@@ -1,10 +1,22 @@
+use chrono::Duration as review_budget_Duration;
+use chrono::TimeZone;
+use chrono::Utc;
+use orbit_store::Store;
+use orbit_store::contracts::ReviewInvocationRecord;
+use orbit_store::contracts::ReviewRelease;
+use orbit_store::contracts::ReviewReserveRequest;
+use orbit_types::workflow::ReviewBudget;
+use orbit_types::workflow::ReviewReservation;
+use orbit_types::workflow::ReviewerInvocationEvent;
+use orbit_types::workflow::automation::SourceRevision;
+
 //  A released review attempt's provisional charge is a floor. Later reviewer
 //  runtime still counts against the captured minutes, and a start after the
 //  budget is spent is bounded to its own start time.
 
 #[test]
 fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
-    let store = review_store(Store::open_in_memory().expect("memory store")).expect("review");
+    let store = Store::open_in_memory().expect("memory store");
     let workspace = "ws";
     let lineage = "lineage";
     let meaning = "meaning";
@@ -24,7 +36,7 @@ fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
         now: opened,
     };
     let (reservation, _) = store
-        .review_reserve(workspace, &reserve)
+        .write(|tx| orbit_core::test_support::review_ledger::reserve(tx, workspace, &reserve))
         .expect("reserve the candidate's one review");
     let ReviewReservation::Reserved { attempt } = reservation else {
         panic!("a fresh lineage reserves a new attempt");
@@ -33,16 +45,19 @@ fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
 
     let record = |run_id: &str, event: ReviewerInvocationEvent, now| {
         store
-            .review_record_invocation(
-                workspace,
-                &ReviewInvocationRecord {
-                    lineage_key: lineage,
-                    attempt_id: &attempt_id,
-                    run_id,
-                    event,
-                    now,
-                },
-            )
+            .write(|tx| {
+                orbit_core::test_support::review_ledger::record_invocation(
+                    tx,
+                    workspace,
+                    &ReviewInvocationRecord {
+                        lineage_key: lineage,
+                        attempt_id: &attempt_id,
+                        run_id,
+                        event,
+                        now,
+                    },
+                )
+            })
             .expect("record reviewer invocation")
     };
 
@@ -55,19 +70,23 @@ fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
         opened,
     );
     store
-        .review_release(
-            workspace,
-            &ReviewRelease {
-                lineage_key: lineage,
-                attempt_id: &attempt_id,
-                bound: opened,
-                now: opened,
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::release(
+                tx,
+                workspace,
+                &ReviewRelease {
+                    lineage_key: lineage,
+                    attempt_id: &attempt_id,
+                    bound: opened,
+                    now: opened,
+                },
+            )
+        })
         .expect("release the failed run's attempt");
 
     let released = store
-        .review_ledger(workspace, lineage)
+        .read()
+        .and_then(|snapshot| snapshot.review().ledger(workspace, lineage))
         .expect("read")
         .expect("ledger");
     let attempt = &released.attempts[0];
@@ -91,7 +110,8 @@ fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
     );
 
     let spent = store
-        .review_ledger(workspace, lineage)
+        .read()
+        .and_then(|snapshot| snapshot.review().ledger(workspace, lineage))
         .expect("read")
         .expect("ledger");
     let attempt = &spent.attempts[0];

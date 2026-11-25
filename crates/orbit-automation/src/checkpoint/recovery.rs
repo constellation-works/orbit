@@ -1,94 +1,18 @@
-//! Audited configuration, action, and history recovery for a delivery consumer.
-//! The checkpoint and its immutable record commit together.
+//! Validate the state and immutable audit record of delivery recovery.
 
-use super::checkpoint;
-use super::codec::{decode, encode};
-use crate::Store;
 use orbit_common::OrbitError;
-use orbit_common::security::release::sha256_hex;
-use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryRecord, ReissuedAction,
 };
 use orbit_types::workflow::automation::{AutomationState, BatchAttempt, BatchState, Delivery};
-use rusqlite::{Connection, TransactionBehavior, params};
-
-pub(super) fn commit(
-    store: &Store,
-    previous: &AutomationState,
-    next: &AutomationState,
-    record: &RecoveryRecord,
-) -> Result<bool, OrbitError> {
-    validate(previous, next, record)?;
-
-    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-        let conn = tx.connection();
-
-        if !checkpoint::advance(conn, previous, next)? {
-            return Ok(false);
-        }
-
-        write_record(conn, &previous.consumer, record)?;
-
-        Ok(true)
-    })
-}
-
-/// Drop the consumer row and record what the reset forgot. The generation and
-/// the decoded prior state fence the delete, so a consumer another pass already
-/// moved is never reset against stale facts.
-pub(super) fn reset(
-    store: &Store,
-    previous: &AutomationState,
-    record: &RecoveryRecord,
-) -> Result<bool, OrbitError> {
-    validate_reset(previous, record)?;
-
-    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-        let conn = tx.connection();
-
-        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
-            return Ok(false);
-        };
-
-        let changed = conn
-            .execute(
-                "DELETE FROM automation_consumers WHERE consumer=?1 AND generation=?2 AND state_json=?3",
-                params![previous.consumer, previous.generation, previous_json],
-            )
-            .map_err(sqlite_store_error)?;
-
-        if changed == 0 {
-            return Ok(false);
-        }
-
-        write_record(conn, &previous.consumer, record)?;
-
-        Ok(true)
-    })
-}
-
-fn write_record(
-    conn: &Connection,
-    consumer: &str,
-    record: &RecoveryRecord,
-) -> Result<(), OrbitError> {
-    let record_json = encode(record)?;
-    let record_id = sha256_hex(record_json.as_bytes());
-
-    conn.execute(
-        "INSERT INTO automation_recoveries VALUES (?1,?2,?3,?4)",
-        params![record_id, consumer, record.at.to_rfc3339(), record_json],
-    )
-    .map_err(sqlite_store_error)?;
-
-    Ok(())
-}
 
 /// A reset is the one recovery that forgets debt, so its record has to carry
 /// the exact identity and inventory of the state it destroyed.
-fn validate_reset(previous: &AutomationState, record: &RecoveryRecord) -> Result<(), OrbitError> {
+pub(super) fn validate_reset(
+    previous: &AutomationState,
+    record: &RecoveryRecord,
+) -> Result<(), OrbitError> {
     let invalid = || OrbitError::InvalidInput("invalid automation reset record".into());
 
     let Some(reset) = &record.reset else {
@@ -123,62 +47,12 @@ fn validate_reset(previous: &AutomationState, record: &RecoveryRecord) -> Result
     Ok(())
 }
 
-/// Persist or clear the stall marker alone. Every cursor, obligation and
-/// frozen action has to arrive unchanged: a stall records why evaluation
-/// stopped, it never moves the consumer's position.
-pub(super) fn stall(
-    store: &Store,
-    previous: &AutomationState,
-    next: &AutomationState,
-) -> Result<bool, OrbitError> {
-    let invalid = || OrbitError::InvalidInput("invalid automation stall transition".into());
-
-    if previous.generation.checked_add(1) != Some(next.generation) || previous.stall == next.stall {
-        return Err(invalid());
-    }
-
-    let mut compared = next.clone();
-    compared.generation = previous.generation;
-    compared.stall = previous.stall.clone();
-    if compared != *previous {
-        return Err(invalid());
-    }
-
-    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-        let conn = tx.connection();
-        checkpoint::advance(conn, previous, next)
-    })
-}
-
-pub(super) fn list(
-    store: &Store,
-    consumer: &str,
-    limit: usize,
-) -> Result<Vec<RecoveryRecord>, OrbitError> {
-    store.with_read_connection(|conn| {
-        let mut stmt = conn
-            .prepare(
-                "SELECT record_json FROM automation_recoveries WHERE consumer=?1 ORDER BY recorded_at DESC,rowid DESC LIMIT ?2",
-            )
-            .map_err(sqlite_store_error)?;
-
-        let rows = stmt
-            .query_map(params![consumer, limit.min(100)], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(sqlite_store_error)?;
-
-        rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
-            .collect()
-    })
-}
-
 /// A recovery may move the recorded configuration identity and replace one
 /// settled attempt. Everything else — the cursors, the pending window, waived
 /// and excluded landings, unresolved evidence and the frozen batch itself —
 /// must arrive unchanged, so no recovery can skip or cover an obligation. A
 /// history replay may move commit identities only along its proven mapping.
-fn validate(
+pub(super) fn validate(
     previous: &AutomationState,
     next: &AutomationState,
     record: &RecoveryRecord,

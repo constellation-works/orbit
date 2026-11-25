@@ -45,28 +45,36 @@ fn mutation(fail: bool, evidence: ClaimEvidence) -> ClaimMutation {
 fn reset(pair: &Pair, ledger: &ReviewLedger) -> ReviewLedger {
     pair.wire
         .owner
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_reset(
-            &pair.wire.owner.workspace_id().unwrap(),
-            &ReviewResetRequest {
-                lineage_key: &ledger.lineage_key,
-                task_id: &ledger.task_ids[0],
-                reason: "operator authorized another attempt",
-                actor: "operator",
-                budget: None,
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::review_reset(
+                tx,
+                &pair.wire.owner.workspace_id().unwrap(),
+                &ReviewResetRequest {
+                    lineage_key: &ledger.lineage_key,
+                    task_id: &ledger.task_ids[0],
+                    reason: "operator authorized another attempt",
+                    actor: "operator",
+                    budget: None,
+                    now: Utc::now(),
+                },
+            )
+        })
         .unwrap()
 }
 
 fn read(pair: &Pair, key: &str) -> Option<ReviewLedger> {
     pair.wire
         .owner
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_ledger(&pair.wire.owner.workspace_id().unwrap(), key)
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .review()
+                .ledger(&pair.wire.owner.workspace_id().unwrap(), key)
+        })
         .unwrap()
 }
 
@@ -83,9 +91,15 @@ fn refused_settlements_leave_review_ledgers_unchanged() {
             let ledger = &original.claimed_review.as_ref().unwrap().ledgers[0];
             pair.wire
                 .owner
-                .review_store()
+                .sqlite_store()
                 .unwrap()
-                .review_import_claimed_ledger(&pair.wire.owner.workspace_id().unwrap(), ledger)
+                .write(|tx| {
+                    orbit_core::test_support::review_ledger::import_claimed_ledger(
+                        tx,
+                        &pair.wire.owner.workspace_id().unwrap(),
+                        ledger,
+                    )
+                })
                 .unwrap();
             let before = reset(&pair, ledger);
             if refusal == "replay" {

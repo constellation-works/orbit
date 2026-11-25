@@ -26,3 +26,5 @@ pub use self_reported_actor::{
     ANONYMOUS_ACTOR_LABEL, AuditAttribution, SELF_REPORTED_ACTOR_MAX_LEN,
     normalize_self_reported_actor,
 };
+
+pub mod incident;

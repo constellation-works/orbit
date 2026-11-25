@@ -474,18 +474,21 @@ impl ReviewedLeaf {
     /// follower's review ledger records it.
     fn reviewer_running(&self, attempt_id: &str, lineage_key: &str) {
         self.bound
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_record_invocation(
-                &self.pair.follower.workspace_id().unwrap(),
-                &ReviewInvocationRecord {
-                    lineage_key,
-                    attempt_id,
-                    run_id: &self.leaf,
-                    event: ReviewerInvocationEvent::Started,
-                    now: Utc::now(),
-                },
-            )
+            .write(|tx| {
+                orbit_core::test_support::review_ledger::record_invocation(
+                    tx,
+                    &self.pair.follower.workspace_id().unwrap(),
+                    &ReviewInvocationRecord {
+                        lineage_key,
+                        attempt_id,
+                        run_id: &self.leaf,
+                        event: ReviewerInvocationEvent::Started,
+                        now: Utc::now(),
+                    },
+                )
+            })
             .unwrap();
     }
 
@@ -557,9 +560,14 @@ impl ReviewedLeaf {
             .map(|artifact| (artifact.path, artifact.content))
             .collect();
         let certificate = owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_certificate(&owner.workspace_id().unwrap(), attempt_id)
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .certificate(&owner.workspace_id().unwrap(), attempt_id)
+            })
             .unwrap()
             .is_some();
         (artifacts, certificate)
@@ -685,12 +693,15 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
     );
     let ledger = leaf
         .bound
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_ledger(
-            &leaf.pair.follower.workspace_id().unwrap(),
-            admitted["lineage_key"].as_str().unwrap(),
-        )
+        .read()
+        .and_then(|snapshot| {
+            snapshot.review().ledger(
+                &leaf.pair.follower.workspace_id().unwrap(),
+                admitted["lineage_key"].as_str().unwrap(),
+            )
+        })
         .unwrap()
         .expect("the attempt ledger is on the follower");
     assert_eq!(ledger.attempts.len(), 1);
@@ -712,9 +723,12 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
     assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
     assert!(
         owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_certificate(&owner.workspace_id().unwrap(), &attempt_id)
+            .read()
+            .and_then(|snapshot| snapshot
+                .review()
+                .certificate(&owner.workspace_id().unwrap(), &attempt_id))
             .unwrap()
             .is_some(),
         "the owner records the follower's certificate"
@@ -1305,9 +1319,14 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
         assert!(!before.1, "{case}: no certificate");
         let ledger = leaf
             .bound
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_ledger(&leaf.pair.follower.workspace_id().unwrap(), &lineage_key)
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .ledger(&leaf.pair.follower.workspace_id().unwrap(), &lineage_key)
+            })
             .unwrap()
             .unwrap();
         assert!(

@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
+mod incidents;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
@@ -720,7 +722,8 @@ impl OrbitRuntime {
         &self,
         query: &FailureIncidentQuery,
     ) -> Result<FailureIncidentReport, OrbitError> {
-        self.stores().audit_events().get_failure_incidents(query)
+        let (failures, truncated) = self.sqlite_store()?.read()?.incident().failures(query)?;
+        Ok(incidents::build_report(&failures, truncated))
     }
 }
 

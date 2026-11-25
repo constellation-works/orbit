@@ -222,8 +222,10 @@ fn delivery_last_fire_json(
     else {
         return Ok(Value::Null);
     };
-    let store = runtime.automation_store()?;
-    let state = store.automation_state(&consumer)?;
+    let store = runtime.sqlite_store()?;
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))?;
     let active = if let Some(attempt) = state.as_ref().and_then(|state| state.active.as_ref()) {
         let tasks = runtime.stores().tasks();
         let task_id = if let Some(id) = &attempt.action_id {
@@ -252,7 +254,8 @@ fn delivery_last_fire_json(
     };
     // Receipts return newest first, so one row bounds the completed case.
     let receipt = store
-        .automation_receipts(&consumer, 1)?
+        .read()
+        .and_then(|snapshot| snapshot.automation().receipts(&consumer, 1))?
         .into_iter()
         .next()
         .map(|receipt| (receipt.accepted_at, receipt.action_id));

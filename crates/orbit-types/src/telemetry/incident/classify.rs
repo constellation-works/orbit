@@ -5,8 +5,8 @@ use super::types::{
     DOCTOR_FINDINGS_MESSAGE_PREFIX, FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass,
     RUN_DEFERRED_SURFACE,
 };
-use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
-use orbit_types::workflow::PROVIDER_LIMIT_MARKER;
+use crate::telemetry::{AuditEvent, AuditEventStatus};
+use crate::workflow::PROVIDER_LIMIT_MARKER;
 
 /// Message fragments that mark a documented negative path. Each mirrors an
 /// `OrbitError` variant's `Display` rendering in `orbit-common`, which every
@@ -49,12 +49,12 @@ pub fn classify(event: &AuditEvent) -> FailureClass {
 
 /// The same classifier over the columns used by SQL aggregates, without
 /// hydrating unrelated audit metadata or truncating to the incident scan cap.
-pub(crate) fn classify_failure(
+pub fn classify_failure(
     surface: &str,
     status: AuditEventStatus,
     error_message: Option<&str>,
 ) -> FailureClass {
-    let error_message = error_message.map(orbit_types::workflow::failure_classification_text);
+    let error_message = error_message.map(crate::workflow::failure_classification_text);
     if is_deferral(surface, error_message) {
         return FailureClass::Deferred;
     }

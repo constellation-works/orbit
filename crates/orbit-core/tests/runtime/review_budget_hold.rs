@@ -48,18 +48,21 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
             )
             .unwrap();
         }
-        let store = runtime.review_store().unwrap();
+        let store = runtime.sqlite_store().unwrap();
         if reviewed {
             store
-                .review_settle(
-                    &workspace,
-                    &ReviewSettlement {
-                        lineage_key: lineage,
-                        attempt_id: attempt,
-                        verdict: ReviewVerdict::Accept,
-                        now: Utc::now(),
-                    },
-                )
+                .write(|tx| {
+                    orbit_core::test_support::review_ledger::settle(
+                        tx,
+                        &workspace,
+                        &ReviewSettlement {
+                            lineage_key: lineage,
+                            attempt_id: attempt,
+                            verdict: ReviewVerdict::Accept,
+                            now: Utc::now(),
+                        },
+                    )
+                })
                 .unwrap();
         } else {
             RuntimeHost::release_review_attempt(
@@ -72,8 +75,13 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
             )
             .unwrap();
         }
-        let ledger =
-            || -> ReviewLedger { store.review_ledger(&workspace, lineage).unwrap().unwrap() };
+        let ledger = || -> ReviewLedger {
+            store
+                .read()
+                .and_then(|snapshot| snapshot.review().ledger(&workspace, lineage))
+                .unwrap()
+                .unwrap()
+        };
         let before = ledger();
         let manifest = runtime
             .get_task_artifact(&fixture.task_id, REVIEW_MANIFEST_ARTIFACT)
@@ -165,17 +173,20 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
             // local lineage. Substitute workers are owned and reaped before
             // the disposable runtime is dropped.
             store
-                .review_reset(
-                    &workspace,
-                    &orbit_store::contracts::ReviewResetRequest {
-                        lineage_key: lineage,
-                        task_id: &fixture.task_id,
-                        actor: "human:operator",
-                        reason: "Authorize another review of this candidate",
-                        budget: None,
-                        now: Utc::now(),
-                    },
-                )
+                .write(|tx| {
+                    orbit_core::test_support::review_ledger::review_reset(
+                        tx,
+                        &workspace,
+                        &orbit_store::contracts::ReviewResetRequest {
+                            lineage_key: lineage,
+                            task_id: &fixture.task_id,
+                            actor: "human:operator",
+                            reason: "Authorize another review of this candidate",
+                            budget: None,
+                            now: Utc::now(),
+                        },
+                    )
+                })
                 .unwrap();
             let workers = super::worker_fixture::install_owned_workers(
                 &fixture.repo.join("resume-worker-release"),

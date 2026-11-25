@@ -2385,8 +2385,12 @@ pub(super) fn admitted_frozen_batch(
         active: None,
         stall: None,
     };
-    let store = runtime.automation_store().unwrap();
-    assert!(store.automation_initialize(&baseline).unwrap());
+    let store = runtime.sqlite_store().unwrap();
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::initialize(tx, &baseline))
+            .unwrap()
+    );
     let mut admitted = baseline.clone();
     admitted.generation = 1;
     admitted.observed = revision("landing");
@@ -2418,7 +2422,11 @@ pub(super) fn admitted_frozen_batch(
         retry_after: None,
         reissue: None,
     });
-    assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &baseline, &admitted, None))
+            .unwrap()
+    );
 }
 
 /// A shutdown inside the fixed 180-minute horizon holds a local wave and

@@ -31,9 +31,9 @@ pub(super) async fn full_state(
             Err(reason) => return Ok(Err(reason)),
         };
         let consumer = orbit_core::application::automation::consumer_key(&runtime, &kind, &name)?;
-        Ok(Ok(runtime
-            .automation_store()?
-            .automation_state(&consumer)?))
+        Ok(Ok(runtime.sqlite_store()?.read().and_then(|snapshot| {
+            snapshot.automation().state(&consumer)
+        })?))
     })
     .await
     {
@@ -65,8 +65,9 @@ pub(super) async fn accepted_evidence(
             let consumer =
                 orbit_core::application::automation::consumer_key(&runtime, &kind, &name)?;
             runtime
-                .automation_store()?
-                .automation_receipt(&consumer, &batch)
+                .sqlite_store()?
+                .read()
+                .and_then(|snapshot| snapshot.automation().receipt(&consumer, &batch))
         })() {
             Ok(Some(receipt)) => Ok(EvidenceLookup::Body(receipt.evidence)),
             Ok(None) => Ok(EvidenceLookup::Missing),

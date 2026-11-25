@@ -15,7 +15,7 @@
 use super::recovery;
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::recovery::*;
 use orbit_types::workflow::automation::{AutomationState, DeliveryTrigger, SourceRevision};
 
@@ -46,10 +46,7 @@ pub struct Reset<'a> {
 }
 
 /// Project what a reset would forget, without touching any state.
-pub fn preview(
-    store: &dyn AutomationStoreBackend,
-    request: &Reset<'_>,
-) -> Result<ResetPreview, AutomationError> {
+pub fn preview(store: &Store, request: &Reset<'_>) -> Result<ResetPreview, AutomationError> {
     let state = load_inspected(store, request)?;
     project(store, request, &state, false)
 }
@@ -57,10 +54,7 @@ pub fn preview(
 /// Forget the consumer and record what was forgotten, in one transaction.
 ///
 /// Any refusal aborts before the write, so a refused reset changes nothing.
-pub fn apply(
-    store: &dyn AutomationStoreBackend,
-    request: &Reset<'_>,
-) -> Result<ResetPreview, AutomationError> {
+pub fn apply(store: &Store, request: &Reset<'_>) -> Result<ResetPreview, AutomationError> {
     let state = load_inspected(store, request)?;
 
     if !request.request.mutates() {
@@ -74,7 +68,7 @@ pub fn apply(
 
     let record = record(store, request, &state)?;
 
-    if !store.automation_reset(&state, &record)? {
+    if !store.write(|tx| crate::checkpoint::reset(tx, &state, &record))? {
         return Err(AutomationError::Deferred(
             DeferredReason::ConcurrentEvaluation,
         ));
@@ -87,10 +81,7 @@ pub fn apply(
 
 /// Reject movement before using liveness or inventory from the host's probe.
 /// Store fences movement after this read against this same snapshot.
-fn load_inspected(
-    store: &dyn AutomationStoreBackend,
-    request: &Reset<'_>,
-) -> Result<AutomationState, AutomationError> {
+fn load_inspected(store: &Store, request: &Reset<'_>) -> Result<AutomationState, AutomationError> {
     let state = recovery::load(store, request.consumer)?;
     if request.inspected_state != Some(&state) {
         return Err(AutomationError::Deferred(
@@ -103,7 +94,7 @@ fn load_inspected(
 /// The immutable audit of one reset: the identity it destroyed, the debt it
 /// forgot, and the baseline the next evaluation starts from.
 fn record(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     request: &Reset<'_>,
     state: &AutomationState,
 ) -> Result<RecoveryRecord, AutomationError> {
@@ -164,7 +155,7 @@ fn refusals(request: &Reset<'_>, state: &AutomationState) -> Vec<String> {
 }
 
 fn project(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     request: &Reset<'_>,
     state: &AutomationState,
     applied: bool,
@@ -189,6 +180,10 @@ fn project(
             refusals(request, state)
         },
         applied,
-        history: store.automation_recoveries(request.consumer, recovery::HISTORY_LIMIT)?,
+        history: store.read().and_then(|snapshot| {
+            snapshot
+                .automation()
+                .recoveries(request.consumer, recovery::HISTORY_LIMIT)
+        })?,
     })
 }

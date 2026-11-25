@@ -644,9 +644,11 @@ fn claimed_leaf_settlement_carries_its_review_ledger() {
     );
     ledger.consumed_seconds = 1_800;
     runtime
-        .review_store()
+        .sqlite_store()
         .expect("review store")
-        .review_import_claimed_ledger(&workspace, &ledger)
+        .write(|tx| {
+            crate::application::review::ledger::import_claimed_ledger(tx, &workspace, &ledger)
+        })
         .expect("seed ledger");
     let now = Utc::now();
     {
@@ -730,15 +732,19 @@ fn claimed_review_import_keeps_an_operator_decision() {
         previous_consumption: ReviewConsumption { seconds: 1_800 },
         budget: ReviewBudget { minutes: 30 },
     });
-    let store = runtime.review_store().expect("review store");
+    let store = runtime.sqlite_store().expect("review store");
     store
-        .review_import_claimed_ledger(&workspace, &decided)
+        .write(|tx| {
+            crate::application::review::ledger::import_claimed_ledger(tx, &workspace, &decided)
+        })
         .expect("seed decision");
     let mut exhausted = decided.clone();
     exhausted.decisions.clear();
     exhausted.consumed_seconds = 1_800;
     let kept = store
-        .review_import_claimed_ledger(&workspace, &exhausted)
+        .write(|tx| {
+            crate::application::review::ledger::import_claimed_ledger(tx, &workspace, &exhausted)
+        })
         .expect("replay");
     assert_eq!(kept.decisions.len(), 1);
     assert_eq!(kept.consumed_seconds, 0);

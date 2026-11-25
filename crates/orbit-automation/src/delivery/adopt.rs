@@ -20,7 +20,7 @@
 use super::{DeliveryHost, Evaluation, recovery};
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::recovery::{RecoveryRequest, SYSTEM_ACTOR, refusal};
 use orbit_types::workflow::automation::{AutomationState, DeliveryTrigger};
 
@@ -56,7 +56,7 @@ pub(super) enum Adoption {
 /// Inspection calls this too, so it reports the same position a tick would
 /// reach without writing anything.
 pub fn refusals(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     state: &AutomationState,
     epoch: &str,
     trigger: &DeliveryTrigger,
@@ -122,7 +122,7 @@ pub fn refusals(
 /// generation race changes nothing, then warns and reports exactly once: the
 /// adopted epoch matches on every later tick.
 pub(super) fn adopt(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,
@@ -206,7 +206,8 @@ pub(super) fn adopt(
     }
 
     store
-        .automation_state(request.consumer)?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(request.consumer))?
         .map(|state| Adoption::Adopted(Box::new(state)))
         .ok_or_else(|| AutomationError::Deferred(DeferredReason::StateMissing))
 }

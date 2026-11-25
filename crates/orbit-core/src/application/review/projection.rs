@@ -44,9 +44,15 @@ pub(crate) fn task_review_projection(
     };
     let evidence_hold = super::evidence::evidence_hold(runtime, &task.id)?
         .filter(|hold| hold.attempt_id == certificate.attempt_id && !certificate.verdict.passed());
-    let store = runtime.review_store()?;
-    let ledger = store.review_ledger(&runtime.workspace_id()?, &certificate.lineage_key)?;
-    let landings = store.review_landings(&certificate.attempt_id)?;
+    let store = runtime.sqlite_store()?;
+    let ledger = store.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .ledger(&runtime.workspace_id()?, &certificate.lineage_key)
+    })?;
+    let landings = store
+        .read()
+        .and_then(|snapshot| snapshot.review().landings(&certificate.attempt_id))?;
     let stale_reasons = landings
         .iter()
         .filter(|landing| !landing.covered)

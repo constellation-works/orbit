@@ -17,7 +17,7 @@
 
 use crate::{AutomationError, DeferredReason, checkpoint};
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::recovery::*;
 use orbit_types::workflow::automation::*;
@@ -73,10 +73,7 @@ pub struct HistoryReplayInput {
 /// `refusals` always reports what would block a recovery of this consumer at
 /// all; the refusals specific to an operation are added only when the request
 /// asks for that operation.
-pub fn preview(
-    store: &dyn AutomationStoreBackend,
-    request: &Recovery<'_>,
-) -> Result<RecoveryPreview, AutomationError> {
+pub fn preview(store: &Store, request: &Recovery<'_>) -> Result<RecoveryPreview, AutomationError> {
     let state = load_inspected(store, request)?;
     let (projected, replay) = if request.request.replay_history {
         let (next, replay) = replay_plan(&state, request.replay.as_ref())?;
@@ -91,10 +88,7 @@ pub fn preview(
 /// covered, pending, unresolved, waived, excluded and accepted fact.
 ///
 /// Any refusal aborts before the write, so a refused recovery changes nothing.
-pub fn apply(
-    store: &dyn AutomationStoreBackend,
-    request: &Recovery<'_>,
-) -> Result<RecoveryPreview, AutomationError> {
+pub fn apply(store: &Store, request: &Recovery<'_>) -> Result<RecoveryPreview, AutomationError> {
     let state = load_inspected(store, request)?;
 
     if !request.request.mutates() {
@@ -108,7 +102,7 @@ pub fn apply(
 
     let (next, record) = plan(request, &state)?;
 
-    if !store.automation_recover(&state, &next, &record)? {
+    if !store.write(|tx| crate::checkpoint::recover(tx, &state, &next, &record))? {
         return Err(AutomationError::Deferred(
             DeferredReason::ConcurrentEvaluation,
         ));
@@ -145,7 +139,7 @@ pub fn apply(
 }
 
 fn load_inspected(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     request: &Recovery<'_>,
 ) -> Result<AutomationState, AutomationError> {
     let state = load(store, request.consumer)?;
@@ -160,12 +154,10 @@ fn load_inspected(
     Ok(state)
 }
 
-pub(super) fn load(
-    store: &dyn AutomationStoreBackend,
-    consumer: &str,
-) -> Result<AutomationState, AutomationError> {
+pub(super) fn load(store: &Store, consumer: &str) -> Result<AutomationState, AutomationError> {
     let state = store
-        .automation_state(consumer)?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(consumer))?
         .ok_or_else(|| AutomationError::Refused(refusal::UNKNOWN_CONSUMER.into()))?;
 
     if state.members.is_some() {
@@ -287,7 +279,7 @@ fn reissue(
 /// block any recovery of this consumer are always reported; the ones specific
 /// to an operation only when it was asked for.
 pub(super) fn refusals(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     request: &Recovery<'_>,
     requested: &RecoveryRequest,
     state: &AutomationState,
@@ -349,7 +341,12 @@ pub(super) fn refusals(
         match state.active.as_ref() {
             Some(active) if settled(active, request.action_failed_without_evidence) => {
                 if store
-                    .automation_receipt(&state.consumer, &active.batch.id)?
+                    .read()
+                    .and_then(|snapshot| {
+                        snapshot
+                            .automation()
+                            .receipt(&state.consumer, &active.batch.id)
+                    })?
                     .is_some()
                 {
                     refuse(refusal::ACTION_EVIDENCED);
@@ -381,7 +378,7 @@ pub(super) fn recorded_coverage(state: &AutomationState) -> Option<CoverageClass
 
 /// Everything the consumer owes right now, with its accepted receipts counted.
 pub(super) fn debt(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     state: &AutomationState,
 ) -> Result<CoverageDebt, AutomationError> {
     Ok(CoverageDebt {
@@ -393,7 +390,9 @@ pub(super) fn debt(
         unresolved: state.unresolved.len(),
         waived: state.waived.len(),
         excluded: state.excluded.len(),
-        receipts: store.automation_receipt_count(&state.consumer)?,
+        receipts: store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipt_count(&state.consumer))?,
     })
 }
 
@@ -421,7 +420,7 @@ fn settled(active: &BatchAttempt, action_failed_without_evidence: bool) -> bool 
 
 /// The frozen action a consumer is holding, and whether it may be reissued.
 pub(super) fn stalled_action(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     state: &AutomationState,
     action_failed_without_evidence: bool,
 ) -> Result<Option<StalledAction>, AutomationError> {
@@ -429,7 +428,12 @@ pub(super) fn stalled_action(
         return Ok(None);
     };
     let evidenced = store
-        .automation_receipt(&state.consumer, &active.batch.id)?
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .automation()
+                .receipt(&state.consumer, &active.batch.id)
+        })?
         .is_some();
     Ok(Some(StalledAction {
         batch_id: active.batch.id.clone(),
@@ -449,7 +453,7 @@ pub(super) fn stalled_action(
 }
 
 fn project(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     request: &Recovery<'_>,
     requested: &RecoveryRequest,
     state: &AutomationState,
@@ -483,7 +487,11 @@ fn project(
         history_replay,
         refusals: refusals(store, request, requested, state)?,
         applied,
-        history: store.automation_recoveries(request.consumer, HISTORY_LIMIT)?,
+        history: store.read().and_then(|snapshot| {
+            snapshot
+                .automation()
+                .recoveries(request.consumer, HISTORY_LIMIT)
+        })?,
     })
 }
 

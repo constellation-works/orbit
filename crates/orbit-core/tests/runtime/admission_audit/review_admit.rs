@@ -24,17 +24,20 @@ fn each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over() {
     gated.reviewer_ran(&gated.run_id, &first, 30);
     let runtime = &gated.fixture.runtime;
     runtime
-        .review_store()
+        .sqlite_store()
         .expect("store")
-        .review_settle(
-            &runtime.workspace_id().expect("workspace"),
-            &orbit_store::contracts::ReviewSettlement {
-                lineage_key: first["lineage_key"].as_str().expect("lineage"),
-                attempt_id: first["attempt_id"].as_str().expect("attempt"),
-                verdict: ReviewVerdict::Accept,
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::settle(
+                tx,
+                &runtime.workspace_id().expect("workspace"),
+                &orbit_store::contracts::ReviewSettlement {
+                    lineage_key: first["lineage_key"].as_str().expect("lineage"),
+                    attempt_id: first["attempt_id"].as_str().expect("attempt"),
+                    verdict: ReviewVerdict::Accept,
+                    now: Utc::now(),
+                },
+            )
+        })
         .expect("settle with a verdict");
 
     let resumed = gated.resume(&gated.run_id);
@@ -87,20 +90,23 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
         commit: gated.implementation_sha.clone(),
         tree: git(&gated.fixture.repo, &["rev-parse", "HEAD^{tree}"]),
     };
-    let store = runtime.review_store().expect("store");
+    let store = runtime.sqlite_store().expect("store");
     let ReviewReservation::Reserved { attempt } = store
-        .review_reserve(
-            &workspace_id,
-            &ReviewReserveRequest {
-                lineage_key: &lineage,
-                task_ids: std::slice::from_ref(&gated.task_id),
-                run_id: &gated.run_id,
-                task_meaning_digest: &combined,
-                candidate: &candidate,
-                budget: ReviewBudget::default(),
-                now: started,
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::reserve(
+                tx,
+                &workspace_id,
+                &ReviewReserveRequest {
+                    lineage_key: &lineage,
+                    task_ids: std::slice::from_ref(&gated.task_id),
+                    run_id: &gated.run_id,
+                    task_meaning_digest: &combined,
+                    candidate: &candidate,
+                    budget: ReviewBudget::default(),
+                    now: started,
+                },
+            )
+        })
         .expect("reserve in the first run")
         .0
     else {
@@ -109,16 +115,19 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
     // The reviewer started a minute in under the budget's thirty-minute bound; its process
     // died with the run, which was found dead and finalized hours later.
     store
-        .review_record_invocation(
-            &workspace_id,
-            &ReviewInvocationRecord {
-                lineage_key: &lineage,
-                attempt_id: &attempt.attempt_id,
-                run_id: &gated.run_id,
-                event: ReviewerInvocationEvent::Started,
-                now: started + Duration::minutes(1),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::record_invocation(
+                tx,
+                &workspace_id,
+                &ReviewInvocationRecord {
+                    lineage_key: &lineage,
+                    attempt_id: &attempt.attempt_id,
+                    run_id: &gated.run_id,
+                    event: ReviewerInvocationEvent::Started,
+                    now: started + Duration::minutes(1),
+                },
+            )
+        })
         .expect("record the reviewer start");
     RuntimeHost::finalize_job_run(
         runtime,
@@ -130,7 +139,8 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
     .expect("finalize the dead run");
 
     let ledger = store
-        .review_ledger(&workspace_id, &lineage)
+        .read()
+        .and_then(|snapshot| snapshot.review().ledger(&workspace_id, &lineage))
         .expect("read")
         .expect("ledger");
     assert!(
@@ -206,7 +216,7 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
     gated.reviewer_ran(&gated.run_id, &first, 8000);
     let runtime = &gated.fixture.runtime;
     let workspace = runtime.workspace_id().unwrap();
-    let store = runtime.review_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     let lineage = first["lineage_key"].as_str().unwrap();
     let attempt = first["attempt_id"].as_str().unwrap();
     let preflight_input = json!({
@@ -233,17 +243,20 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
         "{error}"
     );
     let reset = store
-        .review_reset(
-            &workspace,
-            &ReviewResetRequest {
-                lineage_key: lineage,
-                task_id: &gated.task_id,
-                reason: "Repair obsolete timeout accounting",
-                actor: "human:operator",
-                budget: None,
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::review_reset(
+                tx,
+                &workspace,
+                &ReviewResetRequest {
+                    lineage_key: lineage,
+                    task_id: &gated.task_id,
+                    reason: "Repair obsolete timeout accounting",
+                    actor: "human:operator",
+                    budget: None,
+                    now: Utc::now(),
+                },
+            )
+        })
         .expect("reset with the open attempt still present");
     assert_eq!(reset.attempts.len(), 1);
     assert!(reset.open_attempt().is_none());
@@ -259,7 +272,8 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
     assert!(historical.decisions.is_empty());
     assert!(
         store
-            .review_settle(
+            .write(|tx| orbit_core::test_support::review_ledger::settle(
+                tx,
                 &workspace,
                 &ReviewSettlement {
                     lineage_key: lineage,
@@ -267,13 +281,17 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
                     verdict: ReviewVerdict::Accept,
                     now: Utc::now(),
                 }
-            )
+            ))
             .is_err(),
         "late settlement cannot resurrect the retired attempt"
     );
     assert_eq!(preflight().unwrap()["decision"], "preflight_passed");
     assert_eq!(
-        store.review_ledger(&workspace, lineage).unwrap().unwrap(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.review().ledger(&workspace, lineage))
+            .unwrap()
+            .unwrap(),
         reset,
         "preflight reserves no attempt"
     );

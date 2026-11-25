@@ -79,7 +79,7 @@ fn operator_reconciliation_output_preserves_ids_outcomes_and_exact_next_steps() 
     );
 
     let workspace = runtime.workspace_id().unwrap();
-    let store = runtime.review_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     for (index, outcome) in [
         Value::Null,
         json!({"kind": "accepted"}),
@@ -122,7 +122,7 @@ fn operator_reconciliation_output_preserves_ids_outcomes_and_exact_next_steps() 
             "outcome": outcome, "revision": 0, "updated_at": timestamp
         }))
         .unwrap();
-        store.review_reconciliation_open(&workspace, &record).unwrap();
+        store.write(|tx| orbit_core::test_support::review_ledger::open_reconciliation(tx, &workspace, &record)).unwrap();
     }
 
     let input = json!({"action": "reconcile_review", "mode": "status", "id": task, "workspace": fixture.repo}).to_string();

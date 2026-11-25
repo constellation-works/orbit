@@ -139,8 +139,9 @@ impl MemberHost for Host<'_> {
 
         let state = self
             .runtime
-            .automation_store()?
-            .automation_state(&attempt.consumer)?
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&attempt.consumer))?
             .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
         if state
             .members

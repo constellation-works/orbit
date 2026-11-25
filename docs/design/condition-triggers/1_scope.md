@@ -388,7 +388,7 @@ recorded, for this kind.
 
 Fired-subject tombstones keep each fire for `fired_retention_days` (default 30)
 or up to the 1,000-record cap (`CONDITION_RETAINED_RECORDS`,
-`crates/orbit-types/src/workflow/automation/condition_state.rs`). This stops a file
+[condition state types](../../../crates/orbit-types/src/workflow/automation/condition_state.rs)). This stops a file
 moved out and back in, or a task archived and restored, from firing again
 within the window. Missing or corrupt condition state fails closed as a
 diagnostic, never as a fresh baseline

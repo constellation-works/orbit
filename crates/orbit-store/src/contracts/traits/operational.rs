@@ -3,7 +3,6 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::AuditEvent;
 use std::collections::HashSet;
 
-use crate::contracts::incident::{FailureIncidentQuery, FailureIncidentReport};
 use crate::contracts::invocation::{
     ActivityInvocationMetrics, InvocationAccountingFact, InvocationAccountingQuery,
     InvocationInsertParams, InvocationQuery, InvocationRecord, ProviderLedgerEntry,
@@ -212,12 +211,5 @@ pub trait AuditEventStoreBackend: Send + Sync {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditActorAggregate>, OrbitError>;
-    /// Failure incidents grouped from the raw failed/denied rows in `query`'s
-    /// window [ORB-10871]. A derived view: it neither mutates nor withholds
-    /// any row that `list_audit_events` would return.
-    fn get_failure_incidents(
-        &self,
-        query: &FailureIncidentQuery,
-    ) -> Result<FailureIncidentReport, OrbitError>;
     fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError>;
 }

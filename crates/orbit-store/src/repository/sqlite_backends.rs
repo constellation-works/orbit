@@ -113,13 +113,6 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         self.store.get_audit_event_aggregates_by_actor(since)
     }
 
-    fn get_failure_incidents(
-        &self,
-        query: &crate::FailureIncidentQuery,
-    ) -> Result<crate::FailureIncidentReport, OrbitError> {
-        self.store.get_failure_incidents(query)
-    }
-
     fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError> {
         self.store.prune_audit_events(older_than)
     }

@@ -15,7 +15,7 @@ use orbit_automation::delivery::recovery::{
     self, HISTORY_REPLAY_COMMIT_LIMIT, HistoryReplayInput, Recovery,
 };
 use orbit_automation::{AutomationError, DeferredReason};
-use orbit_store::{Store, compose};
+use orbit_store::Store;
 use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryPreview, RecoveryRequest, refusal,
 };
@@ -520,8 +520,7 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             "batched signature matches the per-commit git signature"
         );
 
-        let store = compose::automation_store(Store::open_in_memory().expect("store"))
-            .expect("automation store");
+        let store = Store::open_in_memory().expect("store");
         let baseline = AutomationState {
             observed: state.baseline.clone(),
             generation: 0,
@@ -530,7 +529,11 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             lookup_retries: Default::default(),
             ..state.clone()
         };
-        assert!(store.automation_initialize(&baseline).expect("initialize"));
+        assert!(
+            store
+                .write(|tx| orbit_automation::checkpoint::initialize(tx, &baseline))
+                .expect("initialize")
+        );
         let ordinary = source
             .observe_with_lookup("main", &baseline, &|_, _| unreachable!("no provider"))
             .expect("ordinary observation");
@@ -539,7 +542,7 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
         assert!(!ordinary.complete, "ordinary observation remains paginated");
         assert!(
             store
-                .automation_commit(&baseline, &state, None)
+                .write(|tx| orbit_automation::checkpoint::commit_state(tx, &baseline, &state, None))
                 .expect("observe orphans")
         );
         let request = RecoveryRequest {
@@ -561,13 +564,16 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             action_terminal: false,
             action_failed_without_evidence: false,
         };
-        let preview = recovery::preview(store.as_ref(), &operation)
+        let preview = recovery::preview(&store, &operation)
             .expect("a replay beyond the ordinary page limit can be previewed");
         assert!(preview.refusals.is_empty());
         assert_eq!(preview.debt.pending_commits, count);
         assert_eq!(preview.debt.unresolved, count);
         assert_eq!(
-            store.automation_state(&state.consumer).expect("state"),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(&state.consumer))
+                .expect("state"),
             Some(state.clone()),
             "preview must leave the orphaned checkpoint untouched"
         );
@@ -576,7 +582,7 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
             ..request
         };
         let applied = recovery::apply(
-            store.as_ref(),
+            &store,
             &Recovery {
                 request: &apply_request,
                 ..operation
@@ -586,7 +592,8 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
         assert_eq!(applied.applied, [RecoveryPreview::REPLAYED_HISTORY]);
         assert_eq!(applied.history_replay, preview.history_replay);
         let checkpoint = store
-            .automation_state(&state.consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&state.consumer))
             .expect("state")
             .expect("checkpoint");
         assert_eq!(
@@ -719,8 +726,7 @@ fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
     let (page, record) =
         replay(&source, &state).expect("a retained exclusion needs no fresh provider proof");
 
-    let store = compose::automation_store(Store::open_in_memory().expect("store"))
-        .expect("automation store");
+    let store = Store::open_in_memory().expect("store");
     let baseline = AutomationState {
         observed: state.baseline.clone(),
         generation: 0,
@@ -729,10 +735,14 @@ fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
         excluded: vec![],
         ..state.clone()
     };
-    assert!(store.automation_initialize(&baseline).expect("initialize"));
     assert!(
         store
-            .automation_commit(&baseline, &state, None)
+            .write(|tx| orbit_automation::checkpoint::initialize(tx, &baseline))
+            .expect("initialize")
+    );
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &baseline, &state, None))
             .expect("observe orphans")
     );
     let request = RecoveryRequest {
@@ -741,7 +751,7 @@ fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
         ..RecoveryRequest::default()
     };
     recovery::apply(
-        store.as_ref(),
+        &store,
         &Recovery {
             consumer: &state.consumer,
             epoch: &state.epoch,
@@ -761,7 +771,8 @@ fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
     .expect("the replay applies");
 
     let checkpoint = store
-        .automation_state(&state.consumer)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&state.consumer))
         .expect("state")
         .expect("checkpoint");
     assert_eq!(checkpoint.pending_commits, history.new);
@@ -910,7 +921,7 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
 
     let history = diverged_with_inserted_canonical_commit();
     let (source, mut state) = state_for(history.root.path(), history.old.last().unwrap());
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let trigger = DeliveryTrigger {
         owner_machine: None,
         branch: "main".into(),
@@ -926,7 +937,11 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
         generation: 0,
         ..state.clone()
     };
-    assert!(store.automation_initialize(&baseline).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::initialize(tx, &baseline))
+            .unwrap()
+    );
     state.observed = source.revision(history.new.last().unwrap()).unwrap();
     state.pending_commits = history.new.clone();
     state.unresolved = history
@@ -945,7 +960,11 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
         }),
     );
     state.associations.insert(history.new[1].clone(), None);
-    assert!(store.automation_commit(&baseline, &state, None).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &baseline, &state, None))
+            .unwrap()
+    );
     let known = state.associations.clone();
     let calls = Cell::new(0);
     // The first three observations make two attempts, and later observations
@@ -967,7 +986,7 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
             missing: &history.new[2],
         };
         let diagnostic = delivery::evaluate(
-            store.as_ref(),
+            &store,
             &host,
             Evaluation {
                 consumer: &state.consumer,
@@ -984,7 +1003,11 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
             expected,
             "provider attempts at {seconds}s respect persisted backoff"
         );
-        let persisted = store.automation_state(&state.consumer).unwrap().unwrap();
+        let persisted = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&state.consumer))
+            .unwrap()
+            .unwrap();
         assert_eq!(diagnostic.state.as_ref(), Some(&persisted));
         for (sha, association) in &known {
             assert_eq!(persisted.associations.get(sha), Some(association));

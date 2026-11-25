@@ -43,8 +43,9 @@ pub(crate) fn stale_tasks(
         return Ok(BTreeMap::new());
     }
     let branch = runtime
-        .automation_store()?
-        .automation_state(&claim.consumer)?
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&claim.consumer))?
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?
         .branch;
     let root = &runtime.paths().repo_root;

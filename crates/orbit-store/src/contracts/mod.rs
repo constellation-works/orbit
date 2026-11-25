@@ -52,8 +52,6 @@ pub use skill::*;
 pub use task::*;
 pub use traits::*;
 pub use v2_audit::*;
-mod automation;
-pub use automation::*;
 mod review;
 pub use review::*;
 mod application_consent;

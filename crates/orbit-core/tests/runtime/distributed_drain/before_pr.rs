@@ -74,9 +74,12 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
     assert_eq!(
         reviewed
             .owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_certificate(&reviewed.owner.workspace_id().unwrap(), "follower-attempt")
+            .read()
+            .and_then(|snapshot| snapshot
+                .review()
+                .certificate(&reviewed.owner.workspace_id().unwrap(), "follower-attempt"))
             .unwrap(),
         Some(reviewed.certificate.clone()),
         "the owner's review store holds the follower's certificate"

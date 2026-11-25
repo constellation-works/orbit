@@ -207,7 +207,10 @@ pub(crate) fn condition_status(
     now: DateTime<Utc>,
 ) -> Result<ConditionStatus, OrbitError> {
     let consumer = condition_consumer(runtime, definition.carrier, definition.name)?;
-    let state = runtime.automation_store()?.condition_state(&consumer)?;
+    let state = runtime
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(&consumer))?;
     let epoch = definition.epoch()?;
     let ownership = condition_refusal(runtime).unwrap_or("owned_here");
     let Some(state) = state else {
@@ -435,12 +438,16 @@ fn fire_index(runtime: &OrbitRuntime) -> Result<FireIndex, OrbitError> {
         return Ok(HashMap::new());
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let mut index = HashMap::new();
     let _: ControlFlow<std::convert::Infallible> =
         consumer_states::for_each_workspace_consumer_state(
             &prefix,
-            |after, limit| store.condition_states_page(&prefix, after, limit),
+            |after, limit| {
+                store
+                    .read()
+                    .and_then(|snapshot| snapshot.condition().states_page(&prefix, after, limit))
+            },
             |state| &state.consumer,
             |state| {
                 let trigger = trigger_of(&state.consumer);

@@ -57,8 +57,10 @@ pub fn reset_auto_task(
 
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
-    let store = runtime.automation_store()?;
-    let inspected_state = store.automation_state(&consumer)?;
+    let store = runtime.sqlite_store()?;
+    let inspected_state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))?;
     let action_liveness =
         super::auto_task_action_liveness(runtime, definition, inspected_state.as_ref(), now);
 
@@ -81,7 +83,7 @@ pub fn reset_auto_task(
     };
 
     if !request.mutates() {
-        return reset::preview(store.as_ref(), &reset_input).map_err(automation_error_to_orbit);
+        return reset::preview(&store, &reset_input).map_err(automation_error_to_orbit);
     }
 
     runtime.ensure_coordination_task_write_permitted()?;
@@ -99,7 +101,7 @@ pub fn reset_auto_task(
         .map_err(automation_error_to_orbit)?;
 
     reset_input.released_refs = retained.clone();
-    let applied = reset::apply(store.as_ref(), &reset_input).map_err(automation_error_to_orbit)?;
+    let applied = reset::apply(&store, &reset_input).map_err(automation_error_to_orbit)?;
 
     let kept = source.release_refs(&retained);
     if !kept.is_empty() {
@@ -139,8 +141,9 @@ pub(crate) fn consumer_teardown_refusals(
         return Ok(vec![]);
     };
     if runtime
-        .automation_store()?
-        .automation_state(&consumer)?
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))?
         .is_none()
     {
         return Ok(vec![]);
@@ -175,8 +178,9 @@ pub(crate) fn tear_down_auto_task_consumer(
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
     let reset = runtime
-        .automation_store()?
-        .automation_state(&consumer)?
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))?
         .is_some();
     if reset {
         let request = ResetRequest {

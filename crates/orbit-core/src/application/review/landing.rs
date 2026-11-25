@@ -37,7 +37,7 @@ pub(crate) fn record_review_landing(
         );
         return Ok(());
     };
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let branch = request.base.trim_start_matches("origin/").to_string();
     let landing = match request.landed_commit.as_deref() {
         // A merge this completion did not perform conditionally landed
@@ -64,7 +64,7 @@ pub(crate) fn record_review_landing(
             ReviewInvalidation::MappingUnknown,
         ),
     };
-    store.review_landing_record(&landing)?;
+    store.write(|tx| tx.review().insert_landing(&landing))?;
     runtime.record_pipeline_audit(
         REVIEW_AUDIT,
         Some(&request.run_id),

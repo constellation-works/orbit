@@ -41,20 +41,23 @@ fn the_minutes_limit_refuses_new_starts_but_not_an_admitted_reviewer() {
         commit: gated.implementation_sha.clone(),
         tree: git(&gated.fixture.repo, &["rev-parse", "HEAD^{tree}"]),
     };
-    let store = gated.fixture.runtime.review_store().expect("store");
+    let store = gated.fixture.runtime.sqlite_store().expect("store");
     let ReviewReservation::Reserved { attempt } = store
-        .review_reserve(
-            &workspace_id,
-            &ReviewReserveRequest {
-                lineage_key: &lineage,
-                task_ids: std::slice::from_ref(&gated.task_id),
-                run_id: &gated.run_id,
-                task_meaning_digest: &combined,
-                candidate: &candidate,
-                budget: ReviewBudget { minutes: 1 },
-                now: started,
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::reserve(
+                tx,
+                &workspace_id,
+                &ReviewReserveRequest {
+                    lineage_key: &lineage,
+                    task_ids: std::slice::from_ref(&gated.task_id),
+                    run_id: &gated.run_id,
+                    task_meaning_digest: &combined,
+                    candidate: &candidate,
+                    budget: ReviewBudget { minutes: 1 },
+                    now: started,
+                },
+            )
+        })
         .expect("pre-reserve")
         .0
     else {

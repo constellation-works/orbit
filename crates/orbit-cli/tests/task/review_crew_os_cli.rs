@@ -88,15 +88,27 @@ fn linux_tagged_consumer() -> Fixture {
 /// under `action_key`, with no action.
 pub(super) fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
     let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let before = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     let mut claimed = before.clone();
     claimed.generation += 1;
     let attempt = claimed.active.as_mut().expect("a batch is active");
     attempt.action_key = action_key.to_string();
     attempt.action_id = None;
     attempt.state = BatchState::Claimed;
-    assert!(store.automation_commit(&before, &claimed, None).unwrap());
+    assert!(
+        store
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx, &before, &claimed, None
+                )
+            )
+            .unwrap()
+    );
 }
 
 /// Evaluate once, which must not fail, and return the crew of the review
@@ -178,9 +190,10 @@ fn a_review_crew_no_host_can_run_under_the_tags_is_never_drawn() {
         // the same crew.
         let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
         let minted = runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .and_then(|state| state.active)
             .and_then(|active| active.action_id)
@@ -329,10 +342,11 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
         "the pool, not haiku"
     );
     let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     assert!(
         store
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .unwrap()
             .stall
@@ -368,7 +382,8 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
     assert!(crew.starts_with("muse-"), "a pool member: {crew}");
     assert!(
         store
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .unwrap()
             .stall

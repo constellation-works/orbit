@@ -187,28 +187,31 @@ pub(super) fn land_tasks_and_evaluate(
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     evaluate_auto_task(runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     let before = store
-        .automation_state(&consumer)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
         .unwrap()
         .map(|state| (state.repository.clone(), state.observed.clone()));
     let landed = commit(fixture, content);
     if let Some((repository, before)) = &before {
         store
-            .automation_record_delivery_intent(&Delivery {
-                key: format!("direct:{repository}:fixture-delivery:{}", landed.commit),
-                repository: repository.clone(),
-                branch: "fixture-delivery".into(),
-                before: before.clone(),
-                after: landed.clone(),
-                commits: vec![landed.commit.clone()],
-                task_ids: task_ids.to_vec(),
-                unattributed: task_ids
-                    .is_empty()
-                    .then(|| UNATTRIBUTED_NO_LANDING_TASK.into()),
-                evidence_reference: format!("run:fixture-run:{}", landed.commit),
-                evidence_digest: "fixture-digest".into(),
-                landed_at: Utc::now(),
+            .write(|tx| {
+                tx.automation().insert_delivery_intent(&Delivery {
+                    key: format!("direct:{repository}:fixture-delivery:{}", landed.commit),
+                    repository: repository.clone(),
+                    branch: "fixture-delivery".into(),
+                    before: before.clone(),
+                    after: landed.clone(),
+                    commits: vec![landed.commit.clone()],
+                    task_ids: task_ids.to_vec(),
+                    unattributed: task_ids
+                        .is_empty()
+                        .then(|| UNATTRIBUTED_NO_LANDING_TASK.into()),
+                    evidence_reference: format!("run:fixture-run:{}", landed.commit),
+                    evidence_digest: "fixture-digest".into(),
+                    landed_at: Utc::now(),
+                })
             })
             .unwrap();
     }
@@ -571,8 +574,12 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let baselined = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let baselined = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     let landed = commit(&fixture, "landed\n");
     let action_id = fixture.json(&[
         "task",
@@ -622,7 +629,11 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     });
     assert!(
         store
-            .automation_commit(&baselined, &admitted, None)
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx, &baselined, &admitted, None
+                )
+            )
             .unwrap()
     );
     assert_eq!(doctor_row(&fixture).0["status"], "ok", "an open action");
@@ -684,8 +695,12 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let baselined = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let baselined = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
 
     let mut retuned = trigger();
     retuned["max_wait_minutes"] = json!(30);
@@ -699,7 +714,11 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     let runtime = open_runtime(&fixture);
     let minted = land_and_evaluate(&fixture, &runtime, "landed after retuning\n");
     assert!(minted.is_some(), "the retuned consumer keeps admitting");
-    let adopted = store.automation_state(&consumer).unwrap().unwrap();
+    let adopted = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     assert_ne!(adopted.epoch, baselined.epoch);
     assert_eq!(adopted.trigger.as_ref().unwrap().max_wait_minutes, 30);
     assert_eq!(adopted.baseline, baselined.baseline);
@@ -707,7 +726,10 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
 
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
-    let recoveries = store.automation_recoveries(&consumer, 10).unwrap();
+    let recoveries = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+        .unwrap();
     assert_eq!(recoveries.len(), 1, "{recoveries:?}");
     assert_eq!(recoveries[0].by, "system:automation");
     assert!(recoveries[0].adopted_settings);
@@ -774,7 +796,14 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     let held = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     assert_eq!(held.reason, "definition_changed");
     assert!(held.refusals.contains(&"branch_changed".to_string()));
-    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// [ORB-14168] A local-only workspace with `review.timing = before_pr` is not a

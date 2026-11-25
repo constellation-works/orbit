@@ -17,7 +17,6 @@ use super::super::MIGRATIONS;
 use super::super::feature_ledgers::FEATURE_REGISTRIES;
 use super::super::feature_schema_meta::{FeatureMigration, apply_feature_registry};
 use crate::Store;
-use crate::compose;
 
 /// The store registry up to, not including, v49.
 fn before_absorption() -> &'static [Migration] {
@@ -256,9 +255,9 @@ fn automation_v3_store(path: &Path, state: &AutomationState, seed: impl FnOnce(&
 /// The automation state the next store open leaves, after it applies v49.
 fn after_absorption(path: &Path, consumer: &str) -> AutomationState {
     let store = Store::open(path).expect("open and apply v49");
-    compose::automation_store(store)
-        .expect("automation store")
-        .automation_state(consumer)
+    store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(consumer))
         .expect("read state")
         .expect("consumer kept")
 }

@@ -219,9 +219,10 @@ impl Workspace {
     fn routine_state(&self) -> AutomationState {
         let consumer = consumer_key(&self.runtime, "routine", "fixture-pilot").unwrap();
         self.runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .unwrap()
     }
@@ -235,7 +236,7 @@ impl Workspace {
 
     /// [`Self::admitted`] for one attempt over several pending members.
     fn admitted_batch(&self, tasks: &[&Task], max_attempts: u32) -> MemberAttempt {
-        let store = self.runtime.automation_store().unwrap();
+        let store = self.runtime.sqlite_store().unwrap();
         let state = self.routine_state();
         let members = tasks
             .iter()
@@ -264,7 +265,11 @@ impl Workspace {
         let mut claimed = state.clone();
         claimed.generation += 1;
         claimed.members.as_mut().unwrap().active = Some(attempt.clone());
-        assert!(store.automation_commit(&state, &claimed, None).unwrap());
+        assert!(
+            store
+                .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &claimed, None))
+                .unwrap()
+        );
 
         let KeyedJobRunAdmission::Admitted(run) = self
             .jobs
@@ -283,7 +288,12 @@ impl Workspace {
         acknowledged.members.as_mut().unwrap().active = Some(attempt.clone());
         assert!(
             store
-                .automation_commit(&claimed, &acknowledged, None)
+                .write(|tx| orbit_automation::checkpoint::commit_state(
+                    tx,
+                    &claimed,
+                    &acknowledged,
+                    None
+                ))
                 .unwrap()
         );
         pin_attempt_source(&self.runtime, &attempt).unwrap();

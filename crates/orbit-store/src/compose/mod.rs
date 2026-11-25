@@ -290,17 +290,3 @@ pub mod auto_task {
         AutoTaskStore::new(path.to_path_buf())
     }
 }
-
-/// Open automation contracts over the already-configured host store.
-pub fn automation_store(
-    store: Store,
-) -> Result<Arc<dyn crate::contracts::AutomationStoreBackend>, orbit_common::OrbitError> {
-    Ok(Arc::new(store))
-}
-
-/// Open before-PR review ledger/certificate contracts over the host store.
-pub fn review_store(
-    store: Store,
-) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
-    Ok(Arc::new(store))
-}

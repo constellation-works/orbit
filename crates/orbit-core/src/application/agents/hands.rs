@@ -217,9 +217,11 @@ impl OrbitRuntime {
             else {
                 return Ok(HashMap::new());
             };
-            let ledger = self
-                .review_store()?
-                .review_ledger(&self.workspace_id()?, &certificate.lineage_key)?;
+            let ledger = self.sqlite_store()?.read().and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .ledger(&self.workspace_id()?, &certificate.lineage_key)
+            })?;
             Ok(ledger
                 .map(|ledger| {
                     ledger

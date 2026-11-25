@@ -880,9 +880,12 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     assert_eq!(owner.landing_attempts().unwrap(), settled);
     assert_eq!(
         owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_certificate(&owner.workspace_id().unwrap(), "follower-attempt")
+            .read()
+            .and_then(|snapshot| snapshot
+                .review()
+                .certificate(&owner.workspace_id().unwrap(), "follower-attempt"))
             .unwrap(),
         Some(reviewed.certificate.clone()),
         "the original native certificate is never copied onto the provider head"

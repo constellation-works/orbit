@@ -50,14 +50,17 @@ impl OrbitRuntime {
         }
         let found = self.condition_definition_for(selector)?;
         let consumer = condition_consumer(self, found.carrier, &found.name)?;
-        let store = self.automation_store()?;
-        let state = store.condition_state(&consumer)?.ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "{} '{}' has no condition state yet; nothing is stalled",
-                found.carrier.kind(),
-                found.name
-            ))
-        })?;
+        let store = self.sqlite_store()?;
+        let state = store
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(&consumer))?
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "{} '{}' has no condition state yet; nothing is stalled",
+                    found.carrier.kind(),
+                    found.name
+                ))
+            })?;
         let Some(stall) = state.stall.clone() else {
             return Err(OrbitError::InvalidInput(format!(
                 "{} '{}' is not stalled",
@@ -76,7 +79,9 @@ impl OrbitRuntime {
         let mut next = state.clone();
         next.stall = None;
         next.generation += 1;
-        if !store.condition_commit_audited(&state, &next, &audit)? {
+        if !store.write(|tx| {
+            orbit_automation::condition::commit_audited_state(tx, &state, &next, &audit)
+        })? {
             return Err(OrbitError::InvalidInput(
                 "the condition moved while clearing; refresh and retry".into(),
             ));

@@ -7,7 +7,7 @@ use orbit_automation::{
     AutomationError, DeferredReason, automation_error_to_orbit, delivery::digest,
 };
 use orbit_common::OrbitError;
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::*;
 
 pub(crate) fn record_direct_landing_intent(
@@ -75,26 +75,27 @@ pub(crate) fn record_direct_landing_intent(
         ),
     };
 
+    let delivery = Delivery {
+        key: format!("direct:{repository}:{}:{identity}", request.branch),
+        repository,
+        branch: request.branch.clone(),
+        before,
+        after,
+        commits,
+        task_ids,
+        unattributed,
+        evidence_reference,
+        evidence_digest,
+        landed_at: chrono::Utc::now(),
+    };
     runtime
-        .automation_store()?
-        .automation_record_delivery_intent(&Delivery {
-            key: format!("direct:{repository}:{}:{identity}", request.branch),
-            repository,
-            branch: request.branch.clone(),
-            before,
-            after,
-            commits,
-            task_ids,
-            unattributed,
-            evidence_reference,
-            evidence_digest,
-            landed_at: chrono::Utc::now(),
-        })
+        .sqlite_store()?
+        .write(|tx| record_delivery_intent(tx, &delivery))
 }
 
 pub(super) fn observe(
     source: &Source<'_>,
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     state: &AutomationState,
     page: &mut SourcePage,
 ) -> Result<(), AutomationError> {
@@ -117,9 +118,11 @@ pub(super) fn observe(
         .chain(page.commits.iter())
         .collect::<Vec<_>>();
 
-    for delivery in
-        store.automation_delivery_intents(&state.repository, &state.branch, &candidates)?
-    {
+    for delivery in store.read().and_then(|snapshot| {
+        snapshot
+            .automation()
+            .delivery_intents(&state.repository, &state.branch, &candidates)
+    })? {
         if !delivery.commits.iter().all(|sha| available.contains(&sha)) {
             continue;
         }
@@ -169,4 +172,25 @@ pub(super) fn observe(
     }
 
     Ok(())
+}
+
+fn record_delivery_intent(tx: &orbit_store::Tx<'_>, delivery: &Delivery) -> Result<(), OrbitError> {
+    if delivery.commits.is_empty() || delivery.commits.len() > 5000 {
+        return Err(OrbitError::InvalidInput(
+            "direct delivery membership must contain 1..=5000 commits".into(),
+        ));
+    }
+    let automation = tx.automation();
+    if let Some(old) = automation.delivery_intent(delivery)? {
+        if old.before != delivery.before
+            || old.after != delivery.after
+            || old.commits != delivery.commits
+        {
+            return Err(OrbitError::InvalidInput(
+                "direct delivery identity changed".into(),
+            ));
+        }
+        return Ok(());
+    }
+    automation.insert_delivery_intent(delivery)
 }

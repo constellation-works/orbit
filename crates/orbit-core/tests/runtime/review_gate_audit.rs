@@ -6,8 +6,8 @@ use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, ReviewerInvocationRequest, RuntimeHost};
-use orbit_store::contracts::{FailureClass, classify};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::telemetry::incident::{FailureClass, classify};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
@@ -774,9 +774,10 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
     assert_eq!(
         fixture
             .runtime
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_landings(&certificate.attempt_id)
+            .read()
+            .and_then(|snapshot| snapshot.review().landings(&certificate.attempt_id))
             .unwrap()
             .len(),
         2

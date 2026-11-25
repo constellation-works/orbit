@@ -105,9 +105,16 @@ fn reset_and_delete_recover_after_fetch_exhausts_source_deadline() {
     let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let original = store.automation_state(&consumer).unwrap().unwrap();
-    let history = store.automation_recoveries(&consumer, 10).unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let original = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
+    let history = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+        .unwrap();
     let pin = format!(
         "refs/orbit/automation/{}/deadline-pin",
         orbit_common::security::release::sha256_hex(consumer.as_bytes())
@@ -158,10 +165,19 @@ fn reset_and_delete_recover_after_fetch_exhausts_source_deadline() {
     assert!(preview.refusals.is_empty());
     assert_eq!(preview.baseline, original.observed);
     assert_eq!(
-        store.automation_state(&consumer).unwrap(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap(),
         Some(original.clone())
     );
-    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap(), history);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+            .unwrap(),
+        history
+    );
     assert_eq!(
         git(&fixture, &["rev-parse", &pin]),
         original.observed.commit
@@ -177,9 +193,18 @@ fn reset_and_delete_recover_after_fetch_exhausts_source_deadline() {
     .expect("reset must inspect and release pins after the spent fetch deadline");
     assert!(reset.applied);
     assert_eq!(reset.baseline, original.observed);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
     assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
-    let recoveries = store.automation_recoveries(&consumer, 10).unwrap();
+    let recoveries = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+        .unwrap();
     assert_eq!(recoveries.len(), history.len() + 1);
     assert_eq!(recoveries[0].reason, request.reason);
     let audit = recoveries[0].reset.as_ref().unwrap();
@@ -202,10 +227,19 @@ fn reset_and_delete_recover_after_fetch_exhausts_source_deadline() {
     let teardown = removed.consumer.unwrap();
     assert!(teardown.reset);
     assert_eq!(teardown.released_refs, vec![pin.clone()]);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
     assert!(runtime.auto_task_show(&definition.name).unwrap().is_none());
     assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
-    let recoveries = store.automation_recoveries(&consumer, 10).unwrap();
+    let recoveries = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+        .unwrap();
     assert_eq!(recoveries.len(), history.len() + 2);
     assert_eq!(recoveries[0].reason, "Delete after fetch deadline");
     let audit = recoveries[0].reset.as_ref().unwrap();

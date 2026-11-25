@@ -121,11 +121,15 @@ fn clock_tick_expired_source_preserves_debt_without_running_commands() {
     let runtime = consumers(&fixture);
     land(&fixture, 1);
     let path = recording_runner(&fixture);
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     let before = [CONSUMER, SECOND].map(|name| {
         let key =
             orbit_core::application::automation::consumer_key(&runtime, "auto-task", name).unwrap();
-        store.automation_state(&key).unwrap().unwrap()
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&key))
+            .unwrap()
+            .unwrap()
     });
 
     // Expire before any command starts, without sleeping or host load. The
@@ -154,7 +158,11 @@ fn clock_tick_expired_source_preserves_debt_without_running_commands() {
     assert!(recorded_commands(&fixture).is_empty());
     for state in before {
         assert_eq!(
-            store.automation_state(&state.consumer).unwrap().as_ref(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(&state.consumer))
+                .unwrap()
+                .as_ref(),
             Some(&state),
             "expired source must preserve the consumer's debt and coverage"
         );
@@ -199,11 +207,15 @@ fn clock_tick_shares_fetch_and_each_lookup_across_consumers() {
         commands.len() - 1,
         "each commit is queried once across both consumers"
     );
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     for name in [CONSUMER, SECOND] {
         let key =
             orbit_core::application::automation::consumer_key(&runtime, "auto-task", name).unwrap();
-        let state = store.automation_state(&key).unwrap().unwrap();
+        let state = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&key))
+            .unwrap()
+            .unwrap();
         assert_eq!(state.pending_commits.len(), 24);
         assert_eq!(
             state.associations.len(),
@@ -241,7 +253,7 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
         commit: commits.last().unwrap().clone(),
         tree: git_at(&publisher, &fixture.home, &["rev-parse", "HEAD^{tree}"]),
     };
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     let mut originals = vec![];
     for (name, parked) in [
         (CONSUMER, BatchState::Exhausted),
@@ -249,7 +261,11 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
     ] {
         let key =
             orbit_core::application::automation::consumer_key(&runtime, "auto-task", name).unwrap();
-        let mut state = store.automation_state(&key).unwrap().unwrap();
+        let mut state = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&key))
+            .unwrap()
+            .unwrap();
         state.observed = after.clone();
         state.pending_commits = commits.clone();
         state.unresolved = commits
@@ -338,7 +354,11 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
         );
         for state in &originals {
             assert_eq!(
-                store.automation_state(&state.consumer).unwrap().as_ref(),
+                store
+                    .read()
+                    .and_then(|snapshot| snapshot.automation().state(&state.consumer))
+                    .unwrap()
+                    .as_ref(),
                 Some(state),
                 "parked debt and coverage remain unchanged"
             );

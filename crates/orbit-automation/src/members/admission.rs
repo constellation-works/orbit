@@ -5,14 +5,14 @@ use super::observe::{CAPACITY, retire_superseded};
 use super::{MemberAdmission, MemberHost};
 use crate::checkpoint::commit;
 use crate::{AutomationError, DeferredReason};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::BTreeSet;
 
 /// Acknowledge the active attempt with Core. `batch` carries the due reasons
 /// of a claim made this pass; a resumed claim reports its members as admitted.
 pub(super) fn admit(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn MemberHost,
     state: AutomationState,
     dry_run: bool,

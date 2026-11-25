@@ -207,14 +207,16 @@ pub fn wedged_delivery_consumers(
     if runtime.automation_machine_identity().is_none() {
         return Ok(vec![]);
     }
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let mut wedged = Vec::new();
     for definition in runtime.listed_auto_task_definitions()? {
         if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
             continue;
         }
         let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
-        let state = store.automation_state(&consumer)?;
+        let state = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))?;
         if !super::auto_task_action_liveness(runtime, &definition, state.as_ref(), now)
             .failed_without_evidence
         {
@@ -391,8 +393,10 @@ fn inspect(
     } = request;
 
     let consumer = super::consumer_key(runtime, kind, name)?;
-    let store = runtime.automation_store()?;
-    let state = store.automation_state(&consumer)?;
+    let store = runtime.sqlite_store()?;
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))?;
 
     let definition_changed = state
         .as_ref()
@@ -407,14 +411,7 @@ fn inspect(
             let action_terminal = definition.is_some_and(|definition| {
                 super::auto_task_action_liveness(runtime, definition, Some(state), now).terminal
             });
-            adoption_refusals(
-                runtime,
-                store.as_ref(),
-                state,
-                epoch,
-                trigger,
-                action_terminal,
-            )?
+            adoption_refusals(runtime, &store, state, epoch, trigger, action_terminal)?
         }
         _ => Vec::new(),
     };
@@ -468,9 +465,12 @@ fn inspect(
         ownership: Some(ownership),
         batch: Vec::new(),
         refusals,
-        waivers: store.automation_waivers(&consumer, 20)?,
+        waivers: store
+            .read()
+            .and_then(|snapshot| snapshot.automation().waivers(&consumer, 20))?,
         receipts: store
-            .automation_receipts(&consumer, 20)?
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(&consumer, 20))?
             .into_iter()
             .map(Into::into)
             .collect(),
@@ -483,7 +483,7 @@ fn inspect(
 /// reads as the tick that resolves the branch again would find it.
 fn adoption_refusals(
     runtime: &OrbitRuntime,
-    store: &dyn orbit_store::contracts::AutomationStoreBackend,
+    store: &orbit_store::Store,
     state: &AutomationState,
     epoch: &str,
     trigger: &DeliveryTrigger,

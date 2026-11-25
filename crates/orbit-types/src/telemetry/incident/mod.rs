@@ -52,9 +52,9 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use classify::classify_failure;
+pub use classify::classify_failure;
 pub use classify::{classify, has_tool_identity, is_failure_only_diagnostic_surface};
-pub use grouping::{build_report, group_failure_incidents};
+pub use grouping::group_failure_incidents;
 pub use signature::{normalize_message, signature_for};
 pub use types::{
     CASCADE_WINDOW_SECS, CauseBasis, DEFAULT_SCAN_LIMIT, DOCTOR_FINDINGS_MESSAGE_PREFIX,

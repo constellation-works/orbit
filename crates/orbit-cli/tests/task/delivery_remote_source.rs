@@ -196,9 +196,10 @@ fn observed_commit(runtime: &orbit_core::OrbitRuntime) -> String {
     let consumer =
         orbit_core::application::automation::consumer_key(runtime, "auto-task", CONSUMER).unwrap();
     runtime
-        .automation_store()
+        .sqlite_store()
         .unwrap()
-        .automation_state(&consumer)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
         .unwrap()
         .expect("baselined state")
         .observed
@@ -418,9 +419,10 @@ fn named_consumer_state(runtime: &orbit_core::OrbitRuntime, name: &str) -> Autom
     let consumer =
         orbit_core::application::automation::consumer_key(runtime, "auto-task", name).unwrap();
     runtime
-        .automation_store()
+        .sqlite_store()
         .unwrap()
-        .automation_state(&consumer)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
         .unwrap()
         .expect("consumer state")
 }
@@ -642,9 +644,10 @@ fn stamp_coverage_is_refused_and_per_delivery_evidence_settles() {
     assert_eq!(state.covered, attempt.batch.through_inclusive, "{state:#?}");
     assert!(state.active.is_none(), "{state:#?}");
     let receipts = runtime
-        .automation_store()
+        .sqlite_store()
         .unwrap()
-        .automation_receipts(&state.consumer, 10)
+        .read()
+        .and_then(|snapshot| snapshot.automation().receipts(&state.consumer, 10))
         .unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].action_id, action_id);

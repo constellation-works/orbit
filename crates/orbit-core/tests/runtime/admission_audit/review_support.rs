@@ -441,12 +441,15 @@ impl Gated {
     pub(super) fn ledger(&self, admission: &Value) -> ReviewLedger {
         let runtime = &self.fixture.runtime;
         runtime
-            .review_store()
+            .sqlite_store()
             .expect("store")
-            .review_ledger(
-                &runtime.workspace_id().expect("workspace"),
-                admission["lineage_key"].as_str().expect("lineage key"),
-            )
+            .read()
+            .and_then(|snapshot| {
+                snapshot.review().ledger(
+                    &runtime.workspace_id().expect("workspace"),
+                    admission["lineage_key"].as_str().expect("lineage key"),
+                )
+            })
             .expect("read ledger")
             .expect("ledger exists")
     }

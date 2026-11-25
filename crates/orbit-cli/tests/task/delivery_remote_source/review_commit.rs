@@ -224,9 +224,10 @@ fn a_derived_summary_leaves_the_batch_owed() {
     );
     assert!(
         runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_receipts(&state.consumer, 10)
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(&state.consumer, 10))
             .unwrap()
             .is_empty()
     );
@@ -285,9 +286,10 @@ fn an_agent_replacement_of_a_derived_summary_settles_the_batch() {
     assert_eq!(state.covered, attempt.batch.through_inclusive, "{state:#?}");
     assert!(state.active.is_none(), "no retry is spent: {state:#?}");
     let receipts = runtime
-        .automation_store()
+        .sqlite_store()
         .unwrap()
-        .automation_receipts(&state.consumer, 10)
+        .read()
+        .and_then(|snapshot| snapshot.automation().receipts(&state.consumer, 10))
         .unwrap();
     assert_eq!(receipts.len(), 1, "{receipts:#?}");
     assert!(

@@ -4,7 +4,7 @@ use super::{ActionOutcome, DeliveryHost, evidence, observe};
 use crate::AutomationError;
 use crate::checkpoint::commit;
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::*;
 
@@ -18,7 +18,7 @@ pub struct ActionLiveness {
 }
 
 pub(super) fn retire_covered_prefix(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     state: AutomationState,
     dry_run: bool,
 ) -> Result<AutomationState, AutomationError> {
@@ -33,7 +33,7 @@ pub(super) fn retire_covered_prefix(
 }
 
 pub(super) fn reconcile(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     state: AutomationState,
     now: DateTime<Utc>,

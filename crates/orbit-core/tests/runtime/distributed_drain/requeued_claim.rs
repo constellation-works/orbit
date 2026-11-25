@@ -80,9 +80,11 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
         .pair
         .wire
         .owner
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_import_claimed_ledger(&workspace, &ledger)
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::import_claimed_ledger(tx, &workspace, &ledger)
+        })
         .unwrap();
     let mut state = owner.pair.follower.read_run_state(&first).unwrap().unwrap();
     state.pipeline["worktree"] = worktree.clone();

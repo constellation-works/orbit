@@ -31,10 +31,14 @@ fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, Automat
     toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
     let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
 
     let first = land_and_evaluate(&fixture, &runtime, "covered landing\n").unwrap();
-    let before = store.automation_state(&consumer).unwrap().unwrap();
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     let active = before.active.as_ref().unwrap();
     let mut evidence = evidence_template(active);
     evidence.examination_complete = true;
@@ -71,7 +75,14 @@ fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, Automat
     covered.active = None;
     assert!(
         store
-            .automation_commit(&before, &covered, Some(&receipt))
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx,
+                    &before,
+                    &covered,
+                    Some(&receipt)
+                )
+            )
             .unwrap()
     );
     // Close the first task so dedupe permits the next batch.
@@ -82,7 +93,11 @@ fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, Automat
 
     let action_id = land_and_evaluate(&fixture, &runtime, "unpaid landing\n").unwrap();
     land_and_evaluate(&fixture, &runtime, "later unpaid landing\n");
-    let before = store.automation_state(&consumer).unwrap().unwrap();
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     assert_eq!(before.pending.len(), 2);
     assert_eq!(before.active.as_ref().unwrap().batch.deliveries.len(), 1);
     let mut claimed = before.clone();
@@ -92,7 +107,15 @@ fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, Automat
     if !checkpointed_id {
         attempt.action_id = None;
     }
-    assert!(store.automation_commit(&before, &claimed, None).unwrap());
+    assert!(
+        store
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx, &before, &claimed, None
+                )
+            )
+            .unwrap()
+    );
     (fixture, runtime, claimed, action_id)
 }
 
@@ -130,8 +153,11 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
         (true, "deleted"),
     ] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
-        let store = runtime.automation_store().unwrap();
-        let receipts = store.automation_receipts(&before.consumer, 100).unwrap();
+        let store = runtime.sqlite_store().unwrap();
+        let receipts = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+            .unwrap();
         assert_eq!(receipts.len(), 1);
         match status {
             "archived" => {
@@ -154,7 +180,11 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
         assert_eq!(preview["action"]["reissuable"], true);
         assert_eq!(preview["refusals"], json!([]));
         assert_eq!(
-            store.automation_state(&before.consumer).unwrap().unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+                .unwrap()
+                .unwrap(),
             before
         );
         let (row, _) = doctor_row(&fixture);
@@ -176,7 +206,11 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
             "retain the unpaid review batch",
             "--json",
         ]);
-        let after = store.automation_state(&before.consumer).unwrap().unwrap();
+        let after = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+            .unwrap()
+            .unwrap();
         assert_ne!(after.epoch, before.epoch);
         assert_eq!(
             after.active, before.active,
@@ -184,7 +218,10 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
         );
         assert_debt_unchanged(&before, &after);
         assert_eq!(
-            store.automation_receipts(&before.consumer, 100).unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+                .unwrap(),
             receipts
         );
         assert_eq!(runtime.get_task(&action_id).ok(), terminal);
@@ -194,8 +231,11 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
 fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
     for checkpointed_id in [true, false] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
-        let store = runtime.automation_store().unwrap();
-        let receipts = store.automation_receipts(&before.consumer, 100).unwrap();
+        let store = runtime.sqlite_store().unwrap();
+        let receipts = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+            .unwrap();
         version_one_receipts_still_read_as_accepted_coverage(&runtime, &receipts);
         fixture
             .command(&["task", "archive", &action_id])
@@ -215,7 +255,11 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
             "re-examine the unpaid review batch",
             "--json",
         ]);
-        let recovered = store.automation_state(&before.consumer).unwrap().unwrap();
+        let recovered = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+            .unwrap()
+            .unwrap();
         assert_debt_unchanged(&before, &recovered);
         let attempt = recovered.active.as_ref().unwrap();
         assert_eq!(attempt.attempt, before.active.as_ref().unwrap().attempt + 1);
@@ -256,7 +300,10 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
         assert!(task.description.contains(&action_id));
         assert_eq!(runtime.get_task(&action_id).unwrap(), archived);
         assert_eq!(
-            store.automation_receipts(&before.consumer, 100).unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+                .unwrap(),
             receipts
         );
     }
@@ -265,8 +312,11 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
 fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
     for status in ["archived", "deleted"] {
         let (fixture, runtime, legacy, action_id) = claimed(false);
-        let store = runtime.automation_store().unwrap();
-        let receipts = store.automation_receipts(&legacy.consumer, 100).unwrap();
+        let store = runtime.sqlite_store().unwrap();
+        let receipts = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(&legacy.consumer, 100))
+            .unwrap();
         fixture
             .command(&["task", "archive", &action_id])
             .assert()
@@ -313,11 +363,18 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
                 .assert()
                 .failure();
             assert_eq!(
-                store.automation_state(&before.consumer).unwrap().unwrap(),
+                store
+                    .read()
+                    .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+                    .unwrap()
+                    .unwrap(),
                 before
             );
             assert_eq!(
-                store.automation_receipts(&before.consumer, 100).unwrap(),
+                store
+                    .read()
+                    .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+                    .unwrap(),
                 receipts
             );
             continue;
@@ -329,7 +386,11 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
         );
         assert_eq!(preview["action"]["reissuable"], true);
         assert_eq!(
-            store.automation_state(&before.consumer).unwrap().unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+                .unwrap()
+                .unwrap(),
             before
         );
         fixture.json(&[
@@ -341,7 +402,11 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
             "retain the legacy retry debt",
             "--json",
         ]);
-        let adopted = store.automation_state(&before.consumer).unwrap().unwrap();
+        let adopted = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+            .unwrap()
+            .unwrap();
         assert_ne!(adopted.epoch, before.epoch);
         assert_eq!(adopted.active, before.active);
         assert_debt_unchanged(&before, &adopted);
@@ -363,17 +428,25 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
             reissued["action"]["reissuable"], false,
             "a fresh operator claim has no settled action of its own"
         );
-        let after = store.automation_state(&before.consumer).unwrap().unwrap();
+        let after = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+            .unwrap()
+            .unwrap();
         assert_eq!(after.active.as_ref().unwrap().attempt, 3);
         assert_debt_unchanged(&before, &after);
         assert_eq!(
-            store.automation_receipts(&before.consumer, 100).unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+                .unwrap(),
             receipts
         );
         assert_eq!(runtime.get_task(&action_id).unwrap(), closed);
         assert_eq!(
             store
-                .automation_recoveries(&before.consumer, 10)
+                .read()
+                .and_then(|snapshot| snapshot.automation().recoveries(&before.consumer, 10))
                 .unwrap()
                 .len(),
             2
@@ -384,8 +457,11 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
 fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
     for checkpointed_id in [true, false] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
-        let store = runtime.automation_store().unwrap();
-        let receipts = store.automation_receipts(&before.consumer, 100).unwrap();
+        let store = runtime.sqlite_store().unwrap();
+        let receipts = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+            .unwrap();
         retune(&fixture, 30);
         for status in ["proposed", "in-progress"] {
             if status == "in-progress" {
@@ -429,7 +505,11 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
             .unwrap();
         let diagnostic = report.automation.as_ref().unwrap();
         assert_eq!(diagnostic.reason, "retry_backoff");
-        let after = store.automation_state(&before.consumer).unwrap().unwrap();
+        let after = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&before.consumer))
+            .unwrap()
+            .unwrap();
         assert_ne!(after.epoch, before.epoch);
         assert_debt_unchanged(&before, &after);
         let active = after.active.as_ref().unwrap();
@@ -438,7 +518,10 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
         assert!(active.retry_after.unwrap() > now);
         assert_eq!(doctor_row(&fixture).0["status"], "ok");
         assert_eq!(
-            store.automation_receipts(&before.consumer, 100).unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().receipts(&before.consumer, 100))
+                .unwrap(),
             receipts
         );
         assert_eq!(runtime.get_task(&action_id).unwrap(), archived);

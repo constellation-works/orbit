@@ -246,12 +246,12 @@ fn a_closed_deliveries_landed_guard_keeps_the_owed_deliveries_until_it_opens() {
 
     // Due by count, then past max_wait: the guard still dispatches nothing.
     for minutes in [0, 61] {
-        let held =
-            super::delivery::evaluate_at(store.as_ref(), &host, &trigger, true, minutes).unwrap();
+        let held = super::delivery::evaluate_at(&store, &host, &trigger, true, minutes).unwrap();
         assert!(held.reason.starts_with(GUARD_FALSE), "{held:?}");
         assert!(host.actions.lock().unwrap().is_empty(), "{held:?}");
         let state = store
-            .automation_state(super::delivery::CONSUMER)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(super::delivery::CONSUMER))
             .unwrap()
             .unwrap();
         assert_eq!(state.pending.len(), 2, "the deliveries stay owed");
@@ -265,7 +265,7 @@ fn a_closed_deliveries_landed_guard_keeps_the_owed_deliveries_until_it_opens() {
     }
 
     *host.deferral.lock().unwrap() = None;
-    super::delivery::evaluate_at(store.as_ref(), &host, &trigger, true, 62).unwrap();
+    super::delivery::evaluate_at(&store, &host, &trigger, true, 62).unwrap();
     assert_eq!(
         host.actions.lock().unwrap().len(),
         1,
@@ -275,17 +275,22 @@ fn a_closed_deliveries_landed_guard_keeps_the_owed_deliveries_until_it_opens() {
 
 #[test]
 fn a_closed_state_guard_withholds_due_members_until_it_opens() {
-    let store = orbit_store::compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = super::member_consumers::Host::new();
     *host.withhold.borrow_mut() = Some(closed_guard());
-    let tick = |minute| super::member_consumers::tick(store.as_ref(), &host, minute);
+    let tick = |minute| super::member_consumers::tick(&store, &host, minute);
 
     for minute in [0, 2, 11] {
         tick(minute);
         assert!(host.actions.borrow().is_empty(), "minute {minute}");
     }
     let state = store
-        .automation_state(super::member_consumers::CONSUMER)
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .automation()
+                .state(super::member_consumers::CONSUMER)
+        })
         .unwrap()
         .unwrap();
     let members = state.members.unwrap();

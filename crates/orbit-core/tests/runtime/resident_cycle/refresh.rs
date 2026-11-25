@@ -509,9 +509,9 @@ fn record_passing_review_certificate(
     };
     let ws = fx.runtime.workspace_id().unwrap();
     fx.runtime
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_certificate_record(&ws, &cert)
+        .write(|tx| orbit_core::test_support::review_ledger::record_certificate(tx, &ws, &cert))
         .unwrap();
     let artifact =
         TaskArtifact::from_text(REVIEW_GATE_ARTIFACT, serde_json::to_string(&cert).unwrap());

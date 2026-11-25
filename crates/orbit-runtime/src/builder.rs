@@ -7,11 +7,10 @@ use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::compose::{
-    CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
-    global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, review_store, v2_audit_store_from_store,
-    workspace_coordinated_backends, workspace_job_run_store, workspace_observational_backends,
-    workspace_policy_def_store,
+    CoordinatedWorkspaceBackends, audit_event_store_sqlite, global_executor_def_store,
+    global_policy_def_store, invocation_store_from_store, layered_policy_def_store,
+    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
+    workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, WorkspaceConfig,
@@ -152,22 +151,10 @@ pub(crate) fn build_context_from_roots(
     // Executors and policies are global-only. Jobs always persist run state
     // under the workspace state directory.
     let audit_event_store = audit_event_store_sqlite(store.clone());
-    let host_store = if write_free {
-        OrbitHostStore {
-            sqlite: store.clone(),
-            automation: Arc::new(store.clone()),
-            review: Arc::new(store.clone()),
-            v2_audit: v2_audit_store_from_store(store.clone()),
-            invocation: invocation_store_from_store(store.clone()),
-        }
-    } else {
-        OrbitHostStore {
-            sqlite: store.clone(),
-            automation: automation_store(store.clone())?,
-            review: review_store(store.clone())?,
-            v2_audit: v2_audit_store_from_store(store.clone()),
-            invocation: invocation_store_from_store(store.clone()),
-        }
+    let host_store = OrbitHostStore {
+        sqlite: store.clone(),
+        v2_audit: v2_audit_store_from_store(store.clone()),
+        invocation: invocation_store_from_store(store.clone()),
     };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());
     let global_policy_store = global_policy_def_store(persistence.policy_dir.clone());

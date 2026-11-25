@@ -3,8 +3,8 @@
 // a message-bearing row lands on — and which rows are deferrals, not failures.
 use super::super::classify::classify_failure;
 use super::super::types::FailureClass;
-use crate::contracts::incident::types::{DOCTOR_FINDINGS_MESSAGE_PREFIX, RUN_DEFERRED_SURFACE};
-use orbit_types::telemetry::AuditEventStatus;
+use crate::telemetry::AuditEventStatus;
+use crate::telemetry::incident::types::{DOCTOR_FINDINGS_MESSAGE_PREFIX, RUN_DEFERRED_SURFACE};
 
 #[test]
 fn doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected() {

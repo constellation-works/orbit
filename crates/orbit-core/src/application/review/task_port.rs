@@ -130,8 +130,13 @@ impl TaskReviewPort for OrbitRuntime {
         }
         // The immutable owner ledger authenticates the artifact's certificate.
         Ok(self
-            .review_store()?
-            .review_certificate(&self.workspace_id()?, &certificate.attempt_id)?
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .certificate(&self.workspace_id()?, &certificate.attempt_id)
+            })?
             .as_ref()
             == Some(&certificate))
     }

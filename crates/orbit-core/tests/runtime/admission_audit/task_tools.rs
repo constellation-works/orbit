@@ -468,11 +468,15 @@ fn seed_open_delivery_batch_attempt(
     admitted.pending_commits = vec!["c1".into()];
     admitted.pending = vec![delivery];
     admitted.active = Some(attempt.clone());
-    let store = runtime.automation_store().expect("automation store");
-    assert!(store.automation_initialize(&baseline).expect("init state"));
+    let store = runtime.sqlite_store().expect("automation store");
     assert!(
         store
-            .automation_commit(&baseline, &admitted, None)
+            .write(|tx| orbit_automation::checkpoint::initialize(tx, &baseline))
+            .expect("init state")
+    );
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &baseline, &admitted, None))
             .expect("admit attempt")
     );
     attempt

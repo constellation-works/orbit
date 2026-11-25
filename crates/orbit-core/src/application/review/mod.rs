@@ -37,6 +37,7 @@ mod gate;
 mod handoff;
 mod landing;
 mod landing_dispatch_port;
+pub(crate) mod ledger;
 mod projection;
 pub(crate) mod reconciliation;
 mod switches;
@@ -170,17 +171,20 @@ pub(crate) fn reset_review(
         .get("adopt_configured_budget")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let ledger = runtime.review_store()?.review_reset(
-        &runtime.workspace_id()?,
-        &ReviewResetRequest {
-            lineage_key: &lineage,
-            task_id: &id,
-            reason: &reason,
-            actor: &actor,
-            budget: adopt.then(|| runtime.operation_policy().review_budget()),
-            now: chrono::Utc::now(),
-        },
-    )?;
+    let ledger = runtime.sqlite_store()?.write(|tx| {
+        crate::application::review::ledger::review_reset(
+            tx,
+            &runtime.workspace_id()?,
+            &ReviewResetRequest {
+                lineage_key: &lineage,
+                task_id: &id,
+                reason: &reason,
+                actor: &actor,
+                budget: adopt.then(|| runtime.operation_policy().review_budget()),
+                now: chrono::Utc::now(),
+            },
+        )
+    })?;
     // The decision and its prior consumption are atomic in the ledger. The
     // normal tool-dispatch audit additionally records caller/session provenance.
     Ok(serde_json::json!({"id": id, "ledger": ledger, "reset": true}))

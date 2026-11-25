@@ -249,12 +249,15 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     .unwrap();
     let ledger = fixture
         .runtime
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_ledger(
-            &fixture.runtime.workspace_id().unwrap(),
-            &finished.lineage_key,
-        )
+        .read()
+        .and_then(|snapshot| {
+            snapshot.review().ledger(
+                &fixture.runtime.workspace_id().unwrap(),
+                &finished.lineage_key,
+            )
+        })
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1221,12 +1224,15 @@ fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
     );
     let ledger = fixture
         .runtime
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_ledger(
-            &fixture.runtime.workspace_id().unwrap(),
-            fixture.input["admission"]["lineage_key"].as_str().unwrap(),
-        )
+        .read()
+        .and_then(|snapshot| {
+            snapshot.review().ledger(
+                &fixture.runtime.workspace_id().unwrap(),
+                fixture.input["admission"]["lineage_key"].as_str().unwrap(),
+            )
+        })
         .unwrap()
         .unwrap();
     let attempt = &ledger.attempts[0];

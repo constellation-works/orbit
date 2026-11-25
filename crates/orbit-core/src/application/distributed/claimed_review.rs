@@ -84,7 +84,7 @@ impl OrbitRuntime {
                 return Vec::new();
             }
         };
-        let store = match self.review_store() {
+        let store = match self.sqlite_store() {
             Ok(store) => store,
             Err(error) => {
                 tracing::warn!(
@@ -95,7 +95,11 @@ impl OrbitRuntime {
                 return Vec::new();
             }
         };
-        match store.review_ledgers_for_claim(&workspace_id, claim_id, task_id) {
+        match store.read().and_then(|snapshot| {
+            snapshot
+                .review()
+                .ledgers_for_claim(&workspace_id, claim_id, task_id)
+        }) {
             Ok(ledgers) => ledgers,
             Err(error) => {
                 tracing::warn!(
@@ -147,7 +151,7 @@ impl OrbitRuntime {
             );
             return;
         };
-        let Ok(store) = self.review_store() else {
+        let Ok(store) = self.sqlite_store() else {
             tracing::warn!(
                 target: "orbit.distributed.claimed_review",
                 "could not open the review store while importing claimed review ledgers",
@@ -155,7 +159,9 @@ impl OrbitRuntime {
             return;
         };
         for ledger in &carry.ledgers {
-            if let Err(error) = store.review_import_claimed_ledger(&workspace_id, ledger) {
+            if let Err(error) = store.write(|tx| {
+                crate::application::review::ledger::import_claimed_ledger(tx, &workspace_id, ledger)
+            }) {
                 tracing::warn!(
                     target: "orbit.distributed.claimed_review",
                     lineage = %ledger.lineage_key,

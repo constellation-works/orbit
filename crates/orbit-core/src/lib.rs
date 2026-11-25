@@ -165,6 +165,17 @@ pub mod test_support {
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    /// Review ledger operations for delivery fixtures that drive a reviewer directly.
+    pub mod review_ledger {
+        pub use crate::application::review::ledger::{
+            import_claimed_ledger, open_reconciliation, record_certificate, record_invocation,
+            release, reserve, review_reset, settle, update_reconciliation,
+        };
+    }
+    /// Checkpoint operations for CLI lifecycle fixtures.
+    pub mod automation_checkpoint {
+        pub use orbit_automation::checkpoint::{commit_state, initialize, stall};
+    }
     /// Canonical (artifact-hashing) task-bundle reads on this thread.
     pub use orbit_store::test_support::canonical_bundle_reads;
     /// Lightweight task-bundle reads on this thread, listing or by id.

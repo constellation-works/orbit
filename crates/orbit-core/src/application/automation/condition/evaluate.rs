@@ -115,7 +115,7 @@ pub(crate) fn evaluate_condition_definition(
         consumer: &consumer,
     };
     evaluate_condition(
-        runtime.automation_store()?.as_ref(),
+        &runtime.sqlite_store()?,
         &host,
         ConditionEvaluation {
             consumer: &consumer,
