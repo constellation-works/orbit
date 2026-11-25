@@ -207,22 +207,26 @@ impl OutputSink {
             if line.is_empty() {
                 return String::new();
             }
-            let indent = line.len() - line.trim_start_matches(' ').len();
-            let indent = indent.min(usize::from(self.width.saturating_sub(1)));
+            let (prefix, content, indent) = prose_prefix(line, usize::from(self.width));
             let mut prose = Table::new();
             prose.load_style(presets::NOTHING);
             prose.force_no_tty();
             prose.set_content_arrangement(ContentArrangement::Disabled);
-            prose.add_row(vec![Cell::new(line.trim_start_matches(' '))]);
+            prose.add_row(vec![Cell::new(content)]);
             if let Some(column) = prose.column_mut(0) {
                 column.set_padding((indent as u16, 0));
                 column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(self.width)));
             }
-            prose
-                .lines()
-                .map(|line| line.trim_end().to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
+            let mut lines = prose.lines().map(|line| line.trim_end().to_string());
+            let Some(first) = lines.next() else {
+                return line.to_string();
+            };
+            let mut wrapped = format!("{prefix}{}", first.get(indent..).unwrap_or_default());
+            for continuation in lines {
+                wrapped.push('\n');
+                wrapped.push_str(&continuation);
+            }
+            wrapped
         });
         std::borrow::Cow::Owned(lines.collect::<Vec<_>>().join("\n"))
     }
@@ -280,6 +284,75 @@ impl OutputSink {
     pub fn apply_color_policy(&self) {
         colored::control::set_override(self.color_allowed);
     }
+}
+
+// Return the literal first-line prefix and its display width. ANSI SGR sequences
+// in labels are retained but do not occupy columns. Keep at least one column
+// available for prose on unusually narrow terminals.
+fn prose_prefix(line: &str, width: usize) -> (&str, &str, usize) {
+    use unicode_width::UnicodeWidthStr;
+
+    let leading = line.len() - line.trim_start_matches(' ').len();
+    let rest = &line[leading..];
+    let mut end = leading;
+    if rest.starts_with("- ") {
+        end += 2;
+    } else {
+        let mut visible = String::new();
+        let mut chars = rest.char_indices().peekable();
+        let mut colon = false;
+        while let Some((offset, ch)) = chars.next() {
+            if ch == '\x1b' && chars.peek().is_some_and(|(_, c)| *c == '[') {
+                chars.next();
+                for (_, c) in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if colon && ch == ' ' {
+                end = leading + offset + 1;
+                break;
+            }
+            if colon {
+                break;
+            }
+            visible.push(ch);
+            if visible.width() > 40 {
+                break;
+            }
+            colon = ch == ':';
+        }
+    }
+    let prefix = &line[..end];
+    let visible_prefix = if end == leading {
+        String::new()
+    } else {
+        let mut visible = String::new();
+        let mut chars = prefix.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                visible.push(ch);
+            }
+        }
+        visible
+    };
+    let indent = if end == leading {
+        leading
+    } else {
+        visible_prefix.width()
+    };
+    if indent >= width {
+        return ("", line, 0);
+    }
+    (prefix, &line[end..], indent)
 }
 
 /// Whether process stdin is a terminal.
