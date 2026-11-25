@@ -115,7 +115,10 @@ pub enum ClaimedOwnerRoute {
 /// tool, a local owner's call other than a `review-*` read or put, no remote
 /// owner, or an unsandboxed worker without a broker, which can reach the
 /// owner itself.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The bridge boundary carries independent caller, claim, request, path, and entry-point context."
+)]
 pub fn bridge_claimed_owner_call(
     env: &orbit_common::Env,
     global_root: &Path,
