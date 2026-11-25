@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use orbit_common::Env;
 use orbit_engine::RuntimeHost;
 use orbit_engine::{DispatchError, ResolvedSandbox};
 use orbit_types::policy::{ResolvedFsProfile, UNRESTRICTED_FS_PROFILE};
@@ -19,12 +20,14 @@ use super::worktree::{active_worktree_root, recovery_checkout_root};
 
 pub(crate) fn resolve_executor_sandbox(
     runtime: &OrbitRuntime,
+    env: &Env,
     provider: &str,
     fs_profile: Option<&str>,
     subprocess_cwd: Option<&Path>,
 ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-    resolve_executor_sandbox_on(
+    resolve_executor_sandbox_on_with_env(
         runtime,
+        env,
         provider,
         fs_profile,
         subprocess_cwd,
@@ -34,8 +37,27 @@ pub(crate) fn resolve_executor_sandbox(
 
 /// [`resolve_executor_sandbox`] with the host OS injected, so the refusal of a
 /// sandbox kind the OS has no backend for can be exercised on any CI host.
+#[cfg(test)]
 pub(super) fn resolve_executor_sandbox_on(
     runtime: &OrbitRuntime,
+    provider: &str,
+    fs_profile: Option<&str>,
+    subprocess_cwd: Option<&Path>,
+    host_os: &str,
+) -> Result<Option<ResolvedSandbox>, DispatchError> {
+    resolve_executor_sandbox_on_with_env(
+        runtime,
+        runtime.execution_env_policy().process_env(),
+        provider,
+        fs_profile,
+        subprocess_cwd,
+        host_os,
+    )
+}
+
+fn resolve_executor_sandbox_on_with_env(
+    runtime: &OrbitRuntime,
+    env: &Env,
     provider: &str,
     fs_profile: Option<&str>,
     subprocess_cwd: Option<&Path>,
@@ -196,7 +218,6 @@ pub(super) fn resolve_executor_sandbox_on(
                     &mut resolved,
                     &mut runtime_write_authority,
                 )?;
-                let env = runtime.execution_env_policy().process_env();
                 append_linux_provider_state_roots(env, provider, &mut resolved)?;
                 // A worktree cwd absolutizes the versioned exceptions under
                 // that worktree. The registered checkout does not: the same
