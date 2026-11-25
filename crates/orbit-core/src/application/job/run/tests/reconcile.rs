@@ -257,7 +257,7 @@ fn reconciliation_keeps_a_rescue_candidate_for_a_host_manager_stopped_worker() {
     git(&repo, &["commit", "-q", "-m", "base"]);
 
     let run = insert_pending_run(&runtime, "task_pr_pipeline");
-    let worktree = orbit_engine::run_worktree_paths(&repo, &run)
+    let worktree = orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &repo, &run)
         .expect("worktree paths")
         .into_iter()
         .next()

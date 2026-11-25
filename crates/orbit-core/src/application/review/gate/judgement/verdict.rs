@@ -197,6 +197,7 @@ impl Judgement {
     /// refused even on an otherwise unchanged target.
     pub(in crate::application::review::gate) fn unrestored_mutation(
         &self,
+        env: &orbit_common::Env,
         workspace_path: &std::path::Path,
         reviewed: &str,
         final_candidate: &str,
@@ -210,7 +211,7 @@ impl Judgement {
         let own_repair = repair.is_some_and(|repair| repair.commit == final_candidate);
         for target in targets {
             let changed =
-                path_changed_between(workspace_path, reviewed, final_candidate, &target.path)?;
+                path_changed_between(env, workspace_path, reviewed, final_candidate, &target.path)?;
             if changed && !(own_repair && repaired.contains(&target.path)) {
                 return Ok(Some(ValidationDefect::MutationTargetChanged {
                     command: target.command.to_string(),
@@ -220,7 +221,7 @@ impl Judgement {
             if !changed && target.repaired_blob.is_none() {
                 continue;
             }
-            let found = path_blob_at(workspace_path, final_candidate, &target.path)?;
+            let found = path_blob_at(env, workspace_path, final_candidate, &target.path)?;
             let restored = target.repaired_blob.is_some_and(|declared| {
                 found
                     .as_deref()

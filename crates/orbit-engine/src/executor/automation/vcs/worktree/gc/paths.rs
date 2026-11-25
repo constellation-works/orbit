@@ -27,13 +27,21 @@ pub(super) fn unresolvable_run_report(run: &JobRun, error: &OrbitError) -> Workt
 /// (ORB-10427) — never re-spelled here. A run whose input names no task never
 /// reached `setup_worktree`; its worktree, if any, is the shared batch
 /// worktree keyed by run id.
-pub fn run_worktree_paths(repo_root: &Path, run: &JobRun) -> Result<Vec<PathBuf>, OrbitError> {
+pub fn run_worktree_paths(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    run: &JobRun,
+) -> Result<Vec<PathBuf>, OrbitError> {
     let input = run.input.as_ref().unwrap_or(&Value::Null);
     let Ok(identity) = WorktreeIdentity::from_input(input, Some(&run.run_id)) else {
-        return Ok(vec![resolve_shared_worktree_path(repo_root, &run.run_id)?]);
+        return Ok(vec![resolve_shared_worktree_path(
+            process_env,
+            repo_root,
+            &run.run_id,
+        )?]);
     };
-    let mut paths = vec![identity.path(repo_root)?];
-    paths.extend(identity.fallback_path(repo_root)?);
+    let mut paths = vec![identity.path(process_env, repo_root)?];
+    paths.extend(identity.fallback_path(process_env, repo_root)?);
     Ok(paths)
 }
 
@@ -57,8 +65,9 @@ pub(super) struct WorktreeRootListing {
 impl WorktreeRootListing {
     /// Every entry of any type; an absent root lists nothing. `None` when the
     /// root cannot be named or read, so the caller indexes every path.
-    pub(super) fn read(repo_root: &Path) -> Option<Self> {
-        let sentinel = resolve_shared_worktree_path(repo_root, "gc-root-sentinel").ok()?;
+    pub(super) fn read(process_env: &orbit_common::Env, repo_root: &Path) -> Option<Self> {
+        let sentinel =
+            resolve_shared_worktree_path(process_env, repo_root, "gc-root-sentinel").ok()?;
         let root = sentinel.parent()?.to_path_buf();
         let names = match fs::read_dir(&root) {
             Ok(entries) => entries
@@ -79,8 +88,11 @@ impl WorktreeRootListing {
     }
 }
 
-pub(super) fn on_disk_worktrees(repo_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
-    let sentinel = resolve_shared_worktree_path(repo_root, "gc-root-sentinel")?;
+pub(super) fn on_disk_worktrees(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let sentinel = resolve_shared_worktree_path(process_env, repo_root, "gc-root-sentinel")?;
     let Some(root) = sentinel.parent() else {
         return Ok(Vec::new());
     };
@@ -116,8 +128,15 @@ pub(super) fn on_disk_worktrees(repo_root: &Path) -> Result<Vec<PathBuf>, OrbitE
     Ok(paths)
 }
 
-pub(super) fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
-    let branch = git_output(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+pub(super) fn branch_name(
+    process_env: &orbit_common::Env,
+    worktree: &Path,
+) -> Result<String, OrbitError> {
+    let branch = git_output(
+        process_env,
+        worktree,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     let branch = branch.trim();
     if branch.is_empty() || branch == "HEAD" {
         return Err(OrbitError::Execution(format!(
@@ -133,8 +152,11 @@ pub(super) fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
 /// itself takes none. Git refuses to remove a locked worktree, with or
 /// without a single `--force`, so a lock taken after this check still keeps
 /// it. A lock file GC cannot read counts as held.
-pub(super) fn worktree_lock(worktree: &Path) -> Result<Option<String>, OrbitError> {
-    let admin_dir = git_output(worktree, &["rev-parse", "--absolute-git-dir"])?;
+pub(super) fn worktree_lock(
+    process_env: &orbit_common::Env,
+    worktree: &Path,
+) -> Result<Option<String>, OrbitError> {
+    let admin_dir = git_output(process_env, worktree, &["rev-parse", "--absolute-git-dir"])?;
     match fs::read_to_string(Path::new(&admin_dir).join("locked")) {
         Ok(reason) if reason.trim().is_empty() => Ok(Some("Git holds this worktree locked".into())),
         Ok(reason) => Ok(Some(format!(
@@ -148,8 +170,13 @@ pub(super) fn worktree_lock(worktree: &Path) -> Result<Option<String>, OrbitErro
     }
 }
 
-pub(super) fn branch_exists(repo_root: &Path, branch: &str) -> bool {
+pub(super) fn branch_exists(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    branch: &str,
+) -> bool {
     git_command_success(
+        process_env,
         repo_root,
         &[
             "show-ref",

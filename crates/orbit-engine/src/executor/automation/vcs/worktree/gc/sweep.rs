@@ -146,10 +146,12 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     // ambiguous when another resolvable run occupies it, and report an
     // in-scope failure instead of returning it. Host validation targets are
     // attributed from the same derivation.
+    let snapshot = task_host.process_env();
+    let process_env = &snapshot;
     let mut reports = Vec::new();
     let mut run_paths = Vec::with_capacity(runs.len());
     for run in runs {
-        match run_worktree_paths(repo_root, run) {
+        match run_worktree_paths(process_env, repo_root, run) {
             Ok(paths) => run_paths.push((run, paths)),
             Err(error) => {
                 tracing::warn!(
@@ -170,7 +172,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     // Only a directory on disk is classified, so index only the derived paths
     // the worktree root lists; every run deriving one still joins its entry.
     // Without a listing every derived path is indexed.
-    let listed = WorktreeRootListing::read(repo_root);
+    let listed = WorktreeRootListing::read(process_env, repo_root);
     let mut known_paths = BTreeMap::<PathBuf, Vec<&JobRun>>::new();
     for (run, paths) in &run_paths {
         for path in paths {
@@ -180,7 +182,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         }
     }
 
-    let registered = registered_worktree_paths(repo_root)?;
+    let registered = registered_worktree_paths(process_env, repo_root)?;
     let candidates = known_paths
         .iter()
         .filter_map(|(path, matching_runs)| {
@@ -213,7 +215,13 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 thread::Builder::new()
                     .name("orbit-gc-host-targets".into())
                     .spawn_scoped(scope, || {
-                        collect_host_targets(repo_root, &run_paths, options, &BTreeSet::new())
+                        collect_host_targets(
+                            process_env,
+                            repo_root,
+                            &run_paths,
+                            options,
+                            &BTreeSet::new(),
+                        )
                     })
                     .ok()
             })
@@ -253,13 +261,19 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
             })
             .map(|report| report.path.clone())
             .collect::<BTreeSet<_>>();
-        collect_host_targets(repo_root, &run_paths, options, &removed_worktrees)
+        collect_host_targets(
+            process_env,
+            repo_root,
+            &run_paths,
+            options,
+            &removed_worktrees,
+        )
     });
     reports.extend(host_targets);
 
     if options.run_id.is_none() {
         let known: BTreeSet<_> = known_paths.keys().cloned().collect();
-        for entry in on_disk_worktrees(repo_root)? {
+        for entry in on_disk_worktrees(process_env, repo_root)? {
             if !known.contains(&entry) {
                 let file_name = entry.file_name().and_then(|val| val.to_str());
                 let trash = if !options.target_only {
@@ -293,9 +307,9 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
 
     // Estimates (including doctor's probe) are read-only.
     if options.delete {
-        git_success(repo_root, &["worktree", "prune"])?;
+        git_success(process_env, repo_root, &["worktree", "prune"])?;
         // A patch the operator removed no longer needs its base commit.
-        rescue::release_orphan_rescue_bases(repo_root)?;
+        rescue::release_orphan_rescue_bases(process_env, repo_root)?;
     }
 
     reports.sort_by(|left, right| left.path.cmp(&right.path));
@@ -319,6 +333,8 @@ fn classify_candidate<H: RuntimeHost + ?Sized>(
     options: &WorktreeGcOptions,
     registered: &BTreeSet<PathBuf>,
 ) -> Vec<WorktreeGcReport> {
+    let snapshot = lookups.host.process_env();
+    let process_env = &snapshot;
     if matching_runs.len() > 1 && matching_runs.iter().any(|run| !run.state.is_terminal()) {
         return selected_runs
             .iter()
@@ -348,8 +364,15 @@ fn classify_candidate<H: RuntimeHost + ?Sized>(
             .iter()
             .filter(|other| other.run_id != run.run_id)
         {
-            let mut report =
-                classify_known(repo_root, path, other, lookups, &preflight, registered)?;
+            let mut report = classify_known(
+                process_env,
+                repo_root,
+                path,
+                other,
+                lookups,
+                &preflight,
+                registered,
+            )?;
             let eligible = if options.target_only {
                 "would_reclaim"
             } else {
@@ -368,7 +391,15 @@ fn classify_candidate<H: RuntimeHost + ?Sized>(
                 return Ok(report);
             }
         }
-        classify_known(repo_root, path, run, lookups, options, registered)
+        classify_known(
+            process_env,
+            repo_root,
+            path,
+            run,
+            lookups,
+            options,
+            registered,
+        )
     })()
     .unwrap_or_else(|error| {
         tracing::warn!(
@@ -396,7 +427,12 @@ fn classify_candidate<H: RuntimeHost + ?Sized>(
         && fs::symlink_metadata(path)
             .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
     {
-        match super::super::reclaim::collect(path, reclaim_patterns(options), options.delete) {
+        match super::super::reclaim::collect(
+            process_env,
+            path,
+            reclaim_patterns(options),
+            options.delete,
+        ) {
             Ok(paths) => {
                 report.bytes_reclaimed = paths.iter().map(|path| path.bytes_reclaimed).sum();
                 report.reclaim = paths;

@@ -450,8 +450,9 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
             "owner required validation contains an empty command".to_string(),
         ));
     }
+    let process_env = host.process_env();
     let mut environment = host.validation_subprocess_environment();
-    bind_host_output(&mut environment, workspace_path)?;
+    bind_host_output(&process_env, &mut environment, workspace_path)?;
     let validation_path = environment
         .path()
         .unwrap_or("<unset; /bin/sh uses its default search path>")
@@ -518,7 +519,7 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
     ));
     let setup_ms = started.elapsed().as_millis();
     let supervised = run_process_supervised(
-        &orbit_common::Env::capture(),
+        &process_env,
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],

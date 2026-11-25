@@ -21,7 +21,7 @@ impl OrbitRuntime {
         let _cwd_guard = super::cwd::WorkerCwdGuard::start(run_id)?;
         self.preflight_pipeline_worker_store()?;
         upgrade_handover::bind_worker_run(run_id);
-        if upgrade_handover::adopts_run(run_id) {
+        if upgrade_handover::adopts_run(self.env(), run_id) {
             return self.adopt_pipeline_run(run_id);
         }
         // [ORB-20158] A parked auto-task run the owner clock woke: adopt it

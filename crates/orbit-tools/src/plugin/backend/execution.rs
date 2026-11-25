@@ -1,6 +1,7 @@
 use super::*;
 use crate::{DeterministicStepPrograms, ToolCaller};
 use orbit_common::env_vars;
+use orbit_common::security::child_env::allowlisted_child_env;
 
 /// Whether a child environment also writes the host program-link directory.
 enum ProgramLinks {
@@ -56,6 +57,7 @@ impl PluginBackendSpec {
     /// root itself, which holds the backend the child must execute.
     pub fn sandbox_profile(
         &self,
+        _process_env: &orbit_common::Env,
         workspace_root: Option<&Path>,
     ) -> Result<PluginSandboxProfile, OrbitError> {
         let vars = self.template_vars(workspace_root);
@@ -294,6 +296,8 @@ impl PluginBackendSpec {
             PluginNetworkPermission::None
         };
         Ok(PluginSandboxProfile {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            process_env: _process_env.clone(),
             read,
             read_denies,
             state_dir: self.state_dir.clone(),
@@ -455,10 +459,8 @@ impl PluginBackendSpec {
             &[]
         };
         let mut env_pairs = match ctx.proc_spawn_environment.as_deref() {
-            Some(parent) => {
-                allowlisted_child_env_from(&orbit_common::Env::capture(), parent, env_pass, &[])
-            }
-            None => allowlisted_child_env(&orbit_common::Env::capture(), env_pass, &[]),
+            Some(parent) => allowlisted_child_env_from(&ctx.env, parent, env_pass, &[]),
+            None => allowlisted_child_env(&ctx.env, env_pass, &[]),
         };
         // Granted declared programs are discoverable by name whatever the
         // caller's `PATH`: prepend the host's program link directory, which

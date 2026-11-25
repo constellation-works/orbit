@@ -44,6 +44,7 @@ fn pinned_reads() -> &'static PinnedReads {
 /// The repository `workspace`'s `gh` resolves, as `id`, `full_name` and
 /// `url`: reused while fresh, otherwise read once and kept.
 pub(super) fn repository_identity(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
 ) -> Result<Value, OrbitError> {
@@ -53,7 +54,7 @@ pub(super) fn repository_identity(
     {
         return Ok(identity.clone());
     }
-    let repo = super::prerequisite::api(deadline, workspace, "repos/{owner}/{repo}")?;
+    let repo = super::prerequisite::api(process_env, deadline, workspace, "repos/{owner}/{repo}")?;
     let identity = json!({"id":repo["id"],"full_name":repo["full_name"],"url":repo["url"]});
     if let Ok(mut cached) = identities().lock() {
         cached.insert(workspace.to_path_buf(), (Instant::now(), identity.clone()));
@@ -71,6 +72,7 @@ pub(super) fn forget_repository_identity(workspace: &Path) {
 /// `path`'s contents at `commit`. A full commit SHA fixes them, so they are
 /// read once per worktree; any other `commit` is read every time.
 pub(super) fn contents_at_commit(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     path: &str,
@@ -78,7 +80,7 @@ pub(super) fn contents_at_commit(
 ) -> Result<Value, OrbitError> {
     let endpoint = format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={commit}");
     if !super::input::valid_expected_remote_sha(Some(commit)) {
-        return super::prerequisite::api(deadline, workspace, &endpoint);
+        return super::prerequisite::api(process_env, deadline, workspace, &endpoint);
     }
     let key = (workspace.to_path_buf(), endpoint);
     if let Ok(cached) = pinned_reads().lock()
@@ -86,7 +88,7 @@ pub(super) fn contents_at_commit(
     {
         return Ok(contents.clone());
     }
-    let contents = super::prerequisite::api(deadline, workspace, &key.1)?;
+    let contents = super::prerequisite::api(process_env, deadline, workspace, &key.1)?;
     if let Ok(mut cached) = pinned_reads().lock() {
         if cached.len() >= MAX_PINNED_READS {
             cached.clear();

@@ -106,6 +106,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
     /// recovered before anything stops on it.
     pub(super) fn recover_failed_checks(
         &mut self,
+        process_env: &orbit_common::Env,
         status: &PullRequestStatus,
         state: &PrMergeState,
         owed: &OwedHostedChecks,
@@ -143,7 +144,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
                 &format!("{reason}, so the candidate stays in review"),
             )?);
         }
-        let tip = landing_tip(context, self.view);
+        let tip = landing_tip(process_env, context, self.view);
         // A rerun or branch update is an external write, and one that
         // failed may have been applied, so neither retries the pass.
         let recovered = recover_failed_checks(

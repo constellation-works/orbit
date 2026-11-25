@@ -11,7 +11,7 @@ fn managed_workspace_selector_requires_the_full_trust_boundary() {
         ("ORBIT_WORKSPACE", Some(" ws_orbit ")),
     ]);
     assert_eq!(
-        managed_workspace_selector_from_env().as_deref(),
+        managed_workspace_selector_from_env(&orbit_common::Env::capture()).as_deref(),
         Some("ws_orbit")
     );
 }

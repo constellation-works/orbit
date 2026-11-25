@@ -89,17 +89,19 @@ pub(in crate::executor::automation::vcs::commit) fn checkpoint(
 /// Recheck the checkpoint on the live worktree: HEAD is the pinned
 /// base and nothing is pending.
 pub(in crate::executor::automation::vcs::commit) fn verify_handoff(
+    process_env: &orbit_common::Env,
     task: &Task,
     workspace: &Path,
     checkpoint: &Value,
 ) -> Result<(), OrbitError> {
     verify_checkpoint(task, checkpoint)?;
-    if git_output(workspace, &["rev-parse", "HEAD"])?
+    if git_output(process_env, workspace, &["rev-parse", "HEAD"])?
         != checkpoint["base_sha"].as_str().unwrap_or_default()
     {
         return Err(refused("HEAD is not the checkpoint's pinned base"));
     }
     if !git_output(
+        process_env,
         workspace,
         &["status", "--porcelain", "--untracked-files=all"],
     )?

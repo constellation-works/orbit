@@ -79,7 +79,11 @@ pub(super) fn owed_evidence<'a>(
     };
     let mut changed = Vec::new();
     for commit in commits {
-        changed.extend(committed_paths(&context.workspace_path, &commit.commit)?);
+        changed.extend(committed_paths(
+            runtime.env(),
+            &context.workspace_path,
+            &commit.commit,
+        )?);
     }
     let tags: Vec<String> = context
         .tasks
@@ -204,6 +208,7 @@ impl BubblewrapReach {
 
     /// The reach of `commits`, the change from `base` to `head`.
     pub(super) fn of_candidate<'a>(
+        env: &orbit_common::Env,
         workspace_path: &Path,
         base: &str,
         head: &str,
@@ -211,7 +216,7 @@ impl BubblewrapReach {
     ) -> Result<Self, OrbitError> {
         let mut changed = Vec::new();
         for commit in commits {
-            changed.extend(committed_paths(workspace_path, &commit.commit)?);
+            changed.extend(committed_paths(env, workspace_path, &commit.commit)?);
         }
         changed.sort();
         changed.dedup();
@@ -232,7 +237,7 @@ impl BubblewrapReach {
                 return Ok(Self::everything());
             }
             for commit in [base, head] {
-                if let Some(text) = path_text_at(workspace_path, commit, path)? {
+                if let Some(text) = path_text_at(env, workspace_path, commit, path)? {
                     test_sources.push(text);
                 }
             }

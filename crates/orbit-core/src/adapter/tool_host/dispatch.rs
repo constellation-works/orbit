@@ -185,7 +185,8 @@ fn execute_admitted(
     // task without starting work on it.
     let operator = agent.is_none()
         && model.is_none()
-        && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
+        && resolved_caller_capabilities(runtime.env(), session_context)
+            .contains(&McpCapability::Operator);
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;

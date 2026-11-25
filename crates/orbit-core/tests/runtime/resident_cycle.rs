@@ -145,7 +145,7 @@ pub(super) fn call(
     // MCP names a family action through its family.
     let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
     let env = orbit_common::Env::capture();
-    runtime
+    orbit_core::test_support::with_runtime_env(runtime.clone(), env.clone())
         .execute_tool_command_dispatch_with_session_context_and_env(
             &env,
             &tool,
@@ -210,7 +210,13 @@ impl Fixture {
     #[cfg(unix)]
     fn as_brokered_cycle<T>(&self, mandate: &str, run_id: &str, body: impl FnOnce() -> T) -> T {
         use orbit_engine::PluginBrokerHandle;
-        let broker = resident_test_broker(&self.runtime, mandate, run_id);
+        let broker = self.with_cycle_environment(run_id, None, || {
+            let runtime = orbit_core::test_support::with_runtime_env(
+                self.runtime.clone(),
+                orbit_common::Env::capture(),
+            );
+            resident_test_broker(&runtime, mandate, run_id)
+        });
         self.with_cycle_environment(run_id, Some(broker.socket_path().to_str().unwrap()), body)
     }
 
@@ -1684,7 +1690,7 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
     // The native `orbit task lint` command uses this public registry API.
     // Lint is intentionally inactive on MCP / `orbit tool run`.
     let lint = |input| {
-        fx.runtime
+        orbit_core::test_support::with_runtime_env(fx.runtime.clone(), orbit_common::Env::capture())
             .run_tool("orbit.task.lint", input)
             .map_err(|error| error.to_string())
     };

@@ -26,11 +26,12 @@ use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
 /// Run one sweep pass against the default global root with a caller-supplied
 /// workspace provider.
 pub fn run_sweep_with_providers(
+    env: &orbit_common::Env,
     options: SweepOptions,
     local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
-    let global_root = crate::runtime::resolve_global_root()?;
+    let global_root = crate::runtime::resolve_global_root(env)?;
     // The OS clock invokes this every minute forever; on macOS launchd
     // redirects stdout/stderr into `logs/sweep.log`. Opportunistically roll +
     // prune it here (rename-based, best-effort) so an always-on host cannot

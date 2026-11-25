@@ -65,21 +65,32 @@ pub(super) struct CandidateSnapshot {
 /// index and files untouched. The error is why GC cannot vouch for a
 /// snapshot: content a tree cannot carry (a nested repository, submodule
 /// changes) keeps the worktree.
-pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, String> {
+pub(super) fn candidate_snapshot(
+    process_env: &orbit_common::Env,
+    worktree: &Path,
+) -> Result<CandidateSnapshot, String> {
     let snapshot = (|| -> Result<CandidateSnapshot, OrbitError> {
-        let head = git_output(worktree, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-        let head_tree = git_output(worktree, &["rev-parse", "--verify", "HEAD^{tree}"])?;
-        let tree = with_scratch_index(worktree, |scratch| {
-            git_output_with_env(worktree, &["read-tree", "HEAD"], scratch)?;
-            git_output_with_env(worktree, &["add", "--all", "--", "."], scratch)?;
-            git_output_with_env(worktree, &["write-tree"], scratch)
+        let head = git_output(
+            process_env,
+            worktree,
+            &["rev-parse", "--verify", "HEAD^{commit}"],
+        )?;
+        let head_tree = git_output(
+            process_env,
+            worktree,
+            &["rev-parse", "--verify", "HEAD^{tree}"],
+        )?;
+        let tree = with_scratch_index(process_env, worktree, |scratch| {
+            git_output_with_env(process_env, worktree, &["read-tree", "HEAD"], scratch)?;
+            git_output_with_env(process_env, worktree, &["add", "--all", "--", "."], scratch)?;
+            git_output_with_env(process_env, worktree, &["write-tree"], scratch)
         })?;
         // Only paths changed in the real index need this check: an ordinary
         // unstaged edit differs from the index but has no unique staged state.
         // A single-tree recovery cannot preserve two versions of a staged
         // path, even when another working edit makes the snapshot nonempty.
-        let staged = index_changed_paths(worktree, &head)?;
-        if snapshot_drops_staged(worktree, &staged, &tree)? {
+        let staged = index_changed_paths(process_env, worktree, &head)?;
+        if snapshot_drops_staged(process_env, worktree, &staged, &tree)? {
             return Err(OrbitError::Execution(
                 "staged paths differ from the working candidate; a single-tree recovery cannot preserve both versions"
                     .to_string(),
@@ -92,6 +103,7 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
             ));
         }
         let gitlinks = git_output(
+            process_env,
             worktree,
             &["diff-tree", "-r", "--no-renames", "--raw", &head, &tree],
         )?;
@@ -114,6 +126,7 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
 /// staged set is not a conflict, and the tree is not compared: that is the
 /// short-circuit worktree GC used before this helper existed.
 pub(in crate::executor::automation::vcs) fn snapshot_drops_staged(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     staged_against_head: &BTreeSet<Vec<u8>>,
     tree: &str,
@@ -121,16 +134,18 @@ pub(in crate::executor::automation::vcs) fn snapshot_drops_staged(
     if staged_against_head.is_empty() {
         return Ok(false);
     }
-    Ok(!staged_against_head.is_disjoint(&index_changed_paths(worktree, tree)?))
+    Ok(!staged_against_head.is_disjoint(&index_changed_paths(process_env, worktree, tree)?))
 }
 
 /// Paths whose real index entries differ from a tree. NUL-delimited bytes
 /// preserve arbitrary Git path names, and disabling renames checks both ends.
 pub(in crate::executor::automation::vcs) fn index_changed_paths(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     tree: &str,
 ) -> Result<BTreeSet<Vec<u8>>, OrbitError> {
     let diff = git_run_bytes(
+        process_env,
         worktree,
         &[
             "diff",
@@ -165,16 +180,18 @@ pub(in crate::executor::automation::vcs) fn index_changed_paths(
 /// this object store cannot be compared and does not count; neither does an
 /// unreachable `origin`.
 pub(super) fn published_recovery(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     branch: &str,
     task_ids: &[String],
     run_id: &str,
     snapshot: &CandidateSnapshot,
 ) -> Option<WorktreeGcRecovery> {
-    origin_run_refs(worktree, branch, task_ids, run_id)?
+    origin_run_refs(process_env, worktree, branch, task_ids, run_id)?
         .into_iter()
         .find(|recovery| {
             git_output(
+                process_env,
                 worktree,
                 &[
                     "rev-parse",
@@ -195,17 +212,23 @@ pub(super) fn published_recovery(
 /// error says how many commits only the run branch holds, and keeps the
 /// worktree.
 pub(super) fn committed_recovery(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     branch: &str,
     task_ids: &[String],
     run_id: &str,
 ) -> Result<(String, Option<WorktreeGcRecovery>), String> {
-    let head = git_output(worktree, &["rev-parse", "--verify", "HEAD^{commit}"])
-        .map_err(|error| format!("cannot read the worktree's HEAD: {error}"))?;
+    let head = git_output(
+        process_env,
+        worktree,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .map_err(|error| format!("cannot read the worktree's HEAD: {error}"))?;
     // Other run branches are excluded: each is collected by the same rule,
     // so one never vouches for another.
     let exclude_branch = format!("--exclude={branch}");
     let unique = git_output(
+        process_env,
         worktree,
         &[
             "rev-list",
@@ -227,10 +250,15 @@ pub(super) fn committed_recovery(
     }
     let contains_head = |recovery: &WorktreeGcRecovery| {
         recovery.commit == head
-            || crate::executor::automation::vcs::git::is_ancestor(worktree, &head, &recovery.commit)
-                .unwrap_or(false)
+            || crate::executor::automation::vcs::git::is_ancestor(
+                process_env,
+                worktree,
+                &head,
+                &recovery.commit,
+            )
+            .unwrap_or(false)
     };
-    if let Some(recovery) = origin_run_refs(worktree, branch, task_ids, run_id)
+    if let Some(recovery) = origin_run_refs(process_env, worktree, branch, task_ids, run_id)
         .unwrap_or_default()
         .into_iter()
         .find(contains_head)
@@ -246,6 +274,7 @@ pub(super) fn committed_recovery(
 /// The run's carry refs, then its branch, as `origin` lists them. `None`
 /// when `origin` cannot be listed.
 fn origin_run_refs(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     branch: &str,
     task_ids: &[String],
@@ -259,7 +288,7 @@ fn origin_run_refs(
     let mut args = vec!["ls-remote", "origin"];
     args.extend(carry_refs.iter().map(String::as_str));
     args.push(branch_ref.as_str());
-    let listed = match git_output(worktree, &args) {
+    let listed = match git_output(process_env, worktree, &args) {
         Ok(listed) => listed,
         Err(error) => {
             tracing::info!(path = %worktree.display(), %error,
@@ -294,6 +323,7 @@ fn origin_run_refs(
 /// checks the bounds and names the file without writing it. The error is why
 /// the candidate keeps its worktree.
 pub(super) fn write_rescue_patch(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     worktree: &Path,
     run_id: &str,
@@ -316,6 +346,7 @@ pub(super) fn write_rescue_patch(
     let base_ref = format!("{RESCUE_BASE_REF_PREFIX}{leaf}");
     let file = store.join(format!("{leaf}.patch"));
     let diff = git_run_bytes(
+        process_env,
         worktree,
         &[
             "diff",
@@ -378,7 +409,7 @@ pub(super) fn write_rescue_patch(
             file.display()
         )
     })?;
-    if let Err(error) = verify_patch(worktree, &file, snapshot) {
+    if let Err(error) = verify_patch(process_env, worktree, &file, snapshot) {
         if let Err(remove) = fs::remove_file(&file) {
             tracing::warn!(path = %file.display(), %remove, "unverified rescue patch left behind");
         }
@@ -387,7 +418,7 @@ pub(super) fn write_rescue_patch(
     // The caller deletes the run branch next. When that branch is the only
     // root for an unpublished HEAD, the SHA in the patch text does not keep
     // the commit — or files it introduced that this diff does not repeat.
-    if let Err(error) = retain_patch_base(repo_root, &base_ref, &snapshot.head) {
+    if let Err(error) = retain_patch_base(process_env, repo_root, &base_ref, &snapshot.head) {
         if let Err(remove) = fs::remove_file(&file) {
             tracing::warn!(path = %file.display(), %remove, "unpinned rescue patch left behind");
         }
@@ -398,15 +429,26 @@ pub(super) fn write_rescue_patch(
 
 /// Rebuild the candidate's tree from `HEAD` and the patch file alone.
 fn verify_patch(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     file: &Path,
     snapshot: &CandidateSnapshot,
 ) -> Result<(), OrbitError> {
     let file = file.to_string_lossy().into_owned();
-    let tree = with_scratch_index(worktree, |scratch| {
-        git_output_with_env(worktree, &["read-tree", &snapshot.head], scratch)?;
-        git_output_with_env(worktree, &["apply", "--cached", "--binary", &file], scratch)?;
-        git_output_with_env(worktree, &["write-tree"], scratch)
+    let tree = with_scratch_index(process_env, worktree, |scratch| {
+        git_output_with_env(
+            process_env,
+            worktree,
+            &["read-tree", &snapshot.head],
+            scratch,
+        )?;
+        git_output_with_env(
+            process_env,
+            worktree,
+            &["apply", "--cached", "--binary", &file],
+            scratch,
+        )?;
+        git_output_with_env(process_env, worktree, &["write-tree"], scratch)
     })?;
     if tree == snapshot.tree {
         Ok(())
@@ -515,8 +557,14 @@ fn valid_rescue_base_ref(value: &str) -> bool {
 /// Point `base_ref` at `commit` in the owning repository. The worktree and
 /// the run branch are about to disappear; a commit that exists only in the
 /// worktree's private objects cannot be kept by a ref here.
-fn retain_patch_base(repo_root: &Path, base_ref: &str, commit: &str) -> Result<(), String> {
+fn retain_patch_base(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    base_ref: &str,
+    commit: &str,
+) -> Result<(), String> {
     let found = git_output(
+        process_env,
         repo_root,
         &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
     )
@@ -528,15 +576,21 @@ fn retain_patch_base(repo_root: &Path, base_ref: &str, commit: &str) -> Result<(
             "the owning repository resolved the patch base to {found}, not {commit}"
         ));
     }
-    git_success(repo_root, &["update-ref", "--no-deref", base_ref, commit])
-        .map_err(|error| format!("could not point {base_ref} at {commit}: {error}"))?;
+    git_success(
+        process_env,
+        repo_root,
+        &["update-ref", "--no-deref", base_ref, commit],
+    )
+    .map_err(|error| format!("could not point {base_ref} at {commit}: {error}"))?;
     match git_output(
+        process_env,
         repo_root,
         &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
     ) {
         Ok(pinned) if pinned == commit => Ok(()),
         Ok(pinned) => {
-            if let Err(error) = git_success(repo_root, &["update-ref", "-d", base_ref]) {
+            if let Err(error) = git_success(process_env, repo_root, &["update-ref", "-d", base_ref])
+            {
                 tracing::warn!(%base_ref, %error, "rescue base ref left pointing at the wrong commit");
             }
             Err(format!(
@@ -552,7 +606,10 @@ fn retain_patch_base(repo_root: &Path, base_ref: &str, commit: &str) -> Result<(
 /// Drop base refs whose patch file is gone. A symlinked store is not
 /// evidence the patches were removed, so those refs stay. An unreadable or
 /// unexpected file at the patch path also keeps its ref.
-pub(super) fn release_orphan_rescue_bases(repo_root: &Path) -> Result<(), OrbitError> {
+pub(super) fn release_orphan_rescue_bases(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+) -> Result<(), OrbitError> {
     let Some(store) = validated_rescue_store(repo_root) else {
         return Ok(());
     };
@@ -564,6 +621,7 @@ pub(super) fn release_orphan_rescue_bases(repo_root: &Path) -> Result<(), OrbitE
         return Ok(());
     }
     let listed = git_output(
+        process_env,
         repo_root,
         &[
             "for-each-ref",
@@ -585,7 +643,7 @@ pub(super) fn release_orphan_rescue_bases(repo_root: &Path) -> Result<(), OrbitE
         if !rescue_patch_is_gone(&store.join(format!("{leaf}.patch"))) {
             continue;
         }
-        if let Err(error) = git_success(repo_root, &["update-ref", "-d", name]) {
+        if let Err(error) = git_success(process_env, repo_root, &["update-ref", "-d", name]) {
             tracing::warn!(%name, %error, "rescue base ref could not be released");
         }
     }
@@ -620,10 +678,11 @@ fn rescue_patch_is_gone(patch: &Path) -> bool {
 
 /// Run `body` against a fresh scratch index, removing it afterwards.
 fn with_scratch_index<T>(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     body: impl FnOnce(&[(&str, &str)]) -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
-    let index = scratch_index(worktree)?;
+    let index = scratch_index(process_env, worktree)?;
     let index_env = index.to_string_lossy().into_owned();
     let result = body(&[("GIT_INDEX_FILE", index_env.as_str())]);
     if let Err(error) = fs::remove_file(&index)
@@ -636,8 +695,9 @@ fn with_scratch_index<T>(
 
 /// Absolute: `--git-path` answers relative to the worktree when its Git
 /// directory is inside it.
-fn scratch_index(worktree: &Path) -> Result<PathBuf, OrbitError> {
+fn scratch_index(process_env: &orbit_common::Env, worktree: &Path) -> Result<PathBuf, OrbitError> {
     let path = PathBuf::from(git_output(
+        process_env,
         worktree,
         &["rev-parse", "--git-path", SCRATCH_INDEX],
     )?);

@@ -75,6 +75,7 @@ pub(crate) fn build_context_from_roots(
     access: StateAccess,
     task_prefix: Option<&str>,
 ) -> Result<OrbitContext, OrbitError> {
+    let env = runtime_config.execution_env.process_env();
     let global_root = roots.global_root.as_path();
     let workspace_root = roots.shared_root.as_path();
     let local_root = roots.local_root.as_path();
@@ -207,6 +208,7 @@ pub(crate) fn build_context_from_roots(
     // The workspace `[plugin_enablement]` toggles narrow the host state for
     // this runtime only; every surface below reads the narrowed load.
     let plugin_load = crate::plugin::host::load_workspace_plugins(
+        env,
         global_root,
         &paths.orbit_dir,
         &store,
@@ -258,7 +260,7 @@ pub(crate) fn build_context_from_roots(
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
     let persistence = runtime_config.persistence.clone();
-    let actor = ActorIdentity::from_env();
+    let actor = ActorIdentity::from_env(env);
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {

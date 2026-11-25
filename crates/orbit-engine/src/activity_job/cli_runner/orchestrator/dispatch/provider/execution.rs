@@ -72,6 +72,7 @@ impl PreparedProviderArgv {
 /// applies runtime arg fixups, computes the redacted audit argv, and records
 /// the stdin prompt blob.
 fn stage_provider_argv(
+    process_env: &orbit_common::Env,
     ctx: &ProviderArgvContext<'_>,
     prompt_file_flag: Option<&'static str>,
     invocation_args: &[String],
@@ -118,6 +119,7 @@ fn stage_provider_argv(
     // under bare exec it's `<program> <args...>`. The redactor still scrubs
     // the child's program name + args so secrets in argv stay redacted.
     let audit_argv = try_audit_argv_for_dispatch(
+        process_env,
         ctx.resolved_program,
         &subprocess_args,
         ctx.sandbox,
@@ -141,6 +143,7 @@ fn stage_provider_argv(
     })
 }
 pub(in super::super) fn dispatch_prepared_provider(
+    process_env: &orbit_common::Env,
     context: CliDispatchContext<'_>,
     prepared: dispatch_preparation::PreparedCliDispatch<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
@@ -283,9 +286,13 @@ pub(in super::super) fn dispatch_prepared_provider(
         .invoke(agent_req)
         .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent invoke: {err}")))?;
     let model = agent.model_name().map(str::to_string);
-    let resolved_program =
-        resolve_provider_launcher(&provider, &invocation.program, subprocess_cwd.as_deref())
-            .map_err(|err| DispatchError::CliInvocationPermanent(err.message))?;
+    let resolved_program = resolve_provider_launcher(
+        &host.process_env(),
+        &provider,
+        &invocation.program,
+        subprocess_cwd.as_deref(),
+    )
+    .map_err(|err| DispatchError::CliInvocationPermanent(err.message))?;
     // The child's whole environment is composed from here and applied to a
     // cleared one by every launcher, so the `[execution.env]` allowlist governs what an
     // untrusted provider subprocess can read. The provider's declared
@@ -301,7 +308,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         &spec.crew_env,
         invocation.required_env_vars,
     );
-    let orbit_env = orbit_tool_env(&child_env)
+    let orbit_env = orbit_tool_env(&host.process_env(), &child_env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     let codex_mcp_args = if provider == "codex" {
         let orbit_bin = orbit_env
@@ -356,6 +363,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         audit,
     };
     let mut staged_argv = stage_provider_argv(
+        process_env,
         &argv_ctx,
         invocation.prompt_file_flag,
         &invocation.args,
@@ -381,6 +389,7 @@ pub(in super::super) fn dispatch_prepared_provider(
     // The primary's baseline is the workspace base branch, never whichever
     // branch it has checked out [ORB-19177].
     let mut worktree_boundary = WorktreeBoundaryGuard::capture(
+        process_env,
         input,
         task_ctx.as_ref(),
         run_id,
@@ -579,6 +588,7 @@ pub(in super::super) fn dispatch_prepared_provider(
                 DispatchError::CliInvocationPermanent(format!("agent fallback invoke: {err}"))
             })?;
         staged_argv = stage_provider_argv(
+            process_env,
             &argv_ctx,
             fallback_invocation.prompt_file_flag,
             &fallback_invocation.args,

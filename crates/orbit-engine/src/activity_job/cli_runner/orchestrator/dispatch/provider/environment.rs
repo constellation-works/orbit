@@ -292,7 +292,7 @@ pub(super) fn prepare_provider_environment(
             advisory_db_dir.display().to_string(),
         ));
     }
-    require_crew_env(&spec.crew_env, child_env)?;
+    require_crew_env(&host.process_env(), &spec.crew_env, child_env)?;
     require_claude_worker_credential(host, provider, child_env)?;
     if inspection.is_some() {
         // This invocation has no job-run authority. An outer managed process

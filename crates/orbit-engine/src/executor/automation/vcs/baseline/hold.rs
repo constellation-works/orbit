@@ -57,7 +57,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
     repo: &Path,
     hold: &BaselineRedHold,
 ) -> BaselineHoldStatus {
-    match moved_base_tip(repo, hold) {
+    match moved_base_tip(&host.process_env(), repo, hold) {
         Ok(tip) => {
             if let Some(status) = recorded_moved_base_status(host, repo, hold, &tip) {
                 return status;
@@ -94,7 +94,7 @@ pub fn recorded_baseline_hold_status<H: RuntimeHost + ?Sized>(
     repo: &Path,
     hold: &BaselineRedHold,
 ) -> Option<BaselineHoldStatus> {
-    let tip = match moved_base_tip(repo, hold) {
+    let tip = match moved_base_tip(&host.process_env(), repo, hold) {
         Ok(tip) => tip,
         Err(status) => return Some(status),
     };
@@ -119,6 +119,7 @@ fn record_inconclusive_hold<H: RuntimeHost + ?Sized>(
     let command = hold.command.as_str();
     let record = || -> Result<(), OrbitError> {
         let cache = cache_paths(
+            &host.process_env(),
             repo,
             tip,
             command,
@@ -149,6 +150,7 @@ fn recorded_moved_base_status<H: RuntimeHost + ?Sized>(
     tip: &str,
 ) -> Option<BaselineHoldStatus> {
     let result = match cache_paths(
+        &host.process_env(),
         repo,
         tip,
         &hold.command,
@@ -203,7 +205,11 @@ fn failed_replay_status(
 
 /// The commit the hold's base ref now names, when it moved off the red
 /// commit; otherwise the status that keeps the hold.
-fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, BaselineHoldStatus> {
+fn moved_base_tip(
+    process_env: &orbit_common::Env,
+    repo: &Path,
+    hold: &BaselineRedHold,
+) -> Result<String, BaselineHoldStatus> {
     let base_ref = hold.base_ref.trim();
     if base_ref.is_empty() {
         return Err(BaselineHoldStatus::Holding(
@@ -212,11 +218,12 @@ fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, Baselin
     }
     if let Some(branch) = base_ref.strip_prefix("origin/")
         && fetch_due(repo, branch)
-        && let Err(error) = fetch_remote_base(repo, branch)
+        && let Err(error) = fetch_remote_base(process_env, repo, branch)
     {
         tracing::debug!(branch, "baseline hold could not refresh its base: {error}");
     }
     let tip = git_output(
+        process_env,
         repo,
         &[
             "rev-parse",

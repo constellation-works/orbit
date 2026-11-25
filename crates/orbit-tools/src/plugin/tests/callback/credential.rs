@@ -18,7 +18,7 @@ fn a_forged_record_on_the_callback_descriptor_is_not_a_credential() {
     let (_credential, _env) = present_descriptor(&forged);
 
     assert_eq!(
-        resolve_plugin_callback(root.path()).expect("resolve"),
+        resolve_plugin_callback(&orbit_common::Env::capture(), root.path()).expect("resolve"),
         None,
         "a record the host did not write must not identify anyone"
     );

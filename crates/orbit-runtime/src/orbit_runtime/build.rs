@@ -19,6 +19,18 @@ use crate::workspace::binding::WorkspaceRuntimeBinding;
 use crate::{builder, worker_coordination};
 
 impl RuntimeKernel {
+    /// Inject a caller's environment snapshot into a test fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_env(mut self, env: orbit_common::Env) -> Self {
+        let base = self.base_mut();
+        base.policy.execution_env_policy = base
+            .policy
+            .execution_env_policy
+            .clone()
+            .with_parent_env(&env);
+        self
+    }
+
     /// Set the observation clock for deterministic CI-failure filing.
     /// Without an override, filing uses the current UTC time.
     pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
@@ -139,7 +151,9 @@ impl RuntimeKernel {
             .with_shared_history(global_root)
             .sampled_in_background(),
         );
-        let worker_invocation = worker_coordination::restore_process_binding(global_root)?;
+        let env = context.policy.execution_env_policy.process_env();
+        let worker_invocation = worker_coordination::restore_process_binding(env, global_root)?;
+        let task_pr_forge = default_task_pr_forge(env);
         Ok(Self::from_layers(
             application,
             context,
@@ -149,7 +163,7 @@ impl RuntimeKernel {
             layout_report,
             host_resources,
             default_host_signal_probe(),
-            default_task_pr_forge(),
+            task_pr_forge,
             None,
             worker_invocation,
         ))

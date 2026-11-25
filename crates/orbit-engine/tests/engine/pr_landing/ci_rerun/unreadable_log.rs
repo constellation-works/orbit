@@ -19,6 +19,7 @@ fn truncated_log() -> String {
 
 fn assert_truncated_without_diagnostic(fx: &Fixture, job_id: u64) {
     let read = run_private_vcs_operation(
+        &orbit_common::Env::capture(),
         "ci.job_log",
         &json!({
             "workspace_path": fx.repo,

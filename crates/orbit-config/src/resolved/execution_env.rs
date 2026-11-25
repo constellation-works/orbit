@@ -161,7 +161,15 @@ impl ExecutionEnvPolicy {
         names
     }
 
-    /// Capture the ambient environment with defaults for this policy's pass
+    /// Use the environment captured by the composition root.
+    #[must_use]
+    pub fn with_parent_env(mut self, env: &orbit_common::Env) -> Self {
+        self.env = env.clone();
+        self.parent = Arc::new(parent_vars(env));
+        self
+    }
+
+    /// Use the parent environment with defaults for this policy's pass
     /// names and crew `env` sources. Non-empty ambient values take precedence.
     /// Other defaults are ignored, including when a provider later requests
     /// those names as extras. The process environment is never changed.

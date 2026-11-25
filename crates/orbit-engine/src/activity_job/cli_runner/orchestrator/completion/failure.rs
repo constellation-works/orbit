@@ -29,6 +29,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 pub(super) struct CompletionFailureInput<'a> {
+    pub(super) home: Option<&'a std::ffi::OsStr>,
     pub(super) provider: Provider,
     pub(super) spec: &'a AgentLoopSpec,
     pub(super) input: &'a Value,
@@ -72,6 +73,7 @@ pub(super) struct CompletionFailure {
 
 pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> CompletionFailure {
     let CompletionFailureInput {
+        home,
         provider,
         spec,
         input,
@@ -244,6 +246,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // [ORB-10929]
             .or_else(|| {
                 macos_keychain_auth_diagnostic(
+                    home,
                     provider.as_str(),
                     sandbox,
                     &format!("{trace_stdout_text}\n{stderr_text}"),

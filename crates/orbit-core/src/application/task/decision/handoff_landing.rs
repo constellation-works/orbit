@@ -210,6 +210,7 @@ impl OrbitRuntime {
         self.failure_handoff_preservation(&task)
             .map_err(handoff_answer_refused)?;
         let hold = orbit_engine::candidate_completion_hold(
+            self.env(),
             self.completion_hold_rules(),
             &task,
             repo,
@@ -218,6 +219,7 @@ impl OrbitRuntime {
             &receipt.run_id,
         )?;
         let message = orbit_engine::compose_squash_merge_message(
+            self.env(),
             repo,
             std::slice::from_ref(&task),
             self.pr_config(),

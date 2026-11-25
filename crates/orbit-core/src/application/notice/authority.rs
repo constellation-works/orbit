@@ -218,7 +218,7 @@ impl OrbitRuntime {
         &self,
         caller: &NoticeCaller,
     ) -> Result<NoticePoster, OrbitError> {
-        let capabilities = resolved_caller_capabilities(&caller.session);
+        let capabilities = resolved_caller_capabilities(self.env(), &caller.session);
         let machine_id = self.automation_machine_identity().map(ToOwned::to_owned);
         let model = non_empty(caller.model.as_deref());
         if capabilities.contains(&McpCapability::Operator)

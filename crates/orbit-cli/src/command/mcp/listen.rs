@@ -47,7 +47,10 @@ impl ListenArgs {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> CommandOut {
-        let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
+        let global_root = orbit_core::runtime::resolve_generation_root(
+            &orbit_core::composition::composition_env(),
+            root_override,
+        )?;
         let toolsets = super::command::resolve_mcp_toolsets(
             &global_root,
             self.role.as_deref(),

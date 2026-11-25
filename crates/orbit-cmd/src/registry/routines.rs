@@ -377,6 +377,7 @@ pub fn run_sweep(
         workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())?;
     let environment = RegistryRoutineEnvironment::load(&global_root, workspace_selector)?;
     orbit_core::application::routines::run_sweep_with_providers(
+        &orbit_core::composition::composition_env(),
         options,
         environment.local_machine(),
         &environment,

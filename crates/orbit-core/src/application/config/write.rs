@@ -440,6 +440,7 @@ fn write_store_conditional<T, R>(
         let explicit_root = runtime.global_root() == runtime.shared_root()
             || runtime.workspace_explicitly_selected();
         crate::runtime::refuse_indirect_uninitialized_caller_orbit(
+            runtime.env(),
             &cwd,
             &runtime.shared_root(),
             explicit_root,

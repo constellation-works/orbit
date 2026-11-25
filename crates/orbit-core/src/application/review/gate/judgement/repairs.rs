@@ -31,7 +31,7 @@ impl Judgement {
         reviewer: &ReviewerIdentity,
         attempt: &ReviewAttempt,
     ) -> Result<Option<CommitIdentity>, OrbitError> {
-        let changed = uncommitted_paths(&context.workspace_path)?;
+        let changed = uncommitted_paths(runtime.env(), &context.workspace_path)?;
         if changed.is_empty() {
             return Ok(None);
         }
@@ -56,6 +56,7 @@ impl Judgement {
         // The provider names the agent family the repair commit is attributed
         // to; the model alone may carry no family hint.
         let commit = commit_reviewer_repairs(
+            runtime.env(),
             &context.workspace_path,
             &repair_author_label(reviewer),
             &message,

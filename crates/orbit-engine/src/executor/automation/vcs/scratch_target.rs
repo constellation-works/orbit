@@ -97,12 +97,13 @@ pub struct ScratchHostTargetLease {
 /// built it before the target exists. The descriptor-bound collector runs
 /// on Linux and macOS; elsewhere output is retained and the lease holds nothing.
 pub fn lease_scratch_host_target(
+    _process_env: &orbit_common::Env,
     checkout: &Path,
     kind: ScratchHostTarget,
 ) -> Result<ScratchHostTargetLease, OrbitError> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let (primary, source) = host_validation_source(checkout)?;
+        let (primary, source) = host_validation_source(_process_env, checkout)?;
         let (record_path, lock) = lease_paths(&primary, &host_validation_target_key(&source));
         let guard = acquire_exclusive_file_lock(
             &lock,

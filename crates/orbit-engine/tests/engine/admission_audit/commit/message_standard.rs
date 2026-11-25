@@ -104,6 +104,7 @@ fn squash_of_motivating_pr_composes_one_standard_message() {
     let head = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
 
     let message = orbit_engine::compose_squash_merge_message(
+        &orbit_common::Env::capture(),
         repo,
         std::slice::from_ref(&task),
         &orbit_engine::PrConfig::default(),
@@ -224,6 +225,7 @@ fn every_producer_emits_a_valid_message_typed_by_its_task() {
     let first = task_with_file("ORB-1", "First change", "a.txt", "codex");
     let second = task_with_file("ORB-2", "Second change", "b.txt", "codex");
     let squash = orbit_engine::compose_squash_merge_message(
+        &orbit_common::Env::capture(),
         repo,
         &[first, second],
         &orbit_engine::PrConfig::default(),
@@ -288,6 +290,7 @@ fn squash_with_trailers_only_body_keeps_trailer_values_byte_identical() {
     );
     let head = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
     let message = orbit_engine::compose_squash_merge_message(
+        &orbit_common::Env::capture(),
         repo,
         &[],
         &orbit_engine::PrConfig::default(),
@@ -321,6 +324,7 @@ fn squash_with_trailers_only_body_keeps_trailer_values_byte_identical() {
     let mut task = task_with_file("ORB-1", "Ask @auto to tighten the guard", "a.txt", "codex");
     task.execution_summary = "Ping @auto about the guard.".to_string();
     let message = orbit_engine::compose_squash_merge_message(
+        &orbit_common::Env::capture(),
         repo,
         std::slice::from_ref(&task),
         &orbit_engine::PrConfig::default(),

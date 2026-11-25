@@ -296,10 +296,24 @@ pub(super) fn preserved_publication_steps(
     let Some(pin) = &worktree.base_sha else {
         return Vec::new();
     };
-    let Ok(head) = git_output(root, &["rev-parse", "--verify", "HEAD^{commit}"]) else {
+    let Ok(head) = git_output(
+        &ctx.host.process_env(),
+        root,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    ) else {
         return Vec::new();
     };
-    if !published_candidate_matches(&state, &ctx.run_id, task, root, pin, &head).unwrap_or(false) {
+    if !published_candidate_matches(
+        &ctx.host.process_env(),
+        &state,
+        &ctx.run_id,
+        task,
+        root,
+        pin,
+        &head,
+    )
+    .unwrap_or(false)
+    {
         return Vec::new();
     }
     PUBLISHED_REPLAY_STEPS

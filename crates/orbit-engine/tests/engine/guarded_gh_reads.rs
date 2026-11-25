@@ -82,7 +82,8 @@ fn exercise_guarded_read() {
         "pr": "42",
         "workspace_path": workspace.to_string_lossy(),
     });
-    let result = run_private_vcs_operation("pr.status", &input).unwrap();
+    let result =
+        run_private_vcs_operation(&orbit_common::Env::capture(), "pr.status", &input).unwrap();
     assert_eq!(result["pull_request"]["number"], 42);
 
     let names = fs::read_to_string(&capture).unwrap();
@@ -107,8 +108,8 @@ fn exercise_guarded_read() {
         &bin,
         "echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4",
     );
-    let error =
-        run_private_vcs_operation("pr.status", &input).expect_err("an unauthenticated read fails");
+    let error = run_private_vcs_operation(&orbit_common::Env::capture(), "pr.status", &input)
+        .expect_err("an unauthenticated read fails");
     assert!(
         error.to_string().contains("credentials are unavailable"),
         "{error}"
@@ -118,7 +119,8 @@ fn exercise_guarded_read() {
         &bin,
         "echo 'GraphQL: Could not resolve to a PullRequest (HTTP 404)' >&2; exit 1",
     );
-    let error = run_private_vcs_operation("pr.status", &input).expect_err("a rejected read fails");
+    let error = run_private_vcs_operation(&orbit_common::Env::capture(), "pr.status", &input)
+        .expect_err("a rejected read fails");
     assert!(!error.to_string().contains("credentials"), "{error}");
 }
 

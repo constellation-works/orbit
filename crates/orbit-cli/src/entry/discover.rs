@@ -81,8 +81,10 @@ fn plugin_root_override() -> Option<std::path::PathBuf> {
 /// this command's: the built-in CLI must stay usable, so it is logged and
 /// the groups are simply absent (§4.9).
 fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
-    let Ok(root) = orbit_core::runtime::resolve_generation_root(plugin_root_override().as_deref())
-    else {
+    let Ok(root) = orbit_core::runtime::resolve_generation_root(
+        &orbit_core::composition::composition_env(),
+        plugin_root_override().as_deref(),
+    ) else {
         return Vec::new();
     };
     if !root.join("plugins").is_dir() {

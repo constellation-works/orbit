@@ -88,7 +88,14 @@ impl OrbitRuntime {
             .get_task(task_id)
             .map(|task| workflow::CommitType::for_task_type(task.task_type))
             .unwrap_or(workflow::CommitType::Chore);
-        match preserve_interrupted_review(workspace, task_id, commit_type, &run.run_id, &review) {
+        match preserve_interrupted_review(
+            self.env(),
+            workspace,
+            task_id,
+            commit_type,
+            &run.run_id,
+            &review,
+        ) {
             Ok(kept) => {
                 if let Some(commit) = &kept.commit {
                     record["repair_ref"] = json!(kept.repair_ref);

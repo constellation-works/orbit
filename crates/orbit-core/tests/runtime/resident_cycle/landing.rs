@@ -553,7 +553,12 @@ esac
     let _env = orbit_common::test_env::scoped([("PATH", Some(path.as_str()))]);
     let merge = |script: &str| {
         std::fs::write(&answer, script).unwrap();
-        GhTaskPrForge.merge_pull_request(root.path(), PR, HEAD, &merge_message())
+        GhTaskPrForge::new(&orbit_common::Env::capture()).merge_pull_request(
+            root.path(),
+            PR,
+            HEAD,
+            &merge_message(),
+        )
     };
 
     let merged = merge(&format!(

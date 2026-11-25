@@ -98,7 +98,7 @@ where
         },
         audit_writer,
         |input| {
-            enforce_plugin_callback_allowlist_from_root(global_root, name)?;
+            enforce_plugin_callback_allowlist_from_root(env, global_root, name)?;
             if session_context.application.is_some()
                 || (entry_point == ToolEntryPoint::Cli
                     && env.orbit_application_credential_fd().is_some())
@@ -133,15 +133,16 @@ impl GlobalAuditStoreCache {
     /// it only when the stamps above say the cached handle is stale.
     pub fn insert_audit_event_record(
         &self,
+        env: &orbit_common::Env,
         global_root: &Path,
         params: &AuditEventInsertParams,
         invocation: AuditInvocationFields<'_>,
     ) -> Result<(), OrbitError> {
-        self.store(global_root)?
+        self.store(env, global_root)?
             .insert_audit_event_record_with_invocation(params, invocation)
     }
 
-    fn store(&self, global_root: &Path) -> Result<Store, OrbitError> {
+    fn store(&self, env: &orbit_common::Env, global_root: &Path) -> Result<Store, OrbitError> {
         let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let config_stamp = FileStamp::read(&global_root.join("config.toml"));
         if cached
@@ -150,7 +151,7 @@ impl GlobalAuditStoreCache {
         {
             *cached = None;
             let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
+                env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
             let store = Store::open(&audit_db)?;
@@ -234,13 +235,14 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         .execution_kind(name)
         .unwrap_or(ToolExecutionKind::Mutating);
     let global_root = global_root.to_path_buf();
-    let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
+    let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context(env);
     let activity_tool_policy = if trusted_env {
         read_activity_tool_policy_from_env(env)
     } else {
         Default::default()
     };
     let tool_context = ToolContext {
+        env: env.clone(),
         cwd: std::env::current_dir()
             .ok()
             .map(|path| path.to_string_lossy().into_owned()),
@@ -276,7 +278,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         },
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
+                env,
                 &orbit_config::ConfigRoots::global_only(&global_root),
             )?;
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
@@ -292,11 +294,12 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             // this one has no runtime, so the same generic plugin row is
             // resolved here — inside the audited closure, so a refusal lands
             // on the row for this call.
-            enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
-            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor(&orbit_common::Env::capture())?.is_some() || tool_context.session_context.application.is_some() {
+            enforce_plugin_callback_allowlist_from_root(env, &global_root, name)?;
+            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor(env)?.is_some() || tool_context.session_context.application.is_some() {
                 return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
             }
             authorize_plugin_tool(
+                env,
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
                 binding.agent_callable,
                 entry_point,
@@ -312,6 +315,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
 
 /// Decide a plugin tool call that has no workspace runtime behind it.
 fn authorize_plugin_tool(
+    env: &orbit_common::Env,
     mutating: bool,
     agent_callable: bool,
     entry_point: ToolEntryPoint,
@@ -325,9 +329,7 @@ fn authorize_plugin_tool(
         // An MCP session's authority is whatever its server was started with,
         // never this process's environment.
         ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
-        ToolEntryPoint::Cli => {
-            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context)
-        }
+        ToolEntryPoint::Cli => CallerEnvelope::from_process_env(env, session_context),
     };
     let operation = governed_plugin_tool(mutating, agent_callable);
     let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);

@@ -112,6 +112,7 @@ pub(super) fn quote_argv(argv: &[String]) -> String {
 /// `forbidden` are the paths no root may be or contain besides `$HOME` and
 /// the credential paths: the global Orbit root and the workspace roots.
 pub fn plan_plugin_build(
+    process_env: &orbit_common::Env,
     spec: &PluginBuildSpec,
     source: &str,
     commit: &ResolvedCommit,
@@ -169,7 +170,7 @@ pub fn plan_plugin_build(
         checked.push(&program.invoked);
         checked.push(&program.canonical);
     }
-    refuse_unsafe_roots(&checked, env, forbidden)?;
+    refuse_unsafe_roots(process_env, &checked, env, forbidden)?;
 
     let mut locators = Vec::new();
     if let Some(home) = &rustup_home {
@@ -241,6 +242,7 @@ pub(super) fn recheck_build_paths(plan: &PluginBuildPlan) -> Result<(), OrbitErr
 /// never the global Orbit root, a workspace or a credential path, and is
 /// neither inside nor around one of them (§3.2).
 fn refuse_unsafe_roots(
+    process_env: &orbit_common::Env,
     paths: &[&Path],
     env: &PluginBuildHostEnv,
     forbidden: &[PathBuf],
@@ -253,7 +255,7 @@ fn refuse_unsafe_roots(
     for path in forbidden {
         sensitive.push((canonical_or_self(path), "an Orbit root or workspace", true));
     }
-    for path in orbit_exec::default_credential_read_denies(&orbit_common::Env::capture()) {
+    for path in orbit_exec::default_credential_read_denies(process_env) {
         sensitive.push((canonical_or_self(&path), "a credential path", true));
     }
     for path in paths {

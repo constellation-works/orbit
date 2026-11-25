@@ -112,7 +112,7 @@ pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
         return Ok(task);
     }
 
-    let changes = worktree_changes(workspace_path)?;
+    let changes = worktree_changes(&host.process_env(), workspace_path)?;
     let (summary, note) = if !changes.is_empty() {
         (
             render_derived_summary(&task.id, run_id, &changes),
@@ -183,8 +183,12 @@ struct WorktreeChange {
 ///
 /// `--untracked-files=all` matches what `git add --all` would stage, so the
 /// derived summary describes the same file set the commit contains.
-fn worktree_changes(workspace_path: &Path) -> Result<Vec<WorktreeChange>, OrbitError> {
+fn worktree_changes(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<Vec<WorktreeChange>, OrbitError> {
     let raw = git_output_raw(
+        process_env,
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
     )?;

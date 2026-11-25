@@ -83,17 +83,20 @@ fn stdin_lifecycle_child() {
                 let args = Vec::new();
                 let (stdout, stderr, exit_code, _, timed_out, _) =
                     with_supervisor_seam(seam(), || {
-                        spawn_with_timeout(SpawnWithTimeoutRequest {
-                            stdin_bytes: &payload,
-                            output_capture_limit: Some(payload.len() + 1),
-                            ..spawn_test_request(
-                                "/bin/cat",
-                                &args,
-                                None,
-                                Duration::from_secs(10),
-                                stdin_trace(),
-                            )
-                        })
+                        spawn_with_timeout(
+                            &orbit_common::Env::capture(),
+                            SpawnWithTimeoutRequest {
+                                stdin_bytes: &payload,
+                                output_capture_limit: Some(payload.len() + 1),
+                                ..spawn_test_request(
+                                    "/bin/cat",
+                                    &args,
+                                    None,
+                                    Duration::from_secs(10),
+                                    stdin_trace(),
+                                )
+                            },
+                        )
                     })
                     .expect("normal stdin delivery");
                 assert_eq!(
@@ -109,16 +112,19 @@ fn stdin_lifecycle_child() {
             let args = sh_args("printf 'early exit\\n' >&2; exit 7");
             let payload = vec![b'x'; 4 * 1024 * 1024];
             let (_, stderr, code, _, timed_out, _) = with_supervisor_seam(seam(), || {
-                spawn_with_timeout(SpawnWithTimeoutRequest {
-                    stdin_bytes: &payload,
-                    ..spawn_test_request(
-                        "/bin/sh",
-                        &args,
-                        None,
-                        Duration::from_secs(10),
-                        stdin_trace(),
-                    )
-                })
+                spawn_with_timeout(
+                    &orbit_common::Env::capture(),
+                    SpawnWithTimeoutRequest {
+                        stdin_bytes: &payload,
+                        ..spawn_test_request(
+                            "/bin/sh",
+                            &args,
+                            None,
+                            Duration::from_secs(10),
+                            stdin_trace(),
+                        )
+                    },
+                )
             })
             .expect("broken stdin pipe preserves provider outcome");
             assert_eq!(code, Some(7));
@@ -206,21 +212,24 @@ fn exercise_escaped_stdin(root: &Path, without_wakeup: bool) {
             },
             || {
                 with_supervisor_seam(seam, || {
-                    spawn_with_timeout(SpawnWithTimeoutRequest {
-                        stdin_bytes: &payload,
-                        env: &env,
-                        ..spawn_test_request(
-                            program,
-                            &args,
-                            None,
-                            if mode == "timeout" {
-                                Duration::from_secs(2)
-                            } else {
-                                Duration::from_secs(10)
-                            },
-                            stdin_trace(),
-                        )
-                    })
+                    spawn_with_timeout(
+                        &orbit_common::Env::capture(),
+                        SpawnWithTimeoutRequest {
+                            stdin_bytes: &payload,
+                            env: &env,
+                            ..spawn_test_request(
+                                program,
+                                &args,
+                                None,
+                                if mode == "timeout" {
+                                    Duration::from_secs(2)
+                                } else {
+                                    Duration::from_secs(10)
+                                },
+                                stdin_trace(),
+                            )
+                        },
+                    )
                 })
             },
         );
@@ -450,24 +459,27 @@ fn a_provider_blocked_on_a_stopped_descendant_finishes_once_the_supervisor_ends_
         let args = sh_args(script);
         let reports = std::cell::RefCell::new(Vec::<StoppedDescendant>::new());
         let report = |stopped: &StoppedDescendant| reports.borrow_mut().push(stopped.clone());
-        let outcome = spawn_with_timeout(SpawnWithTimeoutRequest {
-            stopped_descendants: Some(StoppedDescendantReporter {
-                threshold,
-                report: &report,
-            }),
-            ..spawn_test_request(
-                "/bin/sh",
-                &args,
-                None,
-                timeout,
-                SpawnTraceContext {
-                    provider: "fixture",
-                    job_run_id: "job-stopped-descendant",
-                    task_id: None,
-                    cwd: None,
-                },
-            )
-        })
+        let outcome = spawn_with_timeout(
+            &orbit_common::Env::capture(),
+            SpawnWithTimeoutRequest {
+                stopped_descendants: Some(StoppedDescendantReporter {
+                    threshold,
+                    report: &report,
+                }),
+                ..spawn_test_request(
+                    "/bin/sh",
+                    &args,
+                    None,
+                    timeout,
+                    SpawnTraceContext {
+                        provider: "fixture",
+                        job_run_id: "job-stopped-descendant",
+                        task_id: None,
+                        cwd: None,
+                    },
+                )
+            },
+        )
         .expect("spawn succeeds");
         (outcome, reports.into_inner())
     };

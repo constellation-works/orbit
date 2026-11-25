@@ -41,6 +41,10 @@ use super::super::{
 use super::NullRuntimeHost;
 
 impl<T: NullRuntimeHost> RuntimeHost for T {
+    fn process_env(&self) -> orbit_common::Env {
+        NullRuntimeHost::process_env(self)
+    }
+
     fn validation_build_output_env(&self) -> Vec<String> {
         NullRuntimeHost::validation_build_output_env(self)
     }

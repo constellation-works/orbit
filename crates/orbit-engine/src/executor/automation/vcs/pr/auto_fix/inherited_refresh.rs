@@ -89,7 +89,13 @@ pub(in crate::executor::automation::vcs::pr) fn refresh_inherited_failure<
     let Some(base_name) = input_string_field(input, "base") else {
         return hold("the input names no base".to_string());
     };
-    let (_, branch, tip) = match git::resolve_pr_base(workspace, input, &base_name, Some(head)) {
+    let (_, branch, tip) = match git::resolve_pr_base(
+        &host.process_env(),
+        workspace,
+        input,
+        &base_name,
+        Some(head),
+    ) {
         Ok(resolved) => resolved,
         Err(reason) => return hold(reason),
     };
@@ -107,10 +113,13 @@ pub(in crate::executor::automation::vcs::pr) fn refresh_inherited_failure<
         Err(CheckReadGap::Deferred(deferred)) => return Ok(InheritedRefresh::Deferred(deferred)),
         Err(CheckReadGap::Unavailable(why)) => return hold(why),
     };
-    let Some(repository) = git_output(workspace, &["remote", "get-url", "origin"])
-        .ok()
-        .and_then(|url| super::super::super::claim::slug(&url))
-    else {
+    let Some(repository) = git_output(
+        &host.process_env(),
+        workspace,
+        &["remote", "get-url", "origin"],
+    )
+    .ok()
+    .and_then(|url| super::super::super::claim::slug(&url)) else {
         return hold("the origin repository cannot be named".to_string());
     };
     let reservation = PrBaseUpdateReservation {
@@ -160,6 +169,7 @@ pub(in crate::executor::automation::vcs::pr) fn refresh_inherited_failure<
     };
     let base_only = |to: &str| {
         verify_refreshed_head_from_base(
+            &host.process_env(),
             workspace,
             head,
             to,

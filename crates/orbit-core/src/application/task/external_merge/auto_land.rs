@@ -305,6 +305,7 @@ impl OrbitRuntime {
         }
         if let Some(base) = base.as_deref()
             && let Some(hold) = orbit_engine::candidate_completion_hold(
+                self.env(),
                 crate::runtime::RuntimeKernel::completion_hold_rules(self),
                 &task,
                 &repo_root,

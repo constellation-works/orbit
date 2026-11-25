@@ -11,7 +11,7 @@
     "orbit_runtime_ref_param_fns": 1375,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
-    "std_env_reads": 117,
+    "std_env_reads": 63,
     "store_backend_traits": 13,
     "store_open_outside_store": 7,
     "worker_or_owner_reads": 219

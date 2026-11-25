@@ -80,7 +80,8 @@ pub(crate) fn attention_query(
     resident_scope: Option<&BTreeSet<String>>,
 ) -> Result<Value, OrbitError> {
     let filter = AttentionFilter::parse(input)?;
-    let operator = resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
+    let operator = resolved_caller_capabilities(runtime.env(), session_context)
+        .contains(&McpCapability::Operator);
     let machine = orbit_config::load_machine_settings(&runtime.global_root())?;
     let host = AttentionHost {
         machine_id: runtime

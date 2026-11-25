@@ -149,7 +149,11 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         .map(std::path::PathBuf::from)
         .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
 
-    let branch = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = git_output(
+        &host.process_env(),
+        &workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     if branch.trim().is_empty() || branch == "HEAD" {
         return Err(OrbitError::PolicyDenied(
             "required validation runs on a named candidate branch; this checkout has a \
@@ -157,10 +161,11 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 .to_string(),
         ));
     }
-    let candidate = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    let candidate = git_output(&host.process_env(), &workspace_path, &["rev-parse", "HEAD"])?;
     let base_sha = input_string_field(input, "base_sha");
     if let Some(base_sha) = base_sha.as_deref()
         && !crate::executor::automation::vcs::git::is_ancestor(
+            &host.process_env(),
             &workspace_path,
             base_sha,
             &candidate,
@@ -170,7 +175,13 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "candidate '{candidate}' does not descend from synchronized base '{base_sha}'"
         )));
     }
-    require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+    require_clean_checkout(
+        &host.process_env(),
+        &workspace_path,
+        &branch,
+        &candidate,
+        "the candidate",
+    )?;
     if let Some(base_sha) = base_sha.as_deref()
         && let Some(decision) = light_delivery_decision(
             host,
@@ -200,6 +211,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         }
     }
     let tree = git_output(
+        &host.process_env(),
         &workspace_path,
         &["rev-parse", "--verify", &format!("{candidate}^{{tree}}")],
     )?;
@@ -331,7 +343,13 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             return Err(failure);
         }
         if let Some(recovered) = recovered {
-            require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+            require_clean_checkout(
+                &host.process_env(),
+                &workspace_path,
+                &branch,
+                &candidate,
+                "the candidate",
+            )?;
             attach_logs(host, &task_ids, &run_id, &logs)?;
             for task_id in &task_ids {
                 host.record_flaky_validation(task_id, recovered)?;
@@ -342,7 +360,13 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         }
         if let Some(known) = known {
             record_known_red(host, &task_ids, &known)?;
-            require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+            require_clean_checkout(
+                &host.process_env(),
+                &workspace_path,
+                &branch,
+                &candidate,
+                "the candidate",
+            )?;
             known_red.push(known);
             continue;
         }
@@ -375,7 +399,13 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 &evidence,
             ));
         }
-        require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+        require_clean_checkout(
+            &host.process_env(),
+            &workspace_path,
+            &branch,
+            &candidate,
+            "the candidate",
+        )?;
         passed.push(run.command);
     }
 
@@ -450,6 +480,7 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
         .map(std::path::PathBuf::from)
         .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
     let changed = git_output_paths(
+        &host.process_env(),
         &workspace_path,
         &[
             "diff",

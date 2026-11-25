@@ -39,6 +39,7 @@ pub(super) enum Adoption {
 /// worktree holds, or one at an unpublished tip `published_head` does not
 /// name.
 pub(super) fn adopt_published_branch(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     task_id: &str,
     candidate: &Candidate,
@@ -46,6 +47,7 @@ pub(super) fn adopt_published_branch(
 ) -> Result<Adoption, OrbitError> {
     let branch = candidate.branch.as_str();
     let Ok(ours) = git_output(
+        process_env,
         workspace_path,
         &["symbolic-ref", "--quiet", "--short", "HEAD"],
     ) else {
@@ -64,7 +66,11 @@ pub(super) fn adopt_published_branch(
         Some(prefix) == ours_prefix && name.starts_with(&format!("{task_id}-"))
     });
     if !task_branch
-        || !git_command_success(workspace_path, &["check-ref-format", "--branch", branch])?
+        || !git_command_success(
+            process_env,
+            workspace_path,
+            &["check-ref-format", "--branch", branch],
+        )?
     {
         return Ok(Adoption::Refused(format!(
             "'{branch}' is not one of this task's delivery branches beside '{ours}'"
@@ -73,10 +79,12 @@ pub(super) fn adopt_published_branch(
 
     let local_ref = format!("refs/heads/{branch}");
     if git_command_success(
+        process_env,
         workspace_path,
         &["show-ref", "--verify", "--quiet", &local_ref],
     )? {
         let tip = git_output(
+            process_env,
             workspace_path,
             &["rev-parse", "--verify", &format!("{local_ref}^{{commit}}")],
         )?;
@@ -86,7 +94,7 @@ pub(super) fn adopt_published_branch(
         // a divergence; the next adoption re-applies the published head.
         if tip.trim() != candidate.head_sha
             && tip.trim() != published_head
-            && !same_tree(workspace_path, tip.trim(), &candidate.head_sha)?
+            && !same_tree(process_env, workspace_path, tip.trim(), &candidate.head_sha)?
         {
             return Ok(Adoption::Refused(format!(
                 "this host's branch '{branch}' is at {}, not the candidate head {}",
@@ -95,11 +103,15 @@ pub(super) fn adopt_published_branch(
             )));
         }
         if (tip.trim() != published_head && candidate.head_sha != published_head)
-            || held_by_worktree(workspace_path, &local_ref)?
+            || held_by_worktree(process_env, workspace_path, &local_ref)?
         {
             let suffix = ours.rsplit('-').next().unwrap_or(ours.as_str());
             let aside = format!("{branch}-superseded-{suffix}");
-            if let Some(refused) = rename(workspace_path, &["branch", "-m", branch, &aside])? {
+            if let Some(refused) = rename(
+                process_env,
+                workspace_path,
+                &["branch", "-m", branch, &aside],
+            )? {
                 return Ok(Adoption::Refused(refused));
             }
         }
@@ -107,7 +119,11 @@ pub(super) fn adopt_published_branch(
     // A local copy left in place sits at the published head, which `origin`
     // keeps, so `-M` loses nothing by replacing it.
     Ok(
-        match rename(workspace_path, &["branch", "-M", &ours, branch])? {
+        match rename(
+            process_env,
+            workspace_path,
+            &["branch", "-M", &ours, branch],
+        )? {
             Some(refused) => Adoption::Refused(refused),
             None => Adoption::Adopted,
         },
@@ -118,9 +134,15 @@ pub(super) fn adopt_published_branch(
 /// patch (same parent, same tree, same message, different timestamp) names a
 /// different commit with the same tree; that is not a divergence. Any Git
 /// failure answers `false` so the caller keeps its original refusal.
-fn same_tree(workspace_path: &Path, a: &str, b: &str) -> Result<bool, OrbitError> {
+fn same_tree(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    a: &str,
+    b: &str,
+) -> Result<bool, OrbitError> {
     let tree = |sha: &str| {
         git_output(
+            process_env,
             workspace_path,
             &["rev-parse", "--verify", &format!("{sha}^{{tree}}")],
         )
@@ -132,16 +154,28 @@ fn same_tree(workspace_path: &Path, a: &str, b: &str) -> Result<bool, OrbitError
 }
 
 /// Whether a registered worktree has `local_ref` checked out.
-fn held_by_worktree(workspace_path: &Path, local_ref: &str) -> Result<bool, OrbitError> {
-    let listed = git_output(workspace_path, &["worktree", "list", "--porcelain"])?;
+fn held_by_worktree(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    local_ref: &str,
+) -> Result<bool, OrbitError> {
+    let listed = git_output(
+        process_env,
+        workspace_path,
+        &["worktree", "list", "--porcelain"],
+    )?;
     Ok(listed
         .lines()
         .any(|line| line.strip_prefix("branch ") == Some(local_ref)))
 }
 
 /// Run a branch rename; `Some` is why Git refused it.
-fn rename(workspace_path: &Path, args: &[&str]) -> Result<Option<String>, OrbitError> {
-    let outcome = git_run(workspace_path, args)?;
+fn rename(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    args: &[&str],
+) -> Result<Option<String>, OrbitError> {
+    let outcome = git_run(process_env, workspace_path, args)?;
     if outcome.success {
         return Ok(None);
     }

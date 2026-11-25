@@ -52,7 +52,9 @@ pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
     // its base went obsolete. Promotion is where this run first calls the work
     // delivered, so it re-asks the question rather than trusting the earlier
     // step's success.
-    if !no_diff_expected && let Err(error) = ensure_promotable_base(input, &context) {
+    if !no_diff_expected
+        && let Err(error) = ensure_promotable_base(&host.process_env(), input, &context)
+    {
         record_failed_handoff(
             host,
             &context,
@@ -118,7 +120,11 @@ pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
 /// the run's pinned checkpoint, so the base commit is resolved from whichever
 /// the caller supplied. A caller that names no base (the no-diff promotion, and
 /// the direct-promotion tests) has no delivery target to check.
-fn ensure_promotable_base(input: &Value, context: &HandoffContext) -> Result<(), OrbitError> {
+fn ensure_promotable_base(
+    process_env: &orbit_common::Env,
+    input: &Value,
+    context: &HandoffContext,
+) -> Result<(), OrbitError> {
     let Some(base) = input_string_field(input, "base") else {
         return Ok(());
     };
@@ -126,10 +132,11 @@ fn ensure_promotable_base(input: &Value, context: &HandoffContext) -> Result<(),
         Some(base_sha) => base_sha,
         None => {
             let base_ref = input_string_field(input, "base_ref").unwrap_or_else(|| base.clone());
-            commit_sha(&context.workspace_path, &base_ref)?
+            commit_sha(process_env, &context.workspace_path, &base_ref)?
         }
     };
     ensure_base_can_still_land(
+        process_env,
         &context.workspace_path,
         "pr_promote",
         &base,

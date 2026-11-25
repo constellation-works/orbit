@@ -39,16 +39,18 @@ impl LandingView {
     /// Adopting a published PR's updated head requires its own successful
     /// fetch, even when this initial refresh failed.
     pub(super) fn refresh(
+        process_env: &orbit_common::Env,
         workspace: &Path,
         landing_branch: &str,
         delivery: &HandoffDelivery,
     ) -> Self {
         if matches!(delivery, HandoffDelivery::LocalCandidate)
-            || !git_command_success(workspace, &["remote", "get-url", "origin"]).unwrap_or(false)
+            || !git_command_success(process_env, workspace, &["remote", "get-url", "origin"])
+                .unwrap_or(false)
         {
             return Self { refreshed: false };
         }
-        match fetch_remote_base(workspace, landing_branch) {
+        match fetch_remote_base(process_env, workspace, landing_branch) {
             Ok(()) => Self { refreshed: true },
             Err(error) => {
                 tracing::warn!(
@@ -102,7 +104,7 @@ pub(super) fn reconcile_intent<H: RuntimeHost + ?Sized>(
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
                     let mut pin = pin_for(candidate);
-                    adopt_base_update(&mut pin, context, &status);
+                    adopt_base_update(&host.process_env(), &mut pin, context, &status);
                     let evidence = match pin.ensure_delivered(&status, &number.to_string()) {
                         Ok(delivered) => json!({
                             "reconciled": "pull_request_merged",
@@ -134,11 +136,13 @@ pub(super) fn reconcile_intent<H: RuntimeHost + ?Sized>(
         }
         HandoffDelivery::LocalCandidate => {
             let landing = resolve_landing_ref(
+                &host.process_env(),
                 &context.workspace_path,
                 &candidate.landing_branch,
                 &candidate.delivery,
             )?;
             let merged = crate::executor::automation::vcs::git::is_ancestor(
+                &host.process_env(),
                 &context.workspace_path,
                 &candidate.candidate.commit,
                 &landing,
@@ -189,12 +193,13 @@ pub(super) fn reconcile_intent<H: RuntimeHost + ?Sized>(
     if !merged {
         return Ok(None);
     }
-    let observed = observe_candidate(context, None, view).map_err(|error| {
-        if let Some(observation) = &refusal_observation {
-            stop_pr(host, context, observation, false, &error.to_string()).unwrap_or(error)
-        } else {
-            stop(host, context, &error.to_string()).unwrap_or(error)
-        }
-    })?;
+    let observed =
+        observe_candidate(&host.process_env(), context, None, view).map_err(|error| {
+            if let Some(observation) = &refusal_observation {
+                stop_pr(host, context, observation, false, &error.to_string()).unwrap_or(error)
+            } else {
+                stop(host, context, &error.to_string()).unwrap_or(error)
+            }
+        })?;
     Ok(Some(complete(host, context, observed, &evidence)?))
 }

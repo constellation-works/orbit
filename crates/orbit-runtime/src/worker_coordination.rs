@@ -1,6 +1,5 @@
 //! Managed-worker owner-coordinator RPC retries and test wait seams on `RuntimeKernel`; imports `orbit_runtime`, `orbit-common`, `orbit-tools`, and `orbit-types`.
 
-use orbit_common::env_vars;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,9 +108,11 @@ fn retry_wait(delay: Duration) {
 
 impl RuntimeKernel {
     pub fn current_worker_invocation(
+        env: &orbit_common::Env,
         global_root: &std::path::Path,
     ) -> Result<Option<WorkerInvocation>, OrbitError> {
-        restore_process_binding(global_root).map(|binding| binding.map(|value| (*value).clone()))
+        restore_process_binding(env, global_root)
+            .map(|binding| binding.map(|value| (*value).clone()))
     }
 
     /// Bind a runtime clone to an admitted worker. Composition must obtain the
@@ -461,9 +462,10 @@ fn is_coordination_operation(name: &str) -> bool {
 /// A required child can start before the parent has recorded its PID. Wait
 /// briefly for that record; never use environment payload as a substitute.
 pub(super) fn restore_process_binding(
+    env: &orbit_common::Env,
     global_root: &std::path::Path,
 ) -> Result<Option<Arc<WorkerInvocation>>, OrbitError> {
-    let required = std::env::var_os(env_vars::ORBIT_WORKER_CONTEXT_REQUIRED).is_some();
+    let required = env.orbit_worker_context_required().is_some();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if let Some(binding) = super::recovery_authority::current_worker_binding(global_root)? {

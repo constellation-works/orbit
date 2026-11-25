@@ -64,7 +64,7 @@ pub(super) fn regenerate(
     generated: &[GeneratedPath],
 ) -> Result<(), String> {
     for entry in generated {
-        take_a_side(root, &entry.path)?;
+        take_a_side(&host.process_env(), root, &entry.path)?;
     }
     let mut commands = Vec::<&str>::new();
     for entry in generated {
@@ -96,9 +96,9 @@ pub(super) fn regenerate(
 /// Write the upstream side (`--ours` while rebasing), or the replayed side
 /// when upstream has none, over the conflicted file. Only the worktree is
 /// written; the unmerged index entries stay for the continuation to stage.
-fn take_a_side(root: &Path, path: &str) -> Result<(), String> {
+fn take_a_side(process_env: &orbit_common::Env, root: &Path, path: &str) -> Result<(), String> {
     for side in ["--ours", "--theirs"] {
-        let output = git_mutation_output(root, &["checkout", side, "--", path])
+        let output = git_mutation_output(process_env, root, &["checkout", side, "--", path])
             .map_err(|error| format!("take a side of generated path {path}: {error}"))?;
         if output.success {
             return Ok(());
@@ -110,7 +110,7 @@ fn take_a_side(root: &Path, path: &str) -> Result<(), String> {
 
 fn run_generator(host: &dyn RuntimeHost, root: &Path, command: &str) -> Result<(), String> {
     let supervised = run_process_supervised(
-        &orbit_common::Env::capture(),
+        &host.process_env(),
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],

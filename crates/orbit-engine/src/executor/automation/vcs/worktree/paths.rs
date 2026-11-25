@@ -1,4 +1,3 @@
-use orbit_common::env_vars;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -56,17 +55,22 @@ pub(super) fn reject_unsafe_branch_prefix(prefix: &str) -> Result<(), OrbitError
 }
 
 pub fn resolve_worktree_path_from_prefix(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     prefix: &str,
     run_id: &str,
 ) -> Result<PathBuf, OrbitError> {
     let prefix = sanitize_worktree_component("branch_prefix", prefix)?;
     let run_id = sanitize_worktree_component("run_id", run_id)?;
-    worktree_directory(repo_root, &format!("{prefix}-{run_id}"))
+    worktree_directory(process_env, repo_root, &format!("{prefix}-{run_id}"))
 }
 
-pub fn resolve_shared_worktree_path(repo_root: &Path, run_id: &str) -> Result<PathBuf, OrbitError> {
-    worktree_directory(repo_root, &shared_worktree_dir_name(run_id)?)
+pub fn resolve_shared_worktree_path(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    run_id: &str,
+) -> Result<PathBuf, OrbitError> {
+    worktree_directory(process_env, repo_root, &shared_worktree_dir_name(run_id)?)
 }
 
 /// Where a short-lived detached checkout (a base rerun, host evidence) goes:
@@ -74,8 +78,12 @@ pub fn resolve_shared_worktree_path(repo_root: &Path, run_id: &str) -> Result<Pa
 /// common directory, never the common directory itself. The Linux Git
 /// protection scan refuses any symlink under the common directory, and a
 /// checkout of a repository with symlinked files is not Git metadata.
-pub(crate) fn scratch_checkout_path(repo: &Path, dir_name: &str) -> Result<PathBuf, OrbitError> {
-    let common = orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), repo)?;
+pub(crate) fn scratch_checkout_path(
+    process_env: &orbit_common::Env,
+    repo: &Path,
+    dir_name: &str,
+) -> Result<PathBuf, OrbitError> {
+    let common = orbit_common::fs::git::git_common_dir(process_env, repo)?;
     let primary = common
         .parent()
         .filter(|_| common.file_name().is_some_and(|name| name == ".git"))
@@ -85,14 +93,18 @@ pub(crate) fn scratch_checkout_path(repo: &Path, dir_name: &str) -> Result<PathB
                 common.display()
             ))
         })?;
-    worktree_directory(primary, dir_name)
+    worktree_directory(process_env, primary, dir_name)
 }
 
 /// Join `dir_name` as one child of the worktree root. A name that is not a
 /// single normal component, or a join that does not stay under that root,
 /// is rejected.
-fn worktree_directory(repo_root: &Path, dir_name: &str) -> Result<PathBuf, OrbitError> {
-    let parent = match worktree_root() {
+fn worktree_directory(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    dir_name: &str,
+) -> Result<PathBuf, OrbitError> {
+    let parent = match worktree_root(process_env) {
         Some(root) => root.join(repo_name(repo_root)?),
         None => repo_root.join(".orbit").join("state").join("worktrees"),
     };
@@ -124,9 +136,10 @@ fn is_single_worktree_component(dir_name: &str) -> bool {
     }
 }
 
-fn worktree_root() -> Option<PathBuf> {
-    std::env::var(env_vars::ORBIT_WORKTREE_ROOT)
-        .ok()
+fn worktree_root(process_env: &orbit_common::Env) -> Option<PathBuf> {
+    process_env
+        .orbit_worktree_root()
+        .and_then(std::ffi::OsStr::to_str)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)

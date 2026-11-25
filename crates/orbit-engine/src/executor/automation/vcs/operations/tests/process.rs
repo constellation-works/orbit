@@ -34,11 +34,11 @@ fn held_core_refuses_a_delivery_read_before_gh_runs() {
         timeout_ms: None,
         stdin_mode: StdinMode::Null,
         environment_mode: EnvironmentMode::ClearAndSet(
-            crate::executor::automation::vcs::git::gh_environment(),
+            crate::executor::automation::vcs::git::gh_environment(&orbit_common::Env::capture()),
         ),
         debug: false,
     };
-    let account = github_quota::request_account_key(&request);
+    let account = github_quota::request_account_key(&orbit_common::Env::capture(), &request);
     let store = GithubQuotaStore::new(records.path().to_path_buf());
     let policy = GithubQuotaPolicy::default();
     let now = std::time::SystemTime::now()
@@ -59,7 +59,14 @@ fn held_core_refuses_a_delivery_read_before_gh_runs() {
     );
 
     let error = github_quota::with_scoped_guard(store, policy, || {
-        execute_with_transient_retry(&gh.program(), &args(), None, 10_000, "check runs")
+        execute_with_transient_retry(
+            &orbit_common::Env::capture(),
+            &gh.program(),
+            &args(),
+            None,
+            10_000,
+            "check runs",
+        )
     })
     .expect_err("a held read must be refused");
     let throttle = throttle_of(&error).expect("typed throttle");
@@ -75,8 +82,15 @@ fn held_core_refuses_a_delivery_read_before_gh_runs() {
 fn rate_limited_private_vcs_read_carries_the_typed_throttle() {
     let scratch = TempDir::new().unwrap();
     let gh = FixtureGh::create(scratch.path(), true).unwrap();
-    let error = execute_with_transient_retry(&gh.program(), &args(), None, 10_000, "check runs")
-        .expect_err("a throttled read fails");
+    let error = execute_with_transient_retry(
+        &orbit_common::Env::capture(),
+        &gh.program(),
+        &args(),
+        None,
+        10_000,
+        "check runs",
+    )
+    .expect_err("a throttled read fails");
     let throttle = throttle_of(&error).expect("typed throttle");
     assert_eq!(throttle.principal.as_deref(), Some("user ID 42"));
     assert_eq!(gh.calls(), vec![CHECK_RUNS.join(" ")]);

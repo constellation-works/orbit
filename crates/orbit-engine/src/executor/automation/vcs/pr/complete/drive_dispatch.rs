@@ -266,7 +266,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let Some(auto_fix) = auto_fix.filter(|_| is_blocked_merge_state(&status)) else {
             let diagnosis = self
                 .pin
-                .base_advance_note(input, workspace_path)
+                .base_advance_note(&self.host.process_env(), input, workspace_path)
                 .unwrap_or_default();
             let message = format!(
                 "pr_complete: pull request #{pr_number} cannot be merged ({reason}); \

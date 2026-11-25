@@ -1,7 +1,5 @@
 //! User-defined external executable tool adapter (`ExternalTool`); imports `program_policy`, `timeouts`, `tool`, `context`, `orbit-common`, `orbit-exec`, and `orbit-types`.
 
-use std::env;
-
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
@@ -46,7 +44,7 @@ impl Tool for ExternalTool {
                 self.name
             ))
         })?;
-        let timeout_ms = external_tool_timeout_ms()?;
+        let timeout_ms = external_tool_timeout_ms(&ctx.env)?;
         enforce_program_allowlist(ctx, "external tool", &self.path)?;
         let environment_mode =
             EnvironmentMode::ClearAndSet(runtime_environment(ctx, &self.name, &cwd));
@@ -55,7 +53,7 @@ impl Tool for ExternalTool {
         // sandbox. This call adds no second filesystem boundary; its program
         // policy and cleared child environment are handled above.
         let output = run_process(
-            &orbit_common::Env::capture(),
+            &ctx.env,
             &ExecRequest {
                 program: self.path.clone(),
                 args: vec![],
@@ -98,9 +96,10 @@ fn external_tool_description(base: &str) -> String {
     }
 }
 
-fn external_tool_timeout_ms() -> Result<u64, OrbitError> {
-    let Some(raw) = env::var(EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV)
-        .ok()
+fn external_tool_timeout_ms(env: &orbit_common::Env) -> Result<u64, OrbitError> {
+    let Some(raw) = env
+        .orbit_external_tool_timeout_ms()
+        .and_then(std::ffi::OsStr::to_str)
         .filter(|value| !value.trim().is_empty())
     else {
         return Ok(TIMEOUT_DEFAULT_MS);
@@ -118,7 +117,7 @@ fn runtime_environment(ctx: &ToolContext, tool_name: &str, cwd: &str) -> Vec<(St
     let mut env_pairs = ctx
         .proc_spawn_environment
         .clone()
-        .unwrap_or_else(|| allowlisted_child_env(&orbit_common::Env::capture(), &[], &[]));
+        .unwrap_or_else(|| allowlisted_child_env(&ctx.env, &[], &[]));
     upsert_env(&mut env_pairs, ORBIT_TOOL_NAME_ENV, tool_name.to_string());
     upsert_env(&mut env_pairs, ORBIT_TOOL_CWD_ENV, cwd.to_string());
     if let Some(workspace_root) = ctx.workspace_root.as_ref() {

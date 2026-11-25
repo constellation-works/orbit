@@ -25,8 +25,13 @@ struct Observed {
     head_sha: String,
 }
 
-fn observe(workspace: &Path, number: &str) -> Result<Observed, OrbitError> {
+fn observe(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    number: &str,
+) -> Result<Observed, OrbitError> {
     let result = execute_with_transient_retry(
+        process_env,
         "gh",
         &[
             "pr".to_string(),
@@ -59,8 +64,13 @@ fn observe(workspace: &Path, number: &str) -> Result<Observed, OrbitError> {
 }
 
 /// Workflow runs the forge reports for exactly `head_sha`, in any state.
-fn head_workflow_runs(workspace: &Path, head_sha: &str) -> Result<u64, OrbitError> {
+fn head_workflow_runs(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    head_sha: &str,
+) -> Result<u64, OrbitError> {
     let result = execute_with_transient_retry(
+        process_env,
         "gh",
         &[
             "api".to_string(),
@@ -86,6 +96,7 @@ fn head_workflow_runs(workspace: &Path, head_sha: &str) -> Result<u64, OrbitErro
 /// when the pull request is not open and ready at that head. After the
 /// mutation it confirms the pull request is open again on the same head.
 pub(in crate::executor::automation::vcs::operations) fn pr_retrigger_checks(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let number = required_string(input, "pr")?;
@@ -102,7 +113,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_retrigger_checks(
             "PR check re-trigger requires an exact 40- or 64-character head_sha".into(),
         ));
     }
-    let before = observe(workspace, number)?;
+    let before = observe(process_env, workspace, number)?;
     if before.state != "OPEN" || before.draft || before.head_sha != head_sha {
         return Err(OrbitError::Execution(format!(
             "pull request #{number} is not open and ready at head {head_sha} (state {}, draft \
@@ -110,7 +121,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_retrigger_checks(
             before.state, before.draft, before.head_sha
         )));
     }
-    let runs = head_workflow_runs(workspace, head_sha)?;
+    let runs = head_workflow_runs(process_env, workspace, head_sha)?;
     if runs > 0 {
         return Ok(json!({
             "requested": false,
@@ -121,6 +132,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_retrigger_checks(
     // Single-shot close: a reopen follows unconditionally, so an ambiguous
     // close reply still ends with the pull request open.
     let closed = execute(
+        process_env,
         "gh",
         vec!["pr".to_string(), "close".to_string(), number.to_string()],
         Some(workspace),
@@ -130,6 +142,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_retrigger_checks(
     let mut reopened = None;
     for attempt in 1..=GITHUB_TRANSIENT_ATTEMPTS {
         match execute(
+            process_env,
             "gh",
             vec!["pr".to_string(), "reopen".to_string(), number.to_string()],
             Some(workspace),
@@ -148,7 +161,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_retrigger_checks(
             }
         }
     }
-    let after = observe(workspace, number)?;
+    let after = observe(process_env, workspace, number)?;
     if after.state != "OPEN" {
         let cause = reopened
             .map(|error| error.to_string())

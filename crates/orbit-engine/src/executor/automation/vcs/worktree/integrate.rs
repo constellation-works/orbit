@@ -16,26 +16,27 @@ use super::merge::{checkout_holding_branch, ensure_base_checkout_ready};
 /// is not resolved here: the merge is aborted so the base is left as it was,
 /// and the typed error names why the base was not published.
 pub(in crate::executor::automation::vcs) fn merge_remote_head_into_base(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     remote_sha: &str,
 ) -> Result<(), OrbitError> {
-    let holder = checkout_holding_branch(repo_root, base)?;
+    let holder = checkout_holding_branch(process_env, repo_root, base)?;
     let checkout = holder.clone().unwrap_or_else(|| repo_root.to_path_buf());
     if holder.is_none() {
-        git_success(&checkout, &["checkout", base])?;
+        git_success(process_env, &checkout, &["checkout", base])?;
     }
-    ensure_base_checkout_ready(&checkout, Some(remote_sha))?;
+    ensure_base_checkout_ready(process_env, &checkout, Some(remote_sha))?;
     let message = format!(
         "Merge remote '{base}' at {remote_sha} into local '{base}'\n\n\
          Integrates commits other hosts published before this host pushed its own."
     );
     let args = ["merge", "--no-edit", "-m", message.as_str(), remote_sha];
-    let outcome = git_run(&checkout, &args)?;
+    let outcome = git_run(process_env, &checkout, &args)?;
     if outcome.success {
         return Ok(());
     }
-    let _ = git_success(&checkout, &["merge", "--abort"]);
+    let _ = git_success(process_env, &checkout, &["merge", "--abort"]);
     if outcome.timed_out {
         return Err(git_timeout_error(
             &checkout,

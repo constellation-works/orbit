@@ -142,9 +142,8 @@ pub fn install_test_lease_policy(orbit_dir: &std::path::Path, policy: LeasePolic
 /// The principal class of the calling context: `agent` when the process
 /// declares an agent or a managed run (the signal
 /// `agent_context_declared` reads), otherwise `human`.
-pub fn lease_principal_class() -> LeasePrincipalClass {
-    if orbit_common::governance::authorization::agent_context_declared(&orbit_common::Env::capture())
-    {
+pub fn lease_principal_class(env: &orbit_common::Env) -> LeasePrincipalClass {
+    if orbit_common::governance::authorization::agent_context_declared(env) {
         LeasePrincipalClass::Agent
     } else {
         LeasePrincipalClass::Human

@@ -109,11 +109,19 @@ impl WorktreeBoundaryGuard {
         // past the pin while the leaf runs. That advance is reconciled after
         // continuation, not refused here. The ref must still resolve so the
         // continuation can read its tip.
-        git_stdout(&self.assigned_root, &["rev-parse", "--verify", &base_ref])?;
+        git_stdout(
+            &host.process_env(),
+            &self.assigned_root,
+            &["rev-parse", "--verify", &base_ref],
+        )?;
         if prepared_target != target {
             return Err(invalid("prepared base_sha does not match target_base_sha"));
         }
-        let merge_base = git_stdout(&self.assigned_root, &["merge-base", original, target])?;
+        let merge_base = git_stdout(
+            &host.process_env(),
+            &self.assigned_root,
+            &["merge-base", original, target],
+        )?;
         if merge_base != original_base_sha {
             return Err(invalid(&format!(
                 "merge-base '{merge_base}' of original HEAD '{original}' and target base \
@@ -121,13 +129,14 @@ impl WorktreeBoundaryGuard {
             )));
         }
         let conflicting_paths = recovery_conflicting_paths(input).map_err(invalid)?;
-        if unmerged_paths(&self.assigned_root)? != conflicting_paths {
+        if unmerged_paths(&host.process_env(), &self.assigned_root)? != conflicting_paths {
             return Err(invalid(
                 "worktree unmerged paths do not match conflicting_paths",
             ));
         }
         let expected_ref = format!("refs/heads/{branch}");
         let branch_head = git_stdout(
+            &host.process_env(),
             &self.assigned_root,
             &["rev-parse", "--verify", &expected_ref],
         )?;
@@ -138,6 +147,7 @@ impl WorktreeBoundaryGuard {
         }
         for backend in ["rebase-merge", "rebase-apply"] {
             let path = git_stdout(
+                &host.process_env(),
                 &self.assigned_root,
                 &["rev-parse", "--path-format=absolute", "--git-path", backend],
             )?;
@@ -168,7 +178,7 @@ impl WorktreeBoundaryGuard {
                     "rebase onto '{onto}' does not match target base '{target}'"
                 )));
             }
-            if !stopped_head_on_pin(&self.assigned_root, target)? {
+            if !stopped_head_on_pin(&host.process_env(), &self.assigned_root, target)? {
                 return Err(invalid(
                     "stopped rebase HEAD does not descend from target base",
                 ));
@@ -181,7 +191,8 @@ impl WorktreeBoundaryGuard {
                 target,
             )
             .map_err(|reason| invalid(&reason))?;
-            let metadata = RecoveryMetadata::capture(&self.assigned_root, path)?;
+            let metadata =
+                RecoveryMetadata::capture(&host.process_env(), &self.assigned_root, path)?;
             let task_scope_digest = self
                 .recovery_task_id(input)
                 .and_then(|task_id| host.get_task(task_id).ok())
@@ -241,6 +252,7 @@ impl WorktreeBoundaryGuard {
     /// its branch with no rebase state left.
     pub(super) fn finished_authorized_rebase(
         &self,
+        process_env: &orbit_common::Env,
         after: &GitWorktreeFingerprint,
     ) -> Result<Option<&RebaseRecoveryCheckpoint>, DispatchError> {
         let Some(checkpoint) = &self.rebase_recovery else {
@@ -251,6 +263,7 @@ impl WorktreeBoundaryGuard {
         }
         for backend in ["rebase-merge", "rebase-apply"] {
             let path = git_stdout(
+                process_env,
                 &self.assigned_root,
                 &["rev-parse", "--path-format=absolute", "--git-path", backend],
             )?;
@@ -268,19 +281,25 @@ impl WorktreeBoundaryGuard {
         after: &GitWorktreeFingerprint,
     ) -> Result<bool, DispatchError> {
         Ok(self
-            .finished_authorized_rebase(after)?
+            .finished_authorized_rebase(&self.process_env, after)?
             .is_some_and(|checkpoint| after.head == checkpoint.target_base_sha))
     }
 
     pub(in crate::activity_job::workspace) fn completed_authorized_rebase(
         &self,
+        process_env: &orbit_common::Env,
         after: &GitWorktreeFingerprint,
     ) -> Result<bool, DispatchError> {
-        let Some(checkpoint) = self.finished_authorized_rebase(after)? else {
+        let Some(checkpoint) = self.finished_authorized_rebase(process_env, after)? else {
             return Ok(false);
         };
         Ok(after.head != checkpoint.target_base_sha
-            && git_is_ancestor(&self.assigned_root, &checkpoint.target_base_sha, "HEAD")?)
+            && git_is_ancestor(
+                process_env,
+                &self.assigned_root,
+                &checkpoint.target_base_sha,
+                "HEAD",
+            )?)
     }
 
     /// Whether the assigned worktree is still inside this recovery's pinned
@@ -288,14 +307,15 @@ impl WorktreeBoundaryGuard {
     /// stopped on a later commit leaves behind.
     pub(in crate::activity_job::workspace) fn stopped_authorized_rebase(
         &self,
+        process_env: &orbit_common::Env,
     ) -> Result<bool, DispatchError> {
         let Some(checkpoint) = &self.rebase_recovery else {
             return Ok(false);
         };
         let invalid = |reason: &str| DispatchError::CliInvocationPermanent(reason.to_string());
         Ok(self
-            .validate_rebase_checkpoint(checkpoint, &invalid)
+            .validate_rebase_checkpoint(process_env, checkpoint, &invalid)
             .is_ok()
-            && !unmerged_paths(&self.assigned_root)?.is_empty())
+            && !unmerged_paths(process_env, &self.assigned_root)?.is_empty())
     }
 }

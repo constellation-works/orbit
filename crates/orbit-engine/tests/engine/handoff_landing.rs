@@ -95,6 +95,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
     git(repo, &["commit", "-q", "-m", "candidate"]);
     git(repo, &["checkout", "-q", "main"]);
     let candidate = observe_candidate(
+        &orbit_common::Env::capture(),
         repo,
         Some("orbit/T1"),
         "main",
@@ -203,6 +204,7 @@ fn change_candidate_workflow(forge: &mut FakeForge) -> String {
     git(&forge.repo, &["checkout", "-q", &base_branch]);
 
     let mut candidate = observe_candidate(
+        &orbit_common::Env::capture(),
         &forge.repo,
         Some(&candidate_branch),
         &base_branch,
@@ -1138,7 +1140,11 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             "ci.rerun_plan" => {
                 if state.real_rerun_plan {
                     drop(state);
-                    return orbit_engine::run_private_vcs_operation(operation, &input);
+                    return orbit_engine::run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &input,
+                    );
                 }
                 if let Some(error) = state.rerun_plan_error {
                     return Err(OrbitError::Execution(error.into()));
@@ -1213,7 +1219,11 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             }
             "ci.commit_jobs" => {
                 if state.base_push_provider && input["base_push_tip"].is_string() {
-                    return orbit_engine::run_private_vcs_operation(operation, &input);
+                    return orbit_engine::run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &input,
+                    );
                 }
                 let commit = input["commit"].as_str().unwrap();
                 if state.unreadable.iter().any(|bad| bad == commit) {

@@ -179,9 +179,12 @@ impl OrbitRuntime {
         // sandbox denies, so its descendants hand them to the host that
         // spawned it, which audits what it dispatches. A route that did not
         // answer is this caller's to audit; never answered locally instead.
-        if let Some(outcome) =
-            orbit_tools::plugin::forward_host_routed_callback(&self.global_root(), name, &input)
-        {
+        if let Some(outcome) = orbit_tools::plugin::forward_host_routed_callback(
+            env,
+            &self.global_root(),
+            name,
+            &input,
+        ) {
             let error = match outcome {
                 orbit_tools::plugin::HostRouteOutcome::Answered(result) => {
                     mark_tool_audit_recorded();
@@ -223,10 +226,10 @@ impl OrbitRuntime {
         let resident_call = (crate::runtime::plugin::broker::is_brokered_resident_tool(name)
             || crate::runtime::plugin::broker::is_brokered_resident_completion(name, &input)
             || crate::runtime::authorization::is_resident_drain_status_call(name, &input))
-            && (self.env_names_resident_cycle()
+            && (self.env_names_resident_cycle(env)
                 || (name
                     == crate::runtime::plugin::broker::BROKERED_RESIDENT_RESUME_DELIVERY_TOOL
-                    && crate::runtime::run_input::managed_run_context_run_id_from_env()
+                    && crate::runtime::run_input::managed_run_context_run_id_from_env(env)
                         .is_some_and(|run_id| self.is_live_resident_cycle_run(&run_id))));
         #[cfg(unix)]
         if let Some(socket) = env.orbit_plugin_broker()
@@ -361,11 +364,7 @@ impl OrbitRuntime {
                 }
                 self.ensure_tool_agent_facing_with_context(
                     name,
-                    &tool_suggestion_context(
-                        self.execution_env_policy().process_env(),
-                        entry_point,
-                        session_context.clone(),
-                    ),
+                    &tool_suggestion_context(env, entry_point, session_context.clone()),
                 )?;
                 #[cfg(unix)]
                 if let Some(error) = claimed_owner_refusal {
@@ -378,7 +377,7 @@ impl OrbitRuntime {
                         name,
                     )?;
                 }
-                let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
+                let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context(env);
                 let activity_tool_policy = if trusted_env {
                     read_activity_tool_policy_from_env(env)
                 } else {
@@ -400,7 +399,7 @@ impl OrbitRuntime {
                 } else {
                     None
                 };
-                let proc_spawn_activity_scoped = managed_run_context();
+                let proc_spawn_activity_scoped = managed_run_context(env);
                 // Only a managed run's envelope carries an activity deadline;
                 // an interactive call keeps the unscoped ceiling.
                 let proc_spawn_budget = if proc_spawn_activity_scoped {
@@ -425,7 +424,7 @@ impl OrbitRuntime {
                     proc_spawn_environment,
                     proc_spawn_activity_scoped,
                     proc_spawn_budget,
-                    reservation_owner: reservation_owner_from_env(),
+                    reservation_owner: reservation_owner_from_env(env),
                     activity_binding: activity_binding_from_env(env),
                     ..Default::default()
                 };
@@ -565,6 +564,7 @@ impl OrbitRuntime {
                     application_enforcement,
                 )?;
                 enforce_plugin_callback_allowlist(
+                    env,
                     &self.global_root(),
                     self.stores().host_store(),
                     name,

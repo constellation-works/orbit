@@ -293,6 +293,7 @@ impl OrbitRuntime {
                 ));
             }
             orbit_engine::verify_handoff_pull_request_head(
+                self.env(),
                 &self.paths().repo_root,
                 &accepted.handoff.candidate,
                 &status,
@@ -435,6 +436,7 @@ impl OrbitRuntime {
                     ));
                 }
                 orbit_engine::verify_handoff_pull_request_head(
+                    self.env(),
                     &self.paths().repo_root,
                     candidate,
                     &status,

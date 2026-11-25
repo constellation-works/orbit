@@ -140,10 +140,12 @@ fn judge_open_attempt(
     else {
         return Ok(None);
     };
-    if revision(&context.workspace_path, "HEAD")?.commit != attempt.candidate.commit {
+    if revision(runtime.env(), &context.workspace_path, "HEAD")?.commit != attempt.candidate.commit
+    {
         return Ok(None);
     }
     let reviewed = candidate_identity_at(
+        runtime.env(),
         &context.workspace_path,
         &manifest.base.commit,
         &attempt.candidate.commit,
@@ -153,7 +155,7 @@ fn judge_open_attempt(
         &context,
         &reviewed.commits,
         None,
-        &uncommitted_paths(&context.workspace_path)?,
+        &uncommitted_paths(runtime.env(), &context.workspace_path)?,
     )?;
     Ok(Some(OpenAttemptJudgement {
         judgement,

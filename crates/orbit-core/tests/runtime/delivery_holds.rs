@@ -355,7 +355,13 @@ fn completion_outcome(
                 if hit.exists() { now + 601_000 } else { now }
             },
             |_, _| {},
-            || fx.runtime.execute_pipeline_run_worker(&run.run_id),
+            || {
+                orbit_core::test_support::with_runtime_env(
+                    fx.runtime.clone(),
+                    orbit_common::Env::capture(),
+                )
+                .execute_pipeline_run_worker(&run.run_id)
+            },
         );
     } else if case == "deadline_infrastructure" {
         let now = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
@@ -372,10 +378,20 @@ fn completion_outcome(
                     }
                 }
             },
-            || fx.runtime.execute_pipeline_run_worker(&run.run_id),
+            || {
+                orbit_core::test_support::with_runtime_env(
+                    fx.runtime.clone(),
+                    orbit_common::Env::capture(),
+                )
+                .execute_pipeline_run_worker(&run.run_id)
+            },
         );
     } else {
-        let _ = fx.runtime.execute_pipeline_run_worker(&run.run_id);
+        let _ = orbit_core::test_support::with_runtime_env(
+            fx.runtime.clone(),
+            orbit_common::Env::capture(),
+        )
+        .execute_pipeline_run_worker(&run.run_id);
     }
     let stored = fx.runtime.show_job_run(&run.run_id).unwrap();
     let expected = if refusal.is_some() {
@@ -531,7 +547,11 @@ fn completion_outcome(
                 },
             )
             .unwrap();
-        let executed = fx.runtime.execute_pipeline_run_worker(&resumed.run_id);
+        let executed = orbit_core::test_support::with_runtime_env(
+            fx.runtime.clone(),
+            orbit_common::Env::capture(),
+        )
+        .execute_pipeline_run_worker(&resumed.run_id);
         std::fs::write(&released, "").unwrap();
         executed.unwrap();
         let after = fx.runtime.show_job_run(&resumed.run_id).unwrap();

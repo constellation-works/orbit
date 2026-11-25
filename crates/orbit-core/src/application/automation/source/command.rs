@@ -192,6 +192,7 @@ impl<'a> Source<'a> {
             let wall_started = std::time::Instant::now();
             quota_deadline = orbit_tools::github_quota::gh_request_deadline(request, wall_started);
             let admitted = orbit_tools::github_quota::admit_gh_request(
+                &self.env,
                 orbit_tools::github_quota::GithubCaller::Background,
                 request,
             );
@@ -341,6 +342,7 @@ impl<'a> Source<'a> {
             let failure = failure_text(&mut diagnostics, &failure_fallback(&outcome));
             if let Some(request) = &quota_request {
                 orbit_tools::github_quota::observe_gh_failure_by_deadline(
+                    &self.env,
                     request,
                     &failure,
                     quota_deadline,

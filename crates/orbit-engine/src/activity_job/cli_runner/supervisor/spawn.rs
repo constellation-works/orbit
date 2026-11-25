@@ -109,6 +109,7 @@ pub(in crate::activity_job::cli_runner) struct SpawnWithTimeoutRequest<'a> {
 /// the child before supervision starts (the orchestrator takes the Linux
 /// post-run guard off it) spawns here and passes it as `spawned_child`.
 pub(in crate::activity_job::cli_runner) fn spawn_for_supervision(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -116,15 +117,15 @@ pub(in crate::activity_job::cli_runner) fn spawn_for_supervision(
     sandbox: Option<&ResolvedSandbox>,
     provider: &str,
 ) -> Result<SpawnedChild, SpawnError> {
-    spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, provider).map_err(|err| {
-        SpawnError {
+    spawn_child_with_optional_sandbox(process_env, program, args, env, cwd, sandbox, provider)
+        .map_err(|err| SpawnError {
             permanent: err.permanent,
             message: format!("spawn {program}: {}", err.message),
-        }
-    })
+        })
 }
 
 pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
+    process_env: &orbit_common::Env,
     request: SpawnWithTimeoutRequest<'_>,
 ) -> Result<SpawnOutput, SpawnError> {
     let SpawnWithTimeoutRequest {
@@ -148,7 +149,15 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     let deadline_start = supervision_now();
     let spawned = match spawned_child {
         Some(spawned) => spawned,
-        None => spawn_for_supervision(program, args, env, cwd, sandbox, trace.provider)?,
+        None => spawn_for_supervision(
+            process_env,
+            program,
+            args,
+            env,
+            cwd,
+            sandbox,
+            trace.provider,
+        )?,
     };
     // The mount plan outlives supervision, which reaps the child (or kills
     // and reaps it on unwind) before returning.
@@ -163,7 +172,8 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         Stdin::Null
     };
 
-    let output_limit = output_capture_limit.unwrap_or_else(default_output_capture_limit);
+    let output_limit =
+        output_capture_limit.unwrap_or_else(|| default_output_capture_limit(process_env));
     let stdout_buf = Arc::new(Mutex::new(RollingOutputCapture::new(output_limit)));
     let stderr_buf = Arc::new(Mutex::new(RollingOutputCapture::new(output_limit)));
     let dispatch = tracing::dispatcher::get_default(Clone::clone);

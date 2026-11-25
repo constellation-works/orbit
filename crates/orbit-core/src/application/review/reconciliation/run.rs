@@ -247,7 +247,13 @@ fn run_commands(
     // The lease records what built the checkout's host validation target, so
     // worktree GC can reclaim it once the checkout is gone, never while held.
     let runs = (!runtime.validation_env_policy().build_output_env.is_empty())
-        .then(|| review_gate::lease_scratch_host_target(&checkout, ScratchHostTarget::Recovery))
+        .then(|| {
+            review_gate::lease_scratch_host_target(
+                runtime.env(),
+                &checkout,
+                ScratchHostTarget::Recovery,
+            )
+        })
         .transpose()
         .and_then(|_lease| {
             commands

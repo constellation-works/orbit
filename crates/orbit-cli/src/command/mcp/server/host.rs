@@ -376,8 +376,12 @@ impl ServerMcpHost {
             ToolEntryPoint::Mcp,
             context,
             |params, invocation| {
-                self.audit_store
-                    .insert_audit_event_record(&self.global_root, params, invocation)
+                self.audit_store.insert_audit_event_record(
+                    &self.env,
+                    &self.global_root,
+                    params,
+                    invocation,
+                )
             },
             |input| match name {
                 "orbit.workspace.list" => self.list_workspaces(&input),
@@ -627,8 +631,12 @@ impl ServerMcpHost {
             ToolEntryPoint::Mcp,
             context,
             |params, invocation| {
-                self.audit_store
-                    .insert_audit_event_record(&self.global_root, params, invocation)
+                self.audit_store.insert_audit_event_record(
+                    &self.env,
+                    &self.global_root,
+                    params,
+                    invocation,
+                )
             },
             move |_| Err(error),
         )
@@ -722,7 +730,7 @@ impl ServerMcpHost {
             .filter(|_| {
                 context.application.is_none()
                     && context.worker_invocation.is_none()
-                    && route_resident_delivery_recovery_to_broker(&operation)
+                    && route_resident_delivery_recovery_to_broker(&self.env, &operation)
             })
             .map(|home| serde_json::json!({"workspace": home}));
         let (runtime, selected) = match self.resolve_workspace_runtime(

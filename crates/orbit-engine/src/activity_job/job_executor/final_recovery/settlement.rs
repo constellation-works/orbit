@@ -48,14 +48,20 @@ pub(super) fn settle_absorbed(
 }
 
 pub(super) fn observe_repair_commit(
+    process_env: &orbit_common::Env,
     workspace_path: &str,
     head_before: Option<&str>,
 ) -> Option<FinalRecoveryRepairCommit> {
     let workspace_path = std::path::Path::new(workspace_path).canonicalize().ok()?;
     let head_sha_before = head_before?.to_string();
-    let head_sha = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"]).ok()?;
+    let head_sha = git_output(
+        process_env,
+        &workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .ok()?;
     if head_sha == head_sha_before
-        || !is_ancestor(&workspace_path, &head_sha_before, &head_sha).ok()?
+        || !is_ancestor(process_env, &workspace_path, &head_sha_before, &head_sha).ok()?
     {
         return None;
     }

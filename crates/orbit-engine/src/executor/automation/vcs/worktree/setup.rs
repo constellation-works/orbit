@@ -67,49 +67,53 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 
     // Pin the fetched commit without advancing the owner's checkout.
     let local_start = if base_sync_mode == BaseSyncMode::Local {
-        advance_local_base_for_admission(repo_root, &base)?
+        advance_local_base_for_admission(&host.process_env(), repo_root, &base)?
     } else {
         None
     };
 
-    let start_point =
-        match resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode) {
-            Err(OrbitError::DeliveryRefused {
-                refusal: DeliveryRefusal::OriginUnavailable,
-                message,
-            }) => {
-                let tasks = task_ids
-                    .iter()
-                    .map(|task_id| host.get_task(task_id))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if tasks.iter().all(|task| task.status == TaskStatus::Backlog) {
-                    return Err(OrbitError::DeliveryRefused {
-                        refusal: DeliveryRefusal::OriginUnavailable,
-                        message,
-                    });
-                }
-
-                // A task already admitted by an earlier run cannot use the
-                // backlog-only hold: held delivery refusals have no generic resume
-                // path. For local tasks, link this failed attempt so the ordinary
-                // run finalizer can move them through failure handling. A claimed
-                // leaf uses its claim settlement for the same outcome.
-                for (task_id, task) in task_ids.iter().zip(&tasks) {
-                    if task.status == TaskStatus::InProgress && host.worker_invocation().is_none() {
-                        host.apply_task_automation_update(
-                            task_id,
-                            TaskAutomationUpdate {
-                                expected_status: Some(TaskStatus::InProgress),
-                                job_run_id: Some(job_run_id.clone()),
-                                ..TaskAutomationUpdate::default()
-                            },
-                        )?;
-                    }
-                }
-                return Err(OrbitError::Execution(message));
+    let start_point = match resolve_worktree_start_point_for_admission(
+        &host.process_env(),
+        repo_root,
+        &base,
+        base_sync_mode,
+    ) {
+        Err(OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::OriginUnavailable,
+            message,
+        }) => {
+            let tasks = task_ids
+                .iter()
+                .map(|task_id| host.get_task(task_id))
+                .collect::<Result<Vec<_>, _>>()?;
+            if tasks.iter().all(|task| task.status == TaskStatus::Backlog) {
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::OriginUnavailable,
+                    message,
+                });
             }
-            result => result?,
-        };
+
+            // A task already admitted by an earlier run cannot use the
+            // backlog-only hold: held delivery refusals have no generic resume
+            // path. For local tasks, link this failed attempt so the ordinary
+            // run finalizer can move them through failure handling. A claimed
+            // leaf uses its claim settlement for the same outcome.
+            for (task_id, task) in task_ids.iter().zip(&tasks) {
+                if task.status == TaskStatus::InProgress && host.worker_invocation().is_none() {
+                    host.apply_task_automation_update(
+                        task_id,
+                        TaskAutomationUpdate {
+                            expected_status: Some(TaskStatus::InProgress),
+                            job_run_id: Some(job_run_id.clone()),
+                            ..TaskAutomationUpdate::default()
+                        },
+                    )?;
+                }
+            }
+            return Err(OrbitError::Execution(message));
+        }
+        result => result?,
+    };
     // ORB-10380: `start_point` is a moving name (`origin/<base>`) shared by every
     // worktree off this `.git`; a sibling run's fetch or a merge can move it
     // mid-run. Resolve it exactly once here and hand the resulting commit id to
@@ -119,6 +123,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let base_sha = match local_start {
         Some(commit) => commit,
         None => git_output(
+            &host.process_env(),
             repo_root,
             &[
                 "rev-parse",
@@ -155,9 +160,10 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
                 // `origin/<branch>` names the local landing branch, and the
                 // pre-check inspects the checkout that holds that branch.
                 let landing_branch = normalize_base_branch(&base)?;
-                let base_checkout = checkout_holding_branch(repo_root, &landing_branch)?
-                    .unwrap_or_else(|| repo_root.to_path_buf());
-                ensure_base_checkout_ready(&base_checkout, None)?;
+                let base_checkout =
+                    checkout_holding_branch(&host.process_env(), repo_root, &landing_branch)?
+                        .unwrap_or_else(|| repo_root.to_path_buf());
+                ensure_base_checkout_ready(&host.process_env(), &base_checkout, None)?;
             }
             "pr" => {}
             other => {
@@ -176,12 +182,18 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         worktree_run_id,
     )?;
 
-    let worktree_path = identity.path(repo_root)?;
+    let worktree_path = identity.path(&host.process_env(), repo_root)?;
 
     // ORB-11639: `ensure_worktree` refuses an existing branch or registered
     // checkout whose HEAD is not `base_sha`, so admission never sees a
     // checkpoint that later commit provenance would reject.
-    let branch_name = ensure_worktree(repo_root, &worktree_path, &base_sha, &branch_name)?;
+    let branch_name = ensure_worktree(
+        &host.process_env(),
+        repo_root,
+        &worktree_path,
+        &base_sha,
+        &branch_name,
+    )?;
     orbit_common::fs::path::ensure_orbit_scratch_dir(&worktree_path)?;
 
     // ORB-10602: mount-anchor materialization deliberately does *not* happen
@@ -282,12 +294,14 @@ fn worktree_setup_output(
 // orbit.task.update model=grok on ORB-00240 before this edit for the visibility
 // change on internal test helpers.)
 fn ensure_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     worktree_path: &Path,
     start_point: &str,
     branch_name: &str,
 ) -> Result<String, OrbitError> {
     let target = git_output(
+        process_env,
         repo_root,
         &[
             "rev-parse",
@@ -300,8 +314,14 @@ fn ensure_worktree(
         // Only a worktree this repository registered is ours to reuse or
         // remove. "Is some git work tree" would also match an unrelated
         // checkout that happens to sit at the resolved path.
-        if is_registered_worktree(repo_root, worktree_path)? {
-            match inspect_registered_worktree(repo_root, worktree_path, &target, branch_name)? {
+        if is_registered_worktree(process_env, repo_root, worktree_path)? {
+            match inspect_registered_worktree(
+                process_env,
+                repo_root,
+                worktree_path,
+                &target,
+                branch_name,
+            )? {
                 RegisteredWorktree::Usable { branch, head } => {
                     refuse_stale_branch(&branch, &head, &target, worktree_path)?;
                     return Ok(branch);
@@ -316,7 +336,7 @@ fn ensure_worktree(
                             worktree_path.display()
                         )));
                     }
-                    remove_worktree(repo_root, worktree_path, None, true)?;
+                    remove_worktree(process_env, repo_root, worktree_path, None, true)?;
                 }
             }
         } else if is_empty_dir(worktree_path)? {
@@ -343,8 +363,8 @@ fn ensure_worktree(
         })?;
     }
 
-    git_success(repo_root, &["worktree", "prune"])?;
-    add_worktree(repo_root, worktree_path, &target, branch_name)
+    git_success(process_env, repo_root, &["worktree", "prune"])?;
+    add_worktree(process_env, repo_root, worktree_path, &target, branch_name)
 }
 
 enum RegisteredWorktree {
@@ -362,26 +382,47 @@ enum RegisteredWorktree {
 /// commits are retained work on a usable checkout — they do not prove the
 /// checkout is incomplete and must not be restored or deleted here.
 fn inspect_registered_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     worktree_path: &Path,
     start_point: &str,
     branch_name: &str,
 ) -> Result<RegisteredWorktree, OrbitError> {
-    let inside = git_command_success(worktree_path, &["rev-parse", "--is-inside-work-tree"])?;
-    let head_ok = git_command_success(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let git_dir = git_output(worktree_path, &["rev-parse", "--absolute-git-dir"]).ok();
+    let inside = git_command_success(
+        process_env,
+        worktree_path,
+        &["rev-parse", "--is-inside-work-tree"],
+    )?;
+    let head_ok = git_command_success(
+        process_env,
+        worktree_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+    let git_dir = git_output(
+        process_env,
+        worktree_path,
+        &["rev-parse", "--absolute-git-dir"],
+    )
+    .ok();
     let index_ok = git_dir
         .as_ref()
         .map(|dir| Path::new(dir).join("index").is_file())
         .unwrap_or(false);
     let branch = git_output(
+        process_env,
         worktree_path,
         &["symbolic-ref", "--quiet", "--short", "HEAD"],
     )
     .ok();
-    let head = git_output(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"]).ok();
-    let status = git_output(worktree_path, &["status", "--porcelain"]).ok();
+    let head = git_output(
+        process_env,
+        worktree_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .ok();
+    let status = git_output(process_env, worktree_path, &["status", "--porcelain"]).ok();
     let unique_commits = branch_has_unique_commits(
+        process_env,
         repo_root,
         branch.as_deref().unwrap_or(branch_name),
         start_point,
@@ -432,15 +473,21 @@ fn inspect_registered_worktree(
 }
 
 fn branch_has_unique_commits(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     branch_name: &str,
     start_point: &str,
 ) -> Result<bool, OrbitError> {
     let branch_ref = format!("refs/heads/{branch_name}");
-    if !git_command_success(repo_root, &["show-ref", "--verify", "--quiet", &branch_ref])? {
+    if !git_command_success(
+        process_env,
+        repo_root,
+        &["show-ref", "--verify", "--quiet", &branch_ref],
+    )? {
         return Ok(false);
     }
     let tip = git_output(
+        process_env,
         repo_root,
         &[
             "rev-parse",
@@ -452,6 +499,7 @@ fn branch_has_unique_commits(
 }
 
 fn add_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     worktree_path: &Path,
     target: &str,
@@ -459,9 +507,13 @@ fn add_worktree(
 ) -> Result<String, OrbitError> {
     let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
     let branch_ref = format!("refs/heads/{branch_name}");
-    let args = if git_command_success(repo_root, &["show-ref", "--verify", "--quiet", &branch_ref])?
-    {
+    let args = if git_command_success(
+        process_env,
+        repo_root,
+        &["show-ref", "--verify", "--quiet", &branch_ref],
+    )? {
         let tip = git_output(
+            process_env,
             repo_root,
             &[
                 "rev-parse",
@@ -487,9 +539,10 @@ fn add_worktree(
         ]
     };
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let outcome = git_run(repo_root, &arg_refs)?;
+    let outcome = git_run(process_env, repo_root, &arg_refs)?;
     if outcome.timed_out {
         return Err(recover_worktree_add_timeout(
+            process_env,
             repo_root,
             worktree_path,
             branch_name,
@@ -506,7 +559,11 @@ fn add_worktree(
             &outcome.stderr,
         ));
     }
-    let head = git_output(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let head = git_output(
+        process_env,
+        worktree_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     refuse_stale_branch(branch_name, &head, target, worktree_path)?;
     Ok(branch_name.to_string())
 }
@@ -537,10 +594,11 @@ fn refuse_stale_branch(
 }
 
 fn remove_owned_incomplete_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     worktree_path: &Path,
 ) -> Result<(), OrbitError> {
-    match remove_worktree(repo_root, worktree_path, None, true) {
+    match remove_worktree(process_env, repo_root, worktree_path, None, true) {
         Ok(()) => Ok(()),
         Err(error) => {
             if worktree_path.exists() {
@@ -551,13 +609,14 @@ fn remove_owned_incomplete_worktree(
                     ))
                 })?;
             }
-            git_success(repo_root, &["worktree", "prune"])?;
+            git_success(process_env, repo_root, &["worktree", "prune"])?;
             Ok(())
         }
     }
 }
 
 fn recover_worktree_add_timeout(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     worktree_path: &Path,
     branch_name: &str,
@@ -566,7 +625,7 @@ fn recover_worktree_add_timeout(
     args: &[&str],
 ) -> OrbitError {
     let timeout = git_timeout_error(repo_root, args, outcome.timeout_ms, &outcome.stderr);
-    let registered = is_registered_worktree(repo_root, worktree_path).unwrap_or(false);
+    let registered = is_registered_worktree(process_env, repo_root, worktree_path).unwrap_or(false);
     if !registered && !worktree_path.exists() {
         return timeout_recovery_error(
             outcome.timeout_ms,
@@ -577,7 +636,14 @@ fn recover_worktree_add_timeout(
     }
 
     let inspection = if registered {
-        inspect_registered_worktree(repo_root, worktree_path, start_point, branch_name).ok()
+        inspect_registered_worktree(
+            process_env,
+            repo_root,
+            worktree_path,
+            start_point,
+            branch_name,
+        )
+        .ok()
     } else {
         None
     };
@@ -590,7 +656,8 @@ fn recover_worktree_add_timeout(
     );
 
     if registered && can_remove {
-        if let Err(error) = remove_owned_incomplete_worktree(repo_root, worktree_path) {
+        if let Err(error) = remove_owned_incomplete_worktree(process_env, repo_root, worktree_path)
+        {
             return timeout_recovery_error(
                 outcome.timeout_ms,
                 format!(
@@ -663,9 +730,14 @@ fn branch_name_for_tasks<H: RuntimeHost + ?Sized>(
         let task = if template.uses_external_ref() {
             // A task's external refs may change during the run, so a branch
             // this run already named is reused rather than renamed.
-            if let Some(existing) =
-                existing_run_branch(repo_root, &template, branch_prefix, task_id, run_hash)?
-            {
+            if let Some(existing) = existing_run_branch(
+                &host.process_env(),
+                repo_root,
+                &template,
+                branch_prefix,
+                task_id,
+                run_hash,
+            )? {
                 return Ok(existing);
             }
             Some(host.get_task(task_id)?)
@@ -706,6 +778,7 @@ fn branch_name_for_tasks<H: RuntimeHost + ?Sized>(
 /// The local branch this run already named for `task_id`, if exactly one
 /// carries the run's hash and matches the template for the task.
 fn existing_run_branch(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     template: &ConventionTemplate,
     branch_prefix: &str,
@@ -713,6 +786,7 @@ fn existing_run_branch(
     run_hash: &str,
 ) -> Result<Option<String>, OrbitError> {
     let listed = git_output(
+        process_env,
         repo_root,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
     )?;

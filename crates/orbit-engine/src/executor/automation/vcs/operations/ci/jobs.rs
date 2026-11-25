@@ -338,6 +338,7 @@ const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" 
 /// retain completed successful pushes on the accepted base or its descendants;
 /// the candidate rerun supplies the other half of attribution evidence.
 pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let commit = required_string(input, "commit")?;
@@ -378,7 +379,13 @@ pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
             format!("branch={branch}"),
         ]);
     }
-    let runs = projected_ci_json(args, workspace_path, "commit runs", COMMIT_RUN_FIELDS)?;
+    let runs = projected_ci_json(
+        process_env,
+        args,
+        workspace_path,
+        "commit runs",
+        COMMIT_RUN_FIELDS,
+    )?;
     let listed = runs["workflow_runs"]
         .as_array()
         .ok_or_else(|| OrbitError::Execution("commit runs carried no workflow run list".into()))?;
@@ -432,10 +439,20 @@ pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
                 continue;
             }
             let sha = run["head_sha"].as_str().unwrap_or_default();
-            if !crate::executor::automation::vcs::git::is_ancestor(workspace_path, commit, sha)
+            if !crate::executor::automation::vcs::git::is_ancestor(
+                process_env,
+                workspace_path,
+                commit,
+                sha,
+            )
+            .unwrap_or(false)
+                || !crate::executor::automation::vcs::git::is_ancestor(
+                    process_env,
+                    workspace_path,
+                    sha,
+                    tip,
+                )
                 .unwrap_or(false)
-                || !crate::executor::automation::vcs::git::is_ancestor(workspace_path, sha, tip)
-                    .unwrap_or(false)
             {
                 continue;
             }
@@ -444,6 +461,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
             continue;
         };
         let listing = projected_ci_json(
+            process_env,
             vec![
                 "api".to_string(),
                 "--method".to_string(),
@@ -575,6 +593,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_commit_jobs(
 /// failure regions accompany the display with their source; callers must bind
 /// them to the provider's failed job and step before recovery.
 pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<CiJobLogAnswer, OrbitError> {
     let run_id = required_string(input, "run_id")?;
@@ -591,6 +610,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
     let last_timeout = std::cell::Cell::new(DEFAULT_TIMEOUT_MS);
     let budget_expired = std::cell::Cell::new(false);
     let read = github_cli::read_run_log_guarded(
+        process_env,
         &requests,
         github_cli::LogReadBounds::new(MAX_JOB_LOG_BYTES),
         None,
@@ -612,6 +632,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
             };
             let admit_started = std::time::Instant::now();
             let admitted = crate::executor::automation::github_host::clear_gh_environment(
+                process_env,
                 &request,
                 orbit_tools::github_quota::GithubCaller::Delivery,
             );
@@ -668,14 +689,21 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
 }
 
 fn projected_ci_json(
+    process_env: &orbit_common::Env,
     mut args: Vec<String>,
     workspace_path: &Path,
     label: &str,
     fields: &str,
 ) -> Result<Value, OrbitError> {
     args.extend(["--jq".into(), fields.into()]);
-    let result =
-        execute_with_transient_retry("gh", &args, Some(workspace_path), DEFAULT_TIMEOUT_MS, label)?;
+    let result = execute_with_transient_retry(
+        process_env,
+        "gh",
+        &args,
+        Some(workspace_path),
+        DEFAULT_TIMEOUT_MS,
+        label,
+    )?;
     serde_json::from_str(&result.stdout).map_err(|error| {
         OrbitError::Execution(format!(
             "private automation VCS {label} returned invalid JSON: {error}"

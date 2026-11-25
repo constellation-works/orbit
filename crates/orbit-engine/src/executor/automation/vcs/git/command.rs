@@ -55,11 +55,15 @@ pub(crate) fn git_failure_error(
 /// inspect [`GitOutcome::timed_out`] instead of treating it as a Git exit.
 /// That flag is the supervisor's deadline verdict, not a match against
 /// captured stderr.
-pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, OrbitError> {
+pub(crate) fn git_run(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<GitOutcome, OrbitError> {
     let timeout_ms = command_timeout(args)?;
     let result = run_process(
-        &orbit_common::Env::capture(),
-        &git_request(current_dir, args, timeout_ms),
+        process_env,
+        &git_request(process_env, current_dir, args, timeout_ms),
         &NoSandbox,
     )?;
     Ok(GitOutcome {
@@ -88,23 +92,25 @@ pub(crate) const BINARY_PATCH_DIFF_ARGS: &[&str] = &[
 /// Supervise host Git with the same secured environment and process-group
 /// cleanup as `git_run`, retaining stdout bytes and optional stdin bytes.
 pub(crate) fn git_run_bytes(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<GitBytesOutcome, OrbitError> {
-    git_run_bytes_with_env(current_dir, args, stdin, &[])
+    git_run_bytes_with_env(process_env, current_dir, args, stdin, &[])
 }
 
 /// Supervise host Git with `env` added to its secured environment, retaining
 /// raw stdout bytes and optional stdin bytes.
 pub(crate) fn git_run_bytes_with_env(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     stdin: Option<&[u8]>,
     env: &[(&str, &str)],
 ) -> Result<GitBytesOutcome, OrbitError> {
     let timeout_ms = command_timeout(args)?;
-    let mut request = git_request(current_dir, args, timeout_ms);
+    let mut request = git_request(process_env, current_dir, args, timeout_ms);
     if !env.is_empty()
         && let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode
     {
@@ -116,17 +122,13 @@ pub(crate) fn git_run_bytes_with_env(
     if let Some(bytes) = stdin {
         request.stdin_mode = StdinMode::Bytes(bytes.to_vec());
     }
-    let (result, stdout) = run_process_streaming_stdout(
-        &orbit_common::Env::capture(),
-        &request,
-        &NoSandbox,
-        |mut pipe| {
+    let (result, stdout) =
+        run_process_streaming_stdout(process_env, &request, &NoSandbox, |mut pipe| {
             let mut bytes = Vec::new();
             pipe.read_to_end(&mut bytes)
                 .map_err(|error| OrbitError::Execution(format!("read Git stdout: {error}")))?;
             Ok(bytes)
-        },
-    )?;
+        })?;
     Ok(GitBytesOutcome {
         stdout,
         stderr: result.stderr,
@@ -140,15 +142,16 @@ pub(crate) fn git_run_bytes_with_env(
 /// Compose host VCS environments by name. Git needs the SSH agent socket for
 /// authenticated remotes, but never the provider's credentials or ORBIT_* envelope.
 /// GitHub CLI callers take [`gh_environment`], which adds its authentication names.
-fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
+fn vcs_environment(process_env: &orbit_common::Env, extras: &[&str]) -> Vec<(String, String)> {
     AGENT_SUBPROCESS_BASELINE_VARS
         .iter()
         .copied()
         .chain(extras.iter().copied())
         .filter_map(|name| {
-            std::env::var(name)
-                .ok()
-                .map(|value| (name.to_string(), value))
+            process_env
+                .var(name)
+                .and_then(std::ffi::OsStr::to_str)
+                .map(|value| (name.to_owned(), value.to_owned()))
         })
         .collect()
 }
@@ -175,12 +178,14 @@ const GH_CREDENTIAL_ENV: &[&str] = &[
 /// The one environment every host-side `gh` child runs under: the baseline
 /// plus GitHub's authentication, host and config names, never the provider's
 /// credentials or the ORBIT_* envelope.
-pub(in crate::executor::automation) fn gh_environment() -> Vec<(String, String)> {
-    vcs_environment(GH_CREDENTIAL_ENV)
+pub(in crate::executor::automation) fn gh_environment(
+    process_env: &orbit_common::Env,
+) -> Vec<(String, String)> {
+    vcs_environment(process_env, GH_CREDENTIAL_ENV)
 }
 
-fn git_environment() -> Vec<(String, String)> {
-    let mut environment = vcs_environment(&[env_vars::SSH_AUTH_SOCK]);
+fn git_environment(process_env: &orbit_common::Env) -> Vec<(String, String)> {
+    let mut environment = vcs_environment(process_env, &[env_vars::SSH_AUTH_SOCK]);
     // Git stderr drives retry classification. LANGUAGE can override gettext's
     // locale selection, so never admit it and replace the parent's LC_ALL.
     environment.retain(|(name, _)| name != env_vars::LC_ALL && name != "LANGUAGE");
@@ -216,14 +221,19 @@ fn git_args(args: &[&str]) -> Vec<String> {
 }
 
 /// The host Git policy shared by deterministic delivery and workspace recovery.
-pub(crate) fn git_request(current_dir: &Path, args: &[&str], timeout_ms: u64) -> ExecRequest {
+pub(crate) fn git_request(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+    timeout_ms: u64,
+) -> ExecRequest {
     ExecRequest {
         program: "git".to_string(),
         args: git_args(args),
         current_dir: Some(current_dir.to_string_lossy().into_owned()),
         timeout_ms: Some(timeout_ms),
         stdin_mode: StdinMode::Null,
-        environment_mode: EnvironmentMode::ClearAndSet(git_environment()),
+        environment_mode: EnvironmentMode::ClearAndSet(git_environment(process_env)),
         debug: false,
     }
 }
@@ -282,10 +292,11 @@ pub(in crate::executor::automation) fn base_sync_mode_from_input(
 /// may not exist. Callers that stage, commit or otherwise act on the exact
 /// names must use [`git_output_exact_paths`].
 pub(crate) fn git_output_paths(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
 ) -> Result<Vec<String>, OrbitError> {
-    let raw = git_output_raw(current_dir, args)?;
+    let raw = git_output_raw(process_env, current_dir, args)?;
     Ok(raw
         .split('\0')
         .filter(|value| !value.is_empty())
@@ -309,10 +320,11 @@ pub(crate) struct ExactPaths {
 /// A record that is not UTF-8 is kept apart in
 /// [`ExactPaths::unrepresentable`] instead of being renamed with U+FFFD.
 pub(crate) fn git_output_exact_paths(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
 ) -> Result<ExactPaths, OrbitError> {
-    let stdout = git_output_bytes(current_dir, args)?;
+    let stdout = git_output_bytes(process_env, current_dir, args)?;
     Ok(split_exact_paths(&stdout))
 }
 
@@ -341,12 +353,22 @@ fn split_exact_paths(stdout: &[u8]) -> ExactPaths {
 /// single line (` M path` becomes `M path`), misaligning every column-offset
 /// read by one byte. Column-offset porcelain readers must use
 /// [`git_output_raw`] instead, which preserves each line's leading bytes.
-pub(crate) fn git_output(current_dir: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    Ok(git_output_raw(current_dir, args)?.trim().to_string())
+pub(crate) fn git_output(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<String, OrbitError> {
+    Ok(git_output_raw(process_env, current_dir, args)?
+        .trim()
+        .to_string())
 }
 
-pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    let outcome = git_run(current_dir, args)?;
+pub(crate) fn git_output_raw(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<String, OrbitError> {
+    let outcome = git_run(process_env, current_dir, args)?;
     if outcome.timed_out {
         return Err(git_timeout_error(
             current_dir,
@@ -368,38 +390,45 @@ pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String
 }
 
 /// Run Git and return its raw stdout bytes without UTF-8 lossy decoding or trimming.
-pub(crate) fn git_output_bytes(current_dir: &Path, args: &[&str]) -> Result<Vec<u8>, OrbitError> {
-    git_output_bytes_with_env(current_dir, args, &[])
+pub(crate) fn git_output_bytes(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<Vec<u8>, OrbitError> {
+    git_output_bytes_with_env(process_env, current_dir, args, &[])
 }
 
 /// Run Git with `env` added to its secured environment; its raw stdout bytes
 /// without UTF-8 lossy decoding or trimming.
 pub(crate) fn git_output_bytes_with_env(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Result<Vec<u8>, OrbitError> {
-    git_checked_bytes_with_env(current_dir, args, None, env)
+    git_checked_bytes_with_env(process_env, current_dir, args, None, env)
 }
 
 /// Run Git with `env` and `stdin` bytes added to its secured environment; its
 /// raw stdout bytes without UTF-8 lossy decoding or trimming.
 pub(crate) fn git_output_bytes_with_env_and_stdin(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     stdin: &[u8],
     env: &[(&str, &str)],
 ) -> Result<Vec<u8>, OrbitError> {
-    git_checked_bytes_with_env(current_dir, args, Some(stdin), env)
+    git_checked_bytes_with_env(process_env, current_dir, args, Some(stdin), env)
 }
 
 fn git_checked_bytes_with_env(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     stdin: Option<&[u8]>,
     env: &[(&str, &str)],
 ) -> Result<Vec<u8>, OrbitError> {
-    let outcome = git_run_bytes_with_env(current_dir, args, stdin, env)?;
+    let outcome = git_run_bytes_with_env(process_env, current_dir, args, stdin, env)?;
     if outcome.timed_out {
         return Err(git_timeout_error(
             current_dir,
@@ -421,19 +450,20 @@ fn git_checked_bytes_with_env(
 
 /// Run Git with `env` added to its secured environment; its raw stdout.
 pub(crate) fn git_output_raw_with_env(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Result<String, OrbitError> {
     let timeout_ms = command_timeout(args)?;
-    let mut request = git_request(current_dir, args, timeout_ms);
+    let mut request = git_request(process_env, current_dir, args, timeout_ms);
     if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
         environment.extend(
             env.iter()
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
         );
     }
-    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
+    let result = run_process(process_env, &request, &NoSandbox)?;
     if result.timed_out {
         return Err(git_timeout_error(
             current_dir,
@@ -455,17 +485,24 @@ pub(crate) fn git_output_raw_with_env(
 
 /// Run Git with `env` added to its secured environment; its trimmed stdout.
 pub(crate) fn git_output_with_env(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Result<String, OrbitError> {
-    Ok(git_output_raw_with_env(current_dir, args, env)?
-        .trim()
-        .to_string())
+    Ok(
+        git_output_raw_with_env(process_env, current_dir, args, env)?
+            .trim()
+            .to_string(),
+    )
 }
 
-pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), OrbitError> {
-    git_output_raw(current_dir, args).map(|_| ())
+pub(crate) fn git_success(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<(), OrbitError> {
+    git_output_raw(process_env, current_dir, args).map(|_| ())
 }
 
 /// A URL argument that reaches `push_url` itself, without Git applying
@@ -520,6 +557,7 @@ pub(crate) fn direct_remote_target(push_url: &str) -> DirectRemoteTarget {
 /// same length). Probing or fetching the rewritten repository could
 /// report publication at a destination `git push origin` never wrote.
 pub(crate) fn verify_direct_remote_target(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     push_url: &str,
     target: &DirectRemoteTarget,
@@ -529,7 +567,7 @@ pub(crate) fn verify_direct_remote_target(
         args.extend(["-c", config]);
     }
     args.extend(["ls-remote", "--get-url", target.probe_url.as_str()]);
-    let expanded = git_output(current_dir, &args)?;
+    let expanded = git_output(process_env, current_dir, &args)?;
     if expanded != push_url {
         return Err(OrbitError::Execution(format!(
             "git_push: effective push URL '{push_url}' would be rewritten to '{expanded}' \
@@ -541,11 +579,13 @@ pub(crate) fn verify_direct_remote_target(
 }
 
 pub(crate) fn is_ancestor(
+    process_env: &orbit_common::Env,
     dir: &Path,
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, OrbitError> {
     git_command_success(
+        process_env,
         dir,
         &[
             "merge-base",
@@ -557,8 +597,12 @@ pub(crate) fn is_ancestor(
     )
 }
 
-pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<bool, OrbitError> {
-    let outcome = git_run(current_dir, args)?;
+pub(crate) fn git_command_success(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<bool, OrbitError> {
+    let outcome = git_run(process_env, current_dir, args)?;
     if outcome.timed_out {
         return Err(git_timeout_error(
             current_dir,

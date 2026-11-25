@@ -1159,7 +1159,7 @@ fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
     let records = tempfile::tempdir().expect("tempdir");
     let store = GithubQuotaStore::new(records.path().to_path_buf());
     let policy = GithubQuotaPolicy::default();
-    let account = github_quota::inherited_account_key();
+    let account = github_quota::inherited_account_key(&orbit_common::Env::capture());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -1210,7 +1210,7 @@ fn held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_unc
     use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore, RateLimitAnswer};
 
     let policy = GithubQuotaPolicy::default();
-    let account = github_quota::inherited_account_key();
+    let account = github_quota::inherited_account_key(&orbit_common::Env::capture());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -1336,7 +1336,7 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs())
     };
-    let account = github_quota::inherited_account_key();
+    let account = github_quota::inherited_account_key(&orbit_common::Env::capture());
     let seeded_at = epoch_now() - 10_000;
     store.refresh_if_due(&policy, &account, seeded_at, &|| {
         let quota = |remaining| github_quota::ObservedQuota {

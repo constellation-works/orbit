@@ -59,7 +59,7 @@ impl OrbitRuntime {
             "rescue_commit": null,
             "partial_commit": null,
         });
-        let clause = match preserve_rescue_candidate(&workspace, &run.run_id) {
+        let clause = match preserve_rescue_candidate(self.env(), &workspace, &run.run_id) {
             Ok(kept) => {
                 record["rescue_ref"] = json!(kept.rescue_ref);
                 record["rescue_commit"] = json!(kept.commit);
@@ -102,7 +102,7 @@ impl OrbitRuntime {
         {
             return Some(path);
         }
-        run_worktree_paths(&self.paths().repo_root, run)
+        run_worktree_paths(self.env(), &self.paths().repo_root, run)
             .ok()?
             .into_iter()
             .find(|path| path.is_dir())

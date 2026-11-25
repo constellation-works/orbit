@@ -227,9 +227,10 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
         // Include both real retained checkouts without output and runs whose
         // worktrees are gone. Neither should trigger a collection.
         if age < 8 {
-            let worktree = orbit_engine::run_worktree_paths(&repo, &run)
-                .unwrap()
-                .remove(0);
+            let worktree =
+                orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &repo, &run)
+                    .unwrap()
+                    .remove(0);
             git(
                 &repo,
                 &[
@@ -274,7 +275,7 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
     unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
     let admit = || {
         assert!(fs2::available_space(repo.join(".orbit")).unwrap() / (1024 * 1024) < threshold);
-        runtime
+        orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture())
             .run_deterministic(
                 "list_backlog_tasks",
                 &json!({}),

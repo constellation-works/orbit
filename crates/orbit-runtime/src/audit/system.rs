@@ -7,7 +7,6 @@
 //! callers state only what varies.
 
 use orbit_common::OrbitError;
-use orbit_common::env_vars;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::AuditEventStatus;
 
@@ -65,10 +64,12 @@ pub fn record_system_audit_event(
     let (job_run_id, activity_id, step_index) = match attribution {
         AuditRunAttribution::Run(run_id) => (run_id, None, None),
         AuditRunAttribution::Environment { run_id } => (
-            run_id.or_else(|| non_empty_env(env_vars::ORBIT_RUN_ID)),
-            non_empty_env(env_vars::ORBIT_ACTIVITY_ID),
-            std::env::var(env_vars::ORBIT_STEP_INDEX)
-                .ok()
+            run_id.or_else(|| non_empty_env(runtime.env().orbit_run_id())),
+            non_empty_env(runtime.env().orbit_activity_id()),
+            runtime
+                .env()
+                .orbit_step_index()
+                .and_then(std::ffi::OsStr::to_str)
                 .and_then(|s| s.parse().ok()),
         ),
     };
@@ -93,7 +94,11 @@ pub fn record_system_audit_event(
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: None,
-            host: std::env::var(env_vars::HOSTNAME).ok(),
+            host: runtime
+                .env()
+                .hostname()
+                .and_then(std::ffi::OsStr::to_str)
+                .map(ToOwned::to_owned),
             pid: std::process::id(),
             session_id: None,
             workspace_id: workspace_id.map(ToOwned::to_owned),
@@ -115,6 +120,9 @@ pub fn record_system_audit_event(
     )
 }
 
-fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|s| !s.is_empty())
+fn non_empty_env(value: Option<&std::ffi::OsStr>) -> Option<String> {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
 }

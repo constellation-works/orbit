@@ -10,12 +10,14 @@ use super::super::input::{number, same, text};
 use super::support::{api, unreadable};
 
 pub(in super::super) fn workflow(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     run: &Value,
 ) -> Result<(String, String, String), OrbitError> {
     let id = number(run, "workflow_id", unreadable)?;
     let workflow = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/workflows/{id}"),
@@ -39,7 +41,13 @@ pub(in super::super) fn workflow(
         unreadable,
     )?;
     let head = text(run, "head_sha", unreadable)?;
-    let contents = super::super::read_cache::contents_at_commit(deadline, workspace, &path, head)?;
+    let contents = super::super::read_cache::contents_at_commit(
+        process_env,
+        deadline,
+        workspace,
+        &path,
+        head,
+    )?;
     same(
         &contents["type"],
         &json!("file"),
@@ -60,8 +68,13 @@ pub(in super::super) fn workflow(
     if !super::super::input::valid_expected_remote_sha(Some(source_base)) {
         return Err(unreadable("workflow event base commit"));
     }
-    let base_contents =
-        super::super::read_cache::contents_at_commit(deadline, workspace, &path, source_base)?;
+    let base_contents = super::super::read_cache::contents_at_commit(
+        process_env,
+        deadline,
+        workspace,
+        &path,
+        source_base,
+    )?;
     same(
         &base_contents["sha"],
         &json!(blob),
@@ -82,6 +95,7 @@ pub(in super::super) fn workflow(
     )?;
     let revision = format!("{head}:{path}");
     let local_blob = deadline.execute(
+        process_env,
         "git",
         vec!["rev-parse".into(), revision.clone()],
         workspace,
@@ -92,6 +106,7 @@ pub(in super::super) fn workflow(
     }
     let source = deadline
         .execute(
+            process_env,
             "git",
             vec!["show".into(), revision],
             workspace,

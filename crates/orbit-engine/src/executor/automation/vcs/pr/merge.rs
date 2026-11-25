@@ -171,8 +171,9 @@ fn local_completion_hold<H: RuntimeHost + ?Sized>(
         return Ok(None);
     }
     let workspace_path = resolve_batch_workspace_path(host, input, batch_id)?;
-    let head = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    let head = git_output(&host.process_env(), &workspace_path, &["rev-parse", "HEAD"])?;
     let changed = pull_request_changed_paths(
+        &host.process_env(),
         &workspace_path,
         input_string_field(input, "base").as_deref(),
         input_string_field(input, "base_sync").as_deref() == Some("local"),
@@ -230,11 +231,16 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     let workspace_path = resolve_batch_workspace_path(host, input, batch_id)?;
 
     // Get the current branch from the workspace
-    let head = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let head = git_output(
+        &host.process_env(),
+        &workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     let head = head.trim().to_string();
     // The full commit the checks below judge. The provider merges only this
     // head, so a push that lands before the merge request is refused.
-    let reviewed_head_sha = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    let reviewed_head_sha =
+        git_output(&host.process_env(), &workspace_path, &["rev-parse", "HEAD"])?;
     let reviewed_head_sha = reviewed_head_sha.trim().to_string();
     let base = input_string_field(input, "base").unwrap_or_else(|| "main".to_string());
     let base_sync_mode = base_sync_mode_from_input(input)?;
@@ -261,7 +267,13 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         }
     }
 
-    ensure_branch_fresh_against_base(&workspace_path, &head, &base, base_sync_mode)?;
+    ensure_branch_fresh_against_base(
+        &host.process_env(),
+        &workspace_path,
+        &head,
+        &base,
+        base_sync_mode,
+    )?;
 
     let merge_strategy =
         resolve_merge_strategy(host, &workspace_path.to_string_lossy(), &pr_number)?;
@@ -287,7 +299,11 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     // Best-effort remote branch cleanup.  Some repos have GitHub's
     // "Automatically delete head branches" enabled, so the remote ref may
     // already be gone — ignore errors.
-    let _ = git_command_success(&workspace_path, &["push", "origin", "--delete", &head]);
+    let _ = git_command_success(
+        &host.process_env(),
+        &workspace_path,
+        &["push", "origin", "--delete", &head],
+    );
 
     // Preserve ship attribution per task across the Review -> Done transition.
     // The source of truth is task.implemented_by -> task.created_by -> system
@@ -322,7 +338,11 @@ fn resolve_batch_workspace_path<H: RuntimeHost + ?Sized>(
         Some(path) => canonicalize_existing_dir(&path, "workspace_path"),
         None => {
             let repo_root = host.repo_root()?;
-            super::super::worktree::resolve_shared_worktree_path(Path::new(&repo_root), batch_id)
+            super::super::worktree::resolve_shared_worktree_path(
+                &host.process_env(),
+                Path::new(&repo_root),
+                batch_id,
+            )
         }
     }
 }

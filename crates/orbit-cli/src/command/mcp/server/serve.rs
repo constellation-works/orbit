@@ -161,8 +161,10 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     // [ORB-11313].
     let bound_orchestrator = normalized_selector(bound_orchestrator);
     identity.session_context.orchestrator = bound_orchestrator.clone();
-    identity.session_context.worker_invocation =
-        OrbitRuntime::current_worker_invocation(&global_root)?;
+    identity.session_context.worker_invocation = OrbitRuntime::current_worker_invocation(
+        &orbit_core::composition::composition_env(),
+        &global_root,
+    )?;
     if let Some(binding) = &identity.session_context.worker_invocation {
         identity.session_context.workspace = Some(binding.owner_destination.clone());
         identity
@@ -315,8 +317,10 @@ fn compose_server(
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
         orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority)?;
-    identity.session_context.worker_invocation =
-        OrbitRuntime::current_worker_invocation(&global_root)?;
+    identity.session_context.worker_invocation = OrbitRuntime::current_worker_invocation(
+        &orbit_core::composition::composition_env(),
+        &global_root,
+    )?;
     if identity.session_context.worker_invocation.is_some() {
         identity
             .session_context

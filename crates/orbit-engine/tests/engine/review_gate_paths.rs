@@ -54,7 +54,7 @@ fn intent_to_add_rename_reports_destination_and_source() {
     git_ok(repo.path(), &["add", "-N", "b.txt"]);
 
     assert_eq!(
-        uncommitted_paths(repo.path()).unwrap(),
+        uncommitted_paths(&orbit_common::Env::capture(), repo.path()).unwrap(),
         vec!["a.txt", "b.txt"]
     );
 }
@@ -65,7 +65,7 @@ fn staged_rename_reports_destination_and_source() {
     git_ok(repo.path(), &["mv", "a.txt", "c.txt"]);
 
     assert_eq!(
-        uncommitted_paths(repo.path()).unwrap(),
+        uncommitted_paths(&orbit_common::Env::capture(), repo.path()).unwrap(),
         vec!["a.txt", "c.txt"]
     );
 }

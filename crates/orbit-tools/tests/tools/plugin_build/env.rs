@@ -43,6 +43,7 @@ fn a_build_environment_never_carries_a_denied_or_ambient_name() {
         checkout: checkout.path().to_path_buf(),
     };
     let plan = plan_plugin_build(
+        &orbit_common::Env::capture(),
         &spec(&[("out", "bin/out")]),
         "git+https://user:token@example.test/demo.git#aaaa",
         &commit,

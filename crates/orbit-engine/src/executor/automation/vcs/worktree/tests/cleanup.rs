@@ -16,8 +16,14 @@ fn removal_without_force_fails_closed_on_a_dirty_worktree() {
     add_worktree(&repo, &worktree, "orbit/noforce");
     fs::write(worktree.join("uncommitted.txt"), "valuable").unwrap();
 
-    let error = remove_worktree(&repo, &worktree, Some("orbit/noforce"), false)
-        .expect_err("git must refuse to remove a dirty worktree without --force");
+    let error = remove_worktree(
+        &orbit_common::Env::capture(),
+        &repo,
+        &worktree,
+        Some("orbit/noforce"),
+        false,
+    )
+    .expect_err("git must refuse to remove a dirty worktree without --force");
 
     assert!(worktree.join("uncommitted.txt").exists());
     assert!(
@@ -37,7 +43,14 @@ fn forced_pipeline_cleanup_removes_a_worktree_holding_a_read_only_directory() {
     let locked = leave_read_only_fixture(&repo, &worktree);
     let _unlock = Unlock(locked);
 
-    remove_worktree(&repo, &worktree, Some("orbit/forced"), true).unwrap();
+    remove_worktree(
+        &orbit_common::Env::capture(),
+        &repo,
+        &worktree,
+        Some("orbit/forced"),
+        true,
+    )
+    .unwrap();
 
     assert!(!worktree.exists(), "forced removal must leave nothing");
     assert!(!listed_worktrees(&repo).contains("forced"));
@@ -59,7 +72,14 @@ fn repair_never_follows_a_symlink_out_of_the_worktree() {
     let _unlock = Unlock(outside.clone());
     std::os::unix::fs::symlink(&outside, worktree.join("escape")).unwrap();
 
-    remove_worktree(&repo, &worktree, Some("orbit/symlinked"), true).unwrap();
+    remove_worktree(
+        &orbit_common::Env::capture(),
+        &repo,
+        &worktree,
+        Some("orbit/symlinked"),
+        true,
+    )
+    .unwrap();
 
     assert!(!worktree.exists());
     assert_eq!(

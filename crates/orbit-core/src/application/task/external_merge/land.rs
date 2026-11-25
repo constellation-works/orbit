@@ -413,6 +413,7 @@ impl OrbitRuntime {
             return Ok(DeliveryMergeOutcome::TargetBranchChanged { reason });
         }
         let message = orbit_engine::compose_squash_merge_message(
+            self.env(),
             &repo_root,
             std::slice::from_ref(&task),
             self.pr_config(),

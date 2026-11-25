@@ -161,7 +161,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     // through authenticated repair publications, or when bounded conflict
     // repair rewrites and lease-pushes the same branch.
     let mut pin = DeliveryPin::from_input(input);
-    let head_lag = HeadLag::new(max_wait_seconds, poll_interval_seconds);
+    let head_lag = HeadLag::new(host.process_env(), max_wait_seconds, poll_interval_seconds);
     let base_candidate = None;
     let base_adopted = false;
     let watch_only = auto_fix.is_some_and(AutoFix::watch_only);

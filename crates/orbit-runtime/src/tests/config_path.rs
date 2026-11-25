@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 #[test]
 fn root_path_tilde_expansion_uses_home_and_only_one_prefix() {
-    let home = crate::paths::home_dir().expect("test host has a home directory");
+    let home = crate::paths::home_dir(&orbit_common::Env::capture())
+        .expect("test host has a home directory");
     let cases = [
         ("~", home.clone()),
         ("~/x", home.join("x")),
@@ -14,8 +15,13 @@ fn root_path_tilde_expansion_uses_home_and_only_one_prefix() {
     ];
 
     for (input, expected) in cases {
-        let resolved = crate::paths::resolve_path_value(input, &PathBuf::from("."), "root path")
-            .expect("tilde root path resolves");
+        let resolved = crate::paths::resolve_path_value(
+            &orbit_common::Env::capture(),
+            input,
+            &PathBuf::from("."),
+            "root path",
+        )
+        .expect("tilde root path resolves");
 
         assert_eq!(resolved, expected, "unexpected resolution for {input:?}");
     }

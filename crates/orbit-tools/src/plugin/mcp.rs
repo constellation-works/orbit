@@ -405,8 +405,10 @@ impl McpBackend {
             debug: false,
         };
         let profile = match &ctx.brokered_caller {
-            Some(caller) => self.spec.brokered_sandbox_profile(caller)?,
-            None => self.spec.sandbox_profile(ctx.workspace_root.as_deref())?,
+            Some(caller) => self.spec.brokered_sandbox_profile(&ctx.env, caller)?,
+            None => self
+                .spec
+                .sandbox_profile(&ctx.env, ctx.workspace_root.as_deref())?,
         };
         callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
         let sandbox = profile.with_callback_session(&callback);

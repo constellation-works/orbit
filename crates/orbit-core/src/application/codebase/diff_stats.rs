@@ -460,7 +460,9 @@ impl TaskCodebasePort for OrbitRuntime {
                 return Ok(());
             };
             let repo_root = &self.paths().repo_root;
-            if let Err(error) = orbit_engine::review_gate::fetch_landed_commit(repo_root, &commit) {
+            if let Err(error) =
+                orbit_engine::review_gate::fetch_landed_commit(self.env(), repo_root, &commit)
+            {
                 tracing::warn!(task_id = %task.id, %commit, %error, "landed commit could not be fetched");
             }
             let repo = git2::Repository::open(repo_root)

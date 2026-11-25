@@ -33,16 +33,21 @@ impl WorkspaceRebindArgs {
                 "workspace rebind requires --workspace <registered-name-or-id>".into(),
             )
         })?;
-        let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
+        let global_root = orbit_core::runtime::resolve_generation_root(
+            &orbit_core::composition::composition_env(),
+            root_override,
+        )?;
         let result = workspace_rebind::rebind_checkout_directory(
             &global_root,
             selector,
             &self.path,
             CheckoutRebindOptions {
                 dry_run: self.dry_run,
-                audit_role: orbit_core::ActorIdentity::from_env()
-                    .audit_role()
-                    .to_string(),
+                audit_role: orbit_core::ActorIdentity::from_env(
+                    &orbit_core::composition::composition_env(),
+                )
+                .audit_role()
+                .to_string(),
             },
         )?;
         let text = format!(

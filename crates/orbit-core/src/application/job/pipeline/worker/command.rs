@@ -428,7 +428,7 @@ impl WorkerCommandConfig {
         // cycle outside a sandbox, say), it must not inherit that run's binding
         // and activity policy, or its own tool calls would be judged as the
         // submitter's. The workspace and registry locators stay.
-        if crate::runtime::run_input::managed_run_context_from_env() {
+        if crate::runtime::run_input::managed_run_context_from_env(&self.env) {
             for name in MCP_MANAGED_BINDING_ENV_VARS
                 .iter()
                 .copied()

@@ -60,7 +60,9 @@ fn spawn_probe<H: RuntimeHost + ?Sized>(
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
+    let process_env = host.process_env();
     let spawned = spawn_child_with_optional_sandbox(
+        &process_env,
         program,
         &args,
         &host.agent_subprocess_environment(&[]),
@@ -70,7 +72,7 @@ fn spawn_probe<H: RuntimeHost + ?Sized>(
     )
     .map_err(|error| error.message)?;
     let outcome = spawn_owned_supervised_cancellable(
-        &orbit_common::Env::capture(),
+        &process_env,
         || Ok(spawned.child),
         Some(PROBE_TIMEOUT_MS),
         Some(Vec::new()),

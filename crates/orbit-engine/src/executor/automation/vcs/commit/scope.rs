@@ -46,14 +46,17 @@ pub(super) enum NewPathPolicy {
 /// Rename detection stays off so both source deletions and destination
 /// additions are available for task attribution and path-scoped commits.
 pub(super) fn task_candidate_paths(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     policy: NewPathPolicy,
 ) -> Result<BTreeSet<String>, OrbitError> {
     let untracked = git_output_exact_paths(
+        process_env,
         workspace_path,
         &["ls-files", "--others", "--exclude-standard", "-z", "--"],
     )?;
     let tracked = git_output_exact_paths(
+        process_env,
         workspace_path,
         &[
             "diff",
@@ -105,7 +108,7 @@ pub(super) fn task_candidate_paths(
         // outside the sandbox. The crate-guide exception stays in this branch:
         // claimed partial snapshots and recovery call `irregular_candidate_paths`
         // directly and keep refusing every symlink.
-        let irregular = owner_refused_candidates(workspace_path, &candidates);
+        let irregular = owner_refused_candidates(process_env, workspace_path, &candidates);
         if !irregular.is_empty() {
             return Err(OrbitError::Execution(format!(
                 "task delivery refused non-regular candidate paths: {irregular:?}. Delivery \
@@ -124,10 +127,11 @@ pub(super) fn task_candidate_paths(
 /// listing when any name is not UTF-8. For listings that feed staging or a
 /// commit, where a lossy name would silently drop or misname a path.
 pub(super) fn exact_delivery_paths(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     args: &[&str],
 ) -> Result<Vec<String>, OrbitError> {
-    let listed = git_output_exact_paths(workspace_path, args)?;
+    let listed = git_output_exact_paths(process_env, workspace_path, args)?;
     refuse_unrepresentable_paths(&listed.unrepresentable)?;
     Ok(listed.paths)
 }
@@ -188,10 +192,14 @@ fn regular_or_removed(workspace_path: &Path, path: &str) -> bool {
 ///
 /// `irregular_candidate_paths` itself stays unconditional. Claimed partial
 /// snapshots and recovery commits call it and must keep refusing every symlink.
-fn owner_refused_candidates(workspace_path: &Path, candidates: &BTreeSet<String>) -> Vec<String> {
+fn owner_refused_candidates(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    candidates: &BTreeSet<String>,
+) -> Vec<String> {
     irregular_candidate_paths(workspace_path, candidates)
         .into_iter()
-        .filter(|path| !admitted_crate_guide_symlink(workspace_path, path, candidates))
+        .filter(|path| !admitted_crate_guide_symlink(process_env, workspace_path, path, candidates))
         .collect()
 }
 
@@ -204,6 +212,7 @@ fn owner_refused_candidates(workspace_path: &Path, candidates: &BTreeSet<String>
 /// directories. The sibling is accepted only as a regular file: a dangling
 /// link, a directory, or another symlink stays refused.
 fn admitted_crate_guide_symlink(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     path: &str,
     candidates: &BTreeSet<String>,
@@ -226,7 +235,7 @@ fn admitted_crate_guide_symlink(
     if !is_regular_file(&crate_dir.join("CLAUDE.md")) {
         return false;
     }
-    candidates.contains(&guide) || tracked_path(workspace_path, &guide)
+    candidates.contains(&guide) || tracked_path(process_env, workspace_path, &guide)
 }
 
 /// The single path component of `crates/<name>/AGENTS.md`, when `path` is
@@ -261,9 +270,10 @@ fn is_regular_file(path: &Path) -> bool {
 }
 
 /// Whether `path` is already in the index. A Git failure refuses the symlink.
-fn tracked_path(workspace_path: &Path, path: &str) -> bool {
+fn tracked_path(process_env: &orbit_common::Env, workspace_path: &Path, path: &str) -> bool {
     let spec = format!(":(literal){path}");
     let Ok(listed) = git_output_paths(
+        process_env,
         workspace_path,
         &["ls-files", "-z", "--error-unmatch", "--", spec.as_str()],
     ) else {
@@ -280,12 +290,14 @@ fn tracked_path(workspace_path: &Path, path: &str) -> bool {
 /// and the exact widening request from the
 /// original admission selectors: every added path they do not cover.
 pub fn validate_claim_new_paths(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     selectors: &[String],
     base: &str,
     candidate: &str,
 ) -> Result<(Vec<String>, Vec<String>), OrbitError> {
     let new_paths = git_output_paths(
+        process_env,
         workspace_path,
         &[
             "diff",
@@ -299,6 +311,7 @@ pub fn validate_claim_new_paths(
         ],
     )?;
     let type_changed_paths = git_output_paths(
+        process_env,
         workspace_path,
         &[
             "diff",
@@ -320,6 +333,7 @@ pub fn validate_claim_new_paths(
         // worktree has not checked out this commit. Inspect the immutable
         // Git tree mode, including replacements of existing tracked files.
         let entry = super::super::git::git_output(
+            process_env,
             workspace_path,
             &["--literal-pathspecs", "ls-tree", candidate, "--", path],
         )?;

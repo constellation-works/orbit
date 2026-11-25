@@ -162,6 +162,7 @@ impl OrbitRuntime {
                 )))
             } else if across_os.is_some() {
                 orbit_engine::verify_claimed_known_red_base(
+                    self.env(),
                     &self.paths().repo_root,
                     &ship.base_branch,
                     base_sync,

@@ -265,7 +265,13 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                         ) && log_payload(line).starts_with("orbit-dependency-evidence:")
                     });
             if emitted_record
-                && !super::super::suspect::cites_changed_candidate(workspace, head, base, &log)?
+                && !super::super::suspect::cites_changed_candidate(
+                    &host.process_env(),
+                    workspace,
+                    head,
+                    base,
+                    &log,
+                )?
             {
                 dependency_record = true;
                 // Protocol presence grants nothing; the adapter authenticates it

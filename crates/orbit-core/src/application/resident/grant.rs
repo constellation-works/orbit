@@ -65,15 +65,15 @@ impl ResidentGrantCaller {
     /// Whether this caller is the human operator on this host. An MCP
     /// session never is: a relay through a session is a request, whatever
     /// capability the session holds.
-    fn is_native_operator(&self) -> bool {
+    fn is_native_operator(&self, env: &orbit_common::Env) -> bool {
         self.agent.is_none()
             && self.model.is_none()
             && self.orchestrator.is_none()
             && self.session.transport.is_none()
             && self.session.origin_session_id.is_none()
             && self.session.worker_invocation.is_none()
-            && !agent_context_declared(&orbit_common::Env::capture())
-            && resolved_caller_capabilities(&self.session).contains(&McpCapability::Operator)
+            && !agent_context_declared(env)
+            && resolved_caller_capabilities(env, &self.session).contains(&McpCapability::Operator)
     }
 }
 
@@ -382,7 +382,7 @@ impl OrbitRuntime {
         let writer = self
             .actor()
             .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())?;
-        let operator = caller.is_native_operator();
+        let operator = caller.is_native_operator(self.env());
         let mut outcome = None;
         self.stores()
             .tasks()

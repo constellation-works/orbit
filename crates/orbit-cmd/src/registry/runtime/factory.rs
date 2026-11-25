@@ -208,6 +208,7 @@ impl RegisteredRuntimeFactory {
     ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
         let hint = workspace_root_hint(cwd);
         orbit_core::runtime::try_resolve_initialized_roots_with_hint(
+            &orbit_core::composition::composition_env(),
             cwd,
             root_override,
             hint.as_ref(),
@@ -222,7 +223,11 @@ impl RegisteredRuntimeFactory {
         cwd: &Path,
         raw: &str,
     ) -> Result<Option<PathBuf>, OrbitError> {
-        orbit_core::runtime::initialized_explicit_workspace_root(raw, cwd)
+        orbit_core::runtime::initialized_explicit_workspace_root(
+            &orbit_core::composition::composition_env(),
+            raw,
+            cwd,
+        )
     }
 
     /// Initialized workspace discovered from `cwd`, ignoring `--root` and `ORBIT_ROOT`.
@@ -234,7 +239,11 @@ impl RegisteredRuntimeFactory {
         cwd: &Path,
     ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
         let hint = workspace_root_hint(cwd);
-        orbit_core::runtime::try_resolve_initialized_cwd_roots_with_hint(cwd, hint.as_ref())
+        orbit_core::runtime::try_resolve_initialized_cwd_roots_with_hint(
+            &orbit_core::composition::composition_env(),
+            cwd,
+            hint.as_ref(),
+        )
     }
 
     /// Bootstrap a CLI runtime from `--root` and/or `--workspace`.
@@ -342,7 +351,7 @@ impl RegisteredRuntimeFactory {
             if root_override.is_some() {
                 None
             } else {
-                managed_workspace_selector_from_env()
+                managed_workspace_selector_from_env(&orbit_core::composition::composition_env())
             }
         });
         let Some(selector) = selector else {
@@ -353,9 +362,11 @@ impl RegisteredRuntimeFactory {
             // before; the error surfaces from the re-read once roots resolve.
             let preloaded = match root_override {
                 Some(_) => None,
-                None => orbit_core::runtime::resolve_global_root()
-                    .and_then(|global_root| RuntimeOpenInputs::read(&global_root))
-                    .ok(),
+                None => orbit_core::runtime::resolve_global_root(
+                    &orbit_core::composition::composition_env(),
+                )
+                .and_then(|global_root| RuntimeOpenInputs::read(&global_root))
+                .ok(),
             };
             let hint = preloaded
                 .as_ref()

@@ -135,6 +135,7 @@ impl std::fmt::Display for RecoveryCommitRefusal {
 /// Commit what recovery left in the worktree as a new candidate head with
 /// recovery provenance, or refuse it before any Git mutation.
 pub(crate) fn commit_recovery_repair(
+    process_env: &orbit_common::Env,
     request: &RecoveryCommitRequest<'_>,
 ) -> Result<RecoveryCommit, RecoveryCommitRefusal> {
     let uncommittable =
@@ -145,7 +146,7 @@ pub(crate) fn commit_recovery_repair(
             request.workspace_path.display()
         ))
     })?;
-    let paths = task_candidate_paths(&workspace_path, NewPathPolicy::Recovery)
+    let paths = task_candidate_paths(process_env, &workspace_path, NewPathPolicy::Recovery)
         .map_err(uncommittable)?
         .into_iter()
         .collect::<Vec<_>>();
@@ -155,8 +156,12 @@ pub(crate) fn commit_recovery_repair(
     if request.no_diff_route {
         return Err(RecoveryCommitRefusal::NoDiffRoute);
     }
-    let head = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])
-        .map_err(uncommittable)?;
+    let head = git_output(
+        process_env,
+        &workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .map_err(uncommittable)?;
     if request.reviewed_heads.contains(&head) {
         return Err(RecoveryCommitRefusal::ReviewedCandidate(head));
     }
@@ -182,22 +187,27 @@ pub(crate) fn commit_recovery_repair(
             return Err(RecoveryCommitRefusal::UnexplainedPaths(paths));
         }
     }
-    ensure_named_branch(&workspace_path).map_err(uncommittable)?;
-    ensure_no_unmerged_changes(&workspace_path).map_err(uncommittable)?;
+    ensure_named_branch(process_env, &workspace_path).map_err(uncommittable)?;
+    ensure_no_unmerged_changes(process_env, &workspace_path).map_err(uncommittable)?;
 
-    stage_paths(&workspace_path, &paths).map_err(uncommittable)?;
-    let staged = staged_changed_files(&workspace_path).map_err(uncommittable)?;
+    stage_paths(process_env, &workspace_path, &paths).map_err(uncommittable)?;
+    let staged = staged_changed_files(process_env, &workspace_path).map_err(uncommittable)?;
     if staged.is_empty() {
         return Ok(RecoveryCommit::Clean);
     }
     git_commit_as(
+        process_env,
         &workspace_path,
         &message(request),
         &recovery_author(request.recovery_model.as_deref()),
     )
     .map_err(uncommittable)?;
-    let commit_sha = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])
-        .map_err(uncommittable)?;
+    let commit_sha = git_output(
+        process_env,
+        &workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .map_err(uncommittable)?;
     Ok(RecoveryCommit::Committed {
         commit_sha,
         // The pre-stage inventory has rename detection disabled, retaining
@@ -220,9 +230,10 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
 /// `workspace_path` as a redacted binary-capable patch without mutating `.git/index`
 /// or copying protected files into the patch or repository object store.
 pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
 ) -> Result<Option<Vec<u8>>, orbit_common::OrbitError> {
-    let changed_paths = uncommitted_path_bytes(workspace_path)?;
+    let changed_paths = uncommitted_path_bytes(process_env, workspace_path)?;
     let safe_paths = changed_paths
         .iter()
         .filter(|path| is_safe_path_bytes(path))
@@ -239,7 +250,8 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     let index_str = index_path.to_string_lossy().into_owned();
     // Isolation is mandatory: without it `git add` writes ordinary-file blobs
     // into the shared object store before they are redacted.
-    let (temp_objects, alternate_objects) = isolated_temp_object_store(workspace_path, dir.path())?;
+    let (temp_objects, alternate_objects) =
+        isolated_temp_object_store(process_env, workspace_path, dir.path())?;
     let env_storage = [
         ("GIT_INDEX_FILE", index_str),
         ("GIT_OBJECT_DIRECTORY", temp_objects),
@@ -250,15 +262,20 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
         .map(|(key, value)| (*key, value.as_str()))
         .collect::<Vec<_>>();
 
-    let has_head =
-        git_command_success(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let has_head = git_command_success(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     let mut head_entries = BTreeMap::new();
     let mut head_paths = BTreeSet::new();
     let mut head_gitlinks = BTreeSet::new();
     let mut head_protected = Vec::new();
     if has_head {
-        git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
-        for StageEntry { entry, path, .. } in read_stage_entries(workspace_path, Some(&env))? {
+        git_output_with_env(process_env, workspace_path, &["read-tree", "HEAD"], &env)?;
+        for StageEntry { entry, path, .. } in
+            read_stage_entries(process_env, workspace_path, Some(&env))?
+        {
             if !is_safe_path_bytes(&path) {
                 head_protected.push(path.clone());
             }
@@ -272,7 +289,8 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
 
     let mut live_cached_paths = BTreeSet::new();
     let mut live_staged: BTreeMap<Vec<u8>, Vec<(u8, IndexEntry)>> = BTreeMap::new();
-    for StageEntry { entry, stage, path } in read_stage_entries(workspace_path, None)? {
+    for StageEntry { entry, stage, path } in read_stage_entries(process_env, workspace_path, None)?
+    {
         live_cached_paths.insert(path.clone());
         if is_safe_path_bytes(&path) {
             live_staged.entry(path).or_default().push((stage, entry));
@@ -294,8 +312,13 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     let base_ref = if head_protected.is_empty() {
         has_head.then(|| "HEAD".to_string())
     } else {
-        git_rm_cached_nul(workspace_path, &head_protected, &env)?;
-        Some(git_output_with_env(workspace_path, &["write-tree"], &env)?)
+        git_rm_cached_nul(process_env, workspace_path, &head_protected, &env)?;
+        Some(git_output_with_env(
+            process_env,
+            workspace_path,
+            &["write-tree"],
+            &env,
+        )?)
     };
 
     let mut protected = changed_paths
@@ -307,7 +330,12 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     protected.dedup();
 
     if !stageable.is_empty() {
-        git_rm_cached_nul(workspace_path, &stageable.remove_from_index, &env)?;
+        git_rm_cached_nul(
+            process_env,
+            workspace_path,
+            &stageable.remove_from_index,
+            &env,
+        )?;
 
         // Only emit `:(exclude,literal)` for protected paths beneath a directory in
         // `normal_add`; an ignored top-level protected path (such as a force-added
@@ -322,6 +350,7 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
             })
             .collect::<Vec<_>>();
         git_add_nul(
+            process_env,
             workspace_path,
             false,
             &stageable.normal_add,
@@ -329,6 +358,7 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
             &env,
         )?;
         git_add_nul(
+            process_env,
             workspace_path,
             true,
             &stageable.staged_addition_add,
@@ -337,7 +367,7 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
         )?;
     }
 
-    let worktree_entries = read_stage_entries(workspace_path, Some(&env))?
+    let worktree_entries = read_stage_entries(process_env, workspace_path, Some(&env))?
         .into_iter()
         .map(|StageEntry { entry, path, .. }| (path, entry))
         .collect::<BTreeMap<_, _>>();
@@ -392,15 +422,15 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
             });
         }
     }
-    git_rm_cached_nul(workspace_path, &staged_remove, &env)?;
-    git_update_index_info_nul(workspace_path, &staged_update, &env)?;
+    git_rm_cached_nul(process_env, workspace_path, &staged_remove, &env)?;
+    git_update_index_info_nul(process_env, workspace_path, &staged_update, &env)?;
 
     let mut diff_args = vec!["-c", "core.quotePath=true", "diff", "--cached"];
     diff_args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
     if let Some(base) = base_ref.as_deref() {
         diff_args.push(base);
     }
-    let diff = git_output_bytes_with_env(workspace_path, &diff_args, &env)?;
+    let diff = git_output_bytes_with_env(process_env, workspace_path, &diff_args, &env)?;
     let has_diff = !diff.iter().all(u8::is_ascii_whitespace);
     if !has_diff && retained_notes.is_empty() {
         return Ok(None);
@@ -421,10 +451,15 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
 /// Fails when the repository object directory cannot be isolated (for example a
 /// path the alternates list cannot represent) so capture stops before staging.
 fn isolated_temp_object_store(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     temp_root: &Path,
 ) -> Result<(String, String), orbit_common::OrbitError> {
-    let raw_objects = git_output(workspace_path, &["rev-parse", "--git-path", "objects"])?;
+    let raw_objects = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--git-path", "objects"],
+    )?;
     let objects_path = Path::new(&raw_objects);
     let abs_objects = if objects_path.is_absolute() {
         objects_path.to_path_buf()
@@ -452,8 +487,12 @@ fn isolated_temp_object_store(
     ))
 }
 
-fn uncommitted_path_bytes(workspace_path: &Path) -> Result<Vec<Vec<u8>>, orbit_common::OrbitError> {
+fn uncommitted_path_bytes(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<Vec<Vec<u8>>, orbit_common::OrbitError> {
     let status = git_output_bytes(
+        process_env,
         workspace_path,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
@@ -547,13 +586,14 @@ struct RetainedIndexNote {
 }
 
 fn read_stage_entries(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     env: Option<&[(&str, &str)]>,
 ) -> Result<Vec<StageEntry>, orbit_common::OrbitError> {
     let args = ["ls-files", "--stage", "-z"];
     let stdout = match env {
-        Some(env) => git_output_bytes_with_env(workspace_path, &args, env)?,
-        None => git_output_bytes(workspace_path, &args)?,
+        Some(env) => git_output_bytes_with_env(process_env, workspace_path, &args, env)?,
+        None => git_output_bytes(process_env, workspace_path, &args)?,
     };
     let mut entries = Vec::new();
     for raw in split_nul_bytes(&stdout) {
@@ -592,6 +632,7 @@ fn has_path_prefix_conflict(path: &[u8], entries: &BTreeMap<Vec<u8>, IndexEntry>
 }
 
 fn git_update_index_info_nul(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     updates: &[(Vec<u8>, &IndexEntry)],
     env: &[(&str, &str)],
@@ -609,6 +650,7 @@ fn git_update_index_info_nul(
         input.push(0);
     }
     git_output_bytes_with_env_and_stdin(
+        process_env,
         workspace_path,
         &["update-index", "-z", "--index-info"],
         &input,
@@ -636,6 +678,7 @@ fn format_retained_index_header(notes: &[RetainedIndexNote]) -> Vec<u8> {
 }
 
 fn git_rm_cached_nul(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     paths: &[Vec<u8>],
     env: &[(&str, &str)],
@@ -648,6 +691,7 @@ fn git_rm_cached_nul(
         append_pathspec(&mut rm_input, b":(literal)", path);
     }
     git_output_bytes_with_env_and_stdin(
+        process_env,
         workspace_path,
         &[
             "rm",
@@ -664,6 +708,7 @@ fn git_rm_cached_nul(
 }
 
 fn git_add_nul(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     force: bool,
     paths: &[Vec<u8>],
@@ -691,7 +736,7 @@ fn git_add_nul(
     } else {
         &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]
     };
-    git_output_bytes_with_env_and_stdin(workspace_path, args, &add_input, env)?;
+    git_output_bytes_with_env_and_stdin(process_env, workspace_path, args, &add_input, env)?;
     Ok(())
 }
 
@@ -794,7 +839,9 @@ pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
     workspace_path: &Path,
     artifact_path: &str,
 ) -> Result<Option<String>, String> {
-    let Some(diff) = capture_uncommitted_diff(workspace_path).map_err(|e| e.to_string())? else {
+    let Some(diff) =
+        capture_uncommitted_diff(&host.process_env(), workspace_path).map_err(|e| e.to_string())?
+    else {
         return Ok(None);
     };
     let diff = redact_all_bytes(&diff);

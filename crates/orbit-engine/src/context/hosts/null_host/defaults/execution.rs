@@ -55,13 +55,17 @@ pub(super) fn baseline_activity_tools(baseline_tools: &[String]) -> ResolvedActi
 /// `agent_subprocess_environment` first, so an override applies before this
 /// overlay.
 pub(super) fn overlay_crew_env(
+    parent_env: &orbit_common::Env,
     mut env: Vec<(String, String)>,
     crew_env: &[orbit_types::identity::CrewEnvVar],
 ) -> Vec<(String, String)> {
     orbit_common::security::child_env::apply_crew_env_from(
-        &orbit_common::Env::capture(),
+        parent_env,
         &mut env,
-        &std::env::vars().collect::<Vec<_>>(),
+        &parent_env
+            .utf8_vars()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect::<Vec<_>>(),
         crew_env,
     );
     env

@@ -111,7 +111,11 @@ fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<
 /// Refuse a NoDiff leaf whose worktree no longer is its pinned base, naming
 /// the commits beyond that base and the uncommitted paths. Only the leaf's own
 /// checkout is read: `origin/<base>` advancing since does not matter here.
-fn require_unchanged_base(workspace: &Path, base_sha: &str) -> Result<(), OrbitError> {
+fn require_unchanged_base(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    base_sha: &str,
+) -> Result<(), OrbitError> {
     const SHOWN: usize = 10;
     let listed = |lines: &str| {
         let lines = lines.lines().collect::<Vec<_>>();
@@ -125,10 +129,11 @@ fn require_unchanged_base(workspace: &Path, base_sha: &str) -> Result<(), OrbitE
     if base_sha.is_empty() {
         return Err(refused("the NoDiff checkpoint names no synchronized base"));
     }
-    let head = git_output(workspace, &["rev-parse", "HEAD"])?;
+    let head = git_output(process_env, workspace, &["rev-parse", "HEAD"])?;
     let mut changes = Vec::new();
     if head != base_sha {
         let commits = git_output(
+            process_env,
             workspace,
             &[
                 "log",
@@ -144,6 +149,7 @@ fn require_unchanged_base(workspace: &Path, base_sha: &str) -> Result<(), OrbitE
         });
     }
     let pending = git_output(
+        process_env,
         workspace,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
@@ -172,7 +178,11 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
         .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?
         .clone();
     require_checkpoint_identity(&report, &context.task_id, &context.run_id)?;
-    require_unchanged_base(workspace, report["base_sha"].as_str().unwrap_or_default())?;
+    require_unchanged_base(
+        &host.process_env(),
+        workspace,
+        report["base_sha"].as_str().unwrap_or_default(),
+    )?;
     let task = host.get_task(&context.task_id)?;
     verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, &report)?;
     // Preserve admitted already-resolved selectors on report-backed checkpoints
@@ -196,6 +206,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     };
     host.attach_claim_validation_log(&evidence.path, content)?;
     let candidate = observe_with(
+        &host.process_env(),
         workspace,
         context,
         input,
@@ -203,7 +214,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
             evidence: evidence.clone(),
         },
     )?;
-    require_clean_candidate(workspace, &candidate)?;
+    require_clean_candidate(&host.process_env(), workspace, &candidate)?;
     if skips_validation(&report) {
         // An implementer's deferral or already-resolved selectors name tests
         // for a gate this route does not run, so neither replays either.
@@ -226,7 +237,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     results.extend(already_resolved::replay(
         host, context, workspace, &candidate, &resolved,
     )?);
-    require_clean_candidate(workspace, &candidate)?;
+    require_clean_candidate(&host.process_env(), workspace, &candidate)?;
     // Commands may have changed task artifacts too; recheck the checkpoint.
     verify_leaf(host, context, workspace, &evidence)?;
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
@@ -259,9 +270,15 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     let report = checkpoint(host, &handoff.task_id, evidence)?;
     require_checkpoint_identity(&report, &handoff.task_id, &handoff.run_id)?;
     let submitted = &handoff.candidate;
-    let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, base_sync)?;
-    let tip = revision(workspace, &base_ref)?;
+    let base_ref = resolve_worktree_start_point(
+        &host.process_env(),
+        workspace,
+        &submitted.base_branch,
+        base_sync,
+    )?;
+    let tip = revision(&host.process_env(), workspace, &base_ref)?;
     let contained = crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
         workspace,
         &submitted.base.commit,
         &tip.commit,
@@ -273,11 +290,11 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
             submitted.base.commit, tip.commit
         )));
     }
-    let base = revision(workspace, &submitted.base.commit)?;
+    let base = revision(&host.process_env(), workspace, &submitted.base.commit)?;
     if submitted.candidate != base
         || submitted.base != base
         || report["base_sha"] != base.commit
-        || submitted.repository != repository(workspace, &handoff.workspace_id)
+        || submitted.repository != repository(&host.process_env(), workspace, &handoff.workspace_id)
         || !handoff.footprint_widening.is_empty()
     {
         return Err(refused(

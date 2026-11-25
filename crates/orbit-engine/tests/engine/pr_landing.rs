@@ -722,7 +722,7 @@ fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sand
     let input = json!({"pr": "42", "workspace_path": path_str(&fx.repo)});
     for message in "HTTP 400: Bad Request;HTTP 401: Unauthorized;HTTP 403: Forbidden;HTTP 404: Not Found;HTTP 409: Conflict;HTTP 410: Gone;HTTP 422: Unprocessable Entity;HTTP 429: Too Many Requests;bad credentials;permission denied;not accessible by integration;authentication required;SAML authorization required;rate limit exceeded;HTTP 418: I'm a teapot;HTTP 4990: Not a 499 status token;https://api.github.com/graphql?status=499;Head sha can't be blank".split(';') {
         fx.script_pr_views(&[message]);
-        let error = run_private_vcs_operation("pr.status", &input)
+        let error = run_private_vcs_operation(&orbit_common::Env::capture(), "pr.status", &input)
             .unwrap_err();
         let failure = error
             .private_vcs_failure()
@@ -731,17 +731,20 @@ fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sand
         assert_eq!(fx.pr_view_reads(), 1, "{message}: no retry");
     }
     fx.script_pr_views(&["HTTP 499: Bad credentials"]);
-    let error = run_private_vcs_operation("pr.status", &input).unwrap_err();
+    let error =
+        run_private_vcs_operation(&orbit_common::Env::capture(), "pr.status", &input).unwrap_err();
     let failure = error.private_vcs_failure().unwrap();
     assert_eq!(failure.class, PrivateVcsFailureClass::Transient);
     assert_eq!(fx.pr_view_reads(), 3);
     fx.script_pr_views(&["invalid_json"]);
-    let error = run_private_vcs_operation("pr.status", &input).unwrap_err();
+    let error =
+        run_private_vcs_operation(&orbit_common::Env::capture(), "pr.status", &input).unwrap_err();
     assert!(matches!(&error, OrbitError::Execution(_)));
     assert!(error.private_vcs_failure().is_none());
     assert_eq!(fx.pr_view_reads(), 1, "an Orbit refusal is never retried");
     fx.script_merges(&["http_499"]);
     let error = run_private_vcs_operation(
+        &orbit_common::Env::capture(),
         "pr.merge",
         &json!({
             "pr": "42",
@@ -756,6 +759,7 @@ fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sand
     assert_eq!(fx.merge_requests().len(), 1, "merge is not retried");
     fx.script_pr_close_failure("HTTP 499: 499 (https://api.github.com/graphql)");
     let error = run_private_vcs_operation(
+        &orbit_common::Env::capture(),
         "pr.close",
         &json!({
             "pr": "42",
@@ -856,12 +860,16 @@ fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery(sandbox: 
     assert!(landing.managed_merge);
     assert_eq!(landing.landed_commit.as_deref(), Some(landed.as_str()));
     // The recorded landing is what Core checks coverage against: the reviewed tree, squashed onto the reviewed base.
-    review_gate::fetch_landed_commit(&fx.repo, &landed).unwrap();
-    let landed_revision = review_gate::revision(&fx.repo, &landed).unwrap();
-    let candidate_revision = review_gate::revision(&fx.repo, &fx.candidate).unwrap();
-    let base_revision = review_gate::revision(&fx.repo, &fx.base_sha).unwrap();
+    review_gate::fetch_landed_commit(&orbit_common::Env::capture(), &fx.repo, &landed).unwrap();
+    let landed_revision =
+        review_gate::revision(&orbit_common::Env::capture(), &fx.repo, &landed).unwrap();
+    let candidate_revision =
+        review_gate::revision(&orbit_common::Env::capture(), &fx.repo, &fx.candidate).unwrap();
+    let base_revision =
+        review_gate::revision(&orbit_common::Env::capture(), &fx.repo, &fx.base_sha).unwrap();
     assert_eq!(landed_revision.tree, candidate_revision.tree);
     let facts = review_gate::landed_candidate_facts(
+        &orbit_common::Env::capture(),
         &fx.repo,
         &landed_revision,
         &fx.candidate,
@@ -5376,7 +5384,8 @@ fn remote_base_transport_retries_preserve_access_refusals(sandbox: &Path) {
             assert_eq!(ClaimFailureClass::of_step_failure(None, Some(&error)), None);
             assert!(host.handoffs().is_empty());
         } else {
-            let fetched = orbit_engine::fetch_remote_base(&fx.repo, BASE);
+            let fetched =
+                orbit_engine::fetch_remote_base(&orbit_common::Env::capture(), &fx.repo, BASE);
             if recovery {
                 fetched.unwrap();
             } else {
@@ -6535,7 +6544,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         {
             return Ok(answer);
         }
-        orbit_engine::run_private_vcs_operation(operation, &input)
+        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
     }
     /// One owner-local claim on the fixture's candidate branch, requiring whatever this host requires.
     fn claim_execution_context(&self) -> Res<ClaimExecutionContext> {

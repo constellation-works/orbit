@@ -2088,6 +2088,7 @@ fn no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once() {
                     fx.merge_requests()
                 );
                 orbit_engine::verify_merged_base_refresh(
+                    &orbit_common::Env::capture(),
                     &fx.repo,
                     &orbit_engine::MergedBaseRefresh {
                         published_head: &fx.candidate,
@@ -5669,6 +5670,7 @@ fn required_check_evidence_case(case: &str, row: &std::path::Path) {
         "empty" | "truncated" | "fail" => {
             fx.script_required_check_outcomes(&[case, "success"]);
             let answer = run_private_vcs_operation(
+                &orbit_common::Env::capture(),
                 "pr.required_checks",
                 &json!({"pr": "42", "workspace_path": fx.repo}),
             )

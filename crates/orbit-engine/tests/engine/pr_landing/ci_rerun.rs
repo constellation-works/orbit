@@ -141,7 +141,9 @@ fn first_dependency_failure_repairs_without_owner_rerun() {
         "ci_rerun::first_dependency_failure_repairs_without_owner_rerun",
         |sandbox| {
             let (fx, host, request) = fixture(sandbox);
-            let plan = run_private_vcs_operation("ci.rerun_plan", &request).unwrap();
+            let plan =
+                run_private_vcs_operation(&orbit_common::Env::capture(), "ci.rerun_plan", &request)
+                    .unwrap();
             assert_eq!(plan["plan"]["failed_jobs"].as_array().unwrap().len(), 2);
             let mut input = fx.complete_ungated_input();
             input["auto_fix"] = json!(true);
@@ -333,7 +335,12 @@ fn assert_dependency_adapter_refusals(test: &str, cases: &[&str]) {
                     .unwrap();
                     bounded::bounded_logs(&fx, raw);
                     assert!(
-                        run_private_vcs_operation("ci.rerun_plan", &request).is_err(),
+                        run_private_vcs_operation(
+                            &orbit_common::Env::capture(),
+                            "ci.rerun_plan",
+                            &request
+                        )
+                        .is_err(),
                         "{case}"
                     );
                     assert!(fx.forge_lines("retry-sends").is_empty(), "{case}");
@@ -468,6 +475,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
 
 fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
     let mut candidate = orbit_engine::observe_candidate(
+        &orbit_common::Env::capture(),
         &fx.repo,
         Some(BRANCH),
         BASE,

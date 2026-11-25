@@ -122,7 +122,7 @@ fn process_actor_is_used_for_task_attribution() {
     let warnings = Arc::new(AtomicUsize::new(0));
     let subscriber = tracing_subscriber::registry().with(ActorWarnings(warnings.clone()));
     let _subscriber = tracing::subscriber::set_default(subscriber);
-    let actor = ActorIdentity::from_env();
+    let actor = ActorIdentity::from_env(&orbit_common::Env::capture());
     assert_eq!(actor.label, expected);
     let expected_kind = match expected.as_str() {
         "unknown" => ActorKind::Unknown,

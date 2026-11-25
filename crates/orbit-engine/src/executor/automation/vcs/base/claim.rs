@@ -559,7 +559,13 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
             "the owner settlement base comparison deadline expired".into(),
         ));
     }
-    verify_claimed_known_red_base(workspace_path, base_branch, base_sync, base_sha)?;
+    verify_claimed_known_red_base(
+        &host.process_env(),
+        workspace_path,
+        base_branch,
+        base_sync,
+        base_sha,
+    )?;
     let cached = cached_base_check(host, workspace_path, base_sha, command, selection)
         .filter(super::super::baseline::BaselineCheck::conclusive);
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
@@ -630,14 +636,15 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
 /// This check runs no validation command and applies even when the follower's
 /// OS prevents comparison with an owner-side base run.
 pub fn verify_claimed_known_red_base(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base_branch: &str,
     base_sync: BaseSyncMode,
     base_sha: &str,
 ) -> Result<(), KnownRedUnconfirmed> {
     use KnownRedUnconfirmed::Inconclusive;
-    let tip =
-        resolve_worktree_start_point(workspace_path, base_branch, base_sync).map_err(|error| {
+    let tip = resolve_worktree_start_point(process_env, workspace_path, base_branch, base_sync)
+        .map_err(|error| {
             Inconclusive(format!(
                 "this owner could not read its base '{base_branch}': {error}"
             ))
@@ -648,7 +655,12 @@ pub fn verify_claimed_known_red_base(
         .strip_prefix("refs/heads/")
         .or_else(|| tip.strip_prefix("refs/remotes/"))
         .unwrap_or(&tip);
-    match crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, &tip) {
+    match crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        base_sha,
+        &tip,
+    ) {
         Ok(true) => Ok(()),
         Ok(false) => Err(Inconclusive(format!(
             "base {base_sha} is not in the history of this owner's {shown}, so its failures are \

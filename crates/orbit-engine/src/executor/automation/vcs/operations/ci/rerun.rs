@@ -13,6 +13,7 @@ use std::{collections::BTreeSet, path::Path};
 
 /// A plan is evidence, not authority: the host must reserve it before sending.
 pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
@@ -63,7 +64,8 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
     {
         return Err(unreadable("ineligible retry roots"));
     }
-    let snapshot = prerequisite::snapshot_once(deadline, workspace, pr, head, branch, base)?;
+    let snapshot =
+        prerequisite::snapshot_once(process_env, deadline, workspace, pr, head, branch, base)?;
     let runs = complete_list(&snapshot.runs, "workflow_runs")?;
     let listed = runs
         .iter()
@@ -76,7 +78,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
     }) {
         return Err(unreadable("superseded retry run"));
     }
-    let run = prerequisite::checked_run(deadline, workspace, &snapshot, listed)?;
+    let run = prerequisite::checked_run(process_env, deadline, workspace, &snapshot, listed)?;
     let conclusion_only = no_edit_repair
         || roots.iter().all(|root| {
             matches!(
@@ -95,6 +97,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
     }
     let attempt = number(&run, "run_attempt", unreadable)?;
     let listing = api(
+        process_env,
         deadline,
         workspace,
         &format!(
@@ -220,9 +223,10 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
     {
         return Err(unreadable("retry requires an unreadable required job log"));
     }
-    let (path, blob, source) = prerequisite::workflow(deadline, workspace, &run)?;
+    let (path, blob, source) = prerequisite::workflow(process_env, deadline, workspace, &run)?;
     // Trust is rooted in the accepted base, rather than a candidate-authored workflow.
     let trusted = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={accepted}"),
@@ -275,7 +279,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
             continue;
         }
         if root.classification == CI_UNREADABLE_LOG_CLASSIFICATION {
-            verify_unreadable_log(deadline, workspace, run_id, job)?;
+            verify_unreadable_log(process_env, deadline, workspace, run_id, job)?;
             root_ids.insert(root.job_id);
             logs.push(
                 json!({"job_id":root.job_id,"authenticated":CI_UNREADABLE_LOG_CLASSIFICATION}),
@@ -289,7 +293,8 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
             logs.push(json!({"job_id":root.job_id,"authenticated":"failed_step"}));
             continue;
         }
-        let log = recovery_log::complete_job_log(deadline, workspace, run_id, job, &source)?;
+        let log =
+            recovery_log::complete_job_log(process_env, deadline, workspace, run_id, job, &source)?;
         let failed_steps = job["steps"]
             .as_array()
             .into_iter()
@@ -314,7 +319,8 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         .iter()
         .filter(|job| !root_ids.contains(&job["id"].as_u64().unwrap_or_default()))
     {
-        let log = recovery_log::complete_job_log(deadline, workspace, run_id, job, &source)?;
+        let log =
+            recovery_log::complete_job_log(process_env, deadline, workspace, run_id, job, &source)?;
         // Regions may omit another record or an independent waiter diagnostic.
         // Only a complete command/failed-step log can prove record uniqueness.
         if log.proof["kind"] == "selected_failure_regions" {
@@ -324,7 +330,16 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         }
         dependencies.push(
             super::super::dependency_record::authenticate_dependency_record(
-                deadline, workspace, &snapshot, &run, job, &failed, accepted, &path, &source,
+                process_env,
+                deadline,
+                workspace,
+                &snapshot,
+                &run,
+                job,
+                &failed,
+                accepted,
+                &path,
+                &source,
                 &log.text,
             )?,
         );
@@ -381,18 +396,22 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
 /// Re-read the log before authorizing a retry without command evidence.
 /// A readable log or a provider throttle keeps its ordinary route.
 fn verify_unreadable_log(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     run_id: u64,
     job: &Value,
 ) -> Result<(), OrbitError> {
     let job_id = number(job, "id", unreadable)?;
-    let read = match super::ci_job_log(&json!({
-        "workspace_path": workspace,
-        "run_id": run_id.to_string(),
-        "job_id": job_id.to_string(),
-        "deadline_ms": deadline.0
-    })) {
+    let read = match super::ci_job_log(
+        process_env,
+        &json!({
+            "workspace_path": workspace,
+            "run_id": run_id.to_string(),
+            "job_id": job_id.to_string(),
+            "deadline_ms": deadline.0
+        }),
+    ) {
         Ok(read) => read,
         Err(OrbitError::Execution(_)) => return Ok(()),
         Err(error) => return Err(error),
@@ -456,6 +475,7 @@ fn handoff_step_authenticated(root: &CiRerunRoot, job: &Value) -> bool {
 /// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a
 /// failure at most once, and a retried request could queue a second rerun.
 pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let run_id = required_string(input, "run_id")?;
@@ -474,6 +494,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
             ));
         }
         let refreshed = ci_rerun_plan(
+            process_env,
             &json!({"workspace_path":workspace_path,"pr":plan.pr_number,"head_sha":plan.head_sha,"head_branch":plan.head_branch,"base_branch":plan.base_branch,"accepted_base":plan.accepted_base,"run_id":plan.run_id,"roots":plan.roots,"deadline_ms":input["deadline_ms"]}),
         )?;
         let refreshed: orbit_types::workflow::CiRerunPlan =
@@ -503,6 +524,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
             return Err(super::super::prerequisite::unreadable("rerun run identity"));
         }
         let observed = super::super::prerequisite::observe(
+            process_env,
             &json!({"workspace_path":workspace_path,"evidence":expected,"deadline_ms":input["deadline_ms"]}),
         )?;
         if observed["attempt"].as_u64() != Some(u64::from(expected.run_attempt))
@@ -514,6 +536,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
             ));
         }
         let refreshed = super::super::prerequisite::evidence(
+            process_env,
             &json!({"workspace_path":workspace_path,"pr":expected.pr_number,"head_sha":expected.head_sha,"head_branch":expected.head_branch,"base_branch":expected.base_branch,"deadline_ms":input["deadline_ms"]}),
         )?;
         let refreshed: orbit_types::workflow::PrInfrastructureEvidence =
@@ -536,6 +559,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
         args.push("--failed".to_string());
     }
     let result = super::super::process::run_vcs_process(
+        process_env,
         "gh",
         args,
         Some(Path::new(workspace_path)),

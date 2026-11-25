@@ -46,9 +46,16 @@ pub(super) fn parked_hold<H: RuntimeHost + ?Sized>(
 /// commits survive the run branch's deletion; the error keeps the worktree
 /// and its branch.
 pub(super) fn parked_commits_survive(
+    process_env: &orbit_common::Env,
     path: &Path,
     run: &JobRun,
     branch: &str,
 ) -> Result<(String, Option<WorktreeGcRecovery>), String> {
-    committed_recovery(path, branch, &attributed_task_ids(run), &run.run_id)
+    committed_recovery(
+        process_env,
+        path,
+        branch,
+        &attributed_task_ids(run),
+        &run.run_id,
+    )
 }

@@ -123,7 +123,7 @@ fn push_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
         .ok_or_else(|| missing("sync_base", "head"))?;
     let published = pipeline_checkpoint_string(input, "push", "local_sha")
         .ok_or_else(|| missing("push", "local_sha"))?;
-    if commit_sha(&workspace_path, &branch)? == published {
+    if commit_sha(&host.process_env(), &workspace_path, &branch)? == published {
         return Ok(json!({"decision": "no_reviewer_commit", "published_head_sha": published}));
     }
     let mut pushed = push_batch_changes_inner(
@@ -185,9 +185,13 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
         }
     };
     let branch = pipeline_checkpoint_string(input, "sync_base", "head").or_else(|| {
-        git_output(&worktree, &["branch", "--show-current"])
-            .ok()
-            .filter(|name| !name.is_empty())
+        git_output(
+            &host.process_env(),
+            &worktree,
+            &["branch", "--show-current"],
+        )
+        .ok()
+        .filter(|name| !name.is_empty())
     });
     let admission = pipeline_step(input, "landing_review_gate_admit")
         .ok()
@@ -210,7 +214,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
 
     let mut committed_by_handoff = false;
     if failed_step_id == "landing_review"
-        && let Ok(uncommitted) = uncommitted_paths(&worktree)
+        && let Ok(uncommitted) = uncommitted_paths(&host.process_env(), &worktree)
         && !uncommitted.is_empty()
     {
         let reviewer_model = admitted
@@ -223,10 +227,10 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
         let commit_type = CommitType::for_bundle(std::iter::once(task.task_type));
         let message =
             partial_repair_message(commit_type, &task.id, run_id, "landing_review", attempt_id);
-        match commit_reviewer_repairs(&worktree, reviewer_model, &message) {
+        match commit_reviewer_repairs(&host.process_env(), &worktree, reviewer_model, &message) {
             Ok(Some(_)) => committed_by_handoff = true,
             Ok(None) => {}
-            Err(commit_error) => match capture_uncommitted_diff(&worktree) {
+            Err(commit_error) => match capture_uncommitted_diff(&host.process_env(), &worktree) {
                 Ok(Some(diff)) => {
                     let artifact_path = format!("landing-review-uncommitted-{run_id}.patch");
                     return (
@@ -265,9 +269,20 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
     }
 
     let head_sha = match branch.as_deref() {
-        Some(branch_name) => commit_sha(&worktree, branch_name)
-            .or_else(|_| git_output(&worktree, &["rev-parse", "--verify", "HEAD^{commit}"])),
-        None => git_output(&worktree, &["rev-parse", "--verify", "HEAD^{commit}"]),
+        Some(branch_name) => {
+            commit_sha(&host.process_env(), &worktree, branch_name).or_else(|_| {
+                git_output(
+                    &host.process_env(),
+                    &worktree,
+                    &["rev-parse", "--verify", "HEAD^{commit}"],
+                )
+            })
+        }
+        None => git_output(
+            &host.process_env(),
+            &worktree,
+            &["rev-parse", "--verify", "HEAD^{commit}"],
+        ),
     };
     let head_sha = match head_sha {
         Ok(sha) => sha,
@@ -314,6 +329,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
             // Disable rename detection for both the inventory and patch: each
             // endpoint must pass the path guard independently, including deletions.
             let patch = git_output_paths(
+                &host.process_env(),
                 &worktree,
                 &[
                     "diff",
@@ -348,7 +364,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
                 args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
                 args.extend([published.as_str(), head_sha.as_str(), "--"]);
                 args.extend(pathspecs.iter().map(String::as_str));
-                git_output_bytes(&worktree, &args).ok()
+                git_output_bytes(&host.process_env(), &worktree, &args).ok()
             })
             .filter(|diff| !diff.iter().all(u8::is_ascii_whitespace))
             .map(|diff| orbit_common::security::redaction::redact_all_bytes(&diff));
@@ -613,6 +629,7 @@ fn typed_reason(error_code: &str, error_message: &str) -> String {
 /// `head-name` must name the prepared head SHA, base SHA, and branch. Without
 /// that checkpoint no Orbit step started a rebase, so none is owned.
 pub(super) fn prepared_attempt_owns_rebase(
+    process_env: &orbit_common::Env,
     input: &Value,
     workspace_path: &Path,
 ) -> Result<bool, OrbitError> {
@@ -623,7 +640,7 @@ pub(super) fn prepared_attempt_owns_rebase(
     ) else {
         return Ok(false);
     };
-    rebase_belongs_to_attempt(workspace_path, &head, &head_sha, &base_sha)
+    rebase_belongs_to_attempt(process_env, workspace_path, &head, &head_sha, &base_sha)
 }
 
 /// Leave a rebase this run did not start untouched: no abort, commit, push,
@@ -638,7 +655,7 @@ pub(super) fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let provenance = rebase_provenance_summary(workspace_path);
+    let provenance = rebase_provenance_summary(&host.process_env(), workspace_path);
     let note = format!(
         "failure handoff refused a rebase this run did not start: run={run_id}, \
          failed_step={failed_step_id}, {provenance}; nothing was aborted, committed, pushed, \

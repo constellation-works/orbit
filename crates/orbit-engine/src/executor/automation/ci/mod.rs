@@ -102,7 +102,7 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let queries = query::HostCiQueries::new(&query_root(host, input)?);
+    let queries = query::HostCiQueries::new(host.process_env(), &query_root(host, input)?);
     // A sweep before the last rate limit's reset reads nothing from GitHub.
     let now = chrono::Utc::now();
     let now_ms = u64::try_from(now.timestamp_millis()).unwrap_or_default();

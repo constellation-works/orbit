@@ -20,8 +20,9 @@ fn spawn_with_timeout_kills_grandchild_holding_output_pipes() {
     let args = sh_args(&script);
 
     let started = std::time::Instant::now();
-    let (stdout, stderr, exit_code, duration, timed_out, _) =
-        spawn_with_timeout(spawn_test_request(
+    let (stdout, stderr, exit_code, duration, timed_out, _) = spawn_with_timeout(
+        &orbit_common::Env::capture(),
+        spawn_test_request(
             "/bin/sh",
             &args,
             None,
@@ -32,8 +33,9 @@ fn spawn_with_timeout_kills_grandchild_holding_output_pipes() {
                 task_id: Some("TTREE"),
                 cwd: None,
             },
-        ))
-        .expect("spawn succeeds");
+        ),
+    )
+    .expect("spawn succeeds");
 
     assert!(timed_out);
     assert_eq!(exit_code, None);
@@ -62,8 +64,9 @@ fn a_running_childs_output_is_sampled_before_it_exits() {
             .borrow_mut()
             .push((progress.observed_bytes, progress.recent.clone()));
     };
-    let (stdout, _stderr, exit_code, _duration, timed_out, _) =
-        spawn_with_timeout(SpawnWithTimeoutRequest {
+    let (stdout, _stderr, exit_code, _duration, timed_out, _) = spawn_with_timeout(
+        &orbit_common::Env::capture(),
+        SpawnWithTimeoutRequest {
             on_progress: Some(ProgressReporter {
                 interval: Duration::from_millis(100),
                 report: &record,
@@ -80,8 +83,9 @@ fn a_running_childs_output_is_sampled_before_it_exits() {
                     cwd: None,
                 },
             )
-        })
-        .expect("spawn succeeds");
+        },
+    )
+    .expect("spawn succeeds");
 
     assert!(!timed_out);
     assert_eq!(exit_code, Some(0));

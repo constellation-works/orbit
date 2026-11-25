@@ -9,7 +9,7 @@ fn git_failure_redacts_remote_credentials_in_arguments() {
         "https://user:diagnostic-token@host.test/repo.git",
         "ssh://user:diagnostic-token@host.test/repo.git",
     ] {
-        let error = GitRunner::new("publication inspect")
+        let error = GitRunner::new(&orbit_common::Env::capture(), "publication inspect")
             .run(&["orbit-invalid-subcommand", remote, "/private/local-cache"])
             .expect_err("unknown Git command must fail")
             .to_string();

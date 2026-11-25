@@ -1,6 +1,5 @@
 //! Path normalization, tilde/token expansion, and Git-root path helpers; imports `orbit-common` only.
 
-use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
@@ -9,8 +8,8 @@ use orbit_common::fs::git::run_git;
 
 pub const ORBIT_ROOT_TOKEN: &str = "{{ORBIT_ROOT}}";
 
-pub(crate) fn home_dir() -> Option<PathBuf> {
-    orbit_common::fs::path::home_dir(&orbit_common::Env::capture()).ok()
+pub(crate) fn home_dir(env: &orbit_common::Env) -> Option<PathBuf> {
+    orbit_common::fs::path::home_dir_from(env).ok()
 }
 
 pub(crate) fn cwd_orbit_root(cwd: &Path) -> PathBuf {
@@ -18,6 +17,7 @@ pub(crate) fn cwd_orbit_root(cwd: &Path) -> PathBuf {
 }
 
 pub(crate) fn resolve_path_value(
+    env: &orbit_common::Env,
     raw: &str,
     base_dir: &Path,
     field_name: &str,
@@ -29,7 +29,7 @@ pub(crate) fn resolve_path_value(
         )));
     }
     if value == "~" || value.starts_with("~/") {
-        let home = home_dir().ok_or_else(|| {
+        let home = home_dir(env).ok_or_else(|| {
             OrbitError::InvalidInput(
                 "cannot expand '~' because HOME/USERPROFILE is not set".to_string(),
             )
@@ -66,13 +66,13 @@ pub(crate) fn find_git_repo_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-pub(crate) fn find_git_worktree_root(start: &Path) -> Option<PathBuf> {
-    if !git_location_override_set()
+pub(crate) fn find_git_worktree_root(env: &orbit_common::Env, start: &Path) -> Option<PathBuf> {
+    if !git_location_override_set(env)
         && let Some(root) = linked_worktree_root_from_gitfile(start)
     {
         return Some(root);
     }
-    git_rev_parse_path(start, "--show-toplevel").or_else(|| {
+    git_rev_parse_path(env, start, "--show-toplevel").or_else(|| {
         start
             .ancestors()
             .find(|ancestor| {
@@ -110,15 +110,8 @@ fn linked_worktree_root_from_gitfile(start: &Path) -> Option<PathBuf> {
     None
 }
 
-fn git_location_override_set() -> bool {
-    const GIT_LOCATION_OVERRIDES: [&str; 3] = [
-        env_vars::GIT_DIR,
-        env_vars::GIT_COMMON_DIR,
-        env_vars::GIT_WORK_TREE,
-    ];
-    GIT_LOCATION_OVERRIDES
-        .iter()
-        .any(|name| std::env::var_os(name).is_some())
+pub(crate) fn git_location_override_set(env: &orbit_common::Env) -> bool {
+    env.git_dir().is_some() || env.git_common_dir().is_some() || env.git_work_tree().is_some()
 }
 
 /// Resolve the linked worktree a call is running in, when that worktree is a
@@ -130,39 +123,45 @@ fn git_location_override_set() -> bool {
 /// `<repo>/.orbit/state/worktrees/**`, so they sit inside the registered
 /// checkout's directory tree while being separate checkouts. Git's shared
 /// directory is the identity that actually distinguishes the two.
-pub fn find_linked_worktree_root(start: &Path, canonical_repo_root: &Path) -> Option<PathBuf> {
-    let checkout = find_git_worktree_root(start)?.canonicalize().ok()?;
+pub fn find_linked_worktree_root(
+    env: &orbit_common::Env,
+    start: &Path,
+    canonical_repo_root: &Path,
+) -> Option<PathBuf> {
+    let checkout = find_git_worktree_root(env, start)?.canonicalize().ok()?;
     if checkout == canonical_repo_root {
         return None;
     }
 
-    let caller_git_dir = shared_git_dir(&checkout)?;
-    let registered_git_dir = shared_git_dir(canonical_repo_root)?;
+    let caller_git_dir = shared_git_dir(env, &checkout)?;
+    let registered_git_dir = shared_git_dir(env, canonical_repo_root)?;
     (caller_git_dir == registered_git_dir).then_some(checkout)
 }
 
-fn shared_git_dir(checkout: &Path) -> Option<PathBuf> {
-    let common_dir =
-        orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), checkout).ok()?;
+fn shared_git_dir(env: &orbit_common::Env, checkout: &Path) -> Option<PathBuf> {
+    let common_dir = orbit_common::fs::git::git_common_dir(env, checkout).ok()?;
     Some(common_dir.canonicalize().unwrap_or(common_dir))
 }
 
-pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
+pub(crate) fn find_git_main_worktree_root(
+    env: &orbit_common::Env,
+    start: &Path,
+) -> Option<PathBuf> {
     // Every short command resolves its roots here; two `git rev-parse`
     // processes to learn that an ordinary checkout is not a linked worktree
     // cost more than the rest of root resolution, so the standard
     // linked-worktree layout is answered from the gitfile without spawning
     // git. Git stays the authority for every other layout and whenever a
     // location override is set.
-    if !may_be_linked_worktree(start) {
+    if !may_be_linked_worktree(env, start) {
         return None;
     }
-    if !git_location_override_set()
+    if !git_location_override_set(env)
         && let Some(main_root) = find_git_main_worktree_root_from_gitfile(start)
     {
         return Some(main_root);
     }
-    match find_git_main_worktree_root_with_git(start) {
+    match find_git_main_worktree_root_with_git(env, start) {
         Some(main_root) => main_root,
         None => find_git_main_worktree_root_from_gitfile(start),
     }
@@ -174,8 +173,8 @@ pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
 /// directory, so a plain `.git` directory or no `.git` at all rules it out.
 /// Git's own overrides (`GIT_DIR` and friends) can relocate the answer, so
 /// with one set only git can say.
-fn may_be_linked_worktree(start: &Path) -> bool {
-    if git_location_override_set() {
+fn may_be_linked_worktree(env: &orbit_common::Env, start: &Path) -> bool {
+    if git_location_override_set(env) {
         return true;
     }
     start
@@ -194,33 +193,32 @@ fn may_be_linked_worktree(start: &Path) -> bool {
 
 /// `Some(None)` is Git's conclusive answer that this is not linked. Only an
 /// unavailable answer (`None`) permits the filesystem fallback.
-fn find_git_main_worktree_root_with_git(start: &Path) -> Option<Option<PathBuf>> {
-    let git_dir = git_rev_parse_path(start, "--git-dir")?;
-    let common_dir = git_rev_parse_path(start, "--git-common-dir")?;
+fn find_git_main_worktree_root_with_git(
+    env: &orbit_common::Env,
+    start: &Path,
+) -> Option<Option<PathBuf>> {
+    let git_dir = git_rev_parse_path(env, start, "--git-dir")?;
+    let common_dir = git_rev_parse_path(env, start, "--git-common-dir")?;
     if git_dir == common_dir {
         return Some(None);
     }
 
     main_root_from_common_git_dir(&common_dir)
-        .or_else(|| git_worktree_list_main_root(start))
+        .or_else(|| git_worktree_list_main_root(env, start))
         .map(Some)
 }
 
 /// `None` when Git cannot answer, including when it could not run or timed
 /// out (a timeout is logged); root resolution then falls back to reading the
 /// gitfile.
-fn git_rev_parse_path(start: &Path, flag: &str) -> Option<PathBuf> {
-    let output = run_git(
-        &orbit_common::Env::capture(),
-        start,
-        &["rev-parse", "--path-format=absolute", flag],
-    )
-    .inspect_err(|error| {
-        if matches!(error, OrbitError::ProcessTimeout { .. }) {
-            tracing::warn!("cannot resolve Git {flag}: {error}");
-        }
-    })
-    .ok()?;
+fn git_rev_parse_path(env: &orbit_common::Env, start: &Path, flag: &str) -> Option<PathBuf> {
+    let output = run_git(env, start, &["rev-parse", "--path-format=absolute", flag])
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve Git {flag}: {error}");
+            }
+        })
+        .ok()?;
     if !output.success {
         return None;
     }
@@ -240,18 +238,14 @@ fn main_root_from_common_git_dir(common_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn git_worktree_list_main_root(start: &Path) -> Option<PathBuf> {
-    let output = run_git(
-        &orbit_common::Env::capture(),
-        start,
-        &["worktree", "list", "--porcelain"],
-    )
-    .inspect_err(|error| {
-        if matches!(error, OrbitError::ProcessTimeout { .. }) {
-            tracing::warn!("cannot list Git worktrees: {error}");
-        }
-    })
-    .ok()?;
+fn git_worktree_list_main_root(env: &orbit_common::Env, start: &Path) -> Option<PathBuf> {
+    let output = run_git(env, start, &["worktree", "list", "--porcelain"])
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot list Git worktrees: {error}");
+            }
+        })
+        .ok()?;
     if !output.success {
         return None;
     }

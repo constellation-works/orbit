@@ -99,7 +99,8 @@ fn branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget() {
                             fs::write(root.join(name), value).unwrap();
                         }
                         let began = observed.get();
-                        let result = remote_branch_sha(&root, "candidate");
+                        let result =
+                            remote_branch_sha(&orbit_common::Env::capture(), &root, "candidate");
                         assert!(
                             observed.get().duration_since(began)
                                 >= Duration::from_secs(timeouts.min(3)),

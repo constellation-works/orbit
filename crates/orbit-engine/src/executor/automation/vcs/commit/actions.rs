@@ -86,8 +86,8 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
     }
 
     let workspace_path = resolve_workspace_path(host, input, batch_id)?;
-    ensure_named_branch(&workspace_path)?;
-    ensure_no_unmerged_changes(&workspace_path)?;
+    ensure_named_branch(&host.process_env(), &workspace_path)?;
+    ensure_no_unmerged_changes(&host.process_env(), &workspace_path)?;
     let task_ids = match explicit_completed_task_ids {
         Some(task_ids) => task_ids,
         None => fallback_batch_tasks
@@ -104,7 +104,8 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
     // Multi-task scopes run only in local pipelines. Each path is committed
     // with exactly one task: the one whose agent changed it when selectors
     // alone are ambiguous, widening that task's selectors when none cover it.
-    let candidate_paths = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)?;
+    let candidate_paths =
+        task_candidate_paths(&host.process_env(), &workspace_path, NewPathPolicy::Owner)?;
     let mut assigned = attribute_candidate_paths(
         host,
         batch_id,
@@ -132,10 +133,11 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
             continue;
         }
 
-        stage_paths(&workspace_path, &changed_files)?;
+        stage_paths(&host.process_env(), &workspace_path, &changed_files)?;
         let message =
             delivery_commit_message(std::slice::from_ref(&task), &pr_config, &landed, &[]);
         git_commit_paths_with_identity(
+            &host.process_env(),
             &workspace_path,
             &message,
             resolved_model.as_deref(),
@@ -162,10 +164,11 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     }
 
     let workspace_path = resolve_workspace_path(host, input, batch_id)?;
-    ensure_named_branch(&workspace_path)?;
-    ensure_no_unmerged_changes(&workspace_path)?;
+    ensure_named_branch(&host.process_env(), &workspace_path)?;
+    ensure_no_unmerged_changes(&host.process_env(), &workspace_path)?;
 
-    let changed_files = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)?;
+    let changed_files =
+        task_candidate_paths(&host.process_env(), &workspace_path, NewPathPolicy::Owner)?;
     if changed_files.is_empty() {
         return Ok(json!({}));
     }
@@ -195,7 +198,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     }
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
-    stage_paths(&workspace_path, &files_to_commit)?;
+    stage_paths(&host.process_env(), &workspace_path, &files_to_commit)?;
     let pr_config = host.pr_config();
     let landed =
         resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, &pr_config);
@@ -203,6 +206,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     let message = delivery_commit_message(&affected_tasks, &pr_config, &landed, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
     git_commit_paths_with_identity(
+        &host.process_env(),
         &workspace_path,
         &message,
         resolved_model.as_deref(),
@@ -230,9 +234,9 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     };
 
     let workspace_path = resolve_workspace_path(host, input, batch_id)?;
-    ensure_named_branch(&workspace_path)?;
+    ensure_named_branch(&host.process_env(), &workspace_path)?;
 
-    ensure_no_unmerged_changes(&workspace_path)?;
+    ensure_no_unmerged_changes(&host.process_env(), &workspace_path)?;
 
     // ORB-13756: the claim's worker binding, not step input, marks a claimed
     // leaf, whose new paths the owner must be able to accept as widening.
@@ -303,7 +307,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     let (base_sha, head_moved) = if let Some((pin, _)) = &published_replay {
         (Some(pin.clone()), true)
     } else {
-        match validate_pinned_head(&workspace_path, input)? {
+        match validate_pinned_head(&host.process_env(), &workspace_path, input)? {
             PinnedHead::Matched(base_sha) => (Some(base_sha), false),
             PinnedHead::Unpinned => (None, false),
             PinnedHead::Changed { base_sha, head_sha } => {
@@ -317,7 +321,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                     &head_sha,
                 )?;
                 let tagged_descendant = no_diff_expected
-                    && head_descends_from_pin(&workspace_path, &base_sha, &head_sha)?;
+                    && head_descends_from_pin(
+                        &host.process_env(),
+                        &workspace_path,
+                        &base_sha,
+                        &head_sha,
+                    )?;
                 if !preserved_failure_head
                     && !allow_moved_head
                     && !tagged_descendant
@@ -353,7 +362,8 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // Every tracked change and new path outside scratch is delivery: agents
     // may change any path the work requires. Resolve and validate that set
     // before mutating the index, then stage exactly those paths.
-    let candidate_paths = task_candidate_paths(&workspace_path, new_path_policy)?;
+    let candidate_paths =
+        task_candidate_paths(&host.process_env(), &workspace_path, new_path_policy)?;
     let candidate_paths = candidate_paths.into_iter().collect::<Vec<_>>();
     let claimed = matches!(new_path_policy, NewPathPolicy::Claimed);
     // ORB-14791: a claimed tagged leaf hands off NoDiff and has no PR route
@@ -378,24 +388,27 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         // Metadata-only replay preserves the host candidate without staging
         // or creating a commit. File edits use the existing host repair guard;
         // the replay reruns all candidate validation and review afterward.
-        let repaired = commit_recovery_repair(&RecoveryCommitRequest {
-            workspace_path: &workspace_path,
-            run_id: batch_id,
-            failed_step_id: "commit",
-            recovery_activity: "final_recovery",
-            task_ids: std::slice::from_ref(&task.id),
-            commit_type: CommitType::for_task_type(task.task_type),
-            recovery_model: host.resolved_crew_model(batch_id)?,
-            repair_paths: None,
-            no_diff_route: no_diff_expected,
-            reviewed_heads: &[],
-        })
+        let repaired = commit_recovery_repair(
+            &host.process_env(),
+            &RecoveryCommitRequest {
+                workspace_path: &workspace_path,
+                run_id: batch_id,
+                failed_step_id: "commit",
+                recovery_activity: "final_recovery",
+                task_ids: std::slice::from_ref(&task.id),
+                commit_type: CommitType::for_task_type(task.task_type),
+                recovery_model: host.resolved_crew_model(batch_id)?,
+                repair_paths: None,
+                no_diff_route: no_diff_expected,
+                reviewed_heads: &[],
+            },
+        )
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
         let (decision, committed, commit_sha) = match repaired {
             RecoveryCommit::Clean => (
                 "already_committed",
                 false,
-                git_output(&workspace_path, &["rev-parse", "HEAD"])?,
+                git_output(&host.process_env(), &workspace_path, &["rev-parse", "HEAD"])?,
             ),
             RecoveryCommit::Committed { commit_sha, .. } => ("performed", true, commit_sha),
         };
@@ -414,12 +427,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             "commit_sha": commit_sha, "job_run_id": batch_id, "task_id": task.id,
             "base_sha": base_sha, "skipped_no_diff_expected": false,
             "final_recovery_replay": true,
-            "candidate_branch": git_output(&workspace_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])?,
+            "candidate_branch": git_output(&host.process_env(), &workspace_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])?,
         }));
     }
-    stage_paths(&workspace_path, &candidate_paths)?;
+    stage_paths(&host.process_env(), &workspace_path, &candidate_paths)?;
 
-    let changed_files = staged_changed_files(&workspace_path)?;
+    let changed_files = staged_changed_files(&host.process_env(), &workspace_path)?;
     if changed_files.is_empty() {
         // ORB-10380: no failure path mutates worktree state on its way out.
         // `git add --all` staged nothing here, so the index already matches
@@ -470,7 +483,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                 Ok(checkpoint) => return Ok(checkpoint),
                 Err(error) => {
                     return Err(
-                        match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
+                        match empty_stage_error(
+                            &host.process_env(),
+                            &task.id,
+                            &workspace_path,
+                            Some(base_sha),
+                        ) {
                             Ok(OrbitError::Execution(observed)) => {
                                 OrbitError::Execution(format!("{observed}; {error}"))
                             }
@@ -481,6 +499,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             }
         }
         return Err(empty_stage_error(
+            &host.process_env(),
             &task.id,
             &workspace_path,
             base_sha.as_deref(),
@@ -515,8 +534,13 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     let message = delivery_commit_message(std::slice::from_ref(&task), &pr_config, &landed, &[]);
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
-    git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
-    let commit_sha = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    git_commit_with_identity(
+        &host.process_env(),
+        &workspace_path,
+        &message,
+        resolved_model.as_deref(),
+    )?;
+    let commit_sha = git_output(&host.process_env(), &workspace_path, &["rev-parse", "HEAD"])?;
     let mut result = json!({
         "phase": "commit",
         "decision": "performed",
@@ -541,15 +565,17 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
     workspace_path: &Path,
     task: &orbit_types::task::Task,
 ) -> Result<(String, Vec<String>), OrbitError> {
-    ensure_named_branch(workspace_path)?;
-    ensure_no_unmerged_changes(workspace_path)?;
+    ensure_named_branch(&host.process_env(), workspace_path)?;
+    ensure_no_unmerged_changes(&host.process_env(), workspace_path)?;
     // Only `pr_failure_handoff` reaches this, and no claimed pipeline runs it.
-    let candidate_paths = task_candidate_paths(workspace_path, NewPathPolicy::Owner)?;
+    let candidate_paths =
+        task_candidate_paths(&host.process_env(), workspace_path, NewPathPolicy::Owner)?;
     stage_paths(
+        &host.process_env(),
         workspace_path,
         &candidate_paths.into_iter().collect::<Vec<_>>(),
     )?;
-    let changed_files = staged_changed_files(workspace_path)?;
+    let changed_files = staged_changed_files(&host.process_env(), workspace_path)?;
     if !changed_files.is_empty() {
         attribute_candidate_paths(
             host,
@@ -570,9 +596,18 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
         );
         let message = delivery_commit_message(std::slice::from_ref(task), &pr_config, &landed, &[]);
         let resolved_model = host.resolved_crew_model(run_id)?;
-        git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;
+        git_commit_with_identity(
+            &host.process_env(),
+            workspace_path,
+            &message,
+            resolved_model.as_deref(),
+        )?;
     }
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let head_sha = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     Ok((head_sha.trim().to_string(), changed_files))
 }
 
@@ -610,7 +645,11 @@ fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
         None => {
             let repo_root_str = host.repo_root()?;
             let repo_root = Path::new(&repo_root_str);
-            super::super::worktree::resolve_shared_worktree_path(repo_root, batch_id)
+            super::super::worktree::resolve_shared_worktree_path(
+                &host.process_env(),
+                repo_root,
+                batch_id,
+            )
         }
     }
 }

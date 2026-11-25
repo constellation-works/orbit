@@ -18,6 +18,7 @@ use super::super::body::BODY_TEMPLATE_KEY;
 /// published with. `None` keeps Orbit's layout: no template is configured,
 /// the delivery carries several tasks, or `"repo"` finds no template.
 pub(super) fn body_template_text(
+    process_env: &orbit_common::Env,
     workspace_path: &std::path::Path,
     tasks: &[Task],
     pr_config: &PrConfig,
@@ -29,7 +30,7 @@ pub(super) fn body_template_text(
     let path = match source {
         PrBodyTemplateSource::Path(path) => path.clone(),
         PrBodyTemplateSource::Repository => {
-            match repository_template_path(workspace_path, base_sha)? {
+            match repository_template_path(process_env, workspace_path, base_sha)? {
                 Some(path) => path,
                 None => {
                     tracing::info!(
@@ -42,13 +43,16 @@ pub(super) fn body_template_text(
             }
         }
     };
-    let text = git_output_raw(workspace_path, &["show", &format!("{base_sha}:{path}")]).map_err(
-        |error| {
-            OrbitError::InvalidInput(format!(
-                "pr_open: {BODY_TEMPLATE_KEY}: cannot read '{path}' at base {base_sha}: {error}"
-            ))
-        },
-    )?;
+    let text = git_output_raw(
+        process_env,
+        workspace_path,
+        &["show", &format!("{base_sha}:{path}")],
+    )
+    .map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "pr_open: {BODY_TEMPLATE_KEY}: cannot read '{path}' at base {base_sha}: {error}"
+        ))
+    })?;
     Ok(Some(text))
 }
 
@@ -56,6 +60,7 @@ pub(super) fn body_template_text(
 /// [`REPO_PR_TEMPLATE_LOCATIONS`] that names a file there, matched
 /// case-insensitively as GitHub does.
 fn repository_template_path(
+    process_env: &orbit_common::Env,
     workspace_path: &std::path::Path,
     base_sha: &str,
 ) -> Result<Option<String>, OrbitError> {
@@ -66,7 +71,8 @@ fn repository_template_path(
             format!("{base_sha}:{directory}")
         };
         // A missing directory is not an error: the next location is tried.
-        let Ok(listing) = git_output_raw(workspace_path, &["ls-tree", "-z", &tree]) else {
+        let Ok(listing) = git_output_raw(process_env, workspace_path, &["ls-tree", "-z", &tree])
+        else {
             continue;
         };
         for entry in listing.split('\0') {

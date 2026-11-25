@@ -20,6 +20,7 @@ fn a_build_plan_escapes_terminal_controls_in_repository_values() {
         "true\n  source: forged\u{1b}[2J".to_string(),
     ];
     let plan = plan_plugin_build(
+        &orbit_common::Env::capture(),
         &build,
         "git+https://example.test/demo.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         &commit,
@@ -73,6 +74,7 @@ fn a_linked_toolchain_root_is_refused_before_a_build() {
         checkout: forbidden.path().to_path_buf(),
     };
     let error = plan_plugin_build(
+        &orbit_common::Env::capture(),
         &build,
         "git+https://example.test/demo.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         &commit,

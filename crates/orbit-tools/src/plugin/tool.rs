@@ -185,8 +185,8 @@ impl PluginTool {
         // profile as well as the plugin's (design
         // `docs/design/plugins/2_agent_call_broker.md` §5).
         let profile = match &ctx.brokered_caller {
-            Some(caller) => spec.brokered_sandbox_profile(caller)?,
-            None => spec.sandbox_profile(ctx.workspace_root.as_deref())?,
+            Some(caller) => spec.brokered_sandbox_profile(&ctx.env, caller)?,
+            None => spec.sandbox_profile(&ctx.env, ctx.workspace_root.as_deref())?,
         };
         callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
         let sandbox = profile.with_callback_session(&callback);
@@ -205,7 +205,7 @@ impl PluginTool {
         // `bind_pid`: a SIGTERM there would otherwise exit the host on its
         // default disposition and orphan the backend's process group.
         let output = spawn_owned_supervised_cancellable(
-            &orbit_common::Env::capture(),
+            &ctx.env,
             || {
                 let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);
                 callback.bind_pid(child.pid())?;
