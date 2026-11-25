@@ -162,9 +162,12 @@ function loadMoreErrorsLink(payload, ctx) {
   url.searchParams.set("diag", String(next));
   const link = el("a", {
     class: "diagnostics-load-more",
-    text: "Load more errors",
     title: `Load up to ${next} error events`,
-  });
+    "aria-label": "Load more errors",
+  }, [
+    el("span", { class: "diag-count-full", text: "Load more errors" }),
+    el("span", { class: "diag-count-compact", text: "Load more" }),
+  ]);
   link.href = url.href;
   link.addEventListener("click", event => {
     event.stopPropagation();
@@ -391,6 +394,12 @@ function errorsCountText(ordinary) {
   return `${ordinary.length} error events · window ${getWindow()}`;
 }
 
+// Phone-width form of the same header text; CSS swaps the two so the row
+// stays on one line without ellipsis (STD-07 R39).
+function errorsCountCompactText(ordinary) {
+  return `${ordinary.length} errors · ${getWindow()}`;
+}
+
 function bindErrorsPageMedia() {
   if (errorsMediaBound || typeof window.matchMedia !== "function") return;
   const query = window.matchMedia(ERRORS_PHONE_QUERY);
@@ -433,8 +442,14 @@ function renderDiagnostics(ctx = {}) {
   const end = paged ? Math.min(start + size, ordinary.length) : ordinary.length;
   const count = $("diag-count");
   const coverage = errorsCoverageLabel(last.errors);
-  const summary = `${errorsCountText(ordinary)}${coverage ? ` · ${coverage}` : ""}`;
-  count.replaceChildren(el("span", { class: "diag-count-summary", text: summary, title: summary }));
+  // `covers since` is secondary: it lives in the panel body and the header
+  // tooltip, never in the single-line header.
+  const summary = errorsCountText(ordinary);
+  const tooltip = `${summary}${coverage ? ` · ${coverage}` : ""}`;
+  count.replaceChildren(el("span", { class: "diag-count-summary", title: tooltip }, [
+    el("span", { class: "diag-count-full", text: summary }),
+    el("span", { class: "diag-count-compact", text: errorsCountCompactText(ordinary) }),
+  ]));
   count.title = coverage
     ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
     : "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
@@ -450,6 +465,7 @@ function renderDiagnostics(ctx = {}) {
   renderDiagnosticsTable(paged ? ordinary.slice(start, end) : ordinary, columns, ctx,
     rows.length ? "No other error events in this window." : "No error events in this window.", { cards: true, body: main });
   const children = [];
+  if (coverage) children.push(el("p", { class: "diagnostics-errors-coverage", text: coverage }));
   if (paged) children.push(errorsPageControls(ordinary, start, end));
   children.push(main);
   if (internal.length) {
