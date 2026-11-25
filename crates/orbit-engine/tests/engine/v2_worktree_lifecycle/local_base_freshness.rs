@@ -82,6 +82,81 @@ fn a_clean_owner_behind_origin_starts_at_origin_without_moving_owner() {
     assert_eq!(host.admitted().len(), 1, "the clean owner admits the task");
 }
 
+/// A large set of incoming paths must not be captured during admission.
+fn a_large_clean_advance_is_admitted() {
+    let (fixture, host) = Fixture::hosted();
+    let owner = head(&fixture.repo);
+    let origin = fixture.root.path().join("origin.git");
+    let elsewhere = fixture.root.path().join("large-advance");
+    git(
+        fixture.root.path(),
+        &[
+            "clone",
+            "--branch",
+            BASE,
+            path_str(&origin),
+            path_str(&elsewhere),
+        ],
+    );
+    git(&elsewhere, &["config", "user.name", "Orbit Test"]);
+    git(
+        &elsewhere,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+
+    // Keep each component portable while making the old NUL-delimited Git
+    // output exceed the process supervisor's 1 MiB capture limit.
+    let prefix = (0..5)
+        .map(|n| format!("{n}{}", "x".repeat(99)))
+        .collect::<Vec<_>>()
+        .join("/");
+    let directory = elsewhere.join(&prefix);
+    fs::create_dir_all(&directory).unwrap();
+    for n in 0..2100 {
+        fs::write(directory.join(format!("file-{n:04}")), "").unwrap();
+    }
+    git(&elsewhere, &["add", "--", &prefix]);
+    git(&elsewhere, &["commit", "-m", "add many paths"]);
+    let tip = head(&elsewhere);
+    let added = crate::git_test_support::command()
+        .current_dir(&elsewhere)
+        .args([
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=A",
+            "-z",
+            &owner,
+            &tip,
+        ])
+        .output()
+        .unwrap();
+    assert!(added.status.success());
+    assert!(
+        added.stdout.len() > 1024 * 1024,
+        "fixture must cross the capture limit: {}",
+        added.stdout.len()
+    );
+    assert!(
+        !fixture.repo.join(&prefix).exists(),
+        "no incoming path exists in the owner"
+    );
+    git(&elsewhere, &["push", "origin", BASE]);
+
+    host.add_task("T-LARGE", TaskStatus::Backlog);
+    let output = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-LARGE"], "jrun-large"),
+    )
+    .expect("a clean owner admits a large incoming change");
+    assert_eq!(output["base_sha"], tip);
+    assert_eq!(head(&Checkout::from_setup(&output).path), tip);
+    assert_eq!(head(&fixture.repo), owner);
+    assert!(!fixture.repo.join(&prefix).exists());
+    assert_eq!(host.admitted().len(), 1);
+}
+
 /// Behind and dirty: the owner keeps its edit and its commit, and setup refuses
 /// before any task is admitted or any worktree is created.
 fn a_dirty_owner_behind_origin_is_refused_and_left_unmoved() {
@@ -319,6 +394,10 @@ fn local_base_freshness_contracts() {
             (
                 "a_clean_owner_behind_origin_starts_at_origin_without_moving_owner",
                 a_clean_owner_behind_origin_starts_at_origin_without_moving_owner,
+            ),
+            (
+                "a_large_clean_advance_is_admitted",
+                a_large_clean_advance_is_admitted,
             ),
             (
                 "a_dirty_owner_behind_origin_is_refused_and_left_unmoved",
