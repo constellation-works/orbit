@@ -4,7 +4,7 @@ use crate::api::helpers;
 use crate::api::pagination::TaskPageQuery;
 use crate::api::{bad_request, blocking, server_error, validate_id};
 use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail_json};
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, Ws, WsRejection};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::task::DashboardPageReads;
@@ -293,35 +293,153 @@ fn dashboard_status_index(
     runtime.dependency_status_index([task])
 }
 
+/// `GET /api/tasks/{id}` — one task's full projection.
+///
+/// `?workspace=<id>` reads that workspace alone and never reaches into
+/// another. `?workspace=all` finds the workspace that owns `id` (a task id is
+/// unique on a host) and answers its detail with `workspace_id`,
+/// `workspace_name` and `workspace_root` stamped on, as the aggregate list
+/// rows carry them, so the page scopes follow-up reads and actions to the
+/// owner. An id no active workspace owns is the same 404 as a scoped miss.
 pub(in crate::api) async fn get_task(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: Result<Ws, WsRejection>,
+    RawQuery(query): RawQuery,
     Path(id): Path<String>,
 ) -> Response {
     let id = match validate_id(&id) {
-        Ok(id) => id,
+        Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let id = id.to_string();
-    let riskiness = cached_riskiness_model(&state, &runtime).await;
+    if workspace_is_all(query.as_deref()) {
+        let lookup_state = state.clone();
+        let lookup_id = id.clone();
+        let owner = match blocking("task owner lookup", move || {
+            find_task_owner(&lookup_state, &lookup_id)
+        })
+        .await
+        {
+            Ok(owner) => owner,
+            Err(response) => return *response,
+        };
+        let TaskOwner {
+            id,
+            name,
+            root,
+            runtime,
+            row,
+        } = owner;
+        return task_detail_response(&state, runtime, row, Some((id, name, root))).await;
+    }
+    let Ws(runtime) = match ws {
+        Ok(ws) => ws,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let lookup = Arc::clone(&runtime);
+    let row = match blocking("task detail", move || lookup.get_task_row(&id)).await {
+        Ok(row) => row,
+        Err(response) => return *response,
+    };
+    task_detail_response(&state, runtime, row, None).await
+}
+
+/// The workspace that owns a task, with the row read from it.
+struct TaskOwner {
+    id: String,
+    name: String,
+    root: String,
+    runtime: Arc<OrbitRuntime>,
+    row: orbit_core::application::task::TaskRow,
+}
+
+/// Whether the raw query selects the aggregate (`workspace=all`) scope.
+fn workspace_is_all(query: Option<&str>) -> bool {
+    query.is_some_and(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .any(|(key, value)| key == "workspace" && value == "all")
+    })
+}
+
+/// Find the active workspace that owns task `id`, in registry order.
+///
+/// A workspace that cannot be opened or read is skipped with a warning; if no
+/// owner is found and one was skipped, its error is returned instead of a
+/// not-found, because the id may live in the workspace that could not be read.
+fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_core::OrbitError> {
+    let pinned = state.pin();
+    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
+    let mut skipped: Option<orbit_core::OrbitError> = None;
+    for entry in pinned.entries().iter().filter(|entry| entry.active) {
+        let runtime = match pinned.runtime_for(&entry.id) {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                tracing::warn!(workspace = %entry.id, "task owner lookup could not open workspace");
+                skipped.get_or_insert_with(|| {
+                    orbit_core::OrbitError::Execution(format!(
+                        "failed to open workspace '{}'",
+                        entry.id
+                    ))
+                });
+                continue;
+            }
+        };
+        match runtime.get_task_row(id) {
+            Ok(row) => {
+                return Ok(TaskOwner {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    root: crate::api::workspaces::abbreviate_home(
+                        &entry.repo_root,
+                        home.as_deref(),
+                    ),
+                    runtime,
+                    row,
+                });
+            }
+            Err(orbit_core::OrbitError::NotFound {
+                kind: orbit_core::NotFoundKind::Task,
+                ..
+            }) => {}
+            Err(error) => {
+                tracing::warn!(workspace = %entry.id, %error, "task owner lookup could not read workspace");
+                skipped.get_or_insert(error);
+            }
+        }
+    }
+    Err(skipped.unwrap_or_else(|| {
+        orbit_core::OrbitError::not_found(orbit_core::NotFoundKind::Task, id.to_string())
+    }))
+}
+
+/// Render `row`'s full projection from `runtime`, stamping the owning
+/// workspace's `(id, name, root)` on it when the read resolved through the
+/// aggregate.
+async fn task_detail_response(
+    state: &DashboardState,
+    runtime: Arc<OrbitRuntime>,
+    row: orbit_core::application::task::TaskRow,
+    stamp: Option<(String, String, String)>,
+) -> Response {
+    let riskiness = cached_riskiness_model(state, &runtime).await;
     match blocking("task detail", move || {
-        let row = runtime.get_task_row(&id)?;
-        Ok(
-            dashboard_status_index(&runtime, &row.task).and_then(|statuses| {
-                task_detail_json(
-                    &runtime,
-                    &row,
-                    &statuses,
-                    riskiness.as_deref(),
-                    &DashboardPageReads::default(),
-                )
-            }),
-        )
+        let statuses = dashboard_status_index(&runtime, &row.task)?;
+        let mut value = task_detail_json(
+            &runtime,
+            &row,
+            &statuses,
+            riskiness.as_deref(),
+            &DashboardPageReads::default(),
+        )?;
+        if let (Some((id, name, root)), Value::Object(map)) = (stamp, &mut value) {
+            map.insert("workspace_id".to_string(), json!(id));
+            map.insert("workspace_name".to_string(), json!(name));
+            map.insert("workspace_root".to_string(), json!(root));
+        }
+        Ok(value)
     })
     .await
     {
-        Ok(Ok(value)) => Json(value).into_response(),
-        Ok(Err(e)) => server_error(e),
+        Ok(value) => Json(value).into_response(),
         Err(response) => *response,
     }
 }

@@ -1107,3 +1107,83 @@ fn task_search_spans_every_workspace_and_ranks_the_preferred_one_first() {
         },
     );
 }
+
+#[test]
+fn task_detail_under_all_resolves_the_owning_workspace() {
+    isolated(
+        "aggregate_pages::task_detail_under_all_resolves_the_owning_workspace",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global, tmp.path(), "bravo");
+            let add = |orbit_dir: &Path, title: &str, status: TaskStatus| {
+                OrbitRuntime::from_roots(&global, orbit_dir)
+                    .expect("runtime")
+                    .with_actor(ActorIdentity::human("human"))
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: "owned by one workspace".into(),
+                        status: Some(status),
+                        ..Default::default()
+                    })
+                    .expect("add task")
+                    .id
+            };
+            let alpha_id = add(&alpha_orbit, "alpha backlog", TaskStatus::Backlog);
+            let bravo_done = add(&bravo_orbit, "bravo finished", TaskStatus::Done);
+            assert_ne!(alpha_id, bravo_done, "task ids are unique on the host");
+            write_registry(&global, &[("alpha", &alpha_repo), ("bravo", &bravo_repo)]);
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+
+            // Either workspace's task, including a done one, is found by id
+            // alone and names its owner.
+            let detail = json_ok(server.get(&format!("/api/tasks/{bravo_done}?workspace=all")));
+            assert_eq!(detail["id"], bravo_done);
+            assert_eq!(detail["status"], "done");
+            assert_eq!(detail["workspace_id"], "bravo");
+            assert_eq!(detail["workspace_name"], "bravo");
+            assert!(detail["workspace_root"].is_string(), "{detail}");
+            assert!(detail["description"].is_string(), "the full projection");
+            let detail = json_ok(server.get(&format!("/api/tasks/{alpha_id}?workspace=all")));
+            assert_eq!(detail["workspace_id"], "alpha");
+
+            // The owner it names is where a follow-up action lands.
+            let written = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{alpha_id}?workspace=alpha"),
+                serde_json::json!({"title": "alpha renamed"}),
+            ));
+            assert_eq!(written["title"], "alpha renamed");
+            let reread = json_ok(server.get(&format!("/api/tasks/{alpha_id}?workspace=all")));
+            assert_eq!(reread["title"], "alpha renamed");
+            assert_eq!(reread["workspace_id"], "alpha");
+
+            // An id no workspace owns is the usual typed not-found.
+            let missing = server.get("/api/tasks/ORB-99999?workspace=all");
+            assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+            let missing: serde_json::Value = missing.json().expect("json");
+            let scoped = server.get("/api/tasks/ORB-99999?workspace=alpha");
+            assert_eq!(scoped.status(), reqwest::StatusCode::NOT_FOUND);
+            assert_eq!(missing, scoped.json::<serde_json::Value>().expect("json"));
+
+            // A read scoped to one named workspace never reaches into another.
+            let other = server.get(&format!("/api/tasks/{bravo_done}?workspace=alpha"));
+            assert_eq!(other.status(), reqwest::StatusCode::NOT_FOUND);
+            let plain = json_ok(server.get(&format!("/api/tasks/{bravo_done}?workspace=bravo")));
+            assert!(
+                plain.get("workspace_id").is_none(),
+                "a scoped read keeps its body: {plain}"
+            );
+        },
+    );
+}
