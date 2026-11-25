@@ -43,12 +43,15 @@ impl AutoTaskDispatch for GuardedAutoHost {
     fn evaluate_guard(&self, _: &AutoTaskDefinition, _: DateTime<Utc>) -> GuardVerdict {
         verdict(self.open.get())
     }
+
     fn definition_root(&self) -> PathBuf {
         self.root.clone()
     }
+
     fn state_dir(&self) -> PathBuf {
         self.root.join("state")
     }
+
     fn evaluate_delivery(
         &self,
         _: &AutoTaskDefinition,
@@ -57,13 +60,16 @@ impl AutoTaskDispatch for GuardedAutoHost {
     ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
         panic!("guard fixture has no delivery trigger")
     }
+
     fn has_open_instance(&self, _: &AutoTaskDefinition) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
+
     fn mint_task(&self, _: &AutoTaskDefinition) -> Result<String, OrbitError> {
         self.minted.set(self.minted.get() + 1);
         Ok(format!("fixture-task-{}", self.minted.get()))
     }
+
     fn probe_change_since_last_sweep(
         &self,
         _: &AutoTaskDefinition,
@@ -71,6 +77,7 @@ impl AutoTaskDispatch for GuardedAutoHost {
     ) -> Result<ChangeProbe, OrbitError> {
         panic!("guard fixture has no change precondition")
     }
+
     fn probe_blocked_candidates(
         &self,
         _: &AutoTaskDefinition,
@@ -139,14 +146,17 @@ impl RoutineDispatch for GuardedRoutineHost {
     fn evaluate_guard(&self, _: &LoadedRoutine, _: DateTime<Utc>) -> GuardVerdict {
         verdict(self.open.get())
     }
+
     fn submit(&self, _: &Path, _: &str, _: &str, slot: &str) -> Result<String, OrbitError> {
         let mut submitted = self.submitted.borrow_mut();
         submitted.push(slot.into());
         Ok(format!("fixture-run-{}", submitted.len()))
     }
+
     fn run_state(&self, _: &Path, _: &str) -> Option<JobRunState> {
         Some(JobRunState::Success)
     }
+
     fn run_owner_liveness(&self, _: &Path, _: &str) -> RunOwnerLiveness {
         RunOwnerLiveness::Alive
     }

@@ -1,4 +1,5 @@
 //! Operator consent and credential lifecycle for scoped applications.
+
 use crate::command::{CommandOut, Execute, Payload};
 use chrono::SecondsFormat;
 use clap::{Args, Subcommand};
