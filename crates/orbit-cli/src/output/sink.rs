@@ -200,6 +200,7 @@ impl OutputSink {
     /// Words wider than an entire line are split only when necessary to fit.
     pub(crate) fn wrap_prose<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
         use comfy_table::{Cell, ColumnConstraint, ContentArrangement, Table, Width, presets};
+        use unicode_width::UnicodeWidthStr;
 
         if !self.is_tty || self.mode != OutputMode::Table || self.width == 0 {
             return std::borrow::Cow::Borrowed(text);
@@ -208,7 +209,18 @@ impl OutputSink {
             if line.is_empty() {
                 return String::new();
             }
-            let (prefix, content, indent) = prose_prefix(line, usize::from(self.width));
+            let width = usize::from(self.width);
+            let (mut prefix, mut content, mut indent) = prose_prefix(line, width);
+            // A hanging indent must not force a fitting token to split, or
+            // leave less room than a wide grapheme needs. Wrap the whole line
+            // without padding when any token needs the extra columns.
+            if indent > 0
+                && content
+                    .split_whitespace()
+                    .any(|word| word.width() > width - indent)
+            {
+                (prefix, content, indent) = ("", line, 0);
+            }
             let mut prose = Table::new();
             prose.load_style(presets::NOTHING);
             prose.force_no_tty();

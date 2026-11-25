@@ -15,6 +15,60 @@ fn diagnostic_workspace(name: &str) -> TestWorkspace {
 }
 
 #[test]
+fn task_description_keeps_fitting_tokens_and_wide_graphemes() {
+    use unicode_width::UnicodeWidthStr;
+
+    let workspace = diagnostic_workspace("task-description-tokens");
+    let ansi = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    for (description, width) in [
+        ("https://example.com/releases/abcdefghijklnmopqrstuv", "60"),
+        ("日本語", "14"),
+    ] {
+        let mut seed = workspace.task_seed("Token wrapping");
+        seed.description = description.into();
+        let seeded = workspace.seed_tasks(&[seed]).remove(0);
+        let id = seeded["id"].as_str().unwrap();
+        let show = ["task", "show", id];
+        let piped = workspace.run(&show, "piped task");
+        let json = workspace.run(&["task", "show", id, "--json"], "JSON task");
+        let terminal = run_cli_on_terminal_at_width(&workspace, &show, width);
+        let text = String::from_utf8(terminal.stdout)
+            .unwrap()
+            .replace("\r\n", "\n");
+        let text = ansi.replace_all(&text, "");
+        let lines: Vec<_> = text.lines().collect();
+        let start = lines
+            .iter()
+            .position(|line| line.starts_with("Description:"))
+            .unwrap();
+        assert!(
+            lines[start..].iter().any(|line| line.contains(description)),
+            "description split: {text}"
+        );
+        assert!(lines[start].width() <= width.parse::<usize>().unwrap());
+        assert!(lines[start + 1].width() <= width.parse::<usize>().unwrap());
+        let plain = run_cli_on_terminal_at_width(
+            &workspace,
+            &["task", "show", id, "--format", "plain"],
+            width,
+        );
+        assert_eq!(
+            String::from_utf8(plain.stdout)
+                .unwrap()
+                .replace("\r\n", "\n")
+                .as_bytes(),
+            piped.stdout
+        );
+        let terminal_json =
+            run_cli_on_terminal_at_width(&workspace, &["task", "show", id, "--json"], width);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&terminal_json.stdout).unwrap(),
+            serde_json::from_slice::<serde_json::Value>(&json.stdout).unwrap()
+        );
+    }
+}
+
+#[test]
 fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
     let workspace = diagnostic_workspace("diagnostic-prose");
     let timestamp = regex::Regex::new(r"\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-]\d\d:\d\d)").unwrap();
