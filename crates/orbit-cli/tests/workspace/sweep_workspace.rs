@@ -95,6 +95,20 @@ impl Fixture {
         }
     }
 
+    /// One more registered workspace beside the two fixture ones.
+    fn register_workspace(&self, name: &str) -> PathBuf {
+        let repo = self
+            .selected_repo
+            .parent()
+            .expect("fixture parent")
+            .join(name);
+        crate::git_repo::SeededRepo::new(&repo)
+            .readme("# sweep workspace test\n")
+            .build();
+        run_success(&repo, &self.home, &["workspace", "init", "--name", name]);
+        repo
+    }
+
     fn sweep(&self, args: &[&str]) -> Value {
         run_json(&self.selected_repo, &self.home, args)
     }
@@ -270,6 +284,158 @@ fn unknown_workspace_selector_fails_instead_of_sweeping_the_host() {
         .args(["--workspace", "not-registered", "sweep", "--dry-run"])
         .assert()
         .failure();
+}
+
+/// Host routine names are unique across every registered workspace, because
+/// scheduler state is keyed by name alone [ORB-28162]. A scoped pass must drop
+/// a name another workspace also declares, exactly as the unscoped pass does,
+/// and still evaluate the selected workspace's other routines.
+#[test]
+fn scoped_sweep_drops_a_routine_name_another_workspace_declares() {
+    let fixture = Fixture::initialized();
+    let colliding = format!("worktree-gc-{SELECTED}");
+    let kept = format!("worktree-gc-{OTHER}");
+    // The peer takes the selected workspace's routine name, and a third
+    // workspace with an unreadable routines directory and a peer file that
+    // does not parse sit beside it; none may disturb the scoped pass.
+    rename_routine(&fixture.other_repo, &colliding);
+    fs::write(
+        fixture.other_repo.join(".orbit/routines/malformed.yaml"),
+        "name: [unterminated\n",
+    )
+    .expect("write malformed peer routine");
+    let third = fixture.register_workspace("sweep-third");
+    let routines = third.join(".orbit/routines");
+    fs::remove_dir_all(&routines).expect("remove third routines");
+    fs::write(&routines, "not a directory\n").expect("block third routines directory");
+
+    let unscoped = fixture.sweep(&["sweep", "--dry-run", "--format", "json"]);
+    assert!(
+        !report_routines(&unscoped).contains(&colliding),
+        "the unscoped pass must drop the colliding name: {unscoped}"
+    );
+
+    let scoped = fixture.sweep(&[
+        "--workspace",
+        SELECTED,
+        "sweep",
+        "--dry-run",
+        "--format",
+        "json",
+    ]);
+    assert!(
+        !report_routines(&scoped).contains(&colliding),
+        "the scoped pass must not evaluate the colliding name: {scoped}"
+    );
+    assert!(
+        !report_actions(&scoped).contains("would_baseline"),
+        "the scoped pass must not baseline the colliding name: {scoped}"
+    );
+    let selected_file = fixture
+        .selected_repo
+        .canonicalize()
+        .expect("selected checkout")
+        .join(".orbit/routines")
+        .join(ENABLED_ROUTINE);
+    let collision_errors: Vec<&Value> = scoped["load_errors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("sweep outcome must carry load errors: {scoped}"))
+        .iter()
+        .filter(|error| {
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("defined by more than one source"))
+        })
+        .collect();
+    assert_eq!(
+        collision_errors.len(),
+        1,
+        "only the selected workspace's file reports the collision: {scoped}"
+    );
+    assert_eq!(
+        collision_errors[0]["source_workspace"], SELECTED,
+        "{scoped}"
+    );
+    assert_eq!(
+        collision_errors[0]["path"],
+        selected_file.to_string_lossy().as_ref(),
+        "{scoped}"
+    );
+    assert!(
+        collision_errors[0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&colliding)),
+        "{scoped}"
+    );
+    // The peer's own routine is out of scope for the pass either way.
+    assert!(!report_routines(&scoped).contains(&kept), "{scoped}");
+}
+
+#[test]
+fn scoped_sweep_keeps_routines_whose_names_no_peer_declares() {
+    let fixture = Fixture::initialized();
+    let routine = format!("worktree-gc-{SELECTED}");
+    // The peer's malformed file and its unreadable-directory neighbour declare
+    // no name the selected workspace uses.
+    fs::write(
+        fixture.other_repo.join(".orbit/routines/malformed.yaml"),
+        "name: [unterminated\n",
+    )
+    .expect("write malformed peer routine");
+    let third = fixture.register_workspace("sweep-third");
+    let routines = third.join(".orbit/routines");
+    fs::remove_dir_all(&routines).expect("remove third routines");
+    fs::write(&routines, "not a directory\n").expect("block third routines directory");
+
+    let scoped = fixture.sweep(&[
+        "--workspace",
+        SELECTED,
+        "sweep",
+        "--dry-run",
+        "--format",
+        "json",
+    ]);
+    assert!(
+        report_routines(&scoped).contains(&routine),
+        "the selected workspace's routine must still be evaluated: {scoped}"
+    );
+    assert_eq!(
+        report_sources(&scoped),
+        BTreeSet::from([SELECTED.to_string()]),
+        "{scoped}"
+    );
+    assert!(
+        report_actions(&scoped).contains("would_baseline"),
+        "{scoped}"
+    );
+    assert!(
+        !scoped
+            .to_string()
+            .contains("defined by more than one source"),
+        "no collision may be reported: {scoped}"
+    );
+}
+
+/// Name of every reported routine.
+fn report_routines(outcome: &Value) -> BTreeSet<String> {
+    reports(outcome)
+        .iter()
+        .filter(|report| report["kind"] == "routine")
+        .map(|report| report["routine"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Rewrite the enabled seeded routine's declared name in `repo`.
+fn rename_routine(repo: &Path, name: &str) {
+    let path = repo.join(".orbit/routines").join(ENABLED_ROUTINE);
+    let mut definition: serde_yaml::Value =
+        serde_yaml::from_slice(&fs::read(&path).expect("read routine")).expect("parse routine");
+    definition["name"] = name.into();
+    fs::write(
+        path,
+        serde_yaml::to_string(&definition).expect("encode routine"),
+    )
+    .expect("write renamed routine");
 }
 
 /// Source workspace of every reported routine.

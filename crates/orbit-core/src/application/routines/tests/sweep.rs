@@ -247,3 +247,71 @@ impl RoutineWorkspaceProvider for OneWorkspace {
         })
     }
 }
+
+struct SlowPeerScan {
+    workspace: OneWorkspace,
+    seen_deadline: std::cell::Cell<Option<Instant>>,
+}
+
+impl RoutineWorkspaceProvider for SlowPeerScan {
+    fn discover_workspaces(&self, root: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        self.workspace.discover_workspaces(root)
+    }
+
+    fn discover_name_collision_peers(
+        &self,
+        _: &Path,
+        _: &DiscoveredWorkspaces,
+        _: &std::collections::BTreeSet<String>,
+        deadline: Option<Instant>,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        // Fault injection: the peer scan returns only after the tick budget,
+        // like a slow registry opening candidate checkouts.
+        self.seen_deadline.set(deadline);
+        let deadline = deadline.expect("a tick bounds its peer scan");
+        std::thread::sleep(
+            deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+        );
+        Ok(DiscoveredWorkspaces::default())
+    }
+}
+
+/// [ORB-28162] A peer scan the tick deadline cut short cannot rule a name
+/// collision out, so the tick evaluates no routine rather than risk firing one.
+#[test]
+fn a_peer_collision_scan_past_the_deadline_defers_the_workspace() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_peer_collision_scan_past_the_deadline_defers_the_workspace,
+    )) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let orbit = root.path().join("repo").join(".orbit");
+    std::fs::create_dir_all(&orbit).unwrap();
+    std::fs::create_dir_all(&global).unwrap();
+    let provider = SlowPeerScan {
+        workspace: OneWorkspace(OrbitRuntime::from_roots(&global, &orbit).unwrap()),
+        seen_deadline: std::cell::Cell::new(None),
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let outcome = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions {
+            deadline: Some(deadline),
+            dry_run: true,
+            ..SweepOptions::default()
+        },
+        RoutineMachineIdentity {
+            machine_id: "fixture".into(),
+            machine_name: "fixture".into(),
+        },
+        &provider,
+        &crate::runtime::host_signal::FixedHostSignals::none(),
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(provider.seen_deadline.get(), Some(deadline));
+    assert_eq!(outcome.skipped_workspaces, ["horizon"]);
+    assert!(outcome.reports.is_empty(), "{:?}", outcome.reports);
+}
