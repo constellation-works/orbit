@@ -171,7 +171,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Architecture Restructure](./design/architecture-restructure/1_overview.md) | File the step 0 tasks: the ratchet check and the app table [ORB-28318] | claude |
+| [Architecture Restructure](./design/architecture-restructure/1_overview.md) | Approve and land the ratchet check [ORB-28362] and the app table [ORB-28364] | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
