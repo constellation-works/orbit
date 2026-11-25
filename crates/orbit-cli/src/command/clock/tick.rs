@@ -1,10 +1,11 @@
 //! The stateless scheduler tick shared by `orbit clock tick` and `orbit sweep`.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use clap::Args;
 use orbit_cmd::registry_routines::{run_sweep, run_sweep_at};
+use orbit_common::Env;
 use orbit_core::{
     OrbitError, OrbitRuntime,
     application::routines::{
@@ -97,6 +98,7 @@ impl ClockTickArgs {
         self,
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
+        env: &Env,
     ) -> CommandOut {
         let options = SweepOptions {
             dry_run: self.dry_run,
@@ -112,7 +114,7 @@ impl ClockTickArgs {
             eprintln!("{warning}");
         }
 
-        let outcome = run_sweep_for_selected_root(root_override, workspace_selector, options)?;
+        let outcome = run_sweep_for_selected_root(root_override, workspace_selector, options, env)?;
 
         if let Some(row) = &outcome.no_workspace_loaded {
             eprintln!("{row}");
@@ -207,9 +209,12 @@ fn run_sweep_for_selected_root(
     root_override: Option<&Path>,
     workspace_selector: Option<&str>,
     options: SweepOptions,
+    env: &Env,
 ) -> Result<SweepOutcome, OrbitError> {
-    let has_env_override =
-        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
+    let has_env_override = env
+        .orbit_root()
+        .and_then(OsStr::to_str)
+        .is_some_and(|root| !root.trim().is_empty());
     if root_override.is_none() && !has_env_override {
         return run_sweep(options, workspace_selector);
     }

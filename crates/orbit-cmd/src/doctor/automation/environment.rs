@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 
+use orbit_common::Env;
 use orbit_common::security::operator_env::clock_env_file_names;
 
 use crate::doctor::*;
@@ -21,7 +22,10 @@ use crate::doctor::*;
 ///
 /// A crew whose `[crews.<name>] env` reads an unset source is reported in the
 /// same row: drains exclude that crew and its activities are refused.
-pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+pub(in crate::doctor) fn doctor_check_env_pass(
+    runtime: &OrbitRuntime,
+    env: &Env,
+) -> WorkspaceDoctorResult {
     let unset = runtime.unset_env_pass_names();
     // Judge the environment runs actually receive: names `clock.env` supplies
     // count as held. Names only; values never leave the file.
@@ -42,7 +46,7 @@ pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> Worksp
         .collect();
     let crews = runtime.configured_crew_env_sources();
     let service_warnings =
-        crate::service_environment::crew_source_environment_warnings(runtime, &crews);
+        crate::service_environment::crew_source_environment_warnings(runtime, &crews, env);
     if effective_unset.is_empty() && crew_unset.is_empty() && service_warnings.is_empty() {
         return check(
             "env-pass",

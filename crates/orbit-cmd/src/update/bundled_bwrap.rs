@@ -12,11 +12,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
-use orbit_common::OrbitError;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME, TrustedReleaseKey,
     checksum_for_asset, sha256_hex, verify_checksum_signature, verify_sha256_digest,
 };
+use orbit_common::{Env, OrbitError};
 
 use super::source::{ReleaseSource, release_source_from_env};
 
@@ -92,7 +92,7 @@ pub fn stage_bundled_bwrap(
 /// the running Orbit, read from the same source and trust set `orbit update`
 /// uses (`ORBIT_UPDATE_RELEASE_DIR`, `ORBIT_INSTALL_REPO`,
 /// `ORBIT_RELEASE_TRUSTED_KEYS_FILE`).
-pub fn stage_bundled_bwrap_for_this_release() -> Result<StagedBwrap, OrbitError> {
+pub fn stage_bundled_bwrap_for_this_release(env: &Env) -> Result<StagedBwrap, OrbitError> {
     let asset = bundled_bwrap_asset_name(std::env::consts::ARCH).ok_or_else(|| {
         OrbitError::Execution(format!(
             "Orbit publishes no bundled Bubblewrap for {}",
@@ -100,10 +100,10 @@ pub fn stage_bundled_bwrap_for_this_release() -> Result<StagedBwrap, OrbitError>
         ))
     })?;
     stage_bundled_bwrap(
-        release_source_from_env().as_ref(),
+        release_source_from_env(env).as_ref(),
         env!("CARGO_PKG_VERSION"),
         &asset,
-        super::trust::trusted_keys_from_env()?,
+        super::trust::trusted_keys_from_env(env)?,
         chrono::Utc::now().date_naive(),
     )
 }

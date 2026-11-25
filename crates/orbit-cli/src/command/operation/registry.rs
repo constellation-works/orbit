@@ -1,3 +1,5 @@
+use orbit_common::Env;
+
 use super::super::{Commands, Execute};
 use super::spec::*;
 
@@ -5,7 +7,7 @@ impl Commands {
     /// Resolve all cross-cutting behavior for this command from one exhaustive
     /// declaration. Do not add a wildcard arm: exhaustiveness is the guardrail
     /// that keeps new CLI commands from silently inheriting policy defaults.
-    pub fn operation(&self) -> CommandOperation {
+    pub fn operation(&self, env: &Env) -> CommandOperation {
         match self {
             Commands::Application(command) => {
                 use super::super::application::ApplicationSubcommand;
@@ -105,7 +107,7 @@ impl Commands {
                     RuntimeNeed::Required,
                     Some(admin_meta("config", Some(subcommand), Some("config"), None)),
                     None,
-                    runtime_dispatch!(Config),
+                    runtime_env_dispatch!(Config),
                 )
             }
             Commands::Host(command) => {
@@ -409,7 +411,7 @@ impl Commands {
                     // The registry-derived task verbs take their runtime need,
                     // audit metadata and id routing from the spec.
                     TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
-                        return task_operation(invocation, boxed_runtime_dispatch!(Task));
+                        return task_operation(invocation, boxed_runtime_env_dispatch!(Task));
                     }
                     TaskSubcommand::Operation(TaskInvocation::Contention(_)) => {
                         ("locks-contention", None, None)
@@ -458,7 +460,7 @@ impl Commands {
                     runtime_need,
                     Some(admin_meta("task", Some(subcommand), target_type, target_id)),
                     None,
-                    boxed_runtime_dispatch!(Task),
+                    boxed_runtime_env_dispatch!(Task),
                 )
                 .governed_when(
                     matches!(
@@ -533,7 +535,7 @@ impl Commands {
             // Codebase analytics is registry-driven like friction.
             Commands::Attention(command) => {
                 let mut operation =
-                    registry_operation(&command.query, runtime_dispatch!(Attention));
+                    registry_operation(&command.query, runtime_env_dispatch!(Attention));
                 operation.runtime_need = RuntimeNeed::HostReadOnly;
                 operation
             }
@@ -587,7 +589,7 @@ impl Commands {
                 RuntimeNeed::Required,
                 Some(admin_meta("log", Some("tail"), Some("log_feed"), None)),
                 None,
-                runtime_dispatch!(Log),
+                runtime_env_dispatch!(Log),
             ),
             Commands::Doctor(command) => {
                 use super::super::doctor::DoctorSubcommand;
@@ -636,7 +638,7 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    runtime_dispatch!(Doctor),
+                    runtime_env_dispatch!(Doctor),
                 )
             }
             Commands::AutoTask(command) => {
@@ -684,7 +686,7 @@ impl Commands {
                 };
                 CommandOperation::new(runtime_need, Some(meta), None, runtime_dispatch!(Job))
             }
-            Commands::Tool(command) => tool_operation(command),
+            Commands::Tool(command) => tool_operation(command, env),
             // `orbit <ns> <verb>` is `orbit tool run <ns>.<verb>` in another
             // spelling (§4.6), so it declares the same operation: the same
             // runtime need, the same audit row, and the same dispatch into
@@ -704,7 +706,7 @@ impl Commands {
                         tool_name: Some(args.name.clone()),
                         target_type: Some("tool".to_string()),
                         target_id: Some(args.name.clone()),
-                        role: tool_run_actor_role(args),
+                        role: tool_run_actor_role(args, env),
                         arguments_json: None,
                         job_run_id: None,
                     }),
@@ -773,7 +775,7 @@ impl Commands {
                         target_id.as_deref(),
                     )),
                     None,
-                    runtime_dispatch!(Plugin),
+                    runtime_env_dispatch!(Plugin),
                 )
             }
             Commands::Mcp(command) => {

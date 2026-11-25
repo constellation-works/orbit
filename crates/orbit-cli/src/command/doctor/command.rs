@@ -1,10 +1,11 @@
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 
 use super::admission_receipts::{self, AdmissionReceiptsArgs};
 use super::fs_access::{self, FsAccessArgs};
 use super::providers::{self, ProvidersArgs};
-use crate::command::{CommandOut, Execute};
+use crate::command::CommandOut;
 
 /// `orbit doctor` — workspace-level self-diagnostics [ORB-10005].
 #[derive(Args)]
@@ -97,8 +98,8 @@ pub enum DoctorSubcommand {
     FsAccess(FsAccessArgs),
 }
 
-impl Execute for DoctorCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl DoctorCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self.command {
             Some(DoctorSubcommand::AdmissionReceipts(args)) => {
                 return admission_receipts::admission_receipts(runtime, args.compact);
@@ -111,6 +112,6 @@ impl Execute for DoctorCommand {
             }
             None => {}
         }
-        self.workspace_checks(runtime)
+        self.workspace_checks(runtime, env)
     }
 }

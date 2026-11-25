@@ -1,5 +1,6 @@
 use crate::command::locks::LocksContentionArgs;
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
+use orbit_common::Env;
 use orbit_common::governance::task::{TASK, TaskVerb};
 use orbit_core::OrbitRuntime;
 
@@ -34,9 +35,9 @@ pub struct TaskCommand {
     pub command: TaskSubcommand,
 }
 
-impl Execute for TaskCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl TaskCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        self.command.execute_with_env(runtime, env)
     }
 }
 
@@ -66,11 +67,11 @@ pub enum TaskSubcommand {
     Reindex(TaskReindexArgs),
 }
 
-impl Execute for TaskSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl TaskSubcommand {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
             TaskSubcommand::Archive(args) => args.execute(runtime),
-            TaskSubcommand::Operation(invocation) => invocation.execute(runtime),
+            TaskSubcommand::Operation(invocation) => invocation.execute_with_env(runtime, env),
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
             TaskSubcommand::SettleMerged(args) => args.execute(runtime),
@@ -129,10 +130,10 @@ impl FromArgMatches for TaskInvocation {
     }
 }
 
-impl Execute for TaskInvocation {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl TaskInvocation {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
-            Self::Registry(invocation) => super::operation::execute(invocation, runtime),
+            Self::Registry(invocation) => super::operation::execute(invocation, runtime, env),
             Self::Contention(args) => args.execute(runtime),
         }
     }

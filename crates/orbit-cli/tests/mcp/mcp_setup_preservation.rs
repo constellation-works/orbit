@@ -101,8 +101,14 @@ fn init_preserves_operator_launch_bytes_for_every_client_and_scope_without_a_reg
         (McpClientScope::Home, "home"),
     ] {
         for client in McpClient::ALL {
-            let paths =
-                client_config_paths(scope, client, &fixture.repo, Some(&fixture.home)).unwrap();
+            let paths = client_config_paths(
+                scope,
+                client,
+                &fixture.repo,
+                Some(&fixture.home),
+                &orbit_common::Env::capture(),
+            )
+            .unwrap();
             for args in [
                 vec!["mcp", "serve", "--operator"],
                 vec!["--workspace", "ws_existing", "mcp", "serve", "--operator"],
@@ -243,6 +249,7 @@ fn every_actual_config_mutation_logs_path_caller_and_arguments_including_cleanup
             client,
             &fixture.repo,
             Some(&fixture.home),
+            &orbit_common::Env::capture(),
         )
         .unwrap();
         expected.insert(config.mcp_path);

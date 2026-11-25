@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env::{wait_until, with_supervision_clock};
 
-use super::super::converge::{probe_version, require_admission_contract};
+use super::super::converge::{DEFAULT_PROBE_TIMEOUT, probe_version, require_admission_contract};
 
 #[test]
 fn probe_timeouts_tear_down_descendants_before_and_after_parent_exit() {
@@ -52,11 +52,12 @@ fn probe_timeouts_tear_down_descendants_before_and_after_parent_exit() {
                 },
                 || {
                     if contract {
-                        require_admission_contract(&executable)
+                        require_admission_contract(&executable, DEFAULT_PROBE_TIMEOUT)
                             .err()
                             .expect("contract must time out")
                     } else {
-                        probe_version(&executable).expect_err("version must time out")
+                        probe_version(&executable, DEFAULT_PROBE_TIMEOUT)
+                            .expect_err("version must time out")
                     }
                 },
             );

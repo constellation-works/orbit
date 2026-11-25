@@ -1,7 +1,6 @@
 //! HTML rendering and context shortening for web log events.
 
 use orbit_cmd::log_format::{AGENT_OUTPUT_TARGET, format_code, format_source};
-use orbit_common::env_vars;
 use orbit_common::security::redaction::redact_all;
 use serde::Serialize;
 use serde_json::Value;
@@ -18,7 +17,7 @@ pub(crate) struct RenderedLogEvent {
     pub agent_stdout: bool,
 }
 
-pub(crate) fn render_log_event_for_web(event: &Value) -> RenderedLogEvent {
+pub(crate) fn render_log_event_for_web(event: &Value, home: Option<&str>) -> RenderedLogEvent {
     let ts = event
         .get("timestamp")
         .and_then(Value::as_str)
@@ -37,7 +36,7 @@ pub(crate) fn render_log_event_for_web(event: &Value) -> RenderedLogEvent {
         target: redact_all(target),
         code: format_code(target, level_raw, &fields),
         level: normalize_level(level_raw).to_string(),
-        message_html: format_message_html(target, &fields),
+        message_html: format_message_html(target, &fields, home),
         agent_stdout: is_agent_relay(target, &fields)
             && fields.get("stream").and_then(Value::as_str) == Some("stdout"),
     }
@@ -69,7 +68,7 @@ fn redact_strings(value: &Value) -> Value {
     }
 }
 
-pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
+pub(crate) fn format_message_html(target: &str, fields: &Value, home: Option<&str>) -> String {
     let redacted = redact_strings(fields);
     let fields = &redacted;
     let getf = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or("");
@@ -84,22 +83,25 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
     };
 
     match target {
-        "orbit.policy.deny" => html_pairs(&[
-            ("tool", getf("tool").to_string()),
-            ("path", getf("path").to_string()),
-            ("profile", getf("profile").to_string()),
-            ("rule", getf("matched_rule").to_string()),
-        ]),
+        "orbit.policy.deny" => html_pairs(
+            &[
+                ("tool", getf("tool").to_string()),
+                ("path", getf("path").to_string()),
+                ("profile", getf("profile").to_string()),
+                ("rule", getf("matched_rule").to_string()),
+            ],
+            home,
+        ),
         "orbit.friction.reported" => {
             let mut s = format!(
                 "friction reported on {}",
-                code_value(getf("task_id").to_string())
+                code_value(getf("task_id").to_string(), home)
             );
             let agent = getf("agent");
             let model = getf("model");
             if !agent.is_empty() || !model.is_empty() {
                 s.push_str(" by ");
-                s.push_str(&code_value(format!("{agent}/{model}")));
+                s.push_str(&code_value(format!("{agent}/{model}"), home));
             }
             let summary = getf("summary");
             if !summary.is_empty() {
@@ -110,12 +112,12 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
         }
         "orbit.job.step_started" => format!(
             "step {} started [run={}]",
-            code_value(getf("step_id").to_string()),
-            code_value(getf("job_run_id").to_string()),
+            code_value(getf("step_id").to_string(), home),
+            code_value(getf("job_run_id").to_string(), home),
         ),
         "orbit.job.step_finished" => {
-            let step = code_value(getf("step_id").to_string());
-            let outcome = code_value(getf("outcome").to_string());
+            let step = code_value(getf("step_id").to_string(), home);
+            let outcome = code_value(getf("outcome").to_string(), home);
             match fields.get("success").and_then(Value::as_bool) {
                 Some(true) => format!("step {step} finished ok ({outcome})"),
                 Some(false) | None => format!("step {step} finished {outcome}"),
@@ -123,50 +125,53 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
         }
         "orbit.job.step_retry" => format!(
             "step {} retry attempt={} backoff_ms={}",
-            code_value(getf("step_id").to_string()),
-            code_value(getn("attempt")),
-            code_value(getn("next_backoff_ms")),
+            code_value(getf("step_id").to_string(), home),
+            code_value(getn("attempt"), home),
+            code_value(getn("next_backoff_ms"), home),
         ),
         "orbit.job.step_skipped" => {
             format!(
                 "step {} skipped: {}",
-                code_value(getf("step_id").to_string()),
+                code_value(getf("step_id").to_string(), home),
                 escape_html(getf("reason")),
             )
         }
         "orbit.job.step_denied" => {
             format!(
                 "step {} denied: {}",
-                code_value(getf("step_id").to_string()),
+                code_value(getf("step_id").to_string(), home),
                 escape_html(getf("reason")),
             )
         }
-        "orbit.job.fanout" => html_pairs(&[
-            ("phase", getf("phase").to_string()),
-            ("step", getf("step_id").to_string()),
-            ("workers", getn("worker_count")),
-            ("collected", getn("collected")),
-            ("failed", getn("failed")),
-        ]),
+        "orbit.job.fanout" => html_pairs(
+            &[
+                ("phase", getf("phase").to_string()),
+                ("step", getf("step_id").to_string()),
+                ("workers", getn("worker_count")),
+                ("collected", getn("collected")),
+                ("failed", getn("failed")),
+            ],
+            home,
+        ),
         "orbit.job.worker_state" => format!(
             "worker[{}] state={} step={}",
-            code_value(getn("worker_index")),
-            code_value(getf("state").to_string()),
-            code_value(getf("step_id").to_string()),
+            code_value(getn("worker_index"), home),
+            code_value(getf("state").to_string(), home),
+            code_value(getf("step_id").to_string(), home),
         ),
         "orbit.job.loop_iteration" => format!(
             "loop {} phase={} step={}",
-            code_value(getn("iteration")),
-            code_value(getf("phase").to_string()),
-            code_value(getf("step_id").to_string()),
+            code_value(getn("iteration"), home),
+            code_value(getf("phase").to_string(), home),
+            code_value(getf("step_id").to_string(), home),
         ),
         "orbit.job.loop_did_not_converge" => format!(
             "loop step={} did not converge after {} iterations",
-            code_value(getf("step_id").to_string()),
-            code_value(getn("max_iterations")),
+            code_value(getf("step_id").to_string(), home),
+            code_value(getn("max_iterations"), home),
         ),
-        _ if is_agent_relay(target, fields) => format_agent_message(fields),
-        _ => format_generic_fields(fields),
+        _ if is_agent_relay(target, fields) => format_agent_message(fields, home),
+        _ => format_generic_fields(fields, home),
     }
 }
 
@@ -174,7 +179,7 @@ fn is_agent_relay(target: &str, fields: &Value) -> bool {
     target == AGENT_OUTPUT_TARGET && fields.get("line").and_then(Value::as_str).is_some()
 }
 
-fn format_agent_message(fields: &Value) -> String {
+fn format_agent_message(fields: &Value, home: Option<&str>) -> String {
     let line = fields.get("line").and_then(Value::as_str).unwrap_or("");
     let event = serde_json::from_str::<Value>(line).ok();
     let kind = event
@@ -197,7 +202,7 @@ fn format_agent_message(fields: &Value) -> String {
     let mut summary = escape_html(&kind.map_or_else(|| format!("agent {stream}"), str::to_string));
     if let Some(run) = fields.get("job_run_id").and_then(Value::as_str) {
         summary.push_str(" · ");
-        summary.push_str(&code_value(run.to_string()));
+        summary.push_str(&code_value(run.to_string(), home));
     }
     // After the run so the first 60 characters still carry kind and run.
     if let Some(item_kind) = item_kind {
@@ -212,9 +217,9 @@ fn format_agent_message(fields: &Value) -> String {
         if let Some(map) = fields.as_object_mut() {
             map.remove("line");
         }
-        format_generic_fields(&fields)
+        format_generic_fields(&fields, home)
     } else {
-        format_generic_fields(fields)
+        format_generic_fields(fields, home)
     };
     if !context.is_empty() {
         summary.push(' ');
@@ -223,7 +228,7 @@ fn format_agent_message(fields: &Value) -> String {
     summary
 }
 
-fn format_generic_fields(fields: &Value) -> String {
+fn format_generic_fields(fields: &Value, home: Option<&str>) -> String {
     let mut parts = Vec::new();
     if let Value::Object(map) = fields {
         if let Some(message) = map.get("message").and_then(Value::as_str) {
@@ -244,23 +249,33 @@ fn format_generic_fields(fields: &Value) -> String {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            parts.push(format!("<b>{}</b>={}", escape_html(key), code_value(value)));
+            parts.push(format!(
+                "<b>{}</b>={}",
+                escape_html(key),
+                code_value(value, home)
+            ));
         }
     }
     parts.join(" ")
 }
 
-fn html_pairs(pairs: &[(&str, String)]) -> String {
+fn html_pairs(pairs: &[(&str, String)], home: Option<&str>) -> String {
     pairs
         .iter()
         .filter(|(_, value)| !value.is_empty())
-        .map(|(key, value)| format!("<b>{}</b>={}", escape_html(key), code_value(value.clone())))
+        .map(|(key, value)| {
+            format!(
+                "<b>{}</b>={}",
+                escape_html(key),
+                code_value(value.clone(), home)
+            )
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn code_value(value: String) -> String {
-    let short = shorten_context_value(&value);
+fn code_value(value: String, home: Option<&str>) -> String {
+    let short = shorten_context_value(&value, home);
     if short != value {
         format!(
             "<code title=\"{}\">{}</code>",
@@ -272,13 +287,9 @@ fn code_value(value: String) -> String {
     }
 }
 
-fn shorten_context_value(value: &str) -> String {
-    let home = std::env::var(env_vars::HOME)
-        .ok()
-        .filter(|home| !home.is_empty());
-    let relative = home
-        .as_deref()
-        .and_then(|home| Path::new(value).strip_prefix(home).ok());
+fn shorten_context_value(value: &str, home: Option<&str>) -> String {
+    let home = home.filter(|home| !home.is_empty());
+    let relative = home.and_then(|home| Path::new(value).strip_prefix(home).ok());
     // A temporary home can itself live in a managed checkout. Only worktrees
     // below that home override `~`; an outer checkout is not useful context.
     let path = relative.and_then(Path::to_str).unwrap_or(value);

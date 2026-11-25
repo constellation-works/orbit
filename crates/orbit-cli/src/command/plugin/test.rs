@@ -1,12 +1,13 @@
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use clap::Args;
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{PluginTestOptions, PluginTestValidationGate};
 use serde_json::json;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, Payload};
 use crate::output::color::Domain;
 
 #[derive(Args)]
@@ -45,8 +46,8 @@ pub struct PluginTestArgs {
     pub update_goldens: bool,
 }
 
-impl Execute for PluginTestArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl PluginTestArgs {
+    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         let configuration = self.fixture_config.as_ref().map_or_else(
             || "Configuration: manifest defaults; caller plugin settings excluded.".to_string(),
             |path| format!(
@@ -63,10 +64,9 @@ impl Execute for PluginTestArgs {
                 case: self.case,
                 fixture_config: self.fixture_config.clone(),
                 update_goldens: self.update_goldens,
-                validation_gate: validation_gate_from_env(),
-                require_sandbox_exec: std::env::var(env_vars::ORBIT_REQUIRE_SANDBOX_EXEC)
-                    .as_deref()
-                    == Ok("1"),
+                validation_gate: validation_gate_from_env(env),
+                require_sandbox_exec: env.orbit_require_sandbox_exec().and_then(OsStr::to_str)
+                    == Some("1"),
             },
         )?;
 
@@ -188,16 +188,17 @@ impl Execute for PluginTestArgs {
 /// The validation gate a runner named through `ORBIT_VALIDATION_SUMMARY`,
 /// `ORBIT_VALIDATION_GATE` and `ORBIT_VALIDATION_BASE`; `None` without a
 /// summary path.
-fn validation_gate_from_env() -> Option<PluginTestValidationGate> {
-    let named = |name: &str| {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
+fn validation_gate_from_env(env: &Env) -> Option<PluginTestValidationGate> {
+    let trimmed = |value: Option<&OsStr>| {
+        value
+            .and_then(OsStr::to_str)
+            .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
     };
     Some(PluginTestValidationGate {
-        summary: PathBuf::from(named(env_vars::ORBIT_VALIDATION_SUMMARY)?),
-        command: named(env_vars::ORBIT_VALIDATION_GATE),
-        base: named(env_vars::ORBIT_VALIDATION_BASE),
+        summary: PathBuf::from(trimmed(env.orbit_validation_summary())?),
+        command: trimmed(env.orbit_validation_gate()),
+        base: trimmed(env.orbit_validation_base()),
     })
 }

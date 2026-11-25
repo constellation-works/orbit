@@ -2,6 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_common::Env;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_core::application::workspace_preset::WorkspacePreset;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
@@ -35,7 +36,7 @@ use super::validate::{
 };
 
 impl WorkspaceInitArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
         let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
         let roots = RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?;
         let orbit_dir = roots.shared_root;
@@ -77,13 +78,14 @@ impl WorkspaceInitArgs {
             &global_root,
             &registry_path,
             preset.clone(),
+            env,
         )?;
         let preset = preset
             .map(|preset| apply_preset_definitions(&global_root, &init_result, preset))
             .transpose()?;
         // Offered after registration, so a declined or failed install never
         // undoes the workspace.
-        let browser_kit = offer_browser_kit(&init_result.root, install_browser_kit);
+        let browser_kit = offer_browser_kit(&init_result.root, install_browser_kit, env);
         let exit_code = i32::from(browser_kit.failed());
         let report = collect_init_report(
             init_result,
@@ -93,6 +95,7 @@ impl WorkspaceInitArgs {
             inject_rules,
             browser_kit,
             preset,
+            env,
         )?;
 
         Ok(
@@ -109,6 +112,7 @@ impl WorkspaceInitArgs {
         global_root: &Path,
         registry_path: &Path,
         preset: Option<WorkspacePreset>,
+        env: &Env,
     ) -> Result<WorkspaceInitResult, OrbitError> {
         // Validate before bootstrapping any workspace state so invalid modes
         // fail closed at the command boundary.
@@ -297,7 +301,7 @@ impl WorkspaceInitArgs {
                         workspace_ship_mode: Some(seeded_ship_mode),
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
-                        config_seed: Some(config_seed_from_detection(&detect())),
+                        config_seed: Some(config_seed_from_detection(&detect(env))),
                         workspace_preset: preset,
                         ..Default::default()
                     },

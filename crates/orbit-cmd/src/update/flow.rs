@@ -111,7 +111,7 @@ pub(super) fn run_update_with_restore(
     // lock. Version decisions follow the live installed path, not the running
     // inode or the compile-time snapshot.
     let executable = converge::resolve_installed_executable(&environment.executable);
-    let current = locked_installed_version(&executable)?;
+    let current = locked_installed_version(&executable, environment.probe_timeout)?;
     report.executable = executable.clone();
     report.current_version = current.to_string();
     if current != snapshot {
@@ -139,7 +139,8 @@ pub(super) fn run_update_with_restore(
         // process already running the installed generation is asked to hand
         // over to it in place, which proves the generation free before the
         // re-pin.
-        let contract = converge::require_admission_contract(&executable)?;
+        let contract =
+            converge::require_admission_contract(&executable, environment.probe_timeout)?;
         let digest = orbit_common::fs::generation::executable_generation(&executable)?;
         let admissions = acquire_current_admissions(
             &environment.admission_roots,
@@ -176,7 +177,7 @@ pub(super) fn run_update_with_restore(
     // The signed manifest authenticates the archive, but does not bind it to
     // the requested version. Reject mislabeled releases before any backup or
     // swap, so an unrequested binary is never exposed at the installed path.
-    let reported = converge::probe_version(staged.path())
+    let reported = converge::probe_version(staged.path(), environment.probe_timeout)
         .and_then(|reported| ReleaseVersion::parse(&reported))
         .map_err(|error| {
             OrbitError::Execution(format!(
@@ -189,7 +190,7 @@ pub(super) fn run_update_with_restore(
         )));
     }
 
-    let contract = converge::require_admission_contract(staged.path())?;
+    let contract = converge::require_admission_contract(staged.path(), environment.probe_timeout)?;
     if target < current {
         assert_downgrade_is_compatible(environment, staged.path(), &current, &target)?;
     }
@@ -207,8 +208,8 @@ pub(super) fn run_update_with_restore(
     report.backup_path = Some(backup.clone());
 
     // Verify the installed path as well before touching workspace state.
-    let installed =
-        converge::probe_version(&executable).and_then(|reported| ReleaseVersion::parse(&reported));
+    let installed = converge::probe_version(&executable, environment.probe_timeout)
+        .and_then(|reported| ReleaseVersion::parse(&reported));
     match installed {
         Ok(installed) if installed == target => {}
         Ok(installed) => {
@@ -254,8 +255,11 @@ pub(super) fn run_update_with_restore(
 }
 
 /// Probe the on-disk executable after the install lock is held.
-pub(super) fn locked_installed_version(executable: &Path) -> Result<ReleaseVersion, OrbitError> {
-    let reported = converge::probe_version(executable)?;
+pub(super) fn locked_installed_version(
+    executable: &Path,
+    timeout: std::time::Duration,
+) -> Result<ReleaseVersion, OrbitError> {
+    let reported = converge::probe_version(executable, timeout)?;
     ReleaseVersion::parse(&reported)
 }
 

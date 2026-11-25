@@ -8,6 +8,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use orbit_common::Env;
 use orbit_config::ConfigSeed;
 use orbit_core::OrbitError;
 use orbit_registry::workspace_registry::global_orbit_dir;
@@ -28,8 +29,9 @@ pub(crate) fn collect_config_seed_for_init(
     root_override: Option<&Path>,
     force: bool,
     non_interactive: bool,
+    env: &Env,
 ) -> Result<ConfigSeed, OrbitError> {
-    let detected = detect();
+    let detected = detect(env);
     let seed = config_seed_from_detection(&detected);
     if non_interactive || !config_would_be_written(root_override, force)? {
         return Ok(seed);

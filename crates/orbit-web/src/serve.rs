@@ -13,6 +13,7 @@ use axum::response::Response;
 use axum::routing::get;
 use clap::Args;
 use orbit_cmd::registry_runtime;
+use orbit_common::Env;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use tokio::sync::Notify;
@@ -75,11 +76,11 @@ pub struct ServeArgs {
 /// The supplied runtime is retained for the server's lifetime. Config writes
 /// still update its files, but config and plugin changes do not reconstruct
 /// the runtime; the caller controls when to build and serve a new one.
-pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> {
+pub fn serve(runtime: &OrbitRuntime, args: ServeArgs, env: &Env) -> Result<(), OrbitError> {
     heap::configure();
-    let state = state::DashboardState::single(Arc::new(runtime.clone()));
+    let state = state::DashboardState::single_with_env(Arc::new(runtime.clone()), env.clone());
     state.set_operator_session(args.operator);
-    run_server(&args, state)
+    run_server(&args, state, env)
 }
 
 /// Boot the dashboard, resolving every registered workspace from the current
@@ -98,11 +99,15 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// nothing from the machine-global registry (ORB-11388). Which workspace the
 /// browser opens on is a separate question: `--workspace` only supplies the
 /// registry default hint described on `build_state`.
-pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
+pub fn serve_from_env(
+    args: ServeArgs,
+    root_override: Option<&Path>,
+    env: &Env,
+) -> Result<(), OrbitError> {
     heap::configure();
-    let state = build_state(root_override, args.workspace.as_deref())?;
+    let state = build_state(root_override, args.workspace.as_deref(), env)?;
     state.set_operator_session(args.operator);
-    run_server(&args, state)
+    run_server(&args, state, env)
 }
 
 /// Resolve dashboard state from the environment: registry-backed global mode
@@ -142,6 +147,7 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 pub(crate) fn build_state(
     root_override: Option<&Path>,
     workspace_selector: Option<&str>,
+    env: &Env,
 ) -> Result<state::DashboardState, OrbitError> {
     let global_root = registry_runtime::global_root_for(root_override)?;
     let registry_path = workspace_registry::registry_path_for(&global_root);
@@ -151,7 +157,7 @@ pub(crate) fn build_state(
         workspace_selector.map(ToOwned::to_owned),
         cwd,
     );
-    state::DashboardState::from_registry(global_root, source)
+    state::DashboardState::from_registry(global_root, source, env.clone())
 }
 
 /// Upper bound on graceful connection drain once shutdown begins (a shutdown
@@ -228,7 +234,7 @@ pub(crate) async fn security_headers(mut response: Response) -> Response {
 }
 
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
-fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
+fn run_server(args: &ServeArgs, state: state::DashboardState, env: &Env) -> Result<(), OrbitError> {
     check_bindable_host(args.host, args.port)?;
     // Before the TCP bind, so a refused intake peer user stops startup.
     let mut lease_intake = bind_lease_intake(state.global_root())?;
@@ -236,7 +242,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
 
     let addr = SocketAddr::new(args.host, args.port);
     // A dashboard that took over from a replaced image already has its tab.
-    let no_open = args.no_open || std::env::var_os(HANDOVER_ENV).is_some();
+    let no_open = args.no_open || env.orbit_dashboard_handover().is_some();
     let handover = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let handover_target = Arc::clone(&handover);
     let host_tunnels = Arc::clone(state.host_tunnels());

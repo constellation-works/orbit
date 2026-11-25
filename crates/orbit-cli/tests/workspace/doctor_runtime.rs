@@ -71,7 +71,7 @@ fn task_relations_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let mut rows = doctor_report_probes()
         .find(|probe| probe.name == "task-relations")
         .expect("task-relations probe")
-        .run(runtime, false);
+        .run(runtime, &orbit_common::Env::default(), false);
     assert_eq!(rows.len(), 1, "{rows:?}");
     rows.remove(0)
 }
@@ -297,7 +297,7 @@ fn browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit() {
     let rows = doctor_report_probes()
         .find(|probe| probe.name == "browser-kit")
         .expect("browser-kit probe")
-        .run(&runtime, false);
+        .run(&runtime, &orbit_common::Env::capture(), false);
     let warning = rows
         .iter()
         .find(|row| row.check_name == "browser-kit-backlog")
@@ -322,7 +322,7 @@ fn standing_drain_probe_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let mut rows = doctor_report_probes()
         .find(|probe| probe.name == "standing-drain")
         .expect("standing-drain probe")
-        .run(runtime, false);
+        .run(runtime, &orbit_common::Env::default(), false);
     assert_eq!(rows.len(), 1, "{rows:?}");
     rows.remove(0)
 }

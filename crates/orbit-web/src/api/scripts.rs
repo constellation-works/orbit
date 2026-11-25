@@ -58,6 +58,7 @@ pub(super) async fn grant_script(
     let arguments = json!({"digest": body.digest});
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         DASHBOARD_SCRIPT_GRANT.id,
         name.as_str(),

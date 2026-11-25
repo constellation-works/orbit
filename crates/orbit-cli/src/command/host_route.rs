@@ -8,10 +8,11 @@
 //! `orbit_cmd::hosts`; this module only maps commands to tool calls and
 //! renders the answer.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
+use orbit_common::Env;
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::task::TaskVerb;
@@ -40,7 +41,7 @@ pub(crate) enum Preflight {
 
 /// Route `cli` before bootstrap: resolve `--host`, then deliver a call that
 /// belongs to another host there.
-pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
+pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitError> {
     let host = requested_host(&cli.command);
     if host.is_none() && !may_route(cli) {
         return Ok(Preflight::Local);
@@ -118,10 +119,10 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         return Ok(Preflight::Local);
     }
     if matches!(&cli.command, Commands::Notice(_)) {
-        return notice_preflight(cli, &global_root);
+        return notice_preflight(cli, &global_root, env);
     }
     if let Commands::Attention(attention) = &cli.command {
-        return attention_preflight(cli, attention, &global_root);
+        return attention_preflight(cli, attention, &global_root, env);
     }
     if let Some(host) = host {
         let value = workspace_value(cli)?.ok_or_else(|| {
@@ -138,16 +139,16 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         set_workspace_value(cli, resolved)?;
     }
     let Some(task_id) = routed_task_id(&cli.command)? else {
-        return deliver_by_selector(cli, &global_root);
+        return deliver_by_selector(cli, &global_root, env);
     };
     if let Some(selector) = workspace_value(cli)? {
         let Some(holder) = hosts::selector_remote_host(&global_root, &selector)? else {
             return Ok(Preflight::Local);
         };
-        return deliver(cli, &global_root, &holder, Some(selector));
+        return deliver(cli, &global_root, &holder, Some(selector), env);
     }
     // `--root` / `ORBIT_ROOT` names the store explicitly, as a selector does.
-    if explicit_root(cli) {
+    if explicit_root(cli, env) {
         return Ok(Preflight::Local);
     }
     match hosts::route_task_id(&global_root, &task_id)? {
@@ -164,7 +165,7 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
                     &task_id,
                 )?;
             }
-            deliver(cli, &global_root, &holder, None)
+            deliver(cli, &global_root, &holder, None, env)
         }
     }
 }
@@ -175,10 +176,10 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
 /// owner through the federated client. Anything else runs locally, as
 /// before. (`--host` is a notice flag of its own — the machines a
 /// maintenance notice concerns — so the selector is the owner address.)
-fn notice_preflight(cli: &mut Cli, global_root: &Path) -> Result<Preflight, OrbitError> {
+fn notice_preflight(cli: &mut Cli, global_root: &Path, env: &Env) -> Result<Preflight, OrbitError> {
     if let Some(selector) = workspace_value(cli)? {
         if let Some(holder) = hosts::selector_remote_host(global_root, &selector)? {
-            return deliver(cli, global_root, &holder, Some(selector));
+            return deliver(cli, global_root, &holder, Some(selector), env);
         }
         if let Ok(qualified) = selector.parse::<MachineQualifiedSelector>() {
             // The selector names a host, and no remote holder answered for
@@ -198,7 +199,7 @@ fn notice_preflight(cli: &mut Cli, global_root: &Path) -> Result<Preflight, Orbi
     let Commands::Notice(notice) = &cli.command else {
         return Ok(Preflight::Local);
     };
-    if notice.command.spec.verb != NoticeVerb::List || !workspace_less(cli)? {
+    if notice.command.spec.verb != NoticeVerb::List || !workspace_less(cli, env)? {
         return Ok(Preflight::Local);
     }
     if orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
@@ -210,6 +211,7 @@ fn notice_preflight(cli: &mut Cli, global_root: &Path) -> Result<Preflight, Orbi
         notice.command.spec.tool_name,
         input,
         AggregateRender::Notice(NoticeVerb::List),
+        env,
     )
 }
 
@@ -222,10 +224,11 @@ fn attention_preflight(
     cli: &Cli,
     attention: &super::attention::AttentionCommand,
     global_root: &Path,
+    env: &Env,
 ) -> Result<Preflight, OrbitError> {
     // A wait is always a local read bounded by its session grant.
     if attention.wait.is_some()
-        || explicit_root(cli)
+        || explicit_root(cli, env)
         || orbit_mcp::federated::load_destinations(global_root)?.is_empty()
     {
         return Ok(Preflight::Local);
@@ -234,7 +237,7 @@ fn attention_preflight(
     let scoped = input.get("all") == Some(&Value::Bool(true))
         || input.contains_key("host")
         || input.contains_key("workspace");
-    if !scoped && !workspace_less(cli)? {
+    if !scoped && !workspace_less(cli, env)? {
         return Ok(Preflight::Local);
     }
     // A caller holding no capability gets no federated read, and no selector
@@ -263,7 +266,7 @@ fn attention_preflight(
         ));
     }
     let client =
-        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority())?;
+        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority(), env)?;
     let answer = orbit_mcp::McpHost::call_tool(
         &client,
         attention.query.spec.tool_name,
@@ -277,8 +280,8 @@ fn attention_preflight(
 
 /// Whether this invocation names no workspace at all: no selector, no
 /// explicit root, and no initialized workspace discoverable from the cwd.
-fn workspace_less(cli: &Cli) -> Result<bool, OrbitError> {
-    if workspace_value(cli)?.is_some() || explicit_root(cli) {
+fn workspace_less(cli: &Cli, env: &Env) -> Result<bool, OrbitError> {
+    if workspace_value(cli)?.is_some() || explicit_root(cli, env) {
         return Ok(false);
     }
     let cwd = std::env::current_dir()?;
@@ -305,6 +308,7 @@ fn deliver_notice_aggregate(
     name: &str,
     input: Value,
     render: AggregateRender,
+    env: &Env,
 ) -> Result<Preflight, OrbitError> {
     if matches!(
         inspect_machine_identity(global_root)?,
@@ -315,7 +319,7 @@ fn deliver_notice_aggregate(
         ));
     }
     let authority = caller_authority_for_declared_model(input_declared_model(&input).as_deref());
-    let client = super::mcp::federated_aggregate_client(global_root.to_path_buf(), authority)?;
+    let client = super::mcp::federated_aggregate_client(global_root.to_path_buf(), authority, env)?;
     let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| match render {
         AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
@@ -325,7 +329,7 @@ fn deliver_notice_aggregate(
 
 /// A non-id call (`orbit tool run` of any tool) whose selector names a
 /// registered remote host goes there too, as the raw token does.
-fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, OrbitError> {
+fn deliver_by_selector(cli: &Cli, global_root: &Path, env: &Env) -> Result<Preflight, OrbitError> {
     let Commands::Tool(tool) = &cli.command else {
         return Ok(Preflight::Local);
     };
@@ -336,17 +340,23 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
     // does; inside a workspace it stays the local workspace's list.
     if args.name == "orbit.notice.list"
         && !args.dry_run
-        && workspace_less(cli)?
+        && workspace_less(cli, env)?
         && !orbit_mcp::federated::load_destinations(global_root)?.is_empty()
     {
         let mut input = args.prepare_tool_run_input()?;
-        carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
+        carry_declared_model(
+            args.agent.as_deref(),
+            args.model.as_deref(),
+            &mut input,
+            env,
+        );
         let shape = args.prepare_tool_run_shape(&mut input)?;
         return deliver_notice_aggregate(
             global_root,
             &args.name,
             input,
             AggregateRender::ToolRun(shape),
+            env,
         );
     }
     let Some(selector) = workspace_value(cli)? else {
@@ -355,7 +365,7 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
     let Some(holder) = hosts::selector_remote_host(global_root, &selector)? else {
         return Ok(Preflight::Local);
     };
-    deliver(cli, global_root, &holder, Some(selector))
+    deliver(cli, global_root, &holder, Some(selector), env)
 }
 
 /// Whether this command needs host preflight, so commands without routing
@@ -401,9 +411,12 @@ fn requested_host(command: &Commands) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn explicit_root(cli: &Cli) -> bool {
+fn explicit_root(cli: &Cli, env: &Env) -> bool {
     cli.root.is_some()
-        || std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty())
+        || env
+            .orbit_root()
+            .and_then(OsStr::to_str)
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 /// The id an id-routed `orbit task` subcommand addresses.
@@ -529,22 +542,23 @@ fn declared_tool_run_model(
     agent: Option<&str>,
     model: Option<&str>,
     input: &Value,
+    env: &Env,
 ) -> Option<String> {
     input_declared_model(input)
         .or_else(|| trimmed_identity(model))
         .or_else(|| trimmed_identity(agent))
-        .or_else(|| trimmed_identity(std::env::var(env_vars::ORBIT_AGENT_MODEL).ok().as_deref()))
-        .or_else(|| trimmed_identity(std::env::var(env_vars::ORBIT_AGENT_NAME).ok().as_deref()))
+        .or_else(|| trimmed_identity(env.orbit_agent_model().and_then(OsStr::to_str)))
+        .or_else(|| trimmed_identity(env.orbit_agent_name().and_then(OsStr::to_str)))
 }
 
 /// Carry a routed `orbit tool run`'s declared model in its forwarded input,
 /// as the tool boundary's one identity key. An input that already declares
 /// a model is forwarded unchanged.
-fn carry_declared_model(agent: Option<&str>, model: Option<&str>, input: &mut Value) {
+fn carry_declared_model(agent: Option<&str>, model: Option<&str>, input: &mut Value, env: &Env) {
     if input_declared_model(input).is_some() {
         return;
     }
-    let Some(declared) = declared_tool_run_model(agent, model, input) else {
+    let Some(declared) = declared_tool_run_model(agent, model, input, env) else {
         return;
     };
     if let Some(object) = input.as_object_mut() {
@@ -582,7 +596,7 @@ enum Render {
     ToolRun(tool::ToolRunShape),
 }
 
-fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
+fn routed_call(cli: &Cli, holder: &HostEntry, env: &Env) -> Result<RoutedCall, OrbitError> {
     match &cli.command {
         Commands::Notice(notice) => {
             let invocation = &notice.command;
@@ -598,7 +612,7 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                 },
             })
         }
-        Commands::Task(task) => task_call(&task.command, holder),
+        Commands::Task(task) => task_call(&task.command, holder, env),
         Commands::Tool(tool) => match &tool.command {
             ToolSubcommand::Run(args) => {
                 if args.dry_run {
@@ -609,7 +623,12 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     )));
                 }
                 let mut input = args.prepare_tool_run_input()?;
-                carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
+                carry_declared_model(
+                    args.agent.as_deref(),
+                    args.model.as_deref(),
+                    &mut input,
+                    env,
+                );
                 let shape = args.prepare_tool_run_shape(&mut input)?;
                 Ok(RoutedCall {
                     name: args.name.clone(),
@@ -623,113 +642,120 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
     }
 }
 
-fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
+fn task_call(
+    command: &TaskSubcommand,
+    holder: &HostEntry,
+    env: &Env,
+) -> Result<RoutedCall, OrbitError> {
     Ok(match command {
-        TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => match invocation
-            .spec
-            .verb
-        {
-            TaskVerb::Show => {
-                let id = invocation.target_id().unwrap_or_default();
-                let fields = invocation
-                    .input
-                    .get("fields")
-                    .and_then(Value::as_array)
-                    .map(|fields| {
-                        fields
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(ToOwned::to_owned)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let mut input = json!({ "id": id });
-                if !fields.is_empty() {
-                    input["fields"] = json!(fields);
-                }
-                RoutedCall {
-                    name: invocation.spec.tool_name.into(),
-                    input,
-                    render: Render::TaskShow { fields },
-                }
-            }
-            TaskVerb::Update => RoutedCall {
-                name: invocation.spec.tool_name.into(),
-                input: super::task::operation::remote_update_input(&invocation.input, &holder.ssh)?,
-                render: Render::TaskWrite { verb: "Updated" },
-            },
-            TaskVerb::ArtifactPut => {
-                let mut input = invocation.input.clone();
-                input.shift_remove("host");
-                let model = input
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned);
-                if let (_, Some(model)) = super::task::mutation_identity(model) {
-                    input.insert("model".into(), json!(model));
-                }
-                let cwd = std::env::current_dir()?;
-                RoutedCall {
-                    name: invocation.spec.tool_name.into(),
-                    input: orbit_cmd::prepare_remote_task_artifact_put(
-                        Value::Object(input),
-                        Some(&cwd),
-                        Some(&cwd),
-                        None,
-                    )?,
-                    render: Render::TaskWrite {
-                        verb: "Stored an artifact on",
-                    },
-                }
-            }
-            TaskVerb::ArtifactGet => RoutedCall {
-                name: invocation.spec.tool_name.into(),
-                input: json!({ "id": invocation.input.get("id"), "path": invocation.input.get("path") }),
-                render: Render::ArtifactGet {
-                    out: invocation
+        TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
+            match invocation.spec.verb {
+                TaskVerb::Show => {
+                    let id = invocation.target_id().unwrap_or_default();
+                    let fields = invocation
                         .input
-                        .get("out")
-                        .and_then(Value::as_str)
-                        .map(PathBuf::from),
+                        .get("fields")
+                        .and_then(Value::as_array)
+                        .map(|fields| {
+                            fields
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let mut input = json!({ "id": id });
+                    if !fields.is_empty() {
+                        input["fields"] = json!(fields);
+                    }
+                    RoutedCall {
+                        name: invocation.spec.tool_name.into(),
+                        input,
+                        render: Render::TaskShow { fields },
+                    }
+                }
+                TaskVerb::Update => RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input: super::task::operation::remote_update_input(
+                        &invocation.input,
+                        &holder.ssh,
+                        env,
+                    )?,
+                    render: Render::TaskWrite { verb: "Updated" },
                 },
-            },
-            TaskVerb::ReviewReset => RoutedCall {
-                name: invocation.spec.tool_name.into(),
-                input: without_host(&invocation.input),
-                render: Render::ReviewReset,
-            },
-            TaskVerb::ReconcileReview => RoutedCall {
-                name: invocation.spec.tool_name.into(),
-                input: without_host(&invocation.input),
-                render: Render::Reconcile,
-            },
-            TaskVerb::Repilot => RoutedCall {
-                name: invocation.spec.tool_name.into(),
-                input: without_host(&invocation.input),
-                render: Render::Pilot,
-            },
-            TaskVerb::Requeue => RoutedCall {
-                name: invocation.spec.tool_name.into(),
-                input: without_host(&invocation.input),
-                render: Render::Requeue,
-            },
-            TaskVerb::RetryHandoff
-            | TaskVerb::ResumeDelivery
-            | TaskVerb::RecoverClaim
-            | TaskVerb::RevokeHandoff
-            | TaskVerb::LocksList
-            | TaskVerb::LocksReserve
-            | TaskVerb::LocksRelease
-            | TaskVerb::Add
-            | TaskVerb::List
-            | TaskVerb::Eligible
-            | TaskVerb::Lint
-            | TaskVerb::BlockTriage
-            | TaskVerb::Reject
-            | TaskVerb::Delete => {
-                return Err(not_routable());
+                TaskVerb::ArtifactPut => {
+                    let mut input = invocation.input.clone();
+                    input.shift_remove("host");
+                    let model = input
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned);
+                    if let (_, Some(model)) = super::task::mutation_identity(model, env) {
+                        input.insert("model".into(), json!(model));
+                    }
+                    let cwd = std::env::current_dir()?;
+                    RoutedCall {
+                        name: invocation.spec.tool_name.into(),
+                        input: orbit_cmd::prepare_remote_task_artifact_put(
+                            Value::Object(input),
+                            Some(&cwd),
+                            Some(&cwd),
+                            None,
+                        )?,
+                        render: Render::TaskWrite {
+                            verb: "Stored an artifact on",
+                        },
+                    }
+                }
+                TaskVerb::ArtifactGet => RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input: json!({ "id": invocation.input.get("id"), "path": invocation.input.get("path") }),
+                    render: Render::ArtifactGet {
+                        out: invocation
+                            .input
+                            .get("out")
+                            .and_then(Value::as_str)
+                            .map(PathBuf::from),
+                    },
+                },
+                TaskVerb::ReviewReset => RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input: without_host(&invocation.input),
+                    render: Render::ReviewReset,
+                },
+                TaskVerb::ReconcileReview => RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input: without_host(&invocation.input),
+                    render: Render::Reconcile,
+                },
+                TaskVerb::Repilot => RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input: without_host(&invocation.input),
+                    render: Render::Pilot,
+                },
+                TaskVerb::Requeue => RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input: without_host(&invocation.input),
+                    render: Render::Requeue,
+                },
+                TaskVerb::RetryHandoff
+                | TaskVerb::ResumeDelivery
+                | TaskVerb::RecoverClaim
+                | TaskVerb::RevokeHandoff
+                | TaskVerb::LocksList
+                | TaskVerb::LocksReserve
+                | TaskVerb::LocksRelease
+                | TaskVerb::Add
+                | TaskVerb::List
+                | TaskVerb::Eligible
+                | TaskVerb::Lint
+                | TaskVerb::BlockTriage
+                | TaskVerb::Reject
+                | TaskVerb::Delete => {
+                    return Err(not_routable());
+                }
             }
-        },
+        }
         _ => return Err(not_routable()),
     })
 }
@@ -750,8 +776,9 @@ fn deliver(
     global_root: &Path,
     holder: &HostEntry,
     selector: Option<String>,
+    env: &Env,
 ) -> Result<Preflight, OrbitError> {
-    let call = routed_call(cli, holder)?;
+    let call = routed_call(cli, holder, env)?;
     let caller = match inspect_machine_identity(global_root)? {
         MachineIdentityState::Present(identity) => identity.id,
         MachineIdentityState::Absent => {

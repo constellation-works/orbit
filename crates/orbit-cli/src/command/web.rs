@@ -39,7 +39,7 @@ impl Execute for WebSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
             WebSubcommand::Serve(args) => {
-                orbit_web::serve(runtime, args)?;
+                orbit_web::serve(runtime, args, &orbit_common::Env::default())?;
                 Ok(CommandOutput::Silent)
             }
             // `connect` is a client-side tunnel helper; the workspace lives on

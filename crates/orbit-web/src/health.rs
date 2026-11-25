@@ -68,7 +68,7 @@ pub(crate) async fn healthz(
     if query.detailed != Some(true) {
         return (StatusCode::OK, "ok").into_response();
     }
-    let log_path = resolve_log_path(None).map_err(|error| error.to_string());
+    let log_path = resolve_log_path(None, state.env()).map_err(|error| error.to_string());
     detailed_response(&state, log_path).await
 }
 

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 use orbit_core::runtime::RuntimeKernel;
 use orbit_core::{FederatedWorkspaceTarget, OrbitRuntime, WorkspaceCatalog, WorkspaceScope};
 use orbit_registry::workspace_registry;
@@ -38,6 +38,7 @@ use crate::registry_runtime::RegisteredRuntimeFactory;
 #[derive(Debug, Clone)]
 pub struct RegistryWorkspaceCatalog {
     global_root: PathBuf,
+    env: Env,
     resolved: Arc<Mutex<BTreeMap<String, RegisteredCheckout>>>,
 }
 
@@ -61,6 +62,9 @@ impl RegistryWorkspaceCatalog {
     pub fn new(global_root: impl Into<PathBuf>) -> Self {
         Self {
             global_root: global_root.into(),
+            env: orbit_core::composition::captured_env()
+                .cloned()
+                .unwrap_or_default(),
             resolved: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
@@ -152,7 +156,7 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
         let runtime = OrbitRuntime::from_kernel_ref(runtime);
         Ok(Some(
             runtime
-                .doctor_workspace_with_depth(false)?
+                .doctor_workspace_with_depth(&self.env, false)?
                 .into_iter()
                 .filter_map(|row| {
                     let status = match row.status {

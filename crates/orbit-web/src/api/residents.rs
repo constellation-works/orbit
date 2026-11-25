@@ -295,7 +295,14 @@ async fn resident_write<T: Serialize + Send + 'static>(
 ) -> Response {
     let started = Instant::now();
     let workspace = workspace_label(&runtime).await;
-    let audit = OperationAudit::new(&runtime, &workspace, operation, target, arguments);
+    let audit = OperationAudit::new(
+        &runtime,
+        state.env(),
+        &workspace,
+        operation,
+        target,
+        arguments,
+    );
     let caller = match authorized_caller(&DASHBOARD_RESIDENT_WRITE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {

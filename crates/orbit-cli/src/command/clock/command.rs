@@ -1,7 +1,8 @@
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::application::routines::{
     ClockHealth, ClockStatus, ClockUnitInspection, ClockUnitVerdict, clock_status,
     inspect_clock_unit, set_clock_cadence, set_clock_enabled,
@@ -49,10 +50,11 @@ impl ClockCommand {
         self,
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
+        env: &Env,
     ) -> CommandOut {
         match self.command {
             ClockSubcommand::Status => {
-                let global_root = selected_global_root(root_override)?;
+                let global_root = selected_global_root(root_override, env)?;
                 let status = clock_status(&global_root)?;
                 // A unit that cannot be inspected leaves the program fragment
                 // out rather than failing the status report.
@@ -60,7 +62,7 @@ impl ClockCommand {
                 Ok(clock_status_payload(&status, unit.as_ref()).into())
             }
             ClockSubcommand::Pause => {
-                let global_root = selected_global_root(root_override)?;
+                let global_root = selected_global_root(root_override, env)?;
                 let status = set_clock_enabled(&global_root, false)?;
                 let text = format!(
                     "host scheduler clock paused ({}); manual `orbit clock tick` remains available",
@@ -78,7 +80,7 @@ impl ClockCommand {
                 .into())
             }
             ClockSubcommand::Enable => {
-                let global_root = selected_global_root(root_override)?;
+                let global_root = selected_global_root(root_override, env)?;
                 let status = set_clock_enabled(&global_root, true)?;
                 let text = format!(
                     "host scheduler clock enabled: runs every {} seconds ({})",
@@ -96,10 +98,10 @@ impl ClockCommand {
                 .into())
             }
             ClockSubcommand::Repair => {
-                super::repair::execute(&selected_global_root(root_override)?)
+                super::repair::execute(&selected_global_root(root_override, env)?)
             }
             ClockSubcommand::Set { cadence_seconds } => {
-                let global_root = selected_global_root(root_override)?;
+                let global_root = selected_global_root(root_override, env)?;
                 let report = set_clock_cadence(&global_root, cadence_seconds)?;
                 let text = if report.paused {
                     format!(
@@ -122,7 +124,7 @@ impl ClockCommand {
                 .into())
             }
             ClockSubcommand::Tick(args) => {
-                args.execute_without_runtime(root_override, workspace_selector)
+                args.execute_without_runtime(root_override, workspace_selector, env)
             }
         }
     }
@@ -217,9 +219,14 @@ fn clock_program_doc(unit: &ClockUnitInspection) -> Value {
     })
 }
 
-fn selected_global_root(root_override: Option<&Path>) -> Result<std::path::PathBuf, OrbitError> {
-    let has_env_override =
-        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
+fn selected_global_root(
+    root_override: Option<&Path>,
+    env: &Env,
+) -> Result<std::path::PathBuf, OrbitError> {
+    let has_env_override = env
+        .orbit_root()
+        .and_then(OsStr::to_str)
+        .is_some_and(|root| !root.trim().is_empty());
     if root_override.is_some() || has_env_override {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)

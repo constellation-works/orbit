@@ -1,7 +1,8 @@
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
+use orbit_common::Env;
 use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
@@ -69,15 +70,16 @@ pub enum McpSubcommand {
 
 impl Execute for McpSubcommand {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
+        let env = Env::default();
         match self {
             // All MCP subcommands are dispatched runtime-free by the operation
             // registry (`RuntimeNeed::Forbidden`, `dispatch_mcp`) before runtime
             // initialization. They reach this path only if invoked indirectly
             // (currently never), so use the same runtime-less call chain for safety.
-            Self::Init(args) => args.execute_without_runtime(None),
-            Self::Remove(args) => args.execute_without_runtime(None),
-            Self::Serve(args) => args.execute_without_runtime(None),
-            Self::Listen(args) => args.execute_without_runtime(None, None),
+            Self::Init(args) => args.execute_without_runtime(None, &env),
+            Self::Remove(args) => args.execute_without_runtime(None, &env),
+            Self::Serve(args) => args.execute_without_runtime(None, &env),
+            Self::Listen(args) => args.execute_without_runtime(None, None, &env),
         }
     }
 }
@@ -152,10 +154,13 @@ pub struct ServeArgs {
 }
 
 impl ServeArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
         if matches!(self.mode, Some(ServeMode::Remote))
             && (root_override.is_some()
-                || std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty()))
+                || env
+                    .orbit_root()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|value| !value.trim().is_empty()))
         {
             return Err(OrbitError::InvalidInput(
                 "orbit mcp serve --mode remote cannot apply a local Orbit data root override (--root or ORBIT_ROOT); configure the Orbit root on the SSH destination instead"
@@ -194,6 +199,7 @@ impl ServeArgs {
                         &global_root,
                         self.role.as_deref().or(self.operator.then_some("operator")),
                         self.toolset.as_deref(),
+                        env,
                     )?,
                 })?
             }
@@ -208,12 +214,14 @@ impl ServeArgs {
                     &global_root,
                     self.role.as_deref().or(self.operator.then_some("operator")),
                     self.toolset.as_deref(),
+                    env,
                 )?;
                 super::server::serve_mcp_federated_stdio(
                     global_root,
                     self.orchestrator,
                     requested_authority(self.operator),
                     toolsets,
+                    env,
                 )?
             }
             None => {
@@ -230,6 +238,7 @@ impl ServeArgs {
                         &global_root,
                         self.role.as_deref().or(self.operator.then_some("operator")),
                         self.toolset.as_deref(),
+                        env,
                     )?
                 };
                 super::server::serve_mcp_stdio(
@@ -244,6 +253,7 @@ impl ServeArgs {
                         worker_host: self.worker_host,
                     },
                     toolsets,
+                    env,
                 )?
             }
         }
@@ -263,9 +273,11 @@ pub(super) fn resolve_mcp_toolsets(
     global_root: &Path,
     role_flag: Option<&str>,
     toolset_flag: Option<&str>,
+    env: &Env,
 ) -> Result<McpToolsetSelection, OrbitError> {
-    let Some(stamped) = std::env::var(ACTIVITY_MCP_TOOLSETS_ENV)
-        .ok()
+    let Some(stamped) = env
+        .orbit_activity_mcp_toolsets()
+        .and_then(OsStr::to_str)
         .filter(|value| !value.trim().is_empty())
     else {
         return configured_mcp_toolsets(global_root, role_flag, toolset_flag);

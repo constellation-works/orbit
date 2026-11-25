@@ -1,8 +1,8 @@
 //! Providers whose MCP servers live under `[mcp_servers.<id>]` in a TOML
 //! config: Codex and Grok share the exact shape.
 
-use orbit_common::env_vars;
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
+use orbit_common::{Env, env_vars};
 use orbit_core::OrbitError;
 use toml_edit::{Array, Item, Table, value};
 
@@ -16,6 +16,7 @@ pub(in crate::command::mcp::setup) fn apply_toml_init(
     target: &ConfigTarget,
     launch: ServerLaunch<'_>,
     codex: bool,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let mut doc = load_toml_document(&target.mcp_path)?;
     let preserved = doc
@@ -28,7 +29,7 @@ pub(in crate::command::mcp::setup) fn apply_toml_init(
         });
     if preserved {
         if supply_toml_root(&mut doc, launch) {
-            return write_toml_document(&target.mcp_path, &doc);
+            return write_toml_document(&target.mcp_path, &doc, env);
         }
         return Ok(());
     }
@@ -45,12 +46,13 @@ pub(in crate::command::mcp::setup) fn apply_toml_init(
         );
     }
     ensure_toml_table(&mut doc, SERVERS_KEY)?.insert(server_id(launch), Item::Table(table));
-    write_toml_document(&target.mcp_path, &doc)
+    write_toml_document(&target.mcp_path, &doc, env)
 }
 
 pub(in crate::command::mcp::setup) fn apply_toml_remove(
     target: &ConfigTarget,
     server_id: &str,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let mut doc = load_toml_document(&target.mcp_path)?;
     if let Some(servers) = doc.get_mut(SERVERS_KEY).and_then(Item::as_table_like_mut) {
@@ -59,7 +61,7 @@ pub(in crate::command::mcp::setup) fn apply_toml_remove(
             doc.remove(SERVERS_KEY);
         }
     }
-    write_or_remove_toml_document(&target.mcp_path, &doc)
+    write_or_remove_toml_document(&target.mcp_path, &doc, env)
 }
 
 /// Insert the selected catalog root into a preserved operator entry.

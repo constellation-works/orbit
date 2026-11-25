@@ -888,7 +888,7 @@ pub(super) fn serve_fixture() {
         let runtime = OrbitRuntime::in_memory()
             .unwrap()
             .with_host_resource_probe(Arc::new(Probe(AtomicUsize::new(0))));
-        orbit_web::serve(&runtime, args).unwrap();
+        orbit_web::serve(&runtime, args, &orbit_common::Env::capture()).unwrap();
     } else if std::env::var("ORBIT_HTTP_EMBEDDED").as_deref() == Ok("1") {
         let global = root.join("global");
         let registry = orbit_registry::workspace_registry::load_registry_from(
@@ -908,9 +908,14 @@ pub(super) fn serve_fixture() {
             root.canonicalize().unwrap()
         );
         assert_ne!(runtime.workspace_id().unwrap(), "default");
-        orbit_web::serve(&runtime, args).unwrap();
+        orbit_web::serve(&runtime, args, &orbit_common::Env::capture()).unwrap();
     } else {
-        orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
+        orbit_web::serve_from_env(
+            args,
+            Some(&root.join("global")),
+            &orbit_common::Env::capture(),
+        )
+        .unwrap();
     }
 }
 

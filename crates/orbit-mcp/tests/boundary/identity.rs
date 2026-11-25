@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use orbit_common::Env;
 use orbit_mcp::{McpSessionAuthority, mcp_server_identity};
 use orbit_types::tool::McpCapability;
 
@@ -9,8 +10,13 @@ use orbit_types::tool::McpCapability;
 fn a_default_server_serves_agent_sessions_only() {
     let root = tempfile::tempdir().expect("global root");
 
-    let identity = mcp_server_identity(root.path(), None, McpSessionAuthority::Agent)
-        .expect("MCP server identity");
+    let identity = mcp_server_identity(
+        root.path(),
+        None,
+        McpSessionAuthority::Agent,
+        &Env::default(),
+    )
+    .expect("MCP server identity");
 
     assert_eq!(
         identity.session_context.effective_capabilities,

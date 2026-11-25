@@ -217,9 +217,14 @@ impl Node {
     }
 
     fn machine_id(&self) -> String {
-        orbit_mcp::mcp_server_identity(&self.global(), None, orbit_mcp::McpSessionAuthority::Agent)
-            .expect("machine identity")
-            .process_machine_id
+        orbit_mcp::mcp_server_identity(
+            &self.global(),
+            None,
+            orbit_mcp::McpSessionAuthority::Agent,
+            &orbit_common::Env::default(),
+        )
+        .expect("machine identity")
+        .process_machine_id
     }
 }
 

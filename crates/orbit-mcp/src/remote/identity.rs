@@ -1,10 +1,10 @@
 //! Server-local identity facts attached to one MCP stdio session.
 
-use orbit_common::env_vars;
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
 use orbit_registry::{MachineIdentityState, inspect_machine_identity, os_hostname};
@@ -67,6 +67,7 @@ pub fn mcp_server_identity(
     global_root: &Path,
     remote_caller_machine_id: Option<String>,
     authority: McpSessionAuthority,
+    env: &Env,
 ) -> Result<McpServerIdentity, OrbitError> {
     let (process_machine_id, process_machine_name) = local_identity(global_root)?;
     // A forwarded label is the whole origination test. The destination no
@@ -88,7 +89,7 @@ pub fn mcp_server_identity(
         } else {
             McpTransport::Local
         }),
-        caller_ip: is_remote.then(observed_ssh_caller_ip).flatten(),
+        caller_ip: is_remote.then(|| observed_ssh_caller_ip(env)).flatten(),
         effective_capabilities: authority.capabilities(),
         ..ToolSessionContext::default()
     };
@@ -109,10 +110,10 @@ pub(super) fn local_identity(global_root: &Path) -> Result<(String, String), Orb
     }
 }
 
-fn observed_ssh_caller_ip() -> Option<String> {
-    std::env::var(env_vars::SSH_CONNECTION)
-        .ok()
-        .and_then(|connection| ssh_caller_ip(&connection))
+fn observed_ssh_caller_ip(env: &Env) -> Option<String> {
+    env.ssh_connection()
+        .and_then(OsStr::to_str)
+        .and_then(ssh_caller_ip)
 }
 
 pub(super) fn ssh_caller_ip(connection: &str) -> Option<String> {

@@ -28,10 +28,14 @@ fn doctor_returns_the_cli_report_rows_with_remediation() {
 
             let body = json_ok(server.get(DOCTOR));
             let checks = body["checks"].as_array().expect("doctor rows");
-            let expected = orbit_cmd::run_doctor_report(&fixture.runtime, false)
-                .iter()
-                .map(orbit_cmd::doctor_row_json)
-                .collect::<Vec<_>>();
+            let expected = orbit_cmd::run_doctor_report(
+                &fixture.runtime,
+                &orbit_common::Env::capture(),
+                false,
+            )
+            .iter()
+            .map(orbit_cmd::doctor_row_json)
+            .collect::<Vec<_>>();
 
             assert_eq!(
                 names(checks),
@@ -108,16 +112,24 @@ fn doctor_report_is_complete_and_ordered_when_workers_cannot_start() {
         "doctor::doctor_report_is_complete_and_ordered_when_workers_cannot_start",
         || {
             let fixture = Fixture::new();
-            let expected = orbit_cmd::run_doctor_report(&fixture.runtime, false)
-                .iter()
-                .map(|row| row.check_name.clone())
-                .collect::<Vec<_>>();
+            let expected = orbit_cmd::run_doctor_report(
+                &fixture.runtime,
+                &orbit_common::Env::capture(),
+                false,
+            )
+            .iter()
+            .map(|row| row.check_name.clone())
+            .collect::<Vec<_>>();
 
             let refusal = orbit_cmd::DoctorWorkerSpawnRefusal::install();
-            let degraded = orbit_cmd::run_doctor_report(&fixture.runtime, false)
-                .iter()
-                .map(|row| row.check_name.clone())
-                .collect::<Vec<_>>();
+            let degraded = orbit_cmd::run_doctor_report(
+                &fixture.runtime,
+                &orbit_common::Env::capture(),
+                false,
+            )
+            .iter()
+            .map(|row| row.check_name.clone())
+            .collect::<Vec<_>>();
             assert!(refusal.refused() > 0, "the spawn failure must be exercised");
             assert_eq!(degraded, expected);
         },

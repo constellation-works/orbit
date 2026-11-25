@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
 use orbit_cmd::mcp_clients::{McpClient, McpClientScope};
+use orbit_common::Env;
 use orbit_core::OrbitError;
 
 use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run_action};
@@ -211,8 +212,8 @@ pub struct InitArgs {
 }
 
 impl InitArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        let layout = federated_layout(self.federated, self.scope, root_override)?;
+    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
+        let layout = federated_layout(self.federated, self.scope, root_override, env)?;
         // New entries use agent authority. Provider reconciliation retains an
         // existing operator launch; removing it first explicitly resets it.
         // The operator flag explicitly selects operator authority.
@@ -223,7 +224,7 @@ impl InitArgs {
         } else {
             ServerLaunch::local(self.operator, layout_workspace_id(layout.as_ref()))
         };
-        let home_dir = env_home_dir();
+        let home_dir = env_home_dir(env);
         let providers = run_action(
             McpAction::Init(launch),
             layout.as_ref().map(|layout| layout.repo_root.as_path()),
@@ -231,6 +232,7 @@ impl InitArgs {
             self.providers.resolve_mode()?,
             home_dir.clone(),
             self.scope,
+            env,
         )?;
         action_payload(
             McpAction::Init(launch),
@@ -239,6 +241,7 @@ impl InitArgs {
             home_dir.as_deref(),
             self.scope,
             reported_workspace_id(self.federated, layout.as_ref()),
+            env,
         )
     }
 }
@@ -258,14 +261,14 @@ pub struct RemoveArgs {
 }
 
 impl RemoveArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        let layout = federated_layout(self.federated, self.scope, root_override)?;
+    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
+        let layout = federated_layout(self.federated, self.scope, root_override, env)?;
         let action = if self.federated {
             McpAction::RemoveFederated
         } else {
             McpAction::Remove
         };
-        let home_dir = env_home_dir();
+        let home_dir = env_home_dir(env);
         let providers = run_action(
             action,
             layout.as_ref().map(|layout| layout.repo_root.as_path()),
@@ -273,6 +276,7 @@ impl RemoveArgs {
             self.providers.resolve_mode()?,
             home_dir.clone(),
             self.scope,
+            env,
         )?;
         action_payload(
             action,
@@ -281,6 +285,7 @@ impl RemoveArgs {
             home_dir.as_deref(),
             self.scope,
             reported_workspace_id(self.federated, layout.as_ref()),
+            env,
         )
     }
 }
@@ -293,11 +298,12 @@ fn federated_layout(
     federated: bool,
     scope: ScopeArg,
     root_override: Option<&Path>,
+    env: &Env,
 ) -> Result<Option<WorkspaceLayout>, OrbitError> {
     if federated && scope == ScopeArg::Home {
         return Ok(None);
     }
-    resolve_workspace_layout(root_override).map(Some)
+    resolve_workspace_layout(root_override, env).map(Some)
 }
 
 fn layout_workspace_id(layout: Option<&WorkspaceLayout>) -> Option<&str> {
@@ -322,6 +328,7 @@ pub(crate) fn init_auto_for_workspace(
     repo_root: &Path,
     orbit_root: &Path,
     workspace_id: &str,
+    env: &Env,
 ) -> Result<(Vec<String>, Vec<PathBuf>), OrbitError> {
     // `orbit workspace init` is a per-workspace setup, so its auto-MCP path
     // writes repo-local files. `orbit mcp init` defaults to workspace scope
@@ -334,7 +341,7 @@ pub(crate) fn init_auto_for_workspace(
     //
     // The workspace being registered is known here, so the generated server is
     // bound to it directly rather than re-derived from the checkout.
-    let home_dir = env_home_dir();
+    let home_dir = env_home_dir(env);
     let providers = auto_detected_providers(Some(repo_root), home_dir.as_deref());
     let mut files = BTreeSet::new();
     let mut legacy_before = Vec::new();
@@ -344,6 +351,7 @@ pub(crate) fn init_auto_for_workspace(
             provider,
             Some(repo_root),
             home_dir.as_deref(),
+            env,
         )?;
         files.insert(target.mcp_path);
         if let Some(settings_path) = target.settings_path {
@@ -366,6 +374,7 @@ pub(crate) fn init_auto_for_workspace(
         ProviderSelectionMode::Explicit(providers),
         home_dir,
         ScopeArg::Workspace,
+        env,
     )?;
     // Legacy paths are reported only when reconciliation actually changed a
     // surviving file. A deleted Orbit-only file is no longer a checkout file.

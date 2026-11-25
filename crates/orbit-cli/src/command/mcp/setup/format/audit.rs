@@ -1,8 +1,10 @@
 //! Evidence emitted at the actual file mutation, including runtime-free init.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::panic::Location;
 use std::path::Path;
+
+use orbit_common::Env;
 
 /// Record only Orbit launch arguments, never the client's other servers,
 /// settings, or environment. The tracing layer redacts invocation arguments.
@@ -12,6 +14,7 @@ pub(super) fn record_config_write(
     target: &Path,
     action: &str,
     servers: serde_json::Value,
+    env: &Env,
 ) {
     tracing::info!(
         target: "orbit::mcp_config",
@@ -21,8 +24,8 @@ pub(super) fn record_config_write(
         caller = %Location::caller(),
         action,
         pid = std::process::id(),
-        run_id = std::env::var(env_vars::ORBIT_RUN_ID).ok().as_deref(),
-        activity_id = std::env::var(env_vars::ORBIT_ACTIVITY_ID).ok().as_deref(),
+        run_id = env.orbit_run_id().and_then(OsStr::to_str),
+        activity_id = env.orbit_activity_id().and_then(OsStr::to_str),
         cwd = ?std::env::current_dir().ok(),
         args = ?std::env::args_os().collect::<Vec<_>>(),
         server_args = %servers,

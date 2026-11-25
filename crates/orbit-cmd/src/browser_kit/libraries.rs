@@ -9,14 +9,15 @@
 //! libraries and the command that provides them are reported.
 
 use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
 use super::host::{find_on_path, run_interactive, run_probe, run_streaming};
 use super::install::LibraryOutcome;
-use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
+use orbit_common::{Env, OrbitError};
 use orbit_core::bootstrap::browser_kit::KitLayout;
 
 const PROBE_DEADLINE: Duration = Duration::from_secs(60);
@@ -26,10 +27,14 @@ const FONT_PACKAGES: [&str; 3] = ["fontconfig-config", "libfontconfig1", "fonts-
 const NO_ROOT_TOOLS: [&str; 4] = ["apt-get", "apt-cache", "dpkg-deb", "dpkg-query"];
 
 /// Libraries the headless shell at `executable` cannot resolve.
-pub(super) fn unresolved(layout: &KitLayout, executable: &Path) -> Result<Vec<String>, OrbitError> {
+pub(super) fn unresolved(
+    layout: &KitLayout,
+    executable: &Path,
+    env: &Env,
+) -> Result<Vec<String>, OrbitError> {
     let mut command = Command::new("ldd");
     command.arg(executable);
-    if let Some(path) = library_path(layout) {
+    if let Some(path) = library_path(layout, env) {
         command.env(env_vars::LD_LIBRARY_PATH, path);
     }
     let output = run_probe(&mut command, PROBE_DEADLINE)?;
@@ -38,7 +43,7 @@ pub(super) fn unresolved(layout: &KitLayout, executable: &Path) -> Result<Vec<St
 
 /// The kit's unpacked library directories ahead of the caller's
 /// `LD_LIBRARY_PATH`, the way `env.sh` sets it.
-fn library_path(layout: &KitLayout) -> Option<String> {
+fn library_path(layout: &KitLayout, env: &Env) -> Option<String> {
     let mut entries: Vec<String> = layout
         .unpacked_library_dirs()
         .iter()
@@ -47,11 +52,12 @@ fn library_path(layout: &KitLayout) -> Option<String> {
     if entries.is_empty() {
         return None;
     }
-    if let Some(existing) = std::env::var(env_vars::LD_LIBRARY_PATH)
-        .ok()
+    if let Some(existing) = env
+        .ld_library_path()
+        .and_then(OsStr::to_str)
         .filter(|value| !value.is_empty())
     {
-        entries.push(existing);
+        entries.push(existing.to_string());
     }
     Some(entries.join(":"))
 }
@@ -68,8 +74,8 @@ fn parse_not_found(ldd: &str) -> Vec<String> {
 }
 
 /// `fc-list` is missing or lists no font.
-fn fonts_missing() -> bool {
-    let Some(fc_list) = find_on_path("fc-list") else {
+fn fonts_missing(env: &Env) -> bool {
+    let Some(fc_list) = find_on_path(env, "fc-list") else {
         return true;
     };
     run_probe(&mut Command::new(fc_list), PROBE_DEADLINE)
@@ -92,11 +98,11 @@ fn debian_like() -> bool {
     })
 }
 
-fn no_root_path_available() -> bool {
+fn no_root_path_available(env: &Env) -> bool {
     debian_like()
         && NO_ROOT_TOOLS
             .iter()
-            .all(|tool| find_on_path(tool).is_some())
+            .all(|tool| find_on_path(env, tool).is_some())
 }
 
 /// The command that resolves `unresolved` on this host.
@@ -122,10 +128,11 @@ pub(super) fn resolve(
     node: &Path,
     executable: &Path,
     with_deps: bool,
+    env: &Env,
     progress: &mut dyn FnMut(&str),
 ) -> Result<LibraryOutcome, OrbitError> {
-    let missing = unresolved(layout, executable)?;
-    let fonts_needed = !layout.fonts_conf().is_file() && fonts_missing();
+    let missing = unresolved(layout, executable, env)?;
+    let fonts_needed = !layout.fonts_conf().is_file() && fonts_missing(env);
     if missing.is_empty() && !fonts_needed {
         return Ok(LibraryOutcome {
             method: "resolved",
@@ -146,7 +153,7 @@ pub(super) fn resolve(
             .args(["install-deps", "chromium"]);
         run_interactive(&mut command, "sudo playwright install-deps chromium")?;
         ("sudo", Vec::new())
-    } else if no_root_path_available() {
+    } else if no_root_path_available(env) {
         progress("Unpacking Chromium's missing libraries into the kit (no root needed)");
         (
             "unpacked",
@@ -155,7 +162,7 @@ pub(super) fn resolve(
     } else {
         ("unresolved", Vec::new())
     };
-    let remaining = unresolved(layout, executable)?;
+    let remaining = unresolved(layout, executable, env)?;
     // Only the no-install-path branch leaves a needed font unprovided: the
     // sudo path installs system fonts and the unpack path writes a fonts
     // config into the kit.

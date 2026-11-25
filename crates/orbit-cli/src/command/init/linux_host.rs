@@ -6,10 +6,12 @@
 //! signed into this Orbit release is installed root-owned at
 //! [`BUNDLED_BWRAP_PATH`]; executors trust exactly those two paths.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::process::{Command, Stdio};
+
+use orbit_common::{Env, env_vars};
 
 use orbit_core::OrbitError;
 
@@ -118,23 +120,25 @@ pub(super) trait Host {
     fn file_sha256(&self, path: &str) -> Result<Option<String>, OrbitError>;
 }
 
-struct RealHost {
+struct RealHost<'a> {
     authorized: bool,
     probe_user: Option<(u32, u32)>,
+    env: &'a Env,
     /// Kept until preparation ends so the staged file outlives `install`.
     staged: Option<orbit_cmd::update::bundled_bwrap::StagedBwrap>,
 }
 
-impl RealHost {
-    fn new() -> Result<Self, OrbitError> {
+impl<'a> RealHost<'a> {
+    fn new(env: &'a Env) -> Result<Self, OrbitError> {
         let probe_user = intended_probe_user(
             unsafe { libc::geteuid() },
-            std::env::var(env_vars::SUDO_UID).ok().as_deref(),
-            std::env::var(env_vars::SUDO_GID).ok().as_deref(),
+            env.sudo_uid().and_then(OsStr::to_str),
+            env.sudo_gid().and_then(OsStr::to_str),
         )?;
         Ok(Self {
             authorized: false,
             probe_user,
+            env,
             staged: None,
         })
     }
@@ -161,7 +165,7 @@ fn intended_probe_user(
     }
 }
 
-impl Host for RealHost {
+impl Host for RealHost<'_> {
     fn os_release(&self) -> Result<String, OrbitError> {
         fs::read_to_string("/etc/os-release")
             .map_err(|error| OrbitError::Execution(format!("read /etc/os-release: {error}")))
@@ -297,7 +301,8 @@ impl Host for RealHost {
     }
 
     fn stage_bundled(&mut self) -> Result<(String, String), OrbitError> {
-        let staged = orbit_cmd::update::bundled_bwrap::stage_bundled_bwrap_for_this_release()?;
+        let staged =
+            orbit_cmd::update::bundled_bwrap::stage_bundled_bwrap_for_this_release(self.env)?;
         let staged = self.staged.insert(staged);
         Ok((staged.path().display().to_string(), staged.sha256.clone()))
     }
@@ -666,8 +671,8 @@ fn ready_after_bundled_install(
     )))
 }
 
-pub(super) fn prepare(non_interactive: bool) -> Result<String, OrbitError> {
-    let mut host = RealHost::new()?;
+pub(super) fn prepare(non_interactive: bool, env: &Env) -> Result<String, OrbitError> {
+    let mut host = RealHost::new(env)?;
     prepare_with(&mut host, non_interactive)
 }
 

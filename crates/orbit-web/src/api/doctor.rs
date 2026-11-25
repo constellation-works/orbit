@@ -28,7 +28,11 @@ pub(super) async fn doctor(
         Ok(read) => read,
         Err(message) => return bad_request(message),
     };
-    match state.doctor_reports().read(&runtime, read).await {
+    match state
+        .doctor_reports()
+        .read(&runtime, state.env(), read)
+        .await
+    {
         Some((report, finished)) => Json(report.to_json(finished)).into_response(),
         None => Json(empty_report()).into_response(),
     }

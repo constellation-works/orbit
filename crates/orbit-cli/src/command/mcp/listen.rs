@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 use clap::Args;
+use orbit_common::Env;
 use orbit_mcp::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure};
 
 use crate::command::{CommandOut, CommandOutput};
@@ -46,12 +47,14 @@ impl ListenArgs {
         self,
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
+        env: &Env,
     ) -> CommandOut {
         let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
         let toolsets = super::command::resolve_mcp_toolsets(
             &global_root,
             self.role.as_deref(),
             self.toolset.as_deref(),
+            env,
         )?;
         super::server::serve_mcp_listener(
             global_root,
@@ -59,6 +62,7 @@ impl ListenArgs {
             self.exposure(),
             workspace_selector.map(ToOwned::to_owned),
             toolsets,
+            env,
         )?;
         Ok(CommandOutput::Silent)
     }

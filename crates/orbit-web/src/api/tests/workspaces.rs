@@ -78,7 +78,12 @@ fn write_registry_with_ship_modes(global_root: &Path, workspaces: &[(&str, &Path
 fn registry_state(global_root: &Path) -> DashboardState {
     assert_isolated_child();
     let source = RegistrySource::new(global_root.join("workspaces.json"), None, None);
-    DashboardState::from_registry(global_root.to_path_buf(), source).expect("from_registry")
+    DashboardState::from_registry(
+        global_root.to_path_buf(),
+        source,
+        orbit_common::Env::default(),
+    )
+    .expect("from_registry")
 }
 
 /// Metadata selection used by the aggregate exposes a runtime's binding.
