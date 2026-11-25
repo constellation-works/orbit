@@ -846,3 +846,101 @@ fn residual_continuation_counts_before_cursor_on_index_and_scan() {
         );
     }
 }
+
+#[test]
+fn batched_pages_fall_back_per_page_when_the_index_is_incomplete() {
+    if !allocation_admission_isolated(
+        "task_index::batched_pages_fall_back_per_page_when_the_index_is_incomplete",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let mut backlog = Vec::new();
+    for index in 0..3 {
+        backlog.push(owner.create_task_with_status(
+            &format!("Backlog {index}"),
+            &["src/lib.rs"],
+            TaskStatus::Backlog,
+            None,
+        ));
+    }
+    let proposed =
+        owner.create_task_with_status("Proposed", &["src/lib.rs"], TaskStatus::Proposed, None);
+    let backend = &owner.backends.task.task;
+    let pages = [TaskStatus::Proposed, TaskStatus::Done, TaskStatus::Backlog]
+        .map(|status| {
+            (
+                TaskListFilter {
+                    statuses: Some(vec![status]),
+                    ..TaskListFilter::default()
+                },
+                2,
+            )
+        })
+        .to_vec();
+    let answer = |pages: Vec<orbit_store::contracts::TaskPage>| {
+        pages
+            .into_iter()
+            .map(|page| {
+                (
+                    page.items
+                        .into_iter()
+                        .map(|row| row.task.id)
+                        .collect::<Vec<_>>(),
+                    page.total,
+                    page.total_without_cursor,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let unbatched = answer(
+        pages
+            .iter()
+            .map(|(filter, limit)| {
+                backend
+                    .query_task_rows(filter, *limit, None, TaskListHydration::Full)
+                    .unwrap()
+            })
+            .collect(),
+    );
+    assert_eq!(
+        unbatched,
+        vec![
+            (vec![proposed.id.clone()], 1, 1),
+            (vec![], 0, 0),
+            (vec![backlog[2].id.clone(), backlog[1].id.clone()], 3, 3),
+        ]
+    );
+    // An index missing a registered task's row cannot serve the batch.
+    let sql = rusqlite::Connection::open(task_registry_path(root.path())).unwrap();
+    sql.execute(
+        "DELETE FROM task_bundle_index WHERE task_id = ?1",
+        [&backlog[1].id],
+    )
+    .unwrap();
+    let batched = backend
+        .query_task_row_pages(&pages, None, TaskListHydration::Full)
+        .unwrap();
+    assert_eq!(
+        answer(batched),
+        unbatched,
+        "the fallback answers every page"
+    );
+    let indexed: i64 = sql
+        .query_row(
+            "SELECT COUNT(*) FROM task_bundle_index WHERE task_id = ?1",
+            [&backlog[1].id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 1, "the fallback repaired the index");
+    let batched = backend
+        .query_task_row_pages(&pages, None, TaskListHydration::Full)
+        .unwrap();
+    assert_eq!(
+        answer(batched),
+        unbatched,
+        "the repaired index serves the batch"
+    );
+}

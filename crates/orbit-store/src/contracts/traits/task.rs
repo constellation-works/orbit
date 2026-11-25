@@ -244,6 +244,16 @@ pub trait TaskStoreBackend: Send + Sync {
         residual: crate::contracts::TaskResidualFilter<'_>,
         hydration: crate::contracts::TaskListHydration,
     ) -> Result<crate::contracts::TaskPage, OrbitError>;
+    /// [`Self::query_task_rows`] for several pages of one request, in request
+    /// order, through one whole-workspace index freshness validation. Each
+    /// page keeps its own selection, hydration and stale-row fallback; when
+    /// the index cannot serve, every page takes the unbatched route.
+    fn query_task_row_pages(
+        &self,
+        pages: &[(crate::contracts::TaskListFilter, usize)],
+        residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
+    ) -> Result<Vec<crate::contracts::TaskPage>, OrbitError>;
     /// Direct reads remain strict; list reads tolerate concurrent creation/deletion.
     fn get_task_row(
         &self,

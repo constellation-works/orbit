@@ -129,7 +129,9 @@ pub(in crate::api) async fn list_tasks(
 }
 
 /// Build the `group=status` answer for `GET /api/tasks`: one
-/// [`task_list_page_json`] page per status, each bound to that status alone.
+/// [`task_page_json`] page per status, each bound to that status alone. The
+/// sections are selected in one batch, so the request validates the task
+/// index's freshness once rather than once per section.
 fn status_sections_json(
     runtime: &OrbitRuntime,
     query: &TaskPageQuery,
@@ -137,10 +139,22 @@ fn status_sections_json(
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let mut result = json!({ "group": "status", "limit": query.limit() });
+    let section_queries = query.status_section_queries();
+    let filters = section_queries
+        .iter()
+        .map(|(_, section)| (section.filter(), section.limit()))
+        .collect::<Vec<_>>();
+    let pages = runtime.query_task_row_pages(
+        &orbit_core::application::task::TaskListQuery {
+            pilot_warnings: query.pilot_warnings(),
+            ..Default::default()
+        },
+        &filters,
+    )?;
     let mut sections = Vec::new();
     let mut total = 0_u64;
-    for (status, section_query) in query.status_section_queries() {
-        let mut section = task_list_page_json(runtime, &section_query, scope, riskiness.clone())?;
+    for ((status, section_query), page) in section_queries.into_iter().zip(pages) {
+        let mut section = task_page_json(runtime, &section_query, scope, riskiness.clone(), page)?;
         if let Value::Object(map) = &mut section {
             // The selected task's detail sits on whichever section holds it.
             for key in ["detail", "detail_runs", "detail_runs_error"] {
@@ -171,6 +185,17 @@ fn task_list_page_json(
         limit: query.limit(),
         ..Default::default()
     })?;
+    task_page_json(runtime, query, scope, riskiness, page)
+}
+
+/// Project one selected page of `query` into its response envelope.
+fn task_page_json(
+    runtime: &OrbitRuntime,
+    query: &TaskPageQuery,
+    scope: &str,
+    riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
+    page: orbit_core::application::task::TaskPage,
+) -> Result<Value, orbit_core::OrbitError> {
     let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
     let attention = runtime.delivery_attention_map(page.items.iter())?;
