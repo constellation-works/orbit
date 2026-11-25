@@ -194,9 +194,16 @@ certifies the repaired head as both the original head and publication lease.
 
 ### `v2_worktree_lifecycle::local_base_freshness::local_base_freshness_contracts`
 
-- `a_clean_owner_behind_origin_is_fast_forwarded_before_the_worktree_is_cut`
+- `a_clean_owner_behind_origin_starts_at_origin_without_moving_owner`
+- `a_literal_origin_prefixed_base_fetches_its_exact_remote_branch`
+- `a_large_clean_advance_is_admitted`
 - `a_dirty_owner_behind_origin_is_refused_and_left_unmoved`
 - `a_diverged_owner_base_is_refused_and_left_unmoved`
+- `an_ignored_owner_file_at_a_new_origin_path_is_preserved`
+- `an_ignored_owner_file_at_an_incoming_ancestor_path_is_preserved`
+- `an_ignored_owner_file_at_a_new_gitlink_path_is_preserved`
+- `an_unrelated_ignored_owner_file_does_not_block_admission`
+- `landing_preserves_ignored_owner_files`
 - `local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable`
 
 ### `v2_worktree_lifecycle::absorbed_candidate::absorption_contracts_1`

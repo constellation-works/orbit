@@ -370,6 +370,96 @@ fn an_ignored_owner_file_at_a_new_origin_path_is_preserved() {
     );
 }
 
+/// Clone origin elsewhere, let `prepare` stage a change there, then push it.
+/// Returns the new origin tip.
+fn push_staged_change_to_origin(
+    fixture: &Fixture,
+    name: &str,
+    prepare: impl FnOnce(&Path),
+) -> String {
+    let origin = fixture.root.path().join("origin.git");
+    let elsewhere = fixture.root.path().join(format!("elsewhere-{name}"));
+    git(
+        fixture.root.path(),
+        &[
+            "clone",
+            "--branch",
+            BASE,
+            path_str(&origin),
+            path_str(&elsewhere),
+        ],
+    );
+    git(&elsewhere, &["config", "user.name", "Orbit Test"]);
+    git(
+        &elsewhere,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+    prepare(&elsewhere);
+    git(&elsewhere, &["commit", "-m", &format!("stage {name}")]);
+    git(&elsewhere, &["push", "origin", BASE]);
+    git(&elsewhere, &["rev-parse", "HEAD"])
+}
+
+/// Admit from `origin` while the ignored owner file `file` stays byte-identical
+/// and the owner branch and index stay put.
+fn assert_admission_preserves_owner_file(
+    fixture: &Fixture,
+    host: &LifecycleHost,
+    file: &str,
+    origin: &str,
+) {
+    let owner = head(&fixture.repo);
+    let index = git(&fixture.repo, &["ls-files", "--stage"]);
+    host.add_task("T-IGNORED-COLLISION", TaskStatus::Backlog);
+    let output = action(
+        host,
+        "worktree_setup",
+        &setup_input(&["T-IGNORED-COLLISION"], "jrun-ignored-collision"),
+    )
+    .expect("an ignored owner file never blocks admission from an immutable commit");
+    assert_eq!(output["base_sha"], origin);
+    assert_eq!(head(&Checkout::from_setup(&output).path), origin);
+    assert_eq!(head(&fixture.repo), owner, "owner ref is unchanged");
+    assert_eq!(git(&fixture.repo, &["ls-files", "--stage"]), index);
+    assert_eq!(
+        read(fixture.repo.join(file)),
+        "unpublished bytes\n",
+        "the ignored owner file is byte-identical"
+    );
+}
+
+/// An ignored owner file that is an ancestor of a path origin adds stays put.
+fn an_ignored_owner_file_at_an_incoming_ancestor_path_is_preserved() {
+    let (fixture, host) = Fixture::hosted();
+    ignore_owner_file(&fixture, "dir", "unpublished bytes\n");
+    let origin = push_staged_change_to_origin(&fixture, "ancestor", |clone| {
+        fs::create_dir_all(clone.join("dir")).unwrap();
+        fs::write(clone.join("dir/new"), "published\n").unwrap();
+        git(clone, &["add", "dir/new"]);
+    });
+    assert_admission_preserves_owner_file(&fixture, &host, "dir", &origin);
+}
+
+/// An ignored regular owner file at a path origin adds as a gitlink stays put,
+/// even though Orbit's git flags hide submodule differences.
+fn an_ignored_owner_file_at_a_new_gitlink_path_is_preserved() {
+    let (fixture, host) = Fixture::hosted();
+    ignore_owner_file(&fixture, "sub", "unpublished bytes\n");
+    let origin = push_staged_change_to_origin(&fixture, "gitlink", |clone| {
+        let commit = git(clone, &["rev-parse", "HEAD"]);
+        git(
+            clone,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{commit},sub"),
+            ],
+        );
+    });
+    assert_admission_preserves_owner_file(&fixture, &host, "sub", &origin);
+}
+
 /// An ignored owner file at an unrelated path stays byte-identical and does not
 /// stop admission.
 fn an_unrelated_ignored_owner_file_does_not_block_admission() {
@@ -577,6 +667,14 @@ fn local_base_freshness_contracts() {
             (
                 "an_ignored_owner_file_at_a_new_origin_path_is_preserved",
                 an_ignored_owner_file_at_a_new_origin_path_is_preserved,
+            ),
+            (
+                "an_ignored_owner_file_at_an_incoming_ancestor_path_is_preserved",
+                an_ignored_owner_file_at_an_incoming_ancestor_path_is_preserved,
+            ),
+            (
+                "an_ignored_owner_file_at_a_new_gitlink_path_is_preserved",
+                an_ignored_owner_file_at_a_new_gitlink_path_is_preserved,
             ),
             (
                 "an_unrelated_ignored_owner_file_does_not_block_admission",
