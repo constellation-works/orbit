@@ -137,6 +137,8 @@ use std::time::Instant;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
+#[path = "mechanisms/env.rs"]
+mod env;
 #[path = "mechanisms/fs.rs"]
 mod fs;
 #[path = "mechanisms/governance.rs"]
