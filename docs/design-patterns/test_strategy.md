@@ -1772,6 +1772,101 @@ separately, Test build cache version and restore time (including v2
 unpack), the folded build and archive times, and the shard timing. Hosted
 compliance is pending that measurement.
 
+### Shard toolchain install overlaps checkout and download (2026-11-25)
+
+ORB-28513 read the latest 20 completed `pull_request` `ci.yml` runs: 15 Check
+executed, p90 **539 s** (nearest rank), median 434 s, maximum 559 s. ORB-28514
+profiled the Test build and partition path of the two slow successes from that
+cohort, runs 45578312611 (Test build 390 s, partition 11 162 s) and
+45583145947 (build 321 s, partition 11 158 s), from the per-step spans
+(`github.run.view`) and the job logs (`github.run.logs`, byte windows).
+
+**Profile.**
+
+- *Build.* The build is CPU-bound compile. The critical chain in a local
+  `cargo-timing` report is the `orbit-core` library (52.8 s), then its test
+  build (54.7 s), then the `runtime` test binary (46 s). A cold local build on four
+  pinned cores took 4 m 09 s. The workspace-only rebuild (dependencies warm)
+  took 145–149 s. The hosted compile step ran 222–319 s.
+- *Pack and extract.* Local pack ran 7.1 s against 13 s hosted, and local
+  extract 2.5 s against 12 s hosted. Nextest listing costs about 0.4 s.
+- *Partitions.* A partition's nextest wall is its summed test seconds divided by
+  about 5.9 busy slots (six threads on a four-vCPU runner). It is set by load,
+  not by order, and the slowest partition ends within 5 s of that figure. A priority
+  override or a rebalance cannot shorten a saturated partition.
+- *Shard setup.* Each of the 13 test jobs ran `dtolnay/rust-toolchain` as a
+  blocking first step, then checkout, then the archive download. Across 26 jobs
+  the toolchain step spanned 6.4–9.9 s (median 7.5 s) while checkout and the
+  download needed no cargo.
+
+**Change.** In the shared shard steps, "Start the pinned toolchain install" runs
+`rustup toolchain install` and `rustup default` for the `rust-toolchain.toml`
+channel in the background, holding an fd-9 `flock` and writing its exit status
+and output under `$RUNNER_TEMP`, the same pattern as the coverage proof in the
+build job. The download steps run beside it. "Finish the pinned toolchain
+install" takes the lock, prints the output, fails the step on a nonzero or
+missing status and prints `rustc --version --verbose` before anything that
+needs cargo (nextest install, extraction, the run). The job names, the three
+download attempts and their retry bound, digest verification, the partition
+count and the sandbox gate are unchanged. The `test-build` job and the other
+workflows keep `dtolnay/rust-toolchain`.
+`scripts/test-pr-state-workflows.py` pins the step order, the absence of the
+action in the shard jobs and the channel, and runs the two steps against a stub
+`rustup`: start returns while the install is still running, finish waits and
+exits 0, a failed install (exit 7) fails the finish step, and a lost status
+fails it with its own message.
+
+**Expected saving, not measured on hosted runners.** The overlap hides the toolchain
+span behind the checkout and download, so the projection is about 7.5 s per
+shard job at the median (6.4–9.9 s). It lowers shard start only. It does not
+change the Test build, and the partition and Check path through the build
+stays. The figure comes from the recorded spans, not from a hosted run of this
+revision.
+
+**Levers rejected, with the reason.**
+
+| Lever | Why not |
+|---|---|
+| Refresh priority lists or rebalance partitions | Tails are already within 5 s of sum/6 |
+| `codegen-units=16` for the test build | Slower locally: 160–165 s against 145–149 s |
+| Parallel listing | Listing is about 0.4 s |
+| Extract only the needed binaries | About 12% fewer bytes written |
+| Merge the nextest, rg and uv cache steps | About 3 s |
+| One upload instead of four | Loses the four-stream download |
+| More test threads per partition | Flake risk on shared runners |
+| Merge test binaries | About 2–3 s for a high-risk change |
+
+No test, assertion, retry, sleep, skip, required check name, partition
+coverage proof, runner class or cache policy changed, and no test was retired.
+The remaining large levers are operator decisions: a larger Test build runner,
+or starting the shard setup beside the build again, which ORB-24733 gave up for
+runner-minute cost.
+
+**Limits.** Hosted timings vary with the workspace cache (`hit` against `miss`),
+the runner CPU (AMD EPYC 7763 and 9V74 against Intel Xeon 6975P-C), the runner
+image and the selected workload (`full` against `affected`). The profile rests
+on two slow runs and 26 shard-job spans, and the local figures run about 13 times faster
+than hosted for the same step, so they identify the work and cannot predict a
+hosted wall.
+
+**Hosted compliance is not restored by this change, and is owed after merge.**
+Once the latest 20 completed `pull_request` runs of `ci.yml` carry the merged
+revision, the operator runs:
+
+```bash
+python3 scripts/ci-p90.py --limit 20 --budget-seconds 400
+```
+
+under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff).
+The result is the nearest-rank Check p90 over those 20 runs against the 400 s
+budget. Report executed, failed, skipped, cancelled and missing counts
+separately (the coverage gap: skipped and cancelled runs carry no Check
+duration, so the p90 covers only executed runs), pre-Check and awaited-job
+queue wait apart from elapsed time, cache hit or miss, scope, runner CPU strata,
+and the "Finish the pinned toolchain install" and download step spans from the
+shard logs against the 6.4–9.9 s baseline. Hosted compliance is **not run, owed
+after publication**.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
