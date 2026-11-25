@@ -131,6 +131,78 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
     for root in &default_roots {
         assert!(empty.contains(&root.display().to_string()), "{empty:?}");
     }
+
+    // Sandbox preparation and the provider child must use the same XDG
+    // snapshot even if the embedding process changes its environment later.
+    let composed_config = home.join("xdg-config-composed");
+    let composed_data = home.join("xdg-data-composed");
+    let later_config = home.join("xdg-config-later");
+    let later_data = home.join("xdg-data-later");
+    for base in [&composed_config, &composed_data, &later_config, &later_data] {
+        std::fs::create_dir_all(base).expect("xdg base");
+    }
+    std::fs::write(
+        global.join("config.toml"),
+        "[execution.env]\npass = [\"XDG_CONFIG_HOME\", \"XDG_DATA_HOME\"]\n",
+    )
+    .expect("configure child XDG pass-through");
+    let composed_runtime = {
+        let _env = orbit_common::test_env::scoped([
+            (
+                "XDG_CONFIG_HOME",
+                Some(composed_config.to_str().expect("utf-8")),
+            ),
+            (
+                "XDG_DATA_HOME",
+                Some(composed_data.to_str().expect("utf-8")),
+            ),
+        ]);
+        OrbitRuntime::from_roots(&global, &workspace).expect("runtime with composed XDG")
+    };
+    let child_environment = composed_runtime.agent_subprocess_environment(&[]);
+    for (name, expected) in [
+        ("XDG_CONFIG_HOME", &composed_config),
+        ("XDG_DATA_HOME", &composed_data),
+    ] {
+        let value = child_environment
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str());
+        assert_eq!(value, Some(expected.to_str().expect("utf-8")), "{name}");
+    }
+
+    let later_roots = [later_config.join("muse"), later_data.join("muse")];
+    let composed_roots = [composed_config.join("muse"), composed_data.join("muse")];
+    let grants = {
+        let _env = orbit_common::test_env::scoped([
+            (
+                "XDG_CONFIG_HOME",
+                Some(later_config.to_str().expect("utf-8")),
+            ),
+            ("XDG_DATA_HOME", Some(later_data.to_str().expect("utf-8"))),
+        ]);
+        resolved_modify(&composed_runtime, "muse", &worktree)
+    };
+    for root in &composed_roots {
+        assert!(
+            grants.contains(&root.display().to_string()),
+            "Muse child state root {} must be granted: {grants:?}",
+            root.display()
+        );
+        assert!(root.is_dir(), "Muse resolution creates {}", root.display());
+    }
+    for root in &later_roots {
+        assert!(
+            !grants.contains(&root.display().to_string()),
+            "later process XDG root {} must not be granted: {grants:?}",
+            root.display()
+        );
+        assert!(
+            !root.exists(),
+            "Muse resolution must not create later process root {}",
+            root.display()
+        );
+    }
 }
 
 fn resolved_modify(runtime: &OrbitRuntime, provider: &str, worktree: &Path) -> Vec<String> {
