@@ -1,24 +1,34 @@
-//! Per-minute run and host resource history in `run_resource_minutes` and
-//! `host_resource_minutes`, and admission pass forecasts in
-//! `admission_forecasts`.
+//! Concrete repositories for per-minute run and host resource history
+//! (`run_resource_minutes`, `host_resource_minutes`), admission pass forecasts
+//! (`admission_forecasts`) and watchdog breach evidence
+//! (`worker_resource_limits`).
 //!
+//! Reached only through [`Snapshot::resource_usage`] / [`Tx::resource_usage`]
+//! and [`Snapshot::worker_resource_limit`] / [`Tx::worker_resource_limit`].
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
-//! so SQLite orders and compares them as text.
+//! so SQLite orders and compares them as text. When to prune and in what
+//! batches is the calling operation's; this repository owns SQL and row
+//! mapping only.
+
+mod delivery_run_load;
+
+use std::marker::PhantomData;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{OptionalExtension, TransactionBehavior, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
-use crate::Store;
 use crate::contracts::{
     AdmissionForecastPoint, AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS,
     CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunInterval, DeliveryRunResources,
     DeliveryRunsFreshness, DeliveryRunsLoad, HostResourceMinute, ResourceHistoryKeep,
-    ResourceMinutesTable, ResourceRetentionRow, ResourceUsageStoreBackend, RunResourceMinute,
+    ResourceMinutesTable, ResourceRetentionRow, RunResourceMinute, WorkerResourceLimitEvidence,
 };
-
-use super::codec::{RUN_MINUTE_COLUMNS, host_minutes, run_minute_from_row, stamp, unsigned};
+use crate::driver::sqlite::codec::{
+    RUN_MINUTE_COLUMNS, host_minutes, run_minute_from_row, stamp, unsigned,
+};
+use crate::store::{Snapshot, Tx};
 
 /// SQLite integers are signed; a byte count past `i64::MAX` saturates.
 fn bytes(value: u64) -> i64 {
@@ -38,12 +48,36 @@ fn decode<T: serde::de::DeserializeOwned>(index: usize, raw: &str) -> rusqlite::
     })
 }
 
-impl ResourceUsageStoreBackend for Store {
-    fn record_run_resource_minute(&self, minute: &RunResourceMinute) -> Result<(), OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(
-                    r#"
+/// Concrete resource-usage repository scoped to a [`Snapshot`] (read-only)
+/// or a [`Tx`] (read-write).
+pub struct ResourceUsageRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> ResourceUsageRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'tx> ResourceUsageRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
+    }
+
+    /// Record one run minute. Writing the same minute again replaces it, so a
+    /// sampler that re-flushes a minute never duplicates it.
+    pub fn put_run_minute(&self, minute: &RunResourceMinute) -> Result<(), OrbitError> {
+        self.conn
+            .execute(
+                r#"
                     INSERT INTO run_resource_minutes (
                         workspace_id, run_id, minute_index, minute_started_at, task_id,
                         work_class, complexity, resumed, delivery_admitted_at,
@@ -64,61 +98,132 @@ impl ResourceUsageStoreBackend for Store {
                         crew_model = excluded.crew_model,
                         orbit_version = excluded.orbit_version
                     "#,
-                    params![
-                        minute.workspace_id,
-                        minute.run_id,
-                        minute.minute_index,
-                        stamp(minute.minute_started_at),
-                        minute.task_id,
-                        minute.work_class,
-                        minute.complexity,
-                        minute.resumed,
-                        minute.delivery_admitted_at.map(stamp),
-                        minute.cpu_cores,
-                        bytes(minute.memory_bytes),
-                        minute.samples,
-                        minute.cpu_accounting,
-                        minute.crew_model,
-                        minute.orbit_version,
-                    ],
-                )
-                .map(|_| ())
-                .map_err(sqlite_store_error)
-        })
+                params![
+                    minute.workspace_id,
+                    minute.run_id,
+                    minute.minute_index,
+                    stamp(minute.minute_started_at),
+                    minute.task_id,
+                    minute.work_class,
+                    minute.complexity,
+                    minute.resumed,
+                    minute.delivery_admitted_at.map(stamp),
+                    minute.cpu_cores,
+                    bytes(minute.memory_bytes),
+                    minute.samples,
+                    minute.cpu_accounting,
+                    minute.crew_model,
+                    minute.orbit_version,
+                ],
+            )
+            .map(|_| ())
+            .map_err(sqlite_store_error)
     }
 
-    fn offer_host_resource_minute(&self, minute: &HostResourceMinute) -> Result<bool, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(
-                    r#"
+    /// Offer the host's row for one minute. The first offer of a minute wins;
+    /// returns whether this one was stored.
+    pub fn put_host_minute(&self, minute: &HostResourceMinute) -> Result<bool, OrbitError> {
+        self.conn
+            .execute(
+                r#"
                     INSERT INTO host_resource_minutes (
                         minute_at, cpu_cores, cpu_count, memory_bytes,
                         memory_total_bytes, samples, recorded_by_run_id
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                     ON CONFLICT (minute_at) DO NOTHING
                     "#,
-                    params![
-                        stamp(minute.minute_at),
-                        minute.cpu_cores,
-                        minute.cpu_count,
-                        bytes(minute.memory_bytes),
-                        bytes(minute.memory_total_bytes),
-                        minute.samples,
-                        minute.recorded_by_run_id,
-                    ],
-                )
-                .map(|inserted| inserted > 0)
-                .map_err(sqlite_store_error)
-        })
+                params![
+                    stamp(minute.minute_at),
+                    minute.cpu_cores,
+                    minute.cpu_count,
+                    bytes(minute.memory_bytes),
+                    bytes(minute.memory_total_bytes),
+                    minute.samples,
+                    minute.recorded_by_run_id,
+                ],
+            )
+            .map(|inserted| inserted > 0)
+            .map_err(sqlite_store_error)
     }
 
-    fn run_resource_minutes(
+    /// Record one admission pass's forecast.
+    pub fn put_forecast(&self, record: &AdmissionForecastRecord) -> Result<(), OrbitError> {
+        let points = encode(&record.points, "an admission forecast")?;
+        let admitted = encode(&record.admitted, "an admission forecast")?;
+        let fit_admitted = encode(&record.fit_admitted, "an admission forecast")?;
+        let fit_skipped = encode(&record.fit_skipped, "an admission forecast")?;
+        let pull = record
+            .pull
+            .as_ref()
+            .map(|value| encode(value, "an admission forecast"))
+            .transpose()?;
+        let covered = record
+            .covered_deliveries
+            .as_ref()
+            .map(|value| encode(value, "an admission forecast"))
+            .transpose()?;
+        self.conn
+            .execute(
+                r#"
+                    INSERT INTO admission_forecasts (
+                        workspace_id, run_id, forecast_at, mode, cpu_count,
+                        memory_total_bytes, points_json, admitted_json,
+                        fit_admitted_json, fit_skipped_json, pull_decision_json,
+                        baseline_cpu_cores, baseline_memory_bytes, covered_deliveries_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                    "#,
+                params![
+                    record.workspace_id,
+                    record.run_id,
+                    stamp(record.forecast_at),
+                    record.mode,
+                    record.cpu_count,
+                    record.memory_total_bytes.map(bytes),
+                    points,
+                    admitted,
+                    fit_admitted,
+                    fit_skipped,
+                    pull,
+                    record.baseline_cpu_cores,
+                    record.baseline_memory_bytes.map(bytes),
+                    covered,
+                ],
+            )
+            .map(|_| ())
+            .map_err(sqlite_store_error)
+    }
+
+    /// Delete the selected rows of `table` whose timestamps still match, by
+    /// rowid. Returns how many went.
+    pub fn delete_retention_rows(
+        &self,
+        table: ResourceMinutesTable,
+        rows: &[ResourceRetentionRow],
+    ) -> Result<usize, OrbitError> {
+        let sql = format!(
+            "DELETE FROM {} WHERE rowid = ?1 AND {} = ?2",
+            table.table_name(),
+            resource_retention_timestamp(table)
+        );
+        let mut statement = self.conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let mut removed = 0;
+        for row in rows {
+            removed += statement
+                .execute(params![row.row_id, row.timestamp])
+                .map_err(sqlite_store_error)?;
+        }
+        Ok(removed)
+    }
+}
+
+impl<Access> ResourceUsageRepository<'_, Access> {
+    /// One run's minutes, in minute order.
+    pub fn run_minutes(
         &self,
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Vec<RunResourceMinute>, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT {RUN_MINUTE_COLUMNS}
@@ -134,22 +239,28 @@ impl ResourceUsageStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
-    fn delivery_run_resources(
+    /// Every sampled run of a delivery admitted at or after `since`, across
+    /// every workspace on the host, with its minutes and `job_runs` lifecycle.
+    pub fn delivery_runs(
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<DeliveryRunResources>, OrbitError> {
-        super::delivery_run_load::load_delivery_runs(&*self.read_connection()?, since)
+        delivery_run_load::load_delivery_runs(self.conn, since)
     }
 
-    fn reload_delivery_runs(
+    /// Every sampled run since the epoch, exactly as [`Self::delivery_runs`]
+    /// would return it now, reusing each run of `previous` whose shape still
+    /// holds.
+    pub fn reload_delivery_runs(
         &self,
         previous: Option<DeliveryRunsLoad>,
     ) -> Result<DeliveryRunsLoad, OrbitError> {
-        super::delivery_run_load::reload_delivery_runs(&*self.read_connection()?, previous)
+        delivery_run_load::reload_delivery_runs(self.conn, previous)
     }
 
-    fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
-        let conn = self.read_connection()?;
+    /// The finished sampled runs on the host, as a cache freshness probe.
+    pub fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
+        let conn = self.conn;
         // Every sampled run counts from its first recorded minute, whatever its
         // index: a failed first read or insert can leave no minute-zero row. The
         // probe reads only retained minute rows, never all of `job_runs`.
@@ -173,8 +284,12 @@ impl ResourceUsageStoreBackend for Store {
         })
     }
 
-    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
-        let conn = self.read_connection()?;
+    /// A counter that moves whenever [`Self::delivery_runs_freshness`] may
+    /// have changed, read without scanning: while it holds, the probe's
+    /// answer holds too. `None` when the store keeps no such counter, so a
+    /// caller always probes.
+    pub fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        let conn = self.conn;
         // A write-free reader may open a store migrated before the counter.
         let kept: bool = conn
             .query_row(
@@ -196,69 +311,21 @@ impl ResourceUsageStoreBackend for Store {
         .map_err(sqlite_store_error)
     }
 
-    fn host_resource_minutes(
+    /// Host minutes at or after `since`, oldest first.
+    pub fn host_minutes(
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<HostResourceMinute>, OrbitError> {
-        host_minutes(&*self.read_connection()?, since)
+        host_minutes(self.conn, since)
     }
 
-    fn record_admission_forecast(
-        &self,
-        record: &AdmissionForecastRecord,
-    ) -> Result<(), OrbitError> {
-        let points = encode(&record.points, "an admission forecast")?;
-        let admitted = encode(&record.admitted, "an admission forecast")?;
-        let fit_admitted = encode(&record.fit_admitted, "an admission forecast")?;
-        let fit_skipped = encode(&record.fit_skipped, "an admission forecast")?;
-        let pull = record
-            .pull
-            .as_ref()
-            .map(|value| encode(value, "an admission forecast"))
-            .transpose()?;
-        let covered = record
-            .covered_deliveries
-            .as_ref()
-            .map(|value| encode(value, "an admission forecast"))
-            .transpose()?;
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(
-                    r#"
-                    INSERT INTO admission_forecasts (
-                        workspace_id, run_id, forecast_at, mode, cpu_count,
-                        memory_total_bytes, points_json, admitted_json,
-                        fit_admitted_json, fit_skipped_json, pull_decision_json,
-                        baseline_cpu_cores, baseline_memory_bytes, covered_deliveries_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-                    "#,
-                    params![
-                        record.workspace_id,
-                        record.run_id,
-                        stamp(record.forecast_at),
-                        record.mode,
-                        record.cpu_count,
-                        record.memory_total_bytes.map(bytes),
-                        points,
-                        admitted,
-                        fit_admitted,
-                        fit_skipped,
-                        pull,
-                        record.baseline_cpu_cores,
-                        record.baseline_memory_bytes.map(bytes),
-                        covered,
-                    ],
-                )
-                .map(|_| ())
-                .map_err(sqlite_store_error)
-        })
-    }
-
-    fn admission_forecasts(
+    /// Admission forecasts made at or after `since`, across every workspace,
+    /// oldest first.
+    pub fn forecasts(
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<AdmissionForecastRecord>, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let mut statement = conn
             .prepare(
                 r#"
@@ -302,13 +369,15 @@ impl ResourceUsageStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
-    fn resource_minutes_older_than(
+    /// Rows of `table` from before `cutoff` that `keep` does not hold,
+    /// across every workspace.
+    pub fn count_prunable(
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
         keep: ResourceHistoryKeep,
     ) -> Result<u64, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let sql = format!(
             "SELECT COUNT(*) FROM {} WHERE {}",
             table.table_name(),
@@ -320,16 +389,162 @@ impl ResourceUsageStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
-    fn prune_resource_minutes_batch(
+    /// At most `limit` of the rows [`Self::count_prunable`] counts, in safe
+    /// deletion order (ineligible markers and minute zero last).
+    pub fn retention_candidates(
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
         keep: ResourceHistoryKeep,
         limit: usize,
-    ) -> Result<usize, OrbitError> {
+    ) -> Result<Vec<ResourceRetentionRow>, OrbitError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = select_resource_retention_rows(self, table, cutoff, keep, limit)?;
-        delete_resource_retention_rows(self, table, &rows)
+        // Keep an ineligible marker until its good siblings have been pruned.
+        // Otherwise the next batch can mistake a partial delivery for a profile.
+        let order = if matches!(table, ResourceMinutesTable::Run) {
+            format!(
+                " ORDER BY CASE WHEN resumed != 0 OR \
+                     (cpu_accounting IS NULL AND {}) OR \
+                     (cpu_accounting IS NOT NULL AND cpu_accounting NOT IN ('{}', '{}', '{}')) OR \
+                     NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.workspace_id = r.workspace_id \
+                         AND j.run_id = r.run_id AND j.job_id IS NOT NULL AND j.finished_at IS NOT NULL) \
+                     THEN 1 ELSE 0 END, CASE WHEN minute_index = 0 THEN 1 ELSE 0 END",
+                if cfg!(target_os = "linux") { 0 } else { 1 },
+                CPU_ACCOUNTING_LINUX,
+                CPU_ACCOUNTING_MACOS,
+                CPU_ACCOUNTING_MACOS_TREE_ONLY
+            )
+        } else {
+            String::new()
+        };
+        let sql = format!(
+            "SELECT r.rowid, r.{timestamp} FROM {table} r WHERE {predicate}{order} LIMIT ?3",
+            table = table.table_name(),
+            timestamp = resource_retention_timestamp(table),
+            predicate = prunable(table)
+        );
+        let (cutoff, kept) = prune_bounds(table, cutoff, keep);
+        let conn = self.conn;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        stmt.query_map(params![cutoff, kept, limit], |row| {
+            Ok(ResourceRetentionRow {
+                row_id: row.get(0)?,
+                timestamp: row.get(1)?,
+            })
+        })
+        .map_err(sqlite_store_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
+    }
+
+    /// Delivery workers of `job_ids` whose lifetime overlaps `[since, until)`.
+    ///
+    /// A worker is live from `started_at` until `finished_at`, and still live
+    /// when `finished_at` is absent. Runs that never started are omitted.
+    /// `job_runs` timestamps are variable-width RFC3339, so the overlap is
+    /// applied after parsing rather than as a text comparison.
+    pub fn delivery_runs_overlapping(
+        &self,
+        job_ids: &[&str],
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<DeliveryRunInterval>, OrbitError> {
+        if job_ids.is_empty() || since >= until {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn;
+        let placeholders = vec!["?"; job_ids.len()].join(",");
+        // The workspace subquery lets SQLite walk each workspace's job index
+        // instead of scanning `job_runs` as one table. See admission load.
+        let sql = format!(
+            "SELECT started_at, finished_at
+             FROM job_runs
+             WHERE workspace_id IN (SELECT DISTINCT workspace_id FROM job_runs)
+               AND job_id IN ({placeholders})
+               AND started_at IS NOT NULL"
+        );
+        let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let values = job_ids
+            .iter()
+            .map(|job| (*job).to_string())
+            .collect::<Vec<_>>();
+        let rows = statement
+            .query_map(params_from_iter(values), |row| {
+                let started_at = crate::parse_timestamp(&row.get::<_, String>(0)?)?;
+                let finished_at = row
+                    .get::<_, Option<String>>(1)?
+                    .map(|at| crate::parse_timestamp(&at))
+                    .transpose()?;
+                Ok(DeliveryRunInterval {
+                    started_at,
+                    finished_at,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+        let mut intervals = Vec::new();
+        for row in rows {
+            let interval = row.map_err(sqlite_store_error)?;
+            let overlaps = interval.started_at < until
+                && interval.finished_at.is_none_or(|finished| finished > since);
+            if overlaps {
+                intervals.push(interval);
+            }
+        }
+        Ok(intervals)
+    }
+}
+
+/// Concrete watchdog breach evidence repository scoped to a [`Snapshot`]
+/// (read-only) or a [`Tx`] (read-write).
+pub struct WorkerResourceLimitRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> WorkerResourceLimitRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'tx> WorkerResourceLimitRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
+    }
+
+    /// Store one run's breach evidence, replacing any earlier evidence of it.
+    pub fn put(&self, evidence: &WorkerResourceLimitEvidence) -> Result<(), OrbitError> {
+        let encoded = encode(evidence, "resource evidence")?;
+        self.conn
+            .execute(
+                "INSERT INTO worker_resource_limits (workspace_id, run_id, evidence_json)
+                 VALUES (?1, ?2, ?3) ON CONFLICT (workspace_id, run_id)
+                 DO UPDATE SET evidence_json = excluded.evidence_json",
+                params![evidence.workspace_id, evidence.run_id, encoded],
+            )
+            .map(|_| ())
+            .map_err(sqlite_store_error)
+    }
+}
+
+impl<Access> WorkerResourceLimitRepository<'_, Access> {
+    /// One run's breach evidence.
+    pub fn get(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<WorkerResourceLimitEvidence>, OrbitError> {
+        self.conn.query_row(
+            "SELECT evidence_json FROM worker_resource_limits WHERE workspace_id = ?1 AND run_id = ?2",
+            params![workspace_id, run_id],
+            |row| decode(0, &row.get::<_, String>(0)?),
+        ).optional().map_err(sqlite_store_error)
     }
 }
 
@@ -339,73 +554,6 @@ fn resource_retention_timestamp(table: ResourceMinutesTable) -> &'static str {
         ResourceMinutesTable::Host => "minute_at",
         ResourceMinutesTable::AdmissionForecast => "forecast_at",
     }
-}
-
-pub(super) fn select_resource_retention_rows(
-    store: &Store,
-    table: ResourceMinutesTable,
-    cutoff: DateTime<Utc>,
-    keep: ResourceHistoryKeep,
-    limit: i64,
-) -> Result<Vec<ResourceRetentionRow>, OrbitError> {
-    // Keep an ineligible marker until its good siblings have been pruned.
-    // Otherwise the next batch can mistake a partial delivery for a profile.
-    let order = if matches!(table, ResourceMinutesTable::Run) {
-        format!(
-            " ORDER BY CASE WHEN resumed != 0 OR \
-                 (cpu_accounting IS NULL AND {}) OR \
-                 (cpu_accounting IS NOT NULL AND cpu_accounting NOT IN ('{}', '{}', '{}')) OR \
-                 NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.workspace_id = r.workspace_id \
-                     AND j.run_id = r.run_id AND j.job_id IS NOT NULL AND j.finished_at IS NOT NULL) \
-                 THEN 1 ELSE 0 END, CASE WHEN minute_index = 0 THEN 1 ELSE 0 END",
-            if cfg!(target_os = "linux") { 0 } else { 1 },
-            CPU_ACCOUNTING_LINUX,
-            CPU_ACCOUNTING_MACOS,
-            CPU_ACCOUNTING_MACOS_TREE_ONLY
-        )
-    } else {
-        String::new()
-    };
-    let sql = format!(
-        "SELECT r.rowid, r.{timestamp} FROM {table} r WHERE {predicate}{order} LIMIT ?3",
-        table = table.table_name(),
-        timestamp = resource_retention_timestamp(table),
-        predicate = prunable(table)
-    );
-    let (cutoff, kept) = prune_bounds(table, cutoff, keep);
-    let conn = store.read_connection()?;
-    let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
-    stmt.query_map(params![cutoff, kept, limit], |row| {
-        Ok(ResourceRetentionRow {
-            row_id: row.get(0)?,
-            timestamp: row.get(1)?,
-        })
-    })
-    .map_err(sqlite_store_error)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(sqlite_store_error)
-}
-
-pub(super) fn delete_resource_retention_rows(
-    store: &Store,
-    table: ResourceMinutesTable,
-    rows: &[ResourceRetentionRow],
-) -> Result<usize, OrbitError> {
-    let sql = format!(
-        "DELETE FROM {} WHERE rowid = ?1 AND {} = ?2",
-        table.table_name(),
-        resource_retention_timestamp(table)
-    );
-    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-        let mut statement = tx.connection().prepare(&sql).map_err(sqlite_store_error)?;
-        let mut removed = 0;
-        for row in rows {
-            removed += statement
-                .execute(params![row.row_id, row.timestamp])
-                .map_err(sqlite_store_error)?;
-        }
-        Ok(removed)
-    })
 }
 
 /// [`prunable`]'s `?1`, the cutoff, and `?2`, how many of the table's own
@@ -536,95 +684,5 @@ fn prunable(table: ResourceMinutesTable) -> String {
                  SELECT rowid FROM admission_forecasts \
                  ORDER BY forecast_at DESC LIMIT ?2)"
             .into(),
-    }
-}
-
-impl Store {
-    /// Delivery workers of `job_ids` whose lifetime overlaps `[since, until)`.
-    ///
-    /// A worker is live from `started_at` until `finished_at`, and still live
-    /// when `finished_at` is absent. Runs that never started are omitted.
-    /// `job_runs` timestamps are variable-width RFC3339, so the overlap is
-    /// applied after parsing rather than as a text comparison.
-    pub fn delivery_runs_overlapping(
-        &self,
-        job_ids: &[&str],
-        since: DateTime<Utc>,
-        until: DateTime<Utc>,
-    ) -> Result<Vec<DeliveryRunInterval>, OrbitError> {
-        if job_ids.is_empty() || since >= until {
-            return Ok(Vec::new());
-        }
-        let conn = self.read_connection()?;
-        let placeholders = vec!["?"; job_ids.len()].join(",");
-        // The workspace subquery lets SQLite walk each workspace's job index
-        // instead of scanning `job_runs` as one table. See admission load.
-        let sql = format!(
-            "SELECT started_at, finished_at
-             FROM job_runs
-             WHERE workspace_id IN (SELECT DISTINCT workspace_id FROM job_runs)
-               AND job_id IN ({placeholders})
-               AND started_at IS NOT NULL"
-        );
-        let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
-        let values = job_ids
-            .iter()
-            .map(|job| (*job).to_string())
-            .collect::<Vec<_>>();
-        let rows = statement
-            .query_map(params_from_iter(values), |row| {
-                let started_at = crate::parse_timestamp(&row.get::<_, String>(0)?)?;
-                let finished_at = row
-                    .get::<_, Option<String>>(1)?
-                    .map(|at| crate::parse_timestamp(&at))
-                    .transpose()?;
-                Ok(DeliveryRunInterval {
-                    started_at,
-                    finished_at,
-                })
-            })
-            .map_err(sqlite_store_error)?;
-        let mut intervals = Vec::new();
-        for row in rows {
-            let interval = row.map_err(sqlite_store_error)?;
-            let overlaps = interval.started_at < until
-                && interval.finished_at.is_none_or(|finished| finished > since);
-            if overlaps {
-                intervals.push(interval);
-            }
-        }
-        Ok(intervals)
-    }
-}
-
-impl crate::contracts::WorkerResourceLimitStoreBackend for Store {
-    fn record_worker_resource_limit_evidence(
-        &self,
-        evidence: &crate::contracts::WorkerResourceLimitEvidence,
-    ) -> Result<(), OrbitError> {
-        let encoded = encode(evidence, "resource evidence")?;
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(
-                    "INSERT INTO worker_resource_limits (workspace_id, run_id, evidence_json)
-                 VALUES (?1, ?2, ?3) ON CONFLICT (workspace_id, run_id)
-                 DO UPDATE SET evidence_json = excluded.evidence_json",
-                    params![evidence.workspace_id, evidence.run_id, encoded],
-                )
-                .map(|_| ())
-                .map_err(sqlite_store_error)
-        })
-    }
-
-    fn worker_resource_limit_evidence(
-        &self,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> Result<Option<crate::contracts::WorkerResourceLimitEvidence>, OrbitError> {
-        self.read_connection()?.query_row(
-            "SELECT evidence_json FROM worker_resource_limits WHERE workspace_id = ?1 AND run_id = ?2",
-            params![workspace_id, run_id],
-            |row| decode(0, &row.get::<_, String>(0)?),
-        ).optional().map_err(sqlite_store_error)
     }
 }

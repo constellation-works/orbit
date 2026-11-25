@@ -1,7 +1,6 @@
 use super::tool_support::{create_context_task, test_runtime, unmanaged_tool_env_guard};
 use orbit_store::contracts::{
     LeaseInsertParams, LeaseMode, LeasePrincipalClass, LeasePriority, LeaseReleaseParams,
-    StoreRetentionBackend,
 };
 use orbit_store::{TaskLockConflict, TaskLockHolder, TaskReservationReleaseReason};
 use orbit_types::task::TaskStatus;
@@ -118,7 +117,10 @@ fn task_scope_reserve_is_refused_by_a_hard_lease_and_granted_past_an_advisory_on
     let denials = runtime
         .sqlite_store()
         .expect("store")
-        .list_task_lock_denials(&workspace_id)
+        .read()
+        .unwrap()
+        .retention()
+        .task_lock_denials(&workspace_id)
         .expect("denial log");
     assert_eq!(denials.len(), 1, "the refusal is in the denial log");
     let logged: serde_json::Value = serde_json::from_str(&denials[0].arguments_json).unwrap();

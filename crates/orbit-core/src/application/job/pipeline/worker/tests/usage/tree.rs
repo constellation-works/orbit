@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use orbit_common::process::ancestry::{ProcessStartKey, ProcessTreeProcess};
 use orbit_store::Store;
-use orbit_store::contracts::{ResourceUsageStoreBackend, RunResourceMinute};
+use orbit_store::contracts::RunResourceMinute;
 use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
@@ -122,7 +122,7 @@ fn recorded_with(
     let fixture = Fixture::new();
     let mut queue = VecDeque::from(script);
     let mut sampler = RunResourceSampler::from_process_tree(
-        Arc::clone(&fixture.store) as Arc<dyn ResourceUsageStoreBackend>,
+        Arc::clone(&fixture.store),
         move || queue.pop_front().unwrap_or(None),
         locate,
         fixture.proc_root.clone(),
@@ -139,14 +139,20 @@ fn recorded_with(
     assert!(
         fixture
             .store
-            .host_resource_minutes(start())
+            .read()
+            .unwrap()
+            .resource_usage()
+            .host_minutes(start())
             .unwrap()
             .is_empty(),
         "a process-tree sample does not invent a host minute"
     );
     fixture
         .store
-        .run_resource_minutes("ws_test", "jrun-tree")
+        .read()
+        .unwrap()
+        .resource_usage()
+        .run_minutes("ws_test", "jrun-tree")
         .unwrap()
 }
 
@@ -391,7 +397,7 @@ fn macos_worker_records_a_spawned_child_tree() {
 
     let fixture = Fixture::new();
     let mut sampler = RunResourceSampler::from_process_tree(
-        Arc::clone(&fixture.store) as Arc<dyn ResourceUsageStoreBackend>,
+        Arc::clone(&fixture.store),
         || orbit_common::process::ancestry::process_tree(std::process::id()),
         orbit_common::process::ancestry::process_start_and_parent,
         fixture.proc_root.clone(),
@@ -467,7 +473,10 @@ fn macos_worker_records_a_spawned_child_tree() {
 
     let rows = fixture
         .store
-        .run_resource_minutes("ws_test", "jrun-live")
+        .read()
+        .unwrap()
+        .resource_usage()
+        .run_minutes("ws_test", "jrun-live")
         .unwrap();
     assert_eq!(rows.len(), 1, "{rows:#?}");
     assert!(

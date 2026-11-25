@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExperimentRecord, ExperimentStoreBackend as _};
+use orbit_store::contracts::ExperimentRecord;
 
 use super::definition::ExperimentOverlay;
 use crate::OrbitRuntime;
@@ -34,7 +34,9 @@ impl OrbitRuntime {
     pub(crate) fn running_memory_experiments(&self) -> Result<Vec<String>, OrbitError> {
         let records = self
             .sqlite_store()?
-            .experiment_records(&self.workspace_id()?, Some("running"))?;
+            .read()?
+            .experiment()
+            .list(&self.workspace_id()?, Some("running"))?;
         let mut ids = Vec::new();
         for record in &records {
             if matches!(record.experiment.mode.as_str(), "shadow" | "live")
@@ -72,7 +74,11 @@ impl OrbitRuntime {
             let Some(arm) = assignment.arm else {
                 continue;
             };
-            let Some(record) = store.experiment_record(&workspace, &assignment.experiment)? else {
+            let Some(record) = store
+                .read()?
+                .experiment()
+                .get(&workspace, &assignment.experiment)?
+            else {
                 continue;
             };
             if memory_arm_names(&record)?.contains(&arm) {

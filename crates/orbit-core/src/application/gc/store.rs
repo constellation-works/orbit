@@ -18,9 +18,9 @@ use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
     AuditRetentionTable, JournalRetentionCandidates, ResourceHistoryKeep, ResourceMinutesTable,
-    RetentionIdSource, RetentionSelection, RetentionWorkspaceScope, StoreRetentionBackend,
-    StoreSpace,
+    RetentionIdSource, RetentionSelection, RetentionWorkspaceScope, StoreSpace,
 };
+use orbit_store::{Store, visit_blob_reference_text};
 use serde::Serialize;
 
 use crate::runtime::host_resource::accuracy::ACCURACY_FORECASTS_KEPT;
@@ -229,7 +229,11 @@ impl OrbitRuntime {
                 legacy_ids: None,
             });
         };
-        let stored = self.sqlite_store()?.distinct_workspace_ids(source)?;
+        let stored = self
+            .sqlite_store()?
+            .read()?
+            .retention()
+            .workspace_ids(source)?;
         let legacy_ids = stored
             .into_iter()
             .filter(|id| id != &workspace_id && !registered.contains(id))
@@ -266,15 +270,20 @@ impl OrbitRuntime {
             (AuditRetentionTable::Run, "workspace"),
         ] {
             let RetentionSelection { rows, bytes } =
-                store.audit_retention_selection(table, workspace_scope, cutoff)?;
+                store
+                    .read()?
+                    .retention()
+                    .audit_selection(table, workspace_scope, cutoff)?;
             let rows_removed = if apply && rows > 0 {
                 run_batches(&mut writes, || {
-                    store.prune_audit_retention_batch(
-                        table,
-                        workspace_scope,
-                        cutoff,
-                        RETENTION_BATCH_ROWS,
-                    )
+                    store.write(|tx| {
+                        tx.retention().delete_audit_batch(
+                            table,
+                            workspace_scope,
+                            cutoff,
+                            RETENTION_BATCH_ROWS,
+                        )
+                    })
                 })?
             } else {
                 0
@@ -295,7 +304,7 @@ impl OrbitRuntime {
             tables,
             blobs,
             writes,
-            store: store.store_space()?.into(),
+            store: store.read()?.retention().space()?.into(),
         })
     }
 
@@ -331,18 +340,22 @@ impl OrbitRuntime {
             workspace_id: &pass.workspace_id,
             legacy_ids: pass.legacy_ids.as_deref(),
         };
-        let RetentionSelection { rows, bytes } =
-            store.run_state_retention_selection(workspace_scope, cutoff)?;
+        let RetentionSelection { rows, bytes } = store
+            .read()?
+            .retention()
+            .run_state_selection(workspace_scope, cutoff)?;
         let mut writes = BatchReport::default();
         let runs_archived = if apply && rows > 0 {
             let archived_at = Utc::now();
             run_batches(&mut writes, || {
-                store.archive_run_states_batch(
-                    workspace_scope,
-                    cutoff,
-                    archived_at,
-                    RETENTION_BATCH_ROWS,
-                )
+                store.write(|tx| {
+                    tx.retention().archive_run_states(
+                        workspace_scope,
+                        cutoff,
+                        archived_at,
+                        RETENTION_BATCH_ROWS,
+                    )
+                })
             })?
         } else {
             0
@@ -362,7 +375,12 @@ impl OrbitRuntime {
         ] {
             // Rank once, without the writer lock. Repeating the ranking in
             // every DELETE made a large history monopolize the host store.
-            let candidates = store.resource_retention_candidates(table, resource_cutoff, keep)?;
+            let candidates = store.read()?.resource_usage().retention_candidates(
+                table,
+                resource_cutoff,
+                keep,
+                usize::MAX,
+            )?;
             let rows = candidates.len() as u64;
             let mut rows_removed = 0;
             if apply {
@@ -371,7 +389,7 @@ impl OrbitRuntime {
                         std::thread::sleep(BATCH_PAUSE);
                     }
                     rows_removed += timed_batch(&mut writes, || {
-                        store.delete_resource_retention_rows(table, batch)
+                        store.write(|tx| tx.resource_usage().delete_retention_rows(table, batch))
                     })? as u64;
                 }
             }
@@ -397,7 +415,7 @@ impl OrbitRuntime {
             runs_archived,
             resource_minutes,
             writes,
-            store: store.store_space()?.into(),
+            store: store.read()?.retention().space()?.into(),
         })
     }
 
@@ -424,8 +442,10 @@ impl OrbitRuntime {
             legacy_ids: pass.legacy_ids.as_deref(),
         };
         let started = Instant::now();
-        let JournalRetentionCandidates { journal_ids, bytes } =
-            store.journal_retention_candidates(workspace_scope, cutoff)?;
+        let JournalRetentionCandidates { journal_ids, bytes } = store
+            .read()?
+            .retention()
+            .journal_candidates(workspace_scope, cutoff)?;
         let selection_ms = elapsed_ms(started);
         let mut writes = BatchReport::default();
         let mut rows_removed = 0;
@@ -434,8 +454,9 @@ impl OrbitRuntime {
                 if index > 0 {
                     std::thread::sleep(BATCH_PAUSE);
                 }
-                rows_removed +=
-                    timed_batch(&mut writes, || store.delete_applied_journal_rows(batch))? as u64;
+                rows_removed += timed_batch(&mut writes, || {
+                    store.write(|tx| tx.retention().delete_applied_journal_rows(batch))
+                })? as u64;
             }
         }
         Ok(JournalGcReport {
@@ -447,7 +468,7 @@ impl OrbitRuntime {
             rows_removed,
             selection_ms,
             writes,
-            store: store.store_space()?.into(),
+            store: store.read()?.retention().space()?.into(),
         })
     }
 
@@ -465,12 +486,16 @@ impl OrbitRuntime {
         let mut audit_rows = 0;
         let mut audit_bytes = 0;
         for table in [AuditRetentionTable::Command, AuditRetentionTable::Run] {
-            let selection = store.audit_retention_selection(table, audit_scope, audit_cutoff)?;
+            let selection =
+                store
+                    .read()?
+                    .retention()
+                    .audit_selection(table, audit_scope, audit_cutoff)?;
             audit_rows += selection.rows;
             audit_bytes += selection.bytes;
         }
         let run_pass = self.retention_pass(RetentionIdSource::JobRuns)?;
-        let runs = store.run_state_retention_selection(
+        let runs = store.read()?.retention().run_state_selection(
             RetentionWorkspaceScope {
                 workspace_id: &run_pass.workspace_id,
                 legacy_ids: run_pass.legacy_ids.as_deref(),
@@ -502,7 +527,7 @@ impl OrbitRuntime {
             run_state_bytes: runs.bytes,
             blob_bytes,
             blob_bytes_past_cutoff,
-            store: store.store_space()?.into(),
+            store: store.read()?.retention().space()?.into(),
         })
     }
 
@@ -511,7 +536,7 @@ impl OrbitRuntime {
     /// would delete, so both modes count the same blobs.
     fn sweep_audit_blobs(
         &self,
-        store: &dyn StoreRetentionBackend,
+        store: &Store,
         apply: bool,
         scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
@@ -559,7 +584,7 @@ impl OrbitRuntime {
         }
         report.stale_markers = stale_markers.len() as u64;
         if !candidates.is_empty() {
-            store.visit_blob_reference_text(Some((scope, cutoff)), &mut |text| {
+            visit_blob_reference_text(store, Some((scope, cutoff)), &mut |text| {
                 blob_sweep::for_each_blob_hash(text, |hash| {
                     candidates.remove(hash);
                 });

@@ -28,5 +28,100 @@
     "identifier": "codebase_task_facts",
     "doc": "docs/design/user-interface/2_design.md",
     "reason": "Names the SQLite table codebase_task_facts (retained as store schema v96), not the removed CodebaseFactsStoreBackend::codebase_task_facts trait method."
+  },
+  {
+    "identifier": "admission_forecasts",
+    "doc": "docs/design/auditability/specs/redaction-retention.md",
+    "reason": "Names the `admission_forecasts` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "admission_forecasts",
+    "doc": "docs/design/auto-concurrency/2_design.md",
+    "reason": "Names the `admission_forecasts` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "admission_forecasts",
+    "doc": "docs/runbooks/state-and-backup.md",
+    "reason": "Names the `admission_forecasts` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "crew_memory_events",
+    "doc": "docs/design/crew-memory/2_design.md",
+    "reason": "Names the `crew_memory_events` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "crew_memory_revisions",
+    "doc": "docs/design/crew-memory/1_overview.md",
+    "reason": "Names the `crew_memory_revisions` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "crew_memory_revisions",
+    "doc": "docs/design/crew-memory/2_design.md",
+    "reason": "Names the `crew_memory_revisions` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "experiment_assignments",
+    "doc": "docs/design/auditability/2_design.md",
+    "reason": "Names the `experiment_assignments` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "experiment_assignments",
+    "doc": "docs/design/experiments/1_scope.md",
+    "reason": "Names the `experiment_assignments` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "host_resource_minutes",
+    "doc": "crates/orbit-core/assets/skills/orbit-setup/references/maintenance-storage.md",
+    "reason": "Names the `host_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "host_resource_minutes",
+    "doc": "docs/design/auditability/specs/redaction-retention.md",
+    "reason": "Names the `host_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "host_resource_minutes",
+    "doc": "docs/design/auto-concurrency/2_design.md",
+    "reason": "Names the `host_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "host_resource_minutes",
+    "doc": "docs/runbooks/state-and-backup.md",
+    "reason": "Names the `host_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "host_resource_minutes",
+    "doc": "plugin/skills/orbit-setup/references/maintenance-storage.md",
+    "reason": "Names the `host_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "run_resource_minutes",
+    "doc": "crates/orbit-core/assets/skills/orbit-setup/references/maintenance-storage.md",
+    "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "run_resource_minutes",
+    "doc": "docs/design/auditability/specs/redaction-retention.md",
+    "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "run_resource_minutes",
+    "doc": "docs/design/auto-concurrency/2_design.md",
+    "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "run_resource_minutes",
+    "doc": "docs/design/auto-concurrency/specs/completion-wait-credit.md",
+    "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "run_resource_minutes",
+    "doc": "docs/runbooks/state-and-backup.md",
+    "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "run_resource_minutes",
+    "doc": "plugin/skills/orbit-setup/references/maintenance-storage.md",
+    "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
   }
 ]

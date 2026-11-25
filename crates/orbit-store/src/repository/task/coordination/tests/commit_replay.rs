@@ -13,9 +13,7 @@ use orbit_common::fs::io::FileLockOptions;
 
 use super::super::apply::apply_fault::{self, Fault};
 use super::claim_section::Owner;
-use crate::contracts::{
-    ExecutionClaimPhase, RetentionWorkspaceScope, StoreRetentionBackend, TaskCommitJournalState,
-};
+use crate::contracts::{ExecutionClaimPhase, RetentionWorkspaceScope, TaskCommitJournalState};
 use crate::repository::task::v2_bundle::COMMIT_LEASE_DIR;
 
 /// The partition's commit leases, by name.
@@ -201,7 +199,10 @@ fn journal_retention_keeps_an_interrupted_decision_for_its_replay() {
         legacy_ids: None,
     };
     let plan = store
-        .journal_retention_candidates(scope, Utc::now())
+        .read()
+        .unwrap()
+        .retention()
+        .journal_candidates(scope, Utc::now())
         .expect("plan");
     assert!(
         !plan.journal_ids.is_empty(),
@@ -209,7 +210,9 @@ fn journal_retention_keeps_an_interrupted_decision_for_its_replay() {
     );
     assert_eq!(
         store
-            .delete_applied_journal_rows(&plan.journal_ids)
+            .write(|tx| tx
+                .retention()
+                .delete_applied_journal_rows(&plan.journal_ids))
             .expect("prune"),
         plan.journal_ids.len()
     );

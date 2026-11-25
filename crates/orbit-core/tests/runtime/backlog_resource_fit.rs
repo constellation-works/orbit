@@ -7,9 +7,7 @@ use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode};
-use orbit_store::contracts::{
-    InvocationInsertParams, ResourceUsageStoreBackend, RunResourceMinute,
-};
+use orbit_store::contracts::{InvocationInsertParams, RunResourceMinute};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use orbit_types::workflow::{JobRun, JobRunState};
@@ -140,22 +138,24 @@ fn profile_delivery(runtime: &OrbitRuntime, cores: f64) {
         .unwrap();
     for minute in 0..60u32 {
         store
-            .record_run_resource_minute(&RunResourceMinute {
-                workspace_id: workspace.clone(),
-                run_id: run.run_id.clone(),
-                minute_index: minute,
-                minute_started_at: admitted + Duration::minutes(i64::from(minute)),
-                task_id: "ORB-profiled".into(),
-                work_class: "change".into(),
-                complexity: Some("medium".into()),
-                resumed: false,
-                delivery_admitted_at: Some(admitted),
-                cpu_cores: cores,
-                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                memory_bytes: GIB,
-                samples: 12,
-                crew_model: None,
-                orbit_version: None,
+            .write(|tx| {
+                tx.resource_usage().put_run_minute(&RunResourceMinute {
+                    workspace_id: workspace.clone(),
+                    run_id: run.run_id.clone(),
+                    minute_index: minute,
+                    minute_started_at: admitted + Duration::minutes(i64::from(minute)),
+                    task_id: "ORB-profiled".into(),
+                    work_class: "change".into(),
+                    complexity: Some("medium".into()),
+                    resumed: false,
+                    delivery_admitted_at: Some(admitted),
+                    cpu_cores: cores,
+                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                    memory_bytes: GIB,
+                    samples: 12,
+                    crew_model: None,
+                    orbit_version: None,
+                })
             })
             .unwrap();
     }

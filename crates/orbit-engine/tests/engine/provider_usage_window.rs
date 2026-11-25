@@ -26,7 +26,6 @@ use orbit_engine::{
     DispatchError, DispatchOutcome, ResolvedCliExecutor, RuntimeHost, V2DispatchInput,
     dispatch_v2_activity,
 };
-use orbit_store::contracts::ProviderLimitStoreBackend;
 use orbit_types::telemetry::{
     InvocationTrace, ProviderLimitObservation, ProviderLimitSource, TokenUsage,
 };
@@ -70,14 +69,17 @@ impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
         &self,
         reading: &ProviderLimitObservation,
     ) -> Result<(), orbit_common::OrbitError> {
-        self.store.record_provider_limit(reading).map(|_| ())
+        self.store
+            .write(|tx| tx.provider_limit().put(reading))
+            .map(|_| ())
     }
 
     fn record_provider_usage_reading(
         &self,
         readings: &[ProviderLimitObservation],
     ) -> Result<(), orbit_common::OrbitError> {
-        self.store.record_provider_usage_reading(readings)
+        self.store
+            .write(|tx| tx.provider_limit().put_reading(readings))
     }
 }
 
@@ -221,7 +223,7 @@ fn dispatch_into_store(
         host: Some(&host),
     })
     .unwrap();
-    let limits = host.store.provider_limits().unwrap();
+    let limits = host.store.read().unwrap().provider_limit().list().unwrap();
     (outcome, limits)
 }
 
@@ -404,7 +406,7 @@ fi
         window_minutes: None,
         ..split[0].clone()
     };
-    store.record_provider_limit(&error).unwrap();
+    store.write(|tx| tx.provider_limit().put(&error)).unwrap();
 
     let latest = run(&without_argon);
     assert_eq!(

@@ -11,9 +11,15 @@ use crate::repository::admission_load::AdmissionLoadRepository;
 use crate::repository::application_consent::ApplicationConsentRepository;
 use crate::repository::backlog_forecast::BacklogForecastRepository;
 use crate::repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
+use crate::repository::crew_memory::CrewMemoryRepository;
 use crate::repository::evolution::EvolutionRepository;
+use crate::repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 use crate::repository::landed_diff::LandedDiffRepository;
 use crate::repository::notice::NoticeRepository;
+use crate::repository::provider_limit::ProviderLimitRepository;
+use crate::repository::reliability::ReliabilityRepository;
+use crate::repository::resource_usage::{ResourceUsageRepository, WorkerResourceLimitRepository};
+use crate::repository::retention::RetentionRepository;
 
 /// One consistent read view of the host store.
 ///
@@ -68,6 +74,45 @@ impl Snapshot<'_> {
     /// Read-only access to fleet notice records in this snapshot.
     pub fn notice(&self) -> NoticeRepository<'_, Self> {
         NoticeRepository::for_snapshot(self)
+    }
+    /// Read-only access to crew memory revisions, events and proposals in this snapshot.
+    pub fn crew_memory(&self) -> CrewMemoryRepository<'_, Self> {
+        CrewMemoryRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to experiment records in this snapshot.
+    pub fn experiment(&self) -> ExperimentRepository<'_, Self> {
+        ExperimentRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to experiment assignments and admissions in this snapshot.
+    pub fn experiment_assignment(&self) -> ExperimentAssignmentRepository<'_, Self> {
+        ExperimentAssignmentRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to this host's provider limits and crew outages in this snapshot.
+    pub fn provider_limit(&self) -> ProviderLimitRepository<'_, Self> {
+        ProviderLimitRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to count-only reliability facts in this snapshot.
+    pub fn reliability(&self) -> ReliabilityRepository<'_, Self> {
+        ReliabilityRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to run and host resource history and admission forecasts in this snapshot.
+    pub fn resource_usage(&self) -> ResourceUsageRepository<'_, Self> {
+        ResourceUsageRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to bounded retention reads and batches in this snapshot.
+    pub fn retention(&self) -> RetentionRepository<'_, Self> {
+        RetentionRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to worker resource-limit breach evidence in this snapshot.
+    pub fn worker_resource_limit(&self) -> WorkerResourceLimitRepository<'_, Self> {
+        WorkerResourceLimitRepository::for_snapshot(self)
     }
 }
 
@@ -133,6 +178,45 @@ impl Tx<'_> {
     /// Read-write access to fleet notice records inside this transaction.
     pub fn notice(&self) -> NoticeRepository<'_, Self> {
         NoticeRepository::for_tx(self)
+    }
+    /// Read-write access to crew memory revisions, events and proposals inside this transaction.
+    pub fn crew_memory(&self) -> CrewMemoryRepository<'_, Self> {
+        CrewMemoryRepository::for_tx(self)
+    }
+
+    /// Read-write access to experiment records inside this transaction.
+    pub fn experiment(&self) -> ExperimentRepository<'_, Self> {
+        ExperimentRepository::for_tx(self)
+    }
+
+    /// Read-write access to experiment assignments and admissions inside this transaction.
+    pub fn experiment_assignment(&self) -> ExperimentAssignmentRepository<'_, Self> {
+        ExperimentAssignmentRepository::for_tx(self)
+    }
+
+    /// Read-write access to this host's provider limits and crew outages inside this transaction.
+    pub fn provider_limit(&self) -> ProviderLimitRepository<'_, Self> {
+        ProviderLimitRepository::for_tx(self)
+    }
+
+    /// Access to count-only reliability facts inside this transaction.
+    pub fn reliability(&self) -> ReliabilityRepository<'_, Self> {
+        ReliabilityRepository::for_tx(self)
+    }
+
+    /// Read-write access to run and host resource history and admission forecasts inside this transaction.
+    pub fn resource_usage(&self) -> ResourceUsageRepository<'_, Self> {
+        ResourceUsageRepository::for_tx(self)
+    }
+
+    /// Read-write access to bounded retention reads and batches inside this transaction.
+    pub fn retention(&self) -> RetentionRepository<'_, Self> {
+        RetentionRepository::for_tx(self)
+    }
+
+    /// Read-write access to worker resource-limit breach evidence inside this transaction.
+    pub fn worker_resource_limit(&self) -> WorkerResourceLimitRepository<'_, Self> {
+        WorkerResourceLimitRepository::for_tx(self)
     }
 }
 

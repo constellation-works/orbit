@@ -5,7 +5,6 @@ use super::overlay::instruction_role;
 use crate::OrbitRuntime;
 use crate::application::crew_memory::memory_key;
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExperimentStoreBackend as _;
 use orbit_types::{
     task::{CrewSource, Task},
     workflow::{CapturedExperiment, CapturedExperimentMemory, CapturedExperiments},
@@ -65,7 +64,9 @@ impl OrbitRuntime {
             };
             let record = self
                 .sqlite_store()?
-                .experiment_record(&self.workspace_id()?, &row.experiment)?
+                .read()?
+                .experiment()
+                .get(&self.workspace_id()?, &row.experiment)?
                 .ok_or_else(|| OrbitError::Store("assigned experiment is missing".into()))?;
             let arm = record
                 .arms

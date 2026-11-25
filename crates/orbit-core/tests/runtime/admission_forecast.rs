@@ -17,9 +17,7 @@ use orbit_core::runtime::host_resource::forecast::{
 };
 use orbit_core::runtime::host_resource::profile::{ProfileLookup, ProfileSource};
 use orbit_store::Store;
-use orbit_store::contracts::{
-    HostResourceMinute, NewAdmissionReservation, ResourceUsageStoreBackend, RunResourceMinute,
-};
+use orbit_store::contracts::{HostResourceMinute, NewAdmissionReservation, RunResourceMinute};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -139,22 +137,24 @@ impl Fixture {
         for (index, (cores, bytes)) in series.cpu_cores.iter().zip(series.memory_bytes).enumerate()
         {
             self.store
-                .record_run_resource_minute(&RunResourceMinute {
-                    workspace_id: workspace.to_string(),
-                    run_id: run_id.to_string(),
-                    minute_index: index as u32,
-                    minute_started_at: admitted + Duration::minutes(index as i64),
-                    task_id: task.to_string(),
-                    work_class: "change".to_string(),
-                    complexity: complexity.map(str::to_string),
-                    resumed: false,
-                    delivery_admitted_at: Some(admitted),
-                    cpu_cores: *cores,
-                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                    memory_bytes: *bytes,
-                    samples: 12,
-                    crew_model: None,
-                    orbit_version: None,
+                .write(|tx| {
+                    tx.resource_usage().put_run_minute(&RunResourceMinute {
+                        workspace_id: workspace.to_string(),
+                        run_id: run_id.to_string(),
+                        minute_index: index as u32,
+                        minute_started_at: admitted + Duration::minutes(index as i64),
+                        task_id: task.to_string(),
+                        work_class: "change".to_string(),
+                        complexity: complexity.map(str::to_string),
+                        resumed: false,
+                        delivery_admitted_at: Some(admitted),
+                        cpu_cores: *cores,
+                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        memory_bytes: *bytes,
+                        samples: 12,
+                        crew_model: None,
+                        orbit_version: None,
+                    })
                 })
                 .unwrap();
         }
@@ -171,22 +171,24 @@ impl Fixture {
         sample: RunMinuteSample,
     ) {
         self.store
-            .record_run_resource_minute(&RunResourceMinute {
-                workspace_id: self.workspace.clone(),
-                run_id: run_id.to_string(),
-                minute_index: index,
-                minute_started_at: started,
-                task_id: task.to_string(),
-                work_class: "change".to_string(),
-                complexity: Some("medium".to_string()),
-                resumed: false,
-                delivery_admitted_at: Some(admitted),
-                cpu_cores: sample.cpu_cores,
-                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                memory_bytes: sample.memory_bytes,
-                samples: sample.samples,
-                crew_model: None,
-                orbit_version: None,
+            .write(|tx| {
+                tx.resource_usage().put_run_minute(&RunResourceMinute {
+                    workspace_id: self.workspace.clone(),
+                    run_id: run_id.to_string(),
+                    minute_index: index,
+                    minute_started_at: started,
+                    task_id: task.to_string(),
+                    work_class: "change".to_string(),
+                    complexity: Some("medium".to_string()),
+                    resumed: false,
+                    delivery_admitted_at: Some(admitted),
+                    cpu_cores: sample.cpu_cores,
+                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                    memory_bytes: sample.memory_bytes,
+                    samples: sample.samples,
+                    crew_model: None,
+                    orbit_version: None,
+                })
             })
             .unwrap();
     }
@@ -194,14 +196,16 @@ impl Fixture {
     /// The host minute a worker recorded at `at`.
     fn host_minute(&self, at: DateTime<Utc>, cores: f64, bytes: u64) {
         self.store
-            .offer_host_resource_minute(&HostResourceMinute {
-                minute_at: at,
-                cpu_cores: cores,
-                cpu_count: 15,
-                memory_bytes: bytes,
-                memory_total_bytes: 32 * GIB,
-                samples: 12,
-                recorded_by_run_id: None,
+            .write(|tx| {
+                tx.resource_usage().put_host_minute(&HostResourceMinute {
+                    minute_at: at,
+                    cpu_cores: cores,
+                    cpu_count: 15,
+                    memory_bytes: bytes,
+                    memory_total_bytes: 32 * GIB,
+                    samples: 12,
+                    recorded_by_run_id: None,
+                })
             })
             .unwrap();
     }

@@ -72,7 +72,10 @@ fn shadow_memory_arm_reports_captured_digest_with_null_revisions() {
     // capture shape the owner writes into a run input.
     let store = runtime.sqlite_store().unwrap();
     let record = store
-        .experiment_record(&runtime.workspace_id().unwrap(), &experiment.id)
+        .read()
+        .unwrap()
+        .experiment()
+        .get(&runtime.workspace_id().unwrap(), &experiment.id)
         .unwrap()
         .unwrap();
     let arm = record.arms.iter().find(|arm| arm.name == "memory").unwrap();
@@ -231,7 +234,10 @@ fn shadow_readout_uses_input_capture_despite_unreadable_checkpoint() {
     let overlay_json = json!({"memory":{"roles":["implement"],"global":true}}).to_string();
     let store = runtime.sqlite_store().unwrap();
     let record = store
-        .experiment_record(&runtime.workspace_id().unwrap(), &experiment.id)
+        .read()
+        .unwrap()
+        .experiment()
+        .get(&runtime.workspace_id().unwrap(), &experiment.id)
         .unwrap()
         .unwrap();
     let arm = record.arms.iter().find(|arm| arm.name == "memory").unwrap();

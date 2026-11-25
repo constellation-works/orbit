@@ -64,22 +64,22 @@ fn the_latest_observation_per_provider_scope_wins() {
     }
     let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
     let store =
-        provider_limit_store_from_store(Store::open(&root.path().join("orbit.db")).unwrap());
+        Store::open(&root.path().join("orbit.db")).unwrap();
 
     let first = observation("antigravity", at(14, 0), Some(at(15, 37)));
-    assert!(store.record_provider_limit(&first).unwrap());
+    assert!(store.write(|tx| tx.provider_limit().put(&first)).unwrap());
     let newer = observation("antigravity", at(14, 30), Some(at(16, 7)));
     assert!(
-        store.record_provider_limit(&newer).unwrap(),
+        store.write(|tx| tx.provider_limit().put(&newer)).unwrap(),
         "a newer one replaces it"
     );
     let older = observation("antigravity", at(13, 0), Some(at(13, 30)));
     assert!(
-        !store.record_provider_limit(&older).unwrap(),
+        !store.write(|tx| tx.provider_limit().put(&older)).unwrap(),
         "an older one is not stored"
     );
     assert_eq!(
-        store.provider_limits().unwrap(),
+        store.read().unwrap().provider_limit().list().unwrap(),
         std::slice::from_ref(&newer)
     );
 
@@ -89,9 +89,9 @@ fn the_latest_observation_per_provider_scope_wins() {
         at(14, 30) + provider_limit_observations_Duration::microseconds(7),
         None,
     );
-    assert!(store.record_provider_limit(&close).unwrap());
+    assert!(store.write(|tx| tx.provider_limit().put(&close)).unwrap());
     assert_eq!(
-        store.provider_limits().unwrap(),
+        store.read().unwrap().provider_limit().list().unwrap(),
         std::slice::from_ref(&close)
     );
 
@@ -100,9 +100,9 @@ fn the_latest_observation_per_provider_scope_wins() {
         window: Some("seven_day_opus".to_string()),
         ..observation("claude", at(12, 0), Some(at(23, 0)))
     };
-    assert!(store.record_provider_limit(&opus).unwrap());
+    assert!(store.write(|tx| tx.provider_limit().put(&opus)).unwrap());
     assert_eq!(
-        store.provider_limits().unwrap(),
+        store.read().unwrap().provider_limit().list().unwrap(),
         [close.clone(), opus.clone()],
         "newest first, one row per scope"
     );
@@ -124,8 +124,8 @@ fn the_latest_observation_per_provider_scope_wins() {
         window: opus.window.clone(),
         ..reading
     };
-    assert!(store.record_provider_limit(&reading).unwrap());
-    assert_eq!(store.provider_limits().unwrap(), [close, reading]);
+    assert!(store.write(|tx| tx.provider_limit().put(&reading)).unwrap());
+    assert_eq!(store.read().unwrap().provider_limit().list().unwrap(), [close, reading]);
 }
 
 /// [ORB-25967] A complete usage reading retires the same account's older
@@ -140,7 +140,7 @@ fn a_usage_reading_retires_the_event_windows_it_no_longer_reports() {
     }
     let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
     let store =
-        provider_limit_store_from_store(Store::open(&root.path().join("orbit.db")).unwrap());
+        Store::open(&root.path().join("orbit.db")).unwrap();
     let window =
         |account: Option<&str>, model: &str, label: &str, hour: u32| ProviderLimitObservation {
             account: account.map(ToOwned::to_owned),
@@ -152,9 +152,9 @@ fn a_usage_reading_retires_the_event_windows_it_no_longer_reports() {
             window_minutes: Some(300),
             ..observation("antigravity", at(hour, 0), Some(at(23, 0)))
         };
-    let keys = |store: &dyn orbit_store::contracts::ProviderLimitStoreBackend| {
+    let keys = |store: &Store| {
         let mut keys = store
-            .provider_limits()
+            .read().unwrap().provider_limit().list()
             .unwrap()
             .into_iter()
             .map(|limit| {
@@ -176,26 +176,26 @@ fn a_usage_reading_retires_the_event_windows_it_no_longer_reports() {
         window(Some("crew-a"), "argon", "wtu", 10),
         window(Some("crew-b"), "argon", "wtu", 10),
     ] {
-        store.record_provider_limit(&older).unwrap();
+        store.write(|tx| tx.provider_limit().put(&older)).unwrap();
     }
     let failure = ProviderLimitObservation {
         model: Some("neon".to_string()),
         window: Some("failure".to_string()),
         ..observation("antigravity", at(10, 0), Some(at(23, 0)))
     };
-    store.record_provider_limit(&failure).unwrap();
+    store.write(|tx| tx.provider_limit().put(&failure)).unwrap();
 
-    store.record_provider_usage_reading(&[]).unwrap();
-    assert_eq!(keys(&*store).len(), 5, "an empty reading retires nothing");
+    store.write(|tx| tx.provider_limit().put_reading(&[])).unwrap();
+    assert_eq!(keys(&store).len(), 5, "an empty reading retires nothing");
 
     store
-        .record_provider_usage_reading(&[window(None, "gemini", "5h", 11)])
+        .write(|tx| tx.provider_limit().put_reading(&[window(None, "gemini", "5h", 11)]))
         .unwrap();
     store
-        .record_provider_usage_reading(&[window(Some("crew-a"), "gemini", "5h", 11)])
+        .write(|tx| tx.provider_limit().put_reading(&[window(Some("crew-a"), "gemini", "5h", 11)]))
         .unwrap();
     assert_eq!(
-        keys(&*store),
+        keys(&store),
         [
             "/gemini/5h",
             "/neon/failure",
@@ -209,13 +209,13 @@ fn a_usage_reading_retires_the_event_windows_it_no_longer_reports() {
     // Nor does it restore a window the newer one retired, for the default
     // login or a named account.
     store
-        .record_provider_usage_reading(&[window(None, "flash", "5h", 9)])
+        .write(|tx| tx.provider_limit().put_reading(&[window(None, "flash", "5h", 9)]))
         .unwrap();
     store
-        .record_provider_usage_reading(&[window(Some("crew-a"), "argon", "wtu", 9)])
+        .write(|tx| tx.provider_limit().put_reading(&[window(Some("crew-a"), "argon", "wtu", 9)]))
         .unwrap();
     assert_eq!(
-        keys(&*store),
+        keys(&store),
         [
             "/gemini/5h",
             "/neon/failure",
@@ -259,7 +259,7 @@ fn an_existing_store_gains_the_provider_limit_table_additively() {
     drop(conn);
 
     for _ in 0..2 {
-        let store = provider_limit_store_from_store(Store::open(&path).unwrap());
+        let store = Store::open(&path).unwrap();
         let conn = Connection::open(&path).unwrap();
         let migration: String = conn
             .query_row(
@@ -277,8 +277,8 @@ fn an_existing_store_gains_the_provider_limit_table_additively() {
         assert_eq!(row, ("preserved".into(), "failure".into()));
 
         let limit = observation("codex", Utc::now(), None);
-        assert!(store.record_provider_limit(&limit).unwrap());
-        assert_eq!(store.provider_limits().unwrap().len(), 1);
+        assert!(store.write(|tx| tx.provider_limit().put(&limit)).unwrap());
+        assert_eq!(store.read().unwrap().provider_limit().list().unwrap().len(), 1);
     }
 }
 
@@ -315,8 +315,8 @@ fn a_v40_table_gains_the_reading_columns_additively() {
     .unwrap();
     drop(conn);
 
-    let store = provider_limit_store_from_store(Store::open(&path).unwrap());
-    let [row] = store.provider_limits().unwrap().try_into().unwrap();
+    let store = Store::open(&path).unwrap();
+    let [row] = store.read().unwrap().provider_limit().list().unwrap().try_into().unwrap();
     assert_eq!(row.source, ProviderLimitSource::Error);
     assert_eq!((row.used_percent, row.window_minutes), (None, None));
     assert!(row.gating, "a failure an older binary recorded still gates");
@@ -353,8 +353,8 @@ fn crew_account_readings_are_kept_apart_from_the_default_login() {
     .unwrap();
     drop(conn);
 
-    let store = provider_limit_store_from_store(Store::open(&path).unwrap());
-    let [legacy] = store.provider_limits().unwrap().try_into().unwrap();
+    let store = Store::open(&path).unwrap();
+    let [legacy] = store.read().unwrap().provider_limit().list().unwrap().try_into().unwrap();
     assert_eq!(
         (legacy.account, legacy.crew.as_deref()),
         (None, Some("opus-credits")),
@@ -367,19 +367,19 @@ fn crew_account_readings_are_kept_apart_from_the_default_login() {
         ..observation("claude", observed_at, Some(at(19, 0)))
     };
     let credits = five_hour(Some("opus-credits"), at(14, 10));
-    assert!(store.record_provider_limit(&credits).unwrap());
+    assert!(store.write(|tx| tx.provider_limit().put(&credits)).unwrap());
     let subscription = five_hour(None, at(14, 20));
-    assert!(store.record_provider_limit(&subscription).unwrap());
+    assert!(store.write(|tx| tx.provider_limit().put(&subscription)).unwrap());
     assert_eq!(
-        store.provider_limits().unwrap(),
+        store.read().unwrap().provider_limit().list().unwrap(),
         [subscription.clone(), credits.clone()],
         "one row per account, newest first"
     );
 
     let older_credits = five_hour(Some("opus-credits"), at(14, 5));
     assert!(
-        !store.record_provider_limit(&older_credits).unwrap(),
+        !store.write(|tx| tx.provider_limit().put(&older_credits)).unwrap(),
         "an older reading of the account does not replace its newer one"
     );
-    assert_eq!(store.provider_limits().unwrap(), [subscription, credits]);
+    assert_eq!(store.read().unwrap().provider_limit().list().unwrap(), [subscription, credits]);
 }

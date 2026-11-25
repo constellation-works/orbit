@@ -13,7 +13,7 @@ use orbit_core::runtime::host_resource::profile::{
 use orbit_core::{JobRunState, OrbitRuntime};
 use orbit_engine::RuntimeHost;
 use orbit_store::Store;
-use orbit_store::contracts::{ResourceUsageStoreBackend, RunResourceMinute};
+use orbit_store::contracts::RunResourceMinute;
 use orbit_types::task::TaskStatus;
 use serde_json::json;
 use tempfile::TempDir;
@@ -141,22 +141,24 @@ impl Fixture {
             .unwrap();
         for (index, (cpu, memory)) in seed.cpu.iter().zip(&seed.memory).enumerate() {
             self.store
-                .record_run_resource_minute(&RunResourceMinute {
-                    workspace_id: workspace.to_string(),
-                    run_id: run.run_id.clone(),
-                    minute_index: index as u32,
-                    minute_started_at: started + Duration::minutes(index as i64),
-                    task_id: task.to_string(),
-                    work_class: class.to_string(),
-                    complexity: complexity.map(str::to_string),
-                    resumed: seed.resumed,
-                    delivery_admitted_at: Some(admitted),
-                    cpu_cores: *cpu,
-                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                    memory_bytes: *memory,
-                    samples: 12,
-                    crew_model: self.sampled_under.borrow().0.clone(),
-                    orbit_version: self.sampled_under.borrow().1.clone(),
+                .write(|tx| {
+                    tx.resource_usage().put_run_minute(&RunResourceMinute {
+                        workspace_id: workspace.to_string(),
+                        run_id: run.run_id.clone(),
+                        minute_index: index as u32,
+                        minute_started_at: started + Duration::minutes(index as i64),
+                        task_id: task.to_string(),
+                        work_class: class.to_string(),
+                        complexity: complexity.map(str::to_string),
+                        resumed: seed.resumed,
+                        delivery_admitted_at: Some(admitted),
+                        cpu_cores: *cpu,
+                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        memory_bytes: *memory,
+                        samples: 12,
+                        crew_model: self.sampled_under.borrow().0.clone(),
+                        orbit_version: self.sampled_under.borrow().1.clone(),
+                    })
                 })
                 .unwrap();
         }
@@ -945,14 +947,23 @@ fn profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes() {
         // be excluded when it is untrusted, not just that run or minute.
         let mut rows = fixture
             .store
-            .run_resource_minutes(&fixture.workspace, &runs[0])
+            .read()
+            .unwrap()
+            .resource_usage()
+            .run_minutes(&fixture.workspace, &runs[0])
             .unwrap();
         rows[1].cpu_accounting = accounting.map(str::to_string);
-        fixture.store.record_run_resource_minute(&rows[1]).unwrap();
+        fixture
+            .store
+            .write(|tx| tx.resource_usage().put_run_minute(&rows[1]))
+            .unwrap();
         assert_eq!(
             fixture
                 .store
-                .run_resource_minutes(&fixture.workspace, &runs[0])
+                .read()
+                .unwrap()
+                .resource_usage()
+                .run_minutes(&fixture.workspace, &runs[0])
                 .unwrap(),
             rows,
             "raw counters, footprint and provenance remain readable"
@@ -1082,7 +1093,10 @@ fn gc_preserves_profiles_behind_ineligible_deliveries() {
     assert!(
         fixture
             .store
-            .run_resource_minutes(&workspace, &batched_runs[1])
+            .read()
+            .unwrap()
+            .resource_usage()
+            .run_minutes(&workspace, &batched_runs[1])
             .unwrap()
             .is_empty()
     );

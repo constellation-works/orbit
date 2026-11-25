@@ -1,4 +1,6 @@
-//! Count-only reliability reads over `job_runs` and `invocations` [ORB-10588].
+//! Concrete repository for count-only reliability reads over `job_runs` and
+//! `invocations` [ORB-10588], reached through [`Snapshot::reliability`] and
+//! [`Tx::reliability`]. It reads only; it has no writing method.
 //!
 //! These queries exist so pipeline-reliability reporting never has to load the
 //! wide row shapes that the token/cost metrics path uses. Every column read
@@ -19,24 +21,50 @@
 //! matching every other timestamp filter in this crate (see
 //! `list_job_runs_for_workspace` and `list_invocation_records`).
 
+use std::marker::PhantomData;
+
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 
-use crate::Store;
+use crate::store::{Snapshot, Tx};
 
 use crate::contracts::{
     ActivityInvocationCount, BoundedFacts, InvocationRunCoverage, JobRunOutcomeFact,
 };
 
-impl Store {
+/// Concrete reliability repository scoped to a [`Snapshot`] or a [`Tx`].
+pub struct ReliabilityRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> ReliabilityRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'tx> ReliabilityRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<Access> ReliabilityRepository<'_, Access> {
     /// Lists every job run created in `[since, until)` for one workspace,
     /// projected to `(run_id, job_id, state, created_at)`, plus an
     /// `interrupted` run's recorded error code.
     ///
-    /// Unlike [`Store::list_job_runs_for_workspace`], this does not load step
+    /// Unlike `Store::list_job_runs_for_workspace`, this does not load step
     /// rows, input payloads, or model attribution — a reliability window can
     /// span thousands of runs and the per-run step fan-out would dominate.
     /// Only an `interrupted` row looks at its steps, by primary key.
@@ -56,7 +84,7 @@ impl Store {
                 truncated: false,
             });
         }
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -116,7 +144,7 @@ impl Store {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<ActivityInvocationCount>, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -198,7 +226,7 @@ impl Store {
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             bound.iter().map(|value| value.as_ref()).collect();
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         conn.query_row(&sql, param_refs.as_slice(), |row| {
             Ok(InvocationRunCoverage {
                 total_job_runs: row.get::<_, i64>(0)?.max(0) as u64,

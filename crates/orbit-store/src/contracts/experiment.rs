@@ -1,11 +1,11 @@
 //! Experiment records: operator-defined experiments, their arms and the
 //! append-only event log of every change to them. The lifecycle rules and
 //! the typed overlay, population and metric documents are owned by core; the
-//! store keeps those documents as opaque JSON and makes each write atomic
-//! against the revision it was computed from.
+//! store keeps those documents as opaque JSON, and the calling operation
+//! checks each write against the revision it was computed from inside one
+//! write transaction.
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 
 /// One experiment's definition and lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,75 +123,4 @@ pub struct ExperimentAssignment {
     pub assigned_at: DateTime<Utc>,
     pub forced: bool,
     pub exclusion_reason: Option<String>,
-}
-
-/// Pure assignment decision inside the store transaction. Existing rows cannot
-/// be replaced, except that a forced assignment may replace an exclusion. `admitted` includes prior admissions that matched no population;
-/// a marked admission never reaches the decision once the task is admitted.
-pub type ExperimentAssignmentDecision<'a> = dyn Fn(
-        &[ExperimentRecord],
-        &[ExperimentAssignment],
-        bool,
-    ) -> Result<Vec<ExperimentAssignment>, OrbitError>
-    + 'a;
-
-pub trait ExperimentStoreBackend: Send + Sync {
-    /// Serialize assignment decisions with lifecycle changes and other admissions.
-    /// `experiments_enabled` is the caller's current effective enablement. While
-    /// it is false, a marked admission writes nothing and returns existing rows.
-    /// Once an enabled marked admission has run, later marked admissions return
-    /// the existing rows unchanged, even when that first admission matched none.
-    fn assign_experiments(
-        &self,
-        workspace_id: &str,
-        task_id: &str,
-        mark_admitted: bool,
-        experiments_enabled: bool,
-        decide: &ExperimentAssignmentDecision<'_>,
-    ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
-
-    /// All assignments and exclusions for the task, in experiment creation order.
-    fn task_experiment_assignments(
-        &self,
-        workspace_id: &str,
-        task_id: &str,
-    ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
-
-    /// Every assignment and exclusion of one experiment, oldest first.
-    fn experiment_assignments(
-        &self,
-        workspace_id: &str,
-        experiment_id: &str,
-    ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
-
-    /// Apply `write` in one immediate transaction.
-    fn write_experiment(
-        &self,
-        write: &ExperimentWrite,
-    ) -> Result<ExperimentWriteOutcome, OrbitError>;
-
-    /// The experiment whose id, or else whose name, is `id_or_name`.
-    fn experiment_record(
-        &self,
-        workspace_id: &str,
-        id_or_name: &str,
-    ) -> Result<Option<ExperimentRecord>, OrbitError>;
-
-    /// Delete one experiment with its arms, events and assignment rows in one
-    /// immediate transaction, unless its stored revision is no longer
-    /// `expected_revision`. Returns whether it was deleted.
-    fn delete_experiment(
-        &self,
-        workspace_id: &str,
-        experiment_id: &str,
-        expected_revision: u32,
-    ) -> Result<bool, OrbitError>;
-
-    /// The workspace's experiments, oldest first, optionally only those in
-    /// `status`. Events are not loaded.
-    fn experiment_records(
-        &self,
-        workspace_id: &str,
-        status: Option<&str>,
-    ) -> Result<Vec<ExperimentRecord>, OrbitError>;
 }

@@ -1,17 +1,9 @@
 pub(crate) mod audit_event_store;
 pub(crate) mod authority;
-mod crew_memory_store;
-mod delivery_run_load;
-mod experiment_assignments;
-pub(crate) mod experiment_store;
 pub mod host;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
 pub(crate) mod plugin_store;
-pub(crate) mod provider_limit_store;
-pub(crate) mod reliability_store;
-pub(crate) mod resource_usage_store;
-pub(crate) mod retention;
 pub(crate) mod routine_store;
 pub(crate) mod script_grant_store;
 pub(crate) mod task_commit_journal;

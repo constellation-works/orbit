@@ -234,39 +234,41 @@ fn explicit_same_crew_does_not_count_as_experiment_treatment() {
     ) {
         return;
     }
-    use orbit_store::contracts::ExperimentStoreBackend as _;
     let f = Fixture::new();
     // Fix the enrolled arm to isolate readout behavior from hash allocation.
     f.runtime
         .sqlite_store()
         .unwrap()
-        .assign_experiments(
-            &f.runtime.workspace_id().unwrap(),
-            &f.task,
-            true,
-            true,
-            &|records, _, _| {
-                let record = records
-                    .iter()
-                    .find(|record| record.experiment.id == f.experiment)
-                    .unwrap();
-                let arm = record
-                    .arms
-                    .iter()
-                    .find(|arm| arm.name == "treatment")
-                    .unwrap();
-                Ok(vec![orbit_store::contracts::ExperimentAssignment {
-                    experiment: f.experiment.clone(),
-                    task_id: f.task.clone(),
-                    arm: Some(arm.name.clone()),
-                    segment: Some(record.experiment.segment),
-                    digest: Some(arm.overlay_digest.clone()),
-                    assigned_at: chrono::Utc::now(),
-                    forced: false,
-                    exclusion_reason: None,
-                }])
-            },
-        )
+        .write(|tx| {
+            orbit_core::application::experiment::assign_experiments(
+                tx,
+                &f.runtime.workspace_id().unwrap(),
+                &f.task,
+                true,
+                true,
+                &|records, _, _| {
+                    let record = records
+                        .iter()
+                        .find(|record| record.experiment.id == f.experiment)
+                        .unwrap();
+                    let arm = record
+                        .arms
+                        .iter()
+                        .find(|arm| arm.name == "treatment")
+                        .unwrap();
+                    Ok(vec![orbit_store::contracts::ExperimentAssignment {
+                        experiment: f.experiment.clone(),
+                        task_id: f.task.clone(),
+                        arm: Some(arm.name.clone()),
+                        segment: Some(record.experiment.segment),
+                        digest: Some(arm.overlay_digest.clone()),
+                        assigned_at: chrono::Utc::now(),
+                        forced: false,
+                        exclusion_reason: None,
+                    }])
+                },
+            )
+        })
         .unwrap();
     f.admit(None);
     let before = f.runtime.experiment_readout(&f.experiment, None).unwrap();

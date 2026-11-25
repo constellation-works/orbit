@@ -2,8 +2,6 @@
 //! chain, and a worker without a scope records nothing.
 
 use chrono::Utc;
-#[cfg(target_os = "linux")]
-use orbit_store::contracts::ResourceUsageStoreBackend;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRun, PipelineState};
 use serde_json::{Value, json};
@@ -251,7 +249,10 @@ fn worker_without_a_scope_records_nothing_and_logs_nothing() {
     assert!(sampler.is_none());
     assert!(
         store
-            .run_resource_minutes(&workspace_id, &run.run_id)
+            .read()
+            .unwrap()
+            .resource_usage()
+            .run_minutes(&workspace_id, &run.run_id)
             .unwrap()
             .is_empty()
     );
@@ -280,7 +281,10 @@ fn worker_without_a_scope_records_nothing_and_logs_nothing() {
             .expect("a scoped delivery samples"),
     );
     let rows = store
-        .run_resource_minutes(&workspace_id, &run.run_id)
+        .read()
+        .unwrap()
+        .resource_usage()
+        .run_minutes(&workspace_id, &run.run_id)
         .unwrap();
     assert_eq!(rows.len(), 1, "{rows:#?}");
     assert_eq!(rows[0].memory_bytes, 3072);

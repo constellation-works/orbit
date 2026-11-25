@@ -10,9 +10,10 @@ impl OrbitRuntime {
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_store::contracts::WorkerResourceLimitEvidence>, OrbitError> {
-        use orbit_store::contracts::WorkerResourceLimitStoreBackend;
         self.sqlite_store()?
-            .worker_resource_limit_evidence(&self.workspace_id()?, run_id)
+            .read()?
+            .worker_resource_limit()
+            .get(&self.workspace_id()?, run_id)
     }
 
     /// [ORB-12903] A run that failed after its worker scope hit a memory or

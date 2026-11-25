@@ -85,7 +85,10 @@ fn expired_instruction_experiment(
     let workspace_id = runtime.workspace_id().unwrap();
     let store = runtime.sqlite_store().unwrap();
     let mut record = store
-        .experiment_record(&workspace_id, &experiment.id)
+        .read()
+        .unwrap()
+        .experiment()
+        .get(&workspace_id, &experiment.id)
         .unwrap()
         .unwrap();
     let revision = record.experiment.revision;
@@ -94,24 +97,28 @@ fn expired_instruction_experiment(
     record.experiment.revision += 1;
     assert_eq!(
         store
-            .write_experiment(&ExperimentWrite {
-                event: ExperimentEventRow {
-                    seq: record.experiment.revision,
-                    kind: "started".into(),
-                    from_status: Some("draft".into()),
-                    to_status: Some("running".into()),
-                    segment: 1,
-                    actor: actor.actor,
-                    at: Utc::now() - Duration::days(2),
-                    reason: None,
-                    detail_json: json!({"segment": 1, "weights": {"control": 1, "treatment": 1}})
-                        .to_string(),
-                },
-                experiment: record.experiment,
-                arms: None,
-                expected_revision: Some(revision),
-                running_limit: None,
-            })
+            .write(|tx| orbit_core::application::experiment::write_experiment(
+                tx,
+                &ExperimentWrite {
+                    event: ExperimentEventRow {
+                        seq: record.experiment.revision,
+                        kind: "started".into(),
+                        from_status: Some("draft".into()),
+                        to_status: Some("running".into()),
+                        segment: 1,
+                        actor: actor.actor,
+                        at: Utc::now() - Duration::days(2),
+                        reason: None,
+                        detail_json:
+                            json!({"segment": 1, "weights": {"control": 1, "treatment": 1}})
+                                .to_string(),
+                    },
+                    experiment: record.experiment,
+                    arms: None,
+                    expected_revision: Some(revision),
+                    running_limit: None,
+                }
+            ))
             .unwrap(),
         ExperimentWriteOutcome::Written
     );

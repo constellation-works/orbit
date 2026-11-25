@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 use super::dream::{CREW_MEMORY_AGENT_TOOLS, DREAM_MINTED, dreaming_task_key};
 use super::operations::{DreamingWrite, json_text};
+use super::records::open_proposal;
 use super::{
     MemoryFile, MemoryKey, MemoryWrite, MemoryWriteContext, MemoryWriter, memory_key,
     validate_memory_write,
@@ -143,8 +144,10 @@ impl OrbitRuntime {
             )));
         }
         let events = self
-            .crew_memory_store()?
-            .crew_memory_events(&self.workspace_id()?, key.as_str())?;
+            .sqlite_store()?
+            .read()?
+            .crew_memory()
+            .events(&self.workspace_id()?, key.as_str())?;
         let evidence = events
             .iter()
             .rev()
@@ -178,8 +181,8 @@ impl OrbitRuntime {
         rule: &str,
         message: &str,
     ) -> Result<(), OrbitError> {
-        self.crew_memory_store()?
-            .append_crew_memory_event(&CrewMemoryEventRow {
+        self.sqlite_store()?.write(|tx| {
+            tx.crew_memory().put_event(&CrewMemoryEventRow {
                 workspace_id: self.workspace_id()?,
                 memory_key: key.to_string(),
                 at: Utc::now().trunc_subsecs(6),
@@ -189,6 +192,7 @@ impl OrbitRuntime {
                 detail_json: json!({ "task_id": task_id, "rule": rule, "message": message })
                     .to_string(),
             })
+        })
     }
 
     /// `orbit.memory.show` for `caller`.
@@ -362,34 +366,37 @@ impl OrbitRuntime {
         let now = Utc::now().trunc_subsecs(6);
         let workspace_id = self.workspace_id()?;
         let id = proposal_id(&workspace_id, &scope.key, &run_id, &text, now);
-        let outcome = self.crew_memory_store()?.open_crew_memory_proposal(
-            &CrewMemoryProposalRow {
-                workspace_id: workspace_id.clone(),
-                id: id.clone(),
-                proposing_key: scope.key.to_string(),
-                proposing_run_id: Some(run_id.clone()),
-                text,
-                evidence_json: json_text(&evidence)?,
-                status: "open".to_string(),
-                created_at: now,
-            },
-            &CrewMemoryEventRow {
-                workspace_id,
-                memory_key: scope.key.to_string(),
-                at: now,
-                action: "proposal_opened".to_string(),
-                actor: writer.actor().to_string(),
-                revision: None,
-                detail_json: json!({
-                    "task_id": task.id,
-                    "run_id": run_id,
-                    "proposal_id": id,
-                    "evidence": evidence,
-                })
-                .to_string(),
-            },
-            CREW_MEMORY_MAX_PROPOSALS_PER_RUN,
-        )?;
+        let outcome = self.sqlite_store()?.write(|tx| {
+            open_proposal(
+                tx,
+                &CrewMemoryProposalRow {
+                    workspace_id: workspace_id.clone(),
+                    id: id.clone(),
+                    proposing_key: scope.key.to_string(),
+                    proposing_run_id: Some(run_id.clone()),
+                    text,
+                    evidence_json: json_text(&evidence)?,
+                    status: "open".to_string(),
+                    created_at: now,
+                },
+                &CrewMemoryEventRow {
+                    workspace_id,
+                    memory_key: scope.key.to_string(),
+                    at: now,
+                    action: "proposal_opened".to_string(),
+                    actor: writer.actor().to_string(),
+                    revision: None,
+                    detail_json: json!({
+                        "task_id": task.id,
+                        "run_id": run_id,
+                        "proposal_id": id,
+                        "evidence": evidence,
+                    })
+                    .to_string(),
+                },
+                CREW_MEMORY_MAX_PROPOSALS_PER_RUN,
+            )
+        })?;
         if let CrewMemoryProposalOutcome::CapReached { existing } = outcome {
             let message = format!(
                 "crew memory propose refused: this run already opened {existing} proposal(s), the most one dreaming run may open is {CREW_MEMORY_MAX_PROPOSALS_PER_RUN}"

@@ -40,7 +40,8 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
-use orbit_store::contracts::{HostResourceMinute, ResourceUsageStoreBackend, RunResourceMinute};
+use orbit_store::Store;
+use orbit_store::contracts::{HostResourceMinute, RunResourceMinute};
 use orbit_types::workflow::JobRun;
 
 use super::super::delivery_class::DeliveryResourceClass;
@@ -99,7 +100,7 @@ impl ResourceSource {
 
 /// Aggregates one worker's samples into minutes and writes each as it ends.
 pub(crate) struct RunResourceSampler {
-    store: Arc<dyn ResourceUsageStoreBackend>,
+    store: Arc<Store>,
     source: ResourceSource,
     proc_root: PathBuf,
     workspace_id: String,
@@ -136,7 +137,7 @@ impl RunResourceSampler {
     /// continues after them and is marked resumed.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn new(
-        store: Arc<dyn ResourceUsageStoreBackend>,
+        store: Arc<Store>,
         scope: WorkerScopeCgroup,
         proc_root: PathBuf,
         workspace_id: String,
@@ -162,7 +163,7 @@ impl RunResourceSampler {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_process_tree(
-        store: Arc<dyn ResourceUsageStoreBackend>,
+        store: Arc<Store>,
         read: impl FnMut() -> Option<Vec<orbit_common::process::ancestry::ProcessTreeProcess>>
         + Send
         + 'static,
@@ -187,7 +188,7 @@ impl RunResourceSampler {
     }
 
     fn assemble(
-        store: Arc<dyn ResourceUsageStoreBackend>,
+        store: Arc<Store>,
         source: ResourceSource,
         proc_root: PathBuf,
         workspace_id: String,
@@ -196,7 +197,12 @@ impl RunResourceSampler {
         started_at: DateTime<Utc>,
     ) -> Self {
         let first_minute = store
-            .run_resource_minutes(&workspace_id, &run_id)
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .resource_usage()
+                    .run_minutes(&workspace_id, &run_id)
+            })
             .ok()
             .and_then(|minutes| minutes.last().map(|minute| minute.minute_index + 1))
             .unwrap_or(0);
@@ -417,7 +423,10 @@ impl RunResourceSampler {
             crew_model: self.crew_model.clone(),
             orbit_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
-        if let Err(error) = self.store.record_run_resource_minute(&row) {
+        if let Err(error) = self
+            .store
+            .write(|tx| tx.resource_usage().put_run_minute(&row))
+        {
             tracing::debug!(
                 target: "orbit.core.job_run",
                 run_id = self.run_id,
@@ -441,7 +450,10 @@ impl RunResourceSampler {
             samples: minute.samples,
             recorded_by_run_id: Some(self.run_id.clone()),
         };
-        if let Err(error) = self.store.offer_host_resource_minute(&row) {
+        if let Err(error) = self
+            .store
+            .write(|tx| tx.resource_usage().put_host_minute(&row))
+        {
             tracing::debug!(
                 target: "orbit.core.job_run",
                 run_id = self.run_id,
@@ -524,7 +536,7 @@ impl OrbitRuntime {
         adopted: bool,
     ) -> Option<ResourceSamplerThread> {
         let class = self.delivery_resource_class(run, adopted)?;
-        let store: Arc<dyn ResourceUsageStoreBackend> = Arc::new(self.sqlite_store().ok()?);
+        let store: Arc<Store> = Arc::new(self.sqlite_store().ok()?);
         let workspace_id = self.workspace_id().ok()?;
         ResourceSamplerThread::spawn(
             RunResourceSampler::from_process_tree(
@@ -553,7 +565,7 @@ impl OrbitRuntime {
     ) -> Option<ResourceSamplerThread> {
         let scope = scope?;
         let class = self.delivery_resource_class(run, adopted)?;
-        let store: Arc<dyn ResourceUsageStoreBackend> = Arc::new(self.sqlite_store().ok()?);
+        let store: Arc<Store> = Arc::new(self.sqlite_store().ok()?);
         let workspace_id = self.workspace_id().ok()?;
         ResourceSamplerThread::spawn(
             RunResourceSampler::new(

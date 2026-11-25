@@ -1,6 +1,7 @@
 //! Loading the retained sampled runs a profile rebuild reads
-//! (`ResourceUsageStoreBackend::delivery_run_resources` and
-//! `reload_delivery_runs`).
+//! (`ResourceUsageRepository::delivery_runs` and `reload_delivery_runs`).
+//! Both run inside the caller's snapshot or transaction, so their statements
+//! see one view of the store.
 //!
 //! A host keeps hundreds of thousands of minute rows, and a rebuild runs on
 //! the request that first sees a finished delivery. Reading every row again,
@@ -22,7 +23,7 @@ use crate::contracts::{
     DeliveryRunResources, DeliveryRunShape, DeliveryRunsLoad, ResourceMinuteLoad,
 };
 
-use super::codec::{stamp, unsigned};
+use crate::driver::sqlite::codec::{stamp, unsigned};
 
 /// The columns [`push_rows`] reads, in its order.
 const MINUTE_COLUMNS: &str = "workspace_id, run_id, task_id, work_class, complexity, resumed,
@@ -35,10 +36,8 @@ pub(super) fn load_delivery_runs(
     conn: &Connection,
     since: DateTime<Utc>,
 ) -> Result<Vec<DeliveryRunResources>, OrbitError> {
-    in_read_snapshot(conn, |conn| {
-        let shapes = run_shapes(conn)?;
-        read_all(conn, since, &shapes)
-    })
+    let shapes = run_shapes(conn)?;
+    read_all(conn, since, &shapes)
 }
 
 /// [`load_delivery_runs`] since the epoch, reusing each run of `previous`
@@ -47,40 +46,38 @@ pub(super) fn reload_delivery_runs(
     conn: &Connection,
     previous: Option<DeliveryRunsLoad>,
 ) -> Result<DeliveryRunsLoad, OrbitError> {
-    in_read_snapshot(conn, |conn| {
-        let shapes = run_shapes(conn)?;
-        let since = DateTime::UNIX_EPOCH;
-        let held = held_runs(&shapes, previous.unwrap_or_default());
-        let moved = held.iter().filter(|run| run.is_none()).count();
-        // Past half the runs, one ordered scan beats a lookup per run.
-        let runs = if moved * 2 > shapes.len() {
-            read_all(conn, since, &shapes)?
-        } else {
-            let mut statement = conn
-                .prepare(&format!(
-                    "SELECT {MINUTE_COLUMNS}
-                     FROM run_resource_minutes
-                     WHERE workspace_id = ?1 AND run_id = ?2 AND delivery_admitted_at >= ?3
-                     ORDER BY minute_index",
-                ))
-                .map_err(sqlite_store_error)?;
-            let since = stamp(since);
-            let mut runs = Vec::with_capacity(shapes.len());
-            for (shape, held) in shapes.iter().zip(held) {
-                match held {
-                    Some(run) => runs.extend(run),
-                    None => {
-                        let mut rows = statement
-                            .query(params![shape.workspace_id, shape.run_id, since])
-                            .map_err(sqlite_store_error)?;
-                        push_rows(&mut rows, std::slice::from_ref(shape), &mut runs)?;
-                    }
+    let shapes = run_shapes(conn)?;
+    let since = DateTime::UNIX_EPOCH;
+    let held = held_runs(&shapes, previous.unwrap_or_default());
+    let moved = held.iter().filter(|run| run.is_none()).count();
+    // Past half the runs, one ordered scan beats a lookup per run.
+    let runs = if moved * 2 > shapes.len() {
+        read_all(conn, since, &shapes)?
+    } else {
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT {MINUTE_COLUMNS}
+                 FROM run_resource_minutes
+                 WHERE workspace_id = ?1 AND run_id = ?2 AND delivery_admitted_at >= ?3
+                 ORDER BY minute_index",
+            ))
+            .map_err(sqlite_store_error)?;
+        let since = stamp(since);
+        let mut runs = Vec::with_capacity(shapes.len());
+        for (shape, held) in shapes.iter().zip(held) {
+            match held {
+                Some(run) => runs.extend(run),
+                None => {
+                    let mut rows = statement
+                        .query(params![shape.workspace_id, shape.run_id, since])
+                        .map_err(sqlite_store_error)?;
+                    push_rows(&mut rows, std::slice::from_ref(shape), &mut runs)?;
                 }
             }
-            runs
-        };
-        Ok(DeliveryRunsLoad { runs, shapes })
-    })
+        }
+        runs
+    };
+    Ok(DeliveryRunsLoad { runs, shapes })
 }
 
 /// What the earlier load holds for one current run: `Some` while the run's
@@ -257,26 +254,6 @@ fn run_shapes(conn: &Connection) -> Result<Vec<DeliveryRunShape>, OrbitError> {
         });
     }
     Ok(shapes)
-}
-
-/// Run `read` in one deferred read transaction, so its statements see one
-/// snapshot.
-fn in_read_snapshot<T>(
-    conn: &Connection,
-    read: impl FnOnce(&Connection) -> Result<T, OrbitError>,
-) -> Result<T, OrbitError> {
-    conn.execute_batch("BEGIN DEFERRED")
-        .map_err(sqlite_store_error)?;
-    match read(conn) {
-        Ok(value) => {
-            conn.execute_batch("COMMIT").map_err(sqlite_store_error)?;
-            Ok(value)
-        }
-        Err(error) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(error)
-        }
-    }
 }
 
 fn replace_if_changed(slot: &mut Option<String>, value: &str) {
