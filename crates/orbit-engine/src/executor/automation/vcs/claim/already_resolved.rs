@@ -31,15 +31,27 @@ use super::validation::ClaimedResult;
 /// The most output a failure message quotes, from the end of the run.
 const MAX_QUOTED_OUTPUT_BYTES: usize = 4 * 1024;
 
+/// An admitted already-resolved declaration with both the raw selector strings
+/// and their host commands.
+pub(super) struct DeclaredAlreadyResolved {
+    pub(super) selectors: Vec<String>,
+    pub(super) commands: Vec<HostSandboxCommand>,
+}
+
 /// The admitted selectors of this attempt's implementer output, handed in as
 /// `implementation`, or `None` when it declared no already-resolved outcome.
-pub(super) fn declared(input: &Value) -> Result<Option<Vec<HostSandboxCommand>>, OrbitError> {
+pub(super) fn declared(input: &Value) -> Result<Option<DeclaredAlreadyResolved>, OrbitError> {
     let Some(output) = input.get("implementation") else {
         return Ok(None);
     };
-    AlreadyResolved::from_output(output)
-        .and_then(|declared| declared.map(|declared| declared.admit()).transpose())
-        .map_err(refused)
+    let Some(declared) = AlreadyResolved::from_output(output).map_err(refused)? else {
+        return Ok(None);
+    };
+    let commands = declared.admit().map_err(refused)?;
+    Ok(Some(DeclaredAlreadyResolved {
+        selectors: declared.selectors,
+        commands,
+    }))
 }
 
 /// Run each admitted selector on `candidate`'s base, in order, and return

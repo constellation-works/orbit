@@ -157,7 +157,19 @@ impl TaskCommitBoundary {
             {
                 return Err(invalid("NoDiff verifier report identity or base mismatch"));
             }
-            if report["decision"] == "verified_already_resolved" {
+            if report["decision"] == "skipped_no_diff_expected"
+                && !report["already_resolved_evidence"].is_null()
+            {
+                return Err(invalid(
+                    "NoDiff skip cannot carry already-resolved selectors",
+                ));
+            }
+            if report["decision"] == "verified_already_resolved"
+                || (matches!(
+                    report["decision"].as_str(),
+                    Some("verified_no_diff" | "verified_already_landed")
+                ) && !report["already_resolved_evidence"].is_null())
+            {
                 let selectors: Vec<String> = serde_json::from_value(
                     report["already_resolved_evidence"]["selectors"].clone(),
                 )

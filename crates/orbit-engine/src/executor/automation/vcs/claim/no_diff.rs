@@ -168,14 +168,28 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     // Refused before anything runs: a declaration naming nothing, or a
     // selector outside the grammar, never reaches the host.
     let resolved = already_resolved::declared(input)?;
-    let report = claimed_clean_base_checkpoint(input)
-        .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?;
-    require_checkpoint_identity(report, &context.task_id, &context.run_id)?;
+    let mut report = claimed_clean_base_checkpoint(input)
+        .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?
+        .clone();
+    require_checkpoint_identity(&report, &context.task_id, &context.run_id)?;
     require_unchanged_base(workspace, report["base_sha"].as_str().unwrap_or_default())?;
     let task = host.get_task(&context.task_id)?;
-    verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, report)?;
+    verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, &report)?;
+    // Preserve admitted already-resolved selectors on report-backed checkpoints
+    // so owner evidence validation recognizes overlapping required/replay runs.
+    if skips_validation(&report) {
+        if let Some(object) = report.as_object_mut() {
+            object.remove("already_resolved_evidence");
+        }
+    } else if report["decision"] != "verified_already_resolved" {
+        if let Some(declared) = &resolved {
+            report["already_resolved_evidence"] = json!({ "selectors": declared.selectors });
+        } else if let Some(object) = report.as_object_mut() {
+            object.remove("already_resolved_evidence");
+        }
+    }
     let content =
-        serde_json::to_vec(report).map_err(|error| OrbitError::Execution(error.to_string()))?;
+        serde_json::to_vec(&report).map_err(|error| OrbitError::Execution(error.to_string()))?;
     let evidence = HandoffArtifactRef {
         path: format!("no-diff-handoff/{}.json", context.claim_id),
         sha256: sha256_hex(&content),
@@ -190,7 +204,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
         },
     )?;
     require_clean_candidate(workspace, &candidate)?;
-    if skips_validation(report) {
+    if skips_validation(&report) {
         // An implementer's deferral or already-resolved selectors name tests
         // for a gate this route does not run, so neither replays either.
         let mut output = passed_output(context, &candidate, &[], Vec::new(), Value::Null)?;
@@ -206,7 +220,9 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     let (mut results, validation_env) = run_claimed_commands(
         host, context, workspace, input, &candidate, &commands, &replays,
     )?;
-    let resolved = resolved.unwrap_or_default();
+    let resolved = resolved
+        .map(|declared| declared.commands)
+        .unwrap_or_default();
     results.extend(already_resolved::replay(
         host, context, workspace, &candidate, &resolved,
     )?);
