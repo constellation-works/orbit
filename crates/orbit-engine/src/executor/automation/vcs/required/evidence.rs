@@ -14,9 +14,8 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-pub(in crate::executor::automation::vcs) const DIRECTORY_ENV: &str = "ORBIT_COMMAND_EVIDENCE_DIR";
-pub(in crate::executor::automation::vcs) const INVOCATION_ENV: &str =
-    "ORBIT_COMMAND_EVIDENCE_INVOCATION";
+pub(in crate::executor::automation::vcs) use orbit_common::env_vars::ORBIT_COMMAND_EVIDENCE_DIR as DIRECTORY_ENV;
+pub(in crate::executor::automation::vcs) use orbit_common::env_vars::ORBIT_COMMAND_EVIDENCE_INVOCATION as INVOCATION_ENV;
 // Use the existing inline read ceiling for the entire invocation, not per file.
 const MAX_BYTES: usize = orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES as usize;
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;

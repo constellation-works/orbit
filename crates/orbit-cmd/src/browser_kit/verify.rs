@@ -26,7 +26,7 @@ pub const HOST_ONLY_NOTE: &str = "A host pass does not prove the sandboxed worke
      browser check and attaches its screenshot.";
 
 const SMOKE_DEADLINE: Duration = Duration::from_secs(180);
-const SCREENSHOT_ENV: &str = "ORBIT_BROWSER_KIT_SCREENSHOT";
+use orbit_common::env_vars::ORBIT_BROWSER_KIT_SCREENSHOT as SCREENSHOT_ENV;
 const SMOKE_SCRIPT: &str = r#"
 import http from "node:http";
 import { createRequire } from "node:module";
