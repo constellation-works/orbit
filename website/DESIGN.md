@@ -218,7 +218,7 @@ Mechanics:
   `components.css` (shared components) and `home.css` (the homepage), loaded in that order
   through `customCss` in `astro.config.mjs`.
 - **Components:** overrides of Starlight's `Header`, `SiteTitle`, `ThemeProvider`,
-  `ThemeSelect`, `Footer` and `PageTitle` in `src/components/`.
+  `ThemeSelect`, `Footer` and `PageTitle` in `src/component/`.
 - **Hosting:** Cloudflare serves the static output; Daniel publishes it by hand. DNS is
   managed outside this repository. Cloudflare Pages applies `public/_headers` and
   `public/_redirects`.
