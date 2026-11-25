@@ -334,6 +334,14 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<crate::contracts::TaskPage, OrbitError> {
         self.in_boundary(|| self.query_task_rows(filter, limit, residual, hydration))
     }
+    fn query_task_row_pages(
+        &self,
+        pages: &[(crate::contracts::TaskListFilter, usize)],
+        residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
+    ) -> Result<Vec<crate::contracts::TaskPage>, OrbitError> {
+        self.in_boundary(|| self.query_task_row_pages(pages, residual, hydration))
+    }
     fn get_task_row(
         &self,
         id: &str,

@@ -149,6 +149,24 @@ fn query_task_store(
     query: &TaskListQuery,
     os_readout: Option<&super::TaskOsReadout>,
 ) -> Result<TaskPage, OrbitError> {
+    with_task_residual(runtime, query, os_readout, |store, residual, hydration| {
+        store.query_task_rows(&query.filter, query.limit, residual, hydration)
+    })
+}
+
+/// Run `select` with the residual predicate and hydration `query` asks for.
+/// The pilot-warning membership and the reference index are built once, so
+/// every page `select` reads shares them.
+fn with_task_residual<T>(
+    runtime: &OrbitRuntime,
+    query: &TaskListQuery,
+    os_readout: Option<&super::TaskOsReadout>,
+    select: impl FnOnce(
+        &dyn TaskStoreBackend,
+        orbit_store::contracts::TaskResidualFilter<'_>,
+        TaskListHydration,
+    ) -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
     let store = runtime.stores().tasks();
     // Only the explicit warning filter scans proposed-task audit sidecars.
     // Resolve membership before pagination so counts and cursors stay accurate.
@@ -205,9 +223,8 @@ fn query_task_store(
     } else {
         query.hydration
     };
-    store.query_task_rows(
-        &query.filter,
-        query.limit,
+    select(
+        store,
         (query.pilot_warnings || query.ready || query.path.is_some() || query.runs_on.is_some())
             .then_some(&residual),
         hydration,
@@ -224,6 +241,34 @@ impl OrbitRuntime {
             .map(|_| super::TaskOsReadout::new(self))
             .transpose()?;
         query_task_store(self, query, os_readout.as_ref())
+    }
+
+    /// [`Self::query_task_rows`] for several pages of one request, such as
+    /// the sections of a per-status listing, in `pages` order. `query`
+    /// supplies the residual filters and hydration every page shares; its
+    /// own `filter` and `limit` are ignored. The store validates index
+    /// freshness once for the batch and keeps each page's stale-row fallback.
+    pub fn query_task_row_pages(
+        &self,
+        query: &TaskListQuery,
+        pages: &[(TaskListFilter, usize)],
+    ) -> Result<Vec<TaskPage>, OrbitError> {
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !self.coordination_task_reads_visible() {
+            return Ok(pages.iter().map(|_| TaskPage::default()).collect());
+        }
+        let os_readout = query
+            .runs_on
+            .map(|_| super::TaskOsReadout::new(self))
+            .transpose()?;
+        with_task_residual(
+            self,
+            query,
+            os_readout.as_ref(),
+            |store, residual, hydration| store.query_task_row_pages(pages, residual, hydration),
+        )
     }
 
     /// Query every lifecycle status with active work first, preserving newest

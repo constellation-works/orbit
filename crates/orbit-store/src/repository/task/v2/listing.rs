@@ -355,14 +355,73 @@ impl TaskV2Store {
         } else {
             filter.clone()
         };
-        let candidates = self.task_candidates(
-            &selection_filter,
-            if residual.is_some() {
-                usize::MAX
-            } else {
-                limit
-            },
-        )?;
+        let candidates =
+            self.task_candidates(&selection_filter, Self::selection_limit(limit, residual))?;
+        self.page_from_candidates(&filter, limit, residual, hydration, candidates)
+    }
+
+    /// [`Self::query_task_rows`] for several pages of one request, in
+    /// request order, sharing one recovery check and one whole-workspace
+    /// index freshness validation. Each page still runs its own indexed
+    /// selection and hydration, and hydration still compares every bundle
+    /// with its selected envelope, so a write racing the request sends that
+    /// page to the strict bundle scan as before. When the index cannot serve
+    /// (missing, incomplete or stale), every page takes the unbatched route,
+    /// whose first read scans and repairs the index for the rest.
+    pub(crate) fn query_task_row_pages(
+        &self,
+        pages: &[(TaskListFilter, usize)],
+        residual: TaskResidualFilter<'_>,
+        hydration: TaskListHydration,
+    ) -> Result<Vec<TaskPage>, OrbitError> {
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.ensure_recovered()?;
+        let Some(unsettled) = self.validate_index()? else {
+            return pages
+                .iter()
+                .map(|(filter, limit)| self.query_task_rows(filter, *limit, residual, hydration))
+                .collect();
+        };
+        pages
+            .iter()
+            .map(|(filter, limit)| {
+                let filter = filter.normalized();
+                let selection_filter = if residual.is_some() {
+                    filter.without_cursor()
+                } else {
+                    filter.clone()
+                };
+                let candidates = self.indexed_candidates(
+                    &selection_filter,
+                    Self::selection_limit(*limit, residual),
+                    unsettled.clone(),
+                )?;
+                self.page_from_candidates(&filter, *limit, residual, hydration, candidates)
+            })
+            .collect()
+    }
+
+    /// How many candidates a page selects: all of them when a residual
+    /// filter still decides membership, else the page size.
+    fn selection_limit(limit: usize, residual: TaskResidualFilter<'_>) -> usize {
+        if residual.is_some() {
+            usize::MAX
+        } else {
+            limit
+        }
+    }
+
+    /// Hydrate the page `candidates` select for the normalized `filter`.
+    fn page_from_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        residual: TaskResidualFilter<'_>,
+        hydration: TaskListHydration,
+        candidates: TaskCandidates,
+    ) -> Result<TaskPage, OrbitError> {
         let status_by_id = self.listing_status_index(&candidates.items)?;
         let mut selected = candidates.items;
         if let Some(matches) = residual {
@@ -415,7 +474,7 @@ impl TaskV2Store {
                 if envelope != candidate {
                     // An update raced selection. One strict scan re-evaluates
                     // filters before the limit; no stale row escapes.
-                    return self.scan_task_page(&filter, limit, residual);
+                    return self.scan_task_page(filter, limit, residual);
                 }
                 if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
                     items.push(row);
@@ -429,7 +488,7 @@ impl TaskV2Store {
             if bundle.envelope != candidate {
                 // An update raced selection. One strict scan re-evaluates filters
                 // before the limit; no retry loop or stale selected row escapes.
-                return self.scan_task_page(&filter, limit, residual);
+                return self.scan_task_page(filter, limit, residual);
             }
             let envelope = bundle.envelope.clone();
             let row = self.row_from_bundle(bundle)?;

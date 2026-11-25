@@ -301,3 +301,179 @@ fn invalid_filter_workspace_and_endpoint_cursors_are_refused_without_state_chang
         },
     );
 }
+
+/// The dashboard Tasks board's default grouped read.
+const BOARD: &str = "group=status&status=in-progress,review,blocked,proposed,backlog&limit=2&status_limit=backlog:3";
+
+fn freshness_scans(server: &Server, read: impl FnOnce() -> Value) -> (Value, usize) {
+    let before = server.task_query_trace().len();
+    let body = read();
+    let scans = server.task_query_trace()[before..]
+        .iter()
+        .filter(|row| row["span"]["name"] == "task_index_freshness")
+        .count();
+    (body, scans)
+}
+
+fn section<'a>(grouped: &'a Value, status: &str) -> &'a Value {
+    grouped["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|section| section["status"] == status)
+        .unwrap_or_else(|| panic!("no {status} section: {grouped}"))
+}
+
+/// A settled grouped request validates the workspace task index once for all
+/// its sections, and each section answers exactly what the ungrouped listing
+/// of that status answers. A later request still sees status moves and an
+/// out-of-band envelope edit, which the stale index's fallback serves.
+#[test]
+fn grouped_task_sections_share_one_index_freshness_validation() {
+    isolated(
+        "pagination::grouped_task_sections_share_one_index_freshness_validation",
+        || {
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            let add = |title: &str, status| {
+                let mut params = matching_task();
+                params.title = title.into();
+                params.status = Some(status);
+                runtime.add_task(params).unwrap()
+            };
+            let mut backlog = Vec::new();
+            for index in 0..5 {
+                backlog.push(add(&format!("Needle backlog {index}"), TaskStatus::Backlog));
+            }
+            let mover = add("Needle mover", TaskStatus::Proposed);
+            add("Needle proposed", TaskStatus::Proposed);
+            add("Needle active", TaskStatus::InProgress);
+            add("Needle review", TaskStatus::Review);
+            add("Elsewhere", TaskStatus::Backlog);
+            let detail = &backlog[4].id;
+            let server = fixture.counted_task_server();
+            let board = format!("{BOARD}&q=needle&tags=page&detail={detail}");
+            let read = || {
+                json_ok(sent(
+                    "GET",
+                    "/api/tasks",
+                    server.request("GET", &format!("/api/tasks?{board}")),
+                ))
+            };
+            // Settle the index (and any envelope proofs) before counting.
+            read();
+            let (grouped, scans) = freshness_scans(&server, read);
+            assert_eq!(
+                scans, 1,
+                "one whole-workspace freshness validation serves every section"
+            );
+            let order: Vec<_> = grouped["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|section| section["status"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                order,
+                ["in-progress", "review", "blocked", "proposed", "backlog"]
+            );
+            assert_eq!(grouped["total"], 9, "{grouped}");
+            assert_eq!(grouped["detail"]["id"], json!(detail), "{grouped}");
+            for (status, limit, total) in [
+                ("in-progress", 2, 1),
+                ("review", 2, 1),
+                ("blocked", 2, 0),
+                ("proposed", 2, 2),
+                ("backlog", 3, 5),
+            ] {
+                let section = section(&grouped, status);
+                let flat = page(
+                    &server,
+                    "/api/tasks",
+                    &format!("status={status}&q=needle&tags=page&limit={limit}"),
+                    None,
+                );
+                assert_eq!(section["total"], total, "{status}: {section}");
+                assert_eq!(section["limit"], limit, "{status}: {section}");
+                for key in ["items", "total", "truncated", "offset"] {
+                    assert_eq!(section[key], flat[key], "{status} {key} parity");
+                }
+                assert_eq!(
+                    section["next_cursor"].is_string(),
+                    total > limit,
+                    "{status}: {section}"
+                );
+            }
+            // A section's cursor still continues that status alone.
+            let rest = page(
+                &server,
+                "/api/tasks",
+                "group=status&status=backlog&q=needle&tags=page&limit=3",
+                section(&grouped, "backlog")["next_cursor"].as_str(),
+            );
+            let mut reached = ids(section(&grouped, "backlog"));
+            reached.extend(ids(&rest["sections"][0]));
+            let mut expected: Vec<_> = backlog.iter().map(|task| task.id.clone()).collect();
+            expected.reverse();
+            assert_eq!(reached, expected);
+            // Errors are unchanged: a cursor still binds one section.
+            let refused = sent(
+                "GET",
+                "/api/tasks",
+                server.request(
+                    "GET",
+                    "/api/tasks?group=status&status=backlog,proposed&cursor=x",
+                ),
+            );
+            assert_eq!(refused.status(), 400);
+
+            // A status move between requests shows on the next request.
+            runtime
+                .update_task_as_human(
+                    &mover.id,
+                    orbit_core::application::task::TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    "test operator".into(),
+                )
+                .unwrap();
+            let moved = read();
+            assert_eq!(section(&moved, "proposed")["total"], 1, "{moved}");
+            assert_eq!(section(&moved, "backlog")["total"], 6, "{moved}");
+            assert_eq!(
+                section(&moved, "backlog")["items"][0]["id"],
+                json!(mover.id)
+            );
+
+            // An out-of-band envelope edit leaves the index stale. The next
+            // grouped request takes the unbatched fallback and answers from
+            // the envelope: the retagged task no longer matches the tag filter.
+            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+                &orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            let binding = registry.find_task_binding(&mover.id).unwrap().unwrap();
+            let envelope_path = binding.canonical_path.join("task.yaml");
+            let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+                serde_yaml::from_str(&fs::read_to_string(&envelope_path).unwrap()).unwrap();
+            envelope.tags = vec!["release".into()];
+            fs::write(&envelope_path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+            let (edited, scans) = freshness_scans(&server, read);
+            assert!(
+                scans > 1,
+                "a stale index is not trusted for the batch: {scans}"
+            );
+            assert_eq!(section(&edited, "backlog")["total"], 5, "{edited}");
+            assert!(
+                !ids(section(&edited, "backlog")).contains(&mover.id),
+                "{edited}"
+            );
+            let (_, scans) = freshness_scans(&server, read);
+            assert_eq!(
+                scans, 1,
+                "the fallback repaired the index for later requests"
+            );
+        },
+    );
+}
