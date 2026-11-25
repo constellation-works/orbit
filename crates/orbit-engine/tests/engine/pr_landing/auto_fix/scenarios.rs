@@ -5464,6 +5464,80 @@ fn unreadable_log_hold(row: &std::path::Path, case: &str) {
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 }
 
+/// [ORB-28485] Repair admission reads the required checks again after the
+/// base-tip comparison settled. When that later read finds a required check
+/// unconcluded, or names another head, the stop is a typed hold the next
+/// auto-fix pass can retry: no repair agent runs, the pull request stays open
+/// and the task stays in review.
+#[test]
+fn auto_fix_holds_required_checks_that_change_between_base_tip_and_repair() {
+    auto_fix_table(
+        "auto_fix::auto_fix_holds_required_checks_that_change_between_base_tip_and_repair",
+        "pending foreign_head",
+        |case, row| {
+            let (fx, host) = opened_review(row);
+            host.script("ci.prerequisite_evidence", json!({"evidence": null}));
+            host.script(
+                "ci.commit_jobs",
+                json!({"jobs": [{
+                    "name": "test", "workflow": "CI", "conclusion": "failure",
+                    "run_id": 10, "job_id": 11, "failed_step": "Tests",
+                    "failed_steps": ["Tests"]
+                }]}),
+            );
+            fx.script_checks(&["failure"]);
+            // The reads up to and including the base-tip comparison settle.
+            // The red-base evaluation and repair admission read after it and
+            // see the changed answer, which repeats.
+            let settled = REQUIRED_READS_BEFORE_REPAIR_ADMISSION;
+            let mut outcomes = vec!["success"; settled];
+            outcomes.push(case);
+            fx.script_required_check_outcomes(&outcomes);
+            let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+            let refusal = if case == "pending" {
+                orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
+            } else {
+                orbit_types::workflow::DeliveryRefusal::HeadChanged
+            };
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: {error}"
+            );
+            assert!(
+                error.to_string().contains("auto_fix_stopped"),
+                "{case}: {error}"
+            );
+            assert!(
+                error.to_string().contains(if case == "pending" {
+                    "have not all concluded"
+                } else {
+                    "rather than"
+                }),
+                "{case}: {error}"
+            );
+            assert_eq!(
+                orbit_types::workflow::HeldFailure::of(
+                    Some(refusal.error_code()),
+                    Some(&error.to_string())
+                ),
+                Some(orbit_types::workflow::HeldFailure::DeliveryRefused(refusal)),
+                "{case}: the run holds for the next auto-fix pass"
+            );
+            assert_eq!(
+                fx.required_check_reads(),
+                settled + 2,
+                "{case}: the red-base read and repair admission's read held"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+/// Required-checks reads `pr_complete` makes on a failed head up to and
+/// including the base-tip comparison.
+const REQUIRED_READS_BEFORE_REPAIR_ADMISSION: usize = 4;
+
 /// [ORB-21412] An empty or truncated required-checks answer, or a failed
 /// read reporting `unexpected end of JSON input`, is retried a bounded
 /// number of times: a transient bad answer recovers without stopping
