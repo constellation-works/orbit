@@ -3,7 +3,7 @@
 // forecasts and method collapsed.
 
 import { el, forecastView, forecastCard, pinnedInfoHint, forecastMoreSection, forecastTable, COMPLEXITY_LABELS, reportsReviewMode, scheduleShowsReview } from './forecast-shared.js';
-import { formatDateTime } from './common.js';
+import { formatDate, formatDateTime } from './common.js';
 import { fmtShare, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, num } from './forecast-summary.js';
 
 // An older forecast omits review-mode coverage. Its sampling table keeps these
@@ -322,6 +322,15 @@ function versus(forecast, actual, fmt) {
   return `${formatForecastQuantileRange(forecast, fmt)} → ${actual == null ? "—" : fmt(actual)}`;
 }
 
+// A forecast with nothing pending and not yet settled is waiting for its
+// observation cutoff, so name the cutoff rather than reading "0 pending".
+function storedStateText(row) {
+  if (row.scored_whole) return "scored";
+  if (row.settled) return "settled, not scored";
+  if (row.pending > 0) return `${row.pending} pending`;
+  return row.observation_cutoff ? `settles ${formatDate(row.observation_cutoff)}` : "awaiting settlement";
+}
+
 function storedSection() {
   const calibration = forecastView.payload.calibration || {};
   const stored = forecastView.payload.stored || {};
@@ -352,7 +361,7 @@ function storedSection() {
     el("td", { class: "num", text: versus(row.forecast?.time_to_drain_hours, row.actual?.time_to_drain_hours, formatForecastHours) }),
     el("td", { class: "num", text: versus(row.forecast?.usd, row.actual?.usd, formatForecastUsd) }),
     el("td", { class: "num", text: versus(row.forecast?.tokens, row.actual?.tokens, formatForecastTokens) }),
-    el("td", { class: "fc-state", text: row.scored_whole ? "scored" : row.settled ? "settled, not scored" : `${row.pending} pending` }),
+    el("td", { class: "fc-state", text: storedStateText(row) }),
   ]));
   const excluded = calibration.excluded || {};
   const history = forecastTable("Stored forecasts", [["Recorded"], ["Model", true], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows, "Stored forecasts, newest first");
