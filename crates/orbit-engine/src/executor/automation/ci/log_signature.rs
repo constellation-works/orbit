@@ -377,6 +377,7 @@ pub fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::ErrorAnnotated
             } else if is_runner_bookkeeping(lowered)
                 || is_successful_ci_test_route_summary(lowered)
+                || is_successful_node_test_verdict(lowered)
                 || lowered.contains("##[group]")
             {
                 LineKind::Bookkeeping
@@ -560,6 +561,18 @@ pub fn is_run_command_payload(payload: &str) -> bool {
 
 fn is_runner_bookkeeping(lowered: &str) -> bool {
     lowered.starts_with("head is now at") || lowered.starts_with("syncing repository")
+}
+
+/// Node's `node --test` reporter prefixes a passing assertion with a checkmark
+/// (`✔`/`✓`), keeping the test name verbatim. A name can contain any error
+/// marker word, but the verdict shape is status output rather than a
+/// diagnostic. Failing assertions use a different mark (`✖`), so they keep
+/// their diagnostic rank. Bookkeeping (rather than content) keeps a later
+/// passing verdict from becoming the nearest-content fallback ahead of an
+/// earlier diagnostic.
+fn is_successful_node_test_verdict(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    trimmed.starts_with('✔') || trimmed.starts_with('✓')
 }
 
 /// `check-ci-macos` prints this successful routing summary after a filtered

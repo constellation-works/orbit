@@ -171,3 +171,53 @@ fn tap_success_output_with_marker_words_is_not_selected_as_diagnostic() {
         orbit_engine::ci_log_signature::normalize_signature(&failure.to_ascii_lowercase())
     );
 }
+
+#[test]
+fn node_checkmark_success_with_failure_word_is_not_selected_as_diagnostic() {
+    let diagnostic = "architecture ratchet: driver_writer_outside_transaction_files is 14, above its baseline of 13; remove or move the new occurrence (--list shows each counted location)";
+    let passing =
+        "✔ failed rename leaves the final path absent and removes the temp file (0.691811ms)";
+    let log = format!("{diagnostic}\n{passing}\n##[error]Process completed with exit code 1.");
+    let signature = error_signature(&log, "Run CI guardrails");
+    assert_eq!(
+        signature.text,
+        orbit_engine::ci_log_signature::normalize_signature(&diagnostic.to_ascii_lowercase())
+    );
+    assert!(!signature.step_fallback);
+    let excerpt = diagnostic_excerpt(&log, 80);
+    assert!(excerpt.contains("architecture ratchet: driver_writer"));
+    assert!(!excerpt.contains("failed rename leaves the final path"));
+
+    for status in [
+        passing,
+        "✓ failed rename leaves the final path absent and removes the temp file (0.691811ms)",
+    ] {
+        assert!(
+            matches!(classify_log_lines(status)[0].0, LineKind::Bookkeeping),
+            "Node success output is not diagnostic evidence: {status}"
+        );
+    }
+
+    // A passing checkmark alone never becomes the signature.
+    let passing_only = error_signature(
+        &format!("{passing}\n##[error]Process completed with exit code 1."),
+        "Run CI guardrails",
+    );
+    assert_eq!(passing_only.text, "run ci guardrails");
+    assert!(passing_only.step_fallback);
+
+    let failure =
+        "✖ failed rename leaves the final path absent and removes the temp file (0.691811ms)";
+    assert!(
+        matches!(classify_log_lines(failure)[0].0, LineKind::Marker),
+        "a failing Node result remains diagnostic evidence"
+    );
+    assert_eq!(
+        error_signature(
+            &format!("{failure}\n##[error]Process completed with exit code 1."),
+            "CI"
+        )
+        .text,
+        orbit_engine::ci_log_signature::normalize_signature(&failure.to_ascii_lowercase())
+    );
+}
