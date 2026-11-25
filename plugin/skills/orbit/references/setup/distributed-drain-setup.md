@@ -211,6 +211,11 @@ Commit settles that as
 clean-tree report artifact exists, and the leaf hands off `NoDiff` without a PR.
 The claim host then runs the required commands on the base and replays each
 selector outside the agent sandbox before handoff, pinning the passing logs.
+When the implementer declares `already_resolved` selectors beside a verifier
+report, commit embeds them into the report-backed `verified_no_diff` or
+`verified_already_landed` checkpoint instead, and the claim host still replays
+each selector the same way before handoff. A `no-diff-expected` skip carrying
+selectors is refused.
 
 A
 failing replay fails the claim, as does one that runs no test or prints a skip;
