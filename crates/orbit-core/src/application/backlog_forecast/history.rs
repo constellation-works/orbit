@@ -4,6 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
+use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -13,12 +14,13 @@ use super::options::{DEFAULT_LOOKBACK_DAYS, MIN_HISTORY_TASKS, Options};
 use super::outcomes::TaskEpisodes;
 use super::persistence::SCORED_FORECASTS;
 use super::{outcomes, rework, scoring};
-use crate::application::task::latest_status_entry_at;
+use crate::application::task::{SYSTEM_ACTOR_LABEL, latest_status_entry_at};
 
 pub(super) struct LoadedForecastHistory {
     pub(super) tasks: HashMap<String, Task>,
     pub(super) stored: Vec<StoredBacklogForecast>,
     pub(super) done_at: HashMap<String, DateTime<Utc>>,
+    pub(super) completion_routes: HashMap<String, CompletionRoute>,
     /// Each completed regression fix's footprint as its durable history
     /// recorded it, for a fix whose current selectors no longer give one.
     pub(super) recorded_footprints: HashMap<String, Vec<String>>,
@@ -32,6 +34,64 @@ pub(super) struct LoadedForecastHistory {
     pub(super) return_start: DateTime<Utc>,
     pub(super) attempted: bool,
 }
+
+/// A completion path identifiable from the durable status history.
+pub(super) enum CompletionRoute {
+    FollowerClaim,
+    OutsideDrain,
+}
+
+impl CompletionRoute {
+    fn read(history: &[TaskHistoryEntry]) -> Option<Self> {
+        let mut transitions = history
+            .iter()
+            .rev()
+            .filter(|entry| entry.to_status.is_some());
+        let done = transitions.find(|entry| entry.to_status == Some(TaskStatus::Done))?;
+        let outside_attempt = |status| {
+            matches!(
+                status,
+                Some(
+                    TaskStatus::Backlog
+                        | TaskStatus::Blocked
+                        | TaskStatus::Someday
+                        | TaskStatus::Proposed
+                )
+            )
+        };
+        let mut outside_drain = false;
+        // Follow the final resolution through review to its start. A prior
+        // claim that returned to the queue cannot explain this completion.
+        for entry in std::iter::once(done).chain(transitions) {
+            match entry.to_status {
+                Some(TaskStatus::Done | TaskStatus::Review) => {
+                    if outside_attempt(entry.from_status) {
+                        return Some(Self::OutsideDrain);
+                    }
+                    outside_drain |= matches!(
+                        entry.event.as_str(),
+                        EXTERNAL_MERGE_SETTLED_EVENT | "forced"
+                    );
+                }
+                Some(TaskStatus::InProgress) => {
+                    if entry.event == "pulled_by" {
+                        return Some(Self::FollowerClaim);
+                    }
+                    // Workflow admission writes "started" as system. An
+                    // attributed start through the task surface is interactive.
+                    outside_drain |= entry.event == "started" && entry.by != SYSTEM_ACTOR_LABEL;
+                    break;
+                }
+                status => {
+                    outside_drain |= outside_attempt(status);
+                    break;
+                }
+            }
+        }
+        outside_drain.then_some(Self::OutsideDrain)
+    }
+}
+
 /// Task ids on stored model-10 forecasts. Their retry-inclusive actual is
 /// read from status episodes even after they leave the return window.
 fn attempt_cohort_ids(stored: &[StoredBacklogForecast]) -> BTreeSet<String> {
@@ -254,7 +314,13 @@ pub(super) fn load_forecast_history(
             }
         }
     }
-    drop(histories);
+    let completion_routes = done_at
+        .keys()
+        .filter_map(|id| {
+            let history = histories.get(id)?.as_deref()?;
+            Some((id.clone(), CompletionRoute::read(history)?))
+        })
+        .collect();
     let attempted = task_episodes.iter().any(|(_, episodes)| {
         episodes
             .settled
@@ -265,6 +331,7 @@ pub(super) fn load_forecast_history(
         tasks,
         stored,
         done_at,
+        completion_routes,
         recorded_footprints,
         task_episodes,
         history_rows,

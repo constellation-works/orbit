@@ -446,47 +446,7 @@ fn completed_delivery(
     usd: Option<f64>,
     hours: u64,
 ) -> String {
-    let id = fixture
-        .runtime
-        .add_task(TaskAddParams {
-            title: "Historical delivery".into(),
-            complexity,
-            status: Some(TaskStatus::Done),
-            ..Default::default()
-        })
-        .unwrap()
-        .id
-        .to_string();
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
-            &fixture.runtime.global_root(),
-        ),
-    )
-    .unwrap();
-    let bundle = registry
-        .find_task_binding(&id)
-        .unwrap()
-        .unwrap()
-        .canonical_path;
-    // Rewind the canonical records too: opening the HTTP server refreshes
-    // the index from task.yaml, so dating only the projection is insufficient.
-    let envelope_path = bundle.join("task.yaml");
-    let mut envelope: TaskEnvelopeV2 =
-        serde_yaml::from_str(&std::fs::read_to_string(&envelope_path).unwrap()).unwrap();
-    envelope.created_at = at - Duration::hours(1);
-    envelope.updated_at = at;
-    std::fs::write(&envelope_path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
-    let events_path = bundle.join("events.jsonl");
-    let events = std::fs::read_to_string(&events_path)
-        .unwrap()
-        .lines()
-        .map(|line| {
-            let mut event: TaskEventRowV2 = serde_json::from_str(line).unwrap();
-            event.at = at;
-            serde_json::to_string(&event).unwrap() + "\n"
-        })
-        .collect::<String>();
-    std::fs::write(events_path, events).unwrap();
+    let id = dated_done_task(fixture, at, complexity, &[], &[]);
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
@@ -523,6 +483,81 @@ fn completed_delivery(
             Ok(())
         })
         .unwrap();
+    id
+}
+
+fn dated_done_task(
+    fixture: &Fixture,
+    at: DateTime<Utc>,
+    complexity: TaskComplexity,
+    tags: &[&str],
+    transitions: &[(&str, TaskStatus, TaskStatus)],
+) -> String {
+    let id = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Historical delivery".into(),
+            complexity,
+            tags: tags.iter().map(|tag| (*tag).into()).collect(),
+            status: Some(TaskStatus::Done),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    let bundle = registry
+        .find_task_binding(&id)
+        .unwrap()
+        .unwrap()
+        .canonical_path;
+    // Rewind the canonical records too: opening the HTTP server refreshes
+    // the index from task.yaml, so dating only the projection is insufficient.
+    let envelope_path = bundle.join("task.yaml");
+    let mut envelope: TaskEnvelopeV2 =
+        serde_yaml::from_str(&std::fs::read_to_string(&envelope_path).unwrap()).unwrap();
+    envelope.created_at = at - Duration::hours(1);
+    envelope.updated_at = at;
+    std::fs::write(&envelope_path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+    let events_path = bundle.join("events.jsonl");
+    let original = std::fs::read_to_string(&events_path).unwrap();
+    let mut events: Vec<TaskEventRowV2> = original
+        .lines()
+        .map(|line| {
+            let mut event: TaskEventRowV2 = serde_json::from_str(line).unwrap();
+            event.at = at;
+            event
+        })
+        .collect();
+    if let Some((_, start, _)) = transitions.first() {
+        events[0].to_status = Some(*start);
+        events[0].at = envelope.created_at;
+    }
+    for (index, (kind, from, to)) in transitions.iter().enumerate() {
+        let mut event = events[0].clone();
+        event.event_id = format!("fixture-transition-{id}-{index}");
+        event.at = at - Duration::minutes((transitions.len() - index - 1) as i64);
+        event.event_type = (*kind).into();
+        event.by = match *kind {
+            "pulled_by" => "hm_forecast_follower",
+            "started" => "human:fixture",
+            _ => "system",
+        }
+        .into();
+        event.from_status = Some(*from);
+        event.to_status = Some(*to);
+        events.push(event);
+    }
+    let events: String = events
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap() + "\n")
+        .collect();
+    std::fs::write(events_path, events).unwrap();
     let index = rusqlite::Connection::open(fixture.global.join("tasks/index.sqlite")).unwrap();
     assert_eq!(index.execute(
         "UPDATE task_bundle_index SET created_at = ?1, updated_at = ?2, terminal_month = ?3 WHERE task_id = ?4",
@@ -567,6 +602,136 @@ fn remove_history(fixture: &Fixture, id: &str) {
         .unwrap()
         .canonical_path;
     std::fs::remove_file(bundle.join("events.jsonl")).unwrap();
+}
+
+#[test]
+fn calibration_explains_done_tasks_without_measured_usage() {
+    isolated(
+        "backlog_forecast::calibration_explains_done_tasks_without_measured_usage",
+        || {
+            use TaskStatus::{Backlog, Blocked, Done, InProgress, Review};
+
+            let fixture = Fixture::new();
+            let forecast_at = Utc::now() - Duration::days(91);
+            let done_at = forecast_at + Duration::hours(3);
+            let task = |tags: &[&str], transitions: &[(&str, TaskStatus, TaskStatus)]| {
+                dated_done_task(&fixture, done_at, TaskComplexity::Medium, tags, transitions)
+            };
+            let blocked = task(
+                &[],
+                &[
+                    ("pulled_by", Backlog, InProgress),
+                    ("claim_failed", InProgress, Blocked),
+                    ("updated", Blocked, Review),
+                    ("updated", Review, Done),
+                ],
+            );
+            let follower = task(
+                &[],
+                &[
+                    ("pulled_by", Backlog, InProgress),
+                    ("claim_handed_off", InProgress, Review),
+                    ("landing_completed", Review, Done),
+                ],
+            );
+            let resident = task(&["resident"], &[]);
+            let interactive = task(
+                &[],
+                &[
+                    ("started", Backlog, InProgress),
+                    ("updated", InProgress, Review),
+                    ("updated", Review, Done),
+                ],
+            );
+            let unknown = task(&[], &[]);
+            let quantiles = json!({"p50": 1.0, "p90": 4.0});
+            let result = json!({
+                "time_to_drain_hours": quantiles, "tokens": quantiles, "usd": quantiles,
+                "pre_regression_baseline": {"time_to_drain_hours": quantiles},
+            });
+            for (at, ids) in [
+                (
+                    forecast_at - Duration::hours(1),
+                    vec![&blocked, &follower, &resident, &interactive, &unknown],
+                ),
+                (forecast_at, vec![&blocked]),
+            ] {
+                let tasks: Vec<_> = ids
+                    .into_iter()
+                    .map(|id| json!({
+                        "id": id, "complexity": "medium",
+                        "forecast": {"work_hours": quantiles, "tokens": quantiles, "usd": quantiles},
+                    }))
+                    .collect();
+                assert!(
+                    fixture
+                        .runtime
+                        .record_backlog_forecast(
+                            StoredBacklogForecast {
+                                workspace_id: String::new(),
+                                forecast_at: at,
+                                model_version: 23,
+                                inputs_json: "{}".into(),
+                                result_json: result.to_string(),
+                                tasks_json: json!(tasks).to_string(),
+                            },
+                            Duration::zero()
+                        )
+                        .unwrap()
+                );
+            }
+
+            let server = fixture.server(false);
+            let response = json_ok(server.get(ENDPOINT));
+            let calibration = &response["calibration"];
+            assert_eq!(calibration["mature_forecasts"], 2);
+            let mixed = &calibration["forecasts"][1];
+            assert_eq!(mixed["tasks"], 5);
+            assert_eq!(mixed["excluded"]["no_delivery"], 5);
+            assert_eq!(
+                mixed["excluded"]["no_delivery_reasons"],
+                json!({
+                    "follower_claim": 1, "resident": 1, "resolved_outside_drain": 2, "unknown": 1,
+                })
+            );
+            assert_eq!(calibration["excluded"]["no_delivery"], 6);
+            assert_eq!(
+                calibration["excluded"]["no_delivery_reasons"],
+                json!({
+                    "follower_claim": 1, "resident": 1, "resolved_outside_drain": 3, "unknown": 1,
+                })
+            );
+
+            let row = &calibration["forecasts"][0];
+            assert_eq!(row["tasks"], 1);
+            assert_eq!(row["excluded"]["no_delivery"], 1);
+            assert_eq!(
+                row["excluded"]["no_delivery_reasons"]["resolved_outside_drain"],
+                1
+            );
+            assert_eq!(row["settled"], true);
+            assert_eq!(row["provisional"], false);
+            assert_eq!(row["actual"]["drained"], true);
+            assert_eq!(row["actual"]["time_to_drain_hours"], 3.0);
+            assert_eq!(row["actual"]["tokens"], Value::Null);
+            assert_eq!(row["actual"]["usd"], Value::Null);
+            assert_eq!(row["scored_whole"], false);
+            assert_eq!(row["residual"]["time_to_drain_hours"], Value::Null);
+            let model = &calibration["by_model_version"][0];
+            assert_eq!(model["forecast_level"]["settled"], 0);
+            assert_eq!(
+                model["forecast_level"]["pre_regression_baseline"]["time_to_drain_hours"]["n"],
+                0
+            );
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(model["forecast_level"]["adjusted"][metric]["n"], 0);
+            }
+            for metric in ["hours", "tokens", "usd"] {
+                assert_eq!(row["residual"][metric], json!({"n": 0, "median": null}));
+                assert_eq!(model["task_level"][metric]["n"], 0);
+            }
+        },
+    );
 }
 
 #[test]

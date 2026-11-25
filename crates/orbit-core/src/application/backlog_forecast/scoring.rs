@@ -5,8 +5,8 @@
 //! tasks have all finished is scored as a whole (time to drain, total USD
 //! and tokens). A task since rejected, archived or deleted, or whose
 //! complexity changed (re-scoped), is excluded and counted; a forecast with
-//! an exclusion is not scored as a whole, since its totals covered work that
-//! no longer exists.
+//! an exclusion is not scored as a whole, since the original cohort lacks
+//! comparable actuals. This includes done tasks without measured usage.
 //!
 //! From model 5 [ORB-18688] a rejected or archived task is a genuine
 //! outcome the forecast samples, not an exclusion: it is abandoned, its
@@ -57,12 +57,14 @@ use orbit_store::contracts::StoredBacklogForecast;
 use orbit_types::task::{
     Task, TaskRelationType, TaskStatus, complexity_bucket, complexity_bucket_ord,
 };
+use orbit_types::workflow::RESIDENT_TAG;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::application::statistics;
 
 use super::ForecastRun;
+use super::history::{CompletionRoute, LoadedForecastHistory};
 use super::outcomes::{self, EpisodeOutcome, TaskEpisodes};
 
 /// One task as a stored forecast recorded it.
@@ -197,16 +199,49 @@ impl Hits {
 }
 
 #[derive(Default)]
+struct NoDeliveryReasons {
+    follower_claim: u64,
+    resident: u64,
+    resolved_outside_drain: u64,
+    unknown: u64,
+}
+
+impl NoDeliveryReasons {
+    fn record(&mut self, task: &Task, route: Option<&CompletionRoute>) {
+        if task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
+            self.resident += 1;
+            return;
+        }
+        match route {
+            Some(CompletionRoute::FollowerClaim) => self.follower_claim += 1,
+            Some(CompletionRoute::OutsideDrain) => self.resolved_outside_drain += 1,
+            None => self.unknown += 1,
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.follower_claim + self.resident + self.resolved_outside_drain + self.unknown
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.follower_claim += other.follower_claim;
+        self.resident += other.resident;
+        self.resolved_outside_drain += other.resolved_outside_drain;
+        self.unknown += other.unknown;
+    }
+}
+
+#[derive(Default)]
 struct Excluded {
     rejected: u64,
     rescoped: u64,
     missing: u64,
-    no_delivery: u64,
+    no_delivery: NoDeliveryReasons,
 }
 
 impl Excluded {
     fn total(&self) -> u64 {
-        self.rejected + self.rescoped + self.missing + self.no_delivery
+        self.rejected + self.rescoped + self.missing + self.no_delivery.total()
     }
 
     fn to_json(&self) -> Value {
@@ -214,7 +249,13 @@ impl Excluded {
             "rejected": self.rejected,
             "rescoped": self.rescoped,
             "missing": self.missing,
-            "no_delivery": self.no_delivery,
+            "no_delivery": self.no_delivery.total(),
+            "no_delivery_reasons": {
+                "follower_claim": self.no_delivery.follower_claim,
+                "resident": self.no_delivery.resident,
+                "resolved_outside_drain": self.no_delivery.resolved_outside_drain,
+                "unknown": self.no_delivery.unknown,
+            },
         })
     }
 }
@@ -340,13 +381,13 @@ fn scorable_forecast_series(result: &Value) -> Vec<&'static str> {
 /// `current_version`'s.
 pub(super) fn score_backlog_forecasts(
     stored: &[StoredBacklogForecast],
-    tasks: &HashMap<String, Task>,
-    done_at: &HashMap<String, DateTime<Utc>>,
+    loaded: &LoadedForecastHistory,
     runs: &HashMap<String, Vec<ForecastRun>>,
-    episodes: &HashMap<String, TaskEpisodes>,
     current_version: u32,
     now: DateTime<Utc>,
 ) -> Value {
+    let tasks = &loaded.tasks;
+    let done_at = &loaded.done_at;
     let mut versions: BTreeMap<u32, VersionHits> = BTreeMap::new();
     let mut all_excluded = Excluded::default();
     let mut forecasts = Vec::new();
@@ -409,19 +450,23 @@ pub(super) fn score_backlog_forecasts(
             }
             let task_runs = runs.get(&stored_task.id).map_or(&[][..], Vec::as_slice);
             let used = super::forecast_usage(task_runs, Some(forecast.forecast_at));
+            let finished = done_at.get(&stored_task.id).copied().or(used.last_end);
+            last_done = last_done.max(finished);
             if used.invocations == 0 {
-                excluded.no_delivery += 1;
+                excluded
+                    .no_delivery
+                    .record(task, loaded.completion_routes.get(&stored_task.id));
+                tokens_total = None;
+                usd_total = None;
                 continue;
             }
             done += 1;
-            let finished = done_at.get(&stored_task.id).copied().or(used.last_end);
-            last_done = last_done.max(finished);
             tokens_total = tokens_total.zip(used.tokens).map(|(sum, one)| sum + one);
             usd_total = usd_total.zip(used.usd).map(|(sum, one)| sum + one);
             let (hours, hours_key) = if attempt_usage {
                 let work = attempt_work_hours(
                     task_runs,
-                    episodes.get(&stored_task.id),
+                    loaded.task_episodes.get(&stored_task.id),
                     forecast.forecast_at,
                     done_at.get(&stored_task.id).copied(),
                 );
@@ -520,7 +565,7 @@ pub(super) fn score_backlog_forecasts(
         all_excluded.rejected += excluded.rejected;
         all_excluded.rescoped += excluded.rescoped;
         all_excluded.missing += excluded.missing;
-        all_excluded.no_delivery += excluded.no_delivery;
+        all_excluded.no_delivery.add(&excluded.no_delivery);
         forecasts.push(json!({
             "forecast_at": forecast.forecast_at.to_rfc3339(),
             "model_version": forecast.model_version,
