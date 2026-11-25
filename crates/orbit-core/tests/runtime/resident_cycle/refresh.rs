@@ -358,8 +358,10 @@ fn live_cycle(fx: &mut Fixture, forge: &Arc<RefreshForge>, rights: &[&str]) -> (
 }
 
 fn call_refresh(runtime: &OrbitRuntime, task: &str, workspace: &str) -> Result<Value, String> {
+    let env = orbit_common::Env::capture();
     runtime
-        .execute_tool_command_dispatch_with_session_context(
+        .execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
             "orbit.workflow",
             json!({
                 "action": "refresh",

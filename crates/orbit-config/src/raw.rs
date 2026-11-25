@@ -24,6 +24,7 @@ pub(crate) struct RawRuntimeConfig {
     /// not installed is deliberately tolerated here: a workspace that pins a
     /// plugin must still load on a machine that has not installed it yet.
     pub(crate) plugins: Option<BTreeMap<String, toml::Value>>,
+    // compat-until: 2026-12-01 (9365d1f462ba)
     /// Retired in ORB-12236. Existing workspaces may still carry
     /// `[routines] role = "source"`; loaders warn and ignore it.
     /// Delete this guard after 2026-12-01, when the section becomes an
@@ -52,6 +53,7 @@ pub(crate) struct RawCrewEntry {
     /// the effective crew registry is resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) effort: Option<String>,
+    // compat-until: 2026-09-14 (fa44a7107e0e, ORB-10801)
     /// Retired in ORB-10801. Read only so a crew that still pins the agent
     /// execution backend is either accepted as inert (`cli`) or refused with
     /// the migration message, never silently re-pointed at another runtime.

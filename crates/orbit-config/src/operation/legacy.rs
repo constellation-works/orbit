@@ -5,6 +5,7 @@ use orbit_common::OrbitError;
 use super::keys::LEGACY_REVIEW_POLICY_KEY;
 use crate::config_document;
 
+// compat-until: 2026-11-29 (e67e97d79494)
 /// A retired `operation.review_policy` value, read only to translate it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LegacyReviewPolicy {
@@ -43,6 +44,7 @@ impl LegacyReviewPolicy {
     }
 }
 
+// compat-until: 2026-11-29 (e67e97d79494)
 /// What a retired `operation.review_policy` says about before-PR review, or
 /// `None` when the document does not state it. [`crate::alias`] folds it
 /// into `review.timing` with the document's other before-landing statements.

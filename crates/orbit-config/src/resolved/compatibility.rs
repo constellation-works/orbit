@@ -12,9 +12,11 @@ use orbit_types::workflow::activity_job::{
 use crate::config_document;
 use crate::registry;
 
+// compat-until: 2026-09-14 (fa44a7107e0e, ORB-10801)
 /// The retired invocation-level agent backend override.
 pub(crate) use orbit_common::env_vars::ORBIT_BACKEND as RETIRED_BACKEND_ENV;
 
+// compat-until: 2026-09-14 (fa44a7107e0e, ORB-10801)
 /// [ORB-10801] `ORBIT_BACKEND` and `[runtime] backend` were tiers 2 and 3 of
 /// the retired agent-loop backend precedence chain. Both are refused rather
 /// than ignored: an operator who still pins `http` must be told their runs are
@@ -59,6 +61,7 @@ pub(super) fn reject_retired_crew_provider(
     }
 }
 
+// compat-until: 2026-09-14 (fa44a7107e0e, ORB-10801)
 /// [ORB-10801] `[crews.<name>] backend` selected the agent execution backend.
 /// Only the CLI agent path survives, so `cli` stays accepted and inert while
 /// the removed values are refused: remapping `http` onto the CLI agent would
@@ -269,6 +272,7 @@ fn warn_deprecated_key(config_path: &Path, key: &str, note: &str) {
     );
 }
 
+// compat-until: 2026-12-01 (9365d1f462ba)
 /// [ORB-12236] Registering an owner checkout is the automation opt-in, so the
 /// versioned `[routines] role` key no longer selects anything. Accepted and
 /// ignored for one release; delete this guard after 2026-12-01, when the key

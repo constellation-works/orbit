@@ -42,6 +42,12 @@ pub fn captured_env() -> Option<&'static Env> {
     CAPTURED_ENV.get()
 }
 
+/// The environment captured by Orbit's entry point, or the current process
+/// environment for a process without an installed entry-point snapshot.
+pub(crate) fn process_env() -> Env {
+    captured_env().cloned().unwrap_or_else(Env::capture)
+}
+
 /// The fully initialized Orbit runtime: the [`RuntimeKernel`] plus the
 /// application and adapter operations defined on it in this crate.
 #[derive(Clone)]
