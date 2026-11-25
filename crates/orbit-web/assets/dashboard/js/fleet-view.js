@@ -211,11 +211,15 @@ export function fleetRemoteAccessSections(reading, hostName) {
   }
   const body = reading.payload;
   const warnings = (body.warnings || []).map(remoteWarning);
-  if (body.restart_required) warnings.push('Config changed since start. Restart orbit web serve to apply it.');
+  if (body.configured_policy_error) warnings.push('Saved trusted hosts need at least one allowed Tailscale login. Add a login in Settings › Machine before restarting.');
+  else if (body.restart_required) warnings.push('Config changed since start. Restart orbit web serve to apply it.');
   if (body.config_error) warnings.push(`Config unreadable: ${body.config_error}`);
   const status = (body.warnings || []).length ? 'Misconfigured' : body.enabled ? 'On' : 'Off';
+  const settingsLink = body.configured_policy_error
+    ? '#config/machine?key=machine.web.trusted_logins'
+    : SETTINGS_LINK;
   const settings = el('a', { text: 'Settings › Machine' });
-  settings.href = SETTINGS_LINK;
+  settings.href = settingsLink;
   const facts = [['Status', el('span', { class: `fleet-state ${status === 'On' ? 'ok' : status === 'Off' ? 'unknown' : 'held'}`, text: status })]];
   if (body.enabled) {
     facts.push(['Trusted', el('div', {}, (body.trusted_hosts || []).map(host => {
@@ -232,7 +236,7 @@ export function fleetRemoteAccessSections(reading, hostName) {
   for (const text of warnings) card.append(el('p', { class: 'fleet-remote-warning', text }));
   if (body.enabled) {
     const edit = el('a', { text: 'Edit in Settings › Machine' });
-    edit.href = SETTINGS_LINK;
+    edit.href = settingsLink;
     card.append(el('p', { class: 'fleet-remote-edit' }, [edit]));
   }
   const nodes = [section('Remote access', card, help)];

@@ -50,7 +50,13 @@ fn remote_access_json(state: &DashboardState) -> Value {
             Ok(web) => (Some(web), None),
             Err(error) => (None, Some(error.to_string())),
         };
-    let restart_required = access.is_from_config()
+    let configured_policy_error = configured.as_ref().and_then(|web| {
+        crate::state::TrustedHosts::new(web.trusted_hosts.clone(), web.trusted_logins.clone())
+            .err()
+            .map(|error| error.to_string())
+    });
+    let restart_required = configured_policy_error.is_none()
+        && access.is_from_config()
         && configured
             .as_ref()
             .is_some_and(|web| !policy.matches(&web.trusted_hosts, &web.trusted_logins));
@@ -102,6 +108,7 @@ fn remote_access_json(state: &DashboardState) -> Value {
             "trusted_hosts": web.trusted_hosts,
             "trusted_logins": web.trusted_logins,
         })),
+        "configured_policy_error": configured_policy_error,
         "config_error": config_error,
         "dashboard_port": access.bound_port(),
         "tailscale": tailscale_json(&tailscale, &served),
