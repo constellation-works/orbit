@@ -116,25 +116,13 @@ pub fn routine_statuses_with_providers(
     );
     let mut load_errors = discovered.errors.clone();
     let mut host = collect_host_routines(&discovered);
-    let routine_names: BTreeSet<String> = host
-        .collection
-        .routines
-        .iter()
-        .map(|routine| routine.definition.name.clone())
-        .chain(
-            host.owner_only
-                .iter()
-                .map(|owned| owned.routine.definition.name.clone()),
-        )
-        .collect();
-    let peers = workspace_provider.discover_name_collision_peers(
+    apply_peer_name_collisions(
+        workspace_provider,
         global_root,
         &discovered,
-        &routine_names,
+        &mut host,
+        None,
     )?;
-    if !peers.entries.is_empty() || !peers.replicas.is_empty() {
-        drop_peer_name_collisions(&discovered, &peers, &mut host);
-    }
     let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
@@ -274,53 +262,4 @@ pub fn routine_statuses_with_providers(
         load_errors,
         owner_only: host.owner_only,
     })
-}
-
-/// Apply host-wide name collision rejection against `peers` when workspace
-/// discovery was scoped to a subset of the host, dropping colliding routines
-/// from `host` and keeping only collision errors for the selected workspaces'
-/// dropped definitions.
-fn drop_peer_name_collisions(
-    discovered: &DiscoveredWorkspaces,
-    peers: &DiscoveredWorkspaces,
-    host: &mut HostRoutines,
-) {
-    let combined = collect_host_routines_across(&[discovered, peers]);
-    let surviving_routines: BTreeSet<&str> = combined
-        .collection
-        .routines
-        .iter()
-        .map(|routine| routine.definition.name.as_str())
-        .collect();
-    let surviving_owner_only: BTreeSet<&str> = combined
-        .owner_only
-        .iter()
-        .map(|owned| owned.routine.definition.name.as_str())
-        .collect();
-    let mut dropped_paths: BTreeSet<PathBuf> = BTreeSet::new();
-    host.collection.routines.retain(|routine| {
-        let keep = surviving_routines.contains(routine.definition.name.as_str());
-        if !keep {
-            dropped_paths.insert(routine.path.clone());
-        }
-        keep
-    });
-    host.owner_only.retain(|owned| {
-        let keep = surviving_owner_only.contains(owned.routine.definition.name.as_str());
-        if !keep {
-            dropped_paths.insert(owned.routine.path.clone());
-        }
-        keep
-    });
-    if !dropped_paths.is_empty() {
-        for error in combined.collection.errors {
-            if error
-                .path
-                .as_ref()
-                .is_some_and(|path| dropped_paths.contains(path))
-            {
-                host.collection.errors.push(error);
-            }
-        }
-    }
 }

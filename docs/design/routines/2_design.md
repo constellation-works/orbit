@@ -245,7 +245,7 @@ policy:
 
 Field semantics:
 
-- **`name`** — unique across all routine sources on a host; collision is a load-time error.
+- **`name`** — unique across all routine sources on a host; collision is a load-time error, including for a `--workspace`-scoped sweep or status read, which also checks the other registered workspaces.
 - **`orbit_default`** — true when the definition is a seeded file (`is_seeded_routine_file`):
   directly under `routines/` and named after one of `orbit_config::SHIPPED_DEFAULT_ROUTINES`, on each
   `GET /api/routines` row and each `owner_only` row. The identity is the file stem, not `name`:

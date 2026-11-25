@@ -87,6 +87,7 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
         global_root: &Path,
         discovered: &DiscoveredWorkspaces,
         routine_names: &BTreeSet<String>,
+        deadline: Option<Instant>,
     ) -> Result<DiscoveredWorkspaces, OrbitError> {
         let Some(selected_id) = self.workspace_filter.as_deref() else {
             return Ok(DiscoveredWorkspaces::default());
@@ -99,6 +100,7 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
             selected_id,
             discovered,
             routine_names,
+            deadline,
             self.read_only,
         )
     }
@@ -197,6 +199,7 @@ fn discover_registered_name_collision_peers(
     selected_id: &str,
     discovered: &DiscoveredWorkspaces,
     routine_names: &BTreeSet<String>,
+    deadline: Option<Instant>,
     read_only: bool,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     let (registry, open) = load_registry_and_opener(global_root, read_only)?;
@@ -216,6 +219,9 @@ fn discover_registered_name_collision_peers(
         }
         if workspace.id == selected_id {
             continue;
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            break;
         }
         let canonical_orbit_dir = std::fs::canonicalize(&checkout.orbit_dir)
             .unwrap_or_else(|_| checkout.orbit_dir.clone());

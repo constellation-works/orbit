@@ -149,6 +149,90 @@ pub(crate) fn collect_host_routines_across(groups: &[&DiscoveredWorkspaces]) -> 
     }
 }
 
+/// Reject host routine names that a registered workspace outside `discovered`
+/// also declares, when the provider scoped discovery to a subset of the host.
+/// Host scheduler state is keyed by routine name alone, so a collision fails
+/// closed across the whole host. Returns `false` when `deadline` passed before
+/// the peer scan finished: the scan could not rule a collision out.
+pub(crate) fn apply_peer_name_collisions(
+    provider: &dyn RoutineWorkspaceProvider,
+    global_root: &Path,
+    discovered: &DiscoveredWorkspaces,
+    host: &mut HostRoutines,
+    deadline: Option<std::time::Instant>,
+) -> Result<bool, OrbitError> {
+    let routine_names: BTreeSet<String> = host
+        .collection
+        .routines
+        .iter()
+        .map(|routine| routine.definition.name.clone())
+        .chain(
+            host.owner_only
+                .iter()
+                .map(|owned| owned.routine.definition.name.clone()),
+        )
+        .collect();
+    let peers = provider.discover_name_collision_peers(
+        global_root,
+        discovered,
+        &routine_names,
+        deadline,
+    )?;
+    if !peers.entries.is_empty() || !peers.replicas.is_empty() {
+        drop_peer_name_collisions(discovered, &peers, host);
+    }
+    Ok(deadline.is_none_or(|deadline| std::time::Instant::now() < deadline))
+}
+
+/// Apply host-wide name collision rejection against `peers` when workspace
+/// discovery was scoped to a subset of the host, dropping colliding routines
+/// from `host` and keeping only collision errors for the selected workspaces'
+/// dropped definitions.
+fn drop_peer_name_collisions(
+    discovered: &DiscoveredWorkspaces,
+    peers: &DiscoveredWorkspaces,
+    host: &mut HostRoutines,
+) {
+    let combined = collect_host_routines_across(&[discovered, peers]);
+    let surviving_routines: BTreeSet<&str> = combined
+        .collection
+        .routines
+        .iter()
+        .map(|routine| routine.definition.name.as_str())
+        .collect();
+    let surviving_owner_only: BTreeSet<&str> = combined
+        .owner_only
+        .iter()
+        .map(|owned| owned.routine.definition.name.as_str())
+        .collect();
+    let mut dropped_paths: BTreeSet<PathBuf> = BTreeSet::new();
+    host.collection.routines.retain(|routine| {
+        let keep = surviving_routines.contains(routine.definition.name.as_str());
+        if !keep {
+            dropped_paths.insert(routine.path.clone());
+        }
+        keep
+    });
+    host.owner_only.retain(|owned| {
+        let keep = surviving_owner_only.contains(owned.routine.definition.name.as_str());
+        if !keep {
+            dropped_paths.insert(owned.routine.path.clone());
+        }
+        keep
+    });
+    if !dropped_paths.is_empty() {
+        for error in combined.collection.errors {
+            if error
+                .path
+                .as_ref()
+                .is_some_and(|path| dropped_paths.contains(path))
+            {
+                host.collection.errors.push(error);
+            }
+        }
+    }
+}
+
 /// Whether `orbit_dir` contains any parseable routine definition whose declared
 /// `name` is in `names`. Unreadable directories and unparseable files are
 /// ignored, matching [`collect_host_routines`].
@@ -198,12 +282,15 @@ pub trait RoutineWorkspaceProvider {
     /// Discover active local peer checkouts that declare any name in
     /// `routine_names`, when `discover_workspaces` was scoped to a subset of
     /// the host's workspaces. Providers that already discover the full host
-    /// leave the default empty result.
+    /// leave the default empty result. A `deadline` bounds the scan: peers not
+    /// reached by then are left undiscovered, and the caller decides what an
+    /// incomplete scan means.
     fn discover_name_collision_peers(
         &self,
         _global_root: &Path,
         _discovered: &DiscoveredWorkspaces,
         _routine_names: &BTreeSet<String>,
+        _deadline: Option<std::time::Instant>,
     ) -> Result<DiscoveredWorkspaces, OrbitError> {
         Ok(DiscoveredWorkspaces::default())
     }

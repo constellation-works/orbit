@@ -10,7 +10,9 @@ use orbit_common::observability::log_rotation::{self, LogRotationConfig};
 use orbit_types::workspace::Workspace;
 
 use super::super::RoutineMachineIdentity;
-use super::super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines};
+use super::super::loader::{
+    RoutineLoadError, RoutineWorkspaceProvider, apply_peer_name_collisions, collect_host_routines,
+};
 use super::dispatch::RuntimeDispatch;
 use super::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
@@ -110,7 +112,34 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // host-local worktree GC and store GC routines; the rest are reported
     // as owner work below.
     let host = if Instant::now() < deadline {
-        collect_host_routines(&discovered)
+        let mut host = collect_host_routines(&discovered);
+        // [ORB-28162] A scoped pass sees one workspace, but host scheduler
+        // state is keyed by routine name alone, so a name another registered
+        // workspace also declares must fail closed here as it does in status.
+        // A scan the deadline cut short cannot rule a collision out, so the
+        // pass then evaluates nothing, as when the deadline had already passed.
+        let peers_complete = apply_peer_name_collisions(
+            workspace_provider,
+            global_root,
+            &discovered,
+            &mut host,
+            Some(deadline),
+        )?;
+        if peers_complete {
+            host
+        } else {
+            skipped_workspaces.extend(
+                discovered
+                    .entries
+                    .iter()
+                    .chain(&discovered.replicas)
+                    .map(|(workspace, _)| workspace.name.clone()),
+            );
+            super::super::loader::HostRoutines {
+                collection: super::super::loader::RoutineCollection::default(),
+                owner_only: Vec::new(),
+            }
+        }
     } else {
         skipped_workspaces.extend(
             discovered
