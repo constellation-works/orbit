@@ -217,6 +217,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.web.trusted_hosts": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.web.trusted_logins": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.worker_containment": {
       "scope": "built-in",
       "state": "default",

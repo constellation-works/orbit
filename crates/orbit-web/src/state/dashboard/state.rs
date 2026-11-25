@@ -101,6 +101,10 @@ pub(in crate::state) struct StateInner {
     /// stamp operator onto the dashboard session envelope. The only operator
     /// grant: the server's TTY and `ORBIT_OPERATOR` are ignored [ORB-23047].
     operator: AtomicBool,
+    /// Non-loopback Hosts the Host gate admits with a listed Tailscale login
+    /// (`machine.web.trusted_hosts`/`trusted_logins`). Set once at boot;
+    /// unset admits loopback Hosts only.
+    trusted_hosts: std::sync::OnceLock<Arc<crate::state::TrustedHosts>>,
     /// Server-instance identifier (`web-operator-<uuid>`), reported as the
     /// caller on web task mutations when `--operator` is enabled.
     session_id: String,
@@ -269,6 +273,7 @@ impl DashboardState {
                 agents: RuntimeMemo::new("agent scorecard scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
+                trusted_hosts: std::sync::OnceLock::new(),
                 session_id: orbit_common::observability::audit_id::audit_execution_id(
                     "web-operator",
                 ),
@@ -440,6 +445,22 @@ impl DashboardState {
     /// before the server accepts requests.
     pub(crate) fn set_operator_session(&self, enabled: bool) {
         self.inner.operator.store(enabled, Ordering::Relaxed);
+    }
+
+    /// The Host gate's trusted-host policy; empty (loopback only) unless
+    /// [`Self::set_trusted_hosts`] ran.
+    pub(crate) fn trusted_hosts(&self) -> Arc<crate::state::TrustedHosts> {
+        self.inner
+            .trusted_hosts
+            .get_or_init(|| Arc::new(crate::state::TrustedHosts::default()))
+            .clone()
+    }
+
+    /// Record the trusted-host policy. Set once at boot, before the app is
+    /// built; a later call, or one after [`Self::trusted_hosts`] was read,
+    /// keeps the first policy.
+    pub(crate) fn set_trusted_hosts(&self, trusted: crate::state::TrustedHosts) {
+        let _ = self.inner.trusted_hosts.set(Arc::new(trusted));
     }
 
     /// Server-instance operator session identifier (`web-operator-<uuid>`) when

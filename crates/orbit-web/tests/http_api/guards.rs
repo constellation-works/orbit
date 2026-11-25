@@ -1088,3 +1088,176 @@ fn guarded_config_delete_refuses_plugin_only_policy_when_staged_reload_would_fai
         },
     );
 }
+
+#[test]
+fn trusted_host_admits_only_a_listed_tailscale_login_and_its_https_origin() {
+    isolated(
+        "guards::trusted_host_admits_only_a_listed_tailscale_login_and_its_https_origin",
+        || {
+            let fixture = Fixture::new();
+            let config = fixture.global.join("config.toml");
+            let base = std::fs::read_to_string(&config).unwrap();
+
+            // Hosts without logins refuse startup, naming the missing key.
+            std::fs::write(
+                &config,
+                format!("{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\n"),
+            )
+            .unwrap();
+            let args = orbit_web::ServeArgs {
+                host: "127.0.0.1".parse().unwrap(),
+                port: 0,
+                no_open: true,
+                global: true,
+                workspace: None,
+                operator: false,
+            };
+            let Err(refused) = orbit_web::serve_from_env(
+                args,
+                Some(&fixture.global),
+                &orbit_common::Env::capture(),
+            ) else {
+                panic!("trusted hosts without logins must refuse startup");
+            };
+            assert!(
+                refused.to_string().contains("machine.web.trusted_logins"),
+                "{refused}"
+            );
+
+            let mut text = base;
+            text.push_str(
+                "\n[machine.web]\ntrusted_hosts = [\"Dash.Tailnet.ts.net\"]\n\
+                 trusted_logins = [\"alice@example.com\"]\n",
+            );
+            std::fs::write(&config, text).unwrap();
+            let server = fixture.server(false);
+            let host = "dash.tailnet.ts.net";
+            let origin = "https://dash.tailnet.ts.net";
+            let task = json!({"title":"Trusted host fixture", "description":"HTTP guard check",
+                "acceptance_criteria":["Admit a listed login"], "complexity":"low"});
+            let send = |method: &str, path: &str, headers: &[(&str, &str)]| {
+                let mut request = server.request(method, path);
+                if method == "POST" {
+                    request = request.json(&task);
+                }
+                for (name, value) in headers {
+                    request = request.header(*name, *value);
+                }
+                request.send().unwrap()
+            };
+            let api = "/api/tasks?workspace=ws_http_fixture";
+            let login = ("tailscale-user-login", "alice@example.com");
+
+            for (method, path, headers) in [
+                ("GET", api, vec![("host", host), login]),
+                ("GET", api, vec![("host", "DASH.tailnet.ts.net:443"), login]),
+                ("GET", api, vec![("host", host), ("origin", origin), login]),
+                ("POST", api, vec![("host", host), ("origin", origin), login]),
+                ("GET", "/", vec![("host", host), login]),
+                ("GET", "/", vec![("host", host), ("origin", origin), login]),
+            ] {
+                let response = send(method, path, &headers);
+                assert!(
+                    response.status().is_success(),
+                    "{method} {path} {headers:?}: {}",
+                    response.status()
+                );
+            }
+
+            let refused = [
+                ("GET", api, vec![("host", host)]),
+                ("GET", "/", vec![("host", host)]),
+                ("GET", api, vec![("host", host), login, login]),
+                ("GET", "/", vec![("host", host), login, login]),
+                (
+                    "GET",
+                    api,
+                    vec![
+                        ("host", host),
+                        ("tailscale-user-login", "mallory@example.com"),
+                    ],
+                ),
+                (
+                    "GET",
+                    "/",
+                    vec![
+                        ("host", host),
+                        ("tailscale-user-login", "mallory@example.com"),
+                    ],
+                ),
+                ("POST", api, vec![("host", host), login]),
+                (
+                    "POST",
+                    api,
+                    vec![
+                        ("host", host),
+                        ("origin", "http://dash.tailnet.ts.net"),
+                        login,
+                    ],
+                ),
+                (
+                    "GET",
+                    "/",
+                    vec![
+                        ("host", host),
+                        ("origin", "http://dash.tailnet.ts.net"),
+                        login,
+                    ],
+                ),
+                (
+                    "POST",
+                    api,
+                    vec![
+                        ("host", host),
+                        ("origin", "https://other.tailnet.ts.net"),
+                        login,
+                    ],
+                ),
+                (
+                    "GET",
+                    api,
+                    vec![
+                        ("host", host),
+                        ("origin", "https://dash.tailnet.ts.net:8443"),
+                        login,
+                    ],
+                ),
+                (
+                    "GET",
+                    "/",
+                    vec![
+                        ("host", host),
+                        ("origin", "https://attacker.example"),
+                        login,
+                    ],
+                ),
+                (
+                    "GET",
+                    api,
+                    vec![("host", host), ("sec-fetch-site", "cross-site"), login],
+                ),
+                (
+                    "GET",
+                    api,
+                    vec![("host", "dash.tailnet.ts.net:7878"), login],
+                ),
+                ("GET", api, vec![("host", "other.tailnet.ts.net"), login]),
+                ("POST", api, vec![("origin", origin), login]),
+            ];
+            for (method, path, headers) in &refused {
+                let response = send(method, path, headers);
+                assert_eq!(
+                    response.status().as_u16(),
+                    403,
+                    "{method} {path} {headers:?}"
+                );
+                let payload: Value = response.json().unwrap();
+                assert_eq!(
+                    payload,
+                    json!({"error":"cross-origin requests not allowed"}),
+                    "{method} {path} {headers:?}"
+                );
+            }
+        },
+    );
+}

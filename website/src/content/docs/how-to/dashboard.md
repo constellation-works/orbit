@@ -28,7 +28,8 @@ and tries to open a browser.
 | `orbit --root <DIR> web serve` | Serve the workspaces in `<DIR>/workspaces.json` instead of `~/.orbit/workspaces.json`. |
 
 The server refuses non-loopback addresses such as `--host 0.0.0.0`. To reach
-another machine, use `orbit web connect`.
+another machine, use `orbit web connect` or
+[Tailscale Serve](#open-it-over-tailscale-serve).
 
 ## Open it over SSH
 
@@ -57,6 +58,25 @@ with `orbit web serve --operator`, or stop it and reconnect.
 `connect` gives each machine its own tab and port. For machines registered
 with `orbit host add`, you can stay in one dashboard and
 [switch hosts](#switch-hosts) instead.
+
+## Open it over Tailscale Serve
+
+To open the dashboard from another tailnet device, such as a phone, front it
+with Tailscale Serve on the machine that runs it and name the host and the
+logins Orbit should admit:
+
+```bash
+tailscale serve --bg 7878
+orbit config set --global machine.web.trusted_hosts '["<node>.<tailnet>.ts.net"]'
+orbit config set --global machine.web.trusted_logins '["you@example.com"]'
+```
+
+Restart `orbit web serve`, then open `https://<node>.<tailnet>.ts.net`.
+A request through that name needs a `Tailscale-User-Login` you listed, which
+Serve sets for tailnet users only. Funnel and tagged devices send none, so
+they are refused. Operator capability still comes only from
+`orbit web serve --operator`. `orbit web serve` refuses to start when hosts
+are set without logins.
 
 ## Switch hosts
 

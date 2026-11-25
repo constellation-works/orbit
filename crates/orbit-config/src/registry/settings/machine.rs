@@ -2,7 +2,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use super::resolve::{resolve_machine_id, resolve_machine_name, resolve_task_prefix};
+use super::resolve::{
+    resolve_machine_id, resolve_machine_name, resolve_task_prefix, resolve_web_trusted_hosts,
+    resolve_web_trusted_logins,
+};
 use crate::config_document;
 use crate::memory_limit::MemoryLimit;
 
@@ -27,6 +30,37 @@ pub struct WorkerContainmentSettings {
     /// `machine.worker_cpu_quota` — CPU ceiling as a percentage of one core;
     /// 0 sets no CPU limit.
     pub cpu_quota_percent: u32,
+}
+
+/// `[machine.web]`, admitted on its own: the dashboard's trusted hosts.
+///
+/// `orbit web serve` reads only these keys, so an unrelated problem elsewhere
+/// in the global file (or one a workspace layer masks) does not stop the
+/// dashboard. Values go through the registry rows' own resolvers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MachineWebSettings {
+    /// `machine.web.trusted_hosts` — lowercase DNS names.
+    pub trusted_hosts: Vec<String>,
+    /// `machine.web.trusted_logins` — Tailscale login names.
+    pub trusted_logins: Vec<String>,
+}
+
+impl MachineWebSettings {
+    /// Admit `[machine.web]` from one already-parsed document.
+    pub(crate) fn admit(document: &toml::Value, config_path: &Path) -> Result<Self, OrbitError> {
+        Ok(Self {
+            trusted_hosts: resolve_web_trusted_hosts(config_document::read_typed_config_value(
+                document,
+                "machine.web.trusted_hosts",
+                config_path,
+            )?)?,
+            trusted_logins: resolve_web_trusted_logins(config_document::read_typed_config_value(
+                document,
+                "machine.web.trusted_logins",
+                config_path,
+            )?)?,
+        })
+    }
 }
 
 /// The `[machine]` table, admitted on its own.
