@@ -379,7 +379,15 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
 /// without pilot preparation while unrelated work holds other files.
 fn doc_duties_mints_an_admissible_locking_context() {
     let (_root, runtime, repo) = runtime();
-    write_files(&repo, &["crates/foo/src/lib.rs"]);
+    write_files(
+        &repo,
+        &[
+            "crates/foo/src/lib.rs",
+            "docs/README.md",
+            "README.md",
+            "CONTRIBUTING.md",
+        ],
+    );
     // Unrelated work in flight: a whole-tree lock conflicts with it on every
     // admission pass and starves the chore [ORB-18264].
     let _holder = seed(

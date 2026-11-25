@@ -16,9 +16,11 @@ template:
 
     The executing worker selects this batch at run time. The steps below are
     the worker's, not preparation's. The lock footprint stays the minted
-    template selectors (`dir:docs`, `file:README.md` and `file:CONTRIBUTING.md`).
-    Preparation keeps that footprint: it does not replace those selectors with
-    this batch, and it does not name a document this section excludes.
+    template selectors: the existing subset of (`dir:docs`, `file:README.md`
+    and `file:CONTRIBUTING.md`) — a file the checkout lacks is not minted,
+    so there is nothing for the pilot to drop. Preparation keeps that
+    footprint: it does not replace those selectors with this batch, and it
+    does not name a document this section excludes.
 
     1. List tracked Markdown files under `docs/` and tracked top-level
        `README*` or `CONTRIBUTING*` documents with `git ls-files`. Exclude vendored
@@ -151,7 +153,10 @@ template:
   # The executing worker selects the batch at run time inside this bound.
   # Preparation keeps these selectors. It does not replace them with the
   # batch or with a document the brief excludes. A dir:. lock starves on a
-  # busy drain, so the minted task locks just this scope.
+  # busy drain, so the minted task locks just this scope. Minting drops a
+  # footprint anchor the checkout lacks (for example a repository without
+  # CONTRIBUTING.md), so the pilot never drops a minted selector with a
+  # promotion-holding warning.
   context_files:
   - 'dir:docs'
   - 'file:README.md'

@@ -51,6 +51,41 @@ fn task_count(runtime: &OrbitRuntime) -> usize {
 }
 
 #[test]
+fn doc_duties_mint_drops_missing_contributing_anchor() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "doc_duties_mint_drops_missing_contributing_anchor",
+    ) {
+        return;
+    }
+
+    let runtime = runtime();
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    fs::create_dir_all(&definitions).expect("definition directory");
+    let repo = &runtime.paths().repo_root;
+    fs::create_dir_all(repo.join("docs")).expect("docs fixture");
+    fs::write(repo.join("README.md"), "fixture\n").expect("README fixture");
+    assert!(
+        !repo.join("CONTRIBUTING.md").exists(),
+        "the fixture must reproduce a checkout without CONTRIBUTING.md"
+    );
+    fs::write(
+        definitions.join("doc-duties.yaml"),
+        include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
+    )
+    .expect("materialize shipped doc-duties definition");
+
+    let task = runtime
+        .auto_task_mint("doc-duties")
+        .expect("mint shipped doc-duties task");
+    assert_eq!(
+        task.context_files,
+        vec!["dir:docs".to_string(), "file:README.md".to_string()],
+        "manual mint omits a provably missing anchor so the pilot does not drop it with a holding warning"
+    );
+}
+
+#[test]
 fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
     if !crate::admission_audit::isolate(
         module_path!(),

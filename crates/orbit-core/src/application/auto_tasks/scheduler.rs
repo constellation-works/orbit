@@ -11,11 +11,12 @@ pub use orbit_automation::auto_tasks::scheduler::{
 };
 use orbit_automation::condition::GuardVerdict;
 use orbit_common::OrbitError;
+use orbit_common::fs::selector::{anchor_path, exists_in_workspace};
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{
     AutoTaskAcceptedHistory, AutoTaskDefinition, SkipIfUnchanged, auto_task_tag,
 };
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use crate::application::automation::{AutomationAutoTaskPort, SourceCache};
 use crate::application::plugin::InactivePlugin;
@@ -477,7 +478,7 @@ pub(crate) fn template_params(
         // The definition's operator grant; task creation records it in the
         // minted task's history.
         granted_tools: definition.granted_tools.clone(),
-        context_files: template.context_files.clone(),
+        context_files: minted_template_selectors(runtime, &template.context_files),
         priority: template.priority,
         // Legacy/custom definitions may omit an assessment. Preserve their
         // historical automated-creation behavior while allowing assessed
@@ -496,4 +497,50 @@ pub(crate) fn template_params(
         system_created: true,
         ..TaskAddParams::default()
     })
+}
+
+/// The template footprint this mint may carry: only selectors that exist in
+/// the checkout the mint writes into.
+///
+/// A template footprint is a lock over repository paths, and the pilot drops
+/// a minted selector whose anchor does not exist at its pinned revision,
+/// reporting the drop as a promotion-holding warning. Minting the missing
+/// anchor anyway would hold every instance in a workspace that lacks the
+/// file — for example `file:CONTRIBUTING.md` in a repository without one
+/// [ORB-28151] — so the mint keeps only selectors that resolve in its target
+/// checkout. Anything whose absence cannot be proven is kept verbatim: an
+/// unresolvable checkout root, an unparseable selector, an anchor-less kind,
+/// or an anchor that escapes the checkout stays for downstream validation to
+/// judge, preserving today's behavior there.
+fn minted_template_selectors(runtime: &OrbitRuntime, selectors: &[String]) -> Vec<String> {
+    let workspace = runtime.paths().repo_root.clone();
+    if workspace.canonicalize().is_err() {
+        return selectors.to_vec();
+    }
+    selectors
+        .iter()
+        .filter(|selector| keep_template_selector(selector, &workspace))
+        .cloned()
+        .collect()
+}
+
+/// Whether one template selector survives the existence filter: everything
+/// survives except a well-formed in-checkout anchor that is provably missing.
+fn keep_template_selector(selector: &str, workspace: &Path) -> bool {
+    let anchor = match anchor_path(selector) {
+        Ok(anchor) => anchor,
+        // Anchor-less kinds (`module:`, `command:`) and malformed selectors
+        // stay for downstream validation to judge.
+        Err(_) => return true,
+    };
+    // An anchor that cannot sit inside the checkout is a template bug the
+    // pilot reports; only a provably missing in-checkout anchor is dropped.
+    if anchor.is_absolute()
+        || anchor
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
+        return true;
+    }
+    exists_in_workspace(selector, workspace)
 }
