@@ -7,10 +7,10 @@ with the gate its rule names, or say it is review-only.
 |---|---|
 | R1 | Dependency-direction check (below) |
 | R2 | Dependency-direction check (surface and transport crates/modules forbidden in domain); otherwise review-only |
-| R3 | Dependency-direction check: grep ban on config-loading and root-discovery calls outside composition |
+| R3 | Clippy `disallowed-methods` ban on the `std::env` reads in [the baseline below](#clippy-disallowed-paths-r3-r5-r6) (config loads, `current_dir`, `home_dir`) outside composition, with a reasoned `#![expect]` in composition; discovery through other calls is review-only |
 | R4 | Dependency-direction check |
-| R5 | Dependency-direction check (no internal edges) plus a grep ban on `std::fs`/`std::net`/`std::process` in the contract unit |
-| R6 | Dependency-direction check in CI (fails on an unlisted edge, an unlisted crate, or an import cycle between units) |
+| R5 | Dependency-direction check (no internal edges) plus a grep ban on `std::net` in the contract unit, and the Clippy `disallowed-types`/`disallowed-methods` ban on `std::fs` and `std::process` in [the baseline below](#clippy-disallowed-paths-r3-r5-r6) |
+| R6 | Dependency-direction check in CI (unlisted crate/edge/cycle, `crate::` module rules) plus `clippy.toml` `disallowed-types` and `disallowed-methods` with `cargo clippy --all-targets -- -D warnings` |
 | R7 | Dependency-direction check bans surface crates (`clap`, terminal and log-subscriber crates) in the domain crate; the split decision itself is review-only |
 | R24 | A regression test that drives the rule through the shared function rather than through one surface (Orbit: the ship guard's test calls `submit_ship_run` directly); otherwise review-only |
 | R25 | review-only |
@@ -18,8 +18,11 @@ with the gate its rule names, or say it is review-only.
 | R40 | Dependency-direction check: the persistence unit imports no application unit, port or feature-rule unit (a crate edge once persistence is its own crate, R7). The naming of its API is review-only. |
 | R41 | review-only |
 | R42 | Dependency-direction check: the unit that defines a port does not import its implementation. Where the shapes live is review-only. |
-| R43 | review-only (the architecture doc's unit map is reviewed whenever a unit is added) |
+| R43 | Architecture-map check in the structure gate: fails when a workspace crate is absent from the architecture doc, when a top-level module (`src/<name>.rs` or `src/<name>/`, `tests` excluded) is absent from its crate's section, when a path the doc writes in code formatting does not exist, or when a crate root or top-level module lacks a first-line `//!` doc. The crate list is read from `cargo metadata`. Whether a unit's sentence matches its `//!` sentence, where new code is placed, and the naming clauses are review-only. |
 | R44 | Dependency-direction check: only the open and upgrade entry points import the legacy unit. Otherwise review-only. |
+| R45 | review-only; the unit map R43 requires lists one application unit per subject, and the dependency-direction check (R6) holds their order |
+| R46 | review-only; a project MAY add provider program and SDK crate names to its dependency-direction check |
+| R47 | review-only |
 | R8 | review-only (optionally `unreachable_pub = "warn"`, not in Orbit's baseline) |
 | R9 | review-only (Orbit does not gate it; see *Deviations* in [`STD-02.md`](STD-02.md#deviations)) |
 | R10 | review-only; an optional grep for `.contains(` on `stderr`, error `to_string()` or message values in classification code is a useful review aid |
@@ -285,16 +288,87 @@ fail=0
 ban() { # ban <dir> <pattern> <message>
   if rg -n "$2" "$1" -g '*.rs' -g '!**/tests/**'; then echo "$3"; fail=1; fi
 }
-ban src/types  'crate::(domain|app|cli)|std::(fs|net|process)' "types must be I/O-free leaves"
+# std::fs, std::env and std::process are Clippy's (see Clippy disallowed paths below), not rg's.
+ban src/types  'crate::(domain|app|cli)|std::net'              "types must be I/O-free leaves"
 ban src/domain 'crate::(app|cli)|\bclap\b'                     "domain must not import app or surface code"
 ban src/app    'crate::cli'                                     "composition must not import surfaces"
-ban src/domain 'std::env::(current_dir|home_dir|var)'           "domain receives resolved roots and config"
 for retired in src/legacy; do [[ -e "$retired" ]] && { echo "retired path exists: $retired"; fail=1; }; done
 exit "$fail"
 ```
 
 Wire it into the same CI job as clippy. Orbit's `orbit-core` and `orbit-store` blocks in its
 script (lines 183–234) are the multi-module version of exactly this.
+
+## Clippy disallowed paths (R3, R5, R6)
+
+Clippy resolves a disallowed path however the code spells it. A grep misses `use std::env;`
+followed by `env::var(..)`, and this list catches it. So the file, process and environment
+boundaries are `clippy.toml` entries, and the dependency-direction script keeps only the crate
+and module rules and `std::net`. The order is the R6 ladder: a crate edge where one exists, else
+item visibility, else an entry here, and a grep only for what none of those can state.
+
+Copy this baseline to the repository's `clippy.toml`. Replace the unit names in each reason with
+the project's own; Orbit's `clippy.toml` names `orbit_common::fs::io` and
+`orbit_common::process::run_bounded` for the same shapes. The gate is
+`cargo clippy --all-targets -- -D warnings`.
+
+```toml
+# clippy.toml — STD-02 §R3, §R5, §R6: the file, process and environment boundary, resolved by Clippy.
+disallowed-types = [
+    { path = "std::fs::File", reason = "file I/O belongs to the persistence unit; open files through its helpers" },
+    { path = "std::fs::OpenOptions", reason = "file I/O belongs to the persistence unit; open files through its helpers" },
+    { path = "std::fs::ReadDir", reason = "directory listing belongs to the persistence unit; list through its helpers" },
+    { path = "std::fs::DirEntry", reason = "directory listing belongs to the persistence unit; list through its helpers" },
+]
+disallowed-methods = [
+    # std::fs — file I/O belongs to the persistence unit, or the adapter that owns the path
+    { path = "std::fs::read", reason = "read through the persistence unit's read helper" },
+    { path = "std::fs::read_to_string", reason = "read through the persistence unit's read helper" },
+    { path = "std::fs::write", reason = "write durable files through the persistence unit's atomic write helper" },
+    { path = "std::fs::remove_file", reason = "remove through the persistence unit's delete helper" },
+    { path = "std::fs::remove_dir", reason = "remove through the persistence unit's delete helper" },
+    { path = "std::fs::remove_dir_all", reason = "remove through the persistence unit's delete helper" },
+    { path = "std::fs::create_dir", reason = "create directories through the persistence unit's directory helper" },
+    { path = "std::fs::create_dir_all", reason = "create directories through the persistence unit's directory helper" },
+    { path = "std::fs::rename", reason = "rename through the persistence unit's atomic replace helper" },
+    { path = "std::fs::copy", reason = "copy through the persistence unit's helper" },
+    { path = "std::fs::hard_link", reason = "link through the persistence unit's helper" },
+    { path = "std::fs::soft_link", reason = "link through the persistence unit's helper" },
+    { path = "std::fs::metadata", reason = "stat through the persistence unit's helper" },
+    { path = "std::fs::symlink_metadata", reason = "stat through the persistence unit's helper" },
+    { path = "std::fs::set_permissions", reason = "set modes through the persistence unit's helper" },
+    { path = "std::fs::read_dir", reason = "list through the persistence unit's helper" },
+    { path = "std::fs::read_link", reason = "read links through the persistence unit's helper" },
+    { path = "std::fs::canonicalize", reason = "resolve paths at the composition root and pass the result in" },
+    { path = "std::fs::exists", reason = "check through the persistence unit's helper" },
+    # std::env — resolved inputs flow down from composition (R3)
+    { path = "std::env::var", reason = "load configuration at the composition root and pass the value in" },
+    { path = "std::env::var_os", reason = "load configuration at the composition root and pass the value in" },
+    { path = "std::env::vars", reason = "load configuration at the composition root and pass the value in" },
+    { path = "std::env::vars_os", reason = "load configuration at the composition root and pass the value in" },
+    { path = "std::env::current_dir", reason = "resolve the working root at the composition root and pass it in" },
+    { path = "std::env::home_dir", reason = "resolve the home root at the composition root and pass it in" },
+    # std::process — children run through the process unit's bounded runner (deadline, process group, capped capture)
+    { path = "std::process::Command::output", reason = "run children through the process unit's bounded runner (deadline, process group, capped capture)" },
+    { path = "std::process::Command::status", reason = "run children through the process unit's bounded runner (deadline, process group, capped capture)" },
+    { path = "std::process::Command::spawn", reason = "run children through the process unit's bounded runner (deadline, process group, capped capture)" },
+]
+```
+
+A module that is allowed one of these carries a module-level expectation with its reason, on the
+module that is the adapter for that boundary (R35). The compiler warns once the lint stops firing,
+and `-D warnings` fails the gate, so the exemption cannot outlive its use:
+
+```rust
+#![expect(clippy::disallowed_methods, reason = "this module is the file adapter; every other module goes through it")]
+```
+
+Use `clippy::disallowed_types` for the type entries. A project on the `cw-kit` crates (`cw-fs`,
+`cw-app`, `cw-supervise`) bans these paths with no exemption, because the kit is the only code
+that names them.
+
+Existing partial lists: `codebases/orbit/clippy.toml`, `codebases/nebula/clippy.toml` and
+`codebases/orbit-graph/clippy.toml` each keep some of these paths beside their own rules.
 
 ## cargo-deny (R23)
 

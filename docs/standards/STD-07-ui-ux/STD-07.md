@@ -3,9 +3,9 @@ id: STD-07-ui-ux
 title: UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state
 summary: Eight principles and the normative rules that serve them, for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 tags: [standard, ui, ux, design]
-version: 16
+version: 20
 created: 2026-11-09
-updated: 2026-11-22
+updated: 2026-11-25
 last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
@@ -85,8 +85,7 @@ decision: where a principle seems to disagree with one, follow the rule and file
   text that loads in, a status that changes, and a transient message. Neighbouring regions
   never move or reflow, and creating or editing an item opens in a modal or popover, not by
   pushing the page down.
-- **R6.** Peer controls MUST be the same size and the same kind of input. A number beside a
-  stepper is a stepper too, and selects are no taller than the buttons beside them.
+- **R6.** Peer controls MUST be the same kind of input and MUST match in rendered height, and selects MUST be no taller than the buttons beside them. Peer buttons MUST share equal rendered height—especially when adjacent, in the same row, or sharing the same underlying function, with stricter uniformity the closer they sit. Peer widths SHOULD aim for uniformity too, though to a lesser scrutiny and subject to content (R42). A button MUST NOT wrap onto extra lines to break peer height; when room runs out, keep readable type and shorten the label by content (R39) instead of shrinking type or leaving mismatched heights.
 - **R7.** Close, Back and panel-level toggles MUST sit at the top right of their panel,
   beside the related header actions.
 - **R27.** A row of tiles, cards or stats MUST NOT leave an orphan: a lone item wrapped onto
@@ -121,6 +120,8 @@ decision: where a principle seems to disagree with one, follow the rule and file
   small icon beside an item (an info ⓘ, a status dot) sits close to it, no wider apart than
   the standard icon gap. An enlarged tap or hover target may overlap the space around it
   but MUST NOT add visible space.
+- **R47.** A container's height MUST come from its content. A card, comment or panel in a stacked list ends where its content ends, with the same inner padding as its siblings (R1). The last item MUST NOT stretch to fill the height left over in its parent. A region whose job is to fill its parent (a scroll area, an editor, a plot) is exempt.
+- **R48.** Everything shown under a selected tab MUST belong to that tab. A panel that stays the same whichever tab is chosen MUST NOT sit under the tab strip: it moves above the strip as page-level content, or into the one tab it serves. Choosing a tab changes only the content below the strip.
 
 ### Typography
 
@@ -165,8 +166,9 @@ decision: where a principle seems to disagree with one, follow the rule and file
 - **R15.** A label MUST be short and MUST NOT repeat context the screen already shows. For
   example, it says "View run", not "View run on host-1" next to the host's name.
 - **R16.** A screen MUST show each piece of information once, and only what the operator acts on. Duplicate controls, nav entries for panels already on screen, redundant pages, noise badges and filler values ("no estimate", "+0/-0") are removed. Disabled features are hidden, not shown greyed out in nav. A detail view, dialog or drill-down MUST NOT repeat what the view that opened it already shows; it adds only what that view lacks.
-- **R32.** A hover tooltip MUST add something the screen does not already show: the full text of a truncated label, a definition, or detail deliberately moved off the screen. It never restates a visible label or a state that a colour, icon or position already shows (for example "Implement · done" on a green step). The full text stays in the accessible name either way. A tooltip's bubble fits its text up to a maximum width, with no empty area beside a short text. Buttons carry no tooltip (R41).
-- **R41.** A button MUST NOT show a hover or focus help bubble or a native tooltip. Its label says what it does. The effect of pressing it, when the label does not show it, goes in the button's accessible description, for example "Run a cycle now that writes a checkpoint" on "Wake for status". A consequence the operator must see before acting (irreversible, affects other hosts) is shown in the confirmation the button opens, or behind an info icon beside it (R13). A disabled button's reason is given the same way: an info icon beside it, and the accessible description.
+- **R32.** A hover tooltip MUST add something the screen does not already show: the full text of a truncated or shortened label, a definition, or detail deliberately moved off the screen. It never restates a visible label or a state that a colour, icon or position already shows (for example "Implement · done" on a green step). The full text stays in the accessible name either way. A tooltip's bubble fits its text up to a maximum width, with no empty area beside a short text. Buttons carry no general help tooltip, except the narrow full-name reveal for an ambiguously shortened label under R41.
+- **R41.** A button MUST NOT show a hover or focus help bubble or a native tooltip explaining what it does or why it is disabled. Its label says what it does, and the effect of pressing it, when the label does not show it, goes in the button's accessible description, for example "Run a cycle now that writes a checkpoint" on "Wake for status". A consequence the operator must see before acting (irreversible, affects other hosts) is shown in the confirmation the button opens, or behind an info icon beside it (R13), and a disabled button's reason is given the same way. Narrow full-name exception: only when a button's visible label is shortened for a constrained layout (R6, R39, R42) and that shrinkage introduces ambiguity (for example "Euro" for "Euro area" or "Rest" for "Rest of world"), the button MUST reveal its full name (and no instructional help) on hover and keyboard focus, support touch, and keep the full name in its accessible name (R32).
+- **R46.** Screens MUST prefer abbreviations in labels, units and values where unambiguous to the intended reader; otherwise use the full form or make the expansion available. Scale values above one million to m and values at or above one billion to b where unambiguous. Monetary values retain their currency and price basis and scale the actual amount.
 
 ### Data display
 
@@ -221,23 +223,8 @@ decision: where a principle seems to disagree with one, follow the rule and file
   them: where the row would wrap inside its own column, it extends into that space instead.
   Where the row fits its column it stays there, and takes no row of its own above the
   neighbouring column.
-- **R39.** A panel's header row, a row of summary figures and a strip of tabs MUST stay on
-  one line at every supported width. Wherever the row fits at full size, its members keep
-  their full size and content. Only where it would not fit do members shrink: a shorter
-  label, a smaller figure, a pill reduced to its dot. If it still does not fit, members are
-  removed, least important first, and a removed value stays in the row's tooltip and
-  accessible name. Shrinking starts at the width where the full-size row stops fitting,
-  measured from its content or derived from its real full-size width, never at a fixed
-  breakpoint that also catches widths where it fits. The row never wraps and never scrolls
-  sideways. A row of controls (chips, filters, buttons) follows R38 instead.
-- **R42.** A control's width MUST come from its content, not a fixed size. A select is as
-  wide as its longest option plus its arrow, and a button or chip as wide as its label. It
-  never grows past the space its row leaves once the other members have their full size.
-  Where the row does not fit, it shrinks as R39 says, but never so far that it clips the
-  part of its value that tells the options apart (such as the host in "workspace · host").
-  A select's width follows its whole option set, not the selected option, so changing the
-  selection moves nothing (R5). A field meant to fill its row, such as a search box, is
-  exempt.
+- **R39.** A panel's header row, a row of summary figures and a strip of tabs MUST stay on one line at every supported width. Wherever the row fits at full size, its members keep their full size and content. Only where it would not fit do members shrink: a shorter label, a smaller figure, a pill reduced to its dot. If it still does not fit, members are removed, least important first, and a removed value stays in the row's tooltip and accessible name. Shrinking starts at the width where the full-size row stops fitting, measured from its content or derived from its real full-size width, never at a fixed breakpoint that also catches widths where it fits. The row never wraps and never scrolls sideways. A row of controls (chips, filters, buttons) follows R38 for wrapping, and when a constrained row shortens button or control labels to keep one line and uniform peer height (R6), it MUST preserve full labels wherever they fit, shorten labels by content before reducing readable type, and—where shortening introduces ambiguity—reveal the full name under R41.
+- **R42.** A control's width MUST come from its content, not a fixed size. A select is as wide as its longest option plus its arrow, and a button or chip as wide as its label, aiming for comparable widths across peer buttons subject to content without sacrificing equal rendered height (R6). It never grows past the space its row leaves once the other members have their full size. Where the row does not fit, it preserves readable type and shortens labels by content (for example "Euro area" to "Euro" and "Rest of world" to "Rest") before reducing font size, and never clips the part of a value that tells options apart (such as the host in "workspace · host"). Where shortening a button label introduces ambiguity, reveal the full name on hover, keyboard focus and touch and preserve the full accessible name (R41). A select's width follows its whole option set, not the selected option, so changing the selection moves nothing (R5). A field meant to fill its row, such as a search box, is exempt.
 - **R43.** When regions shown side by side collapse into one column, the page's primary
   region (the one its nav entry names, such as the task list on Tasks) MUST stay shown. A
   secondary region (a dock, side panel or detail pane) replaces it only when the operator

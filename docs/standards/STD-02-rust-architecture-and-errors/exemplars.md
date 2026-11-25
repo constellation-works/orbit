@@ -11,7 +11,7 @@ Paths are relative to `codebases/orbit/`.
 - R3 — `docs/architecture/orbit-config.md` ("Callers pass explicit roots"); `scripts/check-dependency-direction.sh` lines 201–206 (`ResolvedConfig::load` ban in Core runtime)
 - R4 — `ARCHITECTURE.md#architecture` ("Kernel crates ... never depend back on a feature"); `scripts/check-dependency-direction.sh#allowed_internal_deps` (`orbit-policy | orbit-exec` → common, types only)
 - R5 — `docs/architecture/orbit-types.md` ("does no I/O of any kind"); `crates/orbit-types/Cargo.toml` `[dependencies]`
-- R6 — `scripts/check-dependency-direction.sh` (crate allowlist lines 8–84; single-crate module rules lines 183–234); `AGENTS.md#rules` ("don't add cross-crate dependencies without updating ARCHITECTURE.md"); `crates/orbit-mcp/tests/dep_boundary.rs#mcp_depends_only_on_its_leaf_domains`
+- R6 — `scripts/check-dependency-direction.sh` (crate allowlist lines 8–84; single-crate module rules lines 183–234); `clippy.toml` (`disallowed-methods`: process waits, fs writes and directory creation, syncs, channels); `AGENTS.md#rules` ("don't add cross-crate dependencies without updating ARCHITECTURE.md"); `crates/orbit-mcp/tests/dep_boundary.rs#mcp_depends_only_on_its_leaf_domains`
 - R7 — `docs/design/orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry` (bearing 5); `docs/architecture/orbit-store.md`
 - R24 — `docs/design/activity-job/4_decisions.md#ship-duplicate-dispatch-guard-lives-in-the-shared-submission-path`; `crates/orbit-core/src/application/job/pipeline/submit.rs#submit_ship_run` (its guard `in_flight_ship_run_for_tasks` reads the persisted run input, so every surface is covered); `docs/design/operations-as-data/4_decisions.md#capability-chokepoint-for-destructive-operations-outside-mcp`; `crates/orbit-automation/src/auto_tasks/schedule.rs#interval_period` ("the single range rule" shared by validation and both slot calculations)
 - R25 — `docs/design/activity-job/4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent`; `crates/orbit-engine/src/executor/automation/vcs/commit/summary.rs#ensure_durable_execution_summary`
@@ -42,3 +42,4 @@ Paths are relative to `codebases/orbit/`.
 - R23 — `deny.toml`; `scripts/cargo-deny.sh`; `Makefile#audit`
 - R35–R38 — none yet: Orbit predates them and is listed under *Deviations* in [`STD-02.md`](STD-02.md#deviations).
 - R40 — `codebases/orbit/ARCHITECTURE.md#crates` — the `orbit-store` row: its internal dependencies are `orbit-common` and `orbit-types` only.
+- R45 — `codebases/orbit/crates/orbit-core/src/application/` (one folder per subject: `task/`, `resident/`, `job/`, …)
