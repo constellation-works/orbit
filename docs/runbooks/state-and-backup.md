@@ -257,7 +257,8 @@ files (for example `.mcp.json` and `.claude/settings.json`). The init report
 lists every checkout file it wrote. Review and commit the listed files before
 the first local ship. Local delivery refuses tracked modifications and unresolved
 merge conflicts in the base checkout at setup and before landing. Untracked
-files may remain when they do not overlap the candidate's changed paths; the
+files, including ignored files, may remain when they do not overlap the incoming
+changes from the owner branch to the candidate; the
 merge-time check names only conflicting paths, including file/directory
 collisions. Files created during the run are checked again before each merge,
 and Git's overwrite refusal remains a backstop. PR delivery uses a separate

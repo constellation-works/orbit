@@ -158,7 +158,10 @@ fn merge_with_rebase_retry(
         // Recheck on every attempt, after base synchronization and intent
         // recording: operator files can appear while the candidate is built.
         ensure_base_checkout_ready(base_checkout, Some(after.trim()))?;
-        if git_command_success(base_checkout, &["merge", "--ff-only", after.trim()])? {
+        if git_command_success(
+            base_checkout,
+            &["merge", "--ff-only", "--no-overwrite-ignore", after.trim()],
+        )? {
             let actual = git_output(base_checkout, &["rev-parse", "HEAD"])?;
             let actual = actual.trim();
             if actual != before.trim() && actual != after.trim() {
@@ -285,7 +288,10 @@ fn fast_forward_local_base_to_remote(
 
     if remote_only > 0 {
         ensure_base_checkout_ready(repo_root, Some(remote_base))?;
-        git_success(repo_root, &["merge", "--ff-only", remote_base])?;
+        git_success(
+            repo_root,
+            &["merge", "--ff-only", "--no-overwrite-ignore", remote_base],
+        )?;
     }
 
     Ok(())
@@ -323,7 +329,7 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
 /// Setup has no candidate yet, so it checks tracked work only. Landing also
 /// checks untracked paths against the incoming tree's changes, without
 /// requiring the operator to remove unrelated notes from the base checkout.
-pub(super) fn ensure_base_checkout_ready(
+pub(in crate::executor::automation::vcs) fn ensure_base_checkout_ready(
     path: &Path,
     incoming: Option<&str>,
 ) -> Result<(), OrbitError> {
@@ -332,10 +338,6 @@ pub(super) fn ensure_base_checkout_ready(
     let Some(incoming) = incoming else {
         return Ok(());
     };
-    let untracked = git_output_paths(path, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    if untracked.is_empty() {
-        return Ok(());
-    }
     let changed = git_output_paths(
         path,
         &[
@@ -348,6 +350,32 @@ pub(super) fn ensure_base_checkout_ready(
             "--",
         ],
     )?;
+    // Scan incoming paths and any non-directory parent obstructing them.
+    // Avoid enumerating unrelated ignored files beneath parent directories.
+    let mut selectors = std::collections::BTreeSet::new();
+    for name in &changed {
+        let incoming = Path::new(name);
+        selectors.insert(format!(":(literal){name}"));
+        for ancestor in incoming
+            .ancestors()
+            .skip(1)
+            .take_while(|p| !p.as_os_str().is_empty())
+        {
+            if std::fs::symlink_metadata(path.join(ancestor)).is_ok_and(|m| m.file_type().is_dir())
+            {
+                continue;
+            }
+            selectors.insert(format!(":(literal){}", ancestor.to_string_lossy()));
+        }
+    }
+    let mut untracked = Vec::new();
+    for chunk in selectors.into_iter().collect::<Vec<_>>().chunks(100) {
+        let mut args = vec!["ls-files", "--others", "-z", "--"];
+        args.extend(chunk.iter().map(String::as_str));
+        untracked.extend(git_output_paths(path, &args)?);
+    }
+    untracked.sort();
+    untracked.dedup();
     let conflicts: Vec<_> = untracked
         .iter()
         .filter(|untracked| {
