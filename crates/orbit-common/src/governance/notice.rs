@@ -102,7 +102,7 @@ const POST_PARAMS: &[ParamSpec] = &[
     both(
         "scope",
         ParamType::Enum(SCOPES),
-        "workspace (default) or global.",
+        "Scope (default: workspace).",
         CliArgKind::flag("scope"),
         "workspace (default) or global",
     ),
@@ -250,7 +250,7 @@ const LIST_PARAMS: &[ParamSpec] = &[
     both(
         "status",
         ParamType::Enum(STATUSES),
-        "open (default), closed, expired, or all.",
+        "Filter by status (default: open).",
         CliArgKind::flag("status"),
         "open (default), closed, expired or all",
     ),
@@ -264,7 +264,7 @@ const LIST_PARAMS: &[ParamSpec] = &[
     both(
         "scope",
         ParamType::Enum(SCOPES),
-        "workspace or global.",
+        "Filter by scope.",
         CliArgKind::flag("scope"),
         "Only workspace or only global notices",
     ),
@@ -285,7 +285,7 @@ const LIST_PARAMS: &[ParamSpec] = &[
     both(
         "author_class",
         ParamType::Enum(AUTHOR_CLASSES),
-        "operator, orchestrator, or agent.",
+        "Filter by author class.",
         CliArgKind::flag("author-class"),
         "Only notices posted by operator, orchestrator or agent",
     ),

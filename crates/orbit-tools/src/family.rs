@@ -17,7 +17,7 @@ use orbit_types::tool::{
     McpIdRouteDeclaration, TOOL_ACTION_FIELD, TOOL_MODE_FIELD, ToolFamily, ToolFamilyAction,
     ToolParam, ToolSchema, tool_family, tool_family_action,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
@@ -82,24 +82,10 @@ impl Tool for FamilyTool {
 
     fn input_schema(&self) -> Option<Value> {
         let schema = self.schema();
-        let mut input = Value::Object(tool_input_schema_for(&schema.name, &schema.parameters));
-        if let Some(action) = input
-            .get_mut("properties")
-            .and_then(|properties| properties.get_mut(TOOL_ACTION_FIELD))
-            .and_then(Value::as_object_mut)
-        {
-            action.insert(
-                "enum".into(),
-                json!(
-                    self.family
-                        .actions
-                        .iter()
-                        .map(|action| action.action)
-                        .collect::<Vec<_>>()
-                ),
-            );
-        }
-        Some(input)
+        Some(Value::Object(tool_input_schema_for(
+            &schema.name,
+            &schema.parameters,
+        )))
     }
 
     /// The route its id-addressed actions declare. Every action that
@@ -142,8 +128,9 @@ impl Tool for FamilyTool {
 }
 
 /// One family parameter merged across actions: its type, its description by
-/// action, and how many actions require it.
-type MergedParam<'a> = (String, Vec<(&'a str, String)>, usize);
+/// action, how many actions require it, and its merged wire enum values (`None`
+/// when any action accepts an unbounded string for that parameter).
+type MergedParam<'a> = (String, Vec<(&'a str, String)>, usize, Option<Vec<String>>);
 
 /// The family schema: `action`, a `mode` when an operation takes its own
 /// `action`, then every operation parameter once, in first-declared order.
@@ -178,6 +165,11 @@ fn family_schema(family: &ToolFamily, members: &[FamilyMember]) -> ToolSchema {
         description: action_summary,
         param_type: "string".to_string(),
         required: true,
+        enum_values: family
+            .actions
+            .iter()
+            .map(|action| action.action.to_string())
+            .collect(),
     }];
 
     let mut order: Vec<String> = Vec::new();
@@ -185,15 +177,37 @@ fn family_schema(family: &ToolFamily, members: &[FamilyMember]) -> ToolSchema {
     for member in members {
         for param in &member.schema.parameters {
             let public = public_field_name(member.action, &param.name);
+            let mut inserted = false;
             let entry = params.entry(public.clone()).or_insert_with(|| {
                 order.push(public.clone());
-                (param.param_type.clone(), Vec::new(), 0)
+                inserted = true;
+                (
+                    param.param_type.clone(),
+                    Vec::new(),
+                    0,
+                    (!param.enum_values.is_empty()).then(|| param.enum_values.clone()),
+                )
             });
             entry
                 .1
                 .push((member.action.action, param.description.clone()));
             if param.required {
                 entry.2 += 1;
+            }
+            if !inserted {
+                match (&mut entry.3, param.enum_values.is_empty()) {
+                    (Some(existing), false) => {
+                        for value in &param.enum_values {
+                            if !existing.contains(value) {
+                                existing.push(value.clone());
+                            }
+                        }
+                    }
+                    (existing @ Some(_), true) => {
+                        *existing = None;
+                    }
+                    (None, _) => {}
+                }
             }
         }
     }
@@ -202,7 +216,8 @@ fn family_schema(family: &ToolFamily, members: &[FamilyMember]) -> ToolSchema {
         order.insert(0, mode);
     }
     for name in order {
-        let Some((param_type, descriptions, required_by)) = params.remove(&name) else {
+        let Some((param_type, descriptions, required_by, enum_values)) = params.remove(&name)
+        else {
             continue;
         };
         let description = if name == WORKSPACE_PARAM {
@@ -218,6 +233,7 @@ fn family_schema(family: &ToolFamily, members: &[FamilyMember]) -> ToolSchema {
             description,
             param_type,
             required: required_by == all_actions,
+            enum_values: enum_values.unwrap_or_default(),
         });
     }
     ToolSchema {

@@ -29,12 +29,14 @@ impl Tool for ProcSpawnTool {
                     description: "Program to execute".to_string(),
                     param_type: "string".to_string(),
                     required: true,
+                    enum_values: Vec::new(),
                 },
                 ToolParam {
                     name: "args".to_string(),
                     description: "Arguments to pass to the program".to_string(),
                     param_type: "array".to_string(),
                     required: false,
+                    enum_values: Vec::new(),
                 },
                 ToolParam {
                     name: "timeout_ms".to_string(),
@@ -43,6 +45,7 @@ impl Tool for ProcSpawnTool {
                     ),
                     param_type: "u64".to_string(),
                     required: false,
+                    enum_values: Vec::new(),
                 },
             ],
             builtin: true,

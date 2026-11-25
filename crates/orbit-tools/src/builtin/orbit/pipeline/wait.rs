@@ -15,12 +15,14 @@ impl Tool for OrbitPipelineWaitTool {
                     .to_string(),
                 param_type: "string_list".to_string(),
                 required: true,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "timeout_seconds".to_string(),
                 description: "Optional timeout in seconds (default 3600, max 86400).".to_string(),
                 param_type: "number".to_string(),
                 required: false,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "poll_interval_seconds".to_string(),
@@ -29,6 +31,7 @@ impl Tool for OrbitPipelineWaitTool {
                         .to_string(),
                 param_type: "number".to_string(),
                 required: false,
+                enum_values: Vec::new(),
             },
         ];
         ToolSchema {

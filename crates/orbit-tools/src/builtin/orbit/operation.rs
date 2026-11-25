@@ -237,6 +237,7 @@ pub(super) fn operation_tool_schema<V: 'static>(spec: &OperationSpec<V>) -> Tool
                 description: description.resolve(),
                 param_type: param.param_type.as_tool_param_type().to_string(),
                 required: param.required,
+                enum_values: param.param_type.wire_enum_values(),
             })
             .collect(),
         builtin: true,

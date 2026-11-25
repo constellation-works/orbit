@@ -65,6 +65,8 @@ const AUTO_CONCURRENCY_MODES: &[EnumValue] = &[
     EnumValue::plain("enforce"),
 ];
 
+const SHIP_MODES: &[EnumValue] = &[EnumValue::plain("pr"), EnumValue::plain("local")];
+
 /// The review layers a run's `review` option may add [ORB-16572] [ORB-20099].
 /// `before-landing` is recommended; `before-pr` is deprecated but honoured.
 const REVIEW_LAYERS: &[EnumValue] = &[
@@ -114,7 +116,7 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "auto_concurrency",
             ParamType::Enum(AUTO_CONCURRENCY_MODES),
-            "start: off, shadow, or enforce (local drain only).",
+            "start: Concurrency enforcement (local drain only).",
         ),
         mcp_only(
             "concurrency",
@@ -342,7 +344,7 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
         )),
         mcp_only(
             "mode",
-            ParamType::String,
+            ParamType::Enum(SHIP_MODES),
             "pr or local (default: workspace config).",
         ),
         mcp_only("base", ParamType::String, "Base branch override."),

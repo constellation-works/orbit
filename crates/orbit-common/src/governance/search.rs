@@ -62,7 +62,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "kind",
                 ParamType::Enum(KINDS),
-                "task, friction, or all (default: all).",
+                "Corpus kind (default: all).",
                 flag("kind"),
                 "Restrict results to one corpus kind",
             ),

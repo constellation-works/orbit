@@ -52,6 +52,9 @@ impl Execute for ToolShowArgs {
                 "requirement": requirement,
                 "description": parameter.description,
             });
+            if !parameter.enum_values.is_empty() {
+                doc["enum"] = json!(parameter.enum_values);
+            }
             if let Some(schema) = &tool.input_schema {
                 doc["input_schema"] = schema.clone();
             }
@@ -59,6 +62,12 @@ impl Execute for ToolShowArgs {
                 "Tool: {}\nParameter: {}\nType: {}\nRequired: {}\nDescription: {}",
                 tool.name, parameter.name, parameter.param_type, requirement, parameter.description
             );
+            if !parameter.enum_values.is_empty() {
+                detail.push_str(&format!(
+                    "\nAllowed values: {}",
+                    parameter.enum_values.join(", ")
+                ));
+            }
             if let Some(constraints) = constraint_text {
                 detail.push_str(&format!("\n{constraints}"));
             }
@@ -122,11 +131,18 @@ impl Execute for ToolShowArgs {
                 .keep_all_columns();
         for p in &tool.parameters {
             let req = tool_parameter_requirement(p.required, &p.name, constraints.as_ref());
+            let description = if p.enum_values.is_empty() {
+                p.description.clone()
+            } else if p.description.is_empty() {
+                format!("[{}]", p.enum_values.join(", "))
+            } else {
+                format!("{} [{}]", p.description, p.enum_values.join(", "))
+            };
             table.add_row(vec![
                 p.name.clone(),
                 p.param_type.clone(),
                 req.to_string(),
-                p.description.clone(),
+                description,
             ]);
         }
         let mut blocks = vec![Block::text(header), Block::table(table)];

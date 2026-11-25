@@ -75,13 +75,13 @@
         },
         "severity": {
           "type": "string",
-          "description": "Min severity.",
           "enum": [
             "low",
             "medium",
             "high",
             "critical"
-          ]
+          ],
+          "description": "Min severity."
         },
         "status": {
           "type": "array",
@@ -156,11 +156,11 @@
       "properties": {
         "action": {
           "type": "string",
-          "description": "Action (required fields): add (body); update (id).",
           "enum": [
             "add",
             "update"
-          ]
+          ],
+          "description": "Action (required fields): add (body); update (id)."
         },
         "body": {
           "type": "string",
@@ -240,7 +240,12 @@
         },
         "kind": {
           "type": "string",
-          "description": "task, friction, or all (default: all)."
+          "enum": [
+            "task",
+            "friction",
+            "all"
+          ],
+          "description": "Corpus kind (default: all)."
         },
         "limit": {
           "type": "integer",
@@ -391,11 +396,23 @@
         },
         "priority": {
           "type": "string",
-          "description": "low|medium|high|critical"
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Priority (default: medium)."
         },
         "complexity": {
           "type": "string",
-          "description": "low|medium|hard|xhard"
+          "enum": [
+            "low",
+            "medium",
+            "hard",
+            "xhard"
+          ],
+          "description": "Complexity."
         },
         "type": {
           "type": "string",
@@ -435,7 +452,12 @@
         },
         "origin": {
           "type": "string",
-          "description": "operator_request | orchestrator_initiative | automation"
+          "enum": [
+            "operator_request",
+            "orchestrator_initiative",
+            "automation"
+          ],
+          "description": "Origin."
         },
         "fields": {
           "type": "array",
@@ -520,11 +542,11 @@
       "properties": {
         "action": {
           "type": "string",
-          "description": "Action (required fields): get (id, path); put (id, source_path).",
           "enum": [
             "get",
             "put"
-          ]
+          ],
+          "description": "Action (required fields): get (id, path); put (id, source_path)."
         },
         "id": {
           "type": "string",
@@ -599,14 +621,25 @@
   },
   {
     "name": "orbit_task_list",
-    "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields-projections.md`.",
+    "description": "List tasks as {tasks, total, truncated}; rules: installed Orbit skill `references/task-fields-projections.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "status": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "proposed",
+              "backlog",
+              "in-progress",
+              "review",
+              "done",
+              "blocked",
+              "archived",
+              "rejected",
+              "someday"
+            ]
           },
           "description": "Statuses."
         },
@@ -616,6 +649,12 @@
         },
         "type": {
           "type": "string",
+          "enum": [
+            "feature",
+            "bug",
+            "refactor",
+            "chore"
+          ],
           "description": "Task type."
         },
         "scheduled": {
@@ -632,6 +671,11 @@
         },
         "origin": {
           "type": "string",
+          "enum": [
+            "operator_request",
+            "orchestrator_initiative",
+            "automation"
+          ],
           "description": "Origin."
         },
         "job_run_id": {
@@ -647,6 +691,11 @@
         },
         "runs_on": {
           "type": "string",
+          "enum": [
+            "linux",
+            "macos",
+            "windows"
+          ],
           "description": "Host OS."
         },
         "pilot_warnings": {
@@ -674,7 +723,7 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded view; requires `workspace`, rejects `fields` and non-bounded filters (`status`, `priority`, `search`, `offset`, `limit` only). Only value: `bounded`."
+          "description": "Bounded view; requires `workspace`; rejects `fields` and filters beyond status, priority, search, offset, limit. Only value: `bounded`."
         },
         "offset": {
           "type": "integer",
@@ -686,6 +735,12 @@
         },
         "priority": {
           "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
           "description": "Priority."
         },
         "external_ref": {
@@ -869,11 +924,23 @@
         },
         "priority": {
           "type": "string",
-          "description": "low|medium|high|critical"
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Priority."
         },
         "complexity": {
           "type": "string",
-          "description": "low|medium|hard|xhard"
+          "enum": [
+            "low",
+            "medium",
+            "hard",
+            "xhard"
+          ],
+          "description": "Complexity."
         },
         "type": {
           "type": "string",
@@ -923,7 +990,12 @@
         },
         "origin": {
           "type": "string",
-          "description": "operator_request | orchestrator_initiative | automation"
+          "enum": [
+            "operator_request",
+            "orchestrator_initiative",
+            "automation"
+          ],
+          "description": "Origin."
         },
         "context_files": {
           "type": "array",

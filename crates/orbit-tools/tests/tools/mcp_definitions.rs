@@ -145,18 +145,27 @@ fn task_write_schemas_advertise_priority_and_complexity_values() {
             .iter()
             .find(|definition| definition.schema.name == tool_name)
             .unwrap_or_else(|| panic!("{tool_name} is advertised"));
-        let schema = orbit_common::governance::tool_schema::tool_input_schema(&definition.schema);
+        let schema = definition.input_schema.clone().unwrap_or_else(|| {
+            Value::Object(orbit_common::governance::tool_schema::tool_input_schema(
+                &definition.schema,
+            ))
+        });
         for (field, values) in [
             ("priority", &["low", "medium", "high", "critical"][..]),
             ("complexity", &["low", "medium", "hard", "xhard"][..]),
+            ("type", &["feature", "bug", "refactor", "chore"][..]),
+            (
+                "origin",
+                &["operator_request", "orchestrator_initiative", "automation"][..],
+            ),
         ] {
-            let description = schema["properties"][field]["description"]
-                .as_str()
-                .unwrap_or_else(|| panic!("{tool_name} {field} description is advertised"));
+            let advertised = schema["properties"][field]["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{tool_name}.{field} must advertise an enum: {schema}"));
+            let advertised: Vec<&str> = advertised.iter().filter_map(Value::as_str).collect();
             assert_eq!(
-                description.split('|').collect::<Vec<_>>(),
-                values,
-                "{tool_name} {field} description must list every accepted value"
+                advertised, values,
+                "{tool_name}.{field} enum must list every accepted value"
             );
         }
     }
@@ -171,6 +180,206 @@ fn task_write_schemas_advertise_priority_and_complexity_values() {
             .as_str()
             .is_some_and(|description| description.contains("only accepted value is `bounded`")),
         "orbit.task.show schema must name its accepted view"
+    );
+}
+
+#[test]
+fn every_declared_registry_enum_parameter_is_advertised_in_mcp_schema() {
+    use orbit_common::governance::operation::{OperationSpec, ParamType};
+    use orbit_types::tool::{TOOL_ACTION_FIELD, TOOL_MODE_FIELD, tool_family_of_operation};
+
+    fn check_operations<V: 'static>(
+        operations: &[OperationSpec<V>],
+        definitions: &[orbit_types::tool::McpToolDefinition],
+        registry: &ToolRegistry,
+    ) -> usize {
+        let mut checked = 0usize;
+        for spec in operations {
+            for (param, _) in spec.mcp_params() {
+                let is_list = match param.param_type {
+                    ParamType::Enum(_) => false,
+                    ParamType::EnumList(_) => true,
+                    _ => continue,
+                };
+                let expected = param.param_type.wire_enum_values();
+                assert!(
+                    !expected.is_empty(),
+                    "{}.{}: ParamType::Enum/EnumList must declare at least one value",
+                    spec.tool_name,
+                    param.name
+                );
+
+                // Every active operation schema (standalone or family member)
+                // carries the declared enum values on its ToolParam.
+                if let Some(op_schema) = registry.get_schema(spec.tool_name) {
+                    let tool_param = op_schema
+                        .parameters
+                        .iter()
+                        .find(|entry| entry.name == param.name)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{}.{} missing from registered ToolSchema",
+                                spec.tool_name, param.name
+                            )
+                        });
+                    assert_eq!(
+                        tool_param.enum_values, expected,
+                        "{}.{}: ToolParam.enum_values drifted from ParamType",
+                        spec.tool_name, param.name
+                    );
+                }
+
+                if spec.mcp_scope.is_none() {
+                    continue;
+                }
+                checked += 1;
+
+                let (tool_name, public_field) = match tool_family_of_operation(spec.tool_name) {
+                    Some((family, action)) => {
+                        let field = if action.takes_mode && param.name == TOOL_ACTION_FIELD {
+                            TOOL_MODE_FIELD
+                        } else {
+                            param.name
+                        };
+                        (family.name, field)
+                    }
+                    None => (spec.tool_name, param.name),
+                };
+
+                let definition = definitions
+                    .iter()
+                    .find(|definition| definition.schema.name == tool_name)
+                    .unwrap_or_else(|| panic!("{tool_name} must be advertised in MCP definitions"));
+                let input_schema = definition.input_schema.clone().unwrap_or_else(|| {
+                    Value::Object(orbit_common::governance::tool_schema::tool_input_schema(
+                        &definition.schema,
+                    ))
+                });
+                let property = &input_schema["properties"][public_field];
+                let advertised = if is_list {
+                    assert_eq!(
+                        property["type"], "array",
+                        "{tool_name}.{public_field} (from {}.{}): EnumList must have type array: {property}",
+                        spec.tool_name, param.name
+                    );
+                    property["items"]["enum"].as_array()
+                } else {
+                    property["enum"].as_array()
+                }
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{tool_name}.{public_field} (from {}.{}) lacks JSON-schema enum: {property}",
+                        spec.tool_name, param.name
+                    )
+                });
+                let advertised: Vec<&str> = advertised.iter().filter_map(Value::as_str).collect();
+                for value in &expected {
+                    assert!(
+                        advertised.contains(&value.as_str()),
+                        "{tool_name}.{public_field} (from {}.{}) missing enum value `{value}` in {advertised:?}",
+                        spec.tool_name,
+                        param.name
+                    );
+                }
+            }
+        }
+        checked
+    }
+
+    let definitions =
+        canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+
+    let mut total_checked = 0usize;
+    total_checked += check_operations(
+        orbit_common::governance::agents::AGENTS_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::attention::ATTENTION_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::auto_task::AUTO_TASK_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::automation::AUTOMATION_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::codebase::CODEBASE_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::decision::DECISION_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::drain::DRAIN_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::evolution::EVOLUTION_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::experiment::EXPERIMENT_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::friction::FRICTION_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::memory::MEMORY_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::notice::NOTICE_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::resident::RESIDENT_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::search::SEARCH_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::task::TASK_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::workflow::WORKFLOW_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    total_checked += check_operations(
+        orbit_common::governance::workspace_claim::WORKSPACE_CLAIM_OPERATIONS,
+        &definitions,
+        &registry,
+    );
+    assert!(
+        total_checked >= 40,
+        "expected exhaustive enum check across registries, checked {total_checked}"
     );
 }
 
@@ -189,12 +398,14 @@ impl Tool for UnclassifiedIdTool {
                     description: "one id".to_string(),
                     param_type: "string".to_string(),
                     required: true,
+                    enum_values: Vec::new(),
                 },
                 ToolParam {
                     name: "workspace".to_string(),
                     description: "optional workspace".to_string(),
                     param_type: "string".to_string(),
                     required: false,
+                    enum_values: Vec::new(),
                 },
             ],
             builtin: true,

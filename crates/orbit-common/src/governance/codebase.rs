@@ -52,7 +52,7 @@ const SELECTION: &[ParamSpec] = &[
         both(
             "window",
             ParamType::Enum(WINDOWS),
-            "Period: 7d, 30d, 90d, or all (default: 90d).",
+            "Period (default: 90d).",
             CliArgKind::flag("window"),
             "Counted period ending now",
         ),
@@ -72,7 +72,7 @@ const SELECTION: &[ParamSpec] = &[
         both(
             "rollup",
             ParamType::Enum(ROLLUPS),
-            "Grouping: file, dir, or crate (default: file).",
+            "Grouping (default: file).",
             CliArgKind::flag("rollup"),
             "Group paths by file, parent directory or crate",
         ),

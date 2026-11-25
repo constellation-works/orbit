@@ -25,4 +25,3 @@ pub use operations::{
     task_id_alias_str,
 };
 pub use write_operations::TASK_CLI_OPTIONS_PARAM;
-pub(crate) use write_operations::TASK_UPDATE_STATUS_VALUES;

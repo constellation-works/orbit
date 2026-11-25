@@ -74,6 +74,7 @@ pub(crate) fn tool_param(
         description: description.to_string(),
         param_type: param_type.to_string(),
         required,
+        enum_values: Vec::new(),
     }
 }
 

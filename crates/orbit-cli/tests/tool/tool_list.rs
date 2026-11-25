@@ -727,3 +727,184 @@ fn every_listed_tool_belongs_to_one_mcp_toolset() {
         "registry tools in the always-on core: {core:?}"
     );
 }
+
+#[test]
+fn tool_show_reflects_registry_enums_and_handlers_refuse_unknown_values() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&work);
+    orbit_at_home(&work, &home)
+        .args([
+            "init",
+            "--non-interactive",
+            "--skip-host-prerequisites",
+            "--machine-name",
+            "tool-show-enums",
+            "--task-prefix",
+            "TSE",
+        ])
+        .assert()
+        .success();
+    orbit_at_home(&work, &home)
+        .args(["workspace", "init", "--name", "tool-show-enums"])
+        .assert()
+        .success();
+
+    let show_json = |args: &[&str]| -> Value {
+        let stdout = orbit_at_home(&work, &home)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&stdout).expect("valid tool show JSON")
+    };
+
+    for (tool, expected_params) in [
+        (
+            "orbit.task.add",
+            &[
+                ("priority", &["low", "medium", "high", "critical"][..]),
+                ("complexity", &["low", "medium", "hard", "xhard"][..]),
+                ("type", &["feature", "bug", "refactor", "chore"][..]),
+                (
+                    "origin",
+                    &["operator_request", "orchestrator_initiative", "automation"][..],
+                ),
+            ][..],
+        ),
+        (
+            "orbit.task.update",
+            &[
+                ("priority", &["low", "medium", "high", "critical"][..]),
+                ("complexity", &["low", "medium", "hard", "xhard"][..]),
+                ("type", &["feature", "bug", "refactor", "chore"][..]),
+                (
+                    "origin",
+                    &["operator_request", "orchestrator_initiative", "automation"][..],
+                ),
+            ][..],
+        ),
+        (
+            "orbit.task.list",
+            &[
+                (
+                    "status",
+                    &[
+                        "proposed",
+                        "backlog",
+                        "in-progress",
+                        "review",
+                        "done",
+                        "blocked",
+                        "archived",
+                        "rejected",
+                        "someday",
+                    ][..],
+                ),
+                ("type", &["feature", "bug", "refactor", "chore"][..]),
+                ("priority", &["low", "medium", "high", "critical"][..]),
+                ("runs_on", &["linux", "macos", "windows"][..]),
+            ][..],
+        ),
+    ] {
+        let doc = show_json(&["tool", "show", tool, "--json"]);
+        let params = doc["parameters"].as_array().expect("parameters array");
+        for (name, expected) in expected_params {
+            let param = params
+                .iter()
+                .find(|entry| entry["name"] == *name)
+                .unwrap_or_else(|| panic!("{tool} missing parameter {name}"));
+            let values: Vec<&str> = param["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{tool}.{name} missing enum in tool show --json"))
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert_eq!(values, *expected, "{tool}.{name} tool show enum mismatch");
+        }
+    }
+
+    let detail_json = show_json(&[
+        "tool",
+        "show",
+        "orbit.task.add",
+        "--parameter",
+        "complexity",
+        "--json",
+    ]);
+    assert_eq!(
+        detail_json["enum"],
+        json!(["low", "medium", "hard", "xhard"])
+    );
+    let detail_plain = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "show",
+            "orbit.task.add",
+            "--parameter",
+            "complexity",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail_plain = String::from_utf8_lossy(&detail_plain);
+    assert!(
+        detail_plain.contains("Allowed values: low, medium, hard, xhard"),
+        "plain --parameter detail should show allowed values: {detail_plain}"
+    );
+
+    let list_plain = orbit_at_home(&work, &home)
+        .args(["tool", "show", "orbit.task.list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let list_plain = String::from_utf8_lossy(&list_plain);
+    assert!(
+        list_plain.contains("feature, bug, refactor, chore"),
+        "plain tool show table should display enum values: {list_plain}"
+    );
+
+    for (tool, input, expected_fragment) in [
+        (
+            "orbit.task.list",
+            r#"{"status":["bogus"]}"#,
+            "valid statuses:",
+        ),
+        (
+            "orbit.task.list",
+            r#"{"type":"bogus"}"#,
+            "valid types: feature, bug, refactor, chore",
+        ),
+        (
+            "orbit.task.list",
+            r#"{"priority":"bogus"}"#,
+            "valid priorities: low, medium, high, critical",
+        ),
+        (
+            "orbit.task.add",
+            r#"{"title":"x","description":"y","complexity":"bogus"}"#,
+            "valid complexities: low, medium, hard, xhard",
+        ),
+    ] {
+        let stderr = orbit_at_home(&work, &home)
+            .args(["tool", "run", tool, "--input", input])
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        let stderr = String::from_utf8_lossy(&stderr);
+        assert!(
+            stderr.contains(expected_fragment),
+            "{tool} {input} refusal should include `{expected_fragment}`: {stderr}"
+        );
+    }
+}

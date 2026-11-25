@@ -104,6 +104,7 @@ pub fn workspace_list_include_param() -> ToolParam {
         description: "`[\"crews\"]` adds each workspace's crews.".to_string(),
         param_type: "string_list".to_string(),
         required: false,
+        enum_values: Vec::new(),
     }
 }
 
