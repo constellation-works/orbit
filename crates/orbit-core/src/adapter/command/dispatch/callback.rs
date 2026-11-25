@@ -68,7 +68,7 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
         return Ok(());
     }
     let db = orbit_config::resolved_audit_db_path(
-        &orbit_common::Env::capture(),
+        process_env,
         &orbit_config::ConfigRoots::global_only(global_root),
     )?;
     let store = Store::open(&db)?;

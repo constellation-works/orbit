@@ -63,7 +63,7 @@ pub fn execute_global_plugin_tool(
     entry_point: ToolEntryPoint,
     session_context: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
-    let config = global_only_config(global_root)?;
+    let config = global_only_config_with_env(env, global_root)?;
     let (registry, _load) = discovery::host_plugin_registry(
         global_root,
         &config.persistence.audit_db,
@@ -90,8 +90,14 @@ pub fn execute_global_plugin_tool(
 pub(crate) fn global_only_config(
     global_root: &Path,
 ) -> Result<orbit_config::ResolvedConfig, OrbitError> {
-    orbit_config::ResolvedConfig::load(
-        &orbit_common::Env::capture(),
-        &orbit_config::ConfigRoots::global_only(global_root),
-    )
+    global_only_config_with_env(&orbit_common::Env::capture(), global_root)
+}
+
+/// Same as [`global_only_config`], using the caller-supplied environment
+/// snapshot rather than recapturing the ambient process environment.
+pub(crate) fn global_only_config_with_env(
+    env: &orbit_common::Env,
+    global_root: &Path,
+) -> Result<orbit_config::ResolvedConfig, OrbitError> {
+    orbit_config::ResolvedConfig::load(env, &orbit_config::ConfigRoots::global_only(global_root))
 }
