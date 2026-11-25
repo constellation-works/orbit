@@ -632,11 +632,11 @@ env_vars! {
     );
     const PLAYWRIGHT_BROWSERS_PATH: playwright_browsers_path = (
         "Directory of the headless browser kit's browsers, which Playwright reads.",
-        "Unset. Set only for a worker whose host has a verified kit.",
+        "Unset. Orbit sets it for a worker whose host has a verified kit. Host setup also sets it for the Chromium download, and the kit's `env.sh`, which smoke verification sources, exports it whether or not the kit is verified.",
     );
     const PLAYWRIGHT_MODULE: playwright_module = (
         "The headless browser kit's Playwright ES module, which a check imports `chromium` from.",
-        "Unset. Set only for a worker whose host has a verified kit.",
+        "Unset. Orbit sets it for a worker whose host has a verified kit. The kit's `env.sh`, which host setup writes and smoke verification sources, exports it whether or not the kit is verified.",
     );
     const PYTHONDONTWRITEBYTECODE: pythondontwritebytecode = (
         "Python bytecode-write switch. Orbit sets `1` for a validation command that does not set it.",
