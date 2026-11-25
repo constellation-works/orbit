@@ -9,7 +9,7 @@ use orbit_common::fs::git::run_git;
 pub const ORBIT_ROOT_TOKEN: &str = "{{ORBIT_ROOT}}";
 
 pub(crate) fn home_dir(env: &orbit_common::Env) -> Option<PathBuf> {
-    orbit_common::fs::path::home_dir_from(env).ok()
+    orbit_common::fs::path::home_dir(env).ok()
 }
 
 pub(crate) fn cwd_orbit_root(cwd: &Path) -> PathBuf {

@@ -33,7 +33,7 @@ pub fn resolve_global_root(env: &orbit_common::Env) -> Result<PathBuf, OrbitErro
         }
         return Ok(root);
     }
-    orbit_common::fs::path::home_dir_from(env).map(|home| home.join(".orbit"))
+    orbit_common::fs::path::home_dir(env).map(|home| home.join(".orbit"))
 }
 
 /// Authority used for executable-generation admission.
