@@ -31,7 +31,7 @@ FLEX_STACKS = (
     FlexStack(TASK_DETAIL, ".row-detail .file-list", "li"),
     FlexStack(TASK_DETAIL, ".task-run-list", ".task-run"),
     FlexStack(TASK_DETAIL, ".readiness-list", ".readiness-gap"),
-    FlexStack(TASK_DETAIL, ".history-kv-list", "*"),
+    FlexStack(TASK_DETAIL, ".history-kv-list", "*", (".history-kv-item",)),
     FlexStack(TASK_DETAIL, ".comment-outline", ".comment-outline-link"),
 )
 GRID_STACKS = (
@@ -132,7 +132,9 @@ def compound_matches_item(compound, stack):
     if "::" in compound:
         return False
     if stack.child == "*":
-        return compound == "*" or ":last-child" in compound or ":nth-last-child" in compound
+        # Callers pass only direct children of the stack, and `*` stacks
+        # hold any child element, so every such compound is a stacked item.
+        return True
     if stack.child == "li":
         return compound == "*" or compound.startswith("li") or ":last-child" in compound
     child_class = stack.child.removeprefix(".")
@@ -237,7 +239,9 @@ def matches_item(selector, stack):
     if stack.child == "li":
         return re.match(r"li(?![\w-])", compound) is not None and "::" not in compound
     if stack.child == "*":
-        return False
+        # A `*` stack has no class of its own, so only its declared item
+        # aliases identify an item reached through a descendant combinator.
+        return bool(class_names(compound) & aliases) and "::" not in compound
     return bool(class_names(compound) & aliases)
 
 
