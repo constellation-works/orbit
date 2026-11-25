@@ -328,9 +328,11 @@ def check_grid_stacks(root):
                     has_start_alignment = True
                 elif props.get("align-content") in {"stretch", "normal"}:
                     errors.append(f"{stylesheet}: {selector_group.strip()} lets grid rows stretch with align-content: {props['align-content']}")
-                for prop in ("grid-template-rows", "grid-auto-rows"):
-                    if "fr" in props.get(prop, ""):
-                        errors.append(f"{stylesheet}: {selector_group.strip()} fills a stacked grid row with {prop}")
+            # Rows may be declared in a rule apart from display and alignment,
+            # so check every rule that targets the stack, not only those.
+            for prop in ("grid-template-rows", "grid-auto-rows"):
+                if "fr" in props.get(prop, ""):
+                    errors.append(f"{stylesheet}: {selector_group.strip()} fills a stacked grid row with {prop}")
         if not has_start_alignment:
             errors.append(f"{stylesheet}: {container} needs align-content:start so auto rows stay content-sized")
     return errors
