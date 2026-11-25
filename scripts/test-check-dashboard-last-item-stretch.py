@@ -74,6 +74,8 @@ class DashboardLastItemStretchTests(unittest.TestCase):
             ".task-run-list > .task-run:last-child { flex-grow: 1; }\n",
             ".readiness-list > .readiness-gap:last-child { flex: auto; }\n",
             ".history-kv-list > *:last-child { flex: 1; }\n",
+            ".history-kv-list > .history-kv-item { flex-grow: 1; }\n",
+            ".history-kv-list .history-kv-item { flex: 1; }\n",
             ".comment-outline > .comment-outline-link:last-child { flex-grow: 1; }\n",
         )
         for rule in growth_rules:
@@ -109,6 +111,19 @@ class DashboardLastItemStretchTests(unittest.TestCase):
             self.assertIn("lets a stacked item", result.stderr)
         finally:
             self.task_detail.write_text(original, encoding="utf-8")
+
+    def test_accepts_growth_inside_history_items(self):
+        descendant_rules = (
+            ".history-kv-list > .history-kv-item .history-kv-value { flex: 1; }\n",
+            ".history-kv-list .history-kv-value { flex-grow: 1; }\n",
+        )
+        for rule in descendant_rules:
+            with self.subTest(rule=rule):
+                original = self.task_detail.read_text(encoding="utf-8")
+                self.task_detail.write_text(original + rule, encoding="utf-8")
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.task_detail.write_text(original, encoding="utf-8")
 
     def test_rejects_n_plus_k_child_on_star_stack(self):
         n_plus_k_rules = (
