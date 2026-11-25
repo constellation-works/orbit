@@ -7,8 +7,9 @@
 use super::RoutineMachineIdentity;
 use super::due::{next_occurrence, parse_cron};
 use super::loader::{
-    DiscoveredWorkspaces, LoadedRoutine, OwnerOnlyRoutine, RetiredRoutine, RoutineLoadError,
-    RoutineWorkspaceProvider, collect_host_routines,
+    DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, RetiredRoutine,
+    RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines,
+    collect_host_routines_across,
 };
 use crate::OrbitRuntime;
 use chrono::{DateTime, Local, Utc};
@@ -20,8 +21,8 @@ use orbit_store::contracts::{
 use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::{Map, Value, json};
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 // Bound status reads independently of the compact ten-fire dashboard strip.
 

@@ -104,15 +104,21 @@ pub struct HostRoutines {
 /// collisions across them still fail closed, then keep only the
 /// [replica-local](runs_in_replica) routines a replica defines.
 pub fn collect_host_routines(discovered: &DiscoveredWorkspaces) -> HostRoutines {
-    let workspaces = discovered
-        .entries
+    collect_host_routines_across(&[discovered])
+}
+
+/// Collect routines across `groups` of discovered workspaces together, failing
+/// closed on host-wide name collisions before filtering replica checkouts down
+/// to their [replica-local](runs_in_replica) routines.
+pub(crate) fn collect_host_routines_across(groups: &[&DiscoveredWorkspaces]) -> HostRoutines {
+    let workspaces = groups
         .iter()
-        .chain(&discovered.replicas)
+        .flat_map(|discovered| discovered.entries.iter().chain(&discovered.replicas))
         .collect::<Vec<_>>();
     let mut collection = collect_routines(&workspaces);
-    let replica_owners: BTreeMap<PathBuf, String> = discovered
-        .replicas
+    let replica_owners: BTreeMap<PathBuf, String> = groups
         .iter()
+        .flat_map(|discovered| discovered.replicas.iter())
         .map(|(workspace, runtime)| {
             let owner = runtime
                 .coordination_write_owner()
@@ -141,6 +147,16 @@ pub fn collect_host_routines(discovered: &DiscoveredWorkspaces) -> HostRoutines 
         collection,
         owner_only,
     }
+}
+
+/// Whether `orbit_dir` contains any parseable routine definition whose declared
+/// `name` is in `names`. Unreadable directories and unparseable files are
+/// ignored, matching [`collect_host_routines`].
+pub fn declares_any_routine_name(orbit_dir: &Path, names: &BTreeSet<String>) -> bool {
+    !names.is_empty()
+        && orbit_automation::routines::loader::declared_routine_names(orbit_dir)
+            .keys()
+            .any(|name| names.contains(name))
 }
 
 impl DiscoveredWorkspaces {
@@ -177,6 +193,19 @@ pub trait RoutineWorkspaceProvider {
         _deadline: std::time::Instant,
     ) -> Result<DiscoveredWorkspaces, OrbitError> {
         self.discover_workspaces(global_root)
+    }
+
+    /// Discover active local peer checkouts that declare any name in
+    /// `routine_names`, when `discover_workspaces` was scoped to a subset of
+    /// the host's workspaces. Providers that already discover the full host
+    /// leave the default empty result.
+    fn discover_name_collision_peers(
+        &self,
+        _global_root: &Path,
+        _discovered: &DiscoveredWorkspaces,
+        _routine_names: &BTreeSet<String>,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        Ok(DiscoveredWorkspaces::default())
     }
 }
 

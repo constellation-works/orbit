@@ -4,7 +4,8 @@
 //! Both come exclusively from the global `config.toml` `[machine]` table and
 //! `workspaces.json`.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -80,6 +81,27 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
             self.read_only,
         )
     }
+
+    fn discover_name_collision_peers(
+        &self,
+        global_root: &Path,
+        discovered: &DiscoveredWorkspaces,
+        routine_names: &BTreeSet<String>,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let Some(selected_id) = self.workspace_filter.as_deref() else {
+            return Ok(DiscoveredWorkspaces::default());
+        };
+        if routine_names.is_empty() {
+            return Ok(DiscoveredWorkspaces::default());
+        }
+        discover_registered_name_collision_peers(
+            global_root,
+            selected_id,
+            discovered,
+            routine_names,
+            self.read_only,
+        )
+    }
 }
 
 /// Discover the checkouts this machine evaluates schedules for, optionally
@@ -98,12 +120,16 @@ pub(crate) fn discover_registered_workspaces(
     discover_registered_workspaces_until(global_root, workspace_filter, None, false)
 }
 
-fn discover_registered_workspaces_until(
+type CheckoutOpener = fn(
+    &Path,
+    &orbit_types::workspace::Workspace,
+    &orbit_types::workspace::WorkspaceCheckout,
+) -> Result<orbit_core::OrbitRuntime, OrbitError>;
+
+fn load_registry_and_opener(
     global_root: &Path,
-    workspace_filter: Option<&str>,
-    deadline: Option<Instant>,
     read_only: bool,
-) -> Result<DiscoveredWorkspaces, OrbitError> {
+) -> Result<(orbit_types::workspace::WorkspaceRegistry, CheckoutOpener), OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
     let registry = workspace_registry::load_validated_registry_from(
         &registry_path,
@@ -113,12 +139,21 @@ fn discover_registered_workspaces_until(
             workspace_registry::WorkspaceValidationMode::Persist
         },
     )?;
-
     let open = if read_only {
         RegisteredRuntimeFactory::open_registered_checkout_observational
     } else {
         RegisteredRuntimeFactory::open_registered_checkout
     };
+    Ok((registry, open))
+}
+
+fn discover_registered_workspaces_until(
+    global_root: &Path,
+    workspace_filter: Option<&str>,
+    deadline: Option<Instant>,
+    read_only: bool,
+) -> Result<DiscoveredWorkspaces, OrbitError> {
+    let (registry, open) = load_registry_and_opener(global_root, read_only)?;
     let mut discovered = DiscoveredWorkspaces::default();
     for (workspace, checkout) in workspace_registry::local_workspaces(&registry) {
         if workspace.status != WorkspaceStatus::Active || !checkout.orbit_dir.exists() {
@@ -155,6 +190,60 @@ fn discover_registered_workspaces_until(
         }
     }
     Ok(discovered)
+}
+
+fn discover_registered_name_collision_peers(
+    global_root: &Path,
+    selected_id: &str,
+    discovered: &DiscoveredWorkspaces,
+    routine_names: &BTreeSet<String>,
+    read_only: bool,
+) -> Result<DiscoveredWorkspaces, OrbitError> {
+    let (registry, open) = load_registry_and_opener(global_root, read_only)?;
+    let selected_orbit_dirs: BTreeSet<PathBuf> = discovered
+        .entries
+        .iter()
+        .chain(&discovered.replicas)
+        .map(|(_, runtime)| {
+            let root = runtime.shared_root();
+            std::fs::canonicalize(&root).unwrap_or(root)
+        })
+        .collect();
+    let mut peers = DiscoveredWorkspaces::default();
+    for (workspace, checkout) in workspace_registry::local_workspaces(&registry) {
+        if workspace.status != WorkspaceStatus::Active || !checkout.orbit_dir.exists() {
+            continue;
+        }
+        if workspace.id == selected_id {
+            continue;
+        }
+        let canonical_orbit_dir = std::fs::canonicalize(&checkout.orbit_dir)
+            .unwrap_or_else(|_| checkout.orbit_dir.clone());
+        if selected_orbit_dirs.contains(&canonical_orbit_dir) {
+            continue;
+        }
+        if !orbit_core::application::routines::declares_any_routine_name(
+            &checkout.orbit_dir,
+            routine_names,
+        ) {
+            continue;
+        }
+        match open(global_root, workspace, checkout) {
+            Ok(runtime) if checkout.role == Some(WorkspaceCheckoutRole::Replica) => {
+                peers.replicas.push((workspace.clone(), runtime));
+            }
+            Ok(runtime) => {
+                peers.entries.push((workspace.clone(), runtime));
+            }
+            Err(error) => tracing::debug!(
+                target: "orbit.cmd.routines",
+                workspace = %workspace.name,
+                %error,
+                "candidate colliding workspace could not be opened; skipping collision check",
+            ),
+        }
+    }
+    Ok(peers)
 }
 
 pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, OrbitError> {

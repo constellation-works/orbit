@@ -868,9 +868,11 @@ fn ended_resident_reads_use_the_ending_event() {
     );
 }
 
-/// The resident list reads routine status for the selected workspace alone:
-/// an unrelated registered workspace, even one holding the same routine or an
-/// unreadable routines directory, neither changes nor breaks the `routine` row.
+/// The resident list ignores unrelated registered workspaces that do not
+/// introduce a loadable same-name collision: a distinct valid routine, a
+/// malformed or unresolvable definition (even declaring the same name), and an
+/// unreadable routines directory neither change nor erase the selected `routine`
+/// row.
 #[test]
 fn resident_list_routine_ignores_unrelated_registered_workspaces() {
     isolated(
@@ -884,14 +886,31 @@ fn resident_list_routine_ignores_unrelated_registered_workspaces() {
             let alone = json_ok(server.get(&format!("/api/residents{WS}")));
             assert!(alone_all["routine"].is_object(), "{alone_all}");
 
-            // One workspace holds the same routine definition: a host-wide
-            // read would mark the target's routine a duplicate owner.
+            let template =
+                fs::read_to_string(fixture.work.join("routines/resident_cycle.yaml")).unwrap();
+
+            // One workspace holds a distinct valid resident-cycle routine.
             let twin = add_workspace(&fixture, "ws_twin", "twin");
             let twin_routines = twin.paths().orbit_dir.join("routines");
             fs::create_dir_all(&twin_routines).unwrap();
-            fs::copy(
-                fixture.work.join("routines/resident_cycle.yaml"),
+            fs::write(
                 twin_routines.join("resident_cycle.yaml"),
+                template.replace("name: resident-cycle-fixture", "name: resident-cycle-twin"),
+            )
+            .unwrap();
+            // Another holds a malformed YAML file and an unresolvable definition
+            // even declaring the same name; neither loads into the host
+            // scheduler, so neither may collide with the selected routine.
+            let malformed = add_workspace(&fixture, "ws_malformed", "malformed");
+            let malformed_routines = malformed.paths().orbit_dir.join("routines");
+            fs::create_dir_all(&malformed_routines).unwrap();
+            fs::write(malformed_routines.join("broken.yaml"), "not: [valid: yaml").unwrap();
+            fs::write(
+                malformed_routines.join("unloadable_same_name.yaml"),
+                template.replace(
+                    "target: job:resident_cycle_pipeline",
+                    "target: job:missing_resident_pipeline",
+                ),
             )
             .unwrap();
             // Another has a routines directory that cannot be read.
@@ -903,6 +922,128 @@ fn resident_list_routine_ignores_unrelated_registered_workspaces() {
             let with_others = json_ok(server.get(&format!("/api/residents{WS}")));
             assert_eq!(with_others_all, alone_all);
             assert_eq!(with_others, alone);
+        },
+    );
+}
+
+/// Two active local workspaces defining loadable routines with the same
+/// resident-cycle routine name collide host-wide: the scheduler and `GET
+/// /api/routines` drop both, `POST /api/routines/toggle` responds 404, and
+/// `GET /api/residents` reflects that rejection by omitting `routine` rather
+/// than advertising an un-toggleable row.
+#[test]
+fn resident_list_drops_colliding_routine_in_sync_with_routines_and_toggle() {
+    isolated(
+        "residents::resident_list_drops_colliding_routine_in_sync_with_routines_and_toggle",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+
+            // Enable the fixture's cycle routine first: a collision must drop
+            // even an enabled definition, matching the host scheduler.
+            let before = json_ok(server.get(&format!("/api/residents{WS}")));
+            let initial = &before["routine"];
+            assert_eq!(initial["enabled"], false, "{before}");
+            json_ok(server.send(
+                "POST",
+                &format!("/api/routines/toggle{WS}"),
+                json!({
+                    "name": initial["name"],
+                    "source": initial["source"],
+                    "target": initial["target"],
+                    "machine_name": initial["machine_name"],
+                    "expected_enabled": false,
+                    "enabled": true,
+                }),
+            ));
+
+            let enabled_residents = json_ok(server.get(&format!("/api/residents{WS}")));
+            let enabled_routine = enabled_residents["routine"].clone();
+            assert_eq!(enabled_routine["enabled"], true, "{enabled_residents}");
+            let routines_before = json_ok(server.get(&format!("/api/routines{WS}")));
+            assert!(
+                routines_before["routines"]
+                    .as_array()
+                    .is_some_and(|rows| rows
+                        .iter()
+                        .any(|row| row["name"] == "resident-cycle-fixture")),
+                "{routines_before}"
+            );
+
+            // Register a second active local workspace defining a loadable
+            // routine with the exact same name and job (even while disabled).
+            let twin = add_workspace(&fixture, "ws_twin", "twin");
+            let twin_routines = twin.paths().orbit_dir.join("routines");
+            fs::create_dir_all(&twin_routines).unwrap();
+            fs::copy(
+                fixture.work.join("routines/resident_cycle.yaml"),
+                twin_routines.join("resident_cycle.yaml"),
+            )
+            .unwrap();
+
+            let routines_after = json_ok(server.get(&format!("/api/routines{WS}")));
+            assert!(
+                routines_after["routines"]
+                    .as_array()
+                    .is_some_and(|rows| rows.is_empty()),
+                "Routines should drop the colliding routine: {routines_after}"
+            );
+            assert!(
+                routines_after["load_errors"]
+                    .as_array()
+                    .is_some_and(|errors| errors.iter().any(|error| {
+                        error["message"]
+                            .as_str()
+                            .is_some_and(|msg| msg.contains("resident-cycle-fixture"))
+                    })),
+                "Routines should explain the collision in load_errors: {routines_after}"
+            );
+
+            error_code(
+                server.send(
+                    "POST",
+                    &format!("/api/routines/toggle{WS}"),
+                    json!({
+                        "name": enabled_routine["name"],
+                        "source": enabled_routine["source"],
+                        "target": enabled_routine["target"],
+                        "machine_name": enabled_routine["machine_name"],
+                        "expected_enabled": true,
+                        "enabled": false,
+                    }),
+                ),
+                404,
+                "routine_not_found",
+            );
+
+            for path in [
+                format!("/api/residents{WS}"),
+                format!("/api/residents{WS}&all=true"),
+            ] {
+                let listed = json_ok(server.get(&path));
+                assert!(
+                    listed["routine"].is_null(),
+                    "Residents must omit the dropped colliding routine ({path}): {listed}"
+                );
+            }
+
+            let scoped = orbit_cmd::registry_routines::routine_statuses_for_workspace(
+                &fixture.global,
+                "ws_http_fixture",
+            )
+            .unwrap();
+            assert!(
+                scoped.statuses.is_empty(),
+                "scoped status must omit the colliding routine: {scoped:?}"
+            );
+            assert!(
+                scoped
+                    .load_errors
+                    .iter()
+                    .any(|error| error.message.contains("resident-cycle-fixture")),
+                "scoped status must report the collision load error: {scoped:?}"
+            );
         },
     );
 }
@@ -1004,7 +1145,7 @@ fn split_catalog_and_partition_ids(fixture: &Fixture, catalog_id: &str, partitio
 
 /// The Residents routine row is selected by the catalog ID the dashboard
 /// addresses, not by the partition ID the checkout persists. A twin checkout
-/// holding the same routine must not supply the row.
+/// holding its own resident-cycle routine must not supply the row.
 #[test]
 fn resident_routine_resolves_catalog_id_when_partition_id_differs() {
     isolated(
@@ -1018,9 +1159,11 @@ fn resident_routine_resolves_catalog_id_when_partition_id_differs() {
             let twin = add_workspace(&fixture, "ws_twin", "twin");
             let twin_routines = twin.paths().orbit_dir.join("routines");
             fs::create_dir_all(&twin_routines).unwrap();
-            fs::copy(
-                fixture.work.join("routines/resident_cycle.yaml"),
+            let template =
+                fs::read_to_string(fixture.work.join("routines/resident_cycle.yaml")).unwrap();
+            fs::write(
                 twin_routines.join("resident_cycle.yaml"),
+                template.replace("name: resident-cycle-fixture", "name: resident-cycle-twin"),
             )
             .unwrap();
 
