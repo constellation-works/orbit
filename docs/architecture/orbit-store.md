@@ -34,6 +34,6 @@ Design intent: [docs/design/state-compatibility/](../../docs/design/state-compat
 - `contracts`: Consumer-facing persistence traits, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only (no persistence drivers).
 - `driver`: Private single-technology persistence drivers (`driver/file` and `driver/sqlite`, never importing each other); imports `contracts`, `fs`, `json_schema`, `orbit-common`, and `orbit-types`.
 - `fs`: Narrow filesystem mechanics (locks, path safety, atomic writes, YAML) shared by drivers and workflows; imports `orbit-common` and `orbit-types` only.
-- `json_schema`: JSON Schema draft validation and compilation helper for stored skill/tool schemas; imports `orbit-common` only.
+- `json_schema`: JSON Schema draft validation and compilation helper for stored skill/tool schemas; imports `jsonschema`, `orbit-common`, and `serde_json` only.
 - `repository`: Live repositories enforcing cross-driver invariants across file and SQLite drivers; imports `contracts`, `driver`, `fs`, `workflow`, `orbit-common`, and `orbit-types`.
 - `workflow`: Explicit one-shot import, export, repair, and layout-upgrade workflows; imports `contracts`, `driver`, `fs`, `repository`, `orbit-common`, and `orbit-types`.

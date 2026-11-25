@@ -48,4 +48,4 @@ How the modules under `crates/orbit-engine/src/` split. The dependency guard, th
 - `context`: `RuntimeHost` capability boundary, dispatch contracts, null host, and execution-context primitives; imports `executor` (never `activity_job`) and lower workspace crates.
 - `executor`: Built-in deterministic automation and VCS/PR actions invoked by job steps; imports `context`, `sandbox_spawn` (never `activity_job`), and lower workspace crates.
 - `sandbox_spawn`: Sandboxed child-process spawn and permanent/transient spawn failure classification; imports `context` only inside the crate plus `orbit-common`, `orbit-exec`, and `orbit-types`.
-- `template`: Template context and `{{...}}` interpolation renderer for job steps; imports `orbit-common` only.
+- `template`: Template context and `{{...}}` interpolation renderer for job steps; imports `orbit-common` and `serde_json` only.

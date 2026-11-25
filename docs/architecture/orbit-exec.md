@@ -30,9 +30,9 @@ Design intent: [docs/design/policy-sandbox/](../../docs/design/policy-sandbox/) 
 
 ## Ownership by module
 
-- `browser_kit`: Host headless browser kit layout, state probes, and worker environment variables; imports `orbit-common` only.
+- `browser_kit`: Host headless browser kit layout, state probes, and worker environment variables; imports `orbit-common` and `serde` only.
 - `build_sandbox`: Install-time plugin build sandbox profile (`spec.build`); imports `credential_paths`, `linux_landlock`, `linux_sandbox`, `macos_sandbox`, `path_identity`, `supervision`, `orbit-common`, and `orbit-types`.
-- `credential_paths`: Canonical list of host credential locations denied to confined worker children across platforms; imports `std` only.
+- `credential_paths`: Canonical list of host credential locations denied to confined worker children across platforms; imports `std` and `orbit-common` only.
 - `linux_landlock`: Linux Landlock read/write/TCP confinement primitives for plugin backends; imports `linux_sandbox`, `path_identity`, `process`, `runner`, `orbit-common`, and `orbit-types`.
 - `linux_sandbox`: Linux Bubblewrap write-confinement compiler and spawn helper for CLI-backed agents; imports `credential_paths`, `linux_landlock`, `orbit-common`, and `orbit-types`.
 - `macos_sandbox`: macOS `sandbox-exec` SBPL profile compilation and sandboxed spawn; imports `credential_paths`, `path_identity`, `process`, `orbit-common`, and `orbit-types`.

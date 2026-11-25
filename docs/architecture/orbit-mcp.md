@@ -31,10 +31,10 @@ Design intent: [docs/design/mcp-bridge/](../../docs/design/mcp-bridge/) — this
 ## Ownership by module
 
 - `adapter`: MCP tool dispatch (`OrbitToolServer`), name translation, structured results, and input schemas; imports `error`, `internal_drain`, `presentation_definition`, `orbit-common`, and `orbit-types`.
-- `error`: Translation of `OrbitError` values into structured MCP tool error payloads; imports `orbit-common` only.
+- `error`: Translation of `OrbitError` values into structured MCP tool error payloads; imports `orbit-common`, `rmcp`, and `serde_json` only.
 - `federated`: Fail-closed federated MCP mux routing `hm_*`/`ws_*` selectors across local and SSH-registered hosts; imports `internal_drain`, `remote`, `orbit-common`, `orbit-registry`, `orbit-tools`, and `orbit-types`.
 - `internal_drain`: Deterministic owner/follower drain RPC protocol enabled only on the server launch path; imports `orbit-common` only.
-- `listener`: TCP listener transport (`McpListener`) for serving the MCP kernel over sockets; imports `orbit-common` and `orbit-types` only.
+- `listener`: TCP listener transport (`McpListener`) for serving the MCP kernel over sockets; imports `orbit-common`, `orbit-types`, `rmcp`, and `tokio` only.
 - `listener_peer`: Local user-ID lookup for accepted TCP peers on the MCP listener; imports `listener` and `orbit-common`.
 - `presentation_definition`: Adapter-owned read-only presentation tool schema and actions; imports `rmcp` and `serde_json` only.
 - `remote`: Thin SSH stdio proxy transport and remote-machine MCP metadata; imports `orbit-common`, `orbit-registry`, `orbit-tools`, and `orbit-types`.

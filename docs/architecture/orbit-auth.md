@@ -32,7 +32,7 @@ Design intent: [docs/design/policy-sandbox/](../../docs/design/policy-sandbox/) 
 
 - `client_address`: The listener's client-address rule, the only reader of forwarding headers; imports `orbit-common` only.
 - `environment`: The execution-environment check every listener-user command and the listener run first; imports `orbit-common` only.
-- `limiter`: The bounded keyed request limiter and coalesced rejection audits; imports `std` only.
-- `scope`: Principals, classes, verbs, workspace scope, priority ceilings, `hard` permission, and the allow-or-deny decision with typed refusals; imports `orbit-common` and `orbit-types` only.
+- `limiter`: The bounded keyed request limiter and coalesced rejection audits; imports `std` and `chrono` only.
+- `scope`: Principals, classes, verbs, workspace scope, priority ceilings, `hard` permission, and the allow-or-deny decision with typed refusals; imports `chrono`, `orbit-common`, `orbit-types`, and `serde` only.
 - `store`: The listener user's own SQLite store `lease-tokens.db`, its schema, forward-only migrations, and audit rows including refusals; imports `environment`, `limiter`, `scope`, `token`, and `orbit-common`.
-- `token`: The token format (`orbl_` + 256 random bits), generation, SHA-256 hashing, and constant-time comparison; imports `orbit-common` only.
+- `token`: The token format (`orbl_` + 256 random bits), generation, SHA-256 hashing, and constant-time comparison; imports `orbit-common` and `sha2` only.

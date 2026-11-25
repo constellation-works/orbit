@@ -35,19 +35,19 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `crew`: Crew admission, task types, auto-effort policies, and weighted crew pools; imports `aliases`, `orbit-common`, and `orbit-types`.
 - `crew_defaults`: Built-in default crew registry leaf; imports `orbit-common` and `orbit-types` only.
 - `document`: Admitted `config.toml` document paths, no-follow I/O, and TOML parsing below layering; imports `orbit-common` only.
-- `experiment_keys`: Workflow keys explicitly admitted for task-local experiment overrides; imports `orbit-common` only.
+- `experiment_keys`: Workflow keys explicitly admitted for task-local experiment overrides; imports `orbit-common` and `serde_json` only.
 - `human_crew_seed`: Global `config.toml` seeding of the operator's human crew during `orbit init`; imports `crew_defaults`, `raw`, `resolved`, `store`, `orbit-common`, and `orbit-types`.
 - `layering`: Global-over-workspace configuration merging and source provenance; imports lower config modules, `orbit-common`, and `orbit-types`.
-- `lock_modes`: Ordered per-path footprint lock modes (`workflow.lock_modes`); imports `orbit-common` only.
-- `memory_limit`: Grammar and parser for worker memory limits (`machine.worker_memory_*`); imports `std` only.
+- `lock_modes`: Ordered per-path footprint lock modes (`workflow.lock_modes`); imports `orbit-common` and `serde` only.
+- `memory_limit`: Grammar and parser for worker memory limits (`machine.worker_memory_*`); imports `std` and `serde` only.
 - `operation`: Typed review timing and operation preferences; imports `aliases`, `document`, `orbit-common`, and `orbit-types`.
-- `persistence`: Resolved persistent artifact store paths derived from explicit roots; imports `orbit-types` only.
+- `persistence`: Resolved persistent artifact store paths derived from explicit roots; imports `orbit-types` and `serde_json` only.
 - `plugin_enablement`: Workspace-scoped `[plugin_enablement]` toggle admission; imports `roots`, `document`, `orbit-common`, and `orbit-types`.
-- `plugins`: Dynamically named `[plugins.<ns>]` configuration section admission; imports `orbit-common` only.
+- `plugins`: Dynamically named `[plugins.<ns>]` configuration section admission; imports `jsonschema`, `orbit-common`, and `serde_json` only.
 - `provider_limit`: Provider usage-limit admission settings (`workflow.provider_limit_*`); imports `orbit-common` and `orbit-types` only.
 - `raw`: Private serde schema for dynamic crew tables and retired keys; imports `registry` and `unknown`.
 - `registry`: Admission registry (`define_config_settings!`) and snapshots for fixed `config.toml` keys; imports leaf config modules, `orbit-common`, and `orbit-types`.
-- `regression_layers`: Ordered path classifier (`workflow.regression_layers`) for regression analytics; imports `orbit-common` only.
+- `regression_layers`: Ordered path classifier (`workflow.regression_layers`) for regression analytics; imports `orbit-common` and `serde` only.
 - `resolved`: Consumer-facing `ResolvedConfig` view over admitted settings and policies; imports `layering`, `registry`, `store`, `unknown`, `orbit-common`, and `orbit-types`.
 - `review_skip_tags`: Workspace `[workflow.review_skip_tags.<tag>]` admission; imports `document`, `tag_instructions`, `orbit-common`, and `orbit-types`.
 - `roots`: Explicit global and workspace configuration directory roots (`ConfigRoots`); imports `std` only.

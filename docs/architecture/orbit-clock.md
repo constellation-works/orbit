@@ -30,7 +30,7 @@ Design intent: [docs/design/routines/](../../docs/design/routines/) — this pag
 
 ## Ownership by module
 
-- `clock_settings`: Host-local `clock.toml` schema and sweep cadence persistence; imports `orbit-common` only.
+- `clock_settings`: Host-local `clock.toml` schema and sweep cadence persistence; imports `orbit-common` and `serde` only.
 - `converge`: Repair of an installed clock unit that has drifted from the running binary; imports sibling clock modules and `orbit-common`.
 - `enable`: Pausing and resuming the OS clock through its native manager; imports `manager` and `orbit-common`.
 - `inspect`: Inspection of the installed OS sweep-clock unit against the running binary; imports `install`, `manager`, `program`, and `orbit-common`.

@@ -35,14 +35,14 @@ Design intent: [docs/design/user-interface/](../../docs/design/user-interface/) 
 - `connect`: Client-side SSH tunnel convenience behind `orbit web connect`; imports `ssh_tunnel`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `doctor_report`: Bounded, cached on-demand `orbit doctor` probe report for the dashboard; imports `orbit-cmd` and `orbit-core` (never `api` or `serve`).
 - `health`: `/healthz` liveness and opt-in readiness diagnostics; imports `log_format`, `state`, `orbit-cmd`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
-- `heap`: Heap allocation policy for the long-running dashboard server; imports platform/libc bindings only (never `api` or `serve`).
+- `heap`: Heap allocation policy for the long-running dashboard server; imports `axum`, `tokio`, and platform/libc bindings only (never `api` or `serve`).
 - `host_tunnels`: Per-host SSH tunnels backing `/api/on/<host>/...` dashboard forwarding; imports `connect`, `ssh_tunnel`, and `orbit-common` (never `api` or `serve`).
 - `lease`: Lease listener and operator-owned Unix-socket intake transport; imports `api::leases`, `shutdown`, `state`, `orbit-auth`, `orbit-common`, `orbit-core`, and `orbit-types` (never `serve`).
 - `log_format`: Web log scanning and HTML rendering for `/api/log` and `/api/diagnostics`; imports `parse`, `orbit-cmd`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `parse`: Dashboard query duration and timestamp parsers; imports `orbit-common` and `orbit-core` (never `api` or `serve`).
 - `projections`: Dashboard `*_to_json` detail projections built on shared Core show records; imports `runtime_memo`, `state`, `why_stuck`, `orbit-core`, and `orbit-types` (never `api` or `serve`).
 - `run_failure`: Failure-chain and cancellation fields for dashboard run-detail responses; imports `orbit-core` and `orbit-types` (never `api` or `serve`).
-- `runtime_memo`: Process-local single-flight TTL cache keyed by runtime identity or host inputs; imports `orbit-core` only (never `api` or `serve`).
+- `runtime_memo`: Process-local single-flight TTL cache keyed by runtime identity or host inputs; imports `axum`, `orbit-core`, and `serde_json` only (never `api` or `serve`).
 - `serve`: Axum HTTP server bootstrap, loopback bind enforcement, middleware, and graceful shutdown; imports `api`, `assets`, `connect`, `health`, `heap`, `lease`, `shutdown`, `state`, and composition/core crates.
 - `shutdown`: SIGINT and SIGTERM future shared by the dashboard server and lease listener; imports `orbit-core` only (never `api` or `serve`).
 - `ssh_tunnel`: Client-side SSH local-forward tunnel implementation for `orbit web connect`; imports `host_tunnels`, `orbit-common`, and `orbit-core` (never `api` or `serve`).

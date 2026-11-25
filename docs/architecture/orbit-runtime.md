@@ -40,14 +40,14 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `command_exec`: Claim-gated remote command execution entry point (`orbit.command.exec`); imports `orbit_runtime`, `orbit-common`, and `orbit-types`.
 - `config_path`: Selection of the effective `config.toml` path from explicit runtime roots; imports `orbit-common` only.
 - `context`: Actor identity, shared runtime state, stores, execution assets, and admitted settings; imports `host_signal`, `plugin`, `task`, and lower workspace crates.
-- `cost`: Managed-execution cost and token accounting plus shared dashboard time windows; imports `orbit-common` and `orbit-types` only.
+- `cost`: Managed-execution cost and token accounting plus shared dashboard time windows; imports `chrono`, `orbit-common`, `orbit-types`, and `serde` only.
 - `cwd`: Shared working-directory confinement for operator host tools; imports `orbit_runtime` and `orbit-common`.
 - `engine`: Engine execution helpers, crew projections, environment host, and invocation metrics on `RuntimeKernel`; imports `orbit_runtime`, `cost`, `run_input`, and lower workspace crates.
 - `event_bus`: Bounded in-process session `EventLog` ring buffer; imports `orbit-types` only.
 - `friction`: Runtime-owned access to the workspace-partitioned friction repository; imports `orbit_runtime`, `workspace`, `orbit-common`, `orbit-store`, and `orbit-types`.
 - `git_sandbox`: Host-owned Git write boundaries for macOS and Linux provider sandboxes; imports `orbit-common` and `orbit-types` only.
 - `host_resource`: Host resource probes, shared pressure history, learned profiles, and load forecasts; imports `run_input`, `orbit-common`, `orbit-config`, `orbit-store`, and `orbit-types`.
-- `host_signal`: Host lifecycle signal probes (such as scheduled shutdown/reboot) gating new admissions; imports `std` only.
+- `host_signal`: Host lifecycle signal probes (such as scheduled shutdown/reboot) gating new admissions; imports `std`, `chrono`, and `serde` only.
 - `mutation`: `RuntimeKernel` mutation wrappers that append session `OrbitEvent` entries; imports `orbit_runtime`, `orbit-common`, and `orbit-types`.
 - `orbit_runtime`: `RuntimeKernel` core type and method groups for construction, identity, host probes, persistence, and configuration; imports sibling runtime modules and lower workspace crates.
 - `paths`: Path normalization, tilde/token expansion, and Git-root path helpers; imports `orbit-common` only.
