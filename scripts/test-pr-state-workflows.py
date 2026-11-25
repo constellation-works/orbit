@@ -1199,6 +1199,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
         job = self.document["jobs"]["test-1"]
         steps = {step.get("name"): step for step in job["steps"]}
         start, finish = (steps[f"{verb} the pinned toolchain install"]["run"] for verb in ("Start", "Finish"))
+        channel = re.search(r'channel\s*=\s*"([^"]+)"', (ROOT / "rust-toolchain.toml").read_text()).group(1)
         for outcome in ("0", "7"):
             with self.subTest(outcome=outcome):
                 root = self.root / f"toolchain-{outcome}"
@@ -1233,9 +1234,10 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     (root / "release").touch()
                 stdout, stderr = waiting.communicate(timeout=10)
                 self.assertEqual(waiting.returncode, int(outcome), stdout + stderr)
-                self.assertIn("rustup toolchain install 1.98.1 --profile minimal --no-self-update", stdout)
+                self.assertIn(f"rustup toolchain install {channel} --profile minimal --no-self-update",
+                              stdout.splitlines())
                 if outcome == "0":
-                    self.assertIn("rustup default 1.98.1", stdout)
+                    self.assertIn(f"rustup default {channel}", stdout.splitlines())
                     self.assertIn("rustc --version --verbose", stdout)
                 else:
                     self.assertNotIn("rustup default", stdout, "a failed install never becomes the default")
