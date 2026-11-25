@@ -1,13 +1,13 @@
 ---
 title: Crew Memory — Design
 owner: claude
-last_updated: 2026-11-21
+last_updated: 2026-11-24
 last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory
 doc_role: design
 type: design
-summary: "Proposed design for crew memory: per-model spaces in the owner store, delivered as data through a new experiment overlay surface captured in the admission receipt, rewritten weekly by score-blind dreaming tasks, with a reviewed global memory and a memory-on vs memory-off experiment that decides adoption."
+summary: "Accepted, now parked design for experimental per-model memory: owner-store spaces delivered through a memory experiment overlay and rewritten by score-blind dreaming runs only during an active memory experiment; external user surfaces and the default routine were retired after a no-difference readout."
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
@@ -202,7 +202,7 @@ Each slice is one task, filed only after this design is accepted:
 - **M2. Overlay surface.** `ExperimentOverlay::memory`, resolution after the crew draw, receipt capture, the envelope field and instruction sentence, the overlay record, and the readout's revision-week strata. Ships and is verified in `shadow`. Built by [ORB-23114].
 - **M3. Dreaming.** The `crew_memory_dream` routine, the evidence pack, key-scoped write and propose tools, and dreaming cost attribution. Built by [ORB-23115]; proposals are stored, and listing, accepting and rejecting them is M4.
 - **M4. Global review** (review commands removed 2026-11-21). Built by [ORB-23116]: proposal listing with display-only similarity, operator accept/reject, atomic decision audits and four-week expiry (§8).
-- **M5. Run the experiment.** A one-week shadow, then live until the sample or the 6-week cap, then conclude. Then either the promotion design change or the removal task. The live run (`exp-5342a4d6`) read out "no difference" on 2026-11-21; its removal task ([ORB-26501]) removed the surface and kept the machinery dormant (§1). Shadow started by [ORB-23117] on 2026-11-08 as `exp-57f1ef67` (`min_sample` 40 per arm, 42-day cap). Live no earlier than 2026-11-15; conclusion by 2026-12-20 (handoff on ORB-23110).
+- **M5. Run the experiment.** A one-week shadow, then live until the sample or the 6-week cap, then conclude. Then either the promotion design change or the removal task. The live run (`exp-5342a4d6`) read out "no difference" on 2026-11-21; its removal task ([ORB-26501]) removed the surface and kept the machinery dormant (§1). Shadow started by [ORB-23117] on 2026-11-08 as `exp-57f1ef67` (`min_sample` 40 per arm, 42-day cap). The original handoff planned live no earlier than 2026-11-15 and conclusion by 2026-12-20 ([ORB-23117], [ORB-23110]); the live run concluded on 2026-11-21, before that cap.
 
 ## 11. Concerns & Honest Limitations
 
