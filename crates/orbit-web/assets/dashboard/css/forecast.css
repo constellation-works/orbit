@@ -88,6 +88,7 @@
 .fc-thin { margin-left: var(--space-8); color: var(--warn-fg); font: var(--text-sm) var(--font-sans); }
 .fc-finish-short { color: var(--warn-fg); }
 .fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: var(--radius); }
+.fc-history-table-wrap .fc-exclusions { min-width: 20ch; }
 .fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-8) var(--space-12); }
 .fc-history-page-status { color: var(--fg-dim); font: var(--text-sm) var(--font-sans); }
 

@@ -68,7 +68,7 @@ function byComplexityTable() {
 
 // ---- calibration -----------------------------------------------------------
 
-const CALIBRATION_SETTLEMENT = "Removed or re-scoped tasks, and done tasks with no agent runs after the forecast, are left out and counted. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. Before model version 9, a forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. From model version 9 onward, whole-forecast scoring stays provisional until 90 days after the forecast, even if its initial tasks finish earlier, so regression follow-ups observed during that window can be counted. At the cutoff, the cohort settles regardless of pending tasks and its whole actual is scored if no tasks were left out; unfinished work has no time-to-drain actual. Per-task hits can accrue before then. A settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual.";
+const CALIBRATION_SETTLEMENT = "Removed or re-scoped tasks and completions without measured usage after the forecast count as exclusions. A recorded completion can still date the drain. Work hours, tokens and cost require measured usage. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. Before model version 9, a forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. From model version 9 onward, whole-forecast scoring stays provisional until 90 days after the forecast, even if its initial tasks finish earlier, so regression follow-ups observed during that window can be counted. At the cutoff, the cohort settles regardless of pending tasks and its whole actual is scored if no tasks were left out; unfinished work has no time-to-drain actual. Per-task hits can accrue before then. A settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual.";
 
 // A share of actuals under a percentile against its target: within five
 // points reads as calibrated, anything else as a miss.
@@ -308,7 +308,16 @@ function residualsCard() {
 }
 
 function excludedText(excluded) {
-  const parts = [["rejected", excluded?.rejected], ["re-scoped", excluded?.rescoped], ["removed", excluded?.missing], ["no runs", excluded?.no_delivery]]
+  const reasons = excluded?.no_delivery_reasons;
+  const parts = [
+    ["rejected", excluded?.rejected],
+    ["re-scoped", excluded?.rescoped],
+    ["removed", excluded?.missing],
+    ["follower", reasons?.follower_claim],
+    ["resident", reasons?.resident],
+    ["resolved outside drain", reasons?.resolved_outside_drain],
+    ["unknown cause", reasons?.unknown ?? excluded?.no_delivery],
+  ]
     .filter(([, count]) => count)
     .map(([label, count]) => `${count} ${label}`);
   return parts.length ? parts.join(" · ") : "—";
@@ -357,14 +366,15 @@ function storedSection() {
     el("th", { scope: "row", text: formatDateTime(row.forecast_at) }),
     el("td", { class: "num", text: row.model_version != null ? `v${row.model_version}` : "—" }),
     el("td", { class: "num", text: `${row.done}/${row.tasks}` }),
-    el("td", { text: excludedText(row.excluded) }),
+    el("td", { class: "fc-exclusions", text: excludedText(row.excluded) }),
     el("td", { class: "num", text: versus(row.forecast?.time_to_drain_hours, row.actual?.time_to_drain_hours, formatForecastHours) }),
     el("td", { class: "num", text: versus(row.forecast?.usd, row.actual?.usd, formatForecastUsd) }),
     el("td", { class: "num", text: versus(row.forecast?.tokens, row.actual?.tokens, formatForecastTokens) }),
     el("td", { class: "fc-state", text: storedStateText(row) }),
   ]));
   const excluded = calibration.excluded || {};
-  const history = forecastTable("Stored forecasts", [["Recorded"], ["Model", true], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows, "Stored forecasts, newest first");
+  const exclusionHint = pinnedInfoHint("Counts task exclusions once per stored forecast. Follower claims, resident work, resolutions outside the drain and unknown causes describe completions with no measured usage after the forecast. The Measured column counts completions with usage.");
+  const history = forecastTable("Stored forecasts", [["Recorded"], ["Model", true], ["Measured", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows, "Stored forecasts, newest first");
   history.classList.add("fc-history-table-wrap");
   const newer = el("button", { class: "mx-seg-btn", type: "button", text: "Newer forecasts" });
   newer.disabled = forecastView.historyPage === 0;
@@ -385,7 +395,7 @@ function storedSection() {
   return forecastMoreSection("stored", "Stored forecasts", String(forecasts.length), [
     blurb,
     byVersion,
-    el("p", { class: "mx-blurb", text: `Left out across stored forecasts: ${excludedText(excluded)}.` }),
+    el("p", { class: "mx-blurb" }, [`Left out across stored forecasts: ${excludedText(excluded)}.`, " ", exclusionHint]),
     history,
     pagination,
   ]);

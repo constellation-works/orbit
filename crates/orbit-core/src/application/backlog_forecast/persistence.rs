@@ -64,9 +64,6 @@ pub(super) fn persist_forecast(
     let runtime = context.runtime;
     let options = context.options;
     let now = context.now;
-    let tasks = &context.loaded.tasks;
-    let done_at = &context.loaded.done_at;
-    let task_episodes = &context.loaded.task_episodes;
     let runs = &context.cohorts.runs;
     let history = &context.cohorts.history;
     let episodes = &context.cohorts.episodes;
@@ -77,15 +74,7 @@ pub(super) fn persist_forecast(
     let admission = &context.prepared.admission;
     let forecast = context.forecast;
     let score = |stored: &[StoredBacklogForecast]| {
-        scoring::score_backlog_forecasts(
-            stored,
-            tasks,
-            done_at,
-            runs,
-            task_episodes,
-            model::MODEL_VERSION,
-            now,
-        )
+        scoring::score_backlog_forecasts(stored, context.loaded, runs, model::MODEL_VERSION, now)
     };
 
     let mut stored_now = None;
