@@ -763,20 +763,6 @@ pub(super) fn classify_reuse(
     {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     }
-    if promotion_policy == PromotionPolicy::ResidentHeld
-        && [
-            "operator_validation_hold",
-            "host_operational_hold",
-            "native_os_hold",
-        ]
-        .iter()
-        .any(|field| audit.get(*field).is_some_and(|hold| !hold.is_null()))
-    {
-        return Ok(ExplicitAssessmentReuse::Hold {
-            reason: "pilot_admission_hold",
-            detail: None,
-        });
-    }
     let Some(complexity) = audit
         .get("complexity_after")
         .and_then(|value| serde_json::from_value::<TaskComplexity>(value.clone()).ok())
@@ -818,6 +804,23 @@ pub(super) fn classify_reuse(
         return Ok(ExplicitAssessmentReuse::Hold {
             reason: "changed_since_pilot",
             detail: Some(format!("{reason}: {detail}")),
+        });
+    }
+    if promotion_policy == PromotionPolicy::ResidentHeld
+        && matches!(
+            runtime.pilot_admission_hold_with_audit(task, &comments, &history, &|_| {
+                Ok(audit.clone())
+            })?,
+            Some(
+                super::PilotAdmissionHold::OperatorValidation(_)
+                    | super::PilotAdmissionHold::HostOperational(_)
+                    | super::PilotAdmissionHold::NativeOs(_)
+            )
+        )
+    {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "pilot_admission_hold",
+            detail: None,
         });
     }
     promotable_reuse(

@@ -7,13 +7,17 @@ use super::*;
 // Apply through the same deterministic action as the pilot job so the
 // resident reads a sealed, artifact-backed receipt.
 fn assess(fx: &Fixture, task: &str, warnings: Value) -> String {
+    assess_with(fx, &fx.runtime, task, json!({"utility_warnings": warnings}))
+}
+
+fn assess_with(fx: &Fixture, runtime: &OrbitRuntime, task: &str, overrides: Value) -> String {
     let run_id = fx
         .jobs
         .insert_job_run("task_pilot_pipeline", 1, Utc::now(), None, None)
         .unwrap()
         .run_id;
     let action = |name, input| {
-        fx.runtime
+        runtime
             .run_deterministic(name, &json!({}), &input, ToolContext::default())
             .unwrap()
     };
@@ -27,6 +31,23 @@ fn assess(fx: &Fixture, task: &str, warnings: Value) -> String {
         crate::git_test_support::run(&fx.repo, &["rev-parse", &format!("{revision}^{{tree}}")])
             .unwrap();
     assert!(tree.success, "{}", tree.stderr);
+    let mut task_result = json!({
+        "task_id": task,
+        "context_files_before": prepared["tasks"][0]["context_files_before"],
+        "context_files_after": ["file:.gitignore"],
+        "disposition": "selectors",
+        "recommended_crew": "sol",
+        "recommended_complexity": "low",
+        "confidence": "high",
+        "assessment_rationale": "The ignore rule determines which scratch files can be committed.",
+        "validation_approach": "Check the matched ignore paths.",
+        "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+        "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+        "duplicate_of": null, "already_landed": null,
+    });
+    for (key, value) in overrides.as_object().unwrap() {
+        task_result[key] = value.clone();
+    }
     let applied = action(
         "apply_task_pilot_results",
         json!({
@@ -38,20 +59,7 @@ fn assess(fx: &Fixture, task: &str, warnings: Value) -> String {
                 "task_ids": [task],
                 "observed_revision": revision,
                 "observed_tree": tree.stdout.trim(),
-                "tasks": [{
-                    "task_id": task,
-                    "context_files_before": prepared["tasks"][0]["context_files_before"],
-                    "context_files_after": ["file:.gitignore"],
-                    "disposition": "selectors",
-                    "recommended_crew": "sol",
-                    "recommended_complexity": "low",
-                    "confidence": "high",
-                    "assessment_rationale": "The ignore rule determines which scratch files can be committed.",
-                    "validation_approach": "Check the matched ignore paths.",
-                    "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
-                    "adr_conflicts": [], "utility_warnings": warnings, "surface_warnings": [],
-                    "duplicate_of": null, "already_landed": null,
-                }],
+                "tasks": [task_result],
             }],
         }),
     );
@@ -165,5 +173,177 @@ fn resident_backlog_update_honors_the_proposals_approval_opt_out() {
             audit.contains(&format!("resident:{mandate}:{cycle}:")),
             "{audit}"
         );
+    });
+}
+
+#[test]
+fn resident_promote_held_evaluates_active_pilot_admission_holds() {
+    if !crate::dispatch_admission::isolated(
+        "resident_cycle::promote_held::resident_promote_held_evaluates_active_pilot_admission_holds",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let proposal = |title: &str, task_type: TaskType, tags: &[&str], criterion: &str| {
+        fx.add_task(TaskAddParams {
+            title: title.into(),
+            description: "Adjust host-specific validation handling.".into(),
+            acceptance_criteria: vec![criterion.into()],
+            task_type: Some(task_type),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            status: Some(TaskStatus::Proposed),
+            ..Default::default()
+        })
+    };
+
+    let os_routed = proposal(
+        "Linux-only bug fix",
+        TaskType::Bug,
+        &["no-auto-approve"],
+        "Linux sandbox validation succeeds.",
+    );
+    let untagged_os = proposal(
+        "Conflicting OS tag leaves required_os untagged",
+        TaskType::Bug,
+        &["no-auto-approve", "os:macos"],
+        "Linux sandbox validation succeeds.",
+    );
+    let machine_bound = proposal(
+        "Owner-machine validation required",
+        TaskType::Chore,
+        &["no-auto-approve"],
+        "Owner machine live store check passes.",
+    );
+    let host_operational = proposal(
+        "Host-operational maintenance",
+        TaskType::Chore,
+        &["no-auto-approve"],
+        "Host daemon is restarted.",
+    );
+    let operator_validation = proposal(
+        "Operator-only tool validation",
+        TaskType::Chore,
+        &["no-auto-approve"],
+        "Run orbit.pipeline.invoke to verify pipeline startup.",
+    );
+
+    let os_routed_assessment = assess_with(
+        &fx,
+        &fx.runtime,
+        &os_routed,
+        json!({
+            "required_os": [{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": "Criterion 1 requires a native Linux sandbox.",
+            }],
+        }),
+    );
+    let routed_task = fx.runtime.get_task(&os_routed).unwrap();
+    assert!(
+        routed_task.tags.iter().any(|tag| tag == "os:linux"),
+        "pilot apply should add os:linux: {:?}",
+        routed_task.tags
+    );
+    let receipt: Value = serde_json::from_str(
+        &fx.runtime
+            .get_task_comments(&os_routed)
+            .unwrap()
+            .last()
+            .unwrap()
+            .message,
+    )
+    .unwrap();
+    let audit_path = receipt["assessment_artifact"].as_str().unwrap();
+    let audit_artifact = fx
+        .runtime
+        .get_task_artifact(&os_routed, audit_path)
+        .unwrap()
+        .expect("sealed assessment artifact");
+    let audit: Value = serde_json::from_slice(&audit_artifact.content).unwrap();
+    assert!(
+        !audit["native_os_hold"].is_null(),
+        "audit should still record native_os_hold: {audit}"
+    );
+
+    assess_with(
+        &fx,
+        &fx.runtime,
+        &untagged_os,
+        json!({
+            "required_os": [{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": "Criterion 1 requires a native Linux sandbox.",
+            }],
+        }),
+    );
+    assert!(
+        !fx.runtime
+            .get_task(&untagged_os)
+            .unwrap()
+            .tags
+            .iter()
+            .any(|tag| tag == "os:linux"),
+        "existing os:macos tag must keep required_os untagged"
+    );
+
+    let automation = fx.automation_runtime();
+    assess_with(
+        &fx,
+        &automation,
+        &machine_bound,
+        json!({
+            "required_machine": [{
+                "criterion": 1,
+                "machine": "fixture-machine",
+                "evidence": "Criterion 1 reads live state on fixture-machine.",
+            }],
+        }),
+    );
+
+    assess_with(
+        &fx,
+        &fx.runtime,
+        &host_operational,
+        json!({
+            "disposition": "host_operational",
+            "context_files_after": [],
+            "evidence": "Restart the host daemon directly on the machine.",
+        }),
+    );
+
+    assess_with(&fx, &fx.runtime, &operator_validation, json!({}));
+
+    let mandate = fx.mandate(&os_routed);
+    fx.grant(&mandate, &["promote_held"]);
+    let run = fx.cycle_run(&mandate, "held-promotion-admission-holds");
+    fx.begin_cycle(&run, Utc::now());
+    let promote =
+        |id: &str| fx.agent_call("orbit.task.update", json!({"id": id, "status": "backlog"}));
+    fx.as_cycle_agent(&run, || {
+        for id in [
+            &untagged_os,
+            &machine_bound,
+            &host_operational,
+            &operator_validation,
+        ] {
+            let error = promote(id).unwrap_err();
+            assert!(error.contains("pilot_admission_hold"), "{id}: {error}");
+            assert_eq!(
+                fx.runtime.get_task(id).unwrap().status,
+                TaskStatus::Proposed
+            );
+        }
+
+        let result = promote(&os_routed).unwrap();
+        assert_eq!(result["status"], "backlog", "{result}");
+        let comments = fx.runtime.get_task_comments(&os_routed).unwrap();
+        let audit_comment = &comments.last().unwrap().message;
+        assert!(
+            audit_comment.contains(&os_routed_assessment),
+            "{audit_comment}"
+        );
+        assert!(audit_comment.contains("promote_held"), "{audit_comment}");
     });
 }
