@@ -282,7 +282,10 @@ fn validated_evidence(
     attempt: &BatchAttempt,
     now: DateTime<Utc>,
 ) -> Result<Option<Vec<u8>>, OrbitError> {
-    let source = Source::read_only(&runtime.paths().repo_root);
+    let source = Source::read_only(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
     let facts = match task_outcome(runtime, &source, attempt, false) {
         Ok(ActionOutcome::Evidence(facts)) => facts,
         Ok(_) => return Ok(None),

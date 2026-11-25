@@ -369,7 +369,11 @@ fn install_plugin_inner(
     // sandbox grants, exactly as `orbit plugin enable` does.
     let mut program_warnings = Vec::new();
     if options.enable {
-        let (programs, warnings) = resolve_consented_programs(&global_root, &plugin);
+        let (programs, warnings) = resolve_consented_programs(
+            &global_root,
+            &plugin,
+            runtime.execution_env_policy().process_env(),
+        );
         program_warnings = warnings;
         record_authorization(&global_root, &name, enabled, &record.grants, &programs)?;
     }
@@ -440,7 +444,13 @@ fn install_plugin_inner(
     // Held until the copy above finished, so a fetched tree is not collected
     // out from under it.
     drop(resolved);
-    let mut summary = summary_for_installed(&stored, Some(&plugin), status, &global_root);
+    let mut summary = summary_for_installed(
+        &stored,
+        Some(&plugin),
+        status,
+        &global_root,
+        runtime.execution_env_policy().process_env(),
+    );
     summary.diagnostic = if grants_reset {
         Some(permission_widening_message(
             &name,

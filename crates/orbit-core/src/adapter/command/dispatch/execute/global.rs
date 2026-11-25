@@ -33,6 +33,7 @@ use super::entry::{broker_entry_point, mark_tool_audit_recorded};
 /// audit store, records the supplied invocation context, and preserves the
 /// same fail-closed success semantics as runtime-backed tool dispatch.
 pub fn execute_global_in_process_tool_dispatch<F>(
+    env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -44,6 +45,7 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
 {
     execute_global_in_process_tool_dispatch_with_audit_writer(
+        env,
         global_root,
         name,
         input,
@@ -51,7 +53,7 @@ where
         session_context,
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
+                env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
@@ -65,7 +67,9 @@ where
 /// audit store across dispatches instead of opening it per call. The writer
 /// is invoked with the same params and invocation fields, and its result
 /// goes through the same fail-closed finalization as the open-per-call path.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_global_in_process_tool_dispatch_with_audit_writer<F, S>(
+    env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -78,9 +82,8 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
     S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
-    let env = crate::runtime::process_env();
     execute_tool_dispatch_with_audit_store(
-        &env,
+        env,
         name,
         input,
         ToolExecutionKind::Mutating,
@@ -186,6 +189,7 @@ impl GlobalAuditStoreCache {
 /// this process's cwd and the registry the caller composed from the host's
 /// installed plugins.
 pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
+    env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -193,7 +197,6 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     session_context: ToolSessionContext,
     registry: orbit_tools::ToolRegistry,
 ) -> Result<Value, OrbitError> {
-    let env = crate::runtime::process_env();
     let binding = registry
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
@@ -233,7 +236,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     let global_root = global_root.to_path_buf();
     let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
     let activity_tool_policy = if trusted_env {
-        read_activity_tool_policy_from_env(&env)
+        read_activity_tool_policy_from_env(env)
     } else {
         Default::default()
     };
@@ -245,20 +248,20 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         allowed_tools: activity_tool_policy.allowed_tools,
         tool_deny_policy: activity_tool_policy.deny_policy,
         proc_allowed_programs: if trusted_env {
-            read_proc_allowed_programs_from_env(&env)
+            read_proc_allowed_programs_from_env(env)
         } else {
             Vec::new()
         },
         proc_disallowed_programs: if trusted_env {
-            read_proc_disallowed_programs_from_env(&env)
+            read_proc_disallowed_programs_from_env(env)
         } else {
             None
         },
-        activity_binding: activity_binding_from_env(&env),
+        activity_binding: activity_binding_from_env(env),
         ..Default::default()
     };
     execute_tool_dispatch_with_audit_store(
-        &env,
+        env,
         name,
         input,
         execution_kind,

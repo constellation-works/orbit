@@ -205,8 +205,15 @@ pub(crate) fn instructions(
     // repository it cannot open (a partial clone, whose blobs Git fetches on
     // demand, or reftable refs) keeps the bounded Git commands.
     let instructions = match git2::Repository::open(root) {
-        Ok(repo) => instructions_in_process(&repo, revision)?,
-        Err(_) => instructions_with_git(&Source::new(root), revision)?,
+        Ok(repo) => instructions_in_process(
+            &repo,
+            revision,
+            runtime.execution_env_policy().process_env(),
+        )?,
+        Err(_) => instructions_with_git(
+            &Source::new(root, runtime.execution_env_policy().process_env()),
+            revision,
+        )?,
     };
 
     let snapshot = InstructionSnapshot(
@@ -226,13 +233,13 @@ pub(crate) fn instructions(
 fn instructions_in_process(
     repo: &git2::Repository,
     revision: &str,
+    env: &orbit_common::Env,
 ) -> Result<Vec<(String, String)>, AutomationError> {
     let tree = repo
         .revparse_single(revision)
         .and_then(|object| object.peel_to_tree())
         .map_err(local_git_error)?;
-    let env = crate::runtime::process_env();
-    let started = BudgetClock::start(&env);
+    let started = BudgetClock::start(env);
     let mut paths = Vec::new();
     let mut failure = None;
     let mut listed_bytes = 0u64;
@@ -461,7 +468,7 @@ fn selector_objects(
         }
         let tree = match &repo {
             Some(repo) => revision_tree(repo, revision)?.id().to_string(),
-            None => Source::new(root).git(&[
+            None => Source::new(root, runtime.execution_env_policy().process_env()).git(&[
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
@@ -514,7 +521,8 @@ fn selector_objects(
                 "--",
             ];
             args.extend(uncached.iter().map(String::as_str));
-            let listing = Source::new(root).git(&args)?;
+            let listing =
+                Source::new(root, runtime.execution_env_policy().process_env()).git(&args)?;
             let mut found = std::collections::BTreeSet::new();
             for entry in listing.split('\0') {
                 let Some((meta, path)) = entry.split_once('\t') else {

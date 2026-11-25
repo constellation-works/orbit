@@ -290,7 +290,10 @@ pub fn pin_attempt_source(
     runtime: &OrbitRuntime,
     attempt: &MemberAttempt,
 ) -> Result<String, OrbitError> {
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
     Owner::of(runtime, &source)
         .and_then(|owner| pin(&source, &owner, attempt))
         .map_err(automation_error_to_orbit)
@@ -352,21 +355,29 @@ pub fn release_unreferenced_attempt_pins(
     };
 
     let root = &runtime.paths().repo_root;
-    let owner = Owner::of(runtime, &Source::new(root)).map_err(automation_error_to_orbit)?;
+    let owner = Owner::of(
+        runtime,
+        &Source::new(root, runtime.execution_env_policy().process_env()),
+    )
+    .map_err(automation_error_to_orbit)?;
     let namespace = owner.namespace().map_err(automation_error_to_orbit)?;
     let mut cleanup = AttemptPinCleanup {
         namespace: namespace.clone(),
         ..AttemptPinCleanup::default()
     };
 
-    for (refname, _) in top_level_refs(root, LEGACY_NAMESPACE)? {
+    for (refname, _) in top_level_refs(
+        root,
+        LEGACY_NAMESPACE,
+        runtime.execution_env_policy().process_env(),
+    )? {
         match refname.strip_prefix(LEGACY_NAMESPACE) {
             Some(id) if is_attempt_id(id) => cleanup.retained_legacy += 1,
             _ => cleanup.unrecognized.push(refname),
         }
     }
     let own_record = owner.record_ref().map_err(automation_error_to_orbit)?;
-    cleanup.foreign_owners = Source::new(root)
+    cleanup.foreign_owners = Source::new(root, runtime.execution_env_policy().process_env())
         .git(&["for-each-ref", "--format=%(refname)", OWNER_RECORDS])
         .map_err(automation_error_to_orbit)?
         .lines()
@@ -374,14 +385,21 @@ pub fn release_unreferenced_attempt_pins(
         .count();
 
     let mut candidates = Vec::new();
-    for (refname, object) in top_level_refs(root, &namespace)? {
+    for (refname, object) in top_level_refs(
+        root,
+        &namespace,
+        runtime.execution_env_policy().process_env(),
+    )? {
         match refname.strip_prefix(namespace.as_str()) {
             Some(id) if is_attempt_id(id) => candidates.push((id.to_string(), refname, object)),
             _ => cleanup.unrecognized.push(refname),
         }
     }
 
-    if let Err(error) = proved(&Source::new(root), &owner) {
+    if let Err(error) = proved(
+        &Source::new(root, runtime.execution_env_policy().process_env()),
+        &owner,
+    ) {
         cleanup.refused = Some(error.to_string());
         cleanup.retained_unproven = candidates.len();
         return Ok(cleanup);
@@ -409,7 +427,7 @@ pub fn release_unreferenced_attempt_pins(
         // One transaction: either every pin in the chunk still named its
         // listed commit and is gone, or none was deleted and each is retried
         // alone so one moved ref cannot keep the rest.
-        if Source::new(root)
+        if Source::new(root, runtime.execution_env_policy().process_env())
             .git_with_input(&["update-ref", "--stdin"], instructions.as_bytes())
             .is_ok()
         {
@@ -419,7 +437,11 @@ pub fn release_unreferenced_attempt_pins(
             continue;
         }
         for (refname, object) in chunk {
-            match delete(&Source::new(root), refname, object) {
+            match delete(
+                &Source::new(root, runtime.execution_env_policy().process_env()),
+                refname,
+                object,
+            ) {
                 Ok(()) => cleanup.released.push(refname.clone()),
                 Err(error) => {
                     tracing::warn!(
@@ -439,10 +461,14 @@ pub fn release_unreferenced_attempt_pins(
 /// leading hex digit at a time so each listing stays far inside the source
 /// budget; `*` does not cross `/`, so deeper refs such as delivery batch pins
 /// are never listed.
-fn top_level_refs(root: &Path, namespace: &str) -> Result<Vec<(String, String)>, OrbitError> {
+fn top_level_refs(
+    root: &Path,
+    namespace: &str,
+    env: &orbit_common::Env,
+) -> Result<Vec<(String, String)>, OrbitError> {
     let mut refs = Vec::new();
     for digit in HEX_DIGITS.chars() {
-        let listing = Source::new(root)
+        let listing = Source::new(root, env)
             .git(&[
                 "for-each-ref",
                 "--format=%(refname) %(objectname)",

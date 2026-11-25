@@ -25,6 +25,9 @@
 //! - Submission notices: what a drain or ship start reports as it proceeds
 //!   (throttle, validation environment, host-OS backlog, unset env-pass
 //!   names, the required-validation note), and the drain stop projection.
+//! - Provider executor resolution: an `ORBIT_V2_CLI_<PROVIDER>` override the
+//!   runtime was composed with selects the CLI dispatch runs, whatever the
+//!   ambient environment holds afterwards.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -63,6 +66,7 @@ mod human_crew;
 mod load_failure;
 mod lock_busy_pass;
 mod perf_lane;
+mod provider_override;
 mod replay_crew;
 mod reservation_grants;
 mod shared_base_repair;

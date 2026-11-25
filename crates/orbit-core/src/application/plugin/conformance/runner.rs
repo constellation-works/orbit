@@ -103,7 +103,7 @@ pub fn test_plugin_dir(
         // record them.
         resolve_declared_programs(
             &plugin.manifest.spec.requires.programs,
-            crate::runtime::process_env().path(),
+            runtime.execution_env_policy().process_env().path(),
         )
         .0,
         // The goldens' fixtures, swapped in per case; never the host store.

@@ -54,7 +54,10 @@ impl<'a> OperatorCovers<'a> {
     pub(super) fn new(runtime: &'a OrbitRuntime) -> Result<Self, OrbitError> {
         Ok(Self {
             runtime,
-            source: Source::new(&runtime.paths().repo_root),
+            source: Source::new(
+                &runtime.paths().repo_root,
+                runtime.execution_env_policy().process_env(),
+            ),
             now: runtime.ci_failure_time().unwrap_or_else(Utc::now),
             suppression: Duration::hours(OPERATOR_SUPPRESSION_HOURS),
             covers: BTreeMap::new(),

@@ -489,8 +489,13 @@ pub(crate) fn after_landing_health(
         health.problems.push(refusal.mismatch());
     }
 
-    health.branch_error =
-        inspect::branch_unavailable(&Source::new(&runtime.paths().repo_root), &declared.branch);
+    health.branch_error = inspect::branch_unavailable(
+        &Source::new(
+            &runtime.paths().repo_root,
+            runtime.execution_env_policy().process_env(),
+        ),
+        &declared.branch,
+    );
     if let Some(error) = &health.branch_error {
         health.problems.push(format!(
             "branch `{}` does not resolve: {error}",
@@ -675,6 +680,7 @@ pub(crate) fn after_landing_health(
             .as_ref()
             .map(|state| state.observed.commit.as_str()),
         now,
+        runtime.execution_env_policy().process_env(),
     );
 
     Ok(Some(health))
@@ -690,8 +696,9 @@ fn apply_remote_trail(
     max_wait_minutes: u32,
     observed: Option<&str>,
     now: DateTime<Utc>,
+    env: &orbit_common::Env,
 ) {
-    let observation = match Source::new(root).remote_observation(branch, observed) {
+    let observation = match Source::new(root, env).remote_observation(branch, observed) {
         Ok(observation) => observation,
         Err(error) => {
             health.problems.push(format!(

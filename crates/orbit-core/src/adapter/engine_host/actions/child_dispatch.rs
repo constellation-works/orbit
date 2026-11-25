@@ -304,7 +304,9 @@ fn record_child_audit(
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: error_message.map(ToOwned::to_owned),
-            host: crate::runtime::process_env()
+            host: runtime
+                .execution_env_policy()
+                .process_env()
                 .hostname()
                 .and_then(OsStr::to_str)
                 .map(ToOwned::to_owned),

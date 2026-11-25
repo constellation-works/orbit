@@ -16,7 +16,7 @@ pub(crate) fn resolve_cli_executor(
     runtime: &OrbitRuntime,
     provider: &str,
 ) -> Result<ResolvedCliExecutor, DispatchError> {
-    let env = crate::runtime::process_env();
+    let env = runtime.execution_env_policy().process_env();
     let env_key = format!("ORBIT_V2_CLI_{}", provider.to_ascii_uppercase());
     let env_command = env
         .var(&env_key)

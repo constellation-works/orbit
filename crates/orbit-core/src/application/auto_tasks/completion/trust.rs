@@ -331,7 +331,10 @@ pub(super) fn trusted_release_survey(
     runtime: &OrbitRuntime,
     pinned: &str,
 ) -> Result<Value, String> {
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
     let survey = source
         .release_survey(pinned)
         .map_err(|error| format!("the pinned release survey is unavailable: {error}"))?;

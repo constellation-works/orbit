@@ -50,6 +50,7 @@ pub fn enable_plugin_in_workspace(
         Some(&plugin),
         projection.status,
         &runtime.global_root(),
+        runtime.execution_env_policy().process_env(),
     );
     summary.diagnostic = projection.diagnostic;
     summary.workspace_toggle = Some(true);
@@ -80,6 +81,7 @@ pub fn disable_plugin_in_workspace(
         plugin.as_ref(),
         PluginStatus::Disabled,
         &runtime.global_root(),
+        runtime.execution_env_policy().process_env(),
     );
     summary.workspace_toggle = Some(false);
     summary.disabled_by = Some(if installed.enabled {

@@ -326,17 +326,26 @@ pub(crate) struct WorkerCommandConfig {
     containment: Option<WorkerLimits>,
     strict_containment: bool,
     environment: Option<orbit_config::ExecutionEnvPolicy>,
+    /// The environment the runtime was composed with. The worker's scope
+    /// probe and its launch read this, never the ambient process environment.
+    env: orbit_common::Env,
 }
 
 impl WorkerCommandConfig {
     /// Launch policy without resource containment.
-    pub(crate) fn for_paths(paths: &WorkspacePaths) -> Self {
+    pub(crate) fn for_paths(paths: &WorkspacePaths, env: &orbit_common::Env) -> Self {
         Self {
             root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
             containment: None,
             strict_containment: false,
             environment: None,
+            env: env.clone(),
         }
+    }
+
+    /// The environment this worker config launches under.
+    pub(crate) fn env(&self) -> &orbit_common::Env {
+        &self.env
     }
 
     /// Bound every worker this config launches by `limits`.
@@ -369,6 +378,7 @@ impl WorkerCommandConfig {
             root_override: None,
             containment: limits,
             strict_containment: false,
+            env: policy.process_env().clone(),
             environment: Some(policy),
         }
     }
@@ -391,6 +401,7 @@ impl WorkerCommandConfig {
             Some(availability),
             true,
             &std::sync::Once::new(),
+            &self.env,
         )
     }
 
@@ -403,6 +414,7 @@ impl WorkerCommandConfig {
             run_id,
             self.containment.as_ref(),
             self.strict_containment,
+            &self.env,
         )
     }
 

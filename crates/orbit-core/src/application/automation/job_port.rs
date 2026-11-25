@@ -17,7 +17,12 @@ impl JobAutomationPort for OrbitRuntime {
     }
 
     fn source_repository(&self) -> Option<String> {
-        Source::new(&self.paths().repo_root).repository().ok()
+        Source::new(
+            &self.paths().repo_root,
+            self.execution_env_policy().process_env(),
+        )
+        .repository()
+        .ok()
     }
 
     fn pilot_routine_warning(&self) -> Option<String> {

@@ -28,10 +28,10 @@ pub(super) fn calculate_backlog_forecast(
         items: &prepared.items,
         now,
     });
-    let env = crate::runtime::process_env();
-    let compute_budget = simulation::arrivals_compute_budget(&env);
+    let env = runtime.execution_env_policy().process_env();
+    let compute_budget = simulation::arrivals_compute_budget(env);
     let bounds = simulation::SimulationBounds {
-        max_generated: rework::max_generated(&env),
+        max_generated: rework::max_generated(env),
         compute_budget,
         deadline: preparation_started + compute_budget,
     };

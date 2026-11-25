@@ -356,6 +356,7 @@ fn with_claimed_owner_bridge(
             inner: host,
             global_root: global_root.to_path_buf(),
             process_machine_id: process_machine_id.to_string(),
+            env: orbit_core::composition::composition_env(),
         });
     }
     #[cfg(not(unix))]

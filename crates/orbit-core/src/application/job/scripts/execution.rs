@@ -265,12 +265,14 @@ pub(super) fn script_launcher_env(env: &Env) -> Vec<(String, String)> {
 }
 
 /// Snapshot-driven form of [`script_launcher_env`], so a test states the
-/// ambient environment it is reasoning about.
+/// parent environment it is reasoning about.
 #[cfg(test)]
-pub(crate) fn script_launcher_env_from(parent: &[(String, String)]) -> Vec<(String, String)> {
-    let env = crate::runtime::process_env();
+pub(crate) fn script_launcher_env_from(
+    env: &Env,
+    parent: &[(String, String)],
+) -> Vec<(String, String)> {
     orbit_common::security::child_env::allowlisted_child_env_from(
-        &env,
+        env,
         parent,
         &[],
         &USER_BUS_LOCATOR_ENV_VARS,
@@ -340,18 +342,13 @@ const SCRIPT_FIXED_ENV: [&str; 5] = [
 /// Test wrapper around [`script_env_with_env`] using this process's environment.
 #[cfg(test)]
 pub(crate) fn script_env(
+    env: &Env,
     request: &ScriptStepRequest,
     digest: &str,
     grant: &ScriptGrant,
     mount: &Path,
 ) -> Vec<(String, String)> {
-    script_env_with_env(
-        &crate::runtime::process_env(),
-        request,
-        digest,
-        grant,
-        mount,
-    )
+    script_env_with_env(env, request, digest, grant, mount)
 }
 
 /// The script's fixed environment (§3): fixed values and the step context.

@@ -178,7 +178,7 @@ impl OrbitRuntime {
             return Ok(None);
         };
         let repo_root = &self.paths().repo_root;
-        let repository = Source::new(repo_root)
+        let repository = Source::new(repo_root, self.execution_env_policy().process_env())
             .repository()
             .map_err(orbit_automation::automation_error_to_orbit)?;
         Ok(Some(HandoffReviewObservation {

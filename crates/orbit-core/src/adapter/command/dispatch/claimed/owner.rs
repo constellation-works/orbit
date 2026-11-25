@@ -117,6 +117,7 @@ pub enum ClaimedOwnerRoute {
 /// owner itself.
 #[allow(clippy::too_many_arguments)]
 pub fn bridge_claimed_owner_call(
+    env: &orbit_common::Env,
     global_root: &Path,
     binding: Option<&WorkerInvocation>,
     process_machine_id: Option<&str>,
@@ -127,7 +128,7 @@ pub fn bridge_claimed_owner_call(
     entry_point: ToolEntryPoint,
 ) -> Option<ClaimedOwnerRoute> {
     bridge_claimed_owner_call_with_env(
-        &crate::runtime::process_env(),
+        env,
         global_root,
         binding,
         process_machine_id,

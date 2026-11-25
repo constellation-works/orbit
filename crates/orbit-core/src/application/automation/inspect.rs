@@ -34,7 +34,10 @@ pub struct UnresolvableBranch {
 pub fn unresolvable_delivery_branches(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnresolvableBranch>, OrbitError> {
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
     let mut unresolvable = Vec::new();
     for definition in runtime.listed_auto_task_definitions()? {
         let AutoTaskSchedule::Deliveries {
@@ -437,8 +440,15 @@ fn inspect(
             // evidence.
             None => branch_unavailable(
                 &match cache {
-                    Some(cache) => Source::read_only_with_cache(&runtime.paths().repo_root, cache),
-                    None => Source::new(&runtime.paths().repo_root),
+                    Some(cache) => Source::read_only_with_cache(
+                        &runtime.paths().repo_root,
+                        cache,
+                        runtime.execution_env_policy().process_env(),
+                    ),
+                    None => Source::new(
+                        &runtime.paths().repo_root,
+                        runtime.execution_env_policy().process_env(),
+                    ),
                 },
                 &trigger.branch,
             )
@@ -482,10 +492,13 @@ fn adoption_refusals(
     let repository = if state.branch == trigger.branch {
         // Adoption is judged from the checkout, and `auto-task show` must not
         // fetch. A branch that does not resolve keeps the recorded repository.
-        Source::new(&runtime.paths().repo_root)
-            .local_head(&trigger.branch)
-            .map(|(repository, _)| repository)
-            .unwrap_or_else(|_| state.repository.clone())
+        Source::new(
+            &runtime.paths().repo_root,
+            runtime.execution_env_policy().process_env(),
+        )
+        .local_head(&trigger.branch)
+        .map(|(repository, _)| repository)
+        .unwrap_or_else(|_| state.repository.clone())
     } else {
         state.repository.clone()
     };

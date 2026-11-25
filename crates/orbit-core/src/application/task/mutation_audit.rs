@@ -133,7 +133,7 @@ impl OrbitRuntime {
         let origin_session_id = session_context
             .and_then(|context| context.origin_session_id.clone())
             .or_else(|| caller.map(ToOwned::to_owned));
-        let env = crate::runtime::process_env();
+        let env = self.execution_env_policy().process_env();
         let params = AuditEventInsertParams {
             execution_id: audit_execution_id("task-mutation"),
             command: TASK_MUTATION_AUDIT_COMMAND.to_string(),

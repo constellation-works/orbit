@@ -68,7 +68,7 @@ impl OrbitRuntime {
             gaps: macos.then_some(orbit_exec::SCRIPT_MACOS_PROFILE_GAPS),
             strict_refuses: macos
                 && script_containment_is_strict(
-                    &crate::runtime::process_env(),
+                    self.execution_env_policy().process_env(),
                     self.settings().worker_containment(),
                 ),
         }
@@ -230,7 +230,7 @@ fn prepare_and_run(
     record.write_roots = grant.write_roots.clone();
     // Which granted names pass is known before anything can refuse for the
     // host, so every record after the grant check names them.
-    let env = crate::runtime::process_env();
+    let env = runtime.execution_env_policy().process_env();
     let parent: Vec<(String, String)> = env
         .vars()
         .filter_map(|(name, value)| Some((name.to_str()?.to_owned(), value.to_str()?.to_owned())))
@@ -241,7 +241,7 @@ fn prepare_and_run(
 
     let input_text = admitted_input(&snapshot, &request.input)?;
     let home = env.home();
-    probe_granted_roots(&env, &grant, home)?;
+    probe_granted_roots(env, &grant, home)?;
 
     // Declared inputs resolve after the grant checks, so a refusal records
     // the grant, and before the profile probe and anything created or
@@ -265,7 +265,7 @@ fn prepare_and_run(
     // limits), so strict containment refuses every script step there. It is
     // a host policy, decided before the profile is probed.
     if cfg!(target_os = "macos")
-        && script_containment_is_strict(&env, runtime.settings().worker_containment())
+        && script_containment_is_strict(env, runtime.settings().worker_containment())
     {
         return Err(refuse(
             script_refusal::SANDBOX_UNAVAILABLE,
@@ -297,9 +297,9 @@ fn prepare_and_run(
     // One environment for both the availability probe and the launch, so
     // the probe answers for the environment `systemd-run` will actually
     // get [ORB-20661].
-    let mut launcher_env = script_launcher_env(&env);
+    let mut launcher_env = script_launcher_env(env);
     let scope = script_scope_launcher(
-        &env,
+        env,
         &request.run_id,
         &request.step_id,
         runtime.settings().worker_containment(),
@@ -341,7 +341,7 @@ fn prepare_and_run(
 
     let scratch = ScriptScratch::create(runtime, request)?;
     let mut result = run_in_scratch(RunPlan {
-        env: &env,
+        env,
         request,
         snapshot: &snapshot,
         grant: &grant,

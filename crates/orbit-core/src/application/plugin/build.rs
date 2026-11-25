@@ -115,8 +115,8 @@ pub(super) fn prepare_build(
             plan.source
         )));
     }
-    let env = crate::runtime::process_env();
-    if let Some(reason) = unattended_reason(&global_root, &env) {
+    let env = runtime.execution_env_policy().process_env();
+    if let Some(reason) = unattended_reason(&global_root, env) {
         return Err(OrbitError::PluginBuildConsentUnavailable(format!(
             "{PLUGIN_BUILD_CONSENT_FLAG} was refused: {reason}. Only an operator at their own \
              command line can consent to a plugin build; nothing was built or installed"
@@ -186,7 +186,7 @@ pub(super) fn finish_build(
         consent: PluginBuildConsent {
             at: chrono::Utc::now().to_rfc3339(),
             os_user: {
-                let env = crate::runtime::process_env();
+                let env = runtime.execution_env_policy().process_env();
                 [env.user(), env.logname()]
                     .into_iter()
                     .flatten()

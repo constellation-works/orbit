@@ -314,7 +314,13 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
     let loaded = registered
         .and_then(|entry| entry.loaded.as_deref())
         .or(disabled.as_deref());
-    let mut summary = summary_for_installed(installed, loaded, status, &runtime.global_root());
+    let mut summary = summary_for_installed(
+        installed,
+        loaded,
+        status,
+        &runtime.global_root(),
+        runtime.execution_env_policy().process_env(),
+    );
     summary.workspace_toggle = runtime
         .plugin_load()
         .workspace_toggles
@@ -370,6 +376,7 @@ pub(in crate::application::plugin) fn summary_for_installed(
     plugin: Option<&LoadedPlugin>,
     status: PluginStatus,
     global_root: &Path,
+    env: &orbit_common::Env,
 ) -> PluginSummary {
     let (panels, links) = plugin
         .filter(|_| status == PluginStatus::Active)
@@ -431,7 +438,7 @@ pub(in crate::application::plugin) fn summary_for_installed(
                     &plugin_state_dir(global_root, &installed.name),
                 );
                 // Inspection reads the operator's PATH; the call path never does.
-                mark_resolution_drift(&mut programs, crate::runtime::process_env().path());
+                mark_resolution_drift(&mut programs, env.path());
                 programs
             })
             .unwrap_or_default(),

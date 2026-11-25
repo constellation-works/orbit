@@ -43,7 +43,12 @@ fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
     std::os::unix::fs::symlink(&outside, &logs_dir).expect("create log-directory symlink");
     let mut command = Command::new("true");
 
-    let result = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child");
+    let result = configure_pipeline_worker_stdio(
+        &mut command,
+        &logs_dir,
+        "jrun-child",
+        &orbit_common::Env::capture(),
+    );
 
     let error = match result {
         Ok(_) => panic!("symlinked log directories must fail closed"),
@@ -84,7 +89,12 @@ fn configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority()
     let logs_dir = authority.join("missing").join("logs");
     let mut command = Command::new("true");
 
-    let _error = match configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child") {
+    let _error = match configure_pipeline_worker_stdio(
+        &mut command,
+        &logs_dir,
+        "jrun-child",
+        &orbit_common::Env::capture(),
+    ) {
         Ok(_) => panic!("replaced authority must fail closed"),
         Err(error) => error,
     };
@@ -120,7 +130,13 @@ fn configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects() 
     let mut command = Command::new("true");
 
     assert!(
-        configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child").is_err(),
+        configure_pipeline_worker_stdio(
+            &mut command,
+            &logs_dir,
+            "jrun-child",
+            &orbit_common::Env::capture()
+        )
+        .is_err(),
         "a final-file symlink must fail closed"
     );
     assert_eq!(
@@ -149,7 +165,12 @@ fn configure_pipeline_worker_stdio_rejects_traversal_in_log_directory() {
     let logs_dir = root.path().join("nested").join("..").join("logs");
     let mut command = Command::new("true");
 
-    let error = match configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child") {
+    let error = match configure_pipeline_worker_stdio(
+        &mut command,
+        &logs_dir,
+        "jrun-child",
+        &orbit_common::Env::capture(),
+    ) {
         Ok(_) => panic!("traversal components must fail closed"),
         Err(error) => error,
     };

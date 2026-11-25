@@ -450,7 +450,7 @@ fn write_store_conditional<T, R>(
         ConfigScope::Workspace => workspace_config_path(runtime),
     };
     #[cfg(feature = "test-support")]
-    let env = crate::runtime::process_env();
+    let env = runtime.execution_env_policy().process_env();
     let transaction = || {
         ConfigStore::with_write_lock(&path, || {
             let mut store = match scope {
@@ -470,7 +470,7 @@ fn write_store_conditional<T, R>(
                 ConditionalEdit::Save(edited) => {
                     #[cfg(feature = "test-support")]
                     write_gate::wait(
-                        &env,
+                        env,
                         match scope {
                             ConfigScope::Global => "global-before-save",
                             ConfigScope::Workspace => "workspace-before-save",
@@ -488,7 +488,7 @@ fn write_store_conditional<T, R>(
         // takes, so two such writers never wait on each other. The lock is
         // reentrant when both scopes name one file.
         #[cfg(feature = "test-support")]
-        write_gate::signal(&env, "workspace-fallback-lock");
+        write_gate::signal(env, "workspace-fallback-lock");
         ConfigStore::with_write_lock(&global_config_path(runtime), transaction)
     } else {
         transaction()

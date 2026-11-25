@@ -49,6 +49,9 @@ pub(super) struct ServerMcpHost {
     /// One writable audit store for global dispatches, reopened when the
     /// `config.toml` stamp or the database file identity changes.
     audit_store: GlobalAuditStoreCache,
+    /// The startup environment this server was composed with. Dispatch reads
+    /// it instead of capturing the process environment on each call.
+    env: orbit_common::Env,
 }
 
 /// The combined tool surface and the plugin snapshot it was built from.
@@ -83,6 +86,7 @@ impl ServerMcpHost {
             owner_route_sessions: federated::RoutedSessionPool::default(),
             task_owners: TaskOwnerLookup::default(),
             audit_store: GlobalAuditStoreCache::default(),
+            env: orbit_core::composition::composition_env(),
         }
     }
 
@@ -124,6 +128,7 @@ impl ServerMcpHost {
                         })
                         .map(|definition| definition.schema.name.as_str()),
                     &orbit_core::adapter::command::tool_suggestion_context(
+                        &self.env,
                         ToolEntryPoint::Mcp,
                         context.clone(),
                     ),
@@ -364,6 +369,7 @@ impl ServerMcpHost {
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         execute_global_in_process_tool_dispatch_with_audit_writer(
+            &self.env,
             &self.global_root,
             name,
             input,
@@ -392,7 +398,14 @@ impl ServerMcpHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        execute_global_plugin_tool(&self.global_root, name, input, ToolEntryPoint::Mcp, context)
+        execute_global_plugin_tool(
+            &self.env,
+            &self.global_root,
+            name,
+            input,
+            ToolEntryPoint::Mcp,
+            context,
+        )
     }
 
     pub(super) fn resolve_workspace_runtime(
@@ -607,6 +620,7 @@ impl ServerMcpHost {
         error: OrbitError,
     ) -> Result<Value, OrbitError> {
         execute_global_in_process_tool_dispatch_with_audit_writer(
+            &self.env,
             &self.global_root,
             name,
             input,
