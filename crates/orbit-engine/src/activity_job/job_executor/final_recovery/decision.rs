@@ -1,5 +1,8 @@
-use orbit_types::workflow::FinalRecoveryDecision;
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
+};
 
+use crate::executor::automation::vcs::PUBLISHED_REPLAY_STEPS;
 use crate::executor::automation::vcs::git::git_output;
 
 use super::super::*;
@@ -188,6 +191,95 @@ pub(super) fn admit_resume_step(
     }
 }
 
+/// An interrupted final-recovery replay with retained publication history
+/// must start at the admitted phase. A replay that checkpointed the way
+/// through publication to completion can continue using those checkpoints.
+pub(in crate::activity_job::job_executor) fn final_recovery_replay_from(
+    job: &JobV2,
+    state: &PipelineState,
+) -> Option<usize> {
+    let checkpoint = state.final_recovery.as_ref()?;
+    if checkpoint.repair_commit.is_some() {
+        return None;
+    }
+    let context = checkpoint.resume_context.as_ref()?;
+    let from = job
+        .steps
+        .iter()
+        .position(|step| step.id == context.step_id)?;
+    let retained_history = PUBLISHED_REPLAY_STEPS.iter().all(|(id, _)| {
+        state.pipeline.get(*id).is_some_and(|output| {
+            state.step_outputs.iter().any(|(index, recorded)| {
+                recorded == output && state.step_states.get(index) == Some(&JobRunState::Success)
+            })
+        })
+    });
+    let reached_completion = checkpoint.outcome == Some(FinalRecoveryCheckpointOutcome::Resume)
+        && implementation_replay_reached_completion(job, state, from);
+    (retained_history && !reached_completion).then_some(from)
+}
+
+fn implementation_replay_reached_completion(
+    job: &JobV2,
+    state: &PipelineState,
+    from: usize,
+) -> bool {
+    // This phase lost its checkpoint when recovery was admitted. Its new
+    // success proves the replay started, so the cursor is from the replay
+    // rather than the pass that admitted it.
+    if PUBLISHED_REPLAY_STEPS
+        .iter()
+        .any(|(id, _)| *id == job.steps[from].id)
+    {
+        return false;
+    }
+    let frontier = job
+        .steps
+        .iter()
+        .enumerate()
+        .take(state.next_step_index as usize)
+        .take_while(|(index, _)| {
+            state.step_states.get(&(*index as u32)) == Some(&JobRunState::Success)
+        })
+        .count();
+    let is_action = |step: &JobV2Step, action: &str| {
+        matches!(&step.body, JobV2StepBody::Target(target)
+            if matches!(&target.spec, ActivityV2Spec::Deterministic(spec) if spec.action == action))
+    };
+    let publication = |id: &str, action: &str| {
+        job.steps[..frontier]
+            .iter()
+            .enumerate()
+            .skip(from + 1)
+            .find(|(index, step)| {
+                let index = *index as u32;
+                step.id == id
+                    && is_action(step, action)
+                    && !state.skipped_steps.contains(&index)
+                    && state.step_output(index).is_some_and(|output| {
+                        !output.is_null() && state.pipeline.get(id) == Some(output)
+                    })
+            })
+            .map(|(index, _)| index)
+    };
+    let (Some(push), Some(open)) = (
+        publication("push", "git_push"),
+        publication("pr_open", "pr_open"),
+    ) else {
+        return false;
+    };
+    // The completion round itself may be absent after a failure or rewind.
+    // Its normal head, task and review guards still authenticate the seeded
+    // publication before any completion mutation.
+    push < open
+        && job
+            .steps
+            .iter()
+            .take(frontier + 1)
+            .skip(open + 1)
+            .any(|step| is_action(step, "pr_complete"))
+}
+
 /// Keep only a complete, exact host publication chain. Incomplete or foreign
 /// history gets no continuation and still meets the immutable setup guard.
 pub(super) fn preserved_publication_steps(
@@ -196,7 +288,7 @@ pub(super) fn preserved_publication_steps(
     task: &str,
     worktree: &types::RunWorktree,
 ) -> Vec<u32> {
-    use crate::executor::automation::vcs::{PUBLISHED_REPLAY_STEPS, published_candidate_matches};
+    use crate::executor::automation::vcs::published_candidate_matches;
     let Some(state) = ctx.host.read_run_state(&ctx.run_id).ok().flatten() else {
         return Vec::new();
     };

@@ -28,4 +28,5 @@ mod settlement;
 mod types;
 
 pub(super) use attempt::attempt_final_recovery;
+pub(super) use decision::final_recovery_replay_from;
 pub(super) use types::{FinalRecoveryBudget, FinalRecoveryVerdict, RunWorktree};

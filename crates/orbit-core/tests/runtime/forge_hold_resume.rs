@@ -21,9 +21,10 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{
-    FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT, ForgeUnavailableHold,
-    JobRunState, JobTargetType, PipelineState,
+    DeliveryRefusal, FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT,
+    FinalRecoveryCheckpoint, ForgeUnavailableHold, JobRunState, JobTargetType, PipelineState,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
@@ -592,21 +593,62 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
     }
     use std::os::unix::fs::PermissionsExt;
 
-    let fx = Fixture::with_job(
-        "task_pr_pipeline",
-        json!([
-            {"id": "pr_open", "spec": {"type": "deterministic", "action": "pr_open", "config": {}}},
-            {"id": "complete_pr", "spec": {"type": "deterministic", "action": "pr_complete", "config": {}},
-             "default_input": {
-                 "job_run_id": "{{ steps.pr_open.output.job_run_id }}",
-                 "workspace_path": "{{ input.workspace_path }}",
-                 "completed_task_ids": "{{ input.task_ids }}",
-                 "pr_number": "{{ steps.pr_open.output.pr_number }}",
-                 "published_head_sha": "published-head", "completion": "review",
-                 "auto_fix": true, "max_wait_seconds": 0,
-             }},
-        ]),
-    );
+    let step = |id: &str, action: &str| json!({"id": id, "spec": {"type": "deterministic", "action": action, "config": {}}});
+    let completed = [
+        ("worktree", "pipeline_success_guard", json!({})),
+        (
+            "implement_bundle",
+            "pipeline_success_guard",
+            json!({"success": true}),
+        ),
+        ("commit", "git_commit", json!({"commit_sha": "candidate"})),
+        (
+            "prepare_branch",
+            "pr_prepare",
+            json!({"head": "orbit/candidate"}),
+        ),
+        (
+            "sync_base",
+            "git_rebase",
+            json!({"head_sha": "published-head"}),
+        ),
+        (
+            "validate",
+            "pipeline_success_guard",
+            json!({"validated": true}),
+        ),
+        (
+            "push",
+            "git_push",
+            json!({"branch": "orbit/candidate", "local_sha": "published-head"}),
+        ),
+        (
+            "pr_open",
+            "pr_open",
+            json!({"pr_number": "17", "head": "orbit/candidate", "base": "main"}),
+        ),
+    ];
+    let completion = completed.len();
+    // Retain the normal completion bindings so a replay that drops any of
+    // these checkpoint outputs cannot make a successful forge observation.
+    let steps = completed
+        .iter()
+        .map(|(id, action, _)| step(id, action))
+        .chain([json!({
+            "id": "complete_pr", "spec": {"type": "deterministic", "action": "pr_complete", "config": {}},
+            "default_input": {
+                "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                "workspace_path": "{{ input.workspace_path }}",
+                "completed_task_ids": "{{ input.task_ids }}",
+                "pr_number": "{{ steps.pr_open.output.pr_number }}",
+                "head": "{{ steps.pr_open.output.head }}",
+                "base": "{{ steps.pr_open.output.base }}",
+                "published_head_sha": "{{ steps.push.output.local_sha }}",
+                "completion": "review", "auto_fix": true, "max_wait_seconds": 0,
+            }
+        })])
+        .collect::<Vec<_>>();
+    let fx = Fixture::with_job("task_pr_pipeline", json!(steps));
     let (task, run) = fx.held_delivery_for_job("task_pr_pipeline", None);
     fx.runtime
         .apply_task_automation_update(
@@ -621,15 +663,31 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
             },
         )
         .unwrap();
+    let recovery: FinalRecoveryCheckpoint = serde_json::from_value(json!({
+        "key": {"run_id": run, "attempt": 1},
+        "task_id": task, "failed_step_id": "implement_bundle", "admitted_at": Utc::now(),
+        "decision": {"decision": "resume", "step_id": "implement_bundle", "rationale": "Repair the candidate"},
+        "outcome": {"kind": "resume"},
+        "resume_context": {
+            "step_id": "implement_bundle", "failed_step_id": "implement_bundle",
+            "rationale": "Repair the candidate", "refusal": "fixture failure", "refused_output": null,
+        }
+    }))
+    .unwrap();
     fx.jobs
         .update_run_state(&run, &mut |_, state| {
-            let published = json!({"pr_number": "17", "job_run_id": run});
-            state.record_step(
-                0,
-                JobRunState::Success,
-                Some(published.clone()),
-                Some(json!({"pr_open": published})),
-            );
+            for (index, (id, _, mut output)) in (0..).zip(completed.clone()) {
+                if id == "worktree" {
+                    output["job_run_id"] = json!(run);
+                }
+                state.record_step(
+                    index,
+                    JobRunState::Success,
+                    Some(output.clone()),
+                    Some(json!({id: output})),
+                );
+            }
+            state.final_recovery = Some(recovery.clone());
             Ok(())
         })
         .unwrap();
@@ -637,8 +695,9 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
     std::fs::create_dir_all(&bin).unwrap();
     let calls = fx._root.path().join("forge-calls");
     let gh = bin.join("gh");
-    let observation = json!({
+    let mut observation = json!({
         "state": "OPEN", "mergeStateStatus": "CLEAN", "headRefOid": "published-head",
+        "headRefName": "orbit/candidate", "baseRefName": "main",
         "reviewDecision": "APPROVED", "statusCheckRollup": [],
     });
     let required_checks = json!({"data":{"repository":{"pullRequest":{
@@ -646,11 +705,13 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
             "oid":"published-head", "statusCheckRollup":null,
         }}]},
     }}}});
+    let status = bin.join("status.json");
     std::fs::write(
         &gh,
         format!(
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1 $2\" in\n'pr view') echo '{observation}' ;;\n'api graphql') echo '{required_checks}' ;;\n*) exit 1 ;;\nesac\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1 $2\" in\n'pr view') cat '{}' ;;\n'api graphql') echo '{required_checks}' ;;\n*) exit 1 ;;\nesac\n",
             calls.display(),
+            status.display(),
         ),
     )
     .unwrap();
@@ -667,7 +728,7 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
             &run,
             &JobRunStepParams {
                 lock_wait_ms: None,
-                step_index: 2,
+                step_index: completion,
                 // Finalization appends a diagnostic for the job, after the
                 // activity audit row; the refusal belongs to this last row.
                 target_type: JobTargetType::Job,
@@ -679,7 +740,7 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
                 agent_response_json: None,
                 state: JobRunState::Held,
                 error_code: Some(
-                    orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
+                    DeliveryRefusal::CheckEvidenceInconclusive
                         .error_code()
                         .into(),
                 ),
@@ -687,18 +748,68 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
             },
         )
         .unwrap();
-    let resumed = fx
-        .runtime
-        .submit_resume_run(&run, Some("operator"), None)
-        .expect("completion can re-observe the existing pull request");
-    assert_eq!(fx.retries(&run), 1);
-    fx.runtime
-        .execute_pipeline_run_worker(&resumed.run_id)
-        .unwrap();
-    assert_eq!(
-        fx.jobs.get_job_run(&resumed.run_id).unwrap().unwrap().state,
-        JobRunState::Success,
-    );
-    let observed = std::fs::read_to_string(calls).unwrap();
-    assert!(observed.starts_with("pr view 17 "), "{observed}");
+    let source = fx.jobs.read_run_state(&run).unwrap().unwrap();
+    for (head, expected) in [
+        ("published-head", JobRunState::Success),
+        ("foreign-head", JobRunState::Held),
+    ] {
+        observation["headRefOid"] = json!(head);
+        std::fs::write(&status, observation.to_string()).unwrap();
+        std::fs::write(&calls, "").unwrap();
+        let resumed = fx
+            .runtime
+            .submit_resume_run(&run, Some("operator"), None)
+            .expect("completion can re-observe the existing pull request");
+        let outcome = fx.runtime.execute_pipeline_run_worker(&resumed.run_id);
+        let finished = fx.jobs.get_job_run(&resumed.run_id).unwrap().unwrap();
+        assert_eq!(finished.state, expected, "{outcome:?} {:?}", finished.steps);
+        if expected == JobRunState::Held {
+            assert_eq!(
+                finished.steps.last().unwrap().error_code.as_deref(),
+                Some(DeliveryRefusal::HeadChanged.error_code())
+            );
+        }
+        let started = fx
+            .runtime
+            .list_v2_audit_events(orbit_store::V2AuditEventFilter {
+                workspace_id: fx.runtime.workspace_id().unwrap(),
+                run_id: Some(resumed.run_id.clone()),
+                event_type: Some("step.started".into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                serde_json::from_str::<V2AuditEvent>(&row.payload_json)
+                    .unwrap()
+                    .kind
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(
+                started.as_slice(),
+                [V2AuditEventKind::StepStarted { step_id }] if step_id == "complete_pr"
+            ),
+            "{started:?}"
+        );
+        let resumed_state = fx.jobs.read_run_state(&resumed.run_id).unwrap().unwrap();
+        for (index, (id, _, _)) in (0..).zip(&completed) {
+            assert_eq!(resumed_state.pipeline[id], source.pipeline[id], "{id}");
+            assert_eq!(
+                resumed_state.step_output(index),
+                source.step_output(index),
+                "{id}"
+            );
+        }
+        assert_eq!(resumed_state.final_recovery.as_ref(), Some(&recovery));
+        let observed = std::fs::read_to_string(&calls).unwrap();
+        assert!(observed.starts_with("pr view 17 "), "{observed}");
+        assert!(
+            observed
+                .lines()
+                .all(|line| line.starts_with("pr view 17 ") || line.starts_with("api graphql ")),
+            "{observed}"
+        );
+    }
+    assert_eq!(fx.retries(&run), 2);
 }

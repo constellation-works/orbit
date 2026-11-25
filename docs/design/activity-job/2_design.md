@@ -1872,6 +1872,12 @@ history provenance when they authenticate that exact checkout, run, task,
 branch and candidate. It drops validation, review and compound phase checkpoints.
 These retained successes do not skip replay: an interrupted replay runs again
 from its admitted phase, and all delivery actions and gates run afterward.
+Once the resumed implementation has checkpointed every step through publication
+and reached PR completion, a completion retry reuses those checkpoints and
+runs the completion round for the published head. The recovery receipt stays
+in the retry lineage and still spends final recovery for that run. The
+completion round rechecks the task, pull request and pinned head before any
+completion mutation.
 
 At the commit boundary, the applied same-run recovery receipt plus the retained
 host chain authorize continuation of that exact published candidate. The chain
