@@ -1794,18 +1794,22 @@ cohort, runs 45578312611 (Test build 390 s, partition 11 162 s) and
   about 5.9 busy slots (six threads on a four-vCPU runner). It is set by load,
   not by order, and the slowest partition ends within 5 s of that figure. A priority
   override or a rebalance cannot shorten a saturated partition.
-- *Shard setup.* Each of the 13 test jobs ran `dtolnay/rust-toolchain` as a
-  blocking first step, then checkout, then the archive download. Across 26 jobs
-  the toolchain step spanned 6.4–9.9 s (median 7.5 s) while checkout and the
-  download needed no cargo.
+- *Shard setup.* Before this change, each of the 13 test jobs ran the checkout
+  and the workflow-CI helper checkout first, then `dtolnay/rust-toolchain` as a
+  blocking step, then the cargo-nextest, ripgrep and uv installs, the Bubblewrap
+  probe and the archive download. Both cited runs show that order for the shard
+  steps. Across 26 jobs the toolchain step spanned 6.4–9.9 s (median 7.5 s)
+  while checkout and the download needed no cargo.
 
 **Change.** In the shared shard steps, "Start the pinned toolchain install" runs
 `rustup toolchain install` and `rustup default` for the `rust-toolchain.toml`
 channel in the background, holding an fd-9 `flock` and writing its exit status
 and output under `$RUNNER_TEMP`, the same pattern as the coverage proof in the
-build job. The download steps run beside it. "Finish the pinned toolchain
-install" takes the lock, prints the output, fails the step on a nonzero or
-missing status and prints `rustc --version --verbose` before anything that
+build job. The install is now the first shard step after the test-build gate,
+so the checkout and the download steps run beside it. "Finish the pinned
+toolchain install" takes the lock, prints the output, fails the step on a
+nonzero or missing status and prints `rustc --version --verbose` before
+anything that
 needs cargo (nextest install, extraction, the run). The job names, the three
 download attempts and their retry bound, digest verification, the partition
 count and the sandbox gate are unchanged. The `test-build` job and the other
