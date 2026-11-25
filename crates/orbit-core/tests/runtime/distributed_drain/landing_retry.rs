@@ -1,7 +1,7 @@
 //! Public operator retry of the existing authorized landing.
 
 use super::*;
-use orbit_common::env_vars::{ORBIT_MANAGED_RUN_CONTEXT, ORBIT_RUN_ID};
+use orbit_common::env_vars::{HOME, ORBIT_MANAGED_RUN_CONTEXT, ORBIT_RUN_ID};
 
 /// Reproduces the missing public same-handoff retry seam. The old stopped
 /// attempt survives, the normal landing action completes, and replay keeps
@@ -386,7 +386,10 @@ fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
 fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
     let (owner, task, mut request, stopped) = stopped_retry_fixture();
     let runtime = &owner.pair.wire.owner;
-    let home = std::env::var("HOME").unwrap();
+    let home = std::env::var(HOME).unwrap();
+    // Each table row has its own home. Use the fixture's home for redaction
+    // throughout submission and replay instead of the process-start snapshot.
+    let _home = orbit_common::test_env::scoped([(HOME, Some(home.as_str()))]);
     request.reason = format!("provider state refreshed under {home}/provider");
     let result = retry_tool(runtime, &request, McpCapability::Operator);
 
