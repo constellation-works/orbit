@@ -80,6 +80,7 @@ pub const RETIRED_SYSTEM_CREW_WARNING: &str = "crew `system` is retired and rout
      workflow.<tier>_complexity_crews for the work's complexity; remove the crew name, or \
      name a configured crew";
 
+// compat-until: 2026-11-10 (c9ebc0bc6079, ORB-15663)
 /// Whether `name` is the retired `system` crew rather than a crew `crews`
 /// defines.
 pub fn names_retired_system_crew(name: &str, crews: &BTreeMap<String, Crew>) -> bool {
