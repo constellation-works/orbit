@@ -101,7 +101,6 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
             discovered,
             routine_names,
             deadline,
-            self.read_only,
         )
     }
 }
@@ -200,9 +199,9 @@ fn discover_registered_name_collision_peers(
     discovered: &DiscoveredWorkspaces,
     routine_names: &BTreeSet<String>,
     deadline: Option<Instant>,
-    read_only: bool,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
-    let (registry, open) = load_registry_and_opener(global_root, read_only)?;
+    // Peers participate only in collision inspection, never in dispatch.
+    let (registry, open) = load_registry_and_opener(global_root, true)?;
     let selected_orbit_dirs: BTreeSet<PathBuf> = discovered
         .entries
         .iter()

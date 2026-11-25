@@ -921,8 +921,12 @@ Per pass:
     write no routine fire, auto-task cursor, task, or run state.
 
 The global `--workspace <selector>` narrows one pass to a single registered
-workspace: discovery visits only that workspace, so nothing outside it is
-evaluated, fired, or recorded, in dry-run and live passes alike. The selector is
+workspace: discovery opens that workspace for scheduling and inspects active peer
+definitions observationally to detect host-wide name collisions. Unselected
+checkouts are not migrated, repaired, refreshed or settled by peer inspection;
+their routines are not evaluated, fired or recorded in either dry-run or live
+passes. Host registry validation and host scheduler state remain separate from
+those peer checkout effects. The selector is
 resolved against the local registry before the pass touches scheduler state, and
 an unknown, unregistered, or inactive selector fails the invocation rather than
 silently sweeping the host [ORB-12108].

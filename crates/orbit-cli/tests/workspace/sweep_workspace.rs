@@ -372,6 +372,71 @@ fn scoped_sweep_drops_a_routine_name_another_workspace_declares() {
 }
 
 #[test]
+fn scoped_ticks_preserve_colliding_peer_checkout() {
+    let fixture = Fixture::initialized();
+    let colliding = format!("worktree-gc-{SELECTED}");
+    rename_routine(&fixture.other_repo, &colliding);
+    let peer = fixture.other_repo.join(".orbit");
+    let marker = peer.join("state/layout.version");
+    fs::write(&marker, "1\n").expect("make peer layout pending");
+    let before = snapshot_files(&peer);
+
+    for args in [
+        vec![
+            "--workspace",
+            SELECTED,
+            "clock",
+            "tick",
+            "--dry-run",
+            "--format",
+            "json",
+        ],
+        vec!["--workspace", SELECTED, "clock", "tick", "--format", "json"],
+    ] {
+        let outcome = fixture.sweep(&args);
+        assert!(
+            outcome["load_errors"]
+                .as_array()
+                .expect("load errors")
+                .iter()
+                .any(|error| {
+                    error["source_workspace"] == SELECTED
+                        && error["message"].as_str().is_some_and(|message| {
+                            message.contains("defined by more than one source")
+                                && message.contains(&colliding)
+                        })
+                }),
+            "selected collision must be reported: {outcome}"
+        );
+        assert!(!report_routines(&outcome).contains(&colliding), "{outcome}");
+        assert_eq!(
+            snapshot_files(&peer),
+            before,
+            "peer checkout changed after {args:?}"
+        );
+    }
+}
+
+fn snapshot_files(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(dir).expect("read peer directory") {
+            let path = entry.expect("peer entry").path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.insert(
+                    path.strip_prefix(root).expect("peer path").to_path_buf(),
+                    fs::read(&path).expect("read peer file"),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+#[test]
 fn scoped_sweep_keeps_routines_whose_names_no_peer_declares() {
     let fixture = Fixture::initialized();
     let routine = format!("worktree-gc-{SELECTED}");
