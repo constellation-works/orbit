@@ -50,19 +50,23 @@ mod review;
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
 ///
-/// Capability methods are required, so a new capability fails to compile until the
+/// Every method is required, so a new capability fails to compile until the
 /// production host answers it. Test doubles implement
 /// `test_support::NullRuntimeHost` instead, which answers each capability the
 /// way a host without it does.
-pub trait RuntimeHost: Send + Sync {
-    /// Environment snapshot supplied by the embedding host.
-    fn process_env(&self) -> orbit_common::Env {
-        orbit_common::Env::default()
-    }
-
+pub trait RuntimeHost: RuntimeHostProcessEnvironment + Send + Sync {
     lifecycle::lifecycle_methods!();
     review::review_methods!();
     environment::environment_methods!();
     dispatch::dispatch_methods!();
     recovery::recovery_methods!();
+}
+
+/// Required process environment capability for a [`RuntimeHost`].
+///
+/// Kept as a supertrait so the environment snapshot remains a required
+/// capability without expanding the main runtime host method surface.
+pub trait RuntimeHostProcessEnvironment: Send + Sync {
+    /// Environment snapshot supplied by the embedding host.
+    fn process_env(&self) -> orbit_common::Env;
 }

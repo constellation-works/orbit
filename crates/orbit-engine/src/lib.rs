@@ -12,6 +12,8 @@
 //! - v2 dispatcher, job executor, and audit writer types re-exported at the
 //!   crate root
 //! - [`RuntimeHost`] — the single capability boundary used by job execution
+//! - [`RuntimeHostProcessEnvironment`] — the required process environment
+//!   capability inherited by [`RuntimeHost`]
 //! - [`execute_deterministic_action`] — the built-in automation actions
 //!   (git/PR/worktree/task-update) v2 job steps invoke
 //! - [`ci_log_signature`] — the normalized CI error signature, shared by
@@ -79,13 +81,13 @@ pub use context::{
     PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
     PublishedCompletionObservation, RebaseRecoveryAttemptScope, ResolvedActivityTools,
     ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
-    ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry,
-    ScratchGcReport, ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest,
-    ScriptStepRun, SteeringGateReading, SteeringRoundAdmission, StepRecoveryAdmission,
-    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
-    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, UnlockedPathValidation,
-    ValidatedTree, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT,
-    WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
+    ReviewerInvocationRequest, RuntimeHost, RuntimeHostProcessEnvironment,
+    STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
+    ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
+    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WORKFLOW_RUN_FAILED_EVENT,
+    WORKFLOW_RUN_INTERRUPTED_EVENT, WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
     admit_published_completion_observation, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
     blocked_workflow_owner_signoff_update,
