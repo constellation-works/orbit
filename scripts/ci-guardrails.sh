@@ -698,6 +698,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-desktop-ui.sh"
   run_guard "$repo_root/scripts/check-dashboard-vendor.py"
   run_guard "$repo_root/scripts/check-dashboard-css-literals.py"
+  run_guard "$repo_root/scripts/check-dashboard-last-item-stretch.py"
   run_guard "$repo_root/scripts/sync-plugin-skills.sh" --check
   run_guard "$repo_root/scripts/smoke-plugin-install.sh"
 
@@ -716,6 +717,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-linux-gated-test-items.py"
   run_guard "$repo_root/scripts/test-refresh-dashboard-vendor.py"
   run_guard "$repo_root/scripts/test-check-dashboard-css-literals.py"
+  run_guard "$repo_root/scripts/test-check-dashboard-last-item-stretch.py"
   run_guard "$repo_root/scripts/test-unit-test-inventory.py"
   run_guard "$repo_root/scripts/test-codeql-extension-schema.py"
   run_guard "$repo_root/scripts/test-codeql-production-paths.py"
