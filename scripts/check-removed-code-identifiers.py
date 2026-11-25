@@ -27,6 +27,10 @@ token inside an inline code span of a live document. Live documents are `docs/`
 `scripts/removed-code-identifiers-allowlist.json` with a reason. An entry is
 judged only when this diff removes that identifier: it is stale when the named
 document no longer names it.
+
+A checkout that holds no merge-base with `CI_TEST_BASE` (a shallow clone without
+the common ancestor) fails with an insufficient-history report before any removal
+is scanned, rather than comparing from the base tip.
 """
 
 import json
@@ -101,7 +105,13 @@ def comparison_base():
         fork = git("merge-base", tip, "HEAD")
         if fork.returncode == 0 and fork.stdout.strip():
             return fork.stdout.strip()
-        return tip
+        # A shallow checkout can hold both tips without their common ancestor.
+        # The tip would then count every base addition since the branch point as
+        # a removal, so stop before scanning instead of comparing from it.
+        raise ValueError(
+            f"insufficient history: no common ancestor of CI_TEST_BASE {explicit!r} and HEAD "
+            "in this checkout; fetch enough history to reach it (git fetch --unshallow "
+            "in a shallow clone)")
     for branch in ("refs/remotes/origin/agent-main", "refs/heads/agent-main"):
         if git("rev-parse", "--verify", "--quiet", branch).returncode == 0:
             result = git("merge-base", "HEAD", branch)
