@@ -8,10 +8,11 @@
 //! each joined to `job_runs` and decoded whole, cost most of that request
 //! (ORB-21826). So a reload first reads each sampled run's shape (its row
 //! count and last minute index, from the primary key, and its `job_runs`
-//! row) and re-reads the minutes only of runs whose shape moved; a full read
-//! takes `job_runs` from the same shapes instead of joining every row. Either
-//! way the result is the runs, fields and minutes a whole read returns, in
-//! its order.
+//! row) and re-reads the minutes only of runs whose shape moved, or every run
+//! in one scan when more than half of the current runs moved (a first load
+//! moves them all). A full read takes `job_runs` from the same shapes instead
+//! of joining every row. Either way the result is the runs, fields and minutes
+//! a whole read returns, in its order.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use orbit_common::OrbitError;

@@ -2,7 +2,7 @@
 title: Auto-concurrency — Design
 owner: claude
 created_date: 2026-10-11
-updated_date: 2026-11-14
+updated_date: 2026-11-25
 last_validated: 2026-11-04
 status: Draft
 feature: auto-concurrency
@@ -572,10 +572,10 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   `job_runs` row), and the next build re-reads the minutes of a run only when
   its shape changed. A worker writes each minute index once, past any an
   earlier worker of the run wrote, and retention only deletes, so an unchanged
-  shape means unchanged minutes. The first build, and one where most runs
-  moved, read every row in one scan [ORB-21826]. The dashboard's read also keeps each
-  workspace's encoded profiles with the cached set, so a hit does not
-  re-encode them.
+  shape means unchanged minutes. The first build, and one where more than half
+  of the runs moved, read every row in one scan [ORB-21826]. The dashboard's
+  read also keeps each workspace's encoded profiles with the cached set, so a
+  hit does not re-encode them.
   Only profiles are cached: the forecast's live inputs (running deliveries,
   reservations, baseline) are read fresh every pass.
 
@@ -1551,7 +1551,8 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
 - [ORB-19555] — refreshed cached template classes when `no-diff-expected`
   tags change.
 - [ORB-21826] — bounded resource-profile refresh request tails and re-read
-  only changed runs during a rebuild.
+  only changed runs during a rebuild, falling back to one full ordered scan
+  when more than half of the runs changed.
 - [ORB-22808] — fixed the remaining auto-concurrency bounds at their former defaults and deprecated their keys
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
