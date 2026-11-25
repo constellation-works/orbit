@@ -674,6 +674,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-agent-corpus.py"
   run_guard "$repo_root/scripts/check-installer-pubkey.sh"
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
+  run_guard "$repo_root/scripts/check-architecture-ratchet.py"
   run_guard "$repo_root/scripts/check-architecture-map.py"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"
   run_guard "$repo_root/scripts/check-test-shell-waits.py"
