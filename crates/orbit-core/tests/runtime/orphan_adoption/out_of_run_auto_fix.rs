@@ -2209,6 +2209,56 @@ fn fix_pr_hands_back_a_red_pull_request_a_review_delivery_left() {
     );
 }
 
+/// [ORB-28628] A delivery that ended `success` was compacted when it finished:
+/// its step outputs sit behind pointers into `pipeline`. Fix PR resumes it with
+/// every reused output back in `step_outputs`, which is all the resumed run's
+/// `steps.*` seeding reads; before, the first `when:` that read one failed with
+/// "no data recorded for step".
+fn fix_pr_resumes_a_finished_delivery_with_its_compacted_outputs() {
+    let fx = fixture();
+    let shipped = fx.review_leaf(133);
+    // Production writes the run's last checkpoint as it finishes; a write
+    // after `success` is compacted the same way.
+    let finished = fx.jobs.read_run_state(&shipped.run).unwrap().unwrap();
+    fx.jobs.write_run_state(&shipped.run, &finished).unwrap();
+    let compacted = fx.jobs.read_run_state(&shipped.run).unwrap().unwrap();
+    for index in 0..4 {
+        assert!(
+            compacted.step_output_pointers.contains_key(&index)
+                && !compacted.step_outputs.contains_key(&index),
+            "step {index} is compacted: {:?}",
+            compacted.step_output_pointers
+        );
+    }
+
+    fx.blocked(&shipped, "hhh1", "orbit-bot", false, &["Test"]);
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&shipped.task, false, Some("dashboard"))
+        .unwrap();
+    let retries = fx.retries(&shipped.run);
+    assert_eq!(retries.len(), 1, "{started}");
+    let resumed = fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap();
+    assert!(
+        resumed.step_output_pointers.is_empty(),
+        "{:?}",
+        resumed.step_output_pointers
+    );
+    for (index, id) in ["worktree", "push", "pr_open", "promote_tasks"]
+        .into_iter()
+        .enumerate()
+    {
+        let index = u32::try_from(index).unwrap();
+        assert_eq!(
+            resumed.step_outputs.get(&index),
+            compacted.pipeline.get(id),
+            "step {index} ({id}) is a checkpoint again"
+        );
+        assert!(resumed.step_outputs.contains_key(&index), "{id}");
+    }
+    assert_eq!(resumed.next_step_index, 4, "completion reruns");
+}
+
 fn find_task_events_log(root: &std::path::Path, task_id: &str) -> std::path::PathBuf {
     fn walk(dir: &std::path::Path, task_id: &str) -> Option<std::path::PathBuf> {
         for entry in std::fs::read_dir(dir).ok()?.flatten() {
@@ -2545,6 +2595,7 @@ crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
     fix_pr_hands_back_a_red_pull_request_a_review_delivery_left,
+    fix_pr_resumes_a_finished_delivery_with_its_compacted_outputs,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
     a_requeued_tasks_repair_observes_its_latest_recorded_pull_request,
     a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,

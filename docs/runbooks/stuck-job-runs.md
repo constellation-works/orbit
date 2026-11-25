@@ -55,7 +55,7 @@ The State: line above is `.run.state`, not a top-level `.state`;
 
 `.run.review_layer` (the Review: line) is the review layer before landing a delivery run captured at submission, `{"timing":"none|before-pr|before-landing","source":...}`, where `source` is `run-option` when the run's `--review` added it, `claim` for a claimed leaf, and otherwise the policy layer that decided it; it is absent for a run that captured none.
 
-`.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none; a run that ended `success` or `cancelled` cannot resume, so `.step_output_pointers` maps each step index whose output `.pipeline` holds to the JSON pointer of that entry, in place of its `.step_outputs` copy.
+`.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none; a run that ended `success` or `cancelled` cannot be resumed by `orbit job resume`, so `.step_output_pointers` maps each step index whose output `.pipeline` holds to the JSON pointer of that entry, in place of its `.step_outputs` copy. Fix PR is the one exception: it can resume a review delivery that ended `success`, and its resumed run copies those outputs back into `.step_outputs` and has no `.step_output_pointers`.
 
 `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. The `#` column of the table is one-based and Duration is human-readable (`3h 39m 51s`);
 
