@@ -13,6 +13,12 @@ disallowed-methods = [
     { path = "std::fs::create_dir", reason = "Orbit state directories must be owner-only regardless of umask; use orbit_common::fs::io::create_private_dir; external directories need a reasoned exception" },
     { path = "std::fs::File::sync_all", reason = "durability syncs go through orbit_common::fs::io::sync_file so test runs can relax them" },
     { path = "std::fs::File::sync_data", reason = "durability syncs go through orbit_common::fs::io::sync_file_data so test runs can relax them" },
+    { path = "std::env::var", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
+    { path = "std::env::var_os", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
+    { path = "std::env::vars", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
+    { path = "std::env::vars_os", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
+    { path = "std::env::set_var", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
+    { path = "std::env::remove_var", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
 ]
 
 # A file-lock guard must be released before suspension. ScopedEnv already

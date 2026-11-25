@@ -3,7 +3,7 @@
 
 The restructure (docs/design/architecture-restructure/2_design.md §10) moves
 about a thousand operations over many weeks while unrelated work lands daily,
-so the old shape can regrow. This check holds fourteen counts of that shape at
+so the old shape can regrow. This check holds thirteen counts of that shape at
 or below scripts/architecture-ratchet-baseline.json, the pattern of
 scripts/check-dashboard-css-literals.py:
 
@@ -47,10 +47,6 @@ RUNTIME_LAYERS = ("base", "stored", "host", "run")
 APPLICATION_PORT = "crates/orbit-runtime/src/application_port.rs"
 RUNTIME_HOST_DIR = "crates/orbit-engine/src/context/hosts/runtime_host"
 RUNTIME_HOST_MOD = f"{RUNTIME_HOST_DIR}/mod.rs"
-# The one approved environment read: `std::env::vars_os()` in `Env::capture`
-# (2_design.md §8). Every other read is counted, in that function or not.
-ENV_CAPTURE = "crates/orbit-common/src/env.rs"
-
 DEFINITIONS = {
     "impl_orbit_runtime_files":
         "non-test files with an inherent `impl OrbitRuntime` block",
@@ -74,9 +70,6 @@ DEFINITIONS = {
         "`Store::open` calls outside orbit-store",
     "driver_writer_outside_transaction_files":
         "driver files that lock the writer connection outside `with_transaction`",
-    "std_env_reads":
-        "`std::env` reads and writes: var, var_os, vars, vars_os, set_var, remove_var; "
-        "the one `std::env::vars_os()` in `Env::capture` is not counted",
     "worker_or_owner_reads":
         "calls that read the worker invocation or the coordination owner",
     "runtime_top_level_modules_outside_layers":
@@ -118,10 +111,6 @@ WRITER_LOCK = re.compile(
     r"|\.connection\(\)\s*\.\s*lock\s*\("
 )
 TRANSACTION_CALL = re.compile(r"\bwith_transaction(?:_behavior)?\s*\(")
-ENV_READ = re.compile(
-    r"(?:\bstd\s*::\s*|(?<![\w:]))env\s*::\s*(var_os|var|vars_os|vars|set_var|remove_var)\b")
-IMPL_ENV = re.compile(r"\bimpl\s+Env\s*\{")
-CAPTURE_READ = re.compile(r"\bstd\s*::\s*env\s*::\s*vars_os\s*\(\s*\)")
 OWNER_READ = re.compile(
     r"\b(worker_invocation|coordination_write_owner|coordination_task_reads_visible"
     r"|coordination_task_write_refusal)\s*\(")
@@ -360,36 +349,6 @@ def writer_files(sources):
     return entries
 
 
-def env_capture_read(by_path):
-    """Offset of the approved read: the first `std::env::vars_os()` in `Env::capture`.
-
-    None when env.rs, `impl Env`, its `capture` body or that expression is
-    missing, so nothing is exempt. Every other read in `capture` still counts.
-    """
-    source = by_path.get(ENV_CAPTURE)
-    if source is None:
-        return None
-    masked = source.masked
-    for block in IMPL_ENV.finditer(masked):
-        start, end = block.end(), _closing(masked, block.end() - 1)
-        for decl in fn_decls(masked, start, end):
-            if decl.name != "capture" or decl.body != "{":
-                continue
-            open_index = _top_delimiter(masked, masked.index(decl.params, decl.offset)
-                                        + len(decl.params), end)
-            close = _closing(masked, open_index)
-            read = CAPTURE_READ.search(masked, open_index, close)
-            return None if read is None else read.start()
-    return None
-
-
-def env_reads(sources, by_path):
-    exempt = (ENV_CAPTURE, env_capture_read(by_path))
-    return [source.location(match.start(), match.group(1))
-            for source in sources for match in ENV_READ.finditer(source.masked)
-            if (source.path, match.start()) != exempt]
-
-
 def runtime_top_level_modules(root):
     entries = []
     for path in sorted((root / RUNTIME_SRC).iterdir()):
@@ -427,7 +386,6 @@ def measure(root):
         for source in sources if source.crate != STORE_CRATE
         for match in STORE_OPEN.finditer(source.masked)]
     counts["driver_writer_outside_transaction_files"] = writer_files(sources)
-    counts["std_env_reads"] = env_reads(sources, by_path)
     counts["worker_or_owner_reads"] = [
         source.location(match.start(), match.group(1))
         for source in sources for match in OWNER_READ.finditer(source.masked)
