@@ -514,6 +514,23 @@ impl CleanLeaf {
         fixture
     }
 
+    #[cfg(unix)]
+    pub(crate) fn resolved_without_required_commands(replay: &Replay, selectors: &[&str]) -> Self {
+        let mut fixture = Self::build_requiring(
+            false,
+            "done",
+            &[],
+            false.into(),
+            None,
+            "",
+            &replay.config(),
+            None,
+            None,
+        );
+        fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
+        fixture
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_requiring(
         already_landed: bool,
@@ -529,6 +546,14 @@ impl CleanLeaf {
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{required}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );
+        let config = if required.is_empty() {
+            config.replace(
+                "required_validation_commands = [\"\"]",
+                "required_validation_commands = []",
+            )
+        } else {
+            config
+        };
         let gate = gated.map(|_| Gate::new());
         let naming = |named: bool| match (&gate, named) {
             (Some(gate), true) => config.replace(

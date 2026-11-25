@@ -77,6 +77,7 @@ impl TaskCommitBoundary {
             return Err(invalid("owner validation requirements blank or duplicated"));
         }
         let mut passed = BTreeSet::new();
+        let mut clean_passed = BTreeSet::new();
         let mut known = Vec::new();
         for reference in &handoff.validation {
             let log: HandoffValidationLog =
@@ -120,6 +121,9 @@ impl TaskCommitBoundary {
                     "flaky validation evidence does not match the exact handoff",
                 ));
             }
+            if report.is_none() {
+                clean_passed.insert(log.command.clone());
+            }
             if let Some(report) = report {
                 known.push(known_red_validation(&log, report, handoff, known_red)?);
             }
@@ -145,6 +149,23 @@ impl TaskCommitBoundary {
                 )
             {
                 return Err(invalid("NoDiff verifier report identity or base mismatch"));
+            }
+            if report["decision"] == "verified_already_resolved" {
+                let selectors: Vec<String> = serde_json::from_value(
+                    report["already_resolved_evidence"]["selectors"].clone(),
+                )
+                .map_err(|_| invalid("already-resolved selectors missing or invalid"))?;
+                let admitted = AlreadyResolved { selectors }
+                    .admit()
+                    .map_err(|_| invalid("already-resolved selectors missing or invalid"))?;
+                if !admitted
+                    .iter()
+                    .all(|command| clean_passed.contains(&command.host_command()))
+                {
+                    return Err(invalid(
+                        "already-resolved selector replay validation missing or failed",
+                    ));
+                }
             }
             // [ORB-14791] A claimed `no-diff-expected` skip carries no report
             // of its own: the owner's copy of the task must still be tagged.
