@@ -40,6 +40,8 @@ const SENDER: &str = "operator@example.com";
 const AUTH_PASS: &str = "mx.example.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass";
 const AUTH_DMARC_FAIL: &str = "mx.example.com; dkim=pass; spf=pass; dmarc=fail";
 const FORGED: &str = "forged@example.net";
+const DECISION_CHANNEL_REFERENCE: &str =
+    include_str!("../../assets/skills/orbit/references/tool-surface-decisions.md");
 
 struct Fixture {
     _root: TempDir,
@@ -896,6 +898,14 @@ fn an_empty_plugin_sender_is_refused_with_or_without_an_allowlist() {
 }
 
 fn registration_refuses_an_automation_human_and_a_duplicate() {
+    let reference = DECISION_CHANNEL_REFERENCE
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(reference.contains("a new channel name starts at key epoch 1"));
+    assert!(reference.contains("An active name cannot be registered again"));
+    assert!(reference.contains("Re-registering a revoked name uses the previous epoch + 1"));
+
     let fx = fixture();
     refusal(
         fx.runtime
@@ -911,6 +921,14 @@ fn registration_refuses_an_automation_human_and_a_duplicate() {
     // The refused duplicate generated no new key: the original channel
     // still verifies at epoch 1.
     assert_eq!(fx.runtime.list_decision_channels().unwrap()[0].epoch, 1);
+
+    let revoked = fx.runtime.revoke_decision_channel(CHANNEL).unwrap();
+    assert_eq!(revoked.epoch, 1);
+    let reregistered = fx
+        .runtime
+        .register_decision_channel(CHANNEL, HUMAN, PLUGIN, vec![])
+        .unwrap();
+    assert_eq!(reregistered.epoch, revoked.epoch + 1);
 }
 
 fn submission_is_refused_while_the_decision_channel_is_disabled() {
