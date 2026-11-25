@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
-use crate::driver::sqlite::migration::{SUPPORTED_SCHEMA_VERSION, current_schema_version};
+use crate::driver::sqlite::host::schema::{SUPPORTED_SCHEMA_VERSION, current_schema_version};
 use crate::{Store, StoreTx, now_string};
 
 impl Store {

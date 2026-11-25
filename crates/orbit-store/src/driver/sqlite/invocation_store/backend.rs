@@ -1,7 +1,7 @@
 //! `InvocationStoreBackend` for the SQLite `Store`, delegating to the
 //! inherent record and metrics methods.
 
-impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connection::Store {
+impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::host::connection::Store {
     fn begin_agent_execution(
         &self,
         workspace: &str,

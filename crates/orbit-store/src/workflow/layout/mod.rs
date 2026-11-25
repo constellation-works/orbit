@@ -1,6 +1,6 @@
 //! Versioned `.orbit/` workspace-layout migrations (ORB-10012, P3.4).
 //!
-//! The SQLite schema ledger ([`crate::driver::sqlite::migration`]) versions the store
+//! The SQLite schema ledger ([`crate::driver::sqlite::host::schema`]) versions the store
 //! *database*; this module versions everything else about a workspace's
 //! on-disk `.orbit/` layout — directory structure, non-SQLite state files,
 //! log/index locations. Layout migrations are an ordered, append-only

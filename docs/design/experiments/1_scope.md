@@ -470,7 +470,7 @@ fixed them at those defaults.
 
 1. **Records and shadow assignment.** Done ([ORB-18473] built the records, lifecycle and
    `orbit.experiment.*` tools; [ORB-18474] added sticky shadow assignment at admission,
-   captured into claims). An additive migration (`crates/orbit-store/src/driver/sqlite/migration/experiments.rs`), lifecycle, events, `orbit.experiment.*`
+   captured into claims). An additive migration (`crates/orbit-store/src/driver/sqlite/host/schema/experiments.rs`), lifecycle, events, `orbit.experiment.*`
    and CLI, sticky assignment at admission, claim capture of the arm, `task show` and
    `run show` lines. Overlays are recorded but not applied; the first experiment is an A/A
    test whose sample-ratio check must pass.

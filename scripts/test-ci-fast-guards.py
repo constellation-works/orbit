@@ -1815,10 +1815,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "sandbox_profile_goldens",
                 ],
                 ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
-                 "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
+                 "driver::sqlite::host::schema::tests::ledger::registry::store_schema_prefix_goldens",
                  "--", "--exact"],
                 ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
-                 "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens",
+                 "driver::sqlite::host::schema::tests::ledger::registry::task_registry_schema_prefix_goldens",
                  "--", "--exact"],
             ],
         )
@@ -1894,8 +1894,8 @@ LIVE = [
     "output_goldens::case_output",
     "mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot",
     "sandbox_profile_goldens_case",
-    "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
-    "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens",
+    "driver::sqlite::host::schema::tests::ledger::registry::store_schema_prefix_goldens",
+    "driver::sqlite::host::schema::tests::ledger::registry::task_registry_schema_prefix_goldens",
 ]
 args = sys.argv[2:]
 split = args.index("--") if "--" in args else len(args)

@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: The implemented forward-compatibility contract — how migrations declare additive, read-compatible or breaking, where the record lives, and when an older binary keeps writing, is held read-only, or is refused.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/driver/sqlite/connection.rs", "crates/orbit-cmd/src/migrate.rs"]
+paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
 related_features: [state-compatibility, orbit-core]
 related_artifacts: [ORB-10003, ORB-10012, ORB-12434, ORB-13631]
 ---
@@ -149,9 +149,9 @@ binary, and the apply path are otherwise unchanged.
 ## 6 Frozen store migration bodies
 
 [ORB-15821] froze the store registry in
-`crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`; it is append-only.
+`crates/orbit-store/src/driver/sqlite/host/schema/mod.rs`; it is append-only.
 Each shipped entry owns its body and private shape-defining helpers; only
-schema-neutral primitives in `migration/introspect.rs` are shared. Later
+schema-neutral primitives in `host/schema/introspect.rs` are shared. Later
 schema changes append an entry rather than altering what an earlier version
 produces. The freeze-in-place copied the existing helper bodies without
 changing SQL or operation order. The baseline tools and learning helpers now

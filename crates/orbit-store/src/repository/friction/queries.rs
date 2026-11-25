@@ -17,7 +17,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Row};
 
 use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
-use crate::driver::sqlite::connection::{UNICODE_LOWER_SQL, unicode_lower};
+use crate::driver::sqlite::host::connection::{UNICODE_LOWER_SQL, unicode_lower};
 
 /// Columns every record read selects, in decode order.
 const RECORD_COLUMNS: &str = "friction_id, title, model, status, created_at, resolved_at, \

@@ -1,0 +1,188 @@
+use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
+use rusqlite::Connection;
+
+use super::introspect::{add_column_if_missing, table_exists, table_has_column};
+
+/// v10 `invocation_telemetry_columns` migration (ORB-10367): re-run the
+/// idempotent invocation-schema step against databases that already recorded
+/// the v1 baseline.
+///
+/// The 5m/1h cache split (`cache_create_1h_tokens`) and the token-derived
+/// cost column (`provider_cost_usd`) were added to
+/// the pre-ledger invocation-schema step, which ran as part of the v1
+/// `baseline` migration. Every database created before those columns landed
+/// is already at v1 or newer, so `run_migrations` skips baseline and the
+/// `ALTER`s never reach it — the insert then binds columns the table lacks
+/// and every agent-dispatching run dies at the telemetry write. Registering
+/// the same idempotent step under its own version is what carries it to
+/// existing databases.
+pub(super) fn apply_invocation_telemetry_columns(conn: &Connection) -> Result<(), OrbitError> {
+    // The `ALTER`s below address tables the v1 baseline creates. A database
+    // without them has nothing to repair (and `ALTER TABLE` on a missing
+    // table is an error, not a no-op), so skip rather than fail the open.
+    if !table_exists(conn, "invocations")?
+        || !table_exists(conn, "invocation_tasks")?
+        || !table_exists(conn, "tool_calls")?
+    {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "invocations", "provider_cost_usd", "REAL")?;
+    add_column_if_missing(
+        conn,
+        "invocations",
+        "cache_create_1h_tokens",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_invocation_schema_v10(conn)
+}
+
+fn ensure_invocation_schema_v10(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "invocations", "slot", "TEXT")?;
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_invocations_job_run_id
+            ON invocations(job_run_id);
+
+            CREATE INDEX IF NOT EXISTS idx_invocations_activity_id
+            ON invocations(activity_id);
+
+            CREATE INDEX IF NOT EXISTS idx_invocations_ts
+            ON invocations(ts DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_invocation_tasks_task_id
+            ON invocation_tasks(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_name
+            ON tool_calls(tool_name);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v20 `invocations_ts_index`: cover the accounting window filters and the
+/// newest-first invocation listing on `invocations(ts, id)`.
+///
+/// Guarded like v19: the frozen v1 and v10 invocation steps declare the same index
+/// for a database whose `invocations` table is created or upgraded at open.
+pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_has_column(conn, "invocations", "ts")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_invocations_ts
+            ON invocations(ts DESC, id DESC);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v36 `invocation_workspace_scope`: record the workspace each invocation
+/// belongs to.
+///
+/// Run ids were minted per workspace, so two workspaces submitting in the same
+/// minute could hold the same id and an invocation keyed by `job_run_id` alone was
+/// read by both. The backfill attributes a legacy row only when exactly one
+/// workspace ever held its run id (`job_run_id_allocations`, plus `job_runs`);
+/// an ambiguous or orphaned row stays `NULL` and no workspace-scoped read
+/// matches it.
+pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "invocations", "workspace_id", "TEXT")?;
+
+    let mut owners = Vec::new();
+    if table_has_column(conn, "job_run_id_allocations", "workspace_id")? {
+        owners.push("SELECT workspace_id, run_id FROM job_run_id_allocations");
+    }
+    if table_has_column(conn, "job_runs", "workspace_id")? {
+        owners.push("SELECT workspace_id, run_id FROM job_runs");
+    }
+    if !owners.is_empty() {
+        let owners = owners.join(" UNION ");
+        conn.execute_batch(&format!(
+            r#"
+                UPDATE invocations
+                SET workspace_id = (
+                    SELECT CASE WHEN COUNT(DISTINCT owner.workspace_id) = 1
+                                THEN MIN(owner.workspace_id) END
+                    FROM ({owners}) owner
+                    WHERE owner.run_id = invocations.job_run_id
+                )
+                WHERE workspace_id IS NULL;
+            "#
+        ))
+        .map_err(sqlite_store_error)?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_invocations_workspace_job_run_id
+            ON invocations(workspace_id, job_run_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v42 `invocation_provider` [ORB-14699]: the canonical provider an
+/// invocation ran on, so a provider budget can read its spend from the
+/// ledger. `agent` is the model's family, which is not the provider for
+/// every lane (an Antigravity run is attributed to its Gemini model).
+///
+/// A nullable column only: an older binary keeps inserting without it, and a
+/// reader attributes such a row, and every row recorded before this
+/// migration, by its `agent`.
+pub(super) fn apply_invocation_provider(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "invocations", "provider", "TEXT")
+}
+
+/// v71 `invocation_long_prompt_requests` [ORB-19680]: the per-request usage
+/// of each model request whose prompt may reach a prompt-size price tier,
+/// as a JSON array of token buckets. Prompt-size tiers price one request by
+/// its own prompt, which the invocation totals cannot show.
+///
+/// A nullable column only: an older binary keeps inserting without it, and a
+/// reader treats such a row, and every row recorded before this migration, as
+/// one whose per-request usage was not captured.
+pub(super) fn apply_invocation_long_prompt_requests(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "invocations", "long_prompt_requests_json", "TEXT")
+}
+
+/// Cover reliability's workspace/time filter and both invocation projections.
+/// Index-only and additive: existing writers and readers remain compatible.
+pub(super) fn apply_invocation_reliability_window_index(
+    conn: &Connection,
+) -> Result<(), OrbitError> {
+    if !table_has_column(conn, "invocations", "workspace_id")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_invocations_reliability_window
+         ON invocations(workspace_id, ts, job_run_id, activity_id);",
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v83 `invocation_tool_calls_incomplete` [ORB-20572]: whether the provider's
+/// stdout outgrew the bounded capture, so the invocation's recorded tool calls
+/// are only the suffix that survived it.
+///
+/// A defaulted column only: an older binary keeps inserting without it and its
+/// rows read as complete, as does every row recorded before this migration,
+/// whose truncation was never recorded.
+pub(super) fn apply_invocation_tool_calls_incomplete(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "invocations",
+        "tool_calls_incomplete",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+}

@@ -12,7 +12,7 @@ use super::ledger::{
 };
 use super::util::now_string;
 use crate::contracts::ForwardCompatibleOpen;
-use crate::driver::sqlite::migration::{
+use crate::driver::sqlite::host::ledger::{
     current_schema_version, evaluate_newer_database, run_database_migrations,
 };
 
