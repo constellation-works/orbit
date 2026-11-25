@@ -3,9 +3,9 @@ id: STD-06-design-docs-and-feature-tracking
 title: Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature
 summary: Normative rules for how a project keeps feature designs and knows where each feature stands — one docs/design/<feature>/ folder on a scope or full track, required frontmatter, a `stage` and `next` on the entry doc kept apart from the doc's approval `status`, a generated and CI-checked feature board, decision entries admitted only when they explain surprising code or govern future choices, and every implementation task tagged with its feature slug so live progress is read from the tracker; follow it in any project with design docs.
 tags: [standard, docs, design, tracking, agents]
-version: 1
+version: 2
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-11-25
 last_validated: 2026-10-25
 related: [STD-04-testing-and-verification]
 ---
@@ -65,11 +65,7 @@ examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each versi
 
 ### Frontmatter and stage
 
-- **R4.** Every numbered doc MUST start with YAML frontmatter carrying `title`, `owner`
-  (the accountable person or agent family), `last_updated`, `status`, `feature` (the slug),
-  `doc_role` and a one-line `summary`. `status` is `Draft` until the feature lead approves the
-  doc, then `Accepted`, and `Deprecated` when archived (§R14). It records the doc's approval
-  and nothing else.
+- **R4.** Every numbered doc MUST start with YAML frontmatter carrying `title`, `owner` (the accountable person or agent family), `created_date` and `updated_date` (both `YYYY-MM-DD`; `updated_date` changes with every content edit), `status`, `feature` (the slug), `doc_role` and a one-line `summary`. A `last_validated` field, where present, is the date the doc was last checked against the code. `status` is `Draft` until the feature lead approves the doc, then `Accepted`, and `Deprecated` when archived (§R14). It records the doc's approval and nothing else.
 - **R5.** The entry doc (`1_overview.md` or `1_scope.md`) MUST carry `stage`, one of:
   - `idea`: problem stated, no agreed design, nothing built;
   - `designing`: design written or under review, nothing implemented and nothing approved to

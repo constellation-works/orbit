@@ -1,4 +1,4 @@
-a013f175789251265dd1581b6ad645ab82b52d0f9a854e011ecc7a9c2fd9b984  README.md
+5556d0d9751cb0e52424777568cdb192b457b5fae43228f738a66d74e2718e2e  README.md
 3bdf695e61a6bf8f68641bdf87363bb0a2d838e32418864bf08eda05b7b44a1d  STD-01-cli-surface/CHANGELOG.md
 be117399aa85b22ce0f102aba594af89d932c878e0771179602e022b8e357e76  STD-01-cli-surface/STD-01.md
 4e13c85c701cd6ec73eb1e550db8e6f5a6f874f07c020b8916a10a35fc394b9a  STD-01-cli-surface/checks.md
@@ -24,11 +24,11 @@ ec1102e77532012c72c237205fcae6f62a7de77ecbeeba1aa5345f52316609b8  STD-05-securit
 97a0ff540e1650cc715bdf195819822f8b900a22730db80f9fb22d46935d5893  STD-05-security-boundaries/checks.md
 76c5fec395102bcee47bfccb990a66015daf6e1e60ba8a1f6160933b905541cf  STD-05-security-boundaries/exemplars.md
 3fac915cac549f20d38f863408a61e2b0accd05dff61f43c5007ec240e7ef3f3  STD-05-security-boundaries/why.md
-abb7e38e0e802189d6749325681901a88bf66c97b31ca55228f8d58e9b62f978  STD-06-design-docs-and-feature-tracking/CHANGELOG.md
-9d5133faecbb89942ff3171d23f84dafacb4f0d78eb4c7d5a970d1991b42ad85  STD-06-design-docs-and-feature-tracking/STD-06.md
+e30354c9c460efef9fd43b0db354f6af3336ea6dfff0c3d2f6ece722f9f07797  STD-06-design-docs-and-feature-tracking/CHANGELOG.md
+e4cb7723076730654d8522465b4c0e8c4429f7191c44f6f30a1b74b38502a800  STD-06-design-docs-and-feature-tracking/STD-06.md
 44f92f8359f0dbbeb3fb3e7123710df466f5fdad49e3a0d42c3df9e0b6965fca  STD-06-design-docs-and-feature-tracking/checks.md
 bc5a2bef306e7857329116a48c5ee967f7ab3803bccacaeed3dfe350688a5544  STD-06-design-docs-and-feature-tracking/exemplars.md
-f3f444910863cc6b2030f00bba7804a7323b47812172e7dd769811427acf5793  STD-06-design-docs-and-feature-tracking/why.md
+55bc820ed57fb54cd1adf8b5eea1251d6a26c682944e7e1a7f77f6d3ec2ee8b3  STD-06-design-docs-and-feature-tracking/why.md
 36470fe91f765e74f0d3aa43800e5d598d1b1724170fc2828c5389e1c7e03893  STD-07-ui-ux/CHANGELOG.md
 3bc439408a3ffd92565e717ba5dec73cd325734bb0d7b6ce0f6a32120d4c4f47  STD-07-ui-ux/STD-07.md
 cf10a2434ab361fb7ba8b3ee791a6c3f64f85386733c7b96791b4c5f488bca00  STD-07-ui-ux/checks.md

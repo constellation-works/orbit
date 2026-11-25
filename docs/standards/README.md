@@ -15,7 +15,7 @@ fails CI on any edit; changes come only from a re-sync.
 | STD-03 | 2 | Concurrency and process safety — locks, channels, durable writes, state evolution, subprocess lifecycles, destructive operations, remote effects, test containment and resource bounds | [STD-03-concurrency-and-process-safety/STD-03.md](STD-03-concurrency-and-process-safety/STD-03.md) |
 | STD-04 | 2 | Testing and verification — test design, hermetic tests, honest gates, docs as contracts, and evidence-based verification conduct | [STD-04-testing-and-verification/STD-04.md](STD-04-testing-and-verification/STD-04.md) |
 | STD-05 | 1 | Security boundaries — authority, filesystem containment, child environments, redaction, local network surfaces, supply chain and consent | [STD-05-security-boundaries/STD-05.md](STD-05-security-boundaries/STD-05.md) |
-| STD-06 | 1 | Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature | [STD-06-design-docs-and-feature-tracking/STD-06.md](STD-06-design-docs-and-feature-tracking/STD-06.md) |
+| STD-06 | 2 | Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature | [STD-06-design-docs-and-feature-tracking/STD-06.md](STD-06-design-docs-and-feature-tracking/STD-06.md) |
 | STD-07 | 20 | UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state | [STD-07-ui-ux/STD-07.md](STD-07-ui-ux/STD-07.md) |
 | STD-08 | 3 | Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, complete stored records, size stated at design time | [STD-08-economy/STD-08.md](STD-08-economy/STD-08.md) |
 
@@ -24,7 +24,7 @@ deviate: read it first. `why.md` explains each rule, `checks.md` names the gate 
 enforces it, `exemplars.md` points at worked examples in Orbit, and `CHANGELOG.md`
 records its versions.
 
-Source: the constellation umbrella `docs/standards/` at commit `5a60e14319ac4a5340480c4762d20238d46b6641`.
+Source: the constellation umbrella `docs/standards/` at commit `0e4147c9ef460ab19883da3eb73982304a3270d3`.
 
 ## Normative
 
