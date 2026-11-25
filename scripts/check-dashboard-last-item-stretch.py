@@ -23,6 +23,7 @@ class FlexStack:
     parent: str
     child: str
     child_aliases: tuple[str, ...] = ()
+    child_tags: tuple[str, ...] = ()
 
 
 FLEX_STACKS = (
@@ -31,7 +32,7 @@ FLEX_STACKS = (
     FlexStack(TASK_DETAIL, ".row-detail .file-list", "li"),
     FlexStack(TASK_DETAIL, ".task-run-list", ".task-run"),
     FlexStack(TASK_DETAIL, ".readiness-list", ".readiness-gap"),
-    FlexStack(TASK_DETAIL, ".history-kv-list", "*", (".history-kv-item",)),
+    FlexStack(TASK_DETAIL, ".history-kv-list", "*", (".history-kv-item",), ("div",)),
     FlexStack(TASK_DETAIL, ".comment-outline", ".comment-outline-link"),
 )
 GRID_STACKS = (
@@ -150,6 +151,14 @@ def positive_class_names(selector):
     return class_names(strip_not_blocks(selector))
 
 
+def positive_compound_class_names(compound):
+    """Read classes after a compound's type selector as well as at its start."""
+    return {
+        match.group(1)
+        for match in re.finditer(r"\.([\w-]+)(?![\w-])", strip_not_blocks(compound))
+    }
+
+
 def parent_pattern(parent):
     return re.compile(r"(?<![\w-])" + r"\s+".join(re.escape(part) for part in parent.split()))
 
@@ -160,11 +169,14 @@ def compound_matches_item(compound, stack):
     if stack.child == "*":
         # Callers pass only direct children of the stack. A `*` stack's items
         # are the child aliases (for example `.history-kv-item` on a div), so a
-        # compound styles them only when it names no element type and no class
-        # an item lacks. `*`, `*:last-child` and `.history-kv-item` qualify;
-        # `em` or `.history-kv-note` style something other than the items.
+        # compound styles them only when its element and classes can match an
+        # item. `*`, `*:last-child`, `.history-kv-item`, and
+        # `div.history-kv-item` qualify; `em` or `.history-kv-note` do not.
         item_classes = {name.removeprefix(".") for name in stack.child_aliases}
-        return not re.match(r"[A-Za-z]", compound) and positive_class_names(compound) <= item_classes
+        if not positive_compound_class_names(compound) <= item_classes:
+            return False
+        element = re.match(r"[A-Za-z][\w-]*", compound)
+        return element is None or element.group().lower() in stack.child_tags
     if stack.child == "li":
         return compound == "*" or compound.startswith("li") or ":last-child" in compound
     child_class = stack.child.removeprefix(".")

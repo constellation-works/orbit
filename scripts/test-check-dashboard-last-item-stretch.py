@@ -153,6 +153,29 @@ class DashboardLastItemStretchTests(unittest.TestCase):
                 self.assertIn("lets a stacked item", result.stderr)
                 self.task_detail.write_text(original, encoding="utf-8")
 
+    def test_rejects_growth_and_fixed_height_on_div_history_children(self):
+        rules = (
+            ".history-kv-list > div { flex: 1; }\n",
+            ".history-kv-list > div:last-child { flex-grow: 1; }\n",
+            ".history-kv-list > div:nth-last-child(1) { height: 200px; }\n",
+            ".history-kv-list > .history-kv-item + div:last-child { flex: 1; }\n",
+            ".history-kv-list > div.history-kv-item { flex: 1; }\n",
+        )
+        original = self.task_detail.read_text(encoding="utf-8")
+        for rule in rules:
+            with self.subTest(rule=rule):
+                self.task_detail.write_text(original + rule, encoding="utf-8")
+                try:
+                    result = self.run_guard()
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertTrue(
+                        "lets a stacked item" in result.stderr
+                        or "gives a stacked item a fixed height" in result.stderr,
+                        result.stdout + result.stderr,
+                    )
+                finally:
+                    self.task_detail.write_text(original, encoding="utf-8")
+
     def test_rejects_zero_growth_scoped_to_unmatched_history_children(self):
         # Rendered history items are div.history-kv-item, so a zero-growth rule
         # scoped to other elements or classes never styles the items.
@@ -163,6 +186,7 @@ class DashboardLastItemStretchTests(unittest.TestCase):
             ".history-kv-list > em { flex: none; }\n",
             ".history-kv-list > em:last-child { flex-grow: 0; }\n",
             ".history-kv-list > .history-kv-note { flex: none; }\n",
+            ".history-kv-list > div.history-kv-note { flex: none; }\n",
         )
         for rule in unmatched_rules:
             with self.subTest(rule=rule):
