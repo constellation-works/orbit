@@ -39,6 +39,10 @@ macro_rules! env_vars {
 }
 
 env_vars! {
+    const CARGO_DENY_DB_PATH = (
+        "Cargo-deny advisory database location that Orbit sets for a sandboxed worker that may write.",
+        "Unset. Cargo-deny uses its own default location.",
+    );
     const CARGO_HOME = (
         "Cargo home for toolchain discovery, build caches and credential paths.",
         "The user's `~/.cargo` where Orbit derives a Cargo home.",
@@ -54,6 +58,10 @@ env_vars! {
     const CLICOLOR_FORCE = (
         "Terminal color preference. It cannot enable color on non-terminals or bypass `NO_COLOR` or `TERM=dumb`.",
         "Unset.",
+    );
+    const CODEX_CA_CERTIFICATE = (
+        "PEM CA bundle for Codex. On macOS Orbit checks it is readable and supplies the system bundle when neither this nor `SSL_CERT_FILE` is set.",
+        "Unset. Orbit uses `/etc/ssl/cert.pem` on macOS.",
     );
     const CODEX_HOME = (
         "Codex configuration and state directory.",
@@ -242,6 +250,14 @@ env_vars! {
         "Explicit Orbit executable pinned for tools launched by an agent.",
         "The dispatching Orbit executable.",
     );
+    const ORBIT_BROWSER_KIT_ENV = (
+        "Path of the headless browser kit's `env.sh`, which a check sources before it launches Chromium.",
+        "Unset. Set only for a worker whose host has a verified kit.",
+    );
+    const ORBIT_BROWSER_KIT_SCREENSHOT = (
+        "Screenshot path that `orbit config browser-kit verify` hands to its smoke test.",
+        "Unset. Set only for the smoke test.",
+    );
     const ORBIT_BUILD_BUDGET = (
         "Whether to enforce host build-slot admission, `0` or `1`.",
         "`1`.",
@@ -257,6 +273,14 @@ env_vars! {
     const ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES = (
         "Capture limit in bytes per stream for a provider CLI.",
         "`1048576`.",
+    );
+    const ORBIT_COMMAND_EVIDENCE_DIR = (
+        "Directory in which a required validation command records command evidence.",
+        "Unset. Set only for a required validation command.",
+    );
+    const ORBIT_COMMAND_EVIDENCE_INVOCATION = (
+        "Invocation identifier that a required validation command attaches to its command evidence.",
+        "Unset. Set only for a required validation command.",
     );
     const ORBIT_DASHBOARD_HANDOVER = (
         "Marks a replacement dashboard process so it skips opening a browser.",
@@ -367,6 +391,10 @@ env_vars! {
         "Job-run identifier used for managed dispatch and audit correlation.",
         "Unset.",
     );
+    const ORBIT_SCRATCH_DIR = (
+        "Worker scratch directory, `<checkout>/.orbit/tmp`, which task artifact upload accepts.",
+        "Unset. Set only for a managed worker.",
+    );
     const ORBIT_SESSION_ID = (
         "Invocation or session identifier used for managed dispatch and audit correlation.",
         "Unset.",
@@ -460,6 +488,34 @@ env_vars! {
         "Frozen elapsed milliseconds for source inspection in test-support builds.",
         "Real elapsed time.",
     );
+    const ORBIT_TOOL_AGENT_NAME = (
+        "Name of the agent that called an external tool.",
+        "Unset when the call has no agent.",
+    );
+    const ORBIT_TOOL_ALLOWED_TOOLS = (
+        "Comma-separated tools the caller of an external tool is allowed.",
+        "Unset when the list is empty.",
+    );
+    const ORBIT_TOOL_CWD = (
+        "Working directory an external tool runs in.",
+        "Always set for an external tool.",
+    );
+    const ORBIT_TOOL_MODEL_NAME = (
+        "Name of the model that called an external tool.",
+        "Unset when the call has no model.",
+    );
+    const ORBIT_TOOL_NAME = (
+        "Name of the external tool being run.",
+        "Always set for an external tool.",
+    );
+    const ORBIT_TOOL_PROC_ALLOWED_PROGRAMS = (
+        "Comma-separated programs the caller of an external tool may start with `proc.spawn`.",
+        "Unset when the list is empty.",
+    );
+    const ORBIT_TOOL_WORKSPACE_ROOT = (
+        "Workspace root of the call that runs an external tool.",
+        "Unset when the call has no workspace root.",
+    );
     const ORBIT_UPDATE_PROBE_TIMEOUT_SECS = (
         "Timeout in seconds for version and contract probes during an update.",
         "30 seconds.",
@@ -487,6 +543,10 @@ env_vars! {
     const ORBIT_VALIDATION_GATE = (
         "Name or command supplied by the validation runner for the current check.",
         "Unset.",
+    );
+    const ORBIT_VALIDATION_SELECTION = (
+        "Selection that a validation command must test exactly, so a base rerun tests what the candidate run tested.",
+        "Unset. The command chooses its own selection.",
     );
     const ORBIT_VALIDATION_SUMMARY = (
         "Path at which validation writes its structured summary.",
@@ -522,6 +582,18 @@ env_vars! {
         "Windows executable extensions tried when searching for programs.",
         "`.COM;.EXE;.BAT;.CMD`.",
     );
+    const PLAYWRIGHT_BROWSERS_PATH = (
+        "Directory of the headless browser kit's browsers, which Playwright reads.",
+        "Unset. Set only for a worker whose host has a verified kit.",
+    );
+    const PLAYWRIGHT_MODULE = (
+        "The headless browser kit's Playwright ES module, which a check imports `chromium` from.",
+        "Unset. Set only for a worker whose host has a verified kit.",
+    );
+    const PYTHONDONTWRITEBYTECODE = (
+        "Python bytecode-write switch. Orbit sets `1` for a validation command that does not set it.",
+        "Orbit sets `1` for validation commands.",
+    );
     const RUSTUP_HOME = (
         "Rustup installation and toolchain cache root forwarded to plugin builds.",
         "Unset.",
@@ -544,6 +616,10 @@ env_vars! {
     );
     const SSH_CONNECTION = (
         "OpenSSH connection metadata from which Orbit extracts the caller IP.",
+        "Unset.",
+    );
+    const SSL_CERT_FILE = (
+        "PEM CA bundle that TLS clients read. Orbit accepts it for Codex on macOS when `CODEX_CA_CERTIFICATE` is unset.",
         "Unset.",
     );
     const SUDO_GID = (

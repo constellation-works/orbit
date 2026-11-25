@@ -29,13 +29,13 @@ pub const PIXEL_HELPER_VERSION: &str = "7.0.0";
 /// The kit's location below the home directory of the user who runs workers.
 pub const KIT_HOME_RELATIVE: &str = ".local/chromium-deps";
 
-/// Where the kit's browsers live; Playwright reads it.
-pub const BROWSERS_PATH_ENV: &str = "PLAYWRIGHT_BROWSERS_PATH";
-/// The kit's Playwright ES module, which a check imports `chromium` from.
-pub const MODULE_ENV: &str = "PLAYWRIGHT_MODULE";
 /// The kit's `env.sh`, which a check sources before it launches Chromium.
 /// Only that shell gets the kit's Linux libraries and font configuration.
-pub const ENV_SCRIPT_ENV: &str = "ORBIT_BROWSER_KIT_ENV";
+pub use orbit_common::env_vars::ORBIT_BROWSER_KIT_ENV as ENV_SCRIPT_ENV;
+/// Where the kit's browsers live; Playwright reads it.
+pub use orbit_common::env_vars::PLAYWRIGHT_BROWSERS_PATH as BROWSERS_PATH_ENV;
+/// The kit's Playwright ES module, which a check imports `chromium` from.
+pub use orbit_common::env_vars::PLAYWRIGHT_MODULE as MODULE_ENV;
 
 /// Every variable the CLI runner injects for a verified kit.
 pub const WORKER_ENV_NAMES: [&str; 3] = [BROWSERS_PATH_ENV, MODULE_ENV, ENV_SCRIPT_ENV];

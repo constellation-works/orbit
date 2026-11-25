@@ -23,8 +23,8 @@ use orbit_types::workflow::ExecutorSandboxKind;
 
 use crate::context::dispatch_contract::ResolvedSandbox;
 
-pub(crate) const CODEX_CA_CERTIFICATE_ENV: &str = "CODEX_CA_CERTIFICATE";
-pub(crate) const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
+pub(crate) use orbit_common::env_vars::CODEX_CA_CERTIFICATE as CODEX_CA_CERTIFICATE_ENV;
+pub(crate) use orbit_common::env_vars::SSL_CERT_FILE as SSL_CERT_FILE_ENV;
 const DEFAULT_MACOS_CA_CERTIFICATE: &str = "/etc/ssl/cert.pem";
 
 /// Typed spawn failure with a retryability classification (ORB-10006).

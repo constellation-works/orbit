@@ -78,7 +78,7 @@ const LOGIN_ENV_MARKER: &str = "__ORBIT_VALIDATION_LOGIN_ENV__";
 
 /// Disables Python `.pyc` / `__pycache__/` writes in validation and agent
 /// subprocesses so repository scripts do not dirty delivery worktrees.
-const PYTHON_NO_BYTECODE_ENV: &str = "PYTHONDONTWRITEBYTECODE";
+use orbit_common::env_vars::PYTHONDONTWRITEBYTECODE as PYTHON_NO_BYTECODE_ENV;
 
 /// Where the validation PATH came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

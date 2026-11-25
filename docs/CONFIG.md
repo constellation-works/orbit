@@ -24,10 +24,12 @@ whole.
 <!-- BEGIN GENERATED ENVIRONMENT REFERENCE -->
 | Variable | Meaning | Default when unset | Flag relationship |
 |---|---|---|---|
+| `CARGO_DENY_DB_PATH` | Cargo-deny advisory database location that Orbit sets for a sandboxed worker that may write. | Unset. Cargo-deny uses its own default location. | — |
 | `CARGO_HOME` | Cargo home for toolchain discovery, build caches and credential paths. | The user's `~/.cargo` where Orbit derives a Cargo home. | — |
 | `CARGO_MANIFEST_DIR` | Workspace location for the engine round-trip example. | The manifest directory recorded at compile time. | — |
 | `CLAUDE_CONFIG_DIR` | Claude Code's configuration and state directory. | `~/.claude` where Orbit derives the directory. | — |
 | `CLICOLOR_FORCE` | Terminal color preference. It cannot enable color on non-terminals or bypass `NO_COLOR` or `TERM=dumb`. | Unset. | — |
+| `CODEX_CA_CERTIFICATE` | PEM CA bundle for Codex. On macOS Orbit checks it is readable and supplies the system bundle when neither this nor `SSL_CERT_FILE` is set. | Unset. Orbit uses `/etc/ssl/cert.pem` on macOS. | — |
 | `CODEX_HOME` | Codex configuration and state directory. | `~/.codex` where Orbit derives the directory. | — |
 | `COLUMNS` | Preferred terminal width in columns. | Terminal width query, or no truncation when neither supplies a width. | — |
 | `CONSTELLATION_DEFAULT_PROVIDER` | Provider used to resolve the default workflow crew below explicit config. | The built-in default crew. | — |
@@ -74,10 +76,14 @@ whole.
 | `ORBIT_ATTENTION_WAIT_TOKEN` | Session grant for `orbit attention wait`. | Unset. The wait requires a token. | — |
 | `ORBIT_BACKEND` | Retired backend selector retained for compatibility diagnostics. | Unset. | — |
 | `ORBIT_BIN` | Explicit Orbit executable pinned for tools launched by an agent. | The dispatching Orbit executable. | — |
+| `ORBIT_BROWSER_KIT_ENV` | Path of the headless browser kit's `env.sh`, which a check sources before it launches Chromium. | Unset. Set only for a worker whose host has a verified kit. | — |
+| `ORBIT_BROWSER_KIT_SCREENSHOT` | Screenshot path that `orbit config browser-kit verify` hands to its smoke test. | Unset. Set only for the smoke test. | — |
 | `ORBIT_BUILD_BUDGET` | Whether to enforce host build-slot admission, `0` or `1`. | `1`. | — |
 | `ORBIT_BUILD_BUDGET_DIR` | Directory holding host build-slot state. | `~/.orbit/cache/build-budget`. | — |
 | `ORBIT_BUILD_SLOTS` | Host build-slot count from 1 through 128. | The budget directory's `slots` file, or `2` when absent. | — |
 | `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES` | Capture limit in bytes per stream for a provider CLI. | `1048576`. | — |
+| `ORBIT_COMMAND_EVIDENCE_DIR` | Directory in which a required validation command records command evidence. | Unset. Set only for a required validation command. | — |
+| `ORBIT_COMMAND_EVIDENCE_INVOCATION` | Invocation identifier that a required validation command attaches to its command evidence. | Unset. Set only for a required validation command. | — |
 | `ORBIT_DASHBOARD_HANDOVER` | Marks a replacement dashboard process so it skips opening a browser. | Unset. | Same browser behavior as `orbit web serve --no-open`. |
 | `ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES` | Capture limit in bytes per stream for a supervised command. | `1048576`. | — |
 | `ORBIT_EXTERNAL_TOOL_TIMEOUT_MS` | Timeout override in milliseconds for an external tool. | 15 seconds. | — |
@@ -104,6 +110,7 @@ whole.
 | `ORBIT_REQUIRE_SANDBOX_EXEC` | Set to `1` to require macOS Seatbelt for applicable plugin and host checks. | Unset. | — |
 | `ORBIT_ROOT` | Explicit Orbit config and state root, or checkout containing an initialized `.orbit` directory. | Normal workspace discovery and global `~/.orbit`. | Overridden by `--root`. |
 | `ORBIT_RUN_ID` | Job-run identifier used for managed dispatch and audit correlation. | Unset. | — |
+| `ORBIT_SCRATCH_DIR` | Worker scratch directory, `<checkout>/.orbit/tmp`, which task artifact upload accepts. | Unset. Set only for a managed worker. | — |
 | `ORBIT_SESSION_ID` | Invocation or session identifier used for managed dispatch and audit correlation. | Unset. | — |
 | `ORBIT_SKIP_HOST_PREREQUISITES` | Skip Linux host package and AppArmor setup during initialization. | Off. Cargo test configuration sets it to `1`. | Fallback for `orbit init --skip-host-prerequisites`. |
 | `ORBIT_STEP_INDEX` | Numeric index of the managed activity step for audit correlation. | Unset. | — |
@@ -127,6 +134,13 @@ whole.
 | `ORBIT_TEST_RELEASE_API_BASE` | GitHub release API base override for builds with the release API test feature. | The GitHub API. | — |
 | `ORBIT_TEST_SHARED_IMAGE_DIGESTS` | Debug-build directory for sharing executable digests among test processes. | Unset. Workspace Cargo config supplies `target/test-image-digests`. | — |
 | `ORBIT_TEST_SOURCE_ELAPSED_MS` | Frozen elapsed milliseconds for source inspection in test-support builds. | Real elapsed time. | — |
+| `ORBIT_TOOL_AGENT_NAME` | Name of the agent that called an external tool. | Unset when the call has no agent. | — |
+| `ORBIT_TOOL_ALLOWED_TOOLS` | Comma-separated tools the caller of an external tool is allowed. | Unset when the list is empty. | — |
+| `ORBIT_TOOL_CWD` | Working directory an external tool runs in. | Always set for an external tool. | — |
+| `ORBIT_TOOL_MODEL_NAME` | Name of the model that called an external tool. | Unset when the call has no model. | — |
+| `ORBIT_TOOL_NAME` | Name of the external tool being run. | Always set for an external tool. | — |
+| `ORBIT_TOOL_PROC_ALLOWED_PROGRAMS` | Comma-separated programs the caller of an external tool may start with `proc.spawn`. | Unset when the list is empty. | — |
+| `ORBIT_TOOL_WORKSPACE_ROOT` | Workspace root of the call that runs an external tool. | Unset when the call has no workspace root. | — |
 | `ORBIT_UPDATE_PROBE_TIMEOUT_SECS` | Timeout in seconds for version and contract probes during an update. | 30 seconds. | — |
 | `ORBIT_UPDATE_RELEASE_DIR` | Local release mirror directory used in preference to the network. | GitHub Releases. | — |
 | `ORBIT_UPGRADE_QUIESCE_SECS` | Time in seconds for live participants to yield during a breaking upgrade. | 120 seconds. | — |
@@ -134,6 +148,7 @@ whole.
 | `ORBIT_V2_JOB_DIR` | Legacy job catalog directory list used when `ORBIT_JOB_DIR` is missing or not Unicode. | Normal workspace and global job catalogs. | — |
 | `ORBIT_VALIDATION_BASE` | Base revision supplied by the validation runner. | Unset. | — |
 | `ORBIT_VALIDATION_GATE` | Name or command supplied by the validation runner for the current check. | Unset. | — |
+| `ORBIT_VALIDATION_SELECTION` | Selection that a validation command must test exactly, so a base rerun tests what the candidate run tested. | Unset. The command chooses its own selection. | — |
 | `ORBIT_VALIDATION_SUMMARY` | Path at which validation writes its structured summary. | Unset. | — |
 | `ORBIT_WORKER_CONTAINMENT_STRICT` | Set to `1` to carry strict worker containment to pipeline descendants. | The configured worker containment policy applies. | `--strict-worker-containment` also enables strict containment. |
 | `ORBIT_WORKER_CONTEXT_REQUIRED` | Marks a worker that must receive the managed coordination context. | Unset. | — |
@@ -142,12 +157,16 @@ whole.
 | `ORBIT_WORKTREE_ROOT` | Parent directory override for managed worktrees. | The workspace's managed worktree directory. | — |
 | `PATH` | Program search path used for executable discovery and child execution. | Unset if the OS or launcher does not supply it. Individual launchers may supply a fallback. | — |
 | `PATHEXT` | Windows executable extensions tried when searching for programs. | `.COM;.EXE;.BAT;.CMD`. | — |
+| `PLAYWRIGHT_BROWSERS_PATH` | Directory of the headless browser kit's browsers, which Playwright reads. | Unset. Set only for a worker whose host has a verified kit. | — |
+| `PLAYWRIGHT_MODULE` | The headless browser kit's Playwright ES module, which a check imports `chromium` from. | Unset. Set only for a worker whose host has a verified kit. | — |
+| `PYTHONDONTWRITEBYTECODE` | Python bytecode-write switch. Orbit sets `1` for a validation command that does not set it. | Orbit sets `1` for validation commands. | — |
 | `RUSTUP_HOME` | Rustup installation and toolchain cache root forwarded to plugin builds. | Unset. | — |
 | `RUSTUP_TOOLCHAIN` | Rust toolchain selection forwarded to plugin builds. | Unset. | — |
 | `RUST_LOG` | Tracing directives for Orbit logging. | `warn` for CLI stderr. The CLI JSONL log also keeps provider supervision and MCP configuration at `info`. | — |
 | `SHELL` | Login shell location forwarded to host-side Git and GitHub CLI children. | Unset if the OS or launcher does not supply it. | — |
 | `SSH_AUTH_SOCK` | SSH agent socket forwarded to host-side Git children. | Unset. | — |
 | `SSH_CONNECTION` | OpenSSH connection metadata from which Orbit extracts the caller IP. | Unset. | — |
+| `SSL_CERT_FILE` | PEM CA bundle that TLS clients read. Orbit accepts it for Codex on macOS when `CODEX_CA_CERTIFICATE` is unset. | Unset. | — |
 | `SUDO_GID` | Original group ID used by Linux host setup when running under sudo. | Unset. | — |
 | `SUDO_UID` | Original user ID used by Linux host setup when running under sudo. | Unset. | — |
 | `TERM` | Terminal type. `dumb` disables terminal styling. | Unset if the OS or launcher does not supply it. | — |

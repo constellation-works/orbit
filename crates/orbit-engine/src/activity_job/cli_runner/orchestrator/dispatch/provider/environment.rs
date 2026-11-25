@@ -21,7 +21,7 @@ use std::time::Duration;
 
 /// Environment variable `scripts/cargo-deny.sh` reads for a writable
 /// advisory database root [ORB-11983].
-const CARGO_DENY_DB_PATH_ENV: &str = "CARGO_DENY_DB_PATH";
+use orbit_common::env_vars::CARGO_DENY_DB_PATH as CARGO_DENY_DB_PATH_ENV;
 
 /// Scratch subdirectory holding this run's cargo-deny advisory database.
 const CARGO_DENY_ADVISORY_DB_SUBDIR: &str = "cargo-deny-advisory-db";
