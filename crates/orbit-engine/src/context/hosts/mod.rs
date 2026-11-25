@@ -40,7 +40,7 @@ pub use review::{
     ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
     ReviewerInvocationRequest,
 };
-pub use runtime_host::RuntimeHost;
+pub use runtime_host::{RuntimeHost, RuntimeHostProcessEnvironment};
 pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
 pub use script_step::{
     ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun,

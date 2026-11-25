@@ -24,7 +24,6 @@ use crate::context::dispatch_contract::{
     ResolvedShellExecutor,
 };
 
-use super::super::RuntimeHost;
 use super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
@@ -37,14 +36,17 @@ use super::super::{
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
     TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
+use super::super::{RuntimeHost, RuntimeHostProcessEnvironment};
 
 use super::NullRuntimeHost;
 
-impl<T: NullRuntimeHost> RuntimeHost for T {
+impl<T: NullRuntimeHost> RuntimeHostProcessEnvironment for T {
     fn process_env(&self) -> orbit_common::Env {
         NullRuntimeHost::process_env(self)
     }
+}
 
+impl<T: NullRuntimeHost> RuntimeHost for T {
     fn validation_build_output_env(&self) -> Vec<String> {
         NullRuntimeHost::validation_build_output_env(self)
     }

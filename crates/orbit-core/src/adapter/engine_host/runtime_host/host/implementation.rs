@@ -21,9 +21,10 @@ use orbit_engine::{
     CompletionObservationAdmission, CrewConfig, DispatchError, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
     PluginBrokerHandle, PluginBrokerRun, RebaseRecoveryAttemptScope, ResolvedActivityTools,
-    ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, SteeringGateReading,
-    SteeringRoundAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate,
+    ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, RuntimeHost,
+    RuntimeHostProcessEnvironment, SteeringGateReading, SteeringRoundAdmission,
+    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
+    TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunStepParams};
 use orbit_tools::{FsAuditLogger, ToolContext};
@@ -49,11 +50,13 @@ use super::super::{
 };
 use super::private_vcs;
 
-impl RuntimeHost for OrbitRuntime {
+impl RuntimeHostProcessEnvironment for OrbitRuntime {
     fn process_env(&self) -> orbit_common::Env {
         self.env().clone()
     }
+}
 
+impl RuntimeHost for OrbitRuntime {
     fn start_plugin_broker(
         &self,
         run: &PluginBrokerRun,
