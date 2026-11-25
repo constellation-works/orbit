@@ -31,24 +31,28 @@ impl Tool for OrbitCommandExecTool {
                 description: "Command argv array (no shell).".to_string(),
                 param_type: "string_list".to_string(),
                 required: true,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "working_directory".to_string(),
                 description: "Absolute cwd inside workspace or worktree.".to_string(),
                 param_type: "string".to_string(),
                 required: true,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "timeout_ms".to_string(),
                 description: "Deadline ms (default 120000, max 600000).".to_string(),
                 param_type: "u64".to_string(),
                 required: false,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "claim_token".to_string(),
                 description: "Claim token if another operator holds one.".to_string(),
                 param_type: "string".to_string(),
                 required: false,
+                enum_values: Vec::new(),
             },
         ];
         ToolSchema {

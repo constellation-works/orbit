@@ -147,8 +147,24 @@ pub fn params_from_input_schema(schema: &Value) -> Vec<ToolParam> {
                 .to_string(),
             param_type: param_type_for(property),
             required: required.iter().any(|entry| entry == name),
+            enum_values: enum_values_for(property),
         })
         .collect()
+}
+
+fn enum_values_for(property: &Value) -> Vec<String> {
+    property
+        .get("enum")
+        .or_else(|| property.get("items").and_then(|items| items.get("enum")))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn param_type_for(property: &Value) -> String {

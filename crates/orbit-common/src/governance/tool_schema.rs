@@ -4,12 +4,6 @@ use serde_json::{Map, Value, json};
 
 use orbit_types::tool::{ToolParam, ToolSchema};
 
-use super::agents::{CI_FAILURE_CLASSES, EXECUTIONS, ROLES, WINDOWS};
-use super::operation::EnumValue;
-use super::resident::{CONTROL_ACTIONS, RIGHTS};
-use super::task::TASK_UPDATE_STATUS_VALUES;
-use super::task::operations::{ELIGIBLE_STATUS_VALUES, TASK_TYPE_VALUES};
-
 /// Shared concise description for MCP `workspace` selector parameters.
 pub const WORKSPACE_SELECTOR_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
 /// JSON Schema `pattern` for a provenance `model` value.
@@ -43,18 +37,17 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
 
     for param in params {
         let mut property = tool_parameter_schema(&param.param_type);
-        if let Some(values) = tool_parameter_enum_values(tool_name, &param.name) {
-            let values: Vec<&str> = values.iter().map(|value| value.name).collect();
+        if !param.enum_values.is_empty() {
             if property.get("type").and_then(Value::as_str) == Some("array") {
                 // A list of enumerated values carries its set on the items.
                 let items = property
                     .entry("items".to_string())
                     .or_insert_with(|| json!({ "type": "string" }));
                 if let Some(items) = items.as_object_mut() {
-                    items.insert("enum".to_string(), json!(values));
+                    items.insert("enum".to_string(), json!(param.enum_values));
                 }
             } else {
-                property.insert("enum".to_string(), json!(values));
+                property.insert("enum".to_string(), json!(param.enum_values));
             }
         }
         if let Some(pattern) = tool_parameter_pattern(tool_name, &param.name) {
@@ -153,31 +146,6 @@ pub fn tool_parameter_schema(param_type: &str) -> Map<String, Value> {
         }
     }
     schema
-}
-
-/// Canonical enum metadata shared by every Orbit tool transport.
-pub fn tool_parameter_enum_values(
-    tool_name: &str,
-    param_name: &str,
-) -> Option<&'static [EnumValue]> {
-    match (tool_name, param_name) {
-        ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_VALUES),
-        ("orbit.task.update", "status") => Some(TASK_UPDATE_STATUS_VALUES),
-        // Value lists that MCP descriptions shorten move here whole, so a
-        // shortened description never invents a closed set (ORB-23869).
-        ("orbit.agents.scorecard" | "orbit.agents.show", "role") => Some(ROLES),
-        ("orbit.agents.scorecard" | "orbit.agents.show", "window") => Some(WINDOWS),
-        ("orbit.agents.scorecard" | "orbit.agents.show", "execution") => Some(EXECUTIONS),
-        ("orbit.agents.ci_failures", "class") => Some(CI_FAILURE_CLASSES),
-        ("orbit.task.eligible", "status") => Some(ELIGIBLE_STATUS_VALUES),
-        ("orbit.resident.grant", "add" | "remove") => Some(RIGHTS),
-        ("orbit.resident.control", "action") => Some(CONTROL_ACTIONS),
-        // No MCP tool advertises `model`. A parameter that is still named
-        // `model` (a CLI filter, or the unadvertised identity key) accepts
-        // families and full model strings, so it has no finite enum.
-        (_, "model") => None,
-        _ => None,
-    }
 }
 
 /// JSON Schema `pattern` for a tool parameter, when its accepted set is

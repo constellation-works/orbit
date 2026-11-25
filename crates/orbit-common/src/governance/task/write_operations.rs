@@ -55,6 +55,7 @@ pub(crate) const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
         name: "in-progress",
         help: None,
         aliases: &["in_progress"],
+        wire_name: None,
     },
     EnumValue::plain("review"),
     EnumValue::plain("done"),
@@ -285,7 +286,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 both(
                     "priority",
                     ParamType::Enum(TASK_PRIORITY_VALUES),
-                    "low|medium|high|critical",
+                    "Priority (default: medium).",
                     CliArgKind::flag("priority"),
                     "Priority level",
                 ),
@@ -294,7 +295,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             cli_required(both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
-                "low|medium|hard|xhard",
+                "Complexity.",
                 flag_named("complexity", "low|medium|hard|xhard"),
                 "Task complexity (low, medium, hard, or xhard). Required",
             )),
@@ -335,7 +336,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "operator_request | orchestrator_initiative | automation",
+                "Origin.",
                 CliArgKind::flag("origin"),
                 "Provenance category, not free text: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
             ),
@@ -578,14 +579,14 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "priority",
                 ParamType::Enum(TASK_PRIORITY_VALUES),
-                "low|medium|high|critical",
+                "Priority.",
                 CliArgKind::flag("priority"),
                 "New dispatch priority",
             ),
             both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
-                "low|medium|hard|xhard",
+                "Complexity.",
                 CliArgKind::flag("complexity"),
                 "Task complexity",
             ),
@@ -660,7 +661,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "operator_request | orchestrator_initiative | automation",
+                "Origin.",
                 CliArgKind::flag("origin"),
                 "Replacement provenance category, not free text: operator_request, orchestrator_initiative, automation",
             ),

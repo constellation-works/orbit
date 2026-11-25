@@ -236,6 +236,8 @@ pub struct ToolParam {
     pub description: String,
     pub param_type: String,
     pub required: bool,
+    #[serde(rename = "enum", default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -306,7 +308,7 @@ pub struct McpToolDefinition {
     /// The tool's own JSON Schema for its input, when it declares one — a
     /// plugin tool's manifest `input_schema`. MCP advertises it as written
     /// instead of the schema derived from the flat `schema.parameters`, which
-    /// cannot express `enum`, bounds, `default` or nested shapes.
+    /// cannot express conditionals, bounds, `default` or nested shapes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
     /// Behavior hints MCP advertises as the tool's `annotations`, so a client

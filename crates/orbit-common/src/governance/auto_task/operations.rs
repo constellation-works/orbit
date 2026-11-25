@@ -82,6 +82,7 @@ pub const DEDUPE_VALUES: &[EnumValue] = &[
             "Skip the fire while a previously-created instance is still open, so a stalled backlog never accumulates identical tasks (the default)",
         ),
         aliases: &["skip_if_open"],
+        wire_name: Some("skip_if_open"),
     },
     EnumValue::helped(
         "always",
@@ -250,7 +251,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
             both(
                 "dedupe",
                 ParamType::Enum(DEDUPE_VALUES),
-                "`skip_if_open` (default) or `always`.",
+                "Dedupe policy (default: `skip_if_open`).",
                 CliArgKind::flag("dedupe"),
                 "Dedupe policy (defaults to skip-if-open)",
             ),
@@ -408,7 +409,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         both(
             "dedupe",
             ParamType::Enum(DEDUPE_VALUES),
-            "`skip_if_open` or `always`.",
+            "Dedupe policy.",
             CliArgKind::flag("dedupe"),
             "New dedupe policy",
         ),

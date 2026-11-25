@@ -24,18 +24,24 @@ impl Tool for OrbitPipelineInvokeTool {
                 description: "Registered v2 job name.".to_string(),
                 param_type: "string".to_string(),
                 required: true,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "input".to_string(),
                 description: "Input object (unless `default_input`).".to_string(),
                 param_type: "object".to_string(),
                 required: false,
+                enum_values: Vec::new(),
             },
             ToolParam {
                 name: "priority".to_string(),
-                description: "low|medium|high|critical".to_string(),
+                description: "Priority.".to_string(),
                 param_type: "string".to_string(),
                 required: false,
+                enum_values: orbit_common::governance::task::TASK_PRIORITY_VALUES
+                    .iter()
+                    .map(|value| value.wire_name().to_string())
+                    .collect(),
             },
         ];
         parameters.extend([

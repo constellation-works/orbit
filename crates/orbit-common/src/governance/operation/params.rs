@@ -51,6 +51,9 @@ pub struct EnumValue {
     pub help: Option<&'static str>,
     /// Other spellings the CLI accepts for this value, hidden from `--help`.
     pub aliases: &'static [&'static str],
+    /// Wire spelling when it differs from [`Self::name`], such as snake_case
+    /// on the wire vs kebab-case on CLI `--help`. `None` uses [`Self::name`].
+    pub wire_name: Option<&'static str>,
 }
 
 impl EnumValue {
@@ -60,6 +63,7 @@ impl EnumValue {
             name,
             help: None,
             aliases: &[],
+            wire_name: None,
         }
     }
 
@@ -69,6 +73,15 @@ impl EnumValue {
             name,
             help: Some(help),
             aliases: &[],
+            wire_name: None,
+        }
+    }
+
+    /// The canonical wire spelling for this value.
+    pub const fn wire_name(&self) -> &'static str {
+        match self.wire_name {
+            Some(wire) => wire,
+            None => self.name,
         }
     }
 }
@@ -82,11 +95,23 @@ impl ParamType {
             ParamType::Integer => "integer",
             ParamType::UnsignedInteger => "u64",
             ParamType::Boolean | ParamType::Switch => "boolean",
-            // Allowed values stay in the parameter's description, so a
-            // migrated enum is wire-identical to the string it replaced.
+            // Wire enum values are carried separately in `ToolParam::enum_values`,
+            // so the outer `param_type` token stays `"string"`.
             ParamType::Enum(_) => "string",
             ParamType::Object => "object",
             ParamType::Array => "object_array",
+        }
+    }
+
+    /// Allowed wire values for [`Self::Enum`] and [`Self::EnumList`]; empty
+    /// for other parameter types.
+    pub fn wire_enum_values(self) -> Vec<String> {
+        match self {
+            ParamType::Enum(values) | ParamType::EnumList(values) => values
+                .iter()
+                .map(|value| value.wire_name().to_string())
+                .collect(),
+            _ => Vec::new(),
         }
     }
 }

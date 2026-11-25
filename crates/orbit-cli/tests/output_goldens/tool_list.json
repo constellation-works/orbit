@@ -215,7 +215,13 @@
         "name": "class",
         "description": "Only failures whose current class is this: code (the head's own change), flaky (the same head passed on a rerun), infrastructure (a declared infrastructure signature, the runner or network, or a base that fails the same check) or unknown (no cause established).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "code",
+          "flaky",
+          "infrastructure",
+          "unknown"
+        ]
       }
     ],
     "mcp_toolset": "analytics"
@@ -232,13 +238,30 @@
         "name": "role",
         "description": "The agent role to score: implementers, reviewers or pilots.",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "implementers",
+          "reviewers",
+          "pilots"
+        ]
       },
       {
         "name": "window",
         "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach), or over the newest delivery attempts the scan holds: last50, last200, last500 or last1000. Default: 30d.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "1h",
+          "24h",
+          "7d",
+          "30d",
+          "90d",
+          "all",
+          "last50",
+          "last200",
+          "last500",
+          "last1000"
+        ]
       },
       {
         "name": "min_support",
@@ -250,7 +273,12 @@
         "name": "execution",
         "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "managed",
+          "all",
+          "interactive"
+        ]
       },
       {
         "name": "until",
@@ -285,7 +313,12 @@
         "name": "role",
         "description": "The agent role to score: implementers, reviewers or pilots.",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "implementers",
+          "reviewers",
+          "pilots"
+        ]
       },
       {
         "name": "crew",
@@ -309,7 +342,19 @@
         "name": "window",
         "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach), or over the newest delivery attempts the scan holds: last50, last200, last500 or last1000. Default: 30d.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "1h",
+          "24h",
+          "7d",
+          "30d",
+          "90d",
+          "all",
+          "last50",
+          "last200",
+          "last500",
+          "last1000"
+        ]
       },
       {
         "name": "min_support",
@@ -321,7 +366,12 @@
         "name": "execution",
         "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "managed",
+          "all",
+          "interactive"
+        ]
       },
       {
         "name": "until",
@@ -362,19 +412,61 @@
         "name": "kind",
         "description": "Include kinds.",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "pilot_warning",
+          "pilot_hold",
+          "blocked",
+          "decision_open",
+          "review_waiting",
+          "run_failed",
+          "run_stuck",
+          "claim_stale",
+          "ci_red",
+          "friction_untriaged",
+          "host_unhealthy",
+          "notice_open",
+          "resident_stalled",
+          "routine_tripped",
+          "drain_paused",
+          "drain_breaker_open"
+        ]
       },
       {
         "name": "exclude_kind",
         "description": "Exclude kinds.",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "pilot_warning",
+          "pilot_hold",
+          "blocked",
+          "decision_open",
+          "review_waiting",
+          "run_failed",
+          "run_stuck",
+          "claim_stale",
+          "ci_red",
+          "friction_untriaged",
+          "host_unhealthy",
+          "notice_open",
+          "resident_stalled",
+          "routine_tripped",
+          "drain_paused",
+          "drain_breaker_open"
+        ]
       },
       {
         "name": "severity",
         "description": "Min severity.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
       },
       {
         "name": "status",
@@ -451,7 +543,13 @@
         "name": "action",
         "description": "Action (required fields): list; add (name, schedule, template); update (name); mint (name).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "list",
+          "add",
+          "update",
+          "mint"
+        ]
       },
       {
         "name": "include_inactive_plugins",
@@ -503,9 +601,13 @@
       },
       {
         "name": "dedupe",
-        "description": "add: `skip_if_open` (default) or `always`; update: `skip_if_open` or `always`.",
+        "description": "add: Dedupe policy (default: `skip_if_open`); update: Dedupe policy.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "skip_if_open",
+          "always"
+        ]
       },
       {
         "name": "granted_tools",
@@ -587,7 +689,12 @@
         "name": "action",
         "description": "Action (required fields): show (path); related (path); analytics.",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "show",
+          "related",
+          "analytics"
+        ]
       },
       {
         "name": "path",
@@ -597,9 +704,15 @@
       },
       {
         "name": "window",
-        "description": "show, analytics: Period: 7d, 30d, 90d, or all (default: 90d); related: Landed period (default: 30d).",
+        "description": "show, analytics: Period (default: 90d); related: Landed period (default: 30d).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "7d",
+          "30d",
+          "90d",
+          "all"
+        ]
       },
       {
         "name": "min_support",
@@ -609,21 +722,45 @@
       },
       {
         "name": "rollup",
-        "description": "show, analytics: Grouping: file, dir, or crate (default: file).",
+        "description": "show, analytics: Grouping (default: file).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "file",
+          "dir",
+          "crate"
+        ]
       },
       {
         "name": "nature",
         "description": "show, analytics: Filter regressions by nature (`absent`: unclassified-null).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "broke_existing",
+          "defect_in_new",
+          "incomplete",
+          "merge_reintroduced",
+          "contract_drift",
+          "unclassified",
+          "absent"
+        ]
       },
       {
         "name": "escape",
         "description": "show, analytics: Filter regressions by escape (`absent`: unclassified-null).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "no_test",
+          "test_not_selected",
+          "platform_only",
+          "review_missed",
+          "spec_ambiguous",
+          "nondeterministic",
+          "unclassified",
+          "absent"
+        ]
       },
       {
         "name": "layer",
@@ -635,7 +772,17 @@
         "name": "detected_by",
         "description": "show, analytics: Filter regressions by detector.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "delivery_review",
+          "security_review",
+          "code_review",
+          "qa_sweep",
+          "post_merge_ci",
+          "production_run",
+          "operator",
+          "other"
+        ]
       },
       {
         "name": "top",
@@ -693,13 +840,28 @@
         "name": "action",
         "description": "Action (required fields): list; show (id); raise (task_id, question, options).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "list",
+          "show",
+          "raise"
+        ]
       },
       {
         "name": "gate",
-        "description": "list: Gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval, script_grant.",
+        "description": "list: Only requests waiting on this gate.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "agent_request",
+          "block_triage",
+          "model_answer_review",
+          "pilot_admission",
+          "proposed_approval",
+          "resident_authority",
+          "review_approval",
+          "script_grant"
+        ]
       },
       {
         "name": "task_id",
@@ -1258,7 +1420,11 @@
         "name": "mode",
         "description": "shadow (default) records assignments without applying overlays; live experiments can start and resume, applying overlays on matching dispatches. Start requires base-admissible instruction files and skill bundles, registered enabled agent-facing added tools, and preservation of handoff tools; skill replacement currently supports Claude on Unix.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "shadow",
+          "live"
+        ]
       },
       {
         "name": "reason",
@@ -1279,9 +1445,16 @@
     "parameters": [
       {
         "name": "status",
-        "description": "Only experiments in this status: draft, running, paused, concluded or abandoned.",
+        "description": "Only experiments in this status.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "draft",
+          "running",
+          "paused",
+          "concluded",
+          "abandoned"
+        ]
       }
     ],
     "mcp_toolset": "experiments"
@@ -1496,7 +1669,11 @@
         "name": "mode",
         "description": "shadow (default) records assignments without applying overlays; live experiments can start and resume, applying overlays on matching dispatches. Start requires base-admissible instruction files and skill bundles, registered enabled agent-facing added tools, and preservation of handoff tools; skill replacement currently supports Claude on Unix.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "shadow",
+          "live"
+        ]
       },
       {
         "name": "reason",
@@ -1519,7 +1696,11 @@
         "name": "action",
         "description": "Action (required fields): add (body); update (id).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "add",
+          "update"
+        ]
       },
       {
         "name": "body",
@@ -1623,9 +1804,15 @@
       },
       {
         "name": "status",
-        "description": "open (default), closed, expired, or all.",
+        "description": "Filter by status (default: open).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "open",
+          "closed",
+          "expired",
+          "all"
+        ]
       },
       {
         "name": "include_global",
@@ -1635,15 +1822,25 @@
       },
       {
         "name": "scope",
-        "description": "workspace or global.",
+        "description": "Filter by scope.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "workspace",
+          "global"
+        ]
       },
       {
         "name": "kind",
         "description": "Filter kinds.",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "warn",
+          "incident",
+          "maintenance",
+          "info"
+        ]
       },
       {
         "name": "linked_task",
@@ -1653,9 +1850,14 @@
       },
       {
         "name": "author_class",
-        "description": "operator, orchestrator, or agent.",
+        "description": "Filter by author class.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "operator",
+          "orchestrator",
+          "agent"
+        ]
       },
       {
         "name": "host",
@@ -1690,7 +1892,13 @@
         "name": "kind",
         "description": "warn (operator ask), incident, maintenance, or info.",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "warn",
+          "incident",
+          "maintenance",
+          "info"
+        ]
       },
       {
         "name": "title",
@@ -1706,9 +1914,13 @@
       },
       {
         "name": "scope",
-        "description": "workspace (default) or global.",
+        "description": "Scope (default: workspace).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "workspace",
+          "global"
+        ]
       },
       {
         "name": "dedupe_key",
@@ -1806,9 +2018,15 @@
       },
       {
         "name": "priority",
-        "description": "low|medium|high|critical",
+        "description": "Priority.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
       },
       {
         "name": "workspace",
@@ -1901,7 +2119,15 @@
         "name": "action",
         "description": "pause (active to paused: no new cycle), resume (paused to active), stop (ends the mandate: no new cycle, then the assignment moves to review), wake (active: due on the next tick despite the heartbeat, never the cadence floor), takeover (active or paused to taken_over: no cycle fires) or release (taken_over to active).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "pause",
+          "resume",
+          "stop",
+          "wake",
+          "takeover",
+          "release"
+        ]
       },
       {
         "name": "reason",
@@ -1977,7 +2203,16 @@
         "name": "add",
         "description": "Rights to add.",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "dispatch",
+          "promote",
+          "merge",
+          "plugin_upgrade",
+          "refresh",
+          "recover",
+          "promote_held"
+        ]
       },
       {
         "name": "workspaces",
@@ -1989,7 +2224,16 @@
         "name": "remove",
         "description": "Rights to remove. Narrowing: open to any caller that can write the assignment.",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "dispatch",
+          "promote",
+          "merge",
+          "plugin_upgrade",
+          "refresh",
+          "recover",
+          "promote_held"
+        ]
       },
       {
         "name": "drop_workspaces",
@@ -2229,7 +2473,13 @@
         "name": "action",
         "description": "Action (required fields): list; show (id); observe (id); resume (id).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "list",
+          "show",
+          "observe",
+          "resume"
+        ]
       },
       {
         "name": "limit",
@@ -2322,9 +2572,14 @@
       },
       {
         "name": "kind",
-        "description": "task, friction, or all (default: all).",
+        "description": "Corpus kind (default: all).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "task",
+          "friction",
+          "all"
+        ]
       },
       {
         "name": "limit",
@@ -2447,21 +2702,39 @@
       },
       {
         "name": "priority",
-        "description": "low|medium|high|critical",
+        "description": "Priority (default: medium).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
       },
       {
         "name": "complexity",
-        "description": "low|medium|hard|xhard",
+        "description": "Complexity.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "hard",
+          "xhard"
+        ]
       },
       {
         "name": "type",
         "description": "Kind.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "feature",
+          "bug",
+          "refactor",
+          "chore"
+        ]
       },
       {
         "name": "relations",
@@ -2495,9 +2768,14 @@
       },
       {
         "name": "origin",
-        "description": "operator_request | orchestrator_initiative | automation",
+        "description": "Origin.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "operator_request",
+          "orchestrator_initiative",
+          "automation"
+        ]
       },
       {
         "name": "fields",
@@ -2532,7 +2810,11 @@
         "name": "action",
         "description": "Action (required fields): get (id, path); put (id, source_path).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "get",
+          "put"
+        ]
       },
       {
         "name": "id",
@@ -2579,13 +2861,21 @@
         "name": "action",
         "description": "candidates, propose, or report.",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "candidates",
+          "propose",
+          "report"
+        ]
       },
       {
         "name": "subject",
         "description": "Triage subject (only `pilot_warning`).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "pilot_warning"
+        ]
       },
       {
         "name": "id",
@@ -2650,7 +2940,11 @@
         "name": "status",
         "description": "Statuses (default: both).",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "backlog",
+          "proposed"
+        ]
       },
       {
         "name": "path",
@@ -2685,7 +2979,18 @@
         "name": "status",
         "description": "Statuses.",
         "param_type": "string_list",
-        "required": false
+        "required": false,
+        "enum": [
+          "proposed",
+          "backlog",
+          "in-progress",
+          "review",
+          "done",
+          "blocked",
+          "archived",
+          "rejected",
+          "someday"
+        ]
       },
       {
         "name": "parent_id",
@@ -2697,7 +3002,13 @@
         "name": "type",
         "description": "Task type.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "feature",
+          "bug",
+          "refactor",
+          "chore"
+        ]
       },
       {
         "name": "scheduled",
@@ -2721,7 +3032,12 @@
         "name": "origin",
         "description": "Origin.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "operator_request",
+          "orchestrator_initiative",
+          "automation"
+        ]
       },
       {
         "name": "job_run_id",
@@ -2739,7 +3055,12 @@
         "name": "runs_on",
         "description": "Host OS.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "linux",
+          "macos",
+          "windows"
+        ]
       },
       {
         "name": "pilot_warnings",
@@ -2793,7 +3114,13 @@
         "name": "priority",
         "description": "Priority.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
       },
       {
         "name": "external_ref",
@@ -2911,13 +3238,29 @@
         "name": "action",
         "description": "Action (required fields): recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); resume_delivery (id, run_id, diagnosis); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "recover_claim",
+          "requeue",
+          "resume_delivery",
+          "repilot",
+          "retry_handoff",
+          "revoke_handoff",
+          "review_reset",
+          "reconcile_review"
+        ]
       },
       {
         "name": "mode",
         "description": "reconcile_review: inspect, submit, status, or accept_baseline.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "inspect",
+          "submit",
+          "status",
+          "accept_baseline"
+        ]
       },
       {
         "name": "workspace",
@@ -2941,7 +3284,16 @@
         "name": "status",
         "description": "recover_claim: Lifecycle-valid target (done needs completion evidence).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "blocked",
+          "backlog",
+          "review",
+          "done",
+          "archived",
+          "rejected",
+          "someday"
+        ]
       },
       {
         "name": "reason",
@@ -3013,7 +3365,11 @@
         "name": "expected_latest_state",
         "description": "retry_handoff: stopped, or dispatched with unresolved intent.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "stopped",
+          "dispatched"
+        ]
       },
       {
         "name": "lineage_key",
@@ -3215,7 +3571,18 @@
         "name": "status",
         "description": "Status.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "proposed",
+          "backlog",
+          "someday",
+          "in-progress",
+          "review",
+          "done",
+          "blocked",
+          "archived",
+          "rejected"
+        ]
       },
       {
         "name": "note",
@@ -3225,21 +3592,39 @@
       },
       {
         "name": "priority",
-        "description": "low|medium|high|critical",
+        "description": "Priority.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
       },
       {
         "name": "complexity",
-        "description": "low|medium|hard|xhard",
+        "description": "Complexity.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "low",
+          "medium",
+          "hard",
+          "xhard"
+        ]
       },
       {
         "name": "type",
         "description": "Kind.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "feature",
+          "bug",
+          "refactor",
+          "chore"
+        ]
       },
       {
         "name": "source_task_id",
@@ -3297,9 +3682,14 @@
       },
       {
         "name": "origin",
-        "description": "operator_request | orchestrator_initiative | automation",
+        "description": "Origin.",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "operator_request",
+          "orchestrator_initiative",
+          "automation"
+        ]
       },
       {
         "name": "context_files",
@@ -3364,13 +3754,27 @@
         "name": "action",
         "description": "Action (required fields): auto (mode); ship (task_ids); land (task_id); refresh (task_id).",
         "param_type": "string",
-        "required": true
+        "required": true,
+        "enum": [
+          "auto",
+          "ship",
+          "land",
+          "refresh"
+        ]
       },
       {
         "name": "mode",
         "description": "auto: status, start, stop, or resize; ship: pr or local (default: workspace config).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "status",
+          "start",
+          "stop",
+          "resize",
+          "pr",
+          "local"
+        ]
       },
       {
         "name": "for_seconds",
@@ -3380,9 +3784,14 @@
       },
       {
         "name": "auto_concurrency",
-        "description": "auto: start: off, shadow, or enforce (local drain only).",
+        "description": "auto: start: Concurrency enforcement (local drain only).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "off",
+          "shadow",
+          "enforce"
+        ]
       },
       {
         "name": "concurrency",
@@ -3436,7 +3845,11 @@
         "name": "review",
         "description": "auto, ship: Pre-landing review (`before-landing`, or deprecated `before-pr`); adds review only (auto: start only).",
         "param_type": "string",
-        "required": false
+        "required": false,
+        "enum": [
+          "before-pr",
+          "before-landing"
+        ]
       },
       {
         "name": "approve_proposed",

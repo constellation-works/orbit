@@ -229,6 +229,7 @@ fn definition(name: &str) -> McpToolDefinition {
                 description: "Value to echo, as `demo.inspect` reports it.".to_string(),
                 param_type: "string".to_string(),
                 required: true,
+                enum_values: Vec::new(),
             }],
             builtin: false,
         },
@@ -879,6 +880,7 @@ impl McpHost for DesktopWireHost {
                         param_type: "string".into(),
                         required: false,
                         description: "Bounded observation".into(),
+                        enum_values: Vec::new(),
                     });
             }
         }

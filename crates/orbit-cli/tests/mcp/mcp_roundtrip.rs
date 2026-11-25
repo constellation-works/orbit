@@ -1563,6 +1563,92 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
     let resident_rights = ResidentRight::ALL.map(ResidentRight::as_str);
     let enum_cases: &[(&str, &str, &[&str])] = &[
         (
+            "orbit_task_add",
+            "priority",
+            &["low", "medium", "high", "critical"],
+        ),
+        (
+            "orbit_task_add",
+            "complexity",
+            &["low", "medium", "hard", "xhard"],
+        ),
+        (
+            "orbit_task_add",
+            "type",
+            &["feature", "bug", "refactor", "chore"],
+        ),
+        (
+            "orbit_task_add",
+            "origin",
+            &["operator_request", "orchestrator_initiative", "automation"],
+        ),
+        (
+            "orbit_task_update",
+            "status",
+            &[
+                "proposed",
+                "backlog",
+                "someday",
+                "in-progress",
+                "review",
+                "done",
+                "blocked",
+                "archived",
+                "rejected",
+            ],
+        ),
+        (
+            "orbit_task_update",
+            "priority",
+            &["low", "medium", "high", "critical"],
+        ),
+        (
+            "orbit_task_update",
+            "complexity",
+            &["low", "medium", "hard", "xhard"],
+        ),
+        (
+            "orbit_task_update",
+            "type",
+            &["feature", "bug", "refactor", "chore"],
+        ),
+        (
+            "orbit_task_update",
+            "origin",
+            &["operator_request", "orchestrator_initiative", "automation"],
+        ),
+        (
+            "orbit_task_list",
+            "status",
+            &[
+                "proposed",
+                "backlog",
+                "in-progress",
+                "review",
+                "done",
+                "blocked",
+                "archived",
+                "rejected",
+                "someday",
+            ],
+        ),
+        (
+            "orbit_task_list",
+            "type",
+            &["feature", "bug", "refactor", "chore"],
+        ),
+        (
+            "orbit_task_list",
+            "origin",
+            &["operator_request", "orchestrator_initiative", "automation"],
+        ),
+        ("orbit_task_list", "runs_on", &["linux", "macos", "windows"]),
+        (
+            "orbit_task_list",
+            "priority",
+            &["low", "medium", "high", "critical"],
+        ),
+        (
             "orbit_agents_scorecard",
             "role",
             &["implementers", "reviewers", "pilots"],

@@ -189,6 +189,7 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
         name: "in-progress",
         help: Some("Actively being worked on"),
         aliases: &["in_progress"],
+        wire_name: None,
     },
     EnumValue::helped("review", "Implementation complete; awaiting review/merge"),
     EnumValue::helped("done", "Accepted and closed (terminal)"),

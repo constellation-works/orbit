@@ -90,7 +90,7 @@ const LIST_FILTER: &[ParamSpec] = &[
     both(
         "gate",
         ParamType::Enum(GATES),
-        "Gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval, script_grant.",
+        "Only requests waiting on this gate.",
         CliArgKind::flag("gate"),
         "Only requests waiting on this gate",
     ),

@@ -428,7 +428,7 @@ const SHOW: OperationSpec<ExperimentVerb> = OperationSpec {
 const LIST_FILTER: &[ParamSpec] = &[both(
     "status",
     ParamType::Enum(STATUSES),
-    "Only experiments in this status: draft, running, paused, concluded or abandoned.",
+    "Only experiments in this status.",
     CliArgKind::flag("status"),
     "Only experiments in this status",
 )];
