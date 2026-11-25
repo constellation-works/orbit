@@ -97,8 +97,8 @@ pub enum SecretFileError {
 /// a symlink, a non-regular file, a file owned by another user, one readable
 /// by group or others, and a missing or empty one. The value never appears in
 /// an error.
-pub fn read_secret_file(path: &str) -> Result<String, SecretFileError> {
-    let path = expand_home(path);
+pub fn read_secret_file(env: &crate::Env, path: &str) -> Result<String, SecretFileError> {
+    let path = expand_home(env, path);
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() => return Err(SecretFileError::Symlink),
         Ok(metadata) if !metadata.is_file() => return Err(SecretFileError::NotRegular),
@@ -131,11 +131,10 @@ pub fn read_secret_file(path: &str) -> Result<String, SecretFileError> {
 
 /// `path` with a leading `~/` replaced by the home directory. A path that
 /// cannot be expanded is returned as written and reads as missing.
-fn expand_home(path: &str) -> PathBuf {
+fn expand_home(env: &crate::Env, path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
-        Some(rest) => {
-            crate::fs::path::home_dir().map_or_else(|_| PathBuf::from(path), |home| home.join(rest))
-        }
+        Some(rest) => crate::fs::path::home_dir(env)
+            .map_or_else(|_| PathBuf::from(path), |home| home.join(rest)),
         None => PathBuf::from(path),
     }
 }
@@ -238,13 +237,14 @@ fn unquote(value: &str) -> &str {
 /// Callers must pass the returned values as child-environment data and report
 /// only their names; no credential is exported into the ambient process.
 pub fn load_clock_env(
+    env: &crate::Env,
     global_root: &Path,
     pass: &[String],
 ) -> Result<Vec<(String, String)>, OrbitError> {
     Ok(read_env_file(&clock_env_file_path(global_root), pass)?
         .unwrap_or_default()
         .into_iter()
-        .filter(|(name, _)| std::env::var_os(name).is_none_or(|held| held.is_empty()))
+        .filter(|(name, _)| env.var(name).is_none_or(|held| held.is_empty()))
         .collect())
 }
 

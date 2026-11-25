@@ -21,7 +21,10 @@ impl Execute for ConfigGetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
             admit_config_key(&self.key)?;
-            let effective = load_effective_config(&runtime_config_roots(runtime))?;
+            let effective = load_effective_config(
+                &orbit_core::composition::composition_env(),
+                &runtime_config_roots(runtime),
+            )?;
             let value = effective
                 .value_for(&self.key)
                 .unwrap_or(serde_json::Value::Null);

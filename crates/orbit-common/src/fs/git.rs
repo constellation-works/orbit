@@ -87,8 +87,12 @@ pub enum CurrentBranchStatus {
 }
 
 /// Read symbolic HEAD first, then probe the commit to distinguish a detached checkout.
-pub fn current_branch(workspace_path: &Path) -> Result<CurrentBranchStatus, OrbitError> {
+pub fn current_branch(
+    env: &crate::Env,
+    workspace_path: &Path,
+) -> Result<CurrentBranchStatus, OrbitError> {
     let symbolic = run_git(
+        env,
         workspace_path,
         &["symbolic-ref", "--quiet", "--short", "HEAD"],
     )?;
@@ -100,7 +104,11 @@ pub fn current_branch(workspace_path: &Path) -> Result<CurrentBranchStatus, Orbi
         return Ok(CurrentBranchStatus::Named(branch.to_string()));
     }
 
-    let verify_head = run_git(workspace_path, &["rev-parse", "--verify", "-q", "HEAD"])?;
+    let verify_head = run_git(
+        env,
+        workspace_path,
+        &["rev-parse", "--verify", "-q", "HEAD"],
+    )?;
     if verify_head.success {
         return Ok(CurrentBranchStatus::DetachedHead);
     }
@@ -109,14 +117,17 @@ pub fn current_branch(workspace_path: &Path) -> Result<CurrentBranchStatus, Orbi
 }
 
 /// Prefer a recorded remote default, then a conventional local branch or the sole local branch.
-pub fn default_branch(workspace_path: &Path) -> Result<Option<String>, OrbitError> {
-    for remote in preferred_remotes(workspace_path)? {
-        if let Some(branch) = remote_default_branch(workspace_path, &remote)? {
+pub fn default_branch(
+    env: &crate::Env,
+    workspace_path: &Path,
+) -> Result<Option<String>, OrbitError> {
+    for remote in preferred_remotes(env, workspace_path)? {
+        if let Some(branch) = remote_default_branch(env, workspace_path, &remote)? {
             return Ok(Some(branch));
         }
     }
 
-    let local_branches = local_branches(workspace_path)?;
+    let local_branches = local_branches(env, workspace_path)?;
     for branch in ["main", "master", "trunk", "develop", "development", "dev"] {
         if local_branches.iter().any(|candidate| candidate == branch) {
             return Ok(Some(branch.to_string()));
@@ -130,8 +141,8 @@ pub fn default_branch(workspace_path: &Path) -> Result<Option<String>, OrbitErro
     Ok(None)
 }
 
-fn preferred_remotes(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
-    let remotes = run_git(workspace_path, &["remote"])?;
+fn preferred_remotes(env: &crate::Env, workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
+    let remotes = run_git(env, workspace_path, &["remote"])?;
     if !remotes.success {
         return Ok(Vec::new());
     }
@@ -152,10 +163,12 @@ fn preferred_remotes(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
 }
 
 fn remote_default_branch(
+    env: &crate::Env,
     workspace_path: &Path,
     remote: &str,
 ) -> Result<Option<String>, OrbitError> {
     let remote_head = run_git(
+        env,
         workspace_path,
         &[
             "symbolic-ref",
@@ -178,8 +191,9 @@ fn remote_default_branch(
     Ok(None)
 }
 
-fn local_branches(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
+fn local_branches(env: &crate::Env, workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
     let branches = run_git(
+        env,
         workspace_path,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
     )?;
@@ -197,8 +211,9 @@ fn local_branches(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
 }
 
 /// Resolve Git's absolute common directory, shared by every linked worktree.
-pub fn git_common_dir(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
+pub fn git_common_dir(env: &crate::Env, workspace_path: &Path) -> Result<PathBuf, OrbitError> {
     let output = run_git(
+        env,
         workspace_path,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?;
@@ -226,24 +241,30 @@ pub fn git_fetch_lock_target(git_common_dir: &Path) -> PathBuf {
 
 /// Run `op` while holding the exclusive lock that serializes Orbit-owned
 /// remote-tracking-ref updates across linked checkouts.
-pub fn with_git_fetch_lock<T, E, F>(workspace: &Path, op: F) -> Result<T, E>
+pub fn with_git_fetch_lock<T, E, F>(env: &crate::Env, workspace: &Path, op: F) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
 {
-    let common = git_common_dir(workspace).map_err(|error| io::Error::other(error.to_string()))?;
+    let common =
+        git_common_dir(env, workspace).map_err(|error| io::Error::other(error.to_string()))?;
     with_exclusive_file_lock(&git_fetch_lock_target(&common), "git fetch", op)
 }
 
 /// [`with_git_fetch_lock`] only when the lock is free now: `Ok(None)` when
 /// another Orbit fetch holds it. For an optional remote-tracking-ref update
 /// that a concurrent writer makes redundant, so it never waits on that writer.
-pub fn try_with_git_fetch_lock<T, E, F>(workspace: &Path, op: F) -> Result<Option<T>, E>
+pub fn try_with_git_fetch_lock<T, E, F>(
+    env: &crate::Env,
+    workspace: &Path,
+    op: F,
+) -> Result<Option<T>, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
 {
-    let common = git_common_dir(workspace).map_err(|error| io::Error::other(error.to_string()))?;
+    let common =
+        git_common_dir(env, workspace).map_err(|error| io::Error::other(error.to_string()))?;
     try_with_exclusive_file_lock(&git_fetch_lock_target(&common), "git fetch", op)
 }
 
@@ -419,8 +440,12 @@ fn is_admitted_config_override(setting: &str) -> bool {
 /// An argv the admission above refuses fails with [`OrbitError::InvalidInput`]
 /// before any process starts. A network or whole-checkout command passes its
 /// own deadline through [`run_git_within`].
-pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput, OrbitError> {
-    run_git_within(workspace_path, args, GIT_LOCAL_TIMEOUT)
+pub fn run_git(
+    env: &crate::Env,
+    workspace_path: &Path,
+    args: &[&str],
+) -> Result<GitCommandOutput, OrbitError> {
+    run_git_within(env, workspace_path, args, GIT_LOCAL_TIMEOUT)
 }
 
 /// Build a sanitized `git` [`Command`] rooted at `workspace_path` after
@@ -428,16 +453,22 @@ pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput,
 /// The child runs under the C locale without `LANGUAGE`, so stderr
 /// classification is stable, never prompts (`GIT_TERMINAL_PROMPT=0`), and has
 /// inherited `GIT_DIR` and `GIT_CONFIG*` overrides removed.
-pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, OrbitError> {
+pub fn git_command(
+    env: &crate::Env,
+    workspace_path: &Path,
+    args: &[&str],
+) -> Result<Command, OrbitError> {
     let admitted = admitted_git_args(args)?;
     let mut command = Command::new("git");
     command
         .args(&admitted)
         .current_dir(workspace_path)
+        .env_clear()
+        .envs(env.vars())
         .env(env_vars::LC_ALL, "C")
         .env_remove("LANGUAGE")
         .env("GIT_TERMINAL_PROMPT", "0");
-    for (name, _) in std::env::vars_os() {
+    for (name, _) in env.vars() {
         if name == env_vars::GIT_DIR
             || name == "GIT_CONFIG"
             || name.to_string_lossy().starts_with("GIT_CONFIG_")
@@ -459,11 +490,12 @@ pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, Orbi
 /// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
 /// select repositories and admitted configuration explicitly through argv.
 pub fn run_git_within(
+    env: &crate::Env,
     workspace_path: &Path,
     args: &[&str],
     deadline: Duration,
 ) -> Result<GitCommandOutput, OrbitError> {
-    let mut command = git_command(workspace_path, args)?;
+    let mut command = git_command(env, workspace_path, args)?;
     let output =
         run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
             |error| match error {
@@ -510,11 +542,13 @@ pub enum GitAncestry {
 /// caller decides whether [`GitAncestry::Unanswered`] reads as "not an
 /// ancestor" or as an error.
 pub fn git_ancestry(
+    env: &crate::Env,
     repo: &Path,
     ancestor: &str,
     descendant: &str,
 ) -> Result<GitAncestry, OrbitError> {
     let answer = run_git(
+        env,
         repo,
         &[
             "merge-base",

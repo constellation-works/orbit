@@ -239,10 +239,10 @@ impl WorkspacePreset {
         if touched.is_empty() {
             return Ok(());
         }
-        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-            global_root,
-            workspace_orbit_root,
-        ))?;
+        let config = orbit_config::ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(global_root, workspace_orbit_root),
+        )?;
         if !config.persistence.audit_db.is_file() {
             return Ok(());
         }
@@ -305,8 +305,12 @@ impl WorkspacePreset {
                 self.name
             )));
         }
-        let mut store =
-            ConfigStore::open_for_workspace_set(path, &global_root.join("config.toml"), init)?;
+        let mut store = ConfigStore::open_for_workspace_set(
+            &orbit_common::Env::capture(),
+            path,
+            &global_root.join("config.toml"),
+            init,
+        )?;
         let refuse = |key: &str, error: OrbitError| {
             OrbitError::InvalidInput(format!(
                 "preset '{}' sets `{key}`, which `orbit config set` refuses: {}",
@@ -614,10 +618,10 @@ fn active_plugin_job_files(
     workspace_orbit_root: &Path,
     staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<Vec<(String, Vec<PathBuf>)>, OrbitError> {
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        global_root,
-        workspace_orbit_root,
-    ))?;
+    let config = orbit_config::ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::new(global_root, workspace_orbit_root),
+    )?;
     if !config.persistence.audit_db.is_file() {
         return Ok(Vec::new());
     }

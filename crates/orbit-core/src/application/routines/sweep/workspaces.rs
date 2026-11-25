@@ -30,7 +30,11 @@ pub(super) fn load_clock_env_for(
         .flat_map(|(_, runtime)| runtime.child_env_default_names())
         .collect();
     let pass: Vec<String> = pass.into_iter().collect();
-    match orbit_common::security::operator_env::load_clock_env(global_root, &pass) {
+    match orbit_common::security::operator_env::load_clock_env(
+        &orbit_common::Env::capture(),
+        global_root,
+        &pass,
+    ) {
         Ok(defaults) => {
             for (_, runtime) in discovered
                 .entries

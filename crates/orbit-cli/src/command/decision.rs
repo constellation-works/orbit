@@ -179,7 +179,9 @@ fn channel_execute(
     input: &serde_json::Map<String, Value>,
 ) -> CommandOut {
     if !matches!(verb, DecisionVerb::ChannelList)
-        && orbit_common::governance::authorization::agent_context_declared()
+        && orbit_common::governance::authorization::agent_context_declared(
+            &orbit_core::composition::composition_env(),
+        )
     {
         return Err(OrbitError::PolicyDenied(
             "registering, revoking or rotating a decision channel is the operator's: it is refused from an agent envelope, so no running code can mint itself a human".into(),

@@ -292,7 +292,12 @@ fn footprint_moved(
     paths: &[String],
 ) -> Option<bool> {
     let spec = format!("{prior}^{{commit}}");
-    let known = run_git(workspace_root, &["cat-file", "-e", &spec]).ok()?;
+    let known = run_git(
+        &orbit_common::Env::capture(),
+        workspace_root,
+        &["cat-file", "-e", &spec],
+    )
+    .ok()?;
     if !known.success {
         return None;
     }
@@ -302,7 +307,7 @@ fn footprint_moved(
     let objects = |revision: &str| -> Option<String> {
         let mut args = vec!["ls-tree", revision, "--"];
         args.extend(paths.iter().map(String::as_str));
-        let listed = run_git(workspace_root, &args).ok()?;
+        let listed = run_git(&orbit_common::Env::capture(), workspace_root, &args).ok()?;
         listed.success.then_some(listed.stdout)
     };
     Some(objects(prior)? != objects(current)?)

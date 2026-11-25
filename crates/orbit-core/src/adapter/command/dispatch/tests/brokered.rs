@@ -490,6 +490,7 @@ fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
         return;
     }
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
     ) {
         return;

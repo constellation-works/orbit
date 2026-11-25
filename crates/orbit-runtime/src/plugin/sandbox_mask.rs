@@ -155,7 +155,7 @@ pub fn prepare_agent_mask(global_root: &Path) -> Result<PreparedPluginMask, Orbi
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let mut prepared = prepared;
-        let sockets = orbit_common::fs::path::ssh_socket_dir()?;
+        let sockets = orbit_common::fs::path::ssh_socket_dir(&orbit_common::Env::capture())?;
         let root = sockets.parent().ok_or_else(|| {
             OrbitError::Execution("SSH socket directory has no parent".to_string())
         })?;

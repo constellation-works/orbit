@@ -1843,10 +1843,13 @@ fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
         .to_string(),
     )
     .unwrap();
-    let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-        routed.bravo.home.join(".orbit"),
-        routed.bravo.repo().join(".orbit"),
-    ))
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::new(
+            routed.bravo.home.join(".orbit"),
+            routed.bravo.repo().join(".orbit"),
+        ),
+    )
     .unwrap();
     rusqlite::Connection::open(database)
         .unwrap()

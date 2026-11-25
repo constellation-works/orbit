@@ -159,8 +159,10 @@ fn mcp_listen_exits_on_sigterm_while_plugin_child_runs() {
             .any(|tool| tool["name"] == "signalfixture_wait"),
         "the supervising plugin tool must be advertised: {listed}"
     );
-    if !orbit_exec::macos_sandbox_test_guard("mcp_listen_exits_on_sigterm_while_plugin_child_runs")
-    {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "mcp_listen_exits_on_sigterm_while_plugin_child_runs",
+    ) {
         return;
     }
     // The backend receives Orbit's canonical root; the receiver must identify
@@ -335,7 +337,10 @@ spec:
 fn cli_ctrl_c_during_proc_spawn_reports_interrupt() {
     // `proc.spawn` confines its child with Seatbelt on macOS, which a nested
     // agent sandbox refuses to apply [ORB-15409].
-    if !orbit_exec::macos_sandbox_test_guard("cli_ctrl_c_during_proc_spawn_reports_interrupt") {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "cli_ctrl_c_during_proc_spawn_reports_interrupt",
+    ) {
         return;
     }
     let fixture = Fixture::init();

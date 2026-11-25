@@ -50,6 +50,7 @@ pub enum WorkspaceInitMode {
 /// An in-memory, surgically-editable view of one `config.toml` file, plus
 /// the machinery to validate an edit and atomically persist it.
 pub struct ConfigStore {
+    pub(super) env: orbit_common::Env,
     pub(super) scope: ConfigScope,
     pub(super) path: PathBuf,
     /// The global config path used when this workspace store was opened for
@@ -70,10 +71,14 @@ impl ConfigStore {
     /// exists on disk. A missing file is not an error: it opens as an empty
     /// document, matching how [`ResolvedConfig::load`](crate::ResolvedConfig::load) treats a missing
     /// config (every setting falls back to its default).
-    pub fn open(scope: ConfigScope, path: impl Into<PathBuf>) -> Result<Self, OrbitError> {
+    pub fn open(
+        env: &orbit_common::Env,
+        scope: ConfigScope,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, OrbitError> {
         let path = path.into();
         let content = read_optional(&path)?;
-        Self::from_content(scope, path, &content, content.clone())
+        Self::from_content(env, scope, path, &content, content.clone())
     }
 
     /// Run `op` holding the exclusive write lock of the `config.toml` at
@@ -116,6 +121,7 @@ impl ConfigStore {
     /// exist, `mode` decides whether to seed it from the global file, start
     /// fresh, or refuse.
     pub fn open_for_workspace_set(
+        env: &orbit_common::Env,
         workspace_config_path: impl Into<PathBuf>,
         global_config_path: &Path,
         mode: WorkspaceInitMode,
@@ -126,18 +132,18 @@ impl ConfigStore {
         {
             let roots = ConfigRoots::new(global_root, workspace_root);
             if !roots.has_workspace_layer() {
-                validate_staged_workspace_document(&roots, &path, "")?;
+                validate_staged_workspace_document(env, &roots, &path, "")?;
             }
         }
         // A file holding only `[plugin_enablement]` is not a policy layer
         // yet, so the first real setting written into it gets the same
         // fail-closed choice as a missing file; the toggles are carried over.
         if workspace_config_sets_policy(&path) {
-            let mut store = Self::open(ConfigScope::Workspace, path)?;
+            let mut store = Self::open(env, ConfigScope::Workspace, path)?;
             store.global_config_path = Some(global_config_path.to_path_buf());
             return Ok(store);
         }
-        let mut existing = Self::open(ConfigScope::Workspace, path.clone())?;
+        let mut existing = Self::open(env, ConfigScope::Workspace, path.clone())?;
         let toggles = existing.doc.remove(PLUGIN_ENABLEMENT_TABLE);
         let content = match mode {
             WorkspaceInitMode::RequireExisting => {
@@ -158,7 +164,7 @@ impl ConfigStore {
             WorkspaceInitMode::Fresh => String::new(),
         };
         let mut store =
-            Self::from_content(ConfigScope::Workspace, path, &content, existing.opened)?;
+            Self::from_content(env, ConfigScope::Workspace, path, &content, existing.opened)?;
         store.global_config_path = Some(global_config_path.to_path_buf());
         if mode == WorkspaceInitMode::SeedFromGlobal {
             // Global-only keys (`[machine]`, crew env) are rejected in
@@ -174,6 +180,7 @@ impl ConfigStore {
     }
 
     fn from_content(
+        env: &orbit_common::Env,
         scope: ConfigScope,
         path: PathBuf,
         content: &str,
@@ -186,6 +193,7 @@ impl ConfigStore {
             ))
         })?;
         Ok(Self {
+            env: env.clone(),
             scope,
             path,
             global_config_path: None,

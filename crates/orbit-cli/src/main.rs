@@ -42,6 +42,8 @@ mod tests;
 fn main() {
     // The one read of the process environment, before logging starts.
     let env = orbit_common::Env::capture();
+    orbit_common::fs::io::init_durability(&env);
+    orbit_common::security::redaction::init_process_redaction(&env);
     // Before logging, generation pinning, or any store open. Test binaries
     // never enter `main`, so they keep unknown provenance.
     orbit_common::process::build::register_orbit_build(compiled_orbit_build());

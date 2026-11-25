@@ -4,6 +4,7 @@ use super::*;
 #[test]
 fn consented_mutations_reach_agent_cli_and_mcp_without_operator_authority() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "consented_mutations_reach_agent_cli_and_mcp_without_operator_authority",
     ) {
         return;

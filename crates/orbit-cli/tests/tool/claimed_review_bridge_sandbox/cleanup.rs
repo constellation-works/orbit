@@ -55,6 +55,7 @@ impl ProviderChild {
         // The supervisor assumes kill/reap ownership. Keep the watchdog
         // armed until it finishes, including its setup-error cleanup path.
         orbit_exec::supervise_child(
+            &orbit_common::Env::capture(),
             self.child.take().expect("owned provider"),
             Some(600_000),
             None,
@@ -365,6 +366,7 @@ impl PluginBrokerHandle for InjectedBroker {
 #[test]
 fn confined_pre_supervision_failures_reap_the_provider_and_end_its_group() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "confined_pre_supervision_failures_reap_the_provider_and_end_its_group",
     ) {
         return;

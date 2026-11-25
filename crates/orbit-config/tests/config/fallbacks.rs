@@ -62,7 +62,8 @@ fn optional_crew_fallbacks_match_entry_defaults_after_removal() {
             fallbacks_write_config(workspace.path(), "");
             fallbacks_write_config(root, body);
             let key = format!("crews.custom.{field}");
-            let effective = load_effective_config(&roots).expect("config loads before removal");
+            let effective = load_effective_config(&orbit_common::Env::capture(), &roots)
+                .expect("config loads before removal");
             let row = effective
                 .values()
                 .iter()
@@ -73,7 +74,8 @@ fn optional_crew_fallbacks_match_entry_defaults_after_removal() {
             assert_eq!(fallback.value, expected);
 
             remove_field(root, "custom", field);
-            let reloaded = load_effective_config(&roots).expect("optional field removal loads");
+            let reloaded = load_effective_config(&orbit_common::Env::capture(), &roots)
+                .expect("optional field removal loads");
             assert_eq!(reloaded.value_for(&key), Some(fallback.value.clone()));
         }
     }
@@ -107,7 +109,8 @@ fn required_crew_fields_without_valid_lower_values_have_no_fallback() {
                 }
                 fallbacks_write_config(root, &body);
                 let key = format!("crews.{crew}.{field}");
-                let effective = load_effective_config(&roots).expect("config loads before removal");
+                let effective = load_effective_config(&orbit_common::Env::capture(), &roots)
+                    .expect("config loads before removal");
                 let row = effective
                     .values()
                     .iter()
@@ -118,8 +121,8 @@ fn required_crew_fields_without_valid_lower_values_have_no_fallback() {
                     "invalid required field removal has no prediction"
                 );
                 remove_field(root, crew, field);
-                let error =
-                    load_effective_config(&roots).expect_err("required field removal fails");
+                let error = load_effective_config(&orbit_common::Env::capture(), &roots)
+                    .expect_err("required field removal fails");
                 let OrbitError::InvalidInput(message) = error else {
                     panic!("wrong refusal: {error}");
                 };
@@ -161,7 +164,8 @@ fn workspace_crew_fallbacks_match_admitted_global_fields_after_removal() {
              enabled = true\ndescription = 'workspace description'\ntags = ['workspace']\neffort = 'high'\n",
         );
         let key = format!("crews.custom.{field}");
-        let effective = load_effective_config(&roots).expect("merged crew loads");
+        let effective = load_effective_config(&orbit_common::Env::capture(), &roots)
+            .expect("merged crew loads");
         let row = effective
             .values()
             .iter()
@@ -171,7 +175,8 @@ fn workspace_crew_fallbacks_match_admitted_global_fields_after_removal() {
         let fallback = row.fallback.as_ref().expect("global field fallback");
         assert_eq!(fallback.layer, ConfigValueSourceKind::Global);
         remove_field(workspace.path(), "custom", field);
-        let reloaded = load_effective_config(&roots).expect("inherits global field after removal");
+        let reloaded = load_effective_config(&orbit_common::Env::capture(), &roots)
+            .expect("inherits global field after removal");
         assert_eq!(reloaded.value_for(&key), Some(fallback.value.clone()));
         let row = reloaded
             .values()

@@ -146,7 +146,7 @@ impl OrbitRuntime {
             operator_decision_authority
                 && canonical_agent.is_none()
                 && canonical_model.is_none()
-                && !agent_context_declared(),
+                && !agent_context_declared(&orbit_common::Env::capture()),
         )?;
         let comment_only = params.is_comment_only();
         if params.review_settlement.is_some() && (!system_writer || params.comment.is_none()) {
@@ -234,7 +234,7 @@ impl OrbitRuntime {
                 && operator_decision_authority
                 && canonical_agent.is_none()
                 && canonical_model.is_none()
-                && !agent_context_declared();
+                && !agent_context_declared(&orbit_common::Env::capture());
             if !human_force {
                 ensure_post_deploy_criteria_met(self, &task)?;
                 self.ensure_mutation_proposals_applied(&task)?;
@@ -412,7 +412,7 @@ impl OrbitRuntime {
         // that declares an agent envelope or a managed run is never an operator.
         let artifact_writer = if system_writer {
             Some(ArtifactWriter::System)
-        } else if operator_write && !agent_context_declared() {
+        } else if operator_write && !agent_context_declared(&orbit_common::Env::capture()) {
             Some(ArtifactWriter::Operator)
         } else {
             None
@@ -611,7 +611,7 @@ impl OrbitRuntime {
                 Some(FORCED_STATUS_EVENT.to_string())
             } else if guard_work_start
                 && requested_status == Some(TaskStatus::InProgress)
-                && !(operator_write && !agent_context_declared())
+                && !(operator_write && !agent_context_declared(&orbit_common::Env::capture()))
             {
                 // An agent or managed-run shell moving a task into `in-progress`
                 // starts work. Only a trusted operator's move (including the
@@ -645,7 +645,9 @@ impl OrbitRuntime {
                 append_comments: append_comments.clone(),
                 append_history: append_history.clone(),
                 expected_status: expected_status.map(|status| vec![status]),
-                operator_comment: comment_only && operator_write && !agent_context_declared(),
+                operator_comment: comment_only
+                    && operator_write
+                    && !agent_context_declared(&orbit_common::Env::capture()),
                 ..TaskRecordUpdateParams::from(params)
             },
         )?;

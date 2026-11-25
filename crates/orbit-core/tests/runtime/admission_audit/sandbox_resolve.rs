@@ -53,8 +53,12 @@ fn registered_checkout_denies_live_orbit_versioned_stores() {
             .resolve_executor_sandbox("claude", None, Some(&worktree))
             .expect("resolve worktree sandbox")
             .expect("sandbox");
-        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "claude")
-            .expect("compile worktree profile");
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            &resolved.fs_profile,
+            "claude",
+        )
+        .expect("compile worktree profile");
         let orbit = worktree.join(".orbit");
         for relative in [
             "auto_tasks/child-write.yaml",
@@ -115,8 +119,12 @@ fn assert_registered_host_stores_denied(
 
     #[cfg(target_os = "macos")]
     {
-        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, provider)
-            .unwrap_or_else(|error| panic!("compile {provider} profile: {error}"));
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            &resolved.fs_profile,
+            provider,
+        )
+        .unwrap_or_else(|error| panic!("compile {provider} profile: {error}"));
         for path in &protected {
             let physical = orbit_exec::physical_with_missing_tail(path);
             assert!(
@@ -186,8 +194,12 @@ fn assert_registered_checkout_boundaries_unchanged(
     }
     #[cfg(target_os = "macos")]
     {
-        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "claude")
-            .expect("compile registered checkout profile");
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            &resolved.fs_profile,
+            "claude",
+        )
+        .expect("compile registered checkout profile");
         let authority = orbit_exec::physical_with_missing_tail(
             &runtime
                 .paths()
@@ -417,8 +429,12 @@ fn macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree() {
                 .resolve_executor_sandbox(provider, Some(profile), Some(&worktree))
                 .expect("resolve writer sandbox")
                 .expect("macOS sandbox");
-            let sbpl = orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
-                .expect("compile writer profile");
+            let sbpl = orbit_exec::compile_macos_sandbox_profile(
+                &orbit_common::Env::capture(),
+                &sandbox.fs_profile,
+                provider,
+            )
+            .expect("compile writer profile");
             for path in writable {
                 assert!(
                     last_compiled_file_write_allows_under(&sbpl, path, &repo),
@@ -442,6 +458,7 @@ fn macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree() {
                 );
             }
             if orbit_exec::macos_sandbox_test_guard(
+                &orbit_common::Env::capture(),
                 "macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree",
             ) {
                 for path in writable {
@@ -720,6 +737,7 @@ fn resident_cycle_worktree_launch_is_enforceable_while_direct_reviewer_refuses()
         "the resident cycle's worktree launch is managed"
     );
     compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resident.fs_profile,
         "/bin/true",
         &[],
@@ -737,14 +755,28 @@ fn resident_cycle_worktree_launch_is_enforceable_while_direct_reviewer_refuses()
     profile
         .modify
         .push(format!("{}/src/**", worktree.display()));
-    let error = compile_linux_bwrap_argv(&profile, "/bin/true", &[], Some(&worktree), false)
-        .expect_err("a direct reviewer invocation must still refuse");
+    let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &profile,
+        "/bin/true",
+        &[],
+        Some(&worktree),
+        false,
+    )
+    .expect_err("a direct reviewer invocation must still refuse");
     assert!(
         error.to_string().contains("non-subtree denyModify") && error.to_string().contains(".env"),
         "{error}"
     );
-    compile_linux_bwrap_argv(&profile, "/bin/true", &[], Some(&worktree), true)
-        .expect("the managed resident launch is enforceable");
+    compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &profile,
+        "/bin/true",
+        &[],
+        Some(&worktree),
+        true,
+    )
+    .expect("the managed resident launch is enforceable");
 }
 
 #[cfg(target_os = "linux")]

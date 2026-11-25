@@ -55,7 +55,7 @@ pub fn inspect_base_merge(
             "inspecting a base merge requires full commit SHAs".to_string(),
         ));
     }
-    match git_ancestry(repo_root, base_sha, head_sha)? {
+    match git_ancestry(&orbit_common::Env::capture(), repo_root, base_sha, head_sha)? {
         GitAncestry::Ancestor => {
             return Ok(BaseMergeInspection::AlreadyUpToDate);
         }
@@ -291,5 +291,5 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Result<ExecutionResult, OrbitErro
         environment_mode: EnvironmentMode::Inherit,
         debug: false,
     };
-    run_process(&request, &NoSandbox)
+    run_process(&orbit_common::Env::capture(), &request, &NoSandbox)
 }

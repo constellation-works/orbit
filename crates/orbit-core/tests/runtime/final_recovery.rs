@@ -208,10 +208,10 @@ impl Fixture {
     /// the run's own record. Writes that record only the decision still land.
     /// Dropping the returned guard restores the store.
     fn fail_outcome_writes(&self) -> OutcomeWriteFault {
-        let db = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-            &self.global,
-            self.repo.join(".orbit"),
-        ))
+        let db = orbit_config::resolved_audit_db_path(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(&self.global, self.repo.join(".orbit")),
+        )
         .unwrap();
         let connection = rusqlite::Connection::open(db).unwrap();
         connection

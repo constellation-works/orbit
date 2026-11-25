@@ -36,7 +36,12 @@ fn an_explicit_pass_list_cannot_smuggle_a_privilege_bearing_orbit_name() {
         "ORBIT_WORKSPACE_CLAIM_TOKEN".to_string(),
     ];
 
-    let env = allowlisted_child_env_from(&parent, &pass, &["ORBIT_OPERATOR"]);
+    let env = allowlisted_child_env_from(
+        &orbit_common::Env::capture(),
+        &parent,
+        &pass,
+        &["ORBIT_OPERATOR"],
+    );
 
     // Named in `pass` and `extras` alike; still refused. Only the named
     // envelope variable, admitted on its own terms, survives.
@@ -142,13 +147,20 @@ fn a_secret_file_is_read_trimmed_and_every_unsafe_state_is_refused_without_the_v
     let dir = tempfile::tempdir().unwrap();
     let path = secret_file(dir.path(), "sk-secret-value\n", 0o600);
     let written = path.to_str().unwrap();
-    assert_eq!(read_secret_file(written).unwrap(), "sk-secret-value");
+    assert_eq!(
+        read_secret_file(&orbit_common::Env::capture(), written).unwrap(),
+        "sk-secret-value"
+    );
     std::fs::write(&path, "sk-secret-value\r\n\n").unwrap();
-    assert_eq!(read_secret_file(written).unwrap(), "sk-secret-value");
+    assert_eq!(
+        read_secret_file(&orbit_common::Env::capture(), written).unwrap(),
+        "sk-secret-value"
+    );
 
     for mode in [0o644, 0o640, 0o604, 0o660] {
         let path = secret_file(dir.path(), "sk-secret-value\n", mode);
-        let error = read_secret_file(path.to_str().unwrap()).unwrap_err();
+        let error =
+            read_secret_file(&orbit_common::Env::capture(), path.to_str().unwrap()).unwrap_err();
         assert_eq!(error, SecretFileError::Shared { mode }, "mode {mode:o}");
         assert!(!error.to_string().contains("sk-secret-value"), "{error}");
     }
@@ -157,24 +169,28 @@ fn a_secret_file_is_read_trimmed_and_every_unsafe_state_is_refused_without_the_v
     let link = dir.path().join("link");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     assert_eq!(
-        read_secret_file(link.to_str().unwrap()).unwrap_err(),
+        read_secret_file(&orbit_common::Env::capture(), link.to_str().unwrap()).unwrap_err(),
         SecretFileError::Symlink
     );
 
     assert_eq!(
-        read_secret_file(dir.path().join("absent").to_str().unwrap()).unwrap_err(),
+        read_secret_file(
+            &orbit_common::Env::capture(),
+            dir.path().join("absent").to_str().unwrap()
+        )
+        .unwrap_err(),
         SecretFileError::Missing
     );
     for empty in ["", "\n", "  \n"] {
         let path = secret_file(dir.path(), empty, 0o600);
         assert_eq!(
-            read_secret_file(path.to_str().unwrap()).unwrap_err(),
+            read_secret_file(&orbit_common::Env::capture(), path.to_str().unwrap()).unwrap_err(),
             SecretFileError::Empty,
             "{empty:?}"
         );
     }
     assert_eq!(
-        read_secret_file(dir.path().to_str().unwrap()).unwrap_err(),
+        read_secret_file(&orbit_common::Env::capture(), dir.path().to_str().unwrap()).unwrap_err(),
         SecretFileError::NotRegular
     );
 }
@@ -194,7 +210,7 @@ fn a_secret_file_owned_by_another_user_is_refused() {
     // SAFETY: `c_path` is a valid NUL-terminated path for the call's duration.
     assert_eq!(unsafe { libc::chown(c_path.as_ptr(), 65534, 65534) }, 0);
     assert_eq!(
-        read_secret_file(path.to_str().unwrap()).unwrap_err(),
+        read_secret_file(&orbit_common::Env::capture(), path.to_str().unwrap()).unwrap_err(),
         SecretFileError::ForeignOwner
     );
 }
@@ -205,7 +221,10 @@ fn a_tilde_secret_path_expands_to_the_home_directory() {
     let home = tempfile::tempdir().unwrap();
     secret_file(home.path(), "sk-home-value\n", 0o600);
     let _env = scoped([("HOME", Some(home.path().to_str().unwrap()))]);
-    assert_eq!(read_secret_file("~/credits-key").unwrap(), "sk-home-value");
+    assert_eq!(
+        read_secret_file(&orbit_common::Env::capture(), "~/credits-key").unwrap(),
+        "sk-home-value"
+    );
 }
 
 #[cfg(unix)]
@@ -224,7 +243,12 @@ fn a_file_backed_crew_entry_sets_only_its_target_and_an_unusable_file_leaves_it_
     ];
 
     let mut child = shared.to_vec();
-    apply_crew_env_from(&mut child, &shared, std::slice::from_ref(&entry));
+    apply_crew_env_from(
+        &orbit_common::Env::capture(),
+        &mut child,
+        &shared,
+        std::slice::from_ref(&entry),
+    );
     assert_eq!(
         child,
         [
@@ -236,23 +260,43 @@ fn a_file_backed_crew_entry_sets_only_its_target_and_an_unusable_file_leaves_it_
         ],
         "the file's trimmed contents replace the shared key and the other Claude credential goes"
     );
-    assert!(unset_crew_env_from(&shared, std::slice::from_ref(&entry)).is_empty());
-    assert_eq!(crew_env_file_problem(&entry), None);
+    assert!(
+        unset_crew_env_from(
+            &orbit_common::Env::capture(),
+            &shared,
+            std::slice::from_ref(&entry)
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        crew_env_file_problem(&orbit_common::Env::capture(), &entry),
+        None
+    );
 
     // The same entry once the file is group-readable: the crew never falls
     // back to the shared credential.
     secret_file(dir.path(), "sk-credits-value\n", 0o640);
     let mut child = shared.to_vec();
-    apply_crew_env_from(&mut child, &shared, std::slice::from_ref(&entry));
+    apply_crew_env_from(
+        &orbit_common::Env::capture(),
+        &mut child,
+        &shared,
+        std::slice::from_ref(&entry),
+    );
     assert!(
         !child.iter().any(|(name, _)| name == "ANTHROPIC_API_KEY"),
         "a refused file leaves the target unset: {child:?}"
     );
     assert_eq!(
-        unset_crew_env_from(&shared, std::slice::from_ref(&entry)),
+        unset_crew_env_from(
+            &orbit_common::Env::capture(),
+            &shared,
+            std::slice::from_ref(&entry)
+        ),
         std::slice::from_ref(&entry)
     );
-    let problem = crew_env_file_problem(&entry).expect("a refused file has a reason");
+    let problem = crew_env_file_problem(&orbit_common::Env::capture(), &entry)
+        .expect("a refused file has a reason");
     assert!(
         problem.contains("chmod 600") && !problem.contains("sk-credits-value"),
         "{problem}"
@@ -262,7 +306,12 @@ fn a_file_backed_crew_entry_sets_only_its_target_and_an_unusable_file_leaves_it_
     let variable = CrewEnvVar::parse("ANTHROPIC_API_KEY=CREDITS_KEY").unwrap();
     let parent = [("CREDITS_KEY".to_string(), "from-variable".to_string())];
     let mut child = shared.to_vec();
-    apply_crew_env_from(&mut child, &parent, &[variable]);
+    apply_crew_env_from(
+        &orbit_common::Env::capture(),
+        &mut child,
+        &parent,
+        &[variable],
+    );
     assert!(child.contains(&("ANTHROPIC_API_KEY".to_string(), "from-variable".to_string())));
 }
 

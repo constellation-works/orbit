@@ -432,7 +432,10 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     );
     fixture.publish_script("0.19.0", candidate.as_bytes());
     let digest = executable_generation(&fixture.executable).expect("installed digest");
-    drop(GenerationGuard::acquire(authority, &digest).expect("initialize generation"));
+    drop(
+        GenerationGuard::acquire(&orbit_common::Env::capture(), authority, &digest)
+            .expect("initialize generation"),
+    );
     let generation = authority.join(".generation.lock");
     let before_generation = std::fs::read(&generation).expect("generation record");
     let before = std::fs::read(&fixture.executable).expect("installed bytes");

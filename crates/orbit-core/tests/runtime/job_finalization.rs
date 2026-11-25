@@ -57,9 +57,10 @@ impl Fixture {
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
-        let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-            &global, &workspace,
-        ))
+        let database = orbit_config::resolved_audit_db_path(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(&global, &workspace),
+        )
         .unwrap();
         Self {
             _root: root,

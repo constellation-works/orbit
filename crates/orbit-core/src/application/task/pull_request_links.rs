@@ -53,11 +53,15 @@ fn is_pull_request_number(id: &str) -> bool {
 }
 
 fn origin_repository_url(repo_root: &std::path::Path) -> Option<String> {
-    let output = run_git(repo_root, &["remote", "get-url", "origin"])
-        .inspect_err(|error| {
-            tracing::debug!(%error, "pull request links: origin remote unreadable");
-        })
-        .ok()?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        repo_root,
+        &["remote", "get-url", "origin"],
+    )
+    .inspect_err(|error| {
+        tracing::debug!(%error, "pull request links: origin remote unreadable");
+    })
+    .ok()?;
     if !output.success {
         return None;
     }

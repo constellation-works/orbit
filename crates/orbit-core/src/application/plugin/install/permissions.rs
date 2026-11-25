@@ -93,8 +93,10 @@ pub(super) fn fs_compare_layout(
     name: &str,
     version: &str,
 ) -> Result<FsCompareLayout, OrbitError> {
-    let config =
-        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let config = orbit_config::ResolvedConfig::load(
+        runtime.execution_env_policy().process_env(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )?;
     let repo_root = &runtime.paths().repo_root;
     let workspace = repo_root
         .canonicalize()

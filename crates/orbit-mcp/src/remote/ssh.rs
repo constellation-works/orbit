@@ -31,7 +31,7 @@ const SSH_CONNECT_TIMEOUT_SECS: u64 = 5;
 /// defaults, including the relative `%C` fallback, override an explicit
 /// opt-out. `~` has expanded from `HOME` for as long as `Include` has existed.
 pub(crate) fn ssh_command(target: &str) -> Result<Command, OrbitError> {
-    let sockets = ssh_socket_dir()?;
+    let sockets = ssh_socket_dir(&orbit_common::Env::capture())?;
     prepare_socket_dir(&sockets).map_err(|error| {
         OrbitError::Io(format!(
             "prepare SSH socket directory '{}': {error}",

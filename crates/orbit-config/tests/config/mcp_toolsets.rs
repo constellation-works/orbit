@@ -41,8 +41,10 @@ fn mcp_toolsets_load_with_logs(roots: &ConfigRoots) -> (ResolvedConfig, String) 
         .with_writer(McpToolsetsCapture(buffer.clone()))
         .with_ansi(false)
         .finish();
-    let config = tracing::subscriber::with_default(subscriber, || ResolvedConfig::load(roots))
-        .expect("retired toolset must not fail config resolution");
+    let config = tracing::subscriber::with_default(subscriber, || {
+        ResolvedConfig::load(&orbit_common::Env::capture(), roots)
+    })
+    .expect("retired toolset must not fail config resolution");
     let logs = String::from_utf8(buffer.lock().expect("logs").clone()).expect("utf8 logs");
     (config, logs)
 }

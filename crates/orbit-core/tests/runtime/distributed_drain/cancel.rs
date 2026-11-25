@@ -72,10 +72,13 @@ fn cancellation_retains_claim_and_reservation_until_provider_teardown_is_confirm
                 payload_json: payload.to_string(),
             })
             .unwrap();
-        let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-            pair.follower.global_root(),
-            pair.follower_repo.join(".orbit"),
-        ))
+        let database = orbit_config::resolved_audit_db_path(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(
+                pair.follower.global_root(),
+                pair.follower_repo.join(".orbit"),
+            ),
+        )
         .unwrap();
         let connection = rusqlite::Connection::open(database).unwrap();
         if audit_fault {

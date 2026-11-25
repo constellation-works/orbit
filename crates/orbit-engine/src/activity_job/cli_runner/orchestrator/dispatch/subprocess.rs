@@ -236,7 +236,7 @@ pub(super) fn invoke_cli_provider(
                 report: &report_progress,
             }),
             stopped_descendants: Some(StoppedDescendantReporter {
-                threshold: stopped_descendant_threshold(),
+                threshold: stopped_descendant_threshold(&orbit_common::Env::capture()),
                 report: &report_stopped,
             }),
             spawned_child: Some(spawned),

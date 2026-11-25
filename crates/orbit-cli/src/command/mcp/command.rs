@@ -314,9 +314,10 @@ fn configured_mcp_toolsets(
     let config = if flagged_role.is_some() && flagged_toolsets.is_some() {
         None
     } else {
-        match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
-            global_root,
-        )) {
+        match orbit_config::ResolvedConfig::load(
+            &orbit_core::composition::composition_env(),
+            &orbit_config::ConfigRoots::global_only(global_root),
+        ) {
             Ok(config) => Some(config.snapshot),
             Err(error) => {
                 tracing::warn!(

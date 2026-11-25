@@ -177,7 +177,8 @@ pub fn set_host_offline(
             .map(|until| until.with_timezone(&Utc));
         Some(HostOffline {
             reason: reason.trim().to_string(),
-            set_by: os_login_name().unwrap_or_else(|| local.name.clone()),
+            set_by: os_login_name(&orbit_core::composition::composition_env())
+                .unwrap_or_else(|| local.name.clone()),
             since: Utc::now(),
             until,
         })

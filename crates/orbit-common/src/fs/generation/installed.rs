@@ -6,7 +6,6 @@
 //! installed executable what it supports, so the build cannot advance shared
 //! state past it.
 
-use crate::env_vars;
 use std::path::{Path, PathBuf};
 
 use super::handoff::{PROBE_TIMEOUT, Report, contract_report};
@@ -18,19 +17,20 @@ pub use crate::env_vars::ORBIT_INSTALL_DIR as INSTALL_DIR_ENV;
 
 /// The managed install directory for this process: `$ORBIT_INSTALL_DIR`, else
 /// `$HOME/.orbit/bin`.
-pub fn managed_install_dir() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os(INSTALL_DIR_ENV).filter(|value| !value.is_empty()) {
+pub fn managed_install_dir(env: &crate::Env) -> Option<PathBuf> {
+    if let Some(explicit) = env.orbit_install_dir().filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(explicit));
     }
-    std::env::var_os(env_vars::HOME)
+    env.home()
         .filter(|value| !value.is_empty())
         .map(|home| PathBuf::from(home).join(".orbit").join("bin"))
 }
 
 /// The `orbit` executable in the managed install directory, when one exists
 /// and this process is not running it.
-pub fn installed_executable_other_than_this_process() -> Option<PathBuf> {
-    let installed = managed_install_dir()?.join(format!("orbit{}", std::env::consts::EXE_SUFFIX));
+pub fn installed_executable_other_than_this_process(env: &crate::Env) -> Option<PathBuf> {
+    let installed =
+        managed_install_dir(env)?.join(format!("orbit{}", std::env::consts::EXE_SUFFIX));
     let installed_metadata = std::fs::metadata(&installed).ok()?;
     if !installed_metadata.is_file() {
         return None;

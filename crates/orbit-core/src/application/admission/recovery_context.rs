@@ -264,6 +264,7 @@ fn reconcile_task(runtime: &OrbitRuntime, metadata: &Task) -> Result<Option<Task
             return Ok(None);
         };
         let remote = run_git_within(
+            runtime.execution_env_policy().process_env(),
             &runtime.paths().repo_root,
             &[
                 "ls-remote",

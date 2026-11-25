@@ -68,7 +68,8 @@ fn push_unique_authority(roots: &mut Vec<PathBuf>, root: PathBuf) -> Result<(), 
 /// `--preflight`, which takes the same admissions, answer for the pin.
 pub fn acquire_admissions(roots: &[PathBuf]) -> Result<Vec<GenerationUpdate>, OrbitError> {
     admit_each(roots, |root| {
-        let admission = GenerationUpdate::acquire(root)?;
+        let admission =
+            GenerationUpdate::acquire(&orbit_core::composition::composition_env(), root)?;
         admission.ensure_can_record()?;
         Ok(admission)
     })
@@ -89,7 +90,11 @@ pub(super) fn acquire_current_admissions(
 ) -> Result<Vec<CurrentAdmission>, OrbitError> {
     let installed = InstalledGeneration { digest, identity };
     admit_each(roots, |root| {
-        let admission = GenerationUpdate::acquire_current(root, &installed)?;
+        let admission = GenerationUpdate::acquire_current(
+            &orbit_core::composition::composition_env(),
+            root,
+            &installed,
+        )?;
         admission.ensure_can_record()?;
         Ok(admission)
     })
@@ -116,7 +121,11 @@ pub(super) fn acquire_candidate_admissions(
     candidate: &HandoverCandidate,
 ) -> Result<Vec<CandidateAdmission>, OrbitError> {
     admit_each(roots, |root| {
-        let admission = GenerationUpdate::acquire_for_candidate(root, candidate)?;
+        let admission = GenerationUpdate::acquire_for_candidate(
+            &orbit_core::composition::composition_env(),
+            root,
+            candidate,
+        )?;
         admission.ensure_can_record()?;
         Ok(admission)
     })
@@ -351,7 +360,11 @@ impl CandidatePins {
             let Some(held) = self.pins[index].1.take() else {
                 continue;
             };
-            match GenerationUpdate::fence_pinned(&root, held) {
+            match GenerationUpdate::fence_pinned(
+                &orbit_core::composition::composition_env(),
+                &root,
+                held,
+            ) {
                 Ok(fence) => lent.fences.push((root, fence)),
                 Err(refused) => {
                     let FenceRefusal { restored, error } = *refused;

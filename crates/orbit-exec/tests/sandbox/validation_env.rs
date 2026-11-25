@@ -118,6 +118,7 @@ fn shell(program: &Path) -> LoginShell {
 /// resolved environment and nothing else.
 fn run_with(env: &ValidationEnvironment, command: &str) -> (bool, String) {
     let outcome = run_process(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],
@@ -145,6 +146,7 @@ fn a_minimal_launcher_path_gets_the_login_shell_toolchain() {
     let login = host.fake_login_shell("fake-login-sh", "");
 
     let resolved = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy::default(),
         &shell(&login),
@@ -199,6 +201,7 @@ fn real_login_shells_report_the_profile_path() {
         )
         .unwrap();
         let resolved = ValidationEnvironment::resolve(
+            &orbit_common::Env::capture(),
             host.launcher_env(),
             &ValidationEnvPolicy::default(),
             &shell(Path::new(program)),
@@ -235,6 +238,7 @@ fn configured_path_prepends_or_replaces_and_is_the_recorded_source() {
     let expanded = format!("{}/.extra/bin:/opt/orbit/bin", host.home.display());
 
     let prepended = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy {
             path: configured.clone(),
@@ -250,6 +254,7 @@ fn configured_path_prepends_or_replaces_and_is_the_recorded_source() {
     assert_eq!(prepended.preflight_warning(), None);
 
     let replaced = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy {
             path: configured,
@@ -282,6 +287,7 @@ fn a_failing_or_hanging_login_shell_falls_back_to_the_launcher() {
     let broken = host.fake_login_shell("broken-login-sh", "echo 'profile error' >&2; exit 3");
 
     let failed = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy::default(),
         &shell(&broken),
@@ -303,6 +309,7 @@ fn a_failing_or_hanging_login_shell_falls_back_to_the_launcher() {
 
     let hanging = host.fake_login_shell("hanging-login-sh", "sleep 30");
     let timed_out = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy::default(),
         &LoginShell::new(&hanging, Duration::from_millis(300)),
@@ -328,6 +335,7 @@ fn a_login_shell_ignoring_sigterm_is_still_bounded_by_the_probe_timeout() {
 
     let started = Instant::now();
     let resolved = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy::default(),
         &LoginShell::new(&stubborn, Duration::from_millis(300)),
@@ -355,6 +363,7 @@ fn disabled_resolution_never_starts_the_login_shell() {
     );
 
     let resolved = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy {
             login_shell: false,
@@ -390,6 +399,7 @@ fn a_resolution_is_reused_within_the_cache_window() {
 
     for _ in 0..3 {
         let resolved = ValidationEnvironment::resolve(
+            &orbit_common::Env::capture(),
             host.launcher_env(),
             &ValidationEnvPolicy::default(),
             &shell(&login),
@@ -414,8 +424,12 @@ fn interactive_rc_toolchains_are_found_and_can_be_disabled() {
         ),
     );
     let bash = shell(Path::new("/bin/bash"));
-    let interactive =
-        ValidationEnvironment::resolve(host.launcher_env(), &ValidationEnvPolicy::default(), &bash);
+    let interactive = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
+        host.launcher_env(),
+        &ValidationEnvPolicy::default(),
+        &bash,
+    );
     assert_eq!(
         interactive.probe_mode,
         Some(LoginShellMode::InteractiveLogin)
@@ -431,6 +445,7 @@ fn interactive_rc_toolchains_are_found_and_can_be_disabled() {
     assert!(passed, "interactive rc supplies the tool: {output}");
 
     let login = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy {
             interactive: false,
@@ -523,6 +538,7 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
             resolve_with_ready_timeout(&host, &bash)
         } else {
             ValidationEnvironment::resolve(
+                &orbit_common::Env::capture(),
                 host.launcher_env(),
                 &ValidationEnvPolicy::default(),
                 &bash,
@@ -586,6 +602,7 @@ fn broken_interactive_rcs_fall_back_with_bounded_cached_outcomes() {
              exit 91\n",
         );
         let cached = ValidationEnvironment::resolve(
+            &orbit_common::Env::capture(),
             host.launcher_env(),
             &ValidationEnvPolicy::default(),
             &bash,
@@ -639,6 +656,7 @@ fn resolve_with_ready_timeout(host: &Host, bash: &LoginShell) -> ValidationEnvir
         || {
             with_supervisor_seam(seam, || {
                 ValidationEnvironment::resolve(
+                    &orbit_common::Env::capture(),
                     host.launcher_env(),
                     &ValidationEnvPolicy::default(),
                     bash,
@@ -668,6 +686,7 @@ fn startup_failures_are_recorded_and_cached() {
     let program = host.home.join("missing-shell");
     let probe = shell(&program);
     let failed = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy::default(),
         &probe,
@@ -682,6 +701,7 @@ fn startup_failures_are_recorded_and_cached() {
     executable(&program, "#!/bin/sh\nexit 9\n");
     assert_eq!(
         ValidationEnvironment::resolve(
+            &orbit_common::Env::capture(),
             host.launcher_env(),
             &ValidationEnvPolicy::default(),
             &probe,
@@ -731,6 +751,7 @@ fn python_validation_commands_do_not_write_bytecode() {
     let host = Host::new();
     let login = host.fake_login_shell("fake-login-sh", "");
     let resolved = ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         host.launcher_env(),
         &ValidationEnvPolicy::default(),
         &shell(&login),
@@ -769,6 +790,7 @@ fn python_validation_commands_do_not_write_bytecode() {
             .env
             .push(("PATH".to_string(), std::env::var("PATH").unwrap()));
         let outcome = run_process(
+            &orbit_common::Env::capture(),
             &ExecRequest {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "python3 run_check.py".to_string()],
@@ -807,7 +829,7 @@ fn interactive_probe_detaches_from_controlling_pty() {
         let host = Host::new();
         let started = Instant::now();
         let resolved = shell(Path::new("/bin/bash"))
-            .resolve(&host.launcher_env())
+            .resolve(&orbit_common::Env::capture(), &host.launcher_env())
             .unwrap();
         assert_eq!(resolved.mode, LoginShellMode::InteractiveLogin);
         assert_eq!(resolved.fallback_reason, None);

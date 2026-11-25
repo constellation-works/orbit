@@ -10,7 +10,7 @@ use orbit_common::fs::git::run_git;
 pub const ORBIT_ROOT_TOKEN: &str = "{{ORBIT_ROOT}}";
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
-    orbit_common::fs::path::home_dir().ok()
+    orbit_common::fs::path::home_dir(&orbit_common::Env::capture()).ok()
 }
 
 pub(crate) fn cwd_orbit_root(cwd: &Path) -> PathBuf {
@@ -142,7 +142,8 @@ pub fn find_linked_worktree_root(start: &Path, canonical_repo_root: &Path) -> Op
 }
 
 fn shared_git_dir(checkout: &Path) -> Option<PathBuf> {
-    let common_dir = orbit_common::fs::git::git_common_dir(checkout).ok()?;
+    let common_dir =
+        orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), checkout).ok()?;
     Some(common_dir.canonicalize().unwrap_or(common_dir))
 }
 
@@ -209,13 +210,17 @@ fn find_git_main_worktree_root_with_git(start: &Path) -> Option<Option<PathBuf>>
 /// out (a timeout is logged); root resolution then falls back to reading the
 /// gitfile.
 fn git_rev_parse_path(start: &Path, flag: &str) -> Option<PathBuf> {
-    let output = run_git(start, &["rev-parse", "--path-format=absolute", flag])
-        .inspect_err(|error| {
-            if matches!(error, OrbitError::ProcessTimeout { .. }) {
-                tracing::warn!("cannot resolve Git {flag}: {error}");
-            }
-        })
-        .ok()?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        start,
+        &["rev-parse", "--path-format=absolute", flag],
+    )
+    .inspect_err(|error| {
+        if matches!(error, OrbitError::ProcessTimeout { .. }) {
+            tracing::warn!("cannot resolve Git {flag}: {error}");
+        }
+    })
+    .ok()?;
     if !output.success {
         return None;
     }
@@ -236,13 +241,17 @@ fn main_root_from_common_git_dir(common_dir: &Path) -> Option<PathBuf> {
 }
 
 fn git_worktree_list_main_root(start: &Path) -> Option<PathBuf> {
-    let output = run_git(start, &["worktree", "list", "--porcelain"])
-        .inspect_err(|error| {
-            if matches!(error, OrbitError::ProcessTimeout { .. }) {
-                tracing::warn!("cannot list Git worktrees: {error}");
-            }
-        })
-        .ok()?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        start,
+        &["worktree", "list", "--porcelain"],
+    )
+    .inspect_err(|error| {
+        if matches!(error, OrbitError::ProcessTimeout { .. }) {
+            tracing::warn!("cannot list Git worktrees: {error}");
+        }
+    })
+    .ok()?;
     if !output.success {
         return None;
     }

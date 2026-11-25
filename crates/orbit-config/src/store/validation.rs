@@ -48,6 +48,7 @@ impl ConfigStore {
                 let global_path = global_root.join("config.toml");
                 let global_raw = persistence::read_optional(&global_path)?;
                 resolve_workspace_file_document(
+                    &self.env,
                     &global_path,
                     &global_raw,
                     &self.path,
@@ -71,10 +72,13 @@ impl ConfigStore {
             ConfigScope::Global => Ok(self.resolved()?.plugins),
             ConfigScope::Workspace => {
                 let roots = self.workspace_roots(global_root)?;
-                Ok(
-                    validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?
-                        .plugins,
-                )
+                Ok(validate_staged_workspace_document(
+                    &self.env,
+                    &roots,
+                    &self.path,
+                    &self.doc.to_string(),
+                )?
+                .plugins)
             }
         }
     }
@@ -89,6 +93,7 @@ impl ConfigStore {
             ConfigScope::Workspace => OperationLayerSource::Workspace,
         };
         ResolvedConfig::from_raw_str(
+            &self.env,
             &self.doc.to_string(),
             &self.path,
             persistence,
@@ -172,7 +177,7 @@ impl ConfigStore {
     fn staged_workspace_resolved(&self, global_root: &Path) -> Result<ResolvedConfig, OrbitError> {
         self.require_scope(ConfigScope::Workspace)?;
         let roots = self.workspace_roots(global_root)?;
-        validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())
+        validate_staged_workspace_document(&self.env, &roots, &self.path, &self.doc.to_string())
     }
 
     /// Refuse a layered validation entry point called on the other scope's store.
@@ -232,7 +237,7 @@ impl ConfigStore {
             OrbitError::InvalidInput("global config path has no parent directory".to_string())
         })?;
         let roots = ConfigRoots::new(global_root, workspace_root);
-        validate_staged_global_document(&roots, &self.path, &self.doc.to_string())
+        validate_staged_global_document(&self.env, &roots, &self.path, &self.doc.to_string())
     }
 
     /// [`Self::validate_for_set`] for a global edit, plus the layered

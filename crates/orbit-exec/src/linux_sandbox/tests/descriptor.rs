@@ -56,6 +56,7 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
     }
 
     let plan = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &profile(modify),
         "/bin/true",
         &[],
@@ -114,6 +115,7 @@ fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
     let resolved = profile(vec![target.display().to_string()]);
 
     let error = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/true",
         &[],
@@ -150,6 +152,7 @@ fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
     let resolved = profile(vec![format!("{}/**", target.display())]);
 
     let error = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/true",
         &[],

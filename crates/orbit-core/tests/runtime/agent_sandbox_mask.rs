@@ -82,7 +82,7 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
         );
         return;
     }
-    let home = orbit_common::fs::path::home_dir().expect("home");
+    let home = orbit_common::fs::path::home_dir(&orbit_common::Env::capture()).expect("home");
     std::env::set_current_dir(&home).expect("fixture cwd");
     let root = tempfile::tempdir_in(&home).expect("tempdir");
     let global = root.path().join("relocated/orbit-global");
@@ -152,7 +152,8 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                 use std::os::unix::net::{UnixListener, UnixStream};
                 use std::process::Stdio;
 
-                let sockets = orbit_common::fs::path::ssh_socket_dir().expect("socket directory");
+                let sockets = orbit_common::fs::path::ssh_socket_dir(&orbit_common::Env::capture())
+                    .expect("socket directory");
                 let sockets = sockets
                     .canonicalize()
                     .expect("host pre-creates socket directory");
@@ -197,6 +198,7 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                         })
                         .collect();
                     let mut plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+                        &orbit_common::Env::capture(),
                         &profile,
                         probe_binary.to_str().expect("UTF-8 probe"),
                         &[
@@ -288,8 +290,12 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                 profile
                     .modify
                     .push(format!("{}/**", decision_store.display()));
-                let mut sbpl = orbit_exec::compile_macos_sandbox_profile(&profile, provider)
-                    .expect("compile profile");
+                let mut sbpl = orbit_exec::compile_macos_sandbox_profile(
+                    &orbit_common::Env::capture(),
+                    &profile,
+                    provider,
+                )
+                .expect("compile profile");
                 orbit_exec::append_macos_subpath_mask(&mut sbpl, &mask.targets);
                 orbit_exec::append_macos_file_mask(&mut sbpl, &mask.files);
                 let store = orbit_exec::physical_with_missing_tail(&decision_store);

@@ -75,8 +75,12 @@ fn macos_implementer_worktree_denies_registered_and_linked_git_metadata() {
                 .resolve_executor_sandbox(provider, Some("implementer"), Some(checkout))
                 .expect("resolve implementer sandbox")
                 .expect("sandbox");
-            let sbpl = orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
-                .expect("compile implementer profile");
+            let sbpl = orbit_exec::compile_macos_sandbox_profile(
+                &orbit_common::Env::capture(),
+                &sandbox.fs_profile,
+                provider,
+            )
+            .expect("compile implementer profile");
             let mut protected = shared.clone();
             protected.push(checkout.join(".git"));
             for path in &protected {
@@ -103,6 +107,7 @@ fn macos_implementer_worktree_denies_registered_and_linked_git_metadata() {
                 "the implementer must retain source writes: {sbpl}"
             );
             if orbit_exec::macos_sandbox_test_guard(
+                &orbit_common::Env::capture(),
                 "macos_implementer_worktree_denies_registered_and_linked_git_metadata",
             ) {
                 assert_native_writes(&sbpl, &source, &protected);

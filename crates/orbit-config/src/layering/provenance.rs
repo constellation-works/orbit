@@ -14,22 +14,26 @@ use super::document::{crew_entry, empty_document, merge_tables};
 use super::load::ConfigDocument;
 use super::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, DEFAULT_CREW_KEY,
-    DEFAULT_PROVIDER_ENV, EffectiveConfigValue, ShadowReason, ShadowedConfigValue,
-    WORKSPACE_REPLACE_ONLY_KEYS,
+    EffectiveConfigValue, ShadowReason, ShadowedConfigValue, WORKSPACE_REPLACE_ONLY_KEYS,
 };
 
 pub(super) fn effective_values(
+    env: &orbit_common::Env,
     resolved: &ResolvedConfig,
     global: Option<&ConfigDocument>,
     workspace: Option<&ConfigDocument>,
 ) -> Vec<EffectiveConfigValue> {
-    let below = BelowFiles::new(&resolved.crews);
+    let env_default = env
+        .constellation_default_provider()
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|value| !value.trim().is_empty());
+    let below = BelowFiles::new(&resolved.crews, env_default);
     let mut values = resolved
         .snapshot
         .all_values()
         .into_iter()
         .map(|(key, value)| {
-            let source = source_for_key(key, global, workspace);
+            let source = source_for_key(key, global, workspace, env_default.is_some());
             let global_value = global.and_then(|document| {
                 config_document::config_value_at_path(&document.value, key)?;
                 if source.kind() == ConfigValueSourceKind::Global {
@@ -118,7 +122,7 @@ pub(super) fn effective_values(
         };
         for (field, value) in entries {
             let key = format!("plugins.{namespace}.{field}");
-            let source = source_for_key(&key, global, workspace);
+            let source = source_for_key(&key, global, workspace, env_default.is_some());
             let global_value = global
                 .and_then(|document| config_document::config_value_at_path(&document.value, &key))
                 .map(json_from_toml);
@@ -180,14 +184,14 @@ struct BelowFiles {
 }
 
 impl BelowFiles {
-    fn new(crews: &BTreeMap<String, Crew>) -> Self {
+    fn new(crews: &BTreeMap<String, Crew>, env_default: Option<&str>) -> Self {
         let empty = empty_document();
         let path = Path::new("<built-in defaults>");
         let admit = |env_default: Option<&str>| {
             ConfigSnapshot::admit_with_env(&empty, path, crews, env_default, false).ok()
         };
-        let environment_default_crew = environment_default_provider()
-            .and_then(|provider| admit(Some(&provider)))
+        let environment_default_crew = env_default
+            .and_then(|provider| admit(Some(provider)))
             .and_then(|snapshot| snapshot.value_for(DEFAULT_CREW_KEY));
         Self {
             shipped: ConfigSnapshot::default(),
@@ -322,12 +326,6 @@ fn fallback_for_crew_field(
     Some(ConfigFallback { layer, value })
 }
 
-fn environment_default_provider() -> Option<String> {
-    std::env::var(DEFAULT_PROVIDER_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-}
-
 /// Layers that define `key` without supplying the effective value.
 ///
 /// Only the global layer can be shadowed today: it is the one layer below a
@@ -398,6 +396,7 @@ fn source_for_key(
     key: &str,
     global: Option<&ConfigDocument>,
     workspace: Option<&ConfigDocument>,
+    has_env_default: bool,
 ) -> ConfigValueSource {
     if let Some(document) = workspace
         && config_document::config_value_at_path(&document.value, key).is_some()
@@ -412,7 +411,7 @@ fn source_for_key(
     {
         return file_source(ConfigValueSourceKind::Global, &document.path);
     }
-    if key == DEFAULT_CREW_KEY && environment_default_provider().is_some() {
+    if key == DEFAULT_CREW_KEY && has_env_default {
         return ConfigValueSource {
             kind: ConfigValueSourceKind::Environment,
             path: None,

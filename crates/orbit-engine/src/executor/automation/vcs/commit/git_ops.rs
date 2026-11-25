@@ -150,7 +150,7 @@ fn git_success_dynamic_with_identity(
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
         );
     }
-    let result = run_process(&request, &NoSandbox)?;
+    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
 
     if !result.success {
         return Err(OrbitError::Execution(format!(

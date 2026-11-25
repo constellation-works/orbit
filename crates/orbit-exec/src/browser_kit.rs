@@ -69,8 +69,8 @@ impl KitLayout {
     }
 
     /// The kit of the current user.
-    pub fn current_user() -> Result<Self, orbit_common::OrbitError> {
-        orbit_common::fs::path::home_dir().map(|home| Self::for_home(&home))
+    pub fn current_user(env: &orbit_common::Env) -> Result<Self, orbit_common::OrbitError> {
+        orbit_common::fs::path::home_dir(env).map(|home| Self::for_home(&home))
     }
 
     pub fn root(&self) -> &Path {

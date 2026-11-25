@@ -58,6 +58,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(100);
 
 /// Exclusive admission, before installing a candidate or mutating resources.
 pub struct GenerationUpdate {
+    pub(super) bound: Duration,
     pub(super) root: PathBuf,
     pub(super) generation: Record,
     pub(super) admission: Record,
@@ -237,8 +238,8 @@ impl GenerationUpdate {
     /// Refuse before installation/resource/store writes if a long-lived
     /// process is live or a generation switch is pending. Short-lived
     /// participants are waited for, up to [`quiesce_bound`].
-    pub fn acquire(root: &Path) -> Result<Self, OrbitError> {
-        let (update, handover) = Self::admit(root, None, None)?;
+    pub fn acquire(env: &crate::Env, root: &Path) -> Result<Self, OrbitError> {
+        let (update, handover) = Self::admit(quiesce_bound(env), root, None, None)?;
         debug_assert!(handover.is_empty(), "no candidate, so nothing hands over");
         Ok(update)
     }
@@ -255,13 +256,14 @@ impl GenerationUpdate {
     /// executable at their next idle boundary, and every other newcomer of
     /// another identity is refused while it stands.
     pub fn acquire_current(
+        env: &crate::Env,
         root: &Path,
         installed: &InstalledGeneration<'_>,
     ) -> Result<CurrentAdmission, OrbitError> {
-        let (update, current) = Self::admit(root, None, Some(installed))?;
+        let (update, current) = Self::admit(quiesce_bound(env), root, None, Some(installed))?;
         let refresh = match (current.is_empty(), installed.identity) {
             (false, Some(identity)) => {
-                let bound = quiesce_bound();
+                let bound = update.bound;
                 let requested_at = chrono::Utc::now();
                 let switch = PendingSwitch {
                     pid: std::process::id(),
@@ -292,10 +294,11 @@ impl GenerationUpdate {
     /// with a resume capability the candidate reports is admitted beside,
     /// and named in [`CandidateAdmission::handover`].
     pub fn acquire_for_candidate(
+        env: &crate::Env,
         root: &Path,
         candidate: &HandoverCandidate,
     ) -> Result<CandidateAdmission, OrbitError> {
-        let (update, handover) = Self::admit(root, Some(candidate), None)?;
+        let (update, handover) = Self::admit(quiesce_bound(env), root, Some(candidate), None)?;
         Ok(CandidateAdmission { update, handover })
     }
 
@@ -304,20 +307,21 @@ impl GenerationUpdate {
     /// `installed`. Returns those participants; when it is empty, the
     /// generation is held exclusively.
     fn admit(
+        bound: Duration,
         root: &Path,
         candidate: Option<&HandoverCandidate>,
         installed: Option<&InstalledGeneration<'_>>,
     ) -> Result<(Self, Vec<ParticipantRecord>), OrbitError> {
-        let bound = quiesce_bound();
         // New joiners queue behind this from here on, so the participants
         // already live are the only ones left to wait for.
         let admission = admission(root, Admission::Exclusive, bound, None)?;
         refuse_pending_switch(root)?;
         let mut generation = open(root, GENERATION_LOCK)?;
-        let handover = quiesce_holders(root, &generation, candidate, installed)?;
+        let handover = quiesce_holders(bound, root, &generation, candidate, installed)?;
         read_generation(&mut generation.file)?;
         Ok((
             Self {
+                bound,
                 root: validated_generation_root(root)?,
                 admission,
                 generation,
@@ -338,8 +342,12 @@ impl GenerationUpdate {
     /// a long-lived one or one that never registered refuses. On refusal the
     /// generation is pinned again, shared, before admission is released, and
     /// the restored pin is returned in the [`FenceRefusal`].
-    pub fn fence_pinned(root: &Path, pin: GenerationGuard) -> Result<Self, Box<FenceRefusal>> {
-        let bound = quiesce_bound();
+    pub fn fence_pinned(
+        env: &crate::Env,
+        root: &Path,
+        pin: GenerationGuard,
+    ) -> Result<Self, Box<FenceRefusal>> {
+        let bound = quiesce_bound(env);
         let admission = match admission(root, Admission::Exclusive, bound, None) {
             Ok(admission) => admission,
             Err(error) => return Err(FenceRefusal::boxed(Some(pin), error)),
@@ -356,7 +364,7 @@ impl GenerationUpdate {
         // Nobody joins while admission is exclusive, so releasing the pin
         // here leaves no gap a newcomer could use.
         drop(pin);
-        match quiesce_holders(root, &generation, None, None).and_then(|beside| {
+        match quiesce_holders(bound, root, &generation, None, None).and_then(|beside| {
             // Without a candidate or an installed generation nothing stands
             // beside the updater, so an empty set means the lock is held.
             beside
@@ -365,6 +373,7 @@ impl GenerationUpdate {
                 .ok_or_else(|| holders_refused(&beside, None))
         }) {
             Ok(()) => Ok(Self {
+                bound,
                 root: validated,
                 admission,
                 generation,
@@ -419,12 +428,12 @@ fn refuse_pending_switch(root: &Path) -> Result<(), OrbitError> {
 /// is held exclusively. The caller holds exclusive admission, so the live
 /// set only shrinks.
 fn quiesce_holders(
+    bound: Duration,
     root: &Path,
     generation: &Record,
     candidate: Option<&HandoverCandidate>,
     installed: Option<&InstalledGeneration<'_>>,
 ) -> Result<Vec<ParticipantRecord>, OrbitError> {
-    let bound = quiesce_bound();
     let deadline = Instant::now() + bound;
     let mut unregistered_since = None;
     loop {
@@ -479,7 +488,7 @@ impl GenerationUpdate {
     /// this update has released it. Nobody joins meanwhile, so the live set
     /// only shrinks.
     fn await_handover(&self) -> Result<(), OrbitError> {
-        let bound = quiesce_bound();
+        let bound = self.bound;
         let deadline = Instant::now() + bound;
         loop {
             if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
@@ -499,7 +508,7 @@ impl GenerationUpdate {
     /// record is releasing, a hold that outlasts a joiner's probe belongs to
     /// a process that never registered, and refuses at once.
     fn await_refresh(&self, current: &[ParticipantRecord]) -> Result<(), OrbitError> {
-        let bound = quiesce_bound();
+        let bound = self.bound;
         let deadline = Instant::now() + bound;
         let mut unregistered_since = None;
         loop {

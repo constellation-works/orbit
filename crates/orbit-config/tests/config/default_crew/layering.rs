@@ -25,8 +25,11 @@ pass = ["GLOBAL_SECRET"]
     );
     default_crew_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
 
-    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("workspace config loads");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("workspace config loads");
 
     assert_eq!(config.codex_execution.sandbox(), "workspace-write");
     assert_eq!(config.codex_execution.approval_policy(), None);
@@ -66,8 +69,11 @@ model = "workspace-model"
 "#,
     );
 
-    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("layered crew config loads");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("layered crew config loads");
 
     let build = config.crews.get("build").expect("overridden crew remains");
     assert_eq!(build.assignment.model, "workspace-model");

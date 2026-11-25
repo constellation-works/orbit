@@ -35,7 +35,7 @@ fn nested_seatbelt_skip() -> Option<Outcome> {
     if std::env::var("ORBIT_TEST_FORCE_SEATBELT_REFUSAL").as_deref() == Ok("1") {
         orbit_exec::force_seatbelt_refusal_for_test();
     }
-    if orbit_exec::macos_sandbox_test_guard(SCENARIO_TABLE) {
+    if orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), SCENARIO_TABLE) {
         None
     } else {
         Some(Outcome::Unavailable(

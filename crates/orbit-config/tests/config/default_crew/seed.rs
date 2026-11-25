@@ -10,9 +10,11 @@ fn seeded_and_builtin_configs_load_valid_crew_registries() {
 
     // Built-in registry: no `[crews]` table at all.
     default_crew_write_config(workspace.path(), "[workflow]\n");
-    let config =
-        orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-            .expect("config without crews loads");
+    let config = orbit_config::ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("config without crews loads");
     assert!(!config.crews.is_empty());
     for (name, crew) in &config.crews {
         assert!(!name.trim().is_empty());
@@ -30,9 +32,11 @@ fn seeded_and_builtin_configs_load_valid_crew_registries() {
             workspace.path(),
             &format!("[workflow]\ndefault_crew = {name:?}\n"),
         );
-        let selected =
-            orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-                .expect("built-in crew can be selected");
+        let selected = orbit_config::ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect("built-in crew can be selected");
         assert_eq!(selected.default_crew.as_deref(), Some(name.as_str()));
         assert_eq!(selected.crews[name].assignment, crew.assignment);
     }
@@ -61,9 +65,11 @@ fn seeded_and_builtin_configs_load_valid_crew_registries() {
         // `orbit init` seeds the global file, which alone may carry `[machine]`.
         default_crew_write_config(global.path(), &seeded_body);
         default_crew_write_config(workspace.path(), "[workflow]\n");
-        let loaded =
-            orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-                .expect("seeded config loads with its pools");
+        let loaded = orbit_config::ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect("seeded config loads with its pools");
         assert_eq!(loaded.crews, seed.seeded_crews());
 
         // Reinitializing an existing file must preserve its contents even

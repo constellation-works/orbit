@@ -463,7 +463,11 @@ fn apply_preset_definitions(
 /// branch retain the long-standing `main` fallback. A Git that timed out is an
 /// error rather than that fallback.
 fn checked_out_branch(cwd: &Path) -> Result<String, OrbitError> {
-    let branch = match orbit_common::fs::git::run_git(cwd, &["branch", "--show-current"]) {
+    let branch = match orbit_common::fs::git::run_git(
+        &orbit_core::composition::composition_env(),
+        cwd,
+        &["branch", "--show-current"],
+    ) {
         Ok(output) if output.success => output.stdout.trim().to_string(),
         Ok(_) => String::new(),
         Err(error @ OrbitError::ProcessTimeout { .. }) => return Err(error),

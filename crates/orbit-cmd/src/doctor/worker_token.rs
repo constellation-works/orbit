@@ -285,7 +285,10 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
     let macos = cfg!(target_os = "macos");
     let global_root = runtime.global_root();
     let (claude_routed, crew_credentialed, crew_credentials, config_load_error) = if macos {
-        match ResolvedConfig::load(&ConfigRoots::new(&global_root, runtime.shared_root())) {
+        match ResolvedConfig::load(
+            &orbit_core::composition::composition_env(),
+            &ConfigRoots::new(&global_root, runtime.shared_root()),
+        ) {
             Ok(config) => {
                 let (routed, credentialed, credentials) = routed_claude_crews(&config);
                 (routed, credentialed, credentials, None)

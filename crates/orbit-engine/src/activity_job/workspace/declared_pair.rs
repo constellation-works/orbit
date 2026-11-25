@@ -266,7 +266,7 @@ pub(super) fn git_top_level(path: &Path) -> Result<Option<PathBuf>, DispatchErro
 /// The canonical Git common dir of `path`. A timeout stays
 /// [`DispatchError::GitTimeout`]; any other failure is permanent.
 pub(super) fn canonical_git_common_dir(path: &Path) -> Result<PathBuf, DispatchError> {
-    match git_common_dir(path) {
+    match git_common_dir(&orbit_common::Env::capture(), path) {
         Ok(common) => Ok(canonicalize_dir(&common)),
         Err(OrbitError::ProcessTimeout { timeout_ms, detail }) => Err(DispatchError::GitTimeout {
             operation: "rev-parse --path-format=absolute --git-common-dir".to_string(),

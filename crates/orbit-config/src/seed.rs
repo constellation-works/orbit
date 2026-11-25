@@ -259,14 +259,18 @@ pub fn seed_new_machine_defaults(store: &mut ConfigStore) -> Result<bool, OrbitE
 /// provider detection alone. Existing keys and comments survive, including
 /// deprecated review switches; repeated initialization writes nothing. The
 /// global config is never changed, even when both roots name the same file.
-pub fn seed_workspace_review(roots: &ConfigRoots, ship_mode: ShipMode) -> Result<bool, OrbitError> {
+pub fn seed_workspace_review(
+    env: &orbit_common::Env,
+    roots: &ConfigRoots,
+    ship_mode: ShipMode,
+) -> Result<bool, OrbitError> {
     if roots.global() == roots.workspace() {
         return Ok(false);
     }
     let path = roots.workspace().join("config.toml");
     ConfigStore::with_write_lock(&path, || {
-        let mut store = ConfigStore::open(ConfigScope::Workspace, &path)?;
-        let resolved = ResolvedConfig::load(roots)?;
+        let mut store = ConfigStore::open(env, ConfigScope::Workspace, &path)?;
+        let resolved = ResolvedConfig::load(env, roots)?;
         let cheap: Vec<&str> = ["luna", "haiku", "muse-spark"]
             .into_iter()
             .filter(|name| resolved.crews.get(*name).is_some_and(|crew| crew.enabled))

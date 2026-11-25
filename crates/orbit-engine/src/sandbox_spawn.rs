@@ -322,6 +322,7 @@ fn spawn_linux_bwrap(
     let authority = linux_bwrap_mount_authority(sandbox);
     let mask = linux_bwrap_mask(sandbox);
     let plan = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &sandbox.fs_profile,
         program,
         args,
@@ -494,8 +495,9 @@ fn spawn_macos_sandboxed(
     // `provider` reaches the compiler because the credential denylist has a
     // provider-scoped exception: the confined CLI's own credential store.
     // See `orbit_exec::macos_login_keychain_access`. [ORB-10929] [ORB-12261]
-    let mut profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
-        .map_err(|err| SpawnError::permanent(err.to_string()))?;
+    let mut profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &sandbox.fs_profile, provider)
+            .map_err(|err| SpawnError::permanent(err.to_string()))?;
     // Last, so the host's mask outranks every allow compiled above.
     if let Some(mask) = &sandbox.mask {
         append_macos_subpath_mask(&mut profile_text, &mask.targets);

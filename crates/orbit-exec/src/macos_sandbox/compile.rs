@@ -1,4 +1,3 @@
-use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -57,38 +56,30 @@ use crate::credential_paths::{
 /// Each filter resolves the literal prefix of its absolute rule to the path
 /// Seatbelt sees; wildcard suffixes stay dynamic for future files.
 pub fn compile_macos_sandbox_profile(
+    env: &orbit_common::Env,
     rules: &ResolvedFsProfile,
     provider: &str,
 ) -> Result<String, OrbitError> {
-    let home = std::env::var_os(env_vars::HOME);
-    let codex_home = std::env::var_os(env_vars::CODEX_HOME);
-    let claude_config_dir = std::env::var_os(env_vars::CLAUDE_CONFIG_DIR);
-    let grok_home = std::env::var_os(env_vars::GROK_HOME);
-    let copilot_home = std::env::var_os(env_vars::COPILOT_HOME);
-    let xdg_cache_home = std::env::var_os(env_vars::XDG_CACHE_HOME);
-    let xdg_data_home = std::env::var_os(env_vars::XDG_DATA_HOME);
-    let xdg_config_home = std::env::var_os(env_vars::XDG_CONFIG_HOME);
-    let cargo_home = std::env::var_os(env_vars::CARGO_HOME);
     compile_macos_sandbox_profile_with_env(
         rules,
         provider,
         SandboxCompileEnv {
-            home: home.as_deref(),
-            codex_home: codex_home.as_deref(),
-            claude_config_dir: claude_config_dir.as_deref(),
-            grok_home: grok_home.as_deref(),
-            copilot_home: copilot_home.as_deref(),
-            xdg_cache_home: xdg_cache_home.as_deref(),
-            xdg_data_home: xdg_data_home.as_deref(),
-            xdg_config_home: xdg_config_home.as_deref(),
-            cargo_home: cargo_home.as_deref(),
+            home: env.home(),
+            codex_home: env.codex_home(),
+            claude_config_dir: env.claude_config_dir(),
+            grok_home: env.grok_home(),
+            copilot_home: env.copilot_home(),
+            xdg_cache_home: env.xdg_cache_home(),
+            xdg_data_home: env.xdg_data_home(),
+            xdg_config_home: env.xdg_config_home(),
+            cargo_home: env.cargo_home(),
         },
     )
 }
 
 /// Env inputs that influence per-provider state-directory allowances in the
-/// compiled SBPL profile. Captured once by the public compiler and passed
-/// together to the internal profile renderer.
+/// compiled SBPL profile. The public compiler resolves them from the host
+/// snapshot and passes them together to the profile renderer.
 #[derive(Default, Clone, Copy)]
 struct SandboxCompileEnv<'a> {
     home: Option<&'a OsStr>,

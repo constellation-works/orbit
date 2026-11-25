@@ -314,7 +314,11 @@ pub fn init_workspace_at_root(
             refreshed_skill_files = global_result.refreshed_skill_files;
             created_skills_symlink = global_result.created_skills_symlink;
             if let Some(ship_mode) = options.workspace_ship_mode {
-                seed_workspace_review(&ConfigRoots::new(&global_root, &orbit_root), ship_mode)?;
+                seed_workspace_review(
+                    &orbit_common::Env::capture(),
+                    &ConfigRoots::new(&global_root, &orbit_root),
+                    ship_mode,
+                )?;
             }
             // After the review seed, which carries the security policy into a
             // first workspace layer; before reconciliation, which reads the

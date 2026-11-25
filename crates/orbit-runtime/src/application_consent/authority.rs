@@ -59,8 +59,11 @@ impl RuntimeKernel {
         }
         // An agent cannot turn a trusted API or an operator environment into
         // application authority. Plugin callbacks cannot administer consent.
-        let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session));
-        if agent_context_declared()
+        let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
+            &orbit_common::Env::capture(),
+            session,
+        ));
+        if agent_context_declared(&orbit_common::Env::capture())
             || session.application.is_some()
             || !caller.grants().contains(&McpCapability::Operator)
             || orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?.is_some()
@@ -185,8 +188,11 @@ impl RuntimeKernel {
         id: &str,
         session: &ToolSessionContext,
     ) -> Result<(), OrbitError> {
-        let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session));
-        if agent_context_declared()
+        let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
+            &orbit_common::Env::capture(),
+            session,
+        ));
+        if agent_context_declared(&orbit_common::Env::capture())
             || session.application.is_some()
             || !caller.grants().contains(&McpCapability::Operator)
             || orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?.is_some()

@@ -616,7 +616,13 @@ impl RuntimeKernel {
                     .map(|root| (root, orbit_exec::ScriptRootAccess::Write)),
             );
         for (root, access) in roots {
-            orbit_exec::probe_script_root(root, access, home.as_deref()).map_err(|reason| {
+            orbit_exec::probe_script_root(
+                &orbit_common::Env::capture(),
+                root,
+                access,
+                home.as_deref(),
+            )
+            .map_err(|reason| {
                 OrbitError::InvalidInput(format!(
                     "script `{name}` cannot be granted: {reason}; nothing was granted"
                 ))

@@ -165,10 +165,10 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
             }
             Ok(timed_out)
         }
-        None => run_process(&probe, &NoSandbox),
+        None => run_process(&orbit_common::Env::capture(), &probe, &NoSandbox),
     };
     #[cfg(not(any(test, feature = "test-support")))]
-    let run = run_process(&probe, &NoSandbox);
+    let run = run_process(&orbit_common::Env::capture(), &probe, &NoSandbox);
     match run {
         Ok(result) if result.success => parse_rate_limit(&result.stdout),
         // The caller's deadline, not the endpoint, ended the read.

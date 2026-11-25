@@ -70,6 +70,7 @@ fn spawn_probe<H: RuntimeHost + ?Sized>(
     )
     .map_err(|error| error.message)?;
     let outcome = spawn_owned_supervised_cancellable(
+        &orbit_common::Env::capture(),
         || Ok(spawned.child),
         Some(PROBE_TIMEOUT_MS),
         Some(Vec::new()),

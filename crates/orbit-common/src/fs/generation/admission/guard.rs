@@ -137,7 +137,10 @@ fn live_joined_authorities() -> Vec<(PathBuf, CompatibilityIdentity)> {
 /// has, which is how the updater proves that nothing else holds the
 /// generation before re-pinning it; the new image queues behind the updater
 /// and joins what it pinned.
-pub(in super::super) fn refresh_requested_for_this_process(capability: Option<&str>) -> bool {
+pub(in super::super) fn refresh_requested_for_this_process(
+    env: &crate::Env,
+    capability: Option<&str>,
+) -> bool {
     let Some(participation) = PARTICIPATION.get() else {
         return false;
     };
@@ -148,7 +151,7 @@ pub(in super::super) fn refresh_requested_for_this_process(capability: Option<&s
     if !resumes {
         return false;
     }
-    let Ok(digest) = process_digest(None, false) else {
+    let Ok(digest) = process_digest(env, None, false) else {
         return false;
     };
     let joined = live_joined_authorities();
@@ -260,7 +263,9 @@ impl GenerationGuard {
     /// covers `access` (a writer's covers a reader's), this returns another
     /// guard on that join: no admission, no second record. A pending switch
     /// for another identity still refuses it, as it would a new join.
+    #[allow(clippy::too_many_arguments)]
     pub fn for_process<F>(
+        env: &crate::Env,
         root: &Path,
         identity: &CompatibilityIdentity,
         role: ParticipantRole,
@@ -273,7 +278,7 @@ impl GenerationGuard {
         F: FnOnce() -> Result<u32, OrbitError>,
     {
         let participant = Participant {
-            digest: process_digest(Some(root), access != Access::ReadOnly)?,
+            digest: process_digest(env, Some(root), access != Access::ReadOnly)?,
             identity,
             role,
             access,
@@ -284,7 +289,7 @@ impl GenerationGuard {
         if let Some(guard) = Self::rejoin(&validated, &participant)? {
             return Ok(guard);
         }
-        let mut guard = Self::join(root, &participant, quiesce_bound(), store_schema)?;
+        let mut guard = Self::join(root, &participant, quiesce_bound(env), store_schema)?;
         if access == Access::Write {
             remember_process_digest(root);
         }

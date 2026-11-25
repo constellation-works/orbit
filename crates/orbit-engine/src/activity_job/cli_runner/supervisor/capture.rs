@@ -5,7 +5,6 @@ use orbit_common::process::output_capture::capture_limit_from_env;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::text::floor_char_boundary;
 
-use orbit_common::env_vars::ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES as CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_ENV;
 const DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 
 pub(super) type SharedOutputCapture = Arc<Mutex<RollingOutputCapture>>;
@@ -189,7 +188,7 @@ pub(super) fn finish_captured_output(
 
 pub(super) fn default_output_capture_limit() -> usize {
     capture_limit_from_env(
-        CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_ENV,
+        orbit_common::Env::capture().orbit_cli_runner_output_capture_limit_bytes(),
         DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES,
     )
 }

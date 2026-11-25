@@ -147,6 +147,7 @@ fn execute<H: RuntimeHost + ?Sized>(
     // Every word is admitted from a set with no shell meaning, so the shell
     // only resolves the program on the validation PATH.
     let outcome = run_process(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), host_command.to_string()],

@@ -415,7 +415,9 @@ async fn lifecycle_boundary() -> Option<std::path::PathBuf> {
         interval.tick().await;
         let decision = tokio::task::spawn_blocking(|| {
             generation::process_participation()?;
-            if let Some(executable) = generation::handover_target(None) {
+            if let Some(executable) =
+                generation::handover_target(&orbit_core::composition::composition_env(), None)
+            {
                 return Some(Some(executable));
             }
             generation::pending_switch_for_this_process().map(|_| None)

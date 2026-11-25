@@ -7,7 +7,7 @@ use super::catalog::{
     GovernedOperation, PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY,
     RESIDENT_GRANT_OPERATION_ID,
 };
-use super::env::{OPERATOR_OVERRIDE_ENV, agent_declared_in_env, env_truthy, interactive_terminal};
+use super::env::{agent_declared_in_env, interactive_terminal};
 
 /// Where a caller's capabilities came from.
 ///
@@ -19,7 +19,7 @@ use super::env::{OPERATOR_OVERRIDE_ENV, agent_declared_in_env, env_truthy, inter
 pub enum CallerProvenance {
     /// A trusted transport or the run's own dispatcher asserted the grants.
     Session,
-    /// [`OPERATOR_OVERRIDE_ENV`] was set. Always logged, never silent.
+    /// [`super::env::OPERATOR_OVERRIDE_ENV`] was set. Always logged, never silent.
     OperatorOverride,
     /// The process environment declares an agent envelope.
     AgentEnvelope,
@@ -53,7 +53,7 @@ impl Display for CallerProvenance {
 /// surfaces and is inert on the other.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CapabilityResolution {
-    /// The hosting process's environment counts, so [`OPERATOR_OVERRIDE_ENV`]
+    /// The hosting process's environment counts, so [`super::env::OPERATOR_OVERRIDE_ENV`]
     /// and the agent envelope contribute. This is every surface except MCP
     /// and the dashboard.
     #[default]
@@ -64,7 +64,7 @@ pub enum CapabilityResolution {
     SessionOnly,
     /// Only the dashboard server's own session state counts: the grant
     /// `orbit web serve --operator` stamps at startup. The server's terminal,
-    /// [`OPERATOR_OVERRIDE_ENV`] and agent envelope are ignored, so a server
+    /// [`super::env::OPERATOR_OVERRIDE_ENV`] and agent envelope are ignored, so a server
     /// left running on a terminal (or behind an SSH `-tt` pty) cannot lend
     /// that terminal's operator authority to whatever reaches its loopback
     /// port.
@@ -82,7 +82,7 @@ pub struct CallerEnvelope {
     /// Grants asserted by a trusted seam: a validated MCP session, or the run
     /// dispatcher stamping its own sanction onto a tool context.
     pub session_capabilities: BTreeSet<McpCapability>,
-    /// [`OPERATOR_OVERRIDE_ENV`] is set to a truthy value.
+    /// [`super::env::OPERATOR_OVERRIDE_ENV`] is set to a truthy value.
     pub operator_override: bool,
     /// The process environment declares an agent or a managed run.
     pub agent_declared: bool,
@@ -101,12 +101,12 @@ pub struct CallerEnvelope {
 
 impl CallerEnvelope {
     /// Observe the current process, layered under `session`'s asserted grants.
-    pub fn from_process_env(session: &ToolSessionContext) -> Self {
+    pub fn from_process_env(env: &crate::Env, session: &ToolSessionContext) -> Self {
         Self {
             resolution: CapabilityResolution::ProcessEnvelope,
             session_capabilities: session.effective_capabilities.clone(),
-            operator_override: env_truthy(OPERATOR_OVERRIDE_ENV),
-            agent_declared: agent_declared_in_env(),
+            operator_override: super::env::operator_override_active(env),
+            agent_declared: agent_declared_in_env(env),
             interactive_terminal: interactive_terminal(),
             local_cli: session.transport == Some(McpTransport::Local),
             remote_caller_machine_id: session.remote_caller_machine_id().map(ToOwned::to_owned),

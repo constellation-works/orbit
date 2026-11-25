@@ -197,10 +197,10 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
             )];
         }
     };
-    match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        runtime.global_root(),
-        runtime.data_root(),
-    )) {
+    match orbit_config::ResolvedConfig::load(
+        &orbit_core::composition::composition_env(),
+        &orbit_config::ConfigRoots::new(runtime.global_root(), runtime.data_root()),
+    ) {
         Ok(config) => {
             let ignored = config.ignored_crew_properties.iter().map(|ignored| {
                 actionable_check(

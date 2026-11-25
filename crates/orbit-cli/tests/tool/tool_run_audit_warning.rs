@@ -72,10 +72,10 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
     let seed: Value = serde_json::from_slice(&seed_output).expect("seed task JSON");
     let task_id = seed["id"].as_str().expect("seed task ID").to_string();
 
-    let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-        home.join(".orbit"),
-        work.join(".orbit"),
-    ))
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::new(home.join(".orbit"), work.join(".orbit")),
+    )
     .expect("audit database path");
     rusqlite::Connection::open(database)
         .expect("open audit database")

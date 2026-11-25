@@ -224,10 +224,10 @@ fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf, PathBuf) {
     std::fs::create_dir_all(&workspace_root).expect("workspace root");
     let runtime =
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
-    let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-        &global_root,
-        &workspace_root,
-    ))
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::new(&global_root, &workspace_root),
+    )
     .expect("audit database path");
     (root, runtime, repo_root, database)
 }

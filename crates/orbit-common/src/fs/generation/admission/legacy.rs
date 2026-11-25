@@ -17,8 +17,9 @@ impl GenerationGuard {
     /// Pin an exact digest under `executable-generation-v1` rules. Exclusive
     /// admission makes lock conversion atomic with respect to other
     /// participants (flock conversion alone is not atomic).
-    pub fn acquire(root: &Path, digest: &str) -> Result<Self, OrbitError> {
-        let admission = admission(root, Admission::Exclusive, quiesce_bound(), None)?;
+    pub fn acquire(env: &crate::Env, root: &Path, digest: &str) -> Result<Self, OrbitError> {
+        let bound = quiesce_bound(env);
+        let admission = admission(root, Admission::Exclusive, bound, None)?;
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(|error| {
             refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
@@ -36,6 +37,7 @@ impl GenerationGuard {
             ));
         }
         GenerationUpdate {
+            bound,
             root: validated_generation_root(root)?,
             admission,
             generation,

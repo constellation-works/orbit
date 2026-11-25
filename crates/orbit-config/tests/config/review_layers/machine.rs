@@ -17,9 +17,12 @@ fn a_workspace_machine_table_is_refused_at_load_naming_the_file() {
         "[machine]\nid = \"hm_forged\"\nname = \"forged\"\ntask_prefix = \"FG\"\n",
     );
 
-    let error = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect_err("a checkout must not be able to re-identify its machine")
-        .to_string();
+    let error = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect_err("a checkout must not be able to re-identify its machine")
+    .to_string();
     assert!(
         error.contains("[machine] is not a workspace setting"),
         "{error}"

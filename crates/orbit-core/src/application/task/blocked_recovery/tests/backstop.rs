@@ -588,7 +588,10 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
     // Report the kernel-only deferral in the outer harness too: the recovery
     // assertions still run in the isolated child, whose successful output is captured.
     #[cfg(target_os = "macos")]
-    let _ = orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch");
+    let _ = orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "recovery agent kernel launch",
+    );
     if !enter_isolated_child(
         module_path!(),
         "a_recovery_applies_one_decision_recorded_with_its_run_id",
@@ -701,6 +704,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             orbit_exec::prepare_linux_bwrap_write_grants(&sandbox.fs_profile, &prepared.checkout)
                 .expect("prepare the same write anchors as the agent launcher");
             let mut plan = orbit_exec::compile_linux_bwrap_argv(
+                &orbit_common::Env::capture(),
                 &sandbox.fs_profile,
                 "/bin/sh",
                 &args,
@@ -727,8 +731,13 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                         stderr: Stdio::piped(),
                     })
                     .expect("spawn the recovery agent step");
-                let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
-                    .expect("bounded recovery agent step");
+                let outcome = orbit_exec::supervise_child(
+                    &orbit_common::Env::capture(),
+                    child,
+                    Some(30_000),
+                    None,
+                )
+                .expect("bounded recovery agent step");
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
                 guard
                     .verify(Some(&scratch))
@@ -748,10 +757,16 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         }
         #[cfg(target_os = "macos")]
         {
-            let profile_text =
-                orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "claude")
-                    .expect("compile the effective recovery sandbox");
-            if orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch") {
+            let profile_text = orbit_exec::compile_macos_sandbox_profile(
+                &orbit_common::Env::capture(),
+                &sandbox.fs_profile,
+                "claude",
+            )
+            .expect("compile the effective recovery sandbox");
+            if orbit_exec::macos_sandbox_test_guard(
+                &orbit_common::Env::capture(),
+                "recovery agent kernel launch",
+            ) {
                 let child =
                     orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
                         profile_text: &profile_text,
@@ -765,8 +780,13 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                         inherited_fds: &[],
                     })
                     .expect("spawn the recovery agent step");
-                let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
-                    .expect("bounded recovery agent step");
+                let outcome = orbit_exec::supervise_child(
+                    &orbit_common::Env::capture(),
+                    child,
+                    Some(30_000),
+                    None,
+                )
+                .expect("bounded recovery agent step");
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
             }
         }

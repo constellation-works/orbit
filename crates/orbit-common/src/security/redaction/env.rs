@@ -6,7 +6,20 @@ use serde_json::Value;
 use super::error::redact_json_with;
 
 const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
-static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
+static PROCESS_REDACTION: OnceLock<ProcessRedaction> = OnceLock::new();
+
+struct ProcessRedaction {
+    sensitive_values: Vec<String>,
+    home: Option<String>,
+}
+
+/// Prepare the process redactor from the application's captured environment.
+pub fn init_process_redaction(env: &crate::Env) {
+    PROCESS_REDACTION.get_or_init(|| ProcessRedaction {
+        sensitive_values: collect_sensitive_env_values(env),
+        home: super::error::home_dir_string(env).map(str::to_owned),
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Env-var value scrubbing
@@ -154,10 +167,11 @@ pub fn redact_sensitive_env_json(value: Value) -> Value {
     redact_json_with(value, redact_sensitive_env_text)
 }
 
-fn collect_sensitive_env_values() -> Vec<String> {
-    let mut values = std::env::vars()
+fn collect_sensitive_env_values(env: &crate::Env) -> Vec<String> {
+    let mut values = env
+        .utf8_vars()
         .filter(|(name, value)| is_sensitive_env_name(name) && is_redactable_value(value))
-        .flat_map(|(_, value)| sensitive_value_forms(value))
+        .flat_map(|(_, value)| sensitive_value_forms(value.to_owned()))
         .collect::<Vec<_>>();
     // Longest first so a raw value that sits inside its own encoding cannot
     // split that longer match before it is replaced.
@@ -201,22 +215,38 @@ fn quoted_body(encoded: &str) -> Option<&str> {
     encoded.strip_prefix('"')?.strip_suffix('"')
 }
 
-fn cached_sensitive_env_values() -> &'static [String] {
-    SENSITIVE_ENV_VALUES
-        .get_or_init(collect_sensitive_env_values)
-        .as_slice()
+fn sensitive_env_values() -> Cow<'static, [String]> {
+    if let Some(env) = fixture_env() {
+        return Cow::Owned(collect_sensitive_env_values(&env));
+    }
+    Cow::Borrowed(
+        process_redaction().map_or(&[], |redaction| redaction.sensitive_values.as_slice()),
+    )
 }
 
-fn sensitive_env_values() -> Cow<'static, [String]> {
-    // Tests mutate process env after startup (`ScopedEnv`). A process-wide
-    // snapshot would miss those values, so re-collect in this crate's tests
-    // and while the shared scoped environment guard is active. Normal
-    // production calls retain the cached snapshot.
-    if cfg!(test) || crate::test_env::scoped_env_active() {
-        Cow::Owned(collect_sensitive_env_values())
-    } else {
-        Cow::Borrowed(cached_sensitive_env_values())
+pub(super) fn redaction_home() -> Option<Cow<'static, str>> {
+    if let Some(env) = fixture_env() {
+        return super::error::home_dir_string(&env).map(|home| Cow::Owned(home.to_owned()));
     }
+    process_redaction()?.home.as_deref().map(Cow::Borrowed)
+}
+
+fn fixture_env() -> Option<crate::Env> {
+    // ScopedEnv fixtures deliberately change variables between calls.
+    if cfg!(test) || crate::test_env::scoped_env_active() {
+        Some(crate::Env::capture())
+    } else {
+        None
+    }
+}
+
+fn process_redaction() -> Option<&'static ProcessRedaction> {
+    #[cfg(feature = "test-support")]
+    if PROCESS_REDACTION.get().is_none() {
+        // Integration harnesses do not run the application's startup.
+        init_process_redaction(&crate::Env::capture());
+    }
+    PROCESS_REDACTION.get()
 }
 
 /// Decide whether a sensitive-named env value is eligible for substitution

@@ -52,6 +52,7 @@ where
         session_context,
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
+                &orbit_common::Env::capture(),
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
@@ -142,6 +143,7 @@ impl GlobalAuditStoreCache {
         {
             *cached = None;
             let audit_db = orbit_config::resolved_audit_db_path(
+                &orbit_common::Env::capture(),
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
             let store = Store::open(&audit_db)?;
@@ -268,6 +270,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         },
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
+                &orbit_common::Env::capture(),
                 &orbit_config::ConfigRoots::global_only(&global_root),
             )?;
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
@@ -284,7 +287,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             // resolved here — inside the audited closure, so a refusal lands
             // on the row for this call.
             enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
-            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor()?.is_some() || tool_context.session_context.application.is_some() {
+            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor(&orbit_common::Env::capture())?.is_some() || tool_context.session_context.application.is_some() {
                 return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
             }
             authorize_plugin_tool(
@@ -316,7 +319,9 @@ fn authorize_plugin_tool(
         // An MCP session's authority is whatever its server was started with,
         // never this process's environment.
         ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
-        ToolEntryPoint::Cli => CallerEnvelope::from_process_env(session_context),
+        ToolEntryPoint::Cli => {
+            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context)
+        }
     };
     let operation = governed_plugin_tool(mutating, agent_callable);
     let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);

@@ -40,9 +40,10 @@ impl SubmissionAuditFault {
         )
         .unwrap();
         runtime.sqlite_store().unwrap();
-        let db = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-            &global, &workspace,
-        ))
+        let db = orbit_config::resolved_audit_db_path(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(&global, &workspace),
+        )
         .unwrap();
         rusqlite::Connection::open(db)
             .unwrap()

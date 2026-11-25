@@ -283,10 +283,10 @@ fn the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest_sc
 /// disk would between certification and the run-store copy. Dropping the
 /// returned connection's trigger restores the store.
 fn fail_writes_naming(fixture: &Fixture, marker: &str) -> WriteFault {
-    let db = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-        &fixture.global,
-        fixture.repo.join(".orbit"),
-    ))
+    let db = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::new(&fixture.global, fixture.repo.join(".orbit")),
+    )
     .unwrap();
     let connection = rusqlite::Connection::open(db).unwrap();
     connection

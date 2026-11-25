@@ -77,11 +77,11 @@ fn installed_if_replaced() -> Option<PathBuf> {
 /// image is the one running, so it resumes whatever this process registered.
 ///
 /// [`GenerationUpdate::acquire_current`]: super::GenerationUpdate::acquire_current
-pub fn handover_target(capability: Option<&str>) -> Option<PathBuf> {
+pub fn handover_target(env: &crate::Env, capability: Option<&str>) -> Option<PathBuf> {
     static REFUSED: Mutex<Option<RefusedKey>> = Mutex::new(None);
     match replaced_installation() {
         Some(installed) => judge_candidate(&REFUSED, installed, capability, PROBE_TIMEOUT),
-        None => super::admission::refresh_requested_for_this_process(capability)
+        None => super::admission::refresh_requested_for_this_process(env, capability)
             .then(std::env::current_exe)
             .and_then(Result::ok),
     }

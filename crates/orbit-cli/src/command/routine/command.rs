@@ -75,7 +75,7 @@ fn selected_global_root(root_override: Option<&Path>) -> Result<std::path::PathB
         return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)
             .map(|roots| roots.global_root);
     }
-    workspace_registry::global_orbit_dir()
+    workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())
 }
 
 #[derive(Subcommand)]

@@ -428,8 +428,10 @@ fn stdout_json(output: &std::process::Output) -> Value {
 #[cfg(unix)]
 #[test]
 fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
-    if !orbit_exec::macos_sandbox_test_guard("plugin_error_is_json_on_tool_run_with_a_nonzero_exit")
-    {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "plugin_error_is_json_on_tool_run_with_a_nonzero_exit",
+    ) {
         return;
     }
     let fixture = Fixture::new();
@@ -507,6 +509,7 @@ fn derived_plugin_groups_expand_tilde_roots_and_anchor_relative_roots() {
 #[test]
 fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_derived_group_is_the_same_operation_and_result_as_tool_run",
     ) {
         return;
@@ -749,6 +752,7 @@ fn plugin_listings_show_one_line_summaries_and_help_keeps_the_full_text() {
 #[test]
 fn unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool",
     ) {
         return;
@@ -1807,7 +1811,10 @@ fn assert_rendered_path(path: &str, link: &Path, programs_on_path: bool) {
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
-    if !orbit_exec::macos_sandbox_test_guard("scaffold_validate_test_and_install_run_end_to_end") {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "scaffold_validate_test_and_install_run_end_to_end",
+    ) {
         return;
     }
     let fixture = Fixture::new();
@@ -2185,6 +2192,7 @@ fn copy_tree(from: &Path, to: &Path) {
 #[test]
 fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade",
     ) {
         return;
@@ -2769,6 +2777,7 @@ fn plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay() {
 
     // The outer profile must apply here: this test plays the worker.
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay",
     ) {
         return;
@@ -2914,6 +2923,7 @@ fn plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay() {
 #[test]
 fn plugin_test_ignores_forced_seatbelt_refusal_in_the_shipped_binary() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "plugin_test_ignores_forced_seatbelt_refusal_in_the_shipped_binary",
     ) {
         return;

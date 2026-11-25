@@ -105,7 +105,9 @@ pub(in crate::adapter::tool_host) fn dispatch(
             // any other managed agent is refused here as well, including an
             // accidentally elevated run.
             if !resident_cycle_admitted
-                && orbit_common::governance::authorization::agent_context_declared()
+                && orbit_common::governance::authorization::agent_context_declared(
+                    runtime.execution_env_policy().process_env(),
+                )
             {
                 return Err(OrbitError::CapabilityDenied(
                     "managed agents cannot requeue blocked tasks".into(),
@@ -178,7 +180,9 @@ pub(in crate::adapter::tool_host) fn dispatch(
             ),
         ),
         TaskVerb::RetryHandoff => {
-            if orbit_common::governance::authorization::agent_context_declared() {
+            if orbit_common::governance::authorization::agent_context_declared(
+                runtime.execution_env_policy().process_env(),
+            ) {
                 return Err(OrbitError::CapabilityDenied(
                     "managed agents cannot retry owner handoffs".into(),
                 ));
@@ -216,7 +220,9 @@ pub(in crate::adapter::tool_host) fn dispatch(
             Ok((response, Some(dispatch.task_id)))
         }
         TaskVerb::RecoverClaim => {
-            if orbit_common::governance::authorization::agent_context_declared() {
+            if orbit_common::governance::authorization::agent_context_declared(
+                runtime.execution_env_policy().process_env(),
+            ) {
                 return Err(OrbitError::CapabilityDenied(
                     "managed agents cannot recover claims".into(),
                 ));
@@ -250,7 +256,9 @@ pub(in crate::adapter::tool_host) fn dispatch(
             Ok((response, persisted))
         }
         TaskVerb::RevokeHandoff => {
-            if orbit_common::governance::authorization::agent_context_declared() {
+            if orbit_common::governance::authorization::agent_context_declared(
+                runtime.execution_env_policy().process_env(),
+            ) {
                 return Err(OrbitError::CapabilityDenied(
                     "managed agents cannot revoke handoff authority".into(),
                 ));

@@ -54,7 +54,9 @@ fn refused_apply_prints_a_named_skip_and_required_coverage_fails() {
 #[test]
 #[ignore = "child fixture with an injected Seatbelt apply refusal"]
 fn refused_apply_fixture() {
-    if !SandboxExecApplyProbe::ApplyRefused(FAILURE.to_string()).test_guard(CHILD) {
+    if !SandboxExecApplyProbe::ApplyRefused(FAILURE.to_string())
+        .test_guard(&orbit_common::Env::capture(), CHILD)
+    {
         return;
     }
     panic!("a refused apply must never enter the sandbox-dependent body");

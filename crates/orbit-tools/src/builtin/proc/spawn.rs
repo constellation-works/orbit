@@ -84,7 +84,7 @@ impl Tool for ProcSpawnTool {
         // A managed CLI worker already runs under Bubblewrap (Linux) or
         // sandbox-exec (macOS). Its children inherit that OS boundary. Adding
         // Landlock here would narrow reads again and refuse macOS outright.
-        let exec_result = run_process(&request, &NoSandbox)?;
+        let exec_result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
 
         let mut result = serde_json::to_value(&exec_result)
             .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))?;
@@ -159,7 +159,7 @@ fn spawn_request(
     let env_pairs = ctx
         .proc_spawn_environment
         .clone()
-        .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
+        .unwrap_or_else(|| allowlisted_child_env(&orbit_common::Env::capture(), &[], &[]));
 
     ExecRequest {
         program,

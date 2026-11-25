@@ -10,6 +10,7 @@ pub fn host_resource_monitor(
     global_root: &Path,
 ) -> Result<crate::runtime::host_resource::HostResourceMonitor, OrbitError> {
     let snapshot = orbit_config::ConfigStore::open(
+        &super::composition_env(),
         orbit_config::ConfigScope::Global,
         global_root.join("config.toml"),
     )?

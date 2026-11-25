@@ -19,8 +19,12 @@ fn load_workspace(workspace_body: &str) -> (ResolvedConfig, String) {
     let global = tempdir().expect("global tempdir");
     let workspace = tempdir().expect("workspace tempdir");
     review_layers_write_config(workspace.path(), workspace_body);
-    let (config, logs) =
-        capture_logs(|| ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())));
+    let (config, logs) = capture_logs(|| {
+        ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+    });
     (config.expect("workspace config loads"), logs)
 }
 
@@ -125,8 +129,11 @@ fn legacy_none_policy_turns_neither_on() {
     );
     review_layers_write_config(workspace.path(), "[operation]\nreview_policy = \"none\"\n");
 
-    let config =
-        ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).expect("loads");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("loads");
 
     assert!(!config.operation.review_before_pr.value);
 }
@@ -268,7 +275,11 @@ fn invalid_legacy_values_still_fail_closed() {
     ] {
         review_layers_write_config(workspace.path(), body);
         assert!(
-            ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).is_err(),
+            ResolvedConfig::load(
+                &orbit_common::Env::capture(),
+                &ConfigRoots::new(global.path(), workspace.path())
+            )
+            .is_err(),
             "refused: {body}"
         );
     }
@@ -295,8 +306,11 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
     );
     review_layers_write_config(workspace.path(), CODEQL_RULE);
 
-    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("the rules load");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("the rules load");
     let rules = &config.operation.review_host_evidence;
     assert_eq!(rules.source, OperationLayerSource::Workspace);
     assert_eq!(rules.value.len(), 1, "{rules:?}");
@@ -317,8 +331,11 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
         workspace.path(),
         &format!("{CODEQL_RULE}tags = [\" Security \", \"security-review\"]\n"),
     );
-    let tagged = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("a rule may list task tags");
+    let tagged = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("a rule may list task tags");
     assert_eq!(
         tagged.operation.review_host_evidence.value[0].tags,
         vec!["security".to_string(), "security-review".to_string()]
@@ -328,8 +345,11 @@ fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {
         workspace.path(),
         &format!("{CODEQL_RULE}hosted_check = \" CodeQL / Analyze (rust) \"\n"),
     );
-    let declared = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("a linux codeql rule may name its hosted check");
+    let declared = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("a linux codeql rule may name its hosted check");
     assert_eq!(
         declared.operation.review_host_evidence.value[0]
             .hosted_check
@@ -410,7 +430,11 @@ fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
     ] {
         review_layers_write_config(workspace.path(), &body);
         assert!(
-            ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).is_err(),
+            ResolvedConfig::load(
+                &orbit_common::Env::capture(),
+                &ConfigRoots::new(global.path(), workspace.path())
+            )
+            .is_err(),
             "refused: {body}"
         );
     }
@@ -455,9 +479,12 @@ fn invalid_review_timing_names_the_file_key_value_and_accepted_spellings() {
     let workspace = tempdir().expect("config fixture");
     for root in [global.path(), workspace.path()] {
         review_layers_write_config(root, "[review]\ntiming = \"invalid-timing\"\n");
-        let error = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-            .expect_err("invalid timing is refused")
-            .to_string();
+        let error = ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect_err("invalid timing is refused")
+        .to_string();
         for required in [
             root.join("config.toml").display().to_string(),
             "review.timing".into(),

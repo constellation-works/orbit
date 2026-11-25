@@ -96,13 +96,13 @@ fn config_admission_rejects_invalid_thresholds_and_exposes_overrides() {
     ] {
         std::fs::write(&path, format!("[workflow.resource_throttle]\n{body}")).unwrap();
         assert!(
-            ConfigStore::open(ConfigScope::Global, &path)
+            ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
                 .and_then(|store| store.snapshot())
                 .is_err()
         );
     }
     std::fs::write(&path, "[workflow.resource_throttle]\nenabled = false\ncpu_high_percent = 97\ncpu_resume_percent = 65").unwrap();
-    let config = ConfigStore::open(ConfigScope::Global, &path)
+    let config = ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
         .unwrap()
         .snapshot()
         .unwrap();

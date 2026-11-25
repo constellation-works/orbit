@@ -13,8 +13,11 @@ fn load_config(body: &str) -> Result<ResolvedConfig, String> {
         format!("[workflow]\n{body}\n"),
     )
     .expect("write config");
-    ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .map_err(|error| error.to_string())
+    ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// The policy one load of `[workflow]` `body` admits, or its error.
@@ -25,8 +28,12 @@ fn load(body: &str) -> Result<ProviderLimitPolicy, String> {
 /// `orbit config set --global key value`, validated as the command does.
 fn set(key: &str, value: &str) -> Result<(), String> {
     let root = tempfile::tempdir().expect("config tempdir");
-    let mut store = ConfigStore::open(ConfigScope::Global, root.path().join("config.toml"))
-        .map_err(|error| error.to_string())?;
+    let mut store = ConfigStore::open(
+        &orbit_common::Env::capture(),
+        ConfigScope::Global,
+        root.path().join("config.toml"),
+    )
+    .map_err(|error| error.to_string())?;
     store
         .set_value(key, value)
         .and_then(|()| store.validate_for_set(key))
@@ -253,7 +260,8 @@ fn crew_account_targets_load_only_for_a_defined_crew_with_env() {
             format!("[workflow]\n{body}\n"),
         )
         .expect("write workspace config");
-        ResolvedConfig::load(&roots).map_err(|error| error.to_string())
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .map_err(|error| error.to_string())
     };
 
     let policy = load_workspace(
@@ -341,15 +349,22 @@ fn usage_pressure_keys_default_to_static_and_round_trip_through_config_set() {
         );
         let global = tempfile::tempdir().expect("global tempdir");
         let workspace = tempfile::tempdir().expect("workspace tempdir");
-        let mut store = ConfigStore::open(ConfigScope::Global, global.path().join("config.toml"))
-            .expect("open the global config");
+        let mut store = ConfigStore::open(
+            &orbit_common::Env::capture(),
+            ConfigScope::Global,
+            global.path().join("config.toml"),
+        )
+        .expect("open the global config");
         store.set_value(key, value).expect("config set writes");
         store
             .validate_for_set(key)
             .unwrap_or_else(|error| panic!("config set admits {key} = {value}: {error}"));
         store.save().expect("config set saves");
-        let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-            .expect("the written config loads");
+        let config = ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect("the written config loads");
         assert_eq!(
             config.snapshot.value_for(key),
             Some(read_back),

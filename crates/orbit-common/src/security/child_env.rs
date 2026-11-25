@@ -181,8 +181,12 @@ fn is_privilege_bearing_orbit_name(name: &str) -> bool {
 ///
 /// Names outside that set are absent from the result, so the caller can launch
 /// the child from a cleared environment and get exactly this.
-pub fn allowlisted_child_env(pass: &[String], extras: &[&str]) -> Vec<(String, String)> {
-    allowlisted_child_env_from(&std::env::vars().collect::<Vec<_>>(), pass, extras)
+pub fn allowlisted_child_env(
+    env: &crate::Env,
+    pass: &[String],
+    extras: &[&str],
+) -> Vec<(String, String)> {
+    allowlisted_child_env_from(env, &utf8_vars_owned(env), pass, extras)
 }
 
 /// Snapshot-driven form of [`allowlisted_child_env`].
@@ -191,6 +195,7 @@ pub fn allowlisted_child_env(pass: &[String], extras: &[&str]) -> Vec<(String, S
 /// testable: a test states the ambient environment it is reasoning about
 /// instead of inheriting the developer's shell.
 pub fn allowlisted_child_env_from(
+    env: &crate::Env,
     parent: &[(String, String)],
     pass: &[String],
     extras: &[&str],
@@ -210,13 +215,13 @@ pub fn allowlisted_child_env_from(
                 .filter(|name| !is_privilege_bearing_orbit_name(name)),
         )
         .collect();
-    let mut env: BTreeMap<String, String> = parent
+    let mut child: BTreeMap<String, String> = parent
         .iter()
         .filter(|(name, _)| admitted.contains(name.as_str()) || is_orbit_envelope_name(name))
         .cloned()
         .collect();
-    backfill_login_identity(&mut env);
-    env.into_iter().collect()
+    backfill_login_identity(env, &mut child);
+    child.into_iter().collect()
 }
 
 /// The `pass` names that would reach no child because the parent environment
@@ -274,6 +279,7 @@ pub fn login_auth_credential_names(provider: &str) -> &'static [&'static str] {
 /// removed. Privilege-bearing `ORBIT_*` names are never admitted, whoever
 /// asks.
 pub fn apply_crew_env_from(
+    env: &crate::Env,
     child: &mut Vec<(String, String)>,
     parent: &[(String, String)],
     crew_env: &[CrewEnvVar],
@@ -307,7 +313,7 @@ pub fn apply_crew_env_from(
     }
     child.retain(|(key, _)| !removed.contains(key.as_str()));
     for entry in entries {
-        if let Some(value) = crew_env_value(parent, entry) {
+        if let Some(value) = crew_env_value(env, parent, entry) {
             child.push((entry.name.clone(), value));
         }
     }
@@ -316,14 +322,18 @@ pub fn apply_crew_env_from(
 /// The value one crew `env` entry resolves to: `parent`'s non-empty value of
 /// its source variable, or the contents of its source file. `None` when there
 /// is none.
-fn crew_env_value(parent: &[(String, String)], entry: &CrewEnvVar) -> Option<String> {
+fn crew_env_value(
+    env: &crate::Env,
+    parent: &[(String, String)],
+    entry: &CrewEnvVar,
+) -> Option<String> {
     match &entry.source {
         CrewEnvSource::Variable(source) => parent
             .iter()
             .rev()
             .find(|(key, value)| key == source && !value.is_empty())
             .map(|(_, value)| value.clone()),
-        CrewEnvSource::File(path) => read_secret_file(path).ok(),
+        CrewEnvSource::File(path) => read_secret_file(env, path).ok(),
     }
 }
 
@@ -331,21 +341,24 @@ fn crew_env_value(parent: &[(String, String)], entry: &CrewEnvVar) -> Option<Str
 /// `parent` holds no non-empty value for, or a source file that is missing,
 /// empty or refused. In listed order. Names and paths only, never values.
 pub fn unset_crew_env_from(
+    env: &crate::Env,
     parent: &[(String, String)],
     crew_env: &[CrewEnvVar],
 ) -> Vec<CrewEnvVar> {
     crew_env
         .iter()
-        .filter(|entry| crew_env_value(parent, entry).is_none())
+        .filter(|entry| crew_env_value(env, parent, entry).is_none())
         .cloned()
         .collect()
 }
 
 /// Why a file-backed crew `env` entry resolves to no value, for a warning that
 /// names the file's state. `None` for a variable source or a usable file.
-pub fn crew_env_file_problem(entry: &CrewEnvVar) -> Option<String> {
+pub fn crew_env_file_problem(env: &crate::Env, entry: &CrewEnvVar) -> Option<String> {
     let path = entry.source.file()?;
-    read_secret_file(path).err().map(|error| error.to_string())
+    read_secret_file(env, path)
+        .err()
+        .map(|error| error.to_string())
 }
 
 /// [`inherited_child_env`] over an explicit parent snapshot.
@@ -368,8 +381,14 @@ pub fn inherited_child_env_from(parent: &[(String, String)]) -> Vec<(String, Str
 ///
 /// The explicit opt-in behind `[execution.env] inherit = true`. Callers that
 /// do not opt in use [`allowlisted_child_env`].
-pub fn inherited_child_env() -> Vec<(String, String)> {
-    inherited_child_env_from(&std::env::vars().collect::<Vec<_>>())
+pub fn inherited_child_env(env: &crate::Env) -> Vec<(String, String)> {
+    inherited_child_env_from(&utf8_vars_owned(env))
+}
+
+fn utf8_vars_owned(env: &crate::Env) -> Vec<(String, String)> {
+    env.utf8_vars()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect()
 }
 
 /// Ensure a child environment carries a login identity (`USER` / `LOGNAME`).
@@ -383,7 +402,7 @@ pub fn inherited_child_env() -> Vec<(String, String)> {
 /// uid so the child always has a correct identity; an already-present, non-empty
 /// value is never overwritten. [ORB-00409]
 // pub(crate) for sibling-layout tests in security/tests/child_env.rs.
-pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
+pub(crate) fn backfill_login_identity(env: &crate::Env, vars: &mut BTreeMap<String, String>) {
     let missing = |vars: &BTreeMap<String, String>, key: &str| {
         vars.get(key).is_none_or(|value| value.is_empty())
     };
@@ -392,7 +411,7 @@ pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
     if !need_user && !need_logname {
         return;
     }
-    let Some(login) = os_login_name() else {
+    let Some(login) = os_login_name(env) else {
         // Cannot resolve a login name; leave the environment untouched rather
         // than inject a placeholder that would itself fail credential lookup.
         return;
@@ -412,7 +431,7 @@ pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
 /// environment. Returns `None` when no passwd entry exists or the lookup
 /// fails. Also the fallback for the operator crew name `orbit init` offers.
 #[cfg(unix)]
-pub fn os_login_name() -> Option<String> {
+pub fn os_login_name(_env: &crate::Env) -> Option<String> {
     use std::ffi::CStr;
 
     // SAFETY: getuid cannot fail. getpwuid_r writes into caller-owned buffers
@@ -447,8 +466,9 @@ pub fn os_login_name() -> Option<String> {
 
 /// Non-Unix fallback: derive the login name from `USERNAME` if present.
 #[cfg(not(unix))]
-pub fn os_login_name() -> Option<String> {
-    std::env::var(env_vars::USERNAME)
-        .ok()
+pub fn os_login_name(_env: &crate::Env) -> Option<String> {
+    _env.username()
+        .and_then(std::ffi::OsStr::to_str)
         .filter(|name| !name.is_empty())
+        .map(str::to_owned)
 }

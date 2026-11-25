@@ -23,16 +23,18 @@ use super::*;
 /// expanded up front from one walk per search root; the mount loops and the
 /// post-run guard read that expansion rather than walking again.
 pub fn compile_linux_bwrap_argv(
+    env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
     program: &str,
     args: &[String],
     cwd: Option<&Path>,
     managed_worktree: bool,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
-    compile_plan(profile, program, args, cwd, managed_worktree, None)
+    compile_plan(env, profile, program, args, cwd, managed_worktree, None)
 }
 
 fn compile_plan(
+    env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
     program: &str,
     args: &[String],
@@ -41,13 +43,14 @@ fn compile_plan(
     mask: Option<&LinuxBwrapMask>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
     compile_plan_with_credentials(
+        env,
         profile,
         program,
         args,
         cwd,
         managed_worktree,
         mask,
-        &host_credential_denies(),
+        &host_credential_denies(env),
         host_mounts,
     )
 }
@@ -57,6 +60,7 @@ fn compile_plan(
 /// host account's.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_plan_with_credentials(
+    env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
     program: &str,
     args: &[String],
@@ -124,7 +128,7 @@ pub(super) fn compile_plan_with_credentials(
     // is still emitted afterwards and still wins. A profile with no positive
     // modify rule gains no writable bind at all, cargo caches included.
     if profile_grants_write(profile) {
-        append_cargo_download_cache_mounts(&mut out, cargo_home_dir().as_deref());
+        append_cargo_download_cache_mounts(&mut out, cargo_home_dir(env).as_deref());
     }
     for (index, rule) in profile.modify.iter().enumerate() {
         if rule.starts_with('!') || is_narrow_reallow(&profile.modify[..index], rule) {
@@ -257,7 +261,9 @@ pub(super) fn compile_plan_with_credentials(
 /// `mask`, when given, follows policy mounts; mandatory credential and runtime
 /// masks follow it. A masked directory or file reachable through another path
 /// refuses the plan (see [`LinuxBwrapMask`]).
+#[allow(clippy::too_many_arguments)]
 pub fn compile_linux_bwrap_argv_with_authority(
+    env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
     program: &str,
     args: &[String],
@@ -266,7 +272,7 @@ pub fn compile_linux_bwrap_argv_with_authority(
     authority: Vec<LinuxBwrapMountAuthority>,
     mask: Option<&LinuxBwrapMask>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
-    let mut plan = compile_plan(profile, program, args, cwd, managed_worktree, mask)?;
+    let mut plan = compile_plan(env, profile, program, args, cwd, managed_worktree, mask)?;
     for grant in authority {
         let source = prepare_mount_source(grant.source)?;
         #[cfg(unix)]

@@ -75,7 +75,7 @@ pub fn resolve_shared_worktree_path(repo_root: &Path, run_id: &str) -> Result<Pa
 /// protection scan refuses any symlink under the common directory, and a
 /// checkout of a repository with symlinked files is not Git metadata.
 pub(crate) fn scratch_checkout_path(repo: &Path, dir_name: &str) -> Result<PathBuf, OrbitError> {
-    let common = orbit_common::fs::git::git_common_dir(repo)?;
+    let common = orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), repo)?;
     let primary = common
         .parent()
         .filter(|_| common.file_name().is_some_and(|name| name == ".git"))

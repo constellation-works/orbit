@@ -7,8 +7,8 @@ use orbit_common::OrbitError;
 use orbit_types::identity::{Crew, HumanCrew};
 
 use super::compatibility::{
-    CompatibilityKeys, RETIRED_BACKEND_ENV, deprecated_keys_present,
-    reject_retired_backend_overrides, removed_keys_present,
+    CompatibilityKeys, deprecated_keys_present, reject_retired_backend_overrides,
+    removed_keys_present,
 };
 use super::crew::{
     IgnoredCrewProperty, crews_from_raw, explain_human_crew_reference, human_crews_from_raw,
@@ -174,7 +174,7 @@ impl ResolvedConfig {
     /// Built-in defaults for every setting, with caller-supplied persistence
     /// paths. There is no cwd-derived variant: persistence is always a
     /// function of the roots the caller resolved.
-    pub fn built_in(persistence: PersistenceConfig) -> Self {
+    pub fn built_in(env: &orbit_common::Env, persistence: PersistenceConfig) -> Self {
         let snapshot = ConfigSnapshot::default();
         let SnapshotProjection {
             pr,
@@ -187,7 +187,7 @@ impl ResolvedConfig {
             codex_execution,
         } = SnapshotProjection::from_snapshot(&snapshot);
         Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
+            execution_env: ExecutionEnvPolicy::from_snapshot(env, &snapshot),
             codex_execution,
             persistence,
             pr,
@@ -219,8 +219,8 @@ impl ResolvedConfig {
     /// Sandbox mode, approval policy, and the environment allowlist are the
     /// exception: whenever a distinct workspace file exists, omissions for
     /// those keys resolve to built-in defaults rather than global values.
-    pub fn load(roots: &ConfigRoots) -> Result<Self, OrbitError> {
-        load_layered_resolved(roots).map(|loaded| loaded.resolved)
+    pub fn load(env: &orbit_common::Env, roots: &ConfigRoots) -> Result<Self, OrbitError> {
+        load_layered_resolved(env, roots).map(|loaded| loaded.resolved)
     }
 
     /// Parse and validate a raw `config.toml` document string into a fully
@@ -234,6 +234,7 @@ impl ResolvedConfig {
     /// persistence paths are derived from the two data roots, not from the
     /// config document itself.
     pub(crate) fn from_raw_str(
+        env: &orbit_common::Env,
         raw: &str,
         config_path: &Path,
         persistence: PersistenceConfig,
@@ -243,6 +244,7 @@ impl ResolvedConfig {
             .map_err(|err| config_document::invalid_runtime_config(config_path, err))?;
         crate::alias::translate_deprecated_keys(&mut document, None, config_path)?;
         let resolved = Self::from_document_with_warnings(
+            env,
             document,
             config_path,
             &|_, _| config_path.to_path_buf(),
@@ -271,6 +273,7 @@ impl ResolvedConfig {
     /// and never re-parsed here. `config_path` is the merged document's path;
     /// `crew_field_path` attributes an ignored crew field to the layer that set it.
     pub(crate) fn from_layered_value(
+        env: &orbit_common::Env,
         document: toml::Value,
         config_path: &Path,
         crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
@@ -278,6 +281,7 @@ impl ResolvedConfig {
         global_memory_high_percent: u8,
     ) -> Result<Self, OrbitError> {
         Self::from_document_with_warnings(
+            env,
             document,
             config_path,
             crew_field_path,
@@ -296,12 +300,14 @@ impl ResolvedConfig {
     /// Admit a file snapshot with contextual crews, without requiring the
     /// scoped file to choose a runtime default crew when it omits that key.
     pub(crate) fn from_scoped_value(
+        env: &orbit_common::Env,
         document: toml::Value,
         config_path: &Path,
         crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
         Self::from_document_with_warnings(
+            env,
             document,
             config_path,
             crew_field_path,
@@ -316,6 +322,7 @@ impl ResolvedConfig {
     }
 
     fn from_document_with_warnings(
+        env: &orbit_common::Env,
         document: toml::Value,
         config_path: &Path,
         crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
@@ -329,21 +336,25 @@ impl ResolvedConfig {
 
         reject_retired_backend_overrides(
             &document,
-            std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
+            env.orbit_backend().and_then(std::ffi::OsStr::to_str),
         )?;
         let human_crews = human_crews_from_raw(parsed.crews.as_ref(), config_path)?;
         let (crews, ignored_crew_properties) =
             crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
         reject_human_crew_name_collisions(&crews, &human_crews)?;
+        let env_default = env
+            .constellation_default_provider()
+            .and_then(std::ffi::OsStr::to_str);
         let admitted = if options.scoped {
-            ConfigSnapshot::admit_scoped(&document, config_path, &crews)
+            ConfigSnapshot::admit_scoped(env_default, &document, config_path, &crews)
         } else {
             match options.auto_memory_threshold {
                 AutoConcurrencyMemoryThreshold::EffectiveLayer => {
-                    ConfigSnapshot::admit(&document, config_path, &crews)
+                    ConfigSnapshot::admit(env_default, &document, config_path, &crews)
                 }
                 AutoConcurrencyMemoryThreshold::Global(memory_high) => {
                     ConfigSnapshot::admit_with_global_memory_high(
+                        env_default,
                         &document,
                         config_path,
                         &crews,
@@ -351,7 +362,7 @@ impl ResolvedConfig {
                     )
                 }
                 AutoConcurrencyMemoryThreshold::Skip => {
-                    ConfigSnapshot::admit_workspace(&document, config_path, &crews)
+                    ConfigSnapshot::admit_workspace(env_default, &document, config_path, &crews)
                 }
             }
         };
@@ -400,7 +411,7 @@ impl ResolvedConfig {
             codex_execution,
         } = SnapshotProjection::from_snapshot(&snapshot);
         Ok(Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
+            execution_env: ExecutionEnvPolicy::from_snapshot(env, &snapshot)
                 .with_crew_env_sources(crews.values().flat_map(|crew| &crew.env)),
             codex_execution,
             persistence,

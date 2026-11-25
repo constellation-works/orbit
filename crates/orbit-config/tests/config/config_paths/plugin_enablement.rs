@@ -27,8 +27,11 @@ fn global_plugin_enablement_is_refused_at_load() {
         "[machine]\nname = \"owner-host\"\n\n[plugin_enablement]\ngraph = false\n",
     );
 
-    let error = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect_err("a global toggle table is refused");
+    let error = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect_err("a global toggle table is refused");
     // [ORB-20766] The refusal is a typed host-configuration error naming the
     // host and file, not the caller's invalid_input: a follower whose remote
     // call the owner serves did nothing wrong.
@@ -144,8 +147,11 @@ fn a_toggle_only_workspace_file_keeps_the_security_keys_inherited() {
     write_config(global.path(), PERMISSIVE_GLOBAL);
     write_config(workspace.path(), "[plugin_enablement]\ngraph = false\n");
 
-    let config =
-        ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).expect("load");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("load");
     assert_eq!(config.codex_execution.sandbox(), "danger-full-access");
     assert!(
         config
@@ -164,8 +170,11 @@ fn a_toggle_only_workspace_file_keeps_the_security_keys_inherited() {
         "# operator notes\n",
     ] {
         write_config(workspace.path(), body);
-        let config =
-            ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).expect("load");
+        let config = ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect("load");
         assert_eq!(
             config.codex_execution.sandbox(),
             "workspace-write",

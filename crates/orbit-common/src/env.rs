@@ -66,6 +66,13 @@ impl Env {
             .map(|(name, value)| (name.as_os_str(), value.as_os_str()))
     }
 
+    /// The captured environment in the UTF-8 representation used by subprocess
+    /// policies and configuration. Non-Unicode entries cannot be represented.
+    pub fn utf8_vars(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.vars()
+            .filter_map(|(name, value)| Some((name.to_str()?, value.to_str()?)))
+    }
+
     pub(crate) fn get(&self, name: &str) -> Option<&OsStr> {
         self.vars.get(OsStr::new(name)).map(OsString::as_os_str)
     }

@@ -38,7 +38,7 @@ fn script_sandbox_available(test: &str) -> bool {
         }
     }
     #[cfg(target_os = "macos")]
-    if !orbit_exec::macos_sandbox_test_guard(test) {
+    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
         return false;
     }
     true
@@ -81,26 +81,29 @@ fn a_script_runs_under_its_cpu_and_open_file_limits() {
     );
     let argv = vec!["/bin/bash".to_string(), "-c".to_string(), script];
     let env = vec![("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let run = run_script_sandboxed(ScriptSandboxRequest {
-        sandbox: ScriptSandboxSpec {
-            cwd: &cwd,
-            cwd_writable: true,
-            scratch: &scratch,
-            readable: &[],
-            writable: &[],
-            masked: &[],
-            home: None,
-            inputs: &[],
-            network: ScriptSandboxNetwork::None,
+    let run = run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd: &cwd,
+                cwd_writable: true,
+                scratch: &scratch,
+                readable: &[],
+                writable: &[],
+                masked: &[],
+                home: None,
+                inputs: &[],
+                network: ScriptSandboxNetwork::None,
+            },
+            argv: &argv,
+            env: &env,
+            launcher: &[],
+            launcher_env: &[],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(37),
+            scratch_cap_bytes: u64::MAX,
         },
-        argv: &argv,
-        env: &env,
-        launcher: &[],
-        launcher_env: &[],
-        stdin: Vec::new(),
-        timeout: Duration::from_secs(37),
-        scratch_cap_bytes: u64::MAX,
-    })
+    )
     .expect("run the script");
     let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
     assert_eq!(
@@ -140,8 +143,13 @@ fn granted_roots_are_probed_for_existence_credentials_and_access() {
     }
     let home_os = Some(home.as_os_str());
 
-    let physical = probe_script_root(&library, ScriptRootAccess::Write, home_os)
-        .expect("a readable, writable directory passes");
+    let physical = probe_script_root(
+        &orbit_common::Env::capture(),
+        &library,
+        ScriptRootAccess::Write,
+        home_os,
+    )
+    .expect("a readable, writable directory passes");
     assert_eq!(physical, library.canonicalize().expect("physical"));
     assert_eq!(
         std::fs::read_dir(&library).expect("list").count(),
@@ -150,23 +158,38 @@ fn granted_roots_are_probed_for_existence_credentials_and_access() {
     );
 
     let missing = dir.path().join("gone");
-    let refused = probe_script_root(&missing, ScriptRootAccess::Read, home_os)
-        .expect_err("a missing root is refused");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        &missing,
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect_err("a missing root is refused");
     assert!(
         refused.contains(&missing.display().to_string()) && refused.contains("does not exist"),
         "{refused}"
     );
 
     let credential = home.join(".ssh/keys");
-    let refused = probe_script_root(&credential, ScriptRootAccess::Read, home_os)
-        .expect_err("a root inside a credential path is refused");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        &credential,
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect_err("a root inside a credential path is refused");
     assert!(
         refused.contains(&credential.display().to_string()) && refused.contains("credential"),
         "{refused}"
     );
 
-    let refused = probe_script_root(Path::new("relative"), ScriptRootAccess::Read, home_os)
-        .expect_err("a relative root is refused");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        Path::new("relative"),
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect_err("a relative root is refused");
     assert!(refused.contains("not an absolute path"), "{refused}");
 
     // SAFETY: `geteuid` has no preconditions.
@@ -176,10 +199,20 @@ fn granted_roots_are_probed_for_existence_credentials_and_access() {
         return;
     }
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).expect("chmod");
-    probe_script_root(&sealed, ScriptRootAccess::Read, home_os)
-        .expect("a read-only directory is a usable read root");
-    let refused = probe_script_root(&sealed, ScriptRootAccess::Write, home_os)
-        .expect_err("a write root this process cannot write is refused");
+    probe_script_root(
+        &orbit_common::Env::capture(),
+        &sealed,
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect("a read-only directory is a usable read root");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        &sealed,
+        ScriptRootAccess::Write,
+        home_os,
+    )
+    .expect_err("a write root this process cannot write is refused");
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     assert!(
         refused.contains(&sealed.display().to_string()) && refused.contains("not accessible"),
@@ -225,7 +258,12 @@ fn nonregular_read_roots_are_refused_promptly_without_blocking() {
     fn probe_bounded(root: PathBuf) -> Result<PathBuf, String> {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(probe_script_root(&root, ScriptRootAccess::Read, None));
+            let _ = tx.send(probe_script_root(
+                &orbit_common::Env::capture(),
+                &root,
+                ScriptRootAccess::Read,
+                None,
+            ));
         });
         rx.recv_timeout(std::time::Duration::from_secs(10))
             .expect("the root probe must not block on a non-regular root")
@@ -251,7 +289,13 @@ fn nonregular_read_roots_are_refused_promptly_without_blocking() {
     // A granted regular file replaced by a FIFO at the same path.
     let data = dir.path().join("data");
     std::fs::write(&data, "data").expect("data file");
-    probe_script_root(&data, ScriptRootAccess::Read, home).expect("a regular file passes");
+    probe_script_root(
+        &orbit_common::Env::capture(),
+        &data,
+        ScriptRootAccess::Read,
+        home,
+    )
+    .expect("a regular file passes");
     std::fs::remove_file(&data).expect("remove data");
     mkfifo(&data);
     let refused = probe_bounded(data.clone()).expect_err("a FIFO replacement is refused");
@@ -374,7 +418,8 @@ mod macos {
             );
             request.scratch_cap_bytes = cap;
             request.timeout = timeout;
-            let error = run_script_sandboxed(request).expect_err("preparation must refuse");
+            let error = run_script_sandboxed(&orbit_common::Env::capture(), request)
+                .expect_err("preparation must refuse");
             assert!(
                 matches!(&error, OrbitError::InvalidInput(message) if message.contains(reason)),
                 "{error:?}"
@@ -468,19 +513,22 @@ mod macos {
             source: brief_dir.clone(),
             name: "briefs".to_string(),
         }];
-        let run = run_script_sandboxed(request(
-            spec(
-                &cwd,
-                &scratch,
-                &writable,
-                &masked,
-                &home,
-                &inputs,
-                ScriptSandboxNetwork::None,
+        let run = run_script_sandboxed(
+            &orbit_common::Env::capture(),
+            request(
+                spec(
+                    &cwd,
+                    &scratch,
+                    &writable,
+                    &masked,
+                    &home,
+                    &inputs,
+                    ScriptSandboxNetwork::None,
+                ),
+                &argv,
+                &env,
             ),
-            &argv,
-            &env,
-        ))
+        )
         .expect("run the script");
 
         let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
@@ -561,13 +609,15 @@ mod macos {
             &[],
             ScriptSandboxNetwork::TcpPort(443),
         );
-        let error = compile_macos_script_profile(&sandbox).expect_err("no networked profile");
+        let error = compile_macos_script_profile(&orbit_common::Env::capture(), &sandbox)
+            .expect_err("no networked profile");
         assert!(
             matches!(error, OrbitError::PolicyDenied(_)),
             "unexpected: {error:?}"
         );
-        let error = run_script_sandboxed(request(sandbox, &argv, &[]))
-            .expect_err("a networked run is refused");
+        let error =
+            run_script_sandboxed(&orbit_common::Env::capture(), request(sandbox, &argv, &[]))
+                .expect_err("a networked run is refused");
         assert!(
             matches!(error, OrbitError::PolicyDenied(_)),
             "unexpected: {error:?}"
@@ -630,19 +680,22 @@ mod macos {
         let scratch = scratch_in(&root);
         let marker = cwd.join("ran");
         let argv = vec!["/usr/bin/touch".to_string(), marker.display().to_string()];
-        let error = run_script_sandboxed(request(
-            spec(
-                &cwd,
-                &scratch,
+        let error = run_script_sandboxed(
+            &orbit_common::Env::capture(),
+            request(
+                spec(
+                    &cwd,
+                    &scratch,
+                    &[],
+                    &[],
+                    &root,
+                    &[],
+                    ScriptSandboxNetwork::None,
+                ),
+                &argv,
                 &[],
-                &[],
-                &root,
-                &[],
-                ScriptSandboxNetwork::None,
             ),
-            &argv,
-            &[],
-        ))
+        )
         .expect_err("a nested run is refused");
         assert!(
             matches!(&error, OrbitError::PolicyDenied(message) if message.contains("does not start nested")),

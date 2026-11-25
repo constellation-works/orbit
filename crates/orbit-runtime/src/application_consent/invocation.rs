@@ -91,7 +91,8 @@ impl RuntimeKernel {
         };
         if invocation.is_none()
             && enforcement == CapabilityEnforcement::Enforce
-            && let Some(credential) = ApplicationCredential::from_process_descriptor()?
+            && let Some(credential) =
+                ApplicationCredential::from_process_descriptor(&orbit_common::Env::capture())?
         {
             let record = self
                 .sqlite_store()?
@@ -106,7 +107,7 @@ impl RuntimeKernel {
             return Ok(false);
         };
         APPLICATION_AUDIT.with(|state| *state.borrow_mut() = Some(invocation.clone()));
-        if agent_context_declared()
+        if agent_context_declared(&orbit_common::Env::capture())
             || session.worker_invocation.is_some()
             || !session.effective_capabilities.is_empty()
         {

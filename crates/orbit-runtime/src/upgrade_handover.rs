@@ -90,7 +90,9 @@ impl RuntimeKernel {
         if let Some((owned, switch)) = pending_switch_for_worker() {
             self.yield_to_pending_switch(owned, &switch);
         }
-        let Some(installed) = handover_target(Some(RESUME_DRAIN_ADOPT)) else {
+        let Some(installed) =
+            handover_target(&orbit_common::Env::capture(), Some(RESUME_DRAIN_ADOPT))
+        else {
             return;
         };
         tracing::info!(

@@ -56,7 +56,7 @@ fn backlog_row(runtime: &OrbitRuntime) -> Option<WorkspaceDoctorResult> {
 }
 
 fn kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    let layout = match KitLayout::current_user() {
+    let layout = match KitLayout::current_user(&orbit_core::composition::composition_env()) {
         Ok(layout) => layout,
         Err(error) => {
             return vec![row(
@@ -193,7 +193,8 @@ fn node_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 
 /// The installed clock unit and the PATH it starts workers with.
 fn clock_service_path() -> Option<(String, String)> {
-    let home = orbit_common::fs::path::home_dir().ok()?;
+    let home =
+        orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok()?;
     let systemd = home.join(".config/systemd/user/orbit-sweep.service");
     if let Ok(unit) = std::fs::read_to_string(&systemd) {
         let path = systemd_unit_path(&unit, &home)

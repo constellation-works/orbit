@@ -76,20 +76,22 @@ pub struct ExecRequest {
 /// On Unix, termination signals are intercepted before spawning and forwarded
 /// to the previous disposition after the child's process group is cleaned up.
 pub fn run_process(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
 ) -> Result<ExecutionResult, OrbitError> {
-    Ok(run_process_supervised(req, sandbox)?.result)
+    Ok(run_process_supervised(env, req, sandbox)?.result)
 }
 
 /// Run a process like [`run_process`], retaining the supervisor's structured
 /// stop cause alongside the captured result. Use this when classifying an
 /// inconclusive run: child output may contain any supervision diagnostic.
 pub fn run_process_supervised(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
 ) -> Result<SupervisedOutcome, OrbitError> {
-    run_supervised(req, sandbox, false)
+    run_supervised(env, req, sandbox, false)
 }
 
 /// Run a probe: like [`run_process`], but a child the supervisor stops — at
@@ -101,7 +103,10 @@ pub fn run_process_supervised(
 /// period to protect, and its caller's time bound must hold even when the
 /// child ignores the termination signal (an interactive shell does until it
 /// execs).
-pub(crate) fn run_probe_process(req: &ExecRequest) -> Result<ExecutionResult, OrbitError> {
+pub(crate) fn run_probe_process(
+    env: &orbit_common::Env,
+    req: &ExecRequest,
+) -> Result<ExecutionResult, OrbitError> {
     struct ProbeSandbox;
     impl Sandbox for ProbeSandbox {
         fn validate(&self, _req: &ExecRequest) -> Result<(), OrbitError> {
@@ -111,10 +116,11 @@ pub(crate) fn run_probe_process(req: &ExecRequest) -> Result<ExecutionResult, Or
             crate::process::spawn_probe(req)
         }
     }
-    Ok(run_supervised(req, &ProbeSandbox, true)?.result)
+    Ok(run_supervised(env, req, &ProbeSandbox, true)?.result)
 }
 
 fn run_supervised(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
     kill_at_once: bool,
@@ -124,6 +130,7 @@ fn run_supervised(
     let started = Instant::now();
     let child = SupervisedChild::spawn_guarded(|| sandbox.spawn(req))?;
     let outcome = supervise(
+        env,
         child,
         ExecSupervision {
             timeout_ms: req.timeout_ms,
@@ -181,16 +188,18 @@ pub struct SupervisedOutcome {
 /// [`run_process`] and [`spawn_supervised_cancellable`] also protect their own spawn
 /// operation from termination signals; prefer the latter when post-spawn work follows.
 pub fn supervise_child(
+    env: &orbit_common::Env,
     child: Child,
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
 ) -> Result<SupervisedOutcome, OrbitError> {
-    supervise_child_cancellable(child, timeout_ms, stdin_payload, None)
+    supervise_child_cancellable(env, child, timeout_ms, stdin_payload, None)
 }
 
 /// Supervise a child with host-requested cancellation. Cancellation kills the
 /// whole process group from the owning wait loop, before reaping the child.
 pub fn supervise_child_cancellable(
+    env: &orbit_common::Env,
     child: Child,
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
@@ -198,6 +207,7 @@ pub fn supervise_child_cancellable(
 ) -> Result<SupervisedOutcome, OrbitError> {
     let started = Instant::now();
     let outcome = supervise(
+        env,
         SupervisedChild::adopt(child),
         ExecSupervision {
             timeout_ms,
@@ -226,12 +236,14 @@ pub fn supervise_child_cancellable(
 /// post-spawn setup, use [`spawn_owned_supervised_cancellable`] to retain
 /// cleanup ownership throughout the closure.
 pub fn spawn_supervised_cancellable(
+    env: &orbit_common::Env,
     spawn: impl FnOnce() -> Result<Child, OrbitError>,
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<SupervisedOutcome, OrbitError> {
     spawn_owned_supervised_cancellable(
+        env,
         || spawn().map(orbit_common::process::OwnedChild::from_spawned),
         timeout_ms,
         stdin_payload,
@@ -247,6 +259,7 @@ pub fn spawn_supervised_cancellable(
 /// setup and return the same handle; errors and panics then kill and reap its
 /// group without an unguarded transfer into supervision.
 pub fn spawn_owned_supervised_cancellable(
+    env: &orbit_common::Env,
     spawn: impl FnOnce() -> Result<orbit_common::process::OwnedChild, OrbitError>,
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
@@ -255,6 +268,7 @@ pub fn spawn_owned_supervised_cancellable(
     let started = Instant::now();
     let child = SupervisedChild::spawn_guarded(spawn)?;
     let outcome = supervise(
+        env,
         child,
         ExecSupervision {
             timeout_ms,
@@ -301,6 +315,7 @@ fn supervised_outcome(outcome: Outcome, started: Instant) -> SupervisedOutcome {
 /// kills the child's process group and reaps the child before returning the error.
 /// As with [`run_process`], termination signals are intercepted before spawning.
 pub fn run_process_streaming_stdout<T, F>(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
     consume: F,
@@ -321,6 +336,7 @@ where
     // drain bound, besides draining stderr, enforcing timeouts, and cleaning
     // up the child process group.
     let result = supervise(
+        env,
         child,
         ExecSupervision {
             timeout_ms: req.timeout_ms,

@@ -20,7 +20,11 @@ pub(crate) fn tree_of(
     revision: &str,
 ) -> Result<Result<String, String>, OrbitError> {
     let spec = format!("{revision}^{{tree}}");
-    let output = run_git(workspace, &["rev-parse", "--verify", &spec])?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        workspace,
+        &["rev-parse", "--verify", &spec],
+    )?;
     let tree = output.stdout.trim();
     if !output.success || !is_commit_id(tree) {
         return Ok(Err(output.stderr.trim().to_string()));
@@ -88,6 +92,7 @@ pub(in crate::application::task::pilot) fn fetch_origin_branch(
     let mut last_stderr = String::new();
     for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
         let output = run_git_within(
+            &orbit_common::Env::capture(),
             workspace,
             &[
                 "fetch",
@@ -162,7 +167,7 @@ fn private_source_ref() -> String {
 fn delete_private_source_ref(workspace: &Path, private_ref: &str, revision: Option<&str>) {
     let mut args = vec!["update-ref", "-d", private_ref];
     args.extend(revision);
-    match run_git(workspace, &args) {
+    match run_git(&orbit_common::Env::capture(), workspace, &args) {
         Ok(output) if output.success => {}
         Ok(output) => tracing::warn!(
             private_ref,
@@ -186,8 +191,9 @@ fn delete_private_source_ref(workspace: &Path, private_ref: &str, revision: Opti
 /// fetch is never rolled back. A failure is logged, never the pin's failure.
 pub(super) fn publish_remote_tracking_ref(workspace: &Path, branch: &str, revision: &str) {
     let tracking_ref = format!("refs/remotes/origin/{branch}");
-    let published = try_with_git_fetch_lock(workspace, || {
+    let published = try_with_git_fetch_lock(&orbit_common::Env::capture(), workspace, || {
         let current = run_git(
+            &orbit_common::Env::capture(),
             workspace,
             &[
                 "rev-parse",
@@ -201,8 +207,9 @@ pub(super) fn publish_remote_tracking_ref(workspace: &Path, branch: &str, revisi
         let expected = match current.as_deref() {
             Some(current) if current == revision => return Ok(()),
             Some(current) => {
-                let ancestor = git_ancestry(workspace, current, revision)
-                    .map_err(|error| FetchLockError::Git(error.to_string()))?;
+                let ancestor =
+                    git_ancestry(&orbit_common::Env::capture(), workspace, current, revision)
+                        .map_err(|error| FetchLockError::Git(error.to_string()))?;
                 if ancestor != GitAncestry::Ancestor {
                     return Ok(());
                 }
@@ -212,6 +219,7 @@ pub(super) fn publish_remote_tracking_ref(workspace: &Path, branch: &str, revisi
             None => String::new(),
         };
         let output = run_git(
+            &orbit_common::Env::capture(),
             workspace,
             &[
                 "update-ref",
@@ -298,7 +306,7 @@ pub(super) fn git(
     workspace: &Path,
     args: &[&str],
 ) -> Result<orbit_common::fs::git::GitCommandOutput, DispatchError> {
-    run_git(workspace, args).map_err(|error| {
+    run_git(&orbit_common::Env::capture(), workspace, args).map_err(|error| {
         DispatchError::action_failed(
             action,
             format!(

@@ -6,10 +6,10 @@ use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 /// Report the `machine.worker_*` limits detached workers launch under, so an
 /// operator sees whether a runaway leaf is bounded in memory and CPU.
 pub(super) fn worker_containment_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    let settings = ResolvedConfig::load(&ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    ))
+    let settings = ResolvedConfig::load(
+        &orbit_core::composition::composition_env(),
+        &ConfigRoots::new(runtime.global_root(), runtime.shared_root()),
+    )
     .map(|config| config.snapshot.worker_containment());
     worker_containment_row_for(
         settings.map_err(|error| error.to_string()),

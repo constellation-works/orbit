@@ -43,26 +43,29 @@ fn an_input_growing_during_preparation_cannot_escape_the_scratch_cap() {
     }];
     let marker = cwd.join("ran");
     let argv = ["/usr/bin/touch".to_string(), marker.display().to_string()];
-    let result = run_script_sandboxed(ScriptSandboxRequest {
-        sandbox: ScriptSandboxSpec {
-            cwd: &cwd,
-            cwd_writable: true,
-            scratch: &scratch,
-            readable: &[],
-            writable: &[],
-            masked: &[],
-            home: None,
-            inputs: &inputs,
-            network: ScriptSandboxNetwork::None,
+    let result = run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd: &cwd,
+                cwd_writable: true,
+                scratch: &scratch,
+                readable: &[],
+                writable: &[],
+                masked: &[],
+                home: None,
+                inputs: &inputs,
+                network: ScriptSandboxNetwork::None,
+            },
+            argv: &argv,
+            env: &[],
+            launcher: &[],
+            launcher_env: &[],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(30),
+            scratch_cap_bytes: 12288,
         },
-        argv: &argv,
-        env: &[],
-        launcher: &[],
-        launcher_env: &[],
-        stdin: Vec::new(),
-        timeout: Duration::from_secs(30),
-        scratch_cap_bytes: 12288,
-    });
+    );
     AFTER_INPUT_COPY_CHUNK.with(|hook| {
         hook.take();
     });

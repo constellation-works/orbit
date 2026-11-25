@@ -298,7 +298,7 @@ fn spawn_trash_deletion(trash_path: PathBuf) {
             environment_mode: EnvironmentMode::Inherit,
             debug: false,
         };
-        match run_process(&request, &NoSandbox) {
+        match run_process(&orbit_common::Env::capture(), &request, &NoSandbox) {
             Ok(outcome) if outcome.success => {}
             Ok(outcome) => tracing::warn!(
                 path = %trash_path.display(),

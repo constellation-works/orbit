@@ -273,13 +273,14 @@ pub(super) fn recorded_git_common_dir(checkout: &WorkspaceCheckout) -> Option<Pa
 /// The canonical Git common dir of `path`, or `None` when Git cannot say. A
 /// Git that timed out is logged and, like any `None`, matches no checkout.
 pub(super) fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
-    let common = orbit_common::fs::git::git_common_dir(path)
-        .inspect_err(|error| {
-            if matches!(error, OrbitError::ProcessTimeout { .. }) {
-                tracing::warn!("cannot resolve the Git common dir: {error}");
-            }
-        })
-        .ok()?;
+    let common =
+        orbit_common::fs::git::git_common_dir(&orbit_core::composition::composition_env(), path)
+            .inspect_err(|error| {
+                if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                    tracing::warn!("cannot resolve the Git common dir: {error}");
+                }
+            })
+            .ok()?;
     Some(canonical_path(&common))
 }
 

@@ -251,7 +251,7 @@ pub fn run_gh_request(
         ));
     };
     admitted.map_err(|decided| decided.deliver(request, true))?;
-    let result = run_process(&bounded_request, &NoSandbox)?;
+    let result = run_process(&orbit_common::Env::capture(), &bounded_request, &NoSandbox)?;
     if !result.success {
         observe_gh_failure_by_deadline(&bounded_request, &result.stderr, deadline);
     }

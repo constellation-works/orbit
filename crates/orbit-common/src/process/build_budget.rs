@@ -1,6 +1,5 @@
 //! Cooperative build admission settings and per-invocation wait snapshots.
 
-use crate::env_vars;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -143,19 +142,20 @@ pub struct BuildBudgetCapacity {
 
 impl BuildBudgetCapacity {
     /// Read the same environment/file/default precedence as build-budget.py.
-    pub fn read() -> Result<Self, OrbitError> {
-        let directory = std::env::var_os(env_vars::ORBIT_BUILD_BUDGET_DIR)
+    pub fn read(env: &crate::Env) -> Result<Self, OrbitError> {
+        let directory = env
+            .orbit_build_budget_dir()
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .map(|path| {
                 if let Ok(rest) = path.strip_prefix("~/") {
-                    crate::fs::path::home_dir().map(|home| home.join(rest))
+                    crate::fs::path::home_dir(env).map(|home| home.join(rest))
                 } else {
                     Ok(path)
                 }
             })
             .transpose()?
-            .unwrap_or(crate::fs::path::home_dir()?.join(".orbit/cache/build-budget"));
+            .unwrap_or(crate::fs::path::home_dir(env)?.join(".orbit/cache/build-budget"));
         if directory.is_symlink() {
             return Err(OrbitError::InvalidInput(format!(
                 "build-budget directory is a symbolic link: {}",
@@ -163,9 +163,17 @@ impl BuildBudgetCapacity {
             )));
         }
         let settings_file = directory.join("slots");
-        let raw = match std::env::var(env_vars::ORBIT_BUILD_SLOTS) {
-            Ok(value) => value,
-            Err(std::env::VarError::NotPresent) => match std::fs::read_to_string(&settings_file) {
+        let raw = match env.orbit_build_slots() {
+            Some(value) => value
+                .to_str()
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "ORBIT_BUILD_SLOTS: {}",
+                        std::env::VarError::NotUnicode(value.to_owned())
+                    ))
+                })?
+                .to_owned(),
+            None => match std::fs::read_to_string(&settings_file) {
                 Ok(value) => value.trim().to_string(),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => "2".to_string(),
                 Err(error) => {
@@ -175,11 +183,6 @@ impl BuildBudgetCapacity {
                     )));
                 }
             },
-            Err(error) => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "ORBIT_BUILD_SLOTS: {error}"
-                )));
-            }
         };
         let slots = raw
             .parse::<u32>()
@@ -192,9 +195,9 @@ impl BuildBudgetCapacity {
                     "ORBIT_BUILD_SLOTS must be a decimal integer from 1 through 128; got {raw:?}"
                 ))
             })?;
-        let enabled = match std::env::var(env_vars::ORBIT_BUILD_BUDGET).as_deref() {
-            Ok("0") => false,
-            Ok("1") | Err(std::env::VarError::NotPresent) => true,
+        let enabled = match env.orbit_build_budget().map(std::ffi::OsStr::to_str) {
+            Some(Some("0")) => false,
+            Some(Some("1")) | None => true,
             _ => {
                 return Err(OrbitError::InvalidInput(
                     "ORBIT_BUILD_BUDGET must be 0 or 1".into(),

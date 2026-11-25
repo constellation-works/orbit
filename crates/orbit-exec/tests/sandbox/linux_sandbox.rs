@@ -157,8 +157,15 @@ fn bwrap_child_gets_only_the_supplied_environment() {
 
     let (_temp, workspace) = fresh_workspace();
     let resolved = profile(vec![format!("{}/**", workspace.display())]);
-    let plan = compile_linux_bwrap_argv(&resolved, "/usr/bin/env", &[], Some(&workspace), false)
-        .expect("compile");
+    let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &resolved,
+        "/usr/bin/env",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect("compile");
 
     let env = [
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
@@ -231,6 +238,7 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         ws = workspace.display()
     );
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &["-c".to_string(), script],
@@ -345,6 +353,7 @@ fn bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file() {
         chrome = home.join(".config/google-chrome").display(),
     );
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &["-c".to_string(), script],
@@ -427,6 +436,7 @@ fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
         global = global.display()
     );
     let plan = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &profile(vec![format!("{}/**", workspace.display())]),
         "/bin/sh",
         &["-c".to_string(), script],
@@ -497,6 +507,7 @@ fn kernel_descriptor_mount_never_writes_the_replacement_object() {
     std::fs::write(&target, b"replacement").expect("replacement file");
     let resolved = profile(vec![target.display().to_string()]);
     let plan = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &[
@@ -599,6 +610,7 @@ fn tmp_linked_worktree_retains_git_without_exposing_host_scratch() {
         fs::create_dir(&cwd).expect("cwd");
         let resolved = profile(vec![format!("{}/**", workspace.display())]);
         let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
             &resolved,
             "/bin/sh",
             &[
@@ -731,6 +743,7 @@ fn bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writabl
         w = wrapper.display()
     );
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &["-c".to_string(), script],
@@ -804,8 +817,15 @@ fn absent_anchor_kind_comes_from_rule_semantics_not_filename_shape() {
     );
 
     // Every prepared anchor now mounts; nothing is dropped.
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&worktree), true)
-        .expect("compile");
+    let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &resolved,
+        "/bin/true",
+        &[],
+        Some(&worktree),
+        true,
+    )
+    .expect("compile");
     assert!(plan.dropped_grants.is_empty(), "{:?}", plan.dropped_grants);
     let joined = plan.args.join(" ");
     for anchor in ["config", "cache.v1", "routines"] {
@@ -912,13 +932,27 @@ fn definition_and_cursor_roots_stay_separate_across_local_and_shared_orbit_dirs(
     // The cursor root is a broad host-owned root, not a narrow exception, so
     // compilation refuses to proceed until the host has materialized it. That
     // refusal is what keeps the two roots from collapsing into one.
-    let error = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&worktree), true)
-        .expect_err("an absent host-owned root must fail closed");
+    let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &resolved,
+        "/bin/true",
+        &[],
+        Some(&worktree),
+        true,
+    )
+    .expect_err("an absent host-owned root must fail closed");
     assert!(error.to_string().contains("auto-tasks.json"), "{error}");
 
     std::fs::write(&shared_cursor_state, "{}").expect("host materializes cursor state");
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&worktree), true)
-        .expect("compile");
+    let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &resolved,
+        "/bin/true",
+        &[],
+        Some(&worktree),
+        true,
+    )
+    .expect("compile");
     let joined = plan.args.join(" ");
     assert!(joined.contains(&format!("--bind {0} {0}", shared_cursor_state.display())));
     assert!(joined.contains(&format!("--bind {0} {0}", local_definitions.display())));
@@ -1013,8 +1047,15 @@ fn argv_ordering_table() {
             format!("!{}/**", denied.display()),
         ]);
 
-        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-            .expect("compile");
+        let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            false,
+        )
+        .expect("compile");
         let joined = plan.args.join(" ");
         for required in [
             "--die-with-parent",
@@ -1035,9 +1076,15 @@ fn argv_ordering_table() {
         let readonly = joined.find(&format!("--ro-bind {0} {0}", denied.display()));
         assert!(writable.is_some_and(|index| readonly.is_some_and(|deny| index < deny)));
 
-        let repeated =
-            compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-                .expect("compile twice");
+        let repeated = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            false,
+        )
+        .expect("compile twice");
         assert_eq!(plan, repeated);
     }
 
@@ -1060,8 +1107,15 @@ fn argv_ordering_table() {
             format!("{}/**", workspace.display()),
             format!("{}/**", tasks.display()),
         ]);
-        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-            .expect("compile");
+        let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            false,
+        )
+        .expect("compile");
         let joined = plan.args.join(" ");
         let orbit_readonly = joined
             .find(&format!("--ro-bind {0} {0}", orbit.display()))
@@ -1136,8 +1190,15 @@ fn argv_ordering_table() {
         assert!(partially_writable.is_dir());
         assert_eq!(prepared.created, vec![partially_writable.clone()]);
 
-        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&worktree), true)
-            .expect("compile");
+        let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&worktree),
+            true,
+        )
+        .expect("compile");
         assert!(
             plan.dropped_grants
                 .iter()
@@ -1169,11 +1230,15 @@ fn stable_mount_table() {
         for (case, profile, managed) in
             [("direct", &resolved, false), ("reviewer", &reviewer, true)]
         {
-            let plan =
-                compile_linux_bwrap_argv(profile, "/bin/true", &[], Some(&workspace), managed)
-                    .unwrap_or_else(|error| {
-                        panic!("compile {case} without stable mounts: {error}")
-                    });
+            let plan = compile_linux_bwrap_argv(
+                &orbit_common::Env::capture(),
+                profile,
+                "/bin/true",
+                &[],
+                Some(&workspace),
+                managed,
+            )
+            .unwrap_or_else(|error| panic!("compile {case} without stable mounts: {error}"));
             let joined = plan.args.join(" ");
             assert!(
                 !joined.contains(LINUX_STABLE_WORKSPACE_MOUNT),
@@ -1181,8 +1246,15 @@ fn stable_mount_table() {
             );
         }
 
-        let managed = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
-            .expect("compile managed");
+        let managed = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            true,
+        )
+        .expect("compile managed");
         let joined = managed.args.join(" ");
         let cwd = workspace.canonicalize().expect("canonical workspace");
         let target = cwd.join("target");
@@ -1229,8 +1301,15 @@ fn stable_mount_table() {
         let drafts = workspace.join("docs/drafts").display().to_string();
         let resolved = profile(vec![format!("{docs}/**"), format!("!{drafts}/**")]);
 
-        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
-            .expect("compile subdirectory-only managed profile");
+        let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            true,
+        )
+        .expect("compile subdirectory-only managed profile");
         assert!(
             plan.args
                 .windows(3)
@@ -1254,9 +1333,15 @@ fn stable_mount_table() {
         }
 
         let nested_cwd = workspace.join("docs");
-        let nested_plan =
-            compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&nested_cwd), true)
-                .expect("compile cwd inside the writable root");
+        let nested_plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&nested_cwd),
+            true,
+        )
+        .expect("compile cwd inside the writable root");
         for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
             assert!(
                 nested_plan.args.iter().any(|arg| arg == alias),
@@ -1291,17 +1376,32 @@ fn direct_invocation_policy_table() {
             format!("{}/**", workspace.display()),
             format!("!{denied}"),
         ]);
-        let error = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-            .expect_err("row refuses_absent: an absent deny beneath a writable root must refuse before spawn");
+        let error = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            false,
+        )
+        .expect_err(
+            "row refuses_absent: an absent deny beneath a writable root must refuse before spawn",
+        );
         assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
         assert!(
             !workspace.join("Cargo.lock").exists() && !workspace.join("secrets").exists(),
             "row refuses_absent: compilation must not create denied paths"
         );
 
-        let mut managed =
-            compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
-                .expect("row refuses_absent: managed worktree retains the post-run guard");
+        let mut managed = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            true,
+        )
+        .expect("row refuses_absent: managed worktree retains the post-run guard");
         assert!(managed.take_post_run_guard().is_some());
     }
 
@@ -1319,7 +1419,7 @@ fn direct_invocation_policy_table() {
         format!("!{}/**", outside.join("absent").display()),
         format!("!{}", outside.join("absent.lock").display()),
     ]);
-    let mut plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+    let mut plan = compile_linux_bwrap_argv(&orbit_common::Env::capture(), &resolved, "/bin/true", &[], Some(&workspace), false)
         .expect(
             "row mounts_existing: existing denies mount and absent denies outside the write root need no mount",
         );
@@ -1341,8 +1441,15 @@ fn direct_invocation_policy_table() {
     assert_eq!(plan.take_post_run_guard(), None);
 
     let simple = profile(vec![format!("{}/**", workspace.display())]);
-    compile_linux_bwrap_argv(&simple, "/bin/true", &[], Some(&workspace), false)
-        .expect("row mounts_existing: a direct writable plan without denies remains supported");
+    compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &simple,
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect("row mounts_existing: a direct writable plan without denies remains supported");
 
     // Row: git_metadata_pointer_cannot_restore_host_tmp_wholesale.
     let fixture = tempfile::tempdir_in("/tmp").expect("fixture");
@@ -1353,6 +1460,7 @@ fn direct_invocation_policy_table() {
     std::fs::write(pointer_workspace.join(".git"), "gitdir: ../metadata\n").expect("gitdir");
     std::fs::write(pointer_git.join("commondir"), "/tmp\n").expect("commondir");
     let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(Vec::new()),
         "/bin/true",
         &[],
@@ -1383,6 +1491,7 @@ fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
         modify.push(format!("!{}/{deny}", workspace.display()));
     }
     compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(modify.clone()),
         "/bin/true",
         &[],
@@ -1395,6 +1504,7 @@ fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
     let mut dir_modify = modify.clone();
     dir_modify.push(format!("{}/**", state.display()));
     let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(dir_modify),
         "/bin/true",
         &[],
@@ -1413,6 +1523,7 @@ fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
     let mut env_modify = modify;
     env_modify.push(env_file.display().to_string());
     let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(env_modify),
         "/bin/true",
         &[],
@@ -1439,6 +1550,7 @@ fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
         hard_link_modify.push(format!("!{}/{deny}", workspace.display()));
     }
     let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(hard_link_modify),
         "/bin/true",
         &[],
@@ -1473,8 +1585,15 @@ fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_inv
         format!("{}/**", workspace.display()),
         format!("!{}/**/*.env", workspace.display()),
     ]);
-    let error = compile_linux_bwrap_argv(&unsafe_profile, "/bin/true", &[], None, false)
-        .expect_err("direct invocation must fail closed for unsafe profiles");
+    let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &unsafe_profile,
+        "/bin/true",
+        &[],
+        None,
+        false,
+    )
+    .expect_err("direct invocation must fail closed for unsafe profiles");
     assert!(error.to_string().contains("non-subtree denyModify"));
 
     let script = format!(
@@ -1483,6 +1602,7 @@ fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_inv
         created = created.display()
     );
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &read_only,
         "/bin/sh",
         &["-c".to_string(), script],
@@ -1501,8 +1621,15 @@ fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_inv
         format!("!{}/**/.env", workspace.display()),
         format!("!{}/**/*.env", workspace.display()),
     ]);
-    let narrow_plan = compile_linux_bwrap_argv(&narrow, "/bin/true", &[], None, false)
-        .expect("row allows: a read-only direct invocation needs no mount-based write exclusion");
+    let narrow_plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &narrow,
+        "/bin/true",
+        &[],
+        None,
+        false,
+    )
+    .expect("row allows: a read-only direct invocation needs no mount-based write exclusion");
     assert!(
         !narrow_plan.args.iter().any(|arg| arg == "--bind"),
         "row allows: a no-modify profile must not gain a writable bind: {:?}",
@@ -1543,6 +1670,7 @@ fn assert_absent_deny_enforced(
     let probe = probe_bwrap();
     if probe.available {
         let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
             &resolved,
             "/bin/sh",
             &["-c".to_string(), script.to_string()],
@@ -1670,6 +1798,7 @@ deny mkdir "$DENIED/nested"
 deny mv "$DENIED" "$WORKSPACE/orbit-moved"
 "#;
     let mut plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &["-c".to_string(), script.to_string()],
@@ -1797,6 +1926,7 @@ fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_availabl
         .collect::<Vec<_>>()
         .join("; ");
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &["-c".to_string(), script],
@@ -1917,6 +2047,7 @@ printf 'source edit\n' > "$ALIAS/source.txt"
 "#;
     fs::write(workspace.join("source.txt"), "before\n").unwrap();
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved,
         "/bin/sh",
         &["-c".to_string(), script.to_string()],
@@ -2009,6 +2140,7 @@ fn create_in_managed_child(
         path = path.display()
     );
     let mut plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         resolved,
         "/bin/sh",
         &["-c".to_string(), script],
@@ -2078,7 +2210,16 @@ fn dangling_deny_glob_link_keeps_managed_runs_usable() {
     let missing = workspace.join("missing-target.txt");
     fs::create_dir_all(link.parent().unwrap()).unwrap();
     symlink(&missing, &link).unwrap();
-    let compile = || compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true);
+    let compile = || {
+        compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
+            &resolved,
+            "/bin/true",
+            &[],
+            Some(&workspace),
+            true,
+        )
+    };
 
     let plan = compile().expect("managed compile tolerates the dangling deny match");
     for rendered in [link.display().to_string(), missing.display().to_string()] {
@@ -2167,8 +2308,15 @@ fn dangling_deny_glob_link_keeps_managed_runs_usable() {
         format!("{root}/work/**"),
         format!("!{root}/links/*.orbitdeny"),
     ]);
-    let error = compile_linux_bwrap_argv(&direct, "/bin/true", &[], Some(&workspace), false)
-        .expect_err("direct invocation refuses a dangling deny match");
+    let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &direct,
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("direct invocation refuses a dangling deny match");
     assert!(
         matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains("dangling"),
         "{error}"
@@ -2176,8 +2324,15 @@ fn dangling_deny_glob_link_keeps_managed_runs_usable() {
 
     // A positive glob grant matching only dangling links grants nothing.
     let grant = profile(vec![format!("{root}/links/*.orbitdeny")]);
-    let error = compile_linux_bwrap_argv(&grant, "/bin/true", &[], Some(&workspace), true)
-        .expect_err("a dangling positive match has nothing to mount");
+    let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &grant,
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        true,
+    )
+    .expect_err("a dangling positive match has nothing to mount");
     assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
 }
 

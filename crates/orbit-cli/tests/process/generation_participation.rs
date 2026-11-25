@@ -151,7 +151,8 @@ fn workspace_list_from_unregistered_cwd_joins_foreign_generation_without_writes(
     let root = host.home.join(".orbit");
     let identity = orbit_core::composition::compiled_compatibility();
     let digest = "a".repeat(64);
-    let _record = GenerationGuard::acquire(&root, &digest).expect("record foreign digest");
+    let _record = GenerationGuard::acquire(&orbit_common::Env::capture(), &root, &digest)
+        .expect("record foreign digest");
     let _generation = GenerationGuard::join(
         &root,
         &Participant {
@@ -405,7 +406,8 @@ fn task_list_from_unregistered_cwd_does_not_return_unbound_tasks() {
     fs::create_dir(&cwd).expect("unregistered cwd");
     let identity = orbit_core::composition::compiled_compatibility();
     let digest = "a".repeat(64);
-    let _record = GenerationGuard::acquire(&root, &digest).expect("record foreign digest");
+    let _record = GenerationGuard::acquire(&orbit_common::Env::capture(), &root, &digest)
+        .expect("record foreign digest");
     let _generation = GenerationGuard::join(
         &root,
         &Participant {

@@ -309,25 +309,30 @@ impl LoginShell {
 
     /// Probe interactively, falling back to login-only resolution. `base`
     /// supplies the identity, locale and starting PATH profiles build on.
-    pub fn resolve(&self, base: &[(String, String)]) -> Result<LoginShellEnv, String> {
-        self.resolve_with_interactive(base, true)
+    pub fn resolve(
+        &self,
+        env: &orbit_common::Env,
+        base: &[(String, String)],
+    ) -> Result<LoginShellEnv, String> {
+        self.resolve_with_interactive(env, base, true)
     }
 
     /// Probe now, optionally trying interactive startup before login-only.
     pub(crate) fn resolve_with_interactive(
         &self,
+        env: &orbit_common::Env,
         base: &[(String, String)],
         interactive: bool,
     ) -> Result<LoginShellEnv, String> {
         let fallback_reason = if interactive {
-            match self.probe(base, LoginShellMode::InteractiveLogin) {
+            match self.probe(env, base, LoginShellMode::InteractiveLogin) {
                 Ok(env) => return Ok(env),
                 Err(reason) => Some(reason),
             }
         } else {
             None
         };
-        match self.probe(base, LoginShellMode::Login) {
+        match self.probe(env, base, LoginShellMode::Login) {
             Ok(mut env) => {
                 env.fallback_reason = fallback_reason;
                 Ok(env)
@@ -341,6 +346,7 @@ impl LoginShell {
 
     fn probe(
         &self,
+        env: &orbit_common::Env,
         base: &[(String, String)],
         mode: LoginShellMode,
     ) -> Result<LoginShellEnv, String> {
@@ -358,15 +364,21 @@ impl LoginShell {
             "-c".to_string(),
             format!("exec /bin/sh -c '{}'", printer_script()),
         ]);
-        let outcome = run_probe_process(&ExecRequest {
-            program: shell.clone(),
-            args,
-            current_dir: lookup(base, env_vars::HOME).map(ToOwned::to_owned),
-            timeout_ms: Some(u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX)),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(probe_environment(base, &self.program)),
-            debug: false,
-        })
+        let outcome = run_probe_process(
+            env,
+            &ExecRequest {
+                program: shell.clone(),
+                args,
+                current_dir: lookup(base, env_vars::HOME).map(ToOwned::to_owned),
+                timeout_ms: Some(u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX)),
+                stdin_mode: StdinMode::Null,
+                environment_mode: EnvironmentMode::ClearAndSet(probe_environment(
+                    base,
+                    &self.program,
+                )),
+                debug: false,
+            },
+        )
         .map_err(|error| format!("{label} `{shell}` could not start: {error}"))?;
         if outcome.timed_out {
             return Err(format!(
@@ -408,6 +420,7 @@ impl LoginShell {
     /// too, costing at most two probes per window.
     fn resolve_cached_with_interactive(
         &self,
+        env: &orbit_common::Env,
         base: &[(String, String)],
         interactive: bool,
     ) -> Result<LoginShellEnv, String> {
@@ -430,7 +443,7 @@ impl LoginShell {
         }
         // The probe runs without the lock held: a slow profile must not
         // serialize every other caller behind it.
-        let result = self.resolve_with_interactive(base, interactive);
+        let result = self.resolve_with_interactive(env, base, interactive);
         if let Ok(mut entries) = cache.lock() {
             entries.retain(|_, (at, _)| at.elapsed() < LOGIN_SHELL_CACHE_TTL);
             entries.insert(key, (Instant::now(), result.clone()));
@@ -501,13 +514,14 @@ impl ValidationEnvironment {
     /// Resolve the environment for `policy`, probing `shell` (cached) when
     /// login-shell resolution is enabled.
     pub fn resolve(
+        env: &orbit_common::Env,
         base: Vec<(String, String)>,
         policy: &ValidationEnvPolicy,
         shell: &LoginShell,
     ) -> Self {
         let login = policy.login_shell.then(|| {
             shell
-                .resolve_cached_with_interactive(&base, policy.interactive)
+                .resolve_cached_with_interactive(env, &base, policy.interactive)
                 .map(|env| (shell.program(), env))
         });
         Self::compose(base, policy, login)

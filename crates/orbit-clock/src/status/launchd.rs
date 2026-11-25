@@ -92,7 +92,7 @@ pub(crate) struct LaunchdHealthProbe {
 
 impl LaunchdHealthProbe {
     pub(super) fn current() -> Result<Self, OrbitError> {
-        Self::at(&home_dir()?)
+        Self::at(&home_dir(&orbit_common::Env::capture())?)
     }
 
     pub(crate) fn at(home: &Path) -> Result<Self, OrbitError> {

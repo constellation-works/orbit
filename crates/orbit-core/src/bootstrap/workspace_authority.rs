@@ -483,7 +483,8 @@ fn fence_authorities(
     let admissions = authorities
         .iter()
         .map(|authority| {
-            GenerationUpdate::acquire_fence(authority).map_err(|error| unfenced(authority, error))
+            GenerationUpdate::acquire_fence(&orbit_common::Env::capture(), authority)
+                .map_err(|error| unfenced(authority, error))
         })
         .collect::<Result<_, _>>()?;
     Ok((admissions, authorities))

@@ -33,7 +33,8 @@ fn assert_loaders_refuse(roots: &ConfigRoots, workspace_leaf: bool, cause: &str)
     };
     let path = root.join("config.toml");
     assert_refused(
-        ResolvedConfig::load(roots).expect_err("runtime must refuse an inadmissible leaf"),
+        ResolvedConfig::load(&orbit_common::Env::capture(), roots)
+            .expect_err("runtime must refuse an inadmissible leaf"),
         &path,
         cause,
     );
@@ -59,9 +60,13 @@ fn absent_files_and_parents_inherit_defaults_but_an_empty_file_is_a_layer() {
             fs::create_dir(&workspace).expect("workspace parent");
         }
         let roots = ConfigRoots::new(&global, &workspace);
-        let built_in = ResolvedConfig::load(&ConfigRoots::global_only(&global))
-            .expect("absent global config resolves built-in defaults");
-        let absent = ResolvedConfig::load(&roots).expect("both absent layers load");
+        let built_in = ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::global_only(&global),
+        )
+        .expect("absent global config resolves built-in defaults");
+        let absent = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .expect("both absent layers load");
         assert_eq!(
             absent.codex_execution.sandbox(),
             built_in.codex_execution.sandbox()
@@ -79,7 +84,8 @@ fn absent_files_and_parents_inherit_defaults_but_an_empty_file_is_a_layer() {
             fs::create_dir(&global).expect("create global parent");
         }
         fs::write(global.join("config.toml"), GLOBAL).expect("global config");
-        let inherited = ResolvedConfig::load(&roots).expect("absent workspace inherits global");
+        let inherited = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .expect("absent workspace inherits global");
         assert_eq!(inherited.codex_execution.sandbox(), "danger-full-access");
         assert_eq!(inherited.snapshot.execution_env_pass, ["GLOBAL_TOKEN"]);
 
@@ -87,7 +93,8 @@ fn absent_files_and_parents_inherit_defaults_but_an_empty_file_is_a_layer() {
             fs::create_dir(&workspace).expect("create workspace parent");
         }
         fs::write(workspace.join("config.toml"), "").expect("empty workspace config");
-        let empty = ResolvedConfig::load(&roots).expect("empty workspace loads");
+        let empty = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .expect("empty workspace loads");
         assert_eq!(
             empty.codex_execution.sandbox(),
             built_in.codex_execution.sandbox()
@@ -221,7 +228,8 @@ fn symlinked_parent_directories_still_load_regular_config_files() {
     symlink(real.global(), &global_alias).expect("global parent symlink");
     symlink(real.workspace(), &workspace_alias).expect("workspace parent symlink");
     let aliased = ConfigRoots::new(global_alias, workspace_alias);
-    let config = ResolvedConfig::load(&aliased).expect("regular config through aliased parents");
+    let config = ResolvedConfig::load(&orbit_common::Env::capture(), &aliased)
+        .expect("regular config through aliased parents");
     assert_eq!(config.codex_execution.sandbox(), "danger-full-access");
     assert_eq!(config.plugin_enablement.get("graph"), Some(&false));
     assert_eq!(

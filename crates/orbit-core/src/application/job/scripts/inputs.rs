@@ -72,9 +72,13 @@ pub(super) fn admit_script_inputs(
                 sources.cwd.display()
             )));
         }
-        if let Some(protected) =
-            script_input_conflict(&source, sources.cwd, sources.masked, sources.home)
-        {
+        if let Some(protected) = script_input_conflict(
+            &orbit_common::Env::capture(),
+            &source,
+            sources.cwd,
+            sources.masked,
+            sources.home,
+        ) {
             return Err(refused(format!(
                 "resolves to {}, which overlaps protected state at {}",
                 source.display(),

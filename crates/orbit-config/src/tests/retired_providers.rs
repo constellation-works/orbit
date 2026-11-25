@@ -14,9 +14,12 @@ fn crew_naming_a_retired_provider_fails_with_named_refusal() {
             global.path(),
             &format!("[crews.legacy]\nprovider = \"{provider}\"\nmodel = \"fixture\"\n"),
         );
-        let error = ResolvedConfig::load(&roots(global.path(), workspace.path()))
-            .expect_err("retired provider must not load")
-            .to_string();
+        let error = ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &roots(global.path(), workspace.path()),
+        )
+        .expect_err("retired provider must not load")
+        .to_string();
         assert!(error.contains("legacy"), "{error}");
         assert!(error.contains(provider), "{error}");
         assert!(error.contains("retired"), "{error}");
@@ -33,9 +36,12 @@ fn retired_provider_refusal_is_case_insensitive() {
         global.path(),
         "[crews.legacy]\nprovider = \"Cursor\"\nmodel = \"fixture\"\n",
     );
-    let error = ResolvedConfig::load(&roots(global.path(), workspace.path()))
-        .expect_err("retired provider must not load")
-        .to_string();
+    let error = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &roots(global.path(), workspace.path()),
+    )
+    .expect_err("retired provider must not load")
+    .to_string();
     assert!(
         error.contains("cursor") && error.contains("retired"),
         "{error}"
@@ -47,7 +53,11 @@ fn supported_provider_crew_still_loads_and_defaults_have_no_retired_crews() {
     let global = tempdir().expect("global");
     let workspace = tempdir().expect("workspace");
     write_config(global.path(), "");
-    let loaded = ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("defaults");
+    let loaded = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &roots(global.path(), workspace.path()),
+    )
+    .expect("defaults");
     for retired in ["cursor", "pi", "opencode"] {
         assert!(!loaded.crews.contains_key(retired), "{retired} seeded");
         assert!(
@@ -62,7 +72,10 @@ fn supported_provider_crew_still_loads_and_defaults_have_no_retired_crews() {
         global.path(),
         "[workflow]\ndefault_crew = \"main\"\n[crews.main]\nprovider = \"copilot\"\nmodel = \"fixture\"\n",
     );
-    let loaded = ResolvedConfig::load(&roots(global.path(), workspace.path()))
-        .expect("supported provider loads");
+    let loaded = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &roots(global.path(), workspace.path()),
+    )
+    .expect("supported provider loads");
     assert_eq!(loaded.crews["main"].assignment.provider, "copilot");
 }

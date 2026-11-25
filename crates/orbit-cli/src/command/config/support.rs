@@ -64,5 +64,9 @@ pub(super) fn open_store_for_scope(
     scope: ConfigScopeArg,
 ) -> Result<ConfigStore, OrbitError> {
     let (resolved_scope, path) = resolve_scope(runtime, scope);
-    ConfigStore::open(resolved_scope, path)
+    ConfigStore::open(
+        &orbit_core::composition::composition_env(),
+        resolved_scope,
+        path,
+    )
 }

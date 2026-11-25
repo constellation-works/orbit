@@ -206,7 +206,7 @@ fn command_exec_child_env() -> Vec<(String, String)> {
         .iter()
         .map(|name| (*name).to_string())
         .collect::<Vec<_>>();
-    allowlisted_child_env(&pass, &[])
+    allowlisted_child_env(&orbit_common::Env::capture(), &pass, &[])
 }
 
 /// True when `error` is the OS argument/environment size refusal (E2BIG).

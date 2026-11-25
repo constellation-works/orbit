@@ -20,18 +20,17 @@
 use super::mask::{host_alias, parse_mountinfo, plan_alias};
 use super::*;
 use crate::credential_paths::credential_read_denies;
-use orbit_common::env_vars;
 
 /// Mandatory locations to mask, resolved from this process's `HOME`,
 /// `CARGO_HOME`, UID and `XDG_RUNTIME_DIR`. Empty off Linux, where a plan is
 /// only ever compiled for tests and never handed to Bubblewrap.
-pub(super) fn host_credential_denies() -> Vec<CredentialReadDeny> {
+pub(super) fn host_credential_denies(env: &orbit_common::Env) -> Vec<CredentialReadDeny> {
     if !cfg!(target_os = "linux") {
         return Vec::new();
     }
-    let home = std::env::var_os(env_vars::HOME);
-    let cargo_home = std::env::var_os(env_vars::CARGO_HOME);
-    let denies = credential_read_denies(home.as_deref(), cargo_home.as_deref());
+    let home = env.home();
+    let cargo_home = env.cargo_home();
+    let denies = credential_read_denies(home, cargo_home);
     #[cfg(target_os = "linux")]
     let denies = {
         let mut denies = denies;
@@ -44,7 +43,7 @@ pub(super) fn host_credential_denies() -> Vec<CredentialReadDeny> {
             path: PathBuf::from(format!("/run/user/{uid}")),
             file: false,
         });
-        if let Some(runtime) = std::env::var_os(env_vars::XDG_RUNTIME_DIR) {
+        if let Some(runtime) = env.xdg_runtime_dir() {
             let path = PathBuf::from(runtime);
             // XDG_RUNTIME_DIR must be absolute; ignore invalid relative values.
             if path.is_absolute() {

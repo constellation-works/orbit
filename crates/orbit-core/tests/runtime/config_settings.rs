@@ -16,7 +16,7 @@ fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let roots = orbit_config::ConfigRoots::new(&global, &workspace);
-    let load = || orbit_config::ResolvedConfig::load(&roots);
+    let load = || orbit_config::ResolvedConfig::load(&orbit_common::Env::capture(), &roots);
     // [ORB-15613] The default also covers the scratch build directories and
     // base checkouts that leaked 33 GB of kept worktrees on one host.
     assert_eq!(
@@ -88,7 +88,7 @@ fn mid_run_steering_layers_per_key_and_refuses_invalid_values() {
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let roots = orbit_config::ConfigRoots::new(&global, &workspace);
-    let load = || orbit_config::ResolvedConfig::load(&roots);
+    let load = || orbit_config::ResolvedConfig::load(&orbit_common::Env::capture(), &roots);
     let steering = |config: orbit_config::ResolvedConfig| config.snapshot.mid_run_steering();
     std::fs::write(
         global.join("config.toml"),
@@ -209,14 +209,16 @@ fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
     let roots = orbit_config::ConfigRoots::new(&global, &workspace);
-    orbit_config::ResolvedConfig::load(&roots).expect("the layers load before any write");
+    orbit_config::ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("the layers load before any write");
     let unchanged = || {
         assert_eq!(
             std::fs::read_to_string(global.join("config.toml")).unwrap(),
             global_config,
             "a refused global write leaves the file byte-identical"
         );
-        orbit_config::ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+        orbit_config::ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .expect("workspace config stays loadable");
     };
 
     // The resume value is valid in the global file alone, not beside the
@@ -263,7 +265,8 @@ fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
         ConfigWriteInit::default(),
     )
     .expect("a compatible global write is admitted");
-    orbit_config::ResolvedConfig::load(&roots).expect("still loadable");
+    orbit_config::ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("still loadable");
 }
 
 fn settings_rows_report_built_in_fallback_equality_and_global_reach() {

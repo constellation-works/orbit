@@ -360,7 +360,8 @@ fn run_with_short_fetch_limits(runtime: &OrbitRuntime, run_id: &str) {
 }
 
 fn fetch_lock_is_contended(repo: &Path) -> bool {
-    let common = orbit_common::fs::git::git_common_dir(repo).unwrap();
+    let common =
+        orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), repo).unwrap();
     let lock_path = orbit_common::fs::git::git_fetch_lock_target(&common)
         .with_file_name(".orbit-git-fetch.lock");
     orbit_common::fs::io::try_acquire_exclusive_file_lock(&lock_path, "fixture contention probe")

@@ -20,7 +20,8 @@ fn crew_env_is_global_only_and_refused_from_a_workspace_file_naming_the_crew() {
 
     crew_env_write_config(global.path(), &format!("{CREW_ENV_CREW}{env_line}"));
     crew_env_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
-    let loaded = ResolvedConfig::load(&roots).expect("a global crew env loads");
+    let loaded = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("a global crew env loads");
     let entries: Vec<String> = loaded.crews["opus-credits"]
         .env
         .iter()
@@ -34,7 +35,7 @@ fn crew_env_is_global_only_and_refused_from_a_workspace_file_naming_the_crew() {
         workspace.path(),
         &format!("[crews.opus-credits]\n{env_line}"),
     );
-    let refusal = ResolvedConfig::load(&roots)
+    let refusal = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect_err("a workspace crew env must fail the load")
         .to_string();
     assert!(
@@ -47,6 +48,7 @@ fn crew_env_is_global_only_and_refused_from_a_workspace_file_naming_the_crew() {
     crew_env_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
     let before = std::fs::read(&workspace_path).expect("read workspace config");
     let mut store = ConfigStore::open_for_workspace_set(
+        &orbit_common::Env::capture(),
         &workspace_path,
         &global.path().join("config.toml"),
         WorkspaceInitMode::RequireExisting,
@@ -82,7 +84,7 @@ fn crew_env_entries_that_are_not_variable_names_or_name_orbit_variables_fail_nam
             global.path(),
             &format!("{CREW_ENV_CREW}env = [\"{entry}\"]\n"),
         );
-        let refusal = ResolvedConfig::load(&roots)
+        let refusal = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
             .expect_err("an invalid crew env entry must fail the load")
             .to_string();
         assert!(
@@ -108,7 +110,8 @@ fn crew_env_file_sources_load_as_written_and_malformed_paths_fail_naming_the_ent
             entries[0], entries[1]
         ),
     );
-    let loaded = ResolvedConfig::load(&roots).expect("file-backed crew env loads");
+    let loaded = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("file-backed crew env loads");
     let written: Vec<String> = loaded.crews["opus-credits"]
         .env
         .iter()
@@ -135,7 +138,7 @@ fn crew_env_file_sources_load_as_written_and_malformed_paths_fail_naming_the_ent
             global.path(),
             &format!("{CREW_ENV_CREW}env = [\"{entry}\"]\n"),
         );
-        let refusal = ResolvedConfig::load(&roots)
+        let refusal = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
             .expect_err("a malformed file source must fail the load")
             .to_string();
         assert!(

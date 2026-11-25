@@ -121,7 +121,7 @@ fn platform_sandbox() -> Result<ExecutorSandboxKind, String> {
 
 /// A scratch tree for one test, or `None` after reporting why it is skipped.
 fn scratch_or_skip(test: &str) -> Option<Scratch> {
-    if !orbit_exec::macos_sandbox_test_guard(test) {
+    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
         return None;
     }
     match platform_sandbox() {

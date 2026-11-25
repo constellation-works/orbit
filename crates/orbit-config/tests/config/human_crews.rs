@@ -6,8 +6,11 @@ fn human_crew_load(body: &str) -> Result<ResolvedConfig, String> {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     fs::write(global.path().join("config.toml"), body).expect("global config");
-    ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .map_err(|error| error.to_string())
+    ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .map_err(|error| error.to_string())
 }
 
 const HUMAN_CREW_AGENTS: &str = "[crews.sol]\nmodel = \"m\"\nprovider = \"codex\"\n\n\

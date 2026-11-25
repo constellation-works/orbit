@@ -30,7 +30,10 @@ pub fn parse_config_scope(raw: &str) -> Option<ConfigScope> {
 /// The layered view: sections with their rows, the layer paths, the workspace
 /// registry binding, resolved paths, and the crew table.
 pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
-    let effective = load_effective_config(&config_roots(runtime))?;
+    let effective = load_effective_config(
+        runtime.execution_env_policy().process_env(),
+        &config_roots(runtime),
+    )?;
     let values = effective.values();
     let global_file = config_layer_file(&runtime.global_root())?;
     let workspace_file = config_layer_file(&runtime.shared_root())?;
@@ -63,7 +66,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         // the review switches resolve from the files this view just read.
         "review": crate::application::review::review_switches_view(
             runtime,
-            &orbit_config::ResolvedConfig::load(&config_roots(runtime))?.operation,
+            &orbit_config::ResolvedConfig::load(runtime.execution_env_policy().process_env(), &config_roots(runtime))?.operation,
             chrono::Utc::now(),
         ),
     }))
@@ -92,7 +95,12 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
         )),
         other => other,
     };
-    let store = ConfigStore::open(scope, file.path.clone()).map_err(file_error)?;
+    let store = ConfigStore::open(
+        runtime.execution_env_policy().process_env(),
+        scope,
+        file.path.clone(),
+    )
+    .map_err(file_error)?;
     // Both resolutions below re-read and re-admit the same two files on every
     // view. Their result is a pure function of the layer files, the roots,
     // the scope, the environment and the registered plugin contracts, so it
@@ -115,7 +123,10 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
             let snapshot = store
                 .snapshot_with_global(&runtime.global_root())
                 .map_err(file_error)?;
-            let layered_values = match load_effective_config(&config_roots(runtime)) {
+            let layered_values = match load_effective_config(
+                runtime.execution_env_policy().process_env(),
+                &config_roots(runtime),
+            ) {
                 Ok(layered) => Some(layered.values().to_vec()),
                 Err(error) => {
                     tracing::warn!(%error, "layered config unavailable; file view omits fallback and reach");
@@ -218,9 +229,12 @@ pub fn key_catalog() -> &'static JsonValue {
 /// The layered value of one key before a write, so the audit record can name
 /// what the edit replaced.
 pub(super) fn effective_value(runtime: &OrbitRuntime, key: &str) -> Result<JsonValue, OrbitError> {
-    Ok(load_effective_config(&config_roots(runtime))?
-        .value_for(key)
-        .unwrap_or(JsonValue::Null))
+    Ok(load_effective_config(
+        runtime.execution_env_policy().process_env(),
+        &config_roots(runtime),
+    )?
+    .value_for(key)
+    .unwrap_or(JsonValue::Null))
 }
 
 /// What one `file_view` resolution is a function of: the scope, both layer
@@ -280,7 +294,10 @@ fn store_resolution(key: FileViewResolutionKey, resolution: Arc<FileViewResoluti
 
 /// The layered value of one crew, as the object its row renders.
 pub(super) fn crew_value(runtime: &OrbitRuntime, name: &str) -> Result<JsonValue, OrbitError> {
-    let effective = load_effective_config(&config_roots(runtime))?;
+    let effective = load_effective_config(
+        runtime.execution_env_policy().process_env(),
+        &config_roots(runtime),
+    )?;
     Ok(crew_rows(runtime, effective.values())
         .into_iter()
         .find(|crew| crew["name"] == json!(name))

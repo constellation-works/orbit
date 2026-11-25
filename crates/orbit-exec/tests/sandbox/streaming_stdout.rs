@@ -153,10 +153,15 @@ fn relay_setup_errors_kill_the_group_and_reap_the_child() {
         };
         let consumed = Arc::new(AtomicBool::new(false));
         let consumer_called = Arc::clone(&consumed);
-        let result = run_process_streaming_stdout(&request("exec sleep 60"), &sandbox, move |_| {
-            consumer_called.store(true, Ordering::SeqCst);
-            Ok(())
-        });
+        let result = run_process_streaming_stdout(
+            &orbit_common::Env::capture(),
+            &request("exec sleep 60"),
+            &sandbox,
+            move |_| {
+                consumer_called.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
         let mut group = sandbox.group.borrow_mut();
         group.descriptors.clear();
         let pid = group.pid.expect("spawned child pid");
@@ -226,11 +231,16 @@ fn streaming_preserves_output_timeout_and_consumer_errors() {
     let mut req = request("cat; printf diagnostic >&2");
     let payload = vec![b'x'; 256 * 1024];
     req.stdin_mode = StdinMode::Bytes(payload.clone());
-    let (result, bytes) = run_process_streaming_stdout(&req, &NoSandbox, |mut stdout| {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })
+    let (result, bytes) = run_process_streaming_stdout(
+        &orbit_common::Env::capture(),
+        &req,
+        &NoSandbox,
+        |mut stdout| {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        },
+    )
     .expect("stream successful process");
     assert!(result.success);
     assert!(!result.timed_out);
@@ -241,26 +251,35 @@ fn streaming_preserves_output_timeout_and_consumer_errors() {
 
     let mut req = request("printf partial; exec sleep 60");
     req.timeout_ms = Some(250);
-    let (result, bytes) = run_process_streaming_stdout(&req, &NoSandbox, |mut stdout| {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })
+    let (result, bytes) = run_process_streaming_stdout(
+        &orbit_common::Env::capture(),
+        &req,
+        &NoSandbox,
+        |mut stdout| {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        },
+    )
     .expect("stream timed-out process");
     assert!(!result.success);
     assert!(result.timed_out);
     assert_eq!(result.exit_code, None);
     assert_eq!(bytes, b"partial");
 
-    let result =
-        run_process_streaming_stdout(&request("printf rejected"), &NoSandbox, |mut stdout| {
+    let result = run_process_streaming_stdout(
+        &orbit_common::Env::capture(),
+        &request("printf rejected"),
+        &NoSandbox,
+        |mut stdout| {
             let mut bytes = Vec::new();
             stdout.read_to_end(&mut bytes)?;
             assert_eq!(bytes, b"rejected");
             Err::<(), _>(OrbitError::Execution(
                 "consumer rejected stream".to_string(),
             ))
-        });
+        },
+    );
     assert!(
         matches!(result, Err(OrbitError::Execution(message)) if message == "consumer rejected stream")
     );

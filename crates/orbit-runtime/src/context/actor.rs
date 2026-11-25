@@ -83,7 +83,9 @@ impl ActorIdentity {
             Ok(None) => {}
         }
 
-        if orbit_common::governance::authorization::agent_context_declared() {
+        if orbit_common::governance::authorization::agent_context_declared(
+            &orbit_common::Env::capture(),
+        ) {
             tracing::warn!(
                 target: "orbit.core.actor",
                 actor = UNKNOWN_ACTOR_LABEL,
@@ -100,7 +102,9 @@ impl ActorIdentity {
             return Self::human(label);
         }
 
-        if orbit_common::governance::authorization::operator_override_active() {
+        if orbit_common::governance::authorization::operator_override_active(
+            &orbit_common::Env::capture(),
+        ) {
             return Self::human(OPERATOR_ACTOR_LABEL);
         }
 

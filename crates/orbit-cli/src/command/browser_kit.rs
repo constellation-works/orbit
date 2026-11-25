@@ -69,7 +69,7 @@ pub struct BrowserKitRemoveArgs {
 
 impl BrowserKitCommand {
     pub fn execute_without_runtime(self) -> CommandOut {
-        let layout = KitLayout::current_user()?;
+        let layout = KitLayout::current_user(&orbit_core::composition::composition_env())?;
         match self.command {
             BrowserKitSubcommand::Status(_) => {
                 let status = browser_kit::kit_status(&layout);

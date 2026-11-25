@@ -351,12 +351,13 @@ fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<String, Orb
         "protocol.ssh.allow=always".to_string(),
     ];
     args_with_protocol_policy.extend(args);
-    let mut environment = allowlisted_child_env(&[], &[]);
+    let mut environment = allowlisted_child_env(&orbit_common::Env::capture(), &[], &[]);
     environment.extend([
         ("GIT_PROTOCOL_FROM_USER".to_string(), "0".to_string()),
         ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
     ]);
     let result = run_process(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "git".to_string(),
             args: args_with_protocol_policy,
@@ -485,10 +486,15 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
     ];
     // A custom trust store belongs to the operator, and is the only thing
     // beyond the baseline environment this fetch is allowed to read.
-    let environment = allowlisted_child_env(&[], &["SSL_CERT_FILE", "SSL_CERT_DIR"]);
+    let environment = allowlisted_child_env(
+        &orbit_common::Env::capture(),
+        &[],
+        &["SSL_CERT_FILE", "SSL_CERT_DIR"],
+    );
     let target = destination.to_path_buf();
     let source_name = url.to_string();
     let (result, _written) = run_process_streaming_stdout(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "curl".to_string(),
             args,

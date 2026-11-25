@@ -86,7 +86,7 @@ fn an_update_waits_for_a_participant_paused_mid_release() {
     let (outcome_tx, outcome_rx) = mpsc::channel();
     let updater_root = root.clone();
     let updater = std::thread::spawn(move || {
-        let outcome = GenerationUpdate::acquire(&updater_root).map(drop);
+        let outcome = GenerationUpdate::acquire(&crate::Env::capture(), &updater_root).map(drop);
         outcome_tx.send(outcome).expect("report the update");
     });
     await_updater_admission(&root);

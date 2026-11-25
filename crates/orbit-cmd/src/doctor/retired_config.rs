@@ -318,7 +318,11 @@ fn prepare_layer<'a>(
         )));
     }
     let rewrites = deprecated_key_rewrites(&document, lower, &layer.path)?;
-    let mut store = ConfigStore::open(layer.scope, &layer.path)?;
+    let mut store = ConfigStore::open(
+        &orbit_core::composition::composition_env(),
+        layer.scope,
+        &layer.path,
+    )?;
     let mut written_keys = Vec::new();
     for (key, value) in rewrites {
         store.set_value(key, &value.to_string())?;

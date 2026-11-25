@@ -323,6 +323,7 @@ impl OrbitRuntime {
         for candidate in [format!("origin/{branch}"), branch.clone()] {
             let spec = format!("{candidate}^{{commit}}");
             let output = run_git(
+                &orbit_common::Env::capture(),
                 &self.paths().repo_root,
                 &["rev-parse", "--verify", "--quiet", &spec],
             )?;
@@ -524,6 +525,7 @@ impl OrbitRuntime {
         }
         let target = path.to_string_lossy().to_string();
         let output = run_git_within(
+            &orbit_common::Env::capture(),
             &self.paths().repo_root,
             &["worktree", "add", "--detach", "--quiet", &target, base_sha],
             GIT_CHECKOUT_TIMEOUT,
@@ -558,6 +560,7 @@ impl OrbitRuntime {
         }
         let target = path.to_string_lossy().to_string();
         let output = run_git_within(
+            &orbit_common::Env::capture(),
             &self.paths().repo_root,
             &["worktree", "remove", "--force", &target],
             GIT_CHECKOUT_TIMEOUT,
@@ -570,7 +573,11 @@ impl OrbitRuntime {
         std::fs::remove_dir_all(&path).map_err(|error| {
             OrbitError::Execution(format!("remove recovery checkout {target}: {error}"))
         })?;
-        let _ = run_git(&self.paths().repo_root, &["worktree", "prune"]);
+        let _ = run_git(
+            &orbit_common::Env::capture(),
+            &self.paths().repo_root,
+            &["worktree", "prune"],
+        );
         Ok(())
     }
 

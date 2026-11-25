@@ -53,7 +53,9 @@ fn schema_accepted_keys_can_be_read_set_and_unset_despite_named_properties_or_de
         let root = tempfile::tempdir().expect("config root");
         let path = root.path().join("config.toml");
         let key = format!("plugins.{namespace}.extra");
-        let mut store = ConfigStore::open(ConfigScope::Global, &path).expect("open store");
+        let mut store =
+            ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
+                .expect("open store");
 
         admit_config_key(&key).expect("schema admits additional key");
         assert_eq!(
@@ -66,7 +68,9 @@ fn schema_accepted_keys_can_be_read_set_and_unset_despite_named_properties_or_de
             .expect("whole section is valid");
         store.save().expect("save valid write");
 
-        let mut reopened = ConfigStore::open(ConfigScope::Global, &path).expect("reopen store");
+        let mut reopened =
+            ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
+                .expect("reopen store");
         assert!(reopened.is_key_set(&key));
         assert_eq!(
             reopened.effective_value(&key).expect("read saved key"),
@@ -77,7 +81,8 @@ fn schema_accepted_keys_can_be_read_set_and_unset_despite_named_properties_or_de
             .validate_for_set(&key)
             .expect("section remains valid");
         reopened.save().expect("save unset");
-        let unset = ConfigStore::open(ConfigScope::Global, &path).expect("reopen unset store");
+        let unset = ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
+            .expect("reopen unset store");
         assert!(!unset.is_key_set(&key));
     }
 }
@@ -114,8 +119,12 @@ fn closed_schemas_refuse_unmatched_keys_before_mutation_and_keep_suggestions() {
     ] {
         register(namespace, schema, BTreeMap::new());
         let root = tempfile::tempdir().expect("config root");
-        let mut store = ConfigStore::open(ConfigScope::Global, root.path().join("config.toml"))
-            .expect("open store");
+        let mut store = ConfigStore::open(
+            &orbit_common::Env::capture(),
+            ConfigScope::Global,
+            root.path().join("config.toml"),
+        )
+        .expect("open store");
         let key = format!("plugins.{namespace}.extra");
         let error = admit_config_key(&key)
             .expect_err(&format!("closed schema {namespace} refuses unmatched key"));
@@ -157,7 +166,8 @@ fn writes_validate_values_and_the_entire_effective_section_including_layers_and_
     let workspace = tempfile::tempdir().expect("workspace root");
     let path = workspace.path().join("config.toml");
     let key = format!("plugins.{namespace}.extra");
-    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    let mut store = ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Workspace, &path)
+        .expect("open store");
 
     store.set_value(&key, "3").expect("stage additional key");
     store
@@ -217,9 +227,12 @@ fn plugin_section_load_error(body: &str) -> String {
     let global = tempfile::tempdir().expect("global root");
     let workspace = tempfile::tempdir().expect("workspace root");
     std::fs::write(workspace.path().join("config.toml"), body).expect("workspace config");
-    ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect_err("an invalid plugin section refuses the config load")
-        .to_string()
+    ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect_err("an invalid plugin section refuses the config load")
+    .to_string()
 }
 
 #[test]

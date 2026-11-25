@@ -205,6 +205,7 @@ const PROBE: &str = "set -e\n\
 #[test]
 fn a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept",
     ) {
         return;

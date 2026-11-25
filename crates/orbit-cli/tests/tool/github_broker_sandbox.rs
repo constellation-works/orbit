@@ -161,6 +161,7 @@ fn sandbox_fixture() {
     let provider = root.join("provider.py");
     fs::write(&provider, PROVIDER).expect("sandbox provider");
     let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &profile,
         "/usr/bin/python3",
         &[
@@ -195,9 +196,10 @@ fn sandbox_fixture() {
         .bind_sandbox(child.id())
         .expect("authenticate sandbox namespace");
     // supervise_child bounds the test and tears down the provider's descendants.
-    let output = orbit_exec::supervise_child(child, Some(60_000), None)
-        .expect("supervise sandbox")
-        .result;
+    let output =
+        orbit_exec::supervise_child(&orbit_common::Env::capture(), child, Some(60_000), None)
+            .expect("supervise sandbox")
+            .result;
     drop(broker);
     assert!(
         output.success,

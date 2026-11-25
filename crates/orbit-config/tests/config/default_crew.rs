@@ -16,13 +16,15 @@ fn assert_selected(
     source: ConfigValueSourceKind,
     source_path: Option<&Path>,
 ) {
-    let resolved = ResolvedConfig::load(roots).expect("runtime admission");
+    let resolved =
+        ResolvedConfig::load(&orbit_common::Env::capture(), roots).expect("runtime admission");
     assert_eq!(resolved.default_crew.as_deref(), Some(expected));
     assert_eq!(
         resolved.snapshot.workflow_default_crew,
         resolved.default_crew
     );
-    let effective = load_effective_config(roots).expect("effective admission");
+    let effective =
+        load_effective_config(&orbit_common::Env::capture(), roots).expect("effective admission");
     let row = effective
         .values()
         .iter()
@@ -135,13 +137,19 @@ fn default_crew_admission_and_provenance_do_not_depend_on_file_presence() {
             default_crew_write_config(roots.workspace(), body);
         }
         if provider.as_deref() == Some(INVALID_PROVIDER) {
-            assert_invalid_provider(ResolvedConfig::load(&roots).expect_err("invalid provider"));
-            assert_invalid_provider(load_effective_config(&roots).expect_err("invalid provider"));
+            assert_invalid_provider(
+                ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+                    .expect_err("invalid provider"),
+            );
+            assert_invalid_provider(
+                load_effective_config(&orbit_common::Env::capture(), &roots)
+                    .expect_err("invalid provider"),
+            );
         } else {
             assert_selected(&roots, expected, source, None);
             if workspace.is_some_and(|body| !body.is_empty()) {
                 assert_eq!(
-                    ResolvedConfig::load(&roots)
+                    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
                         .expect("plugin-only file")
                         .plugin_enablement
                         .get("graph"),

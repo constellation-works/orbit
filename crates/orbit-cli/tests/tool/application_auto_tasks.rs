@@ -162,6 +162,7 @@ fn application_rows(fixture: &Fixture, tool: &str) -> Vec<(String, Value)> {
 #[test]
 fn application_auto_task_callbacks_follow_the_artifact_and_refuse_the_rest() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "application_auto_task_callbacks_follow_the_artifact_and_refuse_the_rest",
     ) {
         return;

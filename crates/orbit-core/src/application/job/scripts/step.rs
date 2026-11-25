@@ -323,7 +323,11 @@ fn prepare_and_run(
             );
             // No `systemd-run` runs, so the bus locators have no consumer:
             // the wrapper keeps the plain allowlisted environment.
-            launcher_env = orbit_common::security::child_env::allowlisted_child_env(&[], &[]);
+            launcher_env = orbit_common::security::child_env::allowlisted_child_env(
+                runtime.execution_env_policy().process_env(),
+                &[],
+                &[],
+            );
             Vec::new()
         }
     };
@@ -432,12 +436,14 @@ fn probe_granted_roots(grant: &ScriptGrant, home: Option<&std::ffi::OsStr>) -> R
                 .map(|root| (root, ScriptRootAccess::Write)),
         );
     for (root, access) in roots {
-        orbit_exec::probe_script_root(root, access, home).map_err(|reason| {
-            refuse(
-                script_refusal::ROOT_UNAVAILABLE,
-                format!("{reason}; nothing was run"),
-            )
-        })?;
+        orbit_exec::probe_script_root(&orbit_common::Env::capture(), root, access, home).map_err(
+            |reason| {
+                refuse(
+                    script_refusal::ROOT_UNAVAILABLE,
+                    format!("{reason}; nothing was run"),
+                )
+            },
+        )?;
     }
     Ok(())
 }

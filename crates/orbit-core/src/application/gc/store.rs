@@ -205,10 +205,10 @@ struct RetentionPass {
 
 impl OrbitRuntime {
     fn retention_days(&self) -> Result<RetentionDays, OrbitError> {
-        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-            self.global_root(),
-            self.shared_root(),
-        ))?;
+        let config = orbit_config::ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(self.global_root(), self.shared_root()),
+        )?;
         Ok(RetentionDays {
             audit: config.snapshot.retention_audit_days,
             runs: config.snapshot.retention_runs_days,

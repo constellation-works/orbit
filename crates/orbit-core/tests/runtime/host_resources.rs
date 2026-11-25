@@ -259,7 +259,9 @@ fn proc_fixture_cpu_source_changes_admission_without_bypassing_io() {
     std::fs::create_dir(&global).unwrap();
     std::fs::create_dir(&workspace).unwrap();
     let roots = ConfigRoots::new(&global, &workspace);
-    let mut settings = ResolvedConfig::load(&roots).unwrap().resource_throttle;
+    let mut settings = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .unwrap()
+        .resource_throttle;
     assert_eq!(settings.cpu_source, "load");
     let config_path = global.join("config.toml");
     std::fs::write(
@@ -267,14 +269,16 @@ fn proc_fixture_cpu_source_changes_admission_without_bypassing_io() {
         "[workflow.resource_throttle]\ncpu_source = \"utilization\"\n",
     )
     .unwrap();
-    let utilization_settings = ResolvedConfig::load(&roots).unwrap().resource_throttle;
+    let utilization_settings = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .unwrap()
+        .resource_throttle;
     assert_eq!(utilization_settings.cpu_source, "utilization");
     std::fs::write(
         &config_path,
         "[workflow.resource_throttle]\ncpu_source = \"invalid\"\n",
     )
     .unwrap();
-    assert!(ResolvedConfig::load(&roots).is_err());
+    assert!(ResolvedConfig::load(&orbit_common::Env::capture(), &roots).is_err());
     let now = Utc::now();
     for step in 0..=2 {
         // 20% busy, 30% idle, 50% I/O wait; guest ticks are already in user.

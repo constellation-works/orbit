@@ -23,9 +23,13 @@ use super::provenance::{effective_values, source_for_crew_field};
 use super::{EffectiveConfig, WORKSPACE_REPLACE_ONLY_KEYS};
 
 /// Load the layered config and attribute every value to the layer it came from.
-pub fn load_effective_config(roots: &ConfigRoots) -> Result<EffectiveConfig, OrbitError> {
-    let loaded = load_layered_resolved(roots)?;
+pub fn load_effective_config(
+    env: &orbit_common::Env,
+    roots: &ConfigRoots,
+) -> Result<EffectiveConfig, OrbitError> {
+    let loaded = load_layered_resolved(env, roots)?;
     let values = effective_values(
+        env,
         &loaded.resolved,
         loaded.global.as_ref(),
         loaded.workspace.as_ref(),
@@ -48,15 +52,17 @@ pub(crate) struct LoadedResolvedConfig {
 }
 
 pub(crate) fn load_layered_resolved(
+    env: &orbit_common::Env,
     roots: &ConfigRoots,
 ) -> Result<super::LoadedResolvedConfig, OrbitError> {
-    load_layered_resolved_with_staged(roots, None, None)
+    load_layered_resolved_with_staged(env, roots, None, None)
 }
 
 /// Admit an in-memory workspace edit against the current global layer before
 /// the edited document is written. This uses the same merge and per-layer
 /// checks as a normal load, including validation of plugin toggles.
 pub(crate) fn validate_staged_workspace_document(
+    env: &orbit_common::Env,
     roots: &ConfigRoots,
     workspace_path: &Path,
     raw: &str,
@@ -68,7 +74,7 @@ pub(crate) fn validate_staged_workspace_document(
             redact_home_dir(&roots.global().join("config.toml").display().to_string())
         )));
     }
-    load_layered_resolved_with_staged(roots, None, Some((workspace_path, raw)))
+    load_layered_resolved_with_staged(env, roots, None, Some((workspace_path, raw)))
         .map(|loaded| loaded.resolved)
 }
 
@@ -81,6 +87,7 @@ pub(crate) fn validate_staged_workspace_document(
 /// cannot repair an unloadable config: runtime construction refuses it before
 /// the command runs.
 pub(crate) fn validate_staged_global_document(
+    env: &orbit_common::Env,
     roots: &ConfigRoots,
     global_path: &Path,
     raw: &str,
@@ -88,12 +95,13 @@ pub(crate) fn validate_staged_global_document(
     if !roots.has_workspace_layer() {
         return Ok(());
     }
-    load_layered_resolved_with_staged(roots, Some((global_path, raw)), None).map(|_| ())
+    load_layered_resolved_with_staged(env, roots, Some((global_path, raw)), None).map(|_| ())
 }
 
 /// Resolve workspace file values with only crew definitions inherited from
 /// global. Other global settings must not appear in a scoped file snapshot.
 pub(crate) fn resolve_workspace_file_document(
+    env: &orbit_common::Env,
     global_path: &Path,
     global_raw: &str,
     workspace_path: &Path,
@@ -123,6 +131,7 @@ pub(crate) fn resolve_workspace_file_document(
             .unwrap_or_else(|| workspace_path.to_path_buf())
     };
     ResolvedConfig::from_scoped_value(
+        env,
         scoped,
         workspace_path,
         &crew_field_path,
@@ -133,6 +142,7 @@ pub(crate) fn resolve_workspace_file_document(
 /// The layered load, with an in-memory global or workspace document standing
 /// in for the file it will be written to.
 fn load_layered_resolved_with_staged(
+    env: &orbit_common::Env,
     roots: &ConfigRoots,
     staged_global: Option<(&Path, &str)>,
     staged_workspace: Option<(&Path, &str)>,
@@ -242,6 +252,7 @@ fn load_layered_resolved_with_staged(
             .unwrap_or_else(|| config_path.to_path_buf())
     };
     let mut resolved = ResolvedConfig::from_layered_value(
+        env,
         merged,
         config_path,
         &crew_field_path,

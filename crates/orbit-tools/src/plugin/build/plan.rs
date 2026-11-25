@@ -253,7 +253,7 @@ fn refuse_unsafe_roots(
     for path in forbidden {
         sensitive.push((canonical_or_self(path), "an Orbit root or workspace", true));
     }
-    for path in orbit_exec::default_credential_read_denies() {
+    for path in orbit_exec::default_credential_read_denies(&orbit_common::Env::capture()) {
         sensitive.push((canonical_or_self(&path), "a credential path", true));
     }
     for path in paths {

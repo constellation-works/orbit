@@ -1717,7 +1717,7 @@ fn agent_relay_uses_an_independent_persistent_feed() {
         test_env::assert_child_test_passed(NAME, output.status, &output.stdout, &output.stderr);
         return;
     }
-    logging::init_subscriber_with_file_filter("warn", "info");
+    logging::init_subscriber_with_file_filter(&orbit_common::Env::capture(), "warn", "info");
     let audit = tempfile::tempdir().unwrap();
     let (writer, _) = build_writer(audit.path(), "relay-volume").unwrap();
     let payload = "x".repeat(256);
@@ -1737,7 +1737,7 @@ fn agent_relay_uses_an_independent_persistent_feed() {
     .unwrap();
     assert!(outcome.success, "fake agent must complete: {outcome:?}");
     logging::shutdown_jsonl_writer();
-    let operational = logging::global_jsonl_log_path().unwrap();
+    let operational = logging::global_jsonl_log_path(&orbit_common::Env::capture()).unwrap();
     let agent = logging::agent_jsonl_log_path(&operational).unwrap();
     let bytes = fs::read_to_string(agent).unwrap();
     let records: Vec<Value> = bytes
@@ -1900,8 +1900,11 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        let mut env =
-            orbit_common::security::child_env::allowlisted_child_env(&[], required_env_vars);
+        let mut env = orbit_common::security::child_env::allowlisted_child_env(
+            &orbit_common::Env::capture(),
+            &[],
+            required_env_vars,
+        );
         env.extend(self.admitted_env.iter().cloned());
         env
     }

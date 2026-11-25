@@ -47,9 +47,14 @@ fn hung_git_child(stub_dir: &Path) {
     let workspace = TempDir::new().expect("workspace");
     let deadline = Duration::from_millis(500);
     let started = Instant::now();
-    let error = run_git_within(workspace.path(), &["rev-parse", "HEAD"], deadline)
-        .err()
-        .expect("a git that never exits must time out");
+    let error = run_git_within(
+        &orbit_common::Env::capture(),
+        workspace.path(),
+        &["rev-parse", "HEAD"],
+        deadline,
+    )
+    .err()
+    .expect("a git that never exits must time out");
     let elapsed = started.elapsed();
     assert!(
         elapsed < deadline + Duration::from_secs(5),

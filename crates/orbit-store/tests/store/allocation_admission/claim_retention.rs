@@ -85,7 +85,7 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
     // SAFETY: this exact test runs alone in its re-executed child, before
     // installing the subscriber and starting its background writer.
     unsafe { std::env::set_var("RUST_LOG", "warn") };
-    logging::init_default_subscriber("warn");
+    logging::init_default_subscriber(&orbit_common::Env::capture(), "warn");
     let root = TempDir::new().unwrap();
     let owner = Coordinated::open(root.path());
     owner.create_task_in("reporting", &["src/a.rs"]);
@@ -174,7 +174,10 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
     assert_eq!(store.list(&Default::default()).unwrap().len(), 2);
 
     logging::shutdown_jsonl_writer();
-    let log = std::fs::read_to_string(logging::global_jsonl_log_path().unwrap()).unwrap();
+    let log = std::fs::read_to_string(
+        logging::global_jsonl_log_path(&orbit_common::Env::capture()).unwrap(),
+    )
+    .unwrap();
     let events = log
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())

@@ -107,8 +107,12 @@ impl OrbitRuntime {
             };
             return Err(preserved(&path_text(&path), reason));
         }
-        let head = run_git(&self.paths().repo_root, &["rev-parse", "HEAD"])
-            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        let head = run_git(
+            &orbit_common::Env::capture(),
+            &self.paths().repo_root,
+            &["rev-parse", "HEAD"],
+        )
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
         if !head.success {
             return Err(OrbitError::Execution(format!(
                 "resolve workspace HEAD for the cycle worktree: {}",
@@ -156,6 +160,7 @@ impl OrbitRuntime {
             std::thread::available_parallelism().map_or(1, |count| count.get().clamp(1, 16))
         );
         let output = run_git_within(
+            &orbit_common::Env::capture(),
             &self.paths().repo_root,
             &[
                 "-c", &workers, "worktree", "add", "--detach", "--quiet", &target, head,
@@ -228,6 +233,7 @@ impl OrbitRuntime {
         }
         let path_arg = utf8_path(path)?;
         let output = run_git_within(
+            &orbit_common::Env::capture(),
             &self.paths().repo_root,
             &["worktree", "remove", "--force", &path_arg],
             GIT_CHECKOUT_TIMEOUT,
@@ -329,7 +335,11 @@ fn remove_if_owned(
 }
 
 fn warn_if_prune_fails(repo_root: &Path, target: &str) {
-    match run_git(repo_root, &["worktree", "prune"]) {
+    match run_git(
+        &orbit_common::Env::capture(),
+        repo_root,
+        &["worktree", "prune"],
+    ) {
         Ok(output) if output.success => {}
         Ok(output) => {
             tracing::warn!(
@@ -365,8 +375,12 @@ fn registered_worktree_state(
     repo_root: &Path,
     path: &Path,
 ) -> Result<RegisteredWorktree, OrbitError> {
-    let output = run_git(repo_root, &["worktree", "list", "--porcelain"])
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        repo_root,
+        &["worktree", "list", "--porcelain"],
+    )
+    .map_err(|error| OrbitError::Execution(error.to_string()))?;
     if !output.success {
         return Err(preserved(
             &path_text(path),

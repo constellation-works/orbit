@@ -96,11 +96,13 @@ pub(super) fn require_crew_env(
                 .iter()
                 .any(|(key, value)| key == &entry.name && !value.is_empty())
         })
-        .map(|entry| match crew_env_file_problem(entry) {
-            Some(problem) => format!("{} (from {}: {problem})", entry.name, entry.source),
-            None if entry.is_mapped() => format!("{} (from {})", entry.name, entry.source),
-            None => entry.name.clone(),
-        })
+        .map(
+            |entry| match crew_env_file_problem(&orbit_common::Env::capture(), entry) {
+                Some(problem) => format!("{} (from {}: {problem})", entry.name, entry.source),
+                None if entry.is_mapped() => format!("{} (from {})", entry.name, entry.source),
+                None => entry.name.clone(),
+            },
+        )
         .collect();
     if missing.is_empty() {
         return Ok(());

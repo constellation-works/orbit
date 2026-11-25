@@ -40,9 +40,10 @@ pub fn enable_plugin_in_workspace(
     let plugin = load_plugin_dir(&install_path)?;
     let contributions = apply_enabled_contributions(runtime, &install_path, force)?;
     write_workspace_toggle(&workspace_config, &runtime.global_root(), name, true)?;
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
-        runtime.global_root(),
-    ))?;
+    let config = orbit_config::ResolvedConfig::load(
+        runtime.execution_env_policy().process_env(),
+        &orbit_config::ConfigRoots::global_only(runtime.global_root()),
+    )?;
     let projection = projected_status(&installed, &plugin, &runtime.global_root(), &config.plugins);
     let mut summary = summary_for_installed(
         &installed,
@@ -119,7 +120,8 @@ pub(super) fn write_workspace_toggle(
     enabled: bool,
 ) -> Result<(), OrbitError> {
     ConfigStore::with_write_lock(path, || {
-        let mut store = ConfigStore::open(ConfigScope::Workspace, path)?;
+        let mut store =
+            ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Workspace, path)?;
         store.set_document_value(
             &orbit_config::plugin_enablement_key(name),
             if enabled { "true" } else { "false" },

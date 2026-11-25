@@ -62,6 +62,10 @@ macro_rules! env_vars {
         #[cfg(any(test, feature = "test-support"))]
         $($item)+
     };
+    (@accessor [debug_hook] $($item:tt)+) => {
+        #[cfg(any(debug_assertions, test, feature = "test-support"))]
+        $($item)+
+    };
     (@accessor [] $($item:tt)+) => { $($item)+ };
 }
 
@@ -447,7 +451,7 @@ env_vars! {
         "Task identifier used for managed dispatch and audit correlation.",
         "Unset.",
     );
-    #[test_support]
+    #[debug_hook]
     const ORBIT_TEST_AGENT_JSONL_GATE: orbit_test_agent_jsonl_gate = (
         "Debug-build rendezvous for an agent JSONL write fixture.",
         "Unset. Writes proceed without a gate.",
@@ -512,7 +516,7 @@ env_vars! {
         "Set to `1` in debug builds to use a virtual clock for pipeline wait fixtures.",
         "Real clock.",
     );
-    #[test_support]
+    #[debug_hook]
     const ORBIT_TEST_RELAXED_DURABILITY: orbit_test_relaxed_durability = (
         "Set to `1` in debug builds to skip durable syncs in tests.",
         "Durable syncs enabled. Workspace Cargo config sets it to `1`.",
@@ -522,7 +526,7 @@ env_vars! {
         "GitHub release API base override for builds with the release API test feature.",
         "The GitHub API.",
     );
-    #[test_support]
+    #[debug_hook]
     const ORBIT_TEST_SHARED_IMAGE_DIGESTS: orbit_test_shared_image_digests = (
         "Debug-build directory for sharing executable digests among test processes.",
         "Unset. Workspace Cargo config supplies `target/test-image-digests`.",

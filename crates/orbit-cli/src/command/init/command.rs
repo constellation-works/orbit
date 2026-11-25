@@ -219,7 +219,7 @@ impl InitCommand {
 fn resolve_global_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     match root_override {
         Some(root) => Ok(root.to_path_buf()),
-        None => global_orbit_dir(),
+        None => global_orbit_dir(&orbit_core::composition::composition_env()),
     }
 }
 

@@ -5,7 +5,6 @@
 //! module owns the document edit, so the write takes the config write lock and
 //! never replaces a human crew an earlier init or the operator wrote.
 
-use orbit_common::env_vars;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -66,15 +65,14 @@ pub fn normalize_human_crew_name(raw: &str) -> Option<String> {
 /// The OS user as a crew name, the default `orbit init` offers for the
 /// operator's human crew: `$USER` (or `USERNAME`, `LOGNAME`), else the passwd
 /// entry, normalized. `None` when none yields a usable name.
-pub fn os_user_human_crew_name() -> Option<String> {
-    [env_vars::USER, env_vars::USERNAME, env_vars::LOGNAME]
-        .iter()
-        .find_map(|key| {
-            std::env::var(key)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .or_else(orbit_common::security::child_env::os_login_name)
+pub fn os_user_human_crew_name(env: &orbit_common::Env) -> Option<String> {
+    [env.user(), env.username(), env.logname()]
+        .into_iter()
+        .flatten()
+        .filter_map(std::ffi::OsStr::to_str)
+        .find(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .or_else(|| orbit_common::security::child_env::os_login_name(env))
         .and_then(|name| normalize_human_crew_name(&name))
 }
 
@@ -111,11 +109,12 @@ pub fn human_crew_seed_collides(
 /// to write, or refuses. Runs under the config write lock, so a concurrent
 /// init cannot write a second human crew.
 pub fn seed_operator_human_crew(
+    env: &orbit_common::Env,
     config_path: &Path,
     choose: impl FnOnce(&AgentCrewNames) -> Result<String, OrbitError>,
 ) -> Result<HumanCrewSeedOutcome, OrbitError> {
     ConfigStore::with_write_lock(config_path, || {
-        let mut store = ConfigStore::open(ConfigScope::Global, config_path)?;
+        let mut store = ConfigStore::open(env, ConfigScope::Global, config_path)?;
         let raw = toml::from_str::<RawRuntimeConfig>(store.raw_text())
             .map_err(|error| OrbitError::InvalidInput(format!("invalid global config: {error}")))?;
         let human_crews = human_crews_from_raw(raw.crews.as_ref(), config_path)?;

@@ -72,8 +72,12 @@ pub(super) fn list_tracked_blobs(
 
 pub(super) fn commit_exists(workspace_root: &Path, sha: &str) -> Result<bool, String> {
     let spec = format!("{sha}^{{commit}}");
-    let output = run_git(workspace_root, &["cat-file", "-e", &spec])
-        .map_err(|error| format!("check commit {sha}: {error}"))?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        workspace_root,
+        &["cat-file", "-e", &spec],
+    )
+    .map_err(|error| format!("check commit {sha}: {error}"))?;
     Ok(output.success)
 }
 
@@ -182,6 +186,7 @@ pub(super) fn latest_commit_dates(
     // `git log --name-only`.
     for path in remaining {
         let output = run_git(
+            &orbit_common::Env::capture(),
             workspace_root,
             &["log", "-1", "--format=%cI", revision, "--", &path],
         )
@@ -267,8 +272,8 @@ fn run_git_captured(
     stdin_bytes: Option<&[u8]>,
     limit: u64,
 ) -> Result<std::fs::File, String> {
-    let mut command =
-        git_command(workspace_root, args).map_err(|error| format!("admit git command: {error}"))?;
+    let mut command = git_command(&orbit_common::Env::capture(), workspace_root, args)
+        .map_err(|error| format!("admit git command: {error}"))?;
     let stdin = match stdin_bytes {
         None => Stdio::null(),
         Some(bytes) => {

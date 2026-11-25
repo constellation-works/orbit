@@ -16,6 +16,7 @@ fn a_granted_write_root_standing_as_a_dangling_symlink_is_refused() {
     std::os::unix::fs::symlink(temp.path().join("nowhere"), &root).expect("symlink");
 
     let error = linux_landlock_boundary_grants(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "/bin/true".to_string(),
             args: vec![],

@@ -378,7 +378,7 @@ fn spawn_confined(
     // Landlock has no such base, so the boundary carries them, which also
     // carves them out of the host tool state grants (`~/.config/gh`).
     let mut read_denies = profile.read_denies.clone();
-    for credential in orbit_exec::default_credential_read_denies() {
+    for credential in orbit_exec::default_credential_read_denies(&orbit_common::Env::capture()) {
         if !read_denies.contains(&credential) {
             read_denies.push(credential);
         }
@@ -393,7 +393,12 @@ fn spawn_confined(
         // TCP open, and only `none` is held at the kernel.
         deny_tcp: profile.network == PluginNetworkPermission::None,
     };
-    orbit_exec::spawn_under_linux_landlock_boundary(req, &boundary, inherited_fds)
+    orbit_exec::spawn_under_linux_landlock_boundary(
+        &orbit_common::Env::capture(),
+        req,
+        &boundary,
+        inherited_fds,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -412,7 +417,8 @@ fn spawn_confined(
     let rules = profile.macos_fs_rules();
     // "plugin" is not a provider name, so the compiler keeps every default
     // credential deny (it fails closed on an unknown provider).
-    let mut profile_text = compile_macos_sandbox_profile(&rules, "plugin")?;
+    let mut profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &rules, "plugin")?;
     // The compiler allows reads broadly, so the plugin's read carve-outs are
     // denials appended after it; the child's own state tree, callback record
     // and witness are re-allowed last. SBPL is last-match-wins.

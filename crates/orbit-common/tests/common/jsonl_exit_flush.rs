@@ -85,7 +85,7 @@ fn private_append_rejects_a_final_symlink() {
 #[test]
 #[ignore = "re-executed by the feed tests above"]
 fn warn_then_exit_child() {
-    logging::init_default_subscriber("warn");
+    logging::init_default_subscriber(&orbit_common::Env::capture(), "warn");
     tracing::warn!(target: "orbit.test.exit", code = EXIT_CODE, "last words before exit");
     logging::exit(EXIT_CODE);
 }

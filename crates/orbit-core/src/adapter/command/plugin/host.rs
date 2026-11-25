@@ -86,5 +86,8 @@ pub fn execute_global_plugin_tool(
 pub(crate) fn global_only_config(
     global_root: &Path,
 ) -> Result<orbit_config::ResolvedConfig, OrbitError> {
-    orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root))
+    orbit_config::ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )
 }

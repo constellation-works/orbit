@@ -503,7 +503,7 @@ pub(super) fn artifact_put(
     // The shared writer classifier still refuses agent identities/envelopes;
     // labels, omitted models and operator overrides cannot erase them.
     let native_operator = operator
-        && !agent_context_declared()
+        && !agent_context_declared(runtime.execution_env_policy().process_env())
         && caller.session_context.transport.is_none()
         && caller.session_context.worker_invocation.is_none();
     let screen = write_screen(native_operator, false, caller.reservation_owner);

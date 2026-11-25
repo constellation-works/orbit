@@ -536,8 +536,12 @@ fn persistent_client_hands_over_to_a_local_candidate_update() {
     // continues once the refusal releases admission.
     let record = std::fs::read(authority_root(&workspace).join(".generation.lock"))
         .expect("generation record");
-    let unregistered = GenerationGuard::acquire(&authority_root(&workspace), &new_digest)
-        .expect("an unregistered holder joins beside the session");
+    let unregistered = GenerationGuard::acquire(
+        &orbit_common::Env::capture(),
+        &authority_root(&workspace),
+        &new_digest,
+    )
+    .expect("an unregistered holder joins beside the session");
     let refused = local_candidate_update(&workspace, &candidate, &manifest, &old);
     assert!(!refused.status.success(), "{refused:?}");
     assert!(

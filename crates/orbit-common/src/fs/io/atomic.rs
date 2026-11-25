@@ -442,15 +442,24 @@ pub fn relaxed_durability_requested(value: Option<&OsStr>, debug_build: bool) ->
     debug_build && value == Some(OsStr::new("1"))
 }
 
-/// Whether durability syncs are currently skipped. The variable is read once.
+/// Set the existing process-wide durability policy at application startup.
+pub fn init_durability(_env: &crate::Env) {
+    #[cfg(debug_assertions)]
+    {
+        let relaxed = relaxed_durability_requested(_env.orbit_test_relaxed_durability(), true);
+        let _ = RELAXED_DURABILITY.set(relaxed);
+    }
+}
+
+/// Whether durability syncs are currently skipped.
 pub fn durability_syncs_relaxed() -> bool {
-    let relaxed = *RELAXED_DURABILITY.get_or_init(|| {
-        relaxed_durability_requested(
-            std::env::var_os(RELAXED_DURABILITY_ENV).as_deref(),
-            cfg!(debug_assertions),
-        )
-    });
-    relaxed && DURABLE_SYNC_HOLDS.load(Ordering::SeqCst) == 0
+    #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+    if RELAXED_DURABILITY.get().is_none() {
+        // Unit tests and test-support harnesses do not run Orbit's main.
+        init_durability(&crate::Env::capture());
+    }
+    RELAXED_DURABILITY.get().copied().unwrap_or(false)
+        && DURABLE_SYNC_HOLDS.load(Ordering::SeqCst) == 0
 }
 
 thread_local! {

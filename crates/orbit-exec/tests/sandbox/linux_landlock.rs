@@ -107,7 +107,13 @@ impl Fixture {
             environment_mode: EnvironmentMode::ClearAndSet(self.environment.clone()),
             debug: false,
         };
-        spawn_under_linux_landlock(&request, &self.root(), profile).expect("spawn confined child")
+        spawn_under_linux_landlock(
+            &orbit_common::Env::capture(),
+            &request,
+            &self.root(),
+            profile,
+        )
+        .expect("spawn confined child")
     }
 }
 
@@ -705,8 +711,13 @@ fn a_profile_that_cannot_be_compiled_refuses_to_spawn() {
         environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
         debug: false,
     };
-    let error = spawn_under_linux_landlock(&request, &missing, &profile(&["**"]))
-        .expect_err("a workspace that does not resolve must not spawn");
+    let error = spawn_under_linux_landlock(
+        &orbit_common::Env::capture(),
+        &request,
+        &missing,
+        &profile(&["**"]),
+    )
+    .expect_err("a workspace that does not resolve must not spawn");
 
     assert!(
         error.to_string().contains("landlock workspace"),
@@ -729,7 +740,8 @@ fn spawn_bounded(fixture: &Fixture, boundary: &LandlockBoundary, script: &str) -
         debug: false,
     };
     Output::of(
-        spawn_under_linux_landlock_boundary(&request, boundary, &[]).expect("spawn bounded child"),
+        spawn_under_linux_landlock_boundary(&orbit_common::Env::capture(), &request, boundary, &[])
+            .expect("spawn bounded child"),
     )
 }
 
@@ -879,8 +891,13 @@ fn a_bounded_child_with_deny_tcp_cannot_connect() {
             environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
             debug: false,
         };
-        let error = spawn_under_linux_landlock_boundary(&request, &boundary, &[])
-            .expect_err("an older ABI fails closed instead of spawning");
+        let error = spawn_under_linux_landlock_boundary(
+            &orbit_common::Env::capture(),
+            &request,
+            &boundary,
+            &[],
+        )
+        .expect_err("an older ABI fails closed instead of spawning");
         assert!(error.to_string().contains("Landlock ABI"), "{error}");
         return;
     }
@@ -1100,8 +1117,12 @@ fn a_write_root_inside_a_caller_read_exclusion_cannot_read_the_excluded_tree() {
         ..boundary
     };
     let key = data.join("key");
-    let grants = linux_landlock_boundary_grants(&fixture_request(&fixture), &boundary)
-        .expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(
+        &orbit_common::Env::capture(),
+        &fixture_request(&fixture),
+        &boundary,
+    )
+    .expect("compile boundary");
     assert!(
         !grants_read(&grants, &key),
         "a write root inside a caller read exclusion must not grant read: {grants:?}"
@@ -1137,8 +1158,12 @@ fn a_write_file_inside_a_caller_read_exclusion_cannot_read_that_file() {
         write_files: vec![key.clone()],
         ..boundary
     };
-    let grants = linux_landlock_boundary_grants(&fixture_request(&fixture), &boundary)
-        .expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(
+        &orbit_common::Env::capture(),
+        &fixture_request(&fixture),
+        &boundary,
+    )
+    .expect("compile boundary");
     assert!(
         !grants_read(&grants, &key),
         "a write file inside a caller read exclusion must not grant read: {grants:?}"
@@ -1184,8 +1209,12 @@ fn a_write_root_inside_a_read_deny_reads_only_where_a_read_root_reallows_it() {
         write_files: vec![],
         deny_tcp: false,
     };
-    let grants = linux_landlock_boundary_grants(&fixture_request(&fixture), &boundary)
-        .expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(
+        &orbit_common::Env::capture(),
+        &fixture_request(&fixture),
+        &boundary,
+    )
+    .expect("compile boundary");
     assert!(
         grants_read(&grants, &own.join("data")),
         "the re-allowed state tree stays readable: {grants:?}"
@@ -1307,8 +1336,12 @@ impl HostToolState {
 #[test]
 fn a_read_deny_is_carved_out_of_the_host_tool_state_grants() {
     let state = HostToolState::new();
-    let grants = linux_landlock_boundary_grants(&state.request("true"), &state.boundary)
-        .expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(
+        &orbit_common::Env::capture(),
+        &state.request("true"),
+        &state.boundary,
+    )
+    .expect("compile boundary");
 
     assert!(
         !grants_read(&grants, &state.gh_token),
@@ -1373,7 +1406,8 @@ fn a_host_only_wildcard_exclusion_is_carved_out_of_the_tool_state_grants() {
         read_exclusions: vec![private.display().to_string()],
         ..LandlockBoundary::default()
     };
-    let grants = linux_landlock_boundary_grants(&request, &exact).expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(&orbit_common::Env::capture(), &request, &exact)
+        .expect("compile boundary");
     assert!(
         !grants_read(&grants, &private),
         "an exact exclusion carves the tool state grant: {grants:?}"
@@ -1386,7 +1420,8 @@ fn a_host_only_wildcard_exclusion_is_carved_out_of_the_tool_state_grants() {
         write: vec![data.clone()],
         ..vault
     };
-    let grants = linux_landlock_boundary_grants(&request, &boundary).expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(&orbit_common::Env::capture(), &request, &boundary)
+        .expect("compile boundary");
     assert!(
         !grants_read(&grants, &private),
         "a wildcard exclusion under a host tool state grant must be carved: {grants:?}"

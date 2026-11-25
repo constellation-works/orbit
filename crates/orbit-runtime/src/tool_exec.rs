@@ -577,13 +577,17 @@ fn linked_worktree_root_from_gitfile(
 /// could not run or timed out (logged) resolves like no checkout: the caller
 /// falls back to the registered root, never to an owned checkout.
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
-    let output = run_git(path, &["rev-parse", "--show-toplevel"])
-        .inspect_err(|error| {
-            if matches!(error, OrbitError::ProcessTimeout { .. }) {
-                tracing::warn!("cannot resolve the Git checkout root: {error}");
-            }
-        })
-        .ok()?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        path,
+        &["rev-parse", "--show-toplevel"],
+    )
+    .inspect_err(|error| {
+        if matches!(error, OrbitError::ProcessTimeout { .. }) {
+            tracing::warn!("cannot resolve the Git checkout root: {error}");
+        }
+    })
+    .ok()?;
     if !output.success {
         return None;
     }
@@ -598,7 +602,7 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
 /// `None` outside Git, and when Git timed out (logged): no common dir then
 /// matches, so the caller falls back to the registered root.
 fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
-    let common = git_common_dir(path)
+    let common = git_common_dir(&orbit_common::Env::capture(), path)
         .inspect_err(|error| {
             if matches!(error, OrbitError::ProcessTimeout { .. }) {
                 tracing::warn!("cannot resolve the Git common dir: {error}");

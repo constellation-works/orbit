@@ -158,19 +158,23 @@ impl SourceSnapshot {
     /// the local fallback when that fetch is unavailable.
     pub(in crate::application::task::pilot) fn age(&self, workspace: &Path) -> Value {
         // `committer <name> <email> <epoch> <zone>` in the raw commit header.
-        let committed = run_git(workspace, &["cat-file", "commit", &self.source_revision])
-            .ok()
-            .filter(|output| output.success)
-            .and_then(|output| {
-                let committer = output
-                    .stdout
-                    .lines()
-                    .take_while(|line| !line.is_empty())
-                    .find_map(|line| line.strip_prefix("committer "))?
-                    .to_owned();
-                let epoch = committer.rsplit(' ').nth(1)?.parse::<i64>().ok()?;
-                chrono::DateTime::from_timestamp(epoch, 0)
-            });
+        let committed = run_git(
+            &orbit_common::Env::capture(),
+            workspace,
+            &["cat-file", "commit", &self.source_revision],
+        )
+        .ok()
+        .filter(|output| output.success)
+        .and_then(|output| {
+            let committer = output
+                .stdout
+                .lines()
+                .take_while(|line| !line.is_empty())
+                .find_map(|line| line.strip_prefix("committer "))?
+                .to_owned();
+            let epoch = committer.rsplit(' ').nth(1)?.parse::<i64>().ok()?;
+            chrono::DateTime::from_timestamp(epoch, 0)
+        });
         match committed {
             Some(at) => json!({
                 "committed_at": at,
@@ -416,9 +420,11 @@ pub(crate) fn resolve_source_snapshot(
         let source_ref = format!("refs/heads/{base_branch}");
         // Preserve the workspace-local lock-path probe without waiting on a
         // fetch that does not affect this local branch read.
-        let revision = match try_with_git_fetch_lock(workspace_root, || {
-            Ok::<_, FetchLockError>(rev_parse_commit(action, workspace_root, &source_ref))
-        }) {
+        let revision = match try_with_git_fetch_lock(
+            runtime.execution_env_policy().process_env(),
+            workspace_root,
+            || Ok::<_, FetchLockError>(rev_parse_commit(action, workspace_root, &source_ref)),
+        ) {
             Ok(Some(revision)) => revision?,
             Ok(None) => rev_parse_commit(action, workspace_root, &source_ref)?,
             Err(error) => {

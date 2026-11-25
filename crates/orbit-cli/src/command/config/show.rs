@@ -27,7 +27,10 @@ pub struct ConfigShowArgs {
 impl Execute for ConfigShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
-            let effective = load_effective_config(&runtime_config_roots(runtime))?;
+            let effective = load_effective_config(
+                &orbit_core::composition::composition_env(),
+                &runtime_config_roots(runtime),
+            )?;
             let review = review_switches(runtime);
             let mut json = effective_json(runtime, effective.values());
             json["review"] = review.json;

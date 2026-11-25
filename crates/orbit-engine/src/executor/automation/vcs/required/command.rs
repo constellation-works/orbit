@@ -518,6 +518,7 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
     ));
     let setup_ms = started.elapsed().as_millis();
     let supervised = run_process_supervised(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],

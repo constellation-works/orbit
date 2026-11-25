@@ -17,6 +17,7 @@ use crate::linux_landlock::{RESOLVER_FILES, RUNTIME_DIRS, RUNTIME_FILES, TRUST_D
 /// are symbolic links (`/bin` on a merged-`/usr` system), so the rendered
 /// root matches this host.
 pub fn compile_linux_build_argv(
+    env: &orbit_common::Env,
     spec: &BuildSandboxSpec<'_>,
     argv: &[String],
     cwd: &Path,
@@ -31,7 +32,7 @@ pub fn compile_linux_build_argv(
     }
     args.extend(["--proc", "/proc", "--dev", "/dev"].map(String::from));
     push_runtime_table(&mut args, spec.readable);
-    push_credential_denies(&mut args, spec.home);
+    push_credential_denies(env, &mut args, spec.home);
     args.extend([
         "--bind".into(),
         display(spec.build_dir),
@@ -98,8 +99,12 @@ pub(super) fn push_runtime_table(args: &mut Vec<String>, readable: &[PathBuf]) {
 }
 
 /// The credential denies, after every bind so they win over all of them.
-pub(super) fn push_credential_denies(args: &mut Vec<String>, home: Option<&std::ffi::OsStr>) {
-    for (path, file) in super::credential_denies(home) {
+pub(super) fn push_credential_denies(
+    env: &orbit_common::Env,
+    args: &mut Vec<String>,
+    home: Option<&std::ffi::OsStr>,
+) {
+    for (path, file) in super::credential_denies(env, home) {
         // Unlike existing credential files, future browser keys must also
         // stay hidden. Bubblewrap creates this empty mount in the build
         // namespace, or refuses startup if it cannot apply the mask.
@@ -170,6 +175,7 @@ pub(super) fn probe(fetch: bool) -> Result<super::BuildSandboxProbe, String> {
 /// a `fetch` phase's child applies before `exec` (kept alive until spawn).
 #[cfg(target_os = "linux")]
 pub(super) fn command(
+    env: &orbit_common::Env,
     request: &super::BuildPhaseRequest<'_>,
 ) -> Result<(std::process::Command, Option<std::os::fd::OwnedFd>), orbit_common::OrbitError> {
     let bwrap = crate::bwrap_path().ok_or_else(|| {
@@ -180,6 +186,7 @@ pub(super) fn command(
     })?;
     let mut command = std::process::Command::new(bwrap);
     command.args(compile_linux_build_argv(
+        env,
         &request.sandbox,
         request.argv,
         request.cwd,

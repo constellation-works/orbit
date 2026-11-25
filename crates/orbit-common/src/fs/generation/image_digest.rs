@@ -215,16 +215,11 @@ pub(super) fn digest_with_cache(
 /// processes. Any failure to use the shared cache only means hashing.
 pub(super) fn shared_test_digest(
     image_name: Option<&OsStr>,
+    directory: Option<&OsStr>,
     file: File,
     hash: impl FnOnce(File) -> Result<String, OrbitError>,
 ) -> Result<String, OrbitError> {
-    let Some(path) = shared_test_cache_path(
-        image_name,
-        cfg!(debug_assertions)
-            .then(|| std::env::var_os(SHARED_TEST_DIGESTS_ENV))
-            .flatten()
-            .as_deref(),
-    ) else {
+    let Some(path) = shared_test_cache_path(image_name, directory) else {
         return hash(file);
     };
     digest_with_cache(Some(&path), true, SystemTime::now(), file, hash).map(|(digest, _)| digest)

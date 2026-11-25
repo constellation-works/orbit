@@ -132,6 +132,7 @@ fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
 #[cfg(unix)]
 fn brokered_plugin_calls_audit_only_caller_owned_failures() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "brokered_plugin_calls_audit_only_caller_owned_failures",
     ) {
         return;
@@ -415,7 +416,10 @@ fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64,
 
 #[cfg(unix)]
 fn managed_global_plugin_tool_refusals_are_audited() {
-    if !orbit_exec::macos_sandbox_test_guard("managed_global_plugin_tool_refusals_are_audited") {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "managed_global_plugin_tool_refusals_are_audited",
+    ) {
         return;
     }
     let workspace = McpWorkspace::init();
@@ -593,6 +597,7 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
 #[cfg(unix)]
 fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "exec_plugin_error_reaches_mcp_caller_as_structured_content",
     ) {
         return;
@@ -624,6 +629,7 @@ fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
 #[cfg(unix)]
 fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
     ) {
         return;
@@ -726,6 +732,7 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
 #[cfg(unix)]
 fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
     ) {
         return;
@@ -974,6 +981,7 @@ fn add_global_tool(source: &Path) {
 #[cfg(unix)]
 fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
     ) {
         return;
@@ -1117,6 +1125,7 @@ fn write_callback_plugin_with_scope(
 #[cfg(unix)]
 fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_plugin_callback_reaches_only_its_granted_orbit_tools",
     ) {
         return;
@@ -1310,6 +1319,7 @@ fn call_forging_callback(
 #[cfg(unix)]
 fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
     ) {
         return;
@@ -1356,6 +1366,7 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
 #[cfg(unix)]
 fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
     ) {
         return;
@@ -1415,6 +1426,7 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
 #[cfg(unix)]
 fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
     ) {
         return;
@@ -1526,6 +1538,7 @@ fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
 #[cfg(unix)]
 fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
     ) {
         return;
@@ -1739,7 +1752,10 @@ fn setsid_available() -> bool {
 #[cfg(unix)]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_plugin_is_advertised_and_proxied() {
-    if !orbit_exec::macos_sandbox_test_guard("an_mcp_backend_plugin_is_advertised_and_proxied") {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "an_mcp_backend_plugin_is_advertised_and_proxied",
+    ) {
         return;
     }
     if !python3_available() {
@@ -1823,6 +1839,7 @@ const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31c
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it",
     ) {
         return;
@@ -1916,6 +1933,7 @@ const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value",
     ) {
         return;

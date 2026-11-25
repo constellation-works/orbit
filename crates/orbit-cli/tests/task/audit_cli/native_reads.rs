@@ -51,7 +51,9 @@ fn audit_cli_native_reads_persist_once_in_writable_and_foreign_generations() {
     let digest = "a".repeat(64);
     let mut writable_outputs = Vec::new();
     for foreign in [false, true] {
-        let _record = foreign.then(|| GenerationGuard::acquire(&fixture.root, &digest).unwrap());
+        let _record = foreign.then(|| {
+            GenerationGuard::acquire(&orbit_common::Env::capture(), &fixture.root, &digest).unwrap()
+        });
         let _generation = foreign.then(|| {
             GenerationGuard::join(
                 &fixture.root,

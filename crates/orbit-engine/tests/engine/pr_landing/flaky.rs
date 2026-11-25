@@ -283,7 +283,11 @@ fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
                 ) {
                     assert_eq!(output["decision"], "passed_with_known_red");
                     if mode != "inherited" {
-                        let common = orbit_common::fs::git::git_common_dir(&fx.repo).unwrap();
+                        let common = orbit_common::fs::git::git_common_dir(
+                            &orbit_common::Env::capture(),
+                            &fx.repo,
+                        )
+                        .unwrap();
                         let cache_dir = common.join("orbit-baseline");
                         let path = fs::read_dir(&cache_dir)
                             .unwrap()

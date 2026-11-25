@@ -35,6 +35,7 @@ fn keychain_access_diagnostic_grants_antigravity_and_keeps_unknown_providers_den
 #[test]
 fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers",
     ) {
         return;
@@ -98,6 +99,7 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
 #[test]
 fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "compiled_profile_keeps_unknown_provider_keychain_access_denied",
     ) {
         return;
@@ -134,6 +136,7 @@ fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
 #[test]
 fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "compiled_codex_profile_reads_public_ca_material_but_not_private_credentials",
     ) {
         return;
@@ -266,6 +269,7 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
     use std::process::Command;
 
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec",
     ) {
         return;
@@ -286,7 +290,8 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
         ],
     };
     let profile_text =
-        compile_macos_sandbox_profile(&resolved, NEUTRAL_PROVIDER).expect("compile sbpl");
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &resolved, NEUTRAL_PROVIDER)
+            .expect("compile sbpl");
     assert!(
         !profile_text.contains("(?i)"),
         "compiled profile must not contain the unsupported (?i) inline flag: {profile_text}"
@@ -334,6 +339,7 @@ fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_
     use std::process::Command;
 
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token",
     ) {
         return;
@@ -454,6 +460,7 @@ fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_
 #[test]
 fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec",
     ) {
         return;
@@ -515,7 +522,10 @@ fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec()
 #[cfg(target_os = "macos")]
 #[test]
 fn subpath_mask_hides_the_tree_from_a_sandboxed_child() {
-    if !orbit_exec::macos_sandbox_test_guard("subpath_mask_hides_the_tree_from_a_sandboxed_child") {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "subpath_mask_hides_the_tree_from_a_sandboxed_child",
+    ) {
         return;
     }
     if super::audit_support::run_isolated(
