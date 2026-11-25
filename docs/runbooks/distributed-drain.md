@@ -2310,10 +2310,11 @@ three are safe; none strands a claim, and none fails a task that never ran.
   (`release_held` in `pull_settlements`): it reaches the owner only once the
   leaf is seen to stop, so a second executor never starts the task beside a
   first that is still running. Stop that leaf by hand on its host.
-- The MCP stop control takes the same option: `orbit.workflow.auto` with
-  `action: "stop"` and `force: true` stops admissions, then force-cancels each
-  live drain as above (a local drain's task runs included). It fails, naming
-  the leaves, when any leaf could not be confirmed stopped.
+- The MCP stop control uses `orbit_workflow` (or `orbit.workflow`) with
+  `action: "auto"`, `mode: "stop"` and `force: true`. It stops admissions,
+  then force-cancels each live drain as above (a local drain's task runs
+  included). It fails, naming the leaves, when any leaf could not be
+  confirmed stopped.
 - A drain that is still queued, or whose worker is gone, is cancelled at once;
   its unlaunched claims go back to `backlog` and its live leaves settle
   themselves.
