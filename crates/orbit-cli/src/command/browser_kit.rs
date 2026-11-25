@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use orbit_cmd::browser_kit::{
     self, InstallOptions, InstallReport, KitProblem, KitStatus, VerifyReport,
 };
+use orbit_common::Env;
 use orbit_core::OrbitError;
 use orbit_core::bootstrap::browser_kit::{KitLayout, PLAYWRIGHT_VERSION};
 use serde_json::json;
@@ -68,11 +69,11 @@ pub struct BrowserKitRemoveArgs {
 }
 
 impl BrowserKitCommand {
-    pub fn execute_without_runtime(self) -> CommandOut {
-        let layout = KitLayout::current_user(&orbit_core::composition::composition_env())?;
+    pub fn execute_without_runtime(self, env: &Env) -> CommandOut {
+        let layout = KitLayout::current_user(env)?;
         match self.command {
             BrowserKitSubcommand::Status(_) => {
-                let status = browser_kit::kit_status(&layout);
+                let status = browser_kit::kit_status(&layout, env);
                 Ok(Payload::detail(status_json(&status)?, status_text(&status)).into())
             }
             BrowserKitSubcommand::Install(args) => {
@@ -81,6 +82,7 @@ impl BrowserKitCommand {
                     InstallOptions {
                         with_deps: args.with_deps,
                     },
+                    env,
                     &mut |step| eprintln!("{step}..."),
                 )?;
                 let exit_code = i32::from(!report.ready());
@@ -89,7 +91,7 @@ impl BrowserKitCommand {
                     .into())
             }
             BrowserKitSubcommand::Verify(_) => {
-                let report = browser_kit::verify(&layout)?;
+                let report = browser_kit::verify(&layout, env)?;
                 let exit_code = i32::from(!report.passed);
                 Ok(Payload::detail(to_json(&report)?, verify_text(&report))
                     .with_exit_code(exit_code)
@@ -97,7 +99,7 @@ impl BrowserKitCommand {
             }
             BrowserKitSubcommand::Remove(args) => {
                 require_confirmation(args.confirm, "removing the browser kit")?;
-                let removed = browser_kit::remove(&layout)?;
+                let removed = browser_kit::remove(&layout, env)?;
                 let root = layout.root().display().to_string();
                 let text = if removed {
                     format!("Removed the browser kit at {root}; workers no longer receive it.")

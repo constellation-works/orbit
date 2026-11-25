@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use orbit_common::Env;
 use orbit_common::fs::directory_lock::with_directory_lock;
 use orbit_core::OrbitError;
 use orbit_types::tool::mcp_advertised_tool_name;
@@ -18,14 +19,16 @@ use super::common::{
 pub(in crate::command::mcp::setup) fn apply_claude_init(
     target: &ConfigTarget,
     launch: ServerLaunch<'_>,
+    env: &Env,
 ) -> Result<(), OrbitError> {
-    apply_claude_init_with_legacy(target, launch, None)
+    apply_claude_init_with_legacy(target, launch, None, env)
 }
 
 pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
     target: &ConfigTarget,
     launch: ServerLaunch<'_>,
     inherited: Option<&JsonValue>,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let server_id = server_id(launch);
     let update_mcp = || {
@@ -39,7 +42,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
                 .get_mut(server_id)
                 .is_some_and(|entry| supply_json_root(entry, launch));
             if changed {
-                return write_json_object(&target.mcp_path, &root);
+                return write_json_object(&target.mcp_path, &root, env);
             }
             return Ok(());
         }
@@ -47,7 +50,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
             let mut entry = entry.clone();
             supply_json_root(&mut entry, launch);
             mcp_servers.insert(server_id.to_string(), entry);
-            return write_json_object(&target.mcp_path, &root);
+            return write_json_object(&target.mcp_path, &root, env);
         }
         // Carry authority forward before removing an obsolete config path.
         if let Some(legacy_path) = &target.legacy_mcp_path {
@@ -60,11 +63,11 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
                 let mut entry = entry.clone();
                 supply_json_root(&mut entry, launch);
                 mcp_servers.insert(server_id.to_string(), entry);
-                return write_json_object(&target.mcp_path, &root);
+                return write_json_object(&target.mcp_path, &root, env);
             }
         }
         mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
-        write_json_object(&target.mcp_path, &root)
+        write_json_object(&target.mcp_path, &root, env)
     };
     if target.scope == ScopeArg::Home {
         // Claude Code's proper-lockfile uses mkdir at `<mcp_path>.lock`,
@@ -74,14 +77,14 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
     } else {
         update_mcp()?;
     }
-    cleanup_legacy_mcp_path(target, server_id)?;
+    cleanup_legacy_mcp_path(target, server_id, env)?;
 
     if let Some(settings_path) = &target.settings_path {
         let mut settings = load_json_object(settings_path)?;
         let permissions = ensure_json_object(&mut settings, "permissions")?;
         let allow = ensure_json_string_array(permissions, "allow")?;
         merge_unique_strings(allow, claude_safe_permissions(server_id));
-        write_json_object(settings_path, &settings)?;
+        write_json_object(settings_path, &settings, env)?;
     }
     Ok(())
 }
@@ -89,6 +92,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
 pub(in crate::command::mcp::setup) fn apply_claude_remove(
     target: &ConfigTarget,
     server_id: &str,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let remove_mcp = || {
         let mut root = load_json_object(&target.mcp_path)?;
@@ -103,11 +107,11 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
         if target.scope == ScopeArg::Home {
             if target.mcp_path.exists() {
-                write_json_object(&target.mcp_path, &root)?;
+                write_json_object(&target.mcp_path, &root, env)?;
             }
             Ok(())
         } else {
-            write_or_remove_json_object(&target.mcp_path, &root)
+            write_or_remove_json_object(&target.mcp_path, &root, env)
         }
     };
     if target.scope == ScopeArg::Home {
@@ -115,7 +119,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
     } else {
         remove_mcp()?;
     }
-    cleanup_legacy_mcp_path(target, server_id)?;
+    cleanup_legacy_mcp_path(target, server_id, env)?;
 
     if let Some(settings_path) = &target.settings_path {
         let mut settings = load_json_object(settings_path)?;
@@ -148,7 +152,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         for key in remove_keys {
             settings.remove(&key);
         }
-        write_or_remove_json_object(settings_path, &settings)?;
+        write_or_remove_json_object(settings_path, &settings, env)?;
 
         if let Some(settings_dir) = settings_path.parent() {
             remove_dir_if_empty(settings_dir)?;
@@ -157,7 +161,11 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
     Ok(())
 }
 
-fn cleanup_legacy_mcp_path(target: &ConfigTarget, server_id: &str) -> Result<(), OrbitError> {
+fn cleanup_legacy_mcp_path(
+    target: &ConfigTarget,
+    server_id: &str,
+    env: &Env,
+) -> Result<(), OrbitError> {
     let Some(legacy_path) = &target.legacy_mcp_path else {
         return Ok(());
     };
@@ -172,7 +180,7 @@ fn cleanup_legacy_mcp_path(target: &ConfigTarget, server_id: &str) -> Result<(),
             root.remove("mcpServers");
         }
     }
-    write_or_remove_json_object(legacy_path, &root)
+    write_or_remove_json_object(legacy_path, &root, env)
 }
 
 /// Remove `dir` if it exists and is now empty.

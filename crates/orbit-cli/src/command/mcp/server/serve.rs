@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_mcp::federated;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener, McpSessionAuthority};
@@ -42,6 +42,7 @@ pub(in super::super) struct StdioLaunch {
 /// statement there exactly as it is locally: the caller composed that argv over
 /// an SSH login to this machine, which is ownership of it, so there is no
 /// second authorization for the destination to make [ORB-12564].
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn serve_mcp_stdio(
     global_root: PathBuf,
     remote_caller_machine_id: Option<String>,
@@ -50,6 +51,7 @@ pub(in super::super) fn serve_mcp_stdio(
     bound_orchestrator: Option<String>,
     launch: StdioLaunch,
     toolsets: McpToolsetSelection,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let (host, mut session_context) = compose_server(
         global_root,
@@ -58,12 +60,21 @@ pub(in super::super) fn serve_mcp_stdio(
         bound_workspace,
         bound_orchestrator,
         toolsets,
+        env,
     )?;
     session_context.worker_host_call = launch.worker_host;
     let exit = if launch.internal_drain {
-        block_on_server(orbit_mcp::serve_internal_drain_stdio(host, session_context))?
+        block_on_server(orbit_mcp::serve_internal_drain_stdio(
+            host,
+            session_context,
+            env,
+        ))?
     } else {
-        block_on_server(orbit_mcp::serve_stdio_with_context(host, session_context))?
+        block_on_server(orbit_mcp::serve_stdio_with_context(
+            host,
+            session_context,
+            env,
+        ))?
     };
     finish_stdio_session(exit)
 }
@@ -77,9 +88,10 @@ pub(in super::super) fn serve_mcp_stdio(
 pub(crate) fn federated_aggregate_client(
     global_root: PathBuf,
     authority: McpSessionAuthority,
+    env: &Env,
 ) -> Result<federated::FederatedMcpHost, OrbitError> {
     let remotes = federated::load_destinations(&global_root)?;
-    let identity = orbit_mcp::mcp_server_identity(&global_root, None, authority)?;
+    let identity = orbit_mcp::mcp_server_identity(&global_root, None, authority, env)?;
     let destinations = federated::federated_membership(
         identity.process_machine_id.clone(),
         identity.process_machine_name.clone(),
@@ -146,6 +158,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     bound_orchestrator: Option<String>,
     authority: McpSessionAuthority,
     toolsets: McpToolsetSelection,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let remotes = federated::load_destinations(&global_root)?;
     // The mux is a client to each remote, and identifies itself with the same
@@ -154,7 +167,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     // and the SSH probe asks each destination for the same thing in its argv
     // [ORB-12564]. Local and remote workspaces therefore behave alike in one
     // namespace, which is the whole point of the mux.
-    let mut identity = orbit_mcp::mcp_server_identity(&global_root, None, authority)?;
+    let mut identity = orbit_mcp::mcp_server_identity(&global_root, None, authority, env)?;
     // The mux binds no workspace, but it does carry one attribution default.
     // Local destinations read it from this context; remote ones are told in
     // their own argv, because a routed SSH session forwards no context
@@ -228,6 +241,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     finish_stdio_session(block_on_server(orbit_mcp::serve_stdio_with_context(
         host,
         identity.session_context,
+        env,
     ))?)
 }
 
@@ -255,6 +269,7 @@ pub(in super::super) fn serve_mcp_listener(
     exposure: ListenerExposure,
     bound_workspace: Option<String>,
     toolsets: McpToolsetSelection,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     // A listener has no forwarding proxy in front of it, so there is no caller
     // machine label to trust; each accepted connection contributes only the
@@ -284,6 +299,7 @@ pub(in super::super) fn serve_mcp_listener(
         bound_workspace,
         None,
         toolsets,
+        env,
     )?;
     block_on_server(async move {
         let listener = McpListener::bind(addr, exposure, host, session_context).await?;
@@ -312,9 +328,10 @@ fn compose_server(
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
     toolsets: McpToolsetSelection,
+    env: &Env,
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
-        orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority)?;
+        orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority, env)?;
     identity.session_context.worker_invocation =
         OrbitRuntime::current_worker_invocation(&global_root)?;
     if identity.session_context.worker_invocation.is_some() {

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_cmd::agent_rules::{InjectionAction, InjectionOutcome, inject_agent_rules};
+use orbit_common::Env;
 use orbit_core::OrbitError;
 use orbit_types::workspace::WorkspaceCheckoutRole;
 use serde_json::{Value, json};
@@ -75,6 +76,7 @@ struct RuleFileOutcome {
     action: InjectionAction,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn collect_init_report(
     init_result: WorkspaceInitResult,
     global_root: &Path,
@@ -83,6 +85,7 @@ pub(super) fn collect_init_report(
     inject_rules: bool,
     browser_kit: BrowserKitOutcome,
     preset: Option<AppliedPresetOutcome>,
+    env: &Env,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
     let mut checkout_files = BTreeSet::new();
@@ -110,6 +113,7 @@ pub(super) fn collect_init_report(
             &init_result.root,
             &init_result.orbit_dir,
             &init_result.id,
+            env,
         )?;
         for file in files {
             checkout_files.insert(checkout_file_label(&init_result.root, &file));

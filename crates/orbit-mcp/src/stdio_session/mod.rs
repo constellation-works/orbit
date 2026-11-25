@@ -45,7 +45,7 @@ mod unix;
 mod writer;
 
 pub use lifecycle::stdin_supports_handover;
-pub(crate) use lifecycle::{resumed_session, serve};
+pub(crate) use lifecycle::{lifecycle_interval, resumed_session, serve};
 
 /// Carries a resumed session's state into the replacement image.
 pub use orbit_common::env_vars::ORBIT_MCP_RESUME as RESUME_ENV;

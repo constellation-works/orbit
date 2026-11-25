@@ -54,6 +54,7 @@ pub(super) async fn control_routine_breaker(
     };
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         workspace,
         DASHBOARD_ROUTINE_BREAKER.id,
         body.name.as_str(),

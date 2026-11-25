@@ -48,10 +48,11 @@ pub(in crate::api) async fn list_diagnostics_errors(
     // Errors tab polls it: memoized so overlapping polls share one scan, and
     // computed on the blocking pool, not the worker serving the request.
     let compute_runtime = Arc::clone(&runtime);
+    let env = state.env().clone();
     match state
         .diagnostics_errors_memo()
         .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
-            diagnostics_errors(&compute_runtime, &range, limit)
+            diagnostics_errors(&compute_runtime, &env, &range, limit)
         })
         .await
     {
@@ -69,6 +70,7 @@ pub(in crate::api) async fn list_diagnostics_errors(
 /// and the owning run keeps the full text.
 fn diagnostics_errors(
     runtime: &OrbitRuntime,
+    env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<Value, orbit_core::OrbitError> {
@@ -77,7 +79,7 @@ fn diagnostics_errors(
         Vec::new()
     } else {
         let (rows, process_coverage, stderr_coverage) =
-            diagnostics_error_rows(runtime, range, limit)?;
+            diagnostics_error_rows(runtime, env, range, limit)?;
         coverage_since = [coverage_since, process_coverage, stderr_coverage]
             .into_iter()
             .flatten()
@@ -95,11 +97,12 @@ type ErrorRowsWithCoverage = (Vec<Value>, Option<DateTime<Utc>>, Option<DateTime
 
 fn diagnostics_error_rows(
     runtime: &OrbitRuntime,
+    env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<ErrorRowsWithCoverage, orbit_core::OrbitError> {
     // Read beyond the display cap so duplicate events cannot crowd out distinct failures.
-    let (mut rows, process_coverage) = global_error_rows_in_range(range, 50_000)?;
+    let (mut rows, process_coverage) = global_error_rows_in_range(env, range, 50_000)?;
     rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
     let mut seen_process = HashSet::new();
     rows.retain(|row| {
@@ -210,10 +213,11 @@ fn step_attempt_for_error<'a>(steps: &'a [RunAuditStep], row: &Value) -> Option<
 /// reaches into the window, with the instant the retained segments (or the
 /// `limit` scan cap) actually start from when that is later than the window.
 fn global_error_rows_in_range(
+    env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
-    let path = resolve_log_path(None)?;
+    let path = resolve_log_path(None, env)?;
     let filters = LogFilters::new(
         None,
         Some(crate::log_format::LevelFilter::Error),
@@ -224,6 +228,7 @@ fn global_error_rows_in_range(
         read_recent_matching_events_across_segments(&path, &filters, limit).map_err(|error| {
             orbit_core::OrbitError::Io(format!("read log {}: {error}", path.display()))
         })?;
+    let home = env.home().and_then(std::ffi::OsStr::to_str);
     let rows = scanned
         .events
         .into_iter()
@@ -233,7 +238,7 @@ fn global_error_rows_in_range(
                 .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
                 .is_some_and(|ts| range.contains(ts.with_timezone(&Utc)))
         })
-        .map(|event| process_error_row(&event))
+        .map(|event| process_error_row(&event, home))
         .collect();
     Ok((rows, scanned.coverage_since))
 }
@@ -247,7 +252,7 @@ fn row_timestamp(row: &Value) -> Option<DateTime<Utc>> {
     row["ts"].as_str().and_then(|ts| ts.parse().ok())
 }
 
-fn process_error_row(event: &Value) -> Value {
+fn process_error_row(event: &Value, home: Option<&str>) -> Value {
     let ts = event.get("timestamp").and_then(Value::as_str).unwrap_or("");
     let target = event.get("target").and_then(Value::as_str).unwrap_or("-");
     let empty_fields = Value::Object(Default::default());
@@ -265,7 +270,7 @@ fn process_error_row(event: &Value) -> Value {
             redacted_excerpt(if target == "orbit.job.step_finished" {
                 "no failure detail recorded".to_string()
             } else {
-                strip_htmlish(&format_message_html(target, fields))
+                strip_htmlish(&format_message_html(target, fields, home))
             })
         });
 

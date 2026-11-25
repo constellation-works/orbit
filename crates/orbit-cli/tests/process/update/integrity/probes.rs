@@ -19,7 +19,9 @@ fn version_probe_retries_busy_executables_and_preserves_the_spawn_error() {
     // ETXTBSY. The retry window must be exhausted rather than refusing the
     // first attempt, and the eventual error must remain the OS spawn error.
     let started = Instant::now();
-    let error = orbit_cmd::update::converge::probe_version(&executable).expect_err("busy");
+    let probe_timeout = Duration::from_secs(30);
+    let error =
+        orbit_cmd::update::converge::probe_version(&executable, probe_timeout).expect_err("busy");
     assert!(
         started.elapsed() >= Duration::from_secs(2),
         "busy retry window was skipped"
@@ -32,7 +34,8 @@ fn version_probe_retries_busy_executables_and_preserves_the_spawn_error() {
     );
     drop(writer);
     assert_eq!(
-        orbit_cmd::update::converge::probe_version(&executable).expect("released executable"),
+        orbit_cmd::update::converge::probe_version(&executable, probe_timeout)
+            .expect("released executable"),
         "99.0.0"
     );
 }

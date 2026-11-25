@@ -451,7 +451,14 @@ where
         Err(rejection) => return rejection.into_response(),
     };
     let started = Instant::now();
-    let audit = OperationAudit::new(&runtime, &workspace, audit_name, target.as_str(), arguments);
+    let audit = OperationAudit::new(
+        &runtime,
+        state.env(),
+        &workspace,
+        audit_name,
+        target.as_str(),
+        arguments,
+    );
     let caller = match authorized_caller(operation, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {

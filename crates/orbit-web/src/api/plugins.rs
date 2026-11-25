@@ -92,6 +92,7 @@ async fn mutate_plugin(
     let workspace = workspace_label(&runtime).await;
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         operation.id,
         namespace.as_str(),

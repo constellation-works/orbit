@@ -1,5 +1,7 @@
+use std::ffi::OsStr;
+
 use clap::{Command, CommandFactory, FromArgMatches};
-use orbit_common::env_vars;
+use orbit_common::{Env, env_vars};
 
 use super::host_ssh::host_ssh_command;
 use super::output_args::{install_output_args, plain_header, requested_output};
@@ -43,12 +45,14 @@ fn repair_crew_flag_suggestion(mut err: clap::error::Error) -> clap::error::Erro
 /// Where an explicitly chosen Orbit root came from, if it was chosen at all.
 pub(super) fn explicit_root_source(
     root_override: Option<&std::path::Path>,
+    env: &Env,
 ) -> Option<&'static str> {
     if root_override.is_some() {
         return Some("--root");
     }
-    std::env::var(env_vars::ORBIT_ROOT)
-        .is_ok_and(|value| !value.trim().is_empty())
+    env.orbit_root()
+        .and_then(OsStr::to_str)
+        .is_some_and(|value| !value.trim().is_empty())
         .then_some(env_vars::ORBIT_ROOT)
 }
 
@@ -106,14 +110,17 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
 ///
 /// `main` and the help goldens both build it here, so a golden pins the help
 /// the binary prints rather than the bare derive.
-pub(super) fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Command {
+pub(super) fn cli_command(
+    groups: &[orbit_core::adapter::command::PluginCliGroup],
+    env: &Env,
+) -> Command {
     // Grouped rows share one description column per template derived from the
     // longest name, wrapping to the sink width on a terminal [ORB-19912].
     // Width 0 (piped) keeps single-line rows so help goldens stay
     // deterministic. The width comes from the sink, the only place that
     // queries terminal state (`check-terminal-state-guard.sh`); `main` still
     // resolves its own sink after parsing for rendering.
-    let term_width = crate::output::sink::OutputSink::from_process(None, false).width();
+    let term_width = crate::output::sink::OutputSink::from_process(env, None, false).width();
     cli_command_with_width(groups, term_width)
 }
 
@@ -144,7 +151,7 @@ fn cli_command_with_width(
 }
 
 /// Report a clap parse failure in the invocation's output mode and exit.
-fn exit_parse_error(err: clap::error::Error, args: &[std::ffi::OsString]) -> ! {
+fn exit_parse_error(err: clap::error::Error, args: &[std::ffi::OsString], env: &Env) -> ! {
     let (requested, legacy) = usage_error::pre_parse_format(args);
     let err = usage_error::suggest_help_flag(repair_crew_flag_suggestion(err));
     let err = if usage_error::is_unknown_host_flag(&err) {
@@ -152,12 +159,12 @@ fn exit_parse_error(err: clap::error::Error, args: &[std::ffi::OsString]) -> ! {
     } else {
         err
     };
-    usage_error::exit(err, requested, legacy)
+    usage_error::exit(err, requested, legacy, env)
 }
 
 /// Parse argv into the derived CLI, the two inputs to mode resolution, and
 /// whether `--header` asked for a plain-form header row.
-pub(super) fn parse_cli() -> (command::Cli, Option<FormatArg>, bool, bool) {
+pub(super) fn parse_cli(env: &Env) -> (command::Cli, Option<FormatArg>, bool, bool) {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     // Try the built-in tree first: a successful parse cannot be a plugin
     // group, so it pays no plugin discovery. A plugin namespace equal to a
@@ -166,21 +173,21 @@ pub(super) fn parse_cli() -> (command::Cli, Option<FormatArg>, bool, bool) {
     // failure (help/version display, unknown subcommand, usage error)
     // falls through to discovery and a reparse against the augmented
     // tree, so help, suggestions and errors keep their current wording.
-    let (groups, matches) = match cli_command(&[]).try_get_matches_from(&args) {
+    let (groups, matches) = match cli_command(&[], env).try_get_matches_from(&args) {
         Ok(matches) => (Vec::new(), matches),
         Err(built_in_error) => {
             let groups = plugin_cli_groups();
             if groups.is_empty() {
-                exit_parse_error(built_in_error, &args);
+                exit_parse_error(built_in_error, &args, env);
             }
-            match cli_command(&groups).try_get_matches_from(&args) {
+            match cli_command(&groups, env).try_get_matches_from(&args) {
                 Ok(matches) => (groups, matches),
-                Err(err) => exit_parse_error(err, &args),
+                Err(err) => exit_parse_error(err, &args, env),
             }
         }
     };
     let (requested, legacy) = requested_output(&matches)
-        .unwrap_or_else(|err| usage_error::exit(err, Some(FormatArg::Json), true));
+        .unwrap_or_else(|err| usage_error::exit(err, Some(FormatArg::Json), true, env));
     let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
         // A plugin group is not a `Commands` variant clap can build, so the
         // two global arguments are read here and the rest of the invocation
@@ -191,7 +198,7 @@ pub(super) fn parse_cli() -> (command::Cli, Option<FormatArg>, bool, bool) {
             command: command::Commands::PluginGroup(Box::new(invocation)),
         },
         None => command::Cli::from_arg_matches(&matches)
-            .unwrap_or_else(|err| usage_error::exit(err, requested, legacy)),
+            .unwrap_or_else(|err| usage_error::exit(err, requested, legacy, env)),
     };
     (cli, requested, legacy, plain_header(&matches))
 }

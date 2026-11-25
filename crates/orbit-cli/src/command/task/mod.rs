@@ -1,4 +1,6 @@
-use orbit_common::env_vars;
+use std::ffi::OsStr;
+
+use orbit_common::Env;
 mod archive;
 pub(crate) mod artifact;
 mod command;
@@ -28,16 +30,23 @@ pub(crate) use command::TaskInvocation;
 pub use command::{TaskCommand, TaskSubcommand};
 pub use publication::TaskPublicationSubcommand;
 
-pub(crate) fn mutation_identity(model: Option<String>) -> (Option<String>, Option<String>) {
+pub(crate) fn mutation_identity(
+    model: Option<String>,
+    env: &Env,
+) -> (Option<String>, Option<String>) {
     if model.is_some() {
         return (None, model);
     }
-    let agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    let agent = env
+        .orbit_agent_name()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let model = env
+        .orbit_agent_model()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
     (agent, model)
 }
 

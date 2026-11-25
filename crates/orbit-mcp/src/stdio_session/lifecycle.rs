@@ -1,13 +1,14 @@
 //! Executable-generation lifecycle, resumed state and service orchestration.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
-use orbit_common::OrbitError;
 use orbit_common::fs::generation;
+use orbit_common::{Env, OrbitError};
 use rmcp::ServiceExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,7 +18,7 @@ use crate::adapter::OrbitToolServer;
 
 #[cfg(unix)]
 use super::unix;
-use super::{LIFECYCLE_INTERVAL_ENV, RESUME_ENV, Resumed, StdioExit, input, tracking, writer};
+use super::{Resumed, StdioExit, input, tracking, writer};
 
 /// How often an idle session checks for a replacement or a pending switch.
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -32,11 +33,17 @@ fn lifecycle_interval_from_env(value: Option<&str>, debug_build: bool) -> Durati
     LIFECYCLE_INTERVAL
 }
 
-fn lifecycle_interval() -> Duration {
-    lifecycle_interval_from_env(
-        std::env::var(LIFECYCLE_INTERVAL_ENV).ok().as_deref(),
-        cfg!(debug_assertions),
-    )
+pub(crate) fn lifecycle_interval(env: &Env) -> Duration {
+    #[cfg(any(test, feature = "test-support"))]
+    let raw = env
+        .orbit_test_mcp_lifecycle_interval_ms()
+        .and_then(OsStr::to_str);
+    #[cfg(not(any(test, feature = "test-support")))]
+    let raw = {
+        let _ = env;
+        None
+    };
+    lifecycle_interval_from_env(raw, cfg!(debug_assertions))
 }
 
 /// The session state one image hands the next.
@@ -53,9 +60,9 @@ struct ResumeState {
 }
 
 /// Read the handed-over session, when this image was exec'd to resume one.
-pub(crate) fn resumed_session() -> Option<Resumed> {
-    let raw = std::env::var(RESUME_ENV).ok()?;
-    let state = match serde_json::from_str::<ResumeState>(&raw) {
+pub(crate) fn resumed_session(env: &Env) -> Option<Resumed> {
+    let raw = env.orbit_mcp_resume().and_then(OsStr::to_str)?;
+    let state = match serde_json::from_str::<ResumeState>(raw) {
         Ok(state) if state.pid == std::process::id() => state,
         Ok(_) => return None,
         Err(error) => {
@@ -108,11 +115,14 @@ fn lifecycle() -> Lifecycle {
 pub(crate) async fn serve(
     server: OrbitToolServer,
     resumed: Option<Resumed>,
+    interval: Duration,
 ) -> Result<StdioExit, OrbitError> {
     #[cfg(unix)]
     if let Some(stdin) = unix::NonBlockingStdin::new() {
-        return serve_handing_over(server, resumed, stdin).await;
+        return serve_handing_over(server, resumed, stdin, interval).await;
     }
+    #[cfg(not(unix))]
+    let _ = interval;
     serve_plain(server, resumed).await
 }
 
@@ -197,6 +207,7 @@ async fn serve_handing_over(
     server: OrbitToolServer,
     resumed: Option<Resumed>,
     stdin: unix::NonBlockingStdin,
+    check_interval: Duration,
 ) -> Result<StdioExit, OrbitError> {
     let tracker = Arc::new(Mutex::new(tracking::Tracker::default()));
     let undelivered = Arc::new(AtomicUsize::new(0));
@@ -272,7 +283,7 @@ async fn serve_handing_over(
             .map(|_| ())
             .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))
     });
-    let mut interval = tokio::time::interval(lifecycle_interval());
+    let mut interval = tokio::time::interval(check_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {

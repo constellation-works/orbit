@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use orbit_common::Env;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -65,6 +66,7 @@ pub(in crate::command::mcp::setup) fn load_json_object(
 pub(in crate::command::mcp::setup) fn write_json_object(
     path: &Path,
     root: &JsonMap<String, JsonValue>,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let mut rendered =
         serde_json::to_string_pretty(&JsonValue::Object(root.clone())).map_err(|err| {
@@ -86,6 +88,7 @@ pub(in crate::command::mcp::setup) fn write_json_object(
         &target,
         "write",
         orbit_server_args(&JsonValue::Object(root.clone())),
+        env,
     );
     Ok(())
 }
@@ -97,21 +100,22 @@ pub(in crate::command::mcp::setup) fn write_json_object(
 pub(in crate::command::mcp::setup) fn write_or_remove_json_object(
     path: &Path,
     root: &JsonMap<String, JsonValue>,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     if root.is_empty() {
         if !path.exists() {
             return Ok(());
         }
         if is_config_symlink(path) {
-            return write_json_object(path, root);
+            return write_json_object(path, root, env);
         }
         fs::remove_file(path).map_err(|err| {
             OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
         })?;
-        record_config_write(path, path, "remove", serde_json::json!({}));
+        record_config_write(path, path, "remove", serde_json::json!({}), env);
         return Ok(());
     }
-    write_json_object(path, root)
+    write_json_object(path, root, env)
 }
 
 pub(in crate::command::mcp::setup) fn ensure_json_object<'a>(

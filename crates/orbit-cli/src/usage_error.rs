@@ -50,9 +50,14 @@ pub(crate) fn pre_parse_format(args: &[OsString]) -> (Option<FormatArg>, bool) {
 /// version output are not errors and keep clap's rendering in every mode, as
 /// does the help clap prints in place of a missing subcommand — that is a
 /// help page, not a message a JSON consumer could act on.
-pub(crate) fn exit(error: clap::Error, requested: Option<FormatArg>, legacy_json: bool) -> ! {
+pub(crate) fn exit(
+    error: clap::Error,
+    requested: Option<FormatArg>,
+    legacy_json: bool,
+    env: &orbit_common::Env,
+) -> ! {
     if error.use_stderr() && error.kind() != ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand {
-        let sink = OutputSink::from_process(requested, legacy_json);
+        let sink = OutputSink::from_process(env, requested, legacy_json);
         if matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson) {
             let payload = crate::output::json::usage_error_payload(&message(&error));
             if let Ok(rendered) = crate::output::json::render(&payload, sink.pretty_json()) {

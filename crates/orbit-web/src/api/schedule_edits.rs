@@ -216,6 +216,7 @@ async fn audit_denied_schedule_identity(
     };
     let audit = OperationAudit::new(
         runtime,
+        state.env(),
         workspace,
         operation.id,
         prepared.name.as_str(),
@@ -260,6 +261,7 @@ pub(super) async fn set_routine_trigger(
     };
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         DASHBOARD_ROUTINE_TRIGGER.id,
         body.name.as_str(),
@@ -357,6 +359,7 @@ pub(super) async fn set_auto_task_schedule(
     };
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         DASHBOARD_AUTO_TASK_SCHEDULE.id,
         body.name.as_str(),

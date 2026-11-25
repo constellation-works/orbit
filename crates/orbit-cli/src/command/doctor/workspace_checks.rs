@@ -2,6 +2,7 @@ use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, RetiredConfigKeyRepair, WorkspaceDoctorResult,
     WorkspaceDoctorStatus,
 };
+use orbit_common::Env;
 use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
 use serde_json::Value;
 
@@ -74,7 +75,7 @@ impl DoctorCommand {
 
 impl DoctorCommand {
     /// The bare `orbit doctor` body: optional repairs, then the workspace report.
-    pub(super) fn workspace_checks(self, runtime: &OrbitRuntime) -> CommandOut {
+    pub(super) fn workspace_checks(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         if self.repairs.fix_orphan_task_stores && !self.confirm {
             return Err(orbit_core::OrbitError::InvalidInput(
                     "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
@@ -207,7 +208,7 @@ impl DoctorCommand {
                 message,
             );
         }
-        results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
+        results.extend(orbit_cmd::run_doctor_report(runtime, env, self.deep));
         report_output(results, self.problems, self.check.as_deref())
     }
 }

@@ -11,6 +11,7 @@
 //! exhaustive matches on [`TaskVerb`].
 
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_common::Env;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Map, Value, json};
@@ -46,9 +47,13 @@ pub(super) struct ListView {
     pub(super) artifact_out: Option<String>,
 }
 
-pub(super) fn execute(invocation: Invocation<TaskVerb>, runtime: &OrbitRuntime) -> CommandOut {
+pub(super) fn execute(
+    invocation: Invocation<TaskVerb>,
+    runtime: &OrbitRuntime,
+    env: &Env,
+) -> CommandOut {
     let Invocation { spec, mut input } = invocation;
-    let view = prepare(spec.verb, runtime, &mut input)?;
+    let view = prepare(spec.verb, runtime, &mut input, env)?;
     let value = runtime.run_tool(spec.tool_name, Value::Object(input.clone()))?;
     render(spec.verb, runtime, &input, value, view)
 }
@@ -82,6 +87,7 @@ fn prepare(
     verb: TaskVerb,
     runtime: &OrbitRuntime,
     input: &mut Map<String, Value>,
+    env: &Env,
 ) -> Result<ListView, OrbitError> {
     match verb {
         TaskVerb::Add => {
@@ -94,7 +100,7 @@ fn prepare(
             super::support::shape_not_before_flags(input)?;
             input.insert(TASK_CLI_OPTIONS_PARAM.to_string(), Value::Object(options));
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
-            insert_env_model(input);
+            insert_env_model(input, env);
             Ok(ListView::default())
         }
         TaskVerb::Update => {
@@ -121,7 +127,7 @@ fn prepare(
                 ));
             }
             input.insert(TASK_CLI_OPTIONS_PARAM.to_string(), Value::Object(options));
-            insert_env_model(input);
+            insert_env_model(input, env);
             Ok(ListView::default())
         }
         TaskVerb::List => {
@@ -140,7 +146,7 @@ fn prepare(
         }
         TaskVerb::ArtifactPut => {
             input.shift_remove("host");
-            insert_env_model(input);
+            insert_env_model(input, env);
             Ok(ListView::default())
         }
         TaskVerb::ArtifactGet => {
@@ -205,11 +211,11 @@ fn take_switch(input: &mut Map<String, Value>, name: &str) -> bool {
 
 /// Attribute a write without `--model` to the agent the environment names,
 /// as every other CLI write does.
-fn insert_env_model(input: &mut Map<String, Value>) {
+fn insert_env_model(input: &mut Map<String, Value>, env: &Env) {
     if input.contains_key("model") {
         return;
     }
-    let (agent, model) = super::mutation_identity(None);
+    let (agent, model) = super::mutation_identity(None, env);
     if let Some(model) = model.or(agent) {
         input.insert("model".to_string(), Value::String(model));
     }
@@ -250,6 +256,7 @@ fn artifact_entries(raw_values: &Value) -> Result<Value, OrbitError> {
 pub(crate) fn remote_update_input(
     input: &Map<String, Value>,
     host_ssh: &str,
+    env: &Env,
 ) -> Result<Value, OrbitError> {
     let id = input.get("id").and_then(Value::as_str).unwrap_or_default();
     let refusals = unroutable_update_refusals(input, id, host_ssh);
@@ -277,7 +284,7 @@ pub(crate) fn remote_update_input(
         .get("model")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    if let (_, Some(model)) = super::mutation_identity(explicit) {
+    if let (_, Some(model)) = super::mutation_identity(explicit, env) {
         remote.insert("model".to_string(), Value::String(model));
     }
     Ok(Value::Object(remote))

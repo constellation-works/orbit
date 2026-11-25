@@ -2,13 +2,14 @@ use std::path::Path;
 
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_common::Env;
 use orbit_core::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::config::{ConfigScope, ConfigWriteInit, set_key_literal};
 
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 
 /// Refuse a workspace `config set` before runtime open when the working
 /// directory's uninitialized `.orbit/` is not the workspace that resolution
@@ -49,8 +50,8 @@ pub struct ConfigSetArgs {
     pub fresh: bool,
 }
 
-impl Execute for ConfigSetArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ConfigSetArgs {
+    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         let scope = if self.global {
             ConfigScope::Global
         } else {
@@ -68,6 +69,7 @@ impl Execute for ConfigSetArgs {
             runtime,
             &self.key,
             &outcome.new_value,
+            env,
         );
         let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         let scope = outcome.scope;

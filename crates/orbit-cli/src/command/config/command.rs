@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 
 use crate::command::browser_kit::BrowserKitCommand;
@@ -17,9 +18,9 @@ pub struct ConfigCommand {
     pub command: ConfigSubcommand,
 }
 
-impl Execute for ConfigCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl ConfigCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        self.command.execute_with_env(runtime, env)
     }
 }
 
@@ -40,15 +41,15 @@ pub enum ConfigSubcommand {
     BrowserKit(BrowserKitCommand),
 }
 
-impl Execute for ConfigSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ConfigSubcommand {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
             ConfigSubcommand::Show(args) => args.execute(runtime),
             ConfigSubcommand::Get(args) => args.execute(runtime),
-            ConfigSubcommand::Set(args) => args.execute(runtime),
+            ConfigSubcommand::Set(args) => args.execute_with_env(runtime, env),
             ConfigSubcommand::Keys(args) => args.execute(runtime),
             ConfigSubcommand::Path(args) => args.execute(runtime),
-            ConfigSubcommand::BrowserKit(command) => command.execute_without_runtime(),
+            ConfigSubcommand::BrowserKit(command) => command.execute_without_runtime(env),
         }
     }
 }

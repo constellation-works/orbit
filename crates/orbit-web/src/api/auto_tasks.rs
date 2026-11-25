@@ -97,6 +97,7 @@ pub(super) async fn list_auto_tasks(
                     generated_at,
                     state.operator_session(),
                     include_inactive_plugins,
+                    state.env(),
                 )?,
                 Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
             })
@@ -136,6 +137,7 @@ pub(super) async fn create_auto_task(
         .to_string();
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         DASHBOARD_AUTO_TASK_CREATE.id,
         target,
@@ -205,6 +207,7 @@ pub(super) async fn toggle_auto_task(
     };
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         "auto_task.toggle",
         body.name.as_str(),
@@ -303,6 +306,7 @@ pub(super) async fn mint_auto_task(
     }
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         "auto_task.mint",
         body.name.as_str(),
@@ -373,6 +377,7 @@ pub(super) async fn delete_auto_task(
     let arguments = json!({"reason": reason, "force": body.force});
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         "auto_task.delete",
         body.name.as_str(),
@@ -537,6 +542,7 @@ fn list_json(
     generated_at: DateTime<Utc>,
     operator_session: bool,
     include_inactive_plugins: bool,
+    env: &orbit_common::Env,
 ) -> Result<Value, orbit_core::OrbitError> {
     let now = Utc::now();
     let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
@@ -620,7 +626,7 @@ fn list_json(
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
-        "cron_zone": host_cron_zone(),
+        "cron_zone": host_cron_zone(env),
         "definitions": definitions,
         "inactive_plugin_count": listing.inactive_plugin_count,
         "cursor_state_error": listing.cursor_state_error,

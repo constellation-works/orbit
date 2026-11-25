@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 
 use crate::command::{CommandOut, Execute};
@@ -47,9 +48,9 @@ pub struct PluginCommand {
     pub command: PluginSubcommand,
 }
 
-impl Execute for PluginCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl PluginCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        self.command.execute_with_env(runtime, env)
     }
 }
 
@@ -85,8 +86,8 @@ pub enum PluginSubcommand {
     Migrate(PluginMigrateArgs),
 }
 
-impl Execute for PluginSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl PluginSubcommand {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
             PluginSubcommand::Add(args) => args.execute(runtime),
             PluginSubcommand::Upgrade(args) => args.execute(runtime),
@@ -98,7 +99,7 @@ impl Execute for PluginSubcommand {
             PluginSubcommand::Doctor => execute_doctor(runtime),
             PluginSubcommand::Secret(command) => command.execute(runtime),
             PluginSubcommand::Validate(args) => args.execute(runtime),
-            PluginSubcommand::Test(args) => args.execute(runtime),
+            PluginSubcommand::Test(args) => args.execute_with_env(runtime, env),
             PluginSubcommand::Scaffold(args) => args.execute(runtime),
             PluginSubcommand::Sync(args) => args.execute(runtime),
             PluginSubcommand::Migrate(args) => args.execute(runtime),

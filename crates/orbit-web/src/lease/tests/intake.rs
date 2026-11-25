@@ -1437,6 +1437,7 @@ fn ambiguous_workspace_id_name_selector_is_refused_without_touching_either_works
     let state = DashboardState::from_registry(
         global_root.clone(),
         RegistrySource::new(global_root.join("workspaces.json"), None, None),
+        orbit_common::Env::default(),
     )
     .expect("registry-backed dashboard state");
 

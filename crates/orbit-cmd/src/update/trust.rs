@@ -7,12 +7,13 @@
 //! not honored: a variable meant for those installers must not silently change
 //! what `orbit update` trusts, and setting both is refused.
 
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
-use orbit_common::OrbitError;
 use orbit_common::security::release::{TRUSTED_RELEASE_KEYS, TrustedReleaseKey};
+use orbit_common::{Env, OrbitError};
 
 use orbit_common::env_vars::ORBIT_RELEASE_PUBLIC_KEY_FILE as PUBLIC_KEY_FILE_ENV;
 use orbit_common::env_vars::ORBIT_RELEASE_TRUSTED_KEYS_FILE as TRUSTED_KEYS_FILE_ENV;
@@ -27,10 +28,13 @@ const MAX_PEM_BYTES: u64 = 64 * 1024;
 /// The returned slice is `'static` because signature verification holds the
 /// trust set for the rest of the process. An override is leaked once per
 /// process; `orbit update` loads it a single time.
-pub(super) fn trusted_keys_from_env() -> Result<&'static [TrustedReleaseKey], OrbitError> {
-    let public_override =
-        std::env::var_os(PUBLIC_KEY_FILE_ENV).is_some_and(|value| !value.is_empty());
-    let keys_file = std::env::var_os(TRUSTED_KEYS_FILE_ENV).filter(|value| !value.is_empty());
+pub(super) fn trusted_keys_from_env(env: &Env) -> Result<&'static [TrustedReleaseKey], OrbitError> {
+    let public_override = env
+        .orbit_release_public_key_file()
+        .is_some_and(|value| !value.is_empty());
+    let keys_file = env
+        .orbit_release_trusted_keys_file()
+        .filter(|value| !value.is_empty());
     if public_override && keys_file.is_some() {
         return Err(OrbitError::InvalidInput(format!(
             "{PUBLIC_KEY_FILE_ENV} and {TRUSTED_KEYS_FILE_ENV} cannot both be set"
@@ -39,7 +43,11 @@ pub(super) fn trusted_keys_from_env() -> Result<&'static [TrustedReleaseKey], Or
     let Some(keys_file) = keys_file else {
         return Ok(TRUSTED_RELEASE_KEYS);
     };
-    if std::env::var(TRUSTED_KEYS_ACK_ENV).ok().as_deref() != Some("1") {
+    if env
+        .orbit_release_trusted_keys_file_acknowledge_trust_change()
+        .and_then(OsStr::to_str)
+        != Some("1")
+    {
         return Err(OrbitError::InvalidInput(format!(
             "{TRUSTED_KEYS_FILE_ENV} requires {TRUSTED_KEYS_ACK_ENV}=1"
         )));

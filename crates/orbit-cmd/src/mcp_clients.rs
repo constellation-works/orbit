@@ -5,11 +5,11 @@
 //! `mcp-registration` row reads them, from the CLI and the dashboard alike, so
 //! the path table lives here once. Nothing in this module writes a file.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 
 /// The server name Orbit registers under in every client's config.
 pub const ORBIT_MCP_SERVER_ID: &str = "orbit";
@@ -90,6 +90,7 @@ pub fn client_config_paths(
     client: McpClient,
     repo_root: &Path,
     home_dir: Option<&Path>,
+    env: &Env,
 ) -> Result<McpClientConfigPaths, OrbitError> {
     use McpClientScope::{Home, Workspace};
 
@@ -134,7 +135,7 @@ pub fn client_config_paths(
         }
         (Home, McpClient::Grok) => {
             let home = require_home_dir(home_dir)?;
-            if grok_reads_shared_location(scope, Some(home)) {
+            if grok_reads_shared_location(scope, Some(home), env) {
                 McpClientConfigPaths {
                     mcp_path: home.join(".claude.json"),
                     legacy_mcp_path: Some(home.join(".grok").join("config.toml")),
@@ -145,7 +146,7 @@ pub fn client_config_paths(
             }
         }
         (Workspace, McpClient::Grok) => {
-            let shared = grok_reads_shared_location(scope, home_dir);
+            let shared = grok_reads_shared_location(scope, home_dir, env);
             McpClientConfigPaths {
                 mcp_path: if shared {
                     repo_root.join(".mcp.json")
@@ -186,7 +187,7 @@ pub fn client_config_paths(
 /// Grok stops reading project `.mcp.json` after Claude import, and its
 /// `~/.claude.json` reader can be disabled separately. Use Grok's native
 /// config when the shared reader is unavailable or cannot be checked.
-fn grok_reads_shared_location(scope: McpClientScope, home_dir: Option<&Path>) -> bool {
+fn grok_reads_shared_location(scope: McpClientScope, home_dir: Option<&Path>, env: &Env) -> bool {
     let Some(home) = home_dir else {
         return false;
     };
@@ -217,8 +218,9 @@ fn grok_reads_shared_location(scope: McpClientScope, home_dir: Option<&Path>) ->
         {
             return false;
         }
-        if std::env::var(env_vars::GROK_CLAUDE_MCPS_ENABLED)
-            .ok()
+        if env
+            .grok_claude_mcps_enabled()
+            .and_then(OsStr::to_str)
             .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false"))
         {
             return false;
@@ -270,11 +272,12 @@ pub fn registered_clients_for_workspace(
     repo_root: &Path,
     workspace_id: Option<&str>,
     home_dir: Option<&Path>,
+    env: &Env,
 ) -> Vec<String> {
     let mut found = Vec::new();
     for scope in [McpClientScope::Workspace, McpClientScope::Home] {
         for client in McpClient::ALL {
-            let Ok(paths) = client_config_paths(scope, client, repo_root, home_dir) else {
+            let Ok(paths) = client_config_paths(scope, client, repo_root, home_dir, env) else {
                 continue;
             };
             if [Some(paths.mcp_path), paths.legacy_mcp_path]

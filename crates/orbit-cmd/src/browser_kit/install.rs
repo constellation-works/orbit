@@ -9,8 +9,8 @@
 use std::path::Path;
 use std::process::Command;
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
+use orbit_common::{Env, OrbitError};
 use orbit_core::bootstrap::browser_kit::{
     BROWSERS_PATH_ENV, KitInspection, KitLayout, MANAGED_ENV_SCRIPT_HEADER, MODULE_ENV,
     PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
@@ -64,11 +64,12 @@ impl InstallReport {
 pub fn install(
     layout: &KitLayout,
     options: InstallOptions,
+    env: &Env,
     progress: &mut dyn FnMut(&str),
 ) -> Result<InstallReport, OrbitError> {
-    require_host_operator()?;
-    let node = require_tool("node")?;
-    let npm = require_tool("npm")?;
+    require_host_operator(env)?;
+    let node = require_tool(env, "node")?;
+    let npm = require_tool(env, "npm")?;
     let before = KitInspection::inspect(layout);
     let adopted = before.module_present;
     let mut steps = Vec::new();
@@ -167,7 +168,7 @@ pub fn install(
         steps.push(format!("removed old revision {stale}"));
     }
 
-    let libraries = resolve_libraries(layout, &node, &installed, options, progress)?;
+    let libraries = resolve_libraries(layout, &node, &installed, options, env, progress)?;
     steps.push(write_env_script(layout)?);
 
     let resolved = libraries
@@ -175,7 +176,7 @@ pub fn install(
         .is_none_or(|outcome| outcome.unresolved.is_empty());
     let verification = if resolved {
         progress("Verifying the kit with a loopback screenshot");
-        Some(verify(layout)?)
+        Some(verify(layout, env)?)
     } else {
         None
     };
@@ -184,7 +185,7 @@ pub fn install(
         steps,
         libraries,
         verification,
-        status: kit_status(layout),
+        status: kit_status(layout, env),
     })
 }
 
@@ -194,6 +195,7 @@ fn resolve_libraries(
     node: &Path,
     installed: &KitInspection,
     options: InstallOptions,
+    env: &Env,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Option<LibraryOutcome>, OrbitError> {
     let executable = installed.executable.as_deref().ok_or_else(|| {
@@ -202,7 +204,7 @@ fn resolve_libraries(
             layout.browsers().display()
         ))
     })?;
-    super::libraries::resolve(layout, node, executable, options.with_deps, progress).map(Some)
+    super::libraries::resolve(layout, node, executable, options.with_deps, env, progress).map(Some)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -211,6 +213,7 @@ fn resolve_libraries(
     _node: &Path,
     _installed: &KitInspection,
     _options: InstallOptions,
+    _env: &Env,
     _progress: &mut dyn FnMut(&str),
 ) -> Result<Option<LibraryOutcome>, OrbitError> {
     // macOS supplies Chromium's libraries and fonts.

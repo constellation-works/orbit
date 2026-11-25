@@ -6,11 +6,11 @@
 //! so asking the outgoing process to converge state would apply the version
 //! the operator is leaving.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
     CompatibilityIdentity, GENERATION_CONTRACT, GenerationUpdate, HandoverCandidate,
     LEGACY_GENERATION_CONTRACT,
@@ -18,6 +18,7 @@ use orbit_common::fs::generation::{
 use orbit_common::process::{
     BoundedRunError, run_bounded_capped_complete_typed, run_bounded_capped_typed,
 };
+use orbit_common::{Env, OrbitError};
 use serde::Serialize;
 
 /// How much of a failing step's stderr to carry into the report.
@@ -54,9 +55,9 @@ const MAX_PROBE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const PROBE_OUTPUT_LIMIT: u64 = 1024 * 1024;
 
 /// The configured bound on one probe (see [`PROBE_TIMEOUT_ENV`]).
-fn probe_timeout() -> Duration {
-    std::env::var(PROBE_TIMEOUT_ENV)
-        .ok()
+pub(super) fn probe_timeout_from_env(env: &Env) -> Duration {
+    env.orbit_update_probe_timeout_secs()
+        .and_then(OsStr::to_str)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map_or(DEFAULT_PROBE_TIMEOUT, Duration::from_secs)
         .min(MAX_PROBE_TIMEOUT)
@@ -234,14 +235,15 @@ pub fn resolve_installed_executable(executable: &Path) -> PathBuf {
     executable.to_path_buf()
 }
 
-/// Ask `executable` what version it is, within `probe_timeout()`.
-pub fn probe_version(executable: &Path) -> Result<String, OrbitError> {
-    let output = run_probe(Command::new(executable).arg("--version")).map_err(|error| {
-        OrbitError::Execution(format!(
-            "failed to run '{} --version': {error}",
-            executable.display()
-        ))
-    })?;
+/// Ask `executable` what version it is, within `timeout`.
+pub fn probe_version(executable: &Path, timeout: Duration) -> Result<String, OrbitError> {
+    let output =
+        run_probe(Command::new(executable).arg("--version"), timeout).map_err(|error| {
+            OrbitError::Execution(format!(
+                "failed to run '{} --version': {error}",
+                executable.display()
+            ))
+        })?;
     if !output.status.success() {
         return Err(OrbitError::Execution(format!(
             "'{} --version' failed: {}",
@@ -303,12 +305,11 @@ fn run_process(command: &mut Command) -> std::io::Result<Output> {
 }
 
 /// Run a short probe of `command` and its captured streams to completion
-/// within [`probe_timeout`], retrying while the OS reports the executable as
+/// within `timeout`, retrying while the OS reports the executable as
 /// busy (see [`run_process`]). A probe or inherited pipe that does not finish
 /// in time is torn down with its process group and reported as
 /// [`std::io::ErrorKind::TimedOut`].
-fn run_probe(command: &mut Command) -> std::io::Result<Output> {
-    let timeout = probe_timeout();
+fn run_probe(command: &mut Command, timeout: Duration) -> std::io::Result<Output> {
     let busy_until = Instant::now() + EXEC_BUSY_WINDOW;
     loop {
         match run_bounded_capped_complete_typed(command, timeout, PROBE_OUTPUT_LIMIT as usize) {
@@ -390,7 +391,7 @@ pub(super) fn probe_writable_state(
 
 /// A trusted release must implement admission before it can replace a protected
 /// installation. Older or unrecognized candidates fail before any installation,
-/// as does one that does not describe its contract within [`probe_timeout`].
+/// as does one that does not describe its contract within `timeout`.
 ///
 /// What a candidate's `update --contract` report commits it to.
 pub(super) struct AdmissionContract {
@@ -407,11 +408,15 @@ pub(super) struct AdmissionContract {
 /// See [`AdmissionContract`] for what the report yields.
 pub(super) fn require_admission_contract(
     executable: &Path,
+    timeout: Duration,
 ) -> Result<AdmissionContract, OrbitError> {
-    let output = run_probe(Command::new(executable).args(["update", "--contract", "--json"]))
-        .map_err(|error| {
-            OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
-        })?;
+    let output = run_probe(
+        Command::new(executable).args(["update", "--contract", "--json"]),
+        timeout,
+    )
+    .map_err(|error| {
+        OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
+    })?;
     let report = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
     match report {
         Some(report)

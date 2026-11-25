@@ -165,6 +165,7 @@ impl Fixture {
                 cwd,
             }),
             bundled_bwrap_installed: false,
+            probe_timeout: crate::update::converge::DEFAULT_PROBE_TIMEOUT,
         }
     }
 
@@ -172,7 +173,11 @@ impl Fixture {
     pub fn installed_reports(&self) -> String {
         format!(
             "orbit {}",
-            crate::update::converge::probe_version(&self.executable).expect("run installed binary")
+            crate::update::converge::probe_version(
+                &self.executable,
+                crate::update::converge::DEFAULT_PROBE_TIMEOUT,
+            )
+            .expect("run installed binary")
         )
     }
 

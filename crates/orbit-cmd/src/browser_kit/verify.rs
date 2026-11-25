@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
+use orbit_common::{Env, OrbitError};
 use orbit_core::bootstrap::browser_kit::{
     BROWSERS_PATH_ENV, ENV_SCRIPT_ENV, KitInspection, KitLayout, KitVerification, MODULE_ENV,
     PIXEL_HELPER_VERSION,
@@ -71,8 +71,8 @@ pub struct VerifyReport {
     pub note: &'static str,
 }
 
-pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
-    require_host_operator()?;
+pub fn verify(layout: &KitLayout, env: &Env) -> Result<VerifyReport, OrbitError> {
+    require_host_operator(env)?;
     // Revoke the previous pass before any fallible work: preparation errors,
     // probe spawn failures and timeouts must all leave the kit unverified.
     match std::fs::remove_file(layout.verification_file()) {
@@ -109,7 +109,7 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
             }
         )));
     }
-    let node = require_tool("node")?;
+    let node = require_tool(env, "node")?;
     let verify_dir = layout.root().join("verify");
     create_private_dir_all(&verify_dir)
         .map_err(|error| OrbitError::Io(format!("create {}: {error}", verify_dir.display())))?;

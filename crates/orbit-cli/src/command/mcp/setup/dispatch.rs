@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_cmd::mcp_clients::{self, require_home_dir, vscode_home_user_dir};
+use orbit_common::Env;
 use orbit_core::OrbitError;
 
 use crate::command::mcp::ORBIT_MCP_SERVER_ID;
@@ -32,7 +33,11 @@ fn shared_grok_target(target: &ConfigTarget) -> ConfigTarget {
 /// Remove only the exact Grok TOML shape emitted by older Orbit versions.
 /// A user's own server with the same name but a different launch or extra
 /// settings is left alone, since Orbit has no ownership marker in old files.
-fn cleanup_legacy_grok_path(target: &ConfigTarget, server_id: &str) -> Result<(), OrbitError> {
+fn cleanup_legacy_grok_path(
+    target: &ConfigTarget,
+    server_id: &str,
+    env: &Env,
+) -> Result<(), OrbitError> {
     let Some(path) = target.legacy_mcp_path.as_ref().filter(|path| path.exists()) else {
         return Ok(());
     };
@@ -67,7 +72,7 @@ fn cleanup_legacy_grok_path(target: &ConfigTarget, server_id: &str) -> Result<()
             doc.remove("mcp_servers");
         }
     }
-    write_or_remove_toml_document(path, &doc)?;
+    write_or_remove_toml_document(path, &doc, env)?;
     if !path.exists()
         && let Some(parent) = path.parent()
         && parent
@@ -151,22 +156,23 @@ pub(super) fn run_action(
     selection: ProviderSelectionMode,
     home_dir: Option<PathBuf>,
     scope: ScopeArg,
+    env: &Env,
 ) -> Result<Vec<McpProvider>, OrbitError> {
     let providers = resolve_providers(selection, repo_root, home_dir.as_deref());
     // Local launches carry a non-default catalog. Federated launches ignore
     // it inside `ServerLaunch::with_orbit_root`.
     let embedded = super::workspace::embedded_launch_root(orbit_root);
     for provider in &providers {
-        let target = ConfigTarget::resolve(scope, provider, repo_root, home_dir.as_deref())?;
+        let target = ConfigTarget::resolve(scope, provider, repo_root, home_dir.as_deref(), env)?;
         match action {
             McpAction::Init(launch) => {
                 let launch = launch.with_orbit_root(embedded.as_deref());
                 match provider {
-                    McpProvider::Claude => apply_claude_init(&target, launch)?,
-                    McpProvider::Codex => apply_toml_init(&target, launch, true)?,
-                    McpProvider::Gemini => apply_gemini_init(&target, launch)?,
+                    McpProvider::Claude => apply_claude_init(&target, launch, env)?,
+                    McpProvider::Codex => apply_toml_init(&target, launch, true, env)?,
+                    McpProvider::Gemini => apply_gemini_init(&target, launch, env)?,
                     McpProvider::Antigravity => {
-                        apply_simple_json_init(&target, "mcpServers", launch)?
+                        apply_simple_json_init(&target, "mcpServers", launch, env)?
                     }
                     McpProvider::Grok => {
                         if target.legacy_mcp_path.is_some() {
@@ -180,15 +186,20 @@ pub(super) fn run_action(
                                 &shared_grok_target(&target),
                                 launch,
                                 inherited.as_ref(),
+                                env,
                             )?;
-                            cleanup_legacy_grok_path(&target, server_id_for_action(action))?;
+                            cleanup_legacy_grok_path(&target, server_id_for_action(action), env)?;
                         } else {
-                            apply_toml_init(&target, launch, false)?;
+                            apply_toml_init(&target, launch, false, env)?;
                         }
                     }
-                    McpProvider::Cursor => apply_simple_json_init(&target, "mcpServers", launch)?,
-                    McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch)?,
-                    McpProvider::Windsurf => apply_simple_json_init(&target, "mcpServers", launch)?,
+                    McpProvider::Cursor => {
+                        apply_simple_json_init(&target, "mcpServers", launch, env)?
+                    }
+                    McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch, env)?,
+                    McpProvider::Windsurf => {
+                        apply_simple_json_init(&target, "mcpServers", launch, env)?
+                    }
                 }
             }
             McpAction::Remove | McpAction::RemoveFederated => {
@@ -198,26 +209,28 @@ pub(super) fn run_action(
                     ORBIT_MCP_SERVER_ID
                 };
                 match provider {
-                    McpProvider::Claude => apply_claude_remove(&target, server_id)?,
-                    McpProvider::Codex => apply_toml_remove(&target, server_id)?,
-                    McpProvider::Gemini => apply_gemini_remove(&target, server_id)?,
+                    McpProvider::Claude => apply_claude_remove(&target, server_id, env)?,
+                    McpProvider::Codex => apply_toml_remove(&target, server_id, env)?,
+                    McpProvider::Gemini => apply_gemini_remove(&target, server_id, env)?,
                     McpProvider::Antigravity => {
-                        apply_simple_json_remove(&target, "mcpServers", server_id)?
+                        apply_simple_json_remove(&target, "mcpServers", server_id, env)?
                     }
                     McpProvider::Grok => {
                         if target.legacy_mcp_path.is_some() {
-                            apply_claude_remove(&shared_grok_target(&target), server_id)?;
-                            cleanup_legacy_grok_path(&target, server_id)?;
+                            apply_claude_remove(&shared_grok_target(&target), server_id, env)?;
+                            cleanup_legacy_grok_path(&target, server_id, env)?;
                         } else {
-                            apply_toml_remove(&target, server_id)?;
+                            apply_toml_remove(&target, server_id, env)?;
                         }
                     }
                     McpProvider::Cursor => {
-                        apply_simple_json_remove(&target, "mcpServers", server_id)?
+                        apply_simple_json_remove(&target, "mcpServers", server_id, env)?
                     }
-                    McpProvider::Vscode => apply_simple_json_remove(&target, "servers", server_id)?,
+                    McpProvider::Vscode => {
+                        apply_simple_json_remove(&target, "servers", server_id, env)?
+                    }
                     McpProvider::Windsurf => {
-                        apply_simple_json_remove(&target, "mcpServers", server_id)?
+                        apply_simple_json_remove(&target, "mcpServers", server_id, env)?
                     }
                 }
             }
@@ -246,6 +259,7 @@ impl ConfigTarget {
         provider: &McpProvider,
         repo_root: Option<&Path>,
         home_dir: Option<&Path>,
+        env: &Env,
     ) -> Result<Self, OrbitError> {
         let repo_root = match (scope, repo_root) {
             (_, Some(repo_root)) => repo_root,
@@ -262,6 +276,7 @@ impl ConfigTarget {
             provider.client(),
             repo_root,
             home_dir,
+            env,
         )?;
         Ok(Self {
             mcp_path: paths.mcp_path,
@@ -383,8 +398,17 @@ pub(super) fn action_payload(
     home_dir: Option<&Path>,
     scope: ScopeArg,
     workspace_id: Option<&str>,
+    env: &Env,
 ) -> Result<CommandOutput, OrbitError> {
-    let text = format_action_summary(action, providers, repo_root, home_dir, scope, workspace_id)?;
+    let text = format_action_summary(
+        action,
+        providers,
+        repo_root,
+        home_dir,
+        scope,
+        workspace_id,
+        env,
+    )?;
     let scope_label = match scope {
         ScopeArg::Workspace => "workspace",
         ScopeArg::Home => "home",
@@ -407,6 +431,7 @@ fn format_action_summary(
     home_dir: Option<&Path>,
     scope: ScopeArg,
     workspace_id: Option<&str>,
+    env: &Env,
 ) -> Result<String, OrbitError> {
     if providers.is_empty() {
         return Ok(format!("mcp {}: no providers selected", action.label()));
@@ -448,7 +473,7 @@ fn format_action_summary(
             let home = require_home_dir(home_dir)?;
             let mut targets = Vec::with_capacity(providers.len());
             for provider in providers {
-                let target = ConfigTarget::resolve(scope, provider, repo_root, Some(home))?;
+                let target = ConfigTarget::resolve(scope, provider, repo_root, Some(home), env)?;
                 targets.push(format!(
                     "{} -> {}",
                     provider.label(),

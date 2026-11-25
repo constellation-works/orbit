@@ -6,6 +6,7 @@
 //! probe here is read-only; repairs stay separate `DoctorCommands` methods
 //! that only the CLI's `--fix-*` flags call.
 
+use orbit_common::Env;
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::OrbitRuntime;
 use orbit_types::task::{HostOs, quoted_labels};
@@ -24,41 +25,53 @@ use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDocto
 
 /// The checks after the workspace ones, in report order.
 const REPORT_PROBES: &[DoctorProbe] = &[
-    DoctorProbe::many("build-budget", |runtime, _| build_budget_rows(runtime)),
-    DoctorProbe::one("state-directory-permissions", |runtime, _| {
+    DoctorProbe::many("build-budget", |runtime, _, _| build_budget_rows(runtime)),
+    DoctorProbe::one("state-directory-permissions", |runtime, _, _| {
         state_directory_permissions_row(runtime)
     })
     .slow(),
-    DoctorProbe::one("git-protection", |runtime, _| git_protection_row(runtime)).slow(),
-    DoctorProbe::one("worker-containment", |runtime, _| {
+    DoctorProbe::one("git-protection", |runtime, _, _| {
+        git_protection_row(runtime)
+    })
+    .slow(),
+    DoctorProbe::one("worker-containment", |runtime, _, _| {
         worker_containment_row(runtime)
     }),
-    DoctorProbe::many("script-grants", |runtime, _| script_grant_rows(runtime)),
-    DoctorProbe::many("provider", |runtime, _| routed_provider_rows(runtime)),
-    DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
-    DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),
-    DoctorProbe::one("mcp-registration", |runtime, _| {
+    DoctorProbe::many("script-grants", |runtime, _, _| script_grant_rows(runtime)),
+    DoctorProbe::many("provider", |runtime, env, _| {
+        routed_provider_rows(runtime, env)
+    }),
+    DoctorProbe::many("provider-auth", |runtime, _, _| provider_auth_rows(runtime)),
+    DoctorProbe::many("provider-limits", |runtime, _, _| {
+        provider_limit_rows(runtime)
+    }),
+    DoctorProbe::one("mcp-registration", |runtime, env, _| {
         mcp_registration_row(
             runtime,
-            orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env())
-                .ok()
-                .as_deref(),
+            orbit_common::fs::path::home_dir(env).ok().as_deref(),
+            env,
         )
     }),
     // Machine-global checks: they read the operator's home, not the workspace.
-    DoctorProbe::one("clock-unit", |runtime, _| {
+    DoctorProbe::one("clock-unit", |runtime, _, _| {
         clock_unit_row(&runtime.global_root())
     }),
-    DoctorProbe::one("hosts", |runtime, _| {
+    DoctorProbe::one("hosts", |runtime, _, _| {
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
-    DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)).slow(),
-    DoctorProbe::one("workspace-convergence", |runtime, _| {
+    DoctorProbe::many("browser-kit", |runtime, env, _| {
+        browser_kit_rows(runtime, env)
+    })
+    .slow(),
+    DoctorProbe::one("workspace-convergence", |runtime, _, _| {
         host_workspace_convergence_row(runtime)
     }),
-    DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
-    DoctorProbe::one("standing-drain", |runtime, _| standing_drain_row(runtime)).slow(),
-    DoctorProbe::one("plugin-enablement", |runtime, _| {
+    DoctorProbe::one("host-labels", |runtime, _, _| host_labels_row(runtime)),
+    DoctorProbe::one("standing-drain", |runtime, _, _| {
+        standing_drain_row(runtime)
+    })
+    .slow(),
+    DoctorProbe::one("plugin-enablement", |runtime, _, _| {
         plugin_enablement_row(runtime)
     }),
 ];
@@ -180,7 +193,11 @@ const MAX_PARALLEL_PROBES: usize = 8;
 /// scoped threads, the probes marked slow first: the report takes about as
 /// long as its slowest probe rather than the sum of all of them. Each row
 /// still carries its own probe's time.
-pub fn run_doctor_report(runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoctorResult> {
+pub fn run_doctor_report(
+    runtime: &OrbitRuntime,
+    env: &Env,
+    deep: bool,
+) -> Vec<WorkspaceDoctorResult> {
     let probes = doctor_report_probes().collect::<Vec<_>>();
     // Report positions in dispatch order; a stable sort keeps table order
     // within the slow and the cheap probes.
@@ -196,7 +213,7 @@ pub fn run_doctor_report(runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoc
     if workers <= 1 {
         return probes
             .iter()
-            .flat_map(|probe| probe.run(runtime, deep))
+            .flat_map(|probe| probe.run(runtime, env, deep))
             .collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -208,7 +225,7 @@ pub fn run_doctor_report(runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoc
             let Some(&index) = dispatch.get(turn) else {
                 return done;
             };
-            done.push((index, probes[index].run(runtime, deep)));
+            done.push((index, probes[index].run(runtime, env, deep)));
         }
     };
     let finished = std::thread::scope(|scope| {
@@ -257,9 +274,9 @@ pub fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
 /// config warning. Provider auth is deliberately not probed: a status command
 /// may refresh credentials or call the network, while `doctor` must stay fast
 /// and read-only.
-fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
+fn routed_provider_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
     let config = match ResolvedConfig::load(
-        &orbit_core::composition::composition_env(),
+        env,
         &ConfigRoots::new(runtime.global_root(), runtime.shared_root()),
     ) {
         Ok(config) => config,
@@ -594,6 +611,7 @@ pub fn provider_limit_findings(
 fn mcp_registration_row(
     runtime: &OrbitRuntime,
     home_dir: Option<&std::path::Path>,
+    env: &Env,
 ) -> WorkspaceDoctorResult {
     let workspace_id = runtime
         .workspace_runtime_binding()
@@ -603,6 +621,7 @@ fn mcp_registration_row(
         &runtime.paths().repo_root,
         workspace_id.as_deref(),
         home_dir,
+        env,
     );
     if clients.is_empty() {
         WorkspaceDoctorResult {

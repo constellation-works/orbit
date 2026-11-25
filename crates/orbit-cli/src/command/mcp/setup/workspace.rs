@@ -1,9 +1,10 @@
-use orbit_common::env_vars;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, global_root_for};
+use orbit_common::Env;
 use orbit_core::OrbitError;
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceCheckout, WorkspaceRegistry};
@@ -21,9 +22,10 @@ pub(super) struct WorkspaceLayout {
 
 pub(super) fn resolve_workspace_layout(
     root_override: Option<&Path>,
+    env: &Env,
 ) -> Result<WorkspaceLayout, OrbitError> {
     let cwd = env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
-    resolve_workspace_layout_for_cwd(&cwd, root_override)
+    resolve_workspace_layout_for_cwd(&cwd, root_override, env)
 }
 
 /// Resolve the checkout these MCP setup commands operate on.
@@ -36,8 +38,9 @@ pub(super) fn resolve_workspace_layout(
 fn resolve_workspace_layout_for_cwd(
     cwd: &Path,
     root_override: Option<&Path>,
+    env: &Env,
 ) -> Result<WorkspaceLayout, OrbitError> {
-    let explicit_root = explicit_orbit_root(cwd, root_override)?;
+    let explicit_root = explicit_orbit_root(cwd, root_override, env)?;
     let explicit_root = explicit_root.as_deref();
     let registry_root = registry_root(explicit_root);
 
@@ -48,7 +51,7 @@ fn resolve_workspace_layout_for_cwd(
         .flatten();
     let (repo_root, orbit_root) = match registered_paths {
         Some(paths) => paths,
-        None => unregistered_checkout_paths(cwd, explicit_root)?,
+        None => unregistered_checkout_paths(cwd, explicit_root, env)?,
     };
     let workspace_id = registry_root
         .as_deref()
@@ -70,13 +73,13 @@ fn resolve_workspace_layout_for_cwd(
 fn explicit_orbit_root(
     cwd: &Path,
     root_override: Option<&Path>,
+    env: &Env,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let env_root = env::var(env_vars::ORBIT_ROOT).ok();
+    let env_root = env.orbit_root().and_then(OsStr::to_str);
     let raw = root_override
         .map(|root| root.to_string_lossy())
         .or_else(|| {
             env_root
-                .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .map(std::borrow::Cow::Borrowed)
         });
@@ -218,9 +221,10 @@ fn sole_checkout_for_root<'a>(
 fn unregistered_checkout_paths(
     cwd: &Path,
     root_override: Option<&Path>,
+    env: &Env,
 ) -> Result<(PathBuf, PathBuf), OrbitError> {
     let Some(root) = root_override else {
-        return walk_up_checkout_paths(cwd);
+        return walk_up_checkout_paths(cwd, env);
     };
 
     let repo_root = root
@@ -236,7 +240,7 @@ fn unregistered_checkout_paths(
     Ok((repo_root.to_path_buf(), root.to_path_buf()))
 }
 
-fn walk_up_checkout_paths(cwd: &Path) -> Result<(PathBuf, PathBuf), OrbitError> {
+fn walk_up_checkout_paths(cwd: &Path, env: &Env) -> Result<(PathBuf, PathBuf), OrbitError> {
     if cwd.file_name().is_some_and(|name| name == ".orbit")
         && cwd.is_dir()
         && !is_global_orbit_dir(cwd)
@@ -247,7 +251,7 @@ fn walk_up_checkout_paths(cwd: &Path) -> Result<(PathBuf, PathBuf), OrbitError> 
     // Skip the user's global $HOME/.orbit during ancestor walk-up. It is the
     // global Orbit root, not a workspace, so adopting it would silently write
     // workspace-scope MCP configs to home-scope paths.
-    let home = env_home_dir();
+    let home = env_home_dir(env);
     for ancestor in cwd.ancestors() {
         let orbit_root = ancestor.join(".orbit");
         if orbit_root.is_dir() && !is_global_orbit_dir(&orbit_root) {
@@ -302,12 +306,12 @@ fn canonical_or_original(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-pub(super) fn env_home_dir() -> Option<PathBuf> {
-    env::var_os(env_vars::HOME)
+pub(super) fn env_home_dir(env: &Env) -> Option<PathBuf> {
+    env.home()
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env::var_os(env_vars::USERPROFILE)
+            env.userprofile()
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         })

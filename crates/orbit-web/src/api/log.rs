@@ -120,14 +120,22 @@ pub(super) fn request_shutdown() {
     SHUTTING_DOWN.store(true, Ordering::Relaxed);
 }
 
-pub(super) async fn get_log(Query(q): Query<LogQuery>) -> Response {
-    let path = match resolve_log_path(None) {
+pub(super) async fn get_log(
+    axum::extract::State(state): axum::extract::State<crate::state::DashboardState>,
+    Query(q): Query<LogQuery>,
+) -> Response {
+    let path = match resolve_log_path(None, state.env()) {
         Ok(path) => path,
         Err(e) => return map_runtime_error(e),
     };
+    let home = state
+        .env()
+        .home()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_string);
     // File scan is blocking IO; run it on the pool, not the request worker.
     match super::blocking("log snapshot", move || {
-        read_log_snapshot_from_path(&path, &q)
+        read_log_snapshot_from_path(&path, &q, home.as_deref())
     })
     .await
     {
@@ -136,15 +144,24 @@ pub(super) async fn get_log(Query(q): Query<LogQuery>) -> Response {
     }
 }
 
-pub(super) async fn stream_log(Query(q): Query<LogQuery>, headers: HeaderMap) -> Response {
+pub(super) async fn stream_log(
+    axum::extract::State(state): axum::extract::State<crate::state::DashboardState>,
+    Query(q): Query<LogQuery>,
+    headers: HeaderMap,
+) -> Response {
     let permit = match global_log_stream_gate().try_acquire() {
         Some(p) => p,
         None => return log_stream_unavailable(),
     };
-    let path = match resolve_log_path(None) {
+    let path = match resolve_log_path(None, state.env()) {
         Ok(path) => path,
         Err(e) => return map_runtime_error(e),
     };
+    let home = state
+        .env()
+        .home()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_string);
     let filters = match log_filters(&q) {
         Ok(filters) => filters,
         Err(e) => return map_runtime_error(e),
@@ -163,7 +180,7 @@ pub(super) async fn stream_log(Query(q): Query<LogQuery>, headers: HeaderMap) ->
         ),
     };
     let stream = ReceiverSseStream {
-        rx: spawn_log_sse_frames(path, filters, permit, resume, agent_resume),
+        rx: spawn_log_sse_frames(path, filters, permit, resume, agent_resume, home),
     };
     match Response::builder()
         .status(StatusCode::OK)
@@ -197,6 +214,7 @@ fn log_stream_unavailable() -> Response {
 fn read_log_snapshot_from_path(
     path: &std::path::Path,
     query: &LogQuery,
+    home: Option<&str>,
 ) -> Result<LogSnapshot, orbit_core::OrbitError> {
     let limit = match query.limit {
         Some(limit) if limit > LOG_MAX_LIMIT => {
@@ -246,7 +264,11 @@ fn read_log_snapshot_from_path(
         },
         agent_cursor.as_ref(),
     );
-    let events = tail.events.iter().map(render_log_event_for_web).collect();
+    let events = tail
+        .events
+        .iter()
+        .map(|event| render_log_event_for_web(event, home))
+        .collect();
     Ok(LogSnapshot {
         cursor,
         events,
@@ -360,6 +382,7 @@ fn spawn_log_sse_frames(
     permit: OwnedSemaphorePermit,
     resume_offset: Option<FeedCursor>,
     agent_resume_offset: Option<FeedCursor>,
+    home: Option<String>,
 ) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel(LOG_STREAM_CHANNEL_DEPTH);
     let start = resume_offset.unwrap_or_else(|| FeedCursor::at_end(&path));
@@ -396,33 +419,38 @@ fn spawn_log_sse_frames(
             // time; only a caught-up stream waits for the next poll.
             let scanned_from = offset;
             let mut progressed = false;
-            let mut caught_up =
-                match read_appended_log_events(&path, &filters, &mut offset, &mut lines) {
-                    Ok(batch) => {
-                        complete = FeedCursor {
-                            offset: batch.cursor,
-                            generation: lines.identity.clone(),
+            let mut caught_up = match read_appended_log_events(
+                &path,
+                &filters,
+                &mut offset,
+                &mut lines,
+                home.as_deref(),
+            ) {
+                Ok(batch) => {
+                    complete = FeedCursor {
+                        offset: batch.cursor,
+                        generation: lines.identity.clone(),
+                    };
+                    for (event, event_offset) in batch.events {
+                        let frame = match format_feed_sse_frame(
+                            &event,
+                            &FeedCursor {
+                                offset: event_offset,
+                                generation: lines.identity.clone(),
+                            },
+                            agent_path.as_ref().map(|_| &complete_agent),
+                        ) {
+                            Ok(frame) => frame,
+                            Err(_) => continue,
                         };
-                        for (event, event_offset) in batch.events {
-                            let frame = match format_feed_sse_frame(
-                                &event,
-                                &FeedCursor {
-                                    offset: event_offset,
-                                    generation: lines.identity.clone(),
-                                },
-                                agent_path.as_ref().map(|_| &complete_agent),
-                            ) {
-                                Ok(frame) => frame,
-                                Err(_) => continue,
-                            };
-                            if tx.blocking_send(frame).is_err() {
-                                return;
-                            }
+                        if tx.blocking_send(frame).is_err() {
+                            return;
                         }
-                        !batch.more
                     }
-                    Err(_) => true,
-                };
+                    !batch.more
+                }
+                Err(_) => true,
+            };
             progressed |= offset != scanned_from;
             if let Some(agent_path) = &agent_path {
                 let scanned_from = agent_offset;
@@ -431,6 +459,7 @@ fn spawn_log_sse_frames(
                     &filters,
                     &mut agent_offset,
                     &mut agent_lines,
+                    home.as_deref(),
                 ) {
                     caught_up &= !batch.more;
                     complete_agent = FeedCursor {
@@ -550,6 +579,7 @@ pub(super) fn read_appended_log_events(
     filters: &LogFilters,
     offset: &mut u64,
     lines: &mut LogLineBuffer,
+    home: Option<&str>,
 ) -> io::Result<AppendedLogBatch> {
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
@@ -595,7 +625,7 @@ pub(super) fn read_appended_log_events(
             .finish()
             .and_then(|line| parse_matching_event(&line, filters))
         {
-            events.push((render_log_event_for_web(&event), *offset));
+            events.push((render_log_event_for_web(&event, home), *offset));
         }
     }
 

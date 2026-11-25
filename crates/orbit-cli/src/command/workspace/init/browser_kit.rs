@@ -6,6 +6,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use orbit_cmd::browser_kit::{self, InstallOptions};
+use orbit_common::Env;
 use orbit_core::bootstrap::browser_kit::{KitInspection, KitLayout};
 use serde_json::{Value, json};
 
@@ -35,7 +36,11 @@ impl BrowserKitOutcome {
     }
 }
 
-pub(super) fn offer_browser_kit(root: &Path, install_requested: bool) -> BrowserKitOutcome {
+pub(super) fn offer_browser_kit(
+    root: &Path,
+    install_requested: bool,
+    env: &Env,
+) -> BrowserKitOutcome {
     let Some(marker) = browser_kit::web_ui_marker(root) else {
         return BrowserKitOutcome::NoWebUi;
     };
@@ -65,7 +70,7 @@ pub(super) fn offer_browser_kit(root: &Path, install_requested: bool) -> Browser
             marker,
         };
     }
-    match browser_kit::install(&layout, InstallOptions::default(), &mut |step| {
+    match browser_kit::install(&layout, InstallOptions::default(), env, &mut |step| {
         eprintln!("{step}...");
     }) {
         Ok(report) => BrowserKitOutcome::Installed {

@@ -16,10 +16,11 @@
 //! `comfy_table`, so the two styling backends can no longer disagree about
 //! `NO_COLOR` [ADR-0308].
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::io::IsTerminal;
 
 use clap::ValueEnum;
+use orbit_common::Env;
 
 /// The value of the global `--format` argument, and of `ORBIT_FORMAT`.
 ///
@@ -72,20 +73,20 @@ pub struct SinkEnv {
 }
 
 impl SinkEnv {
-    /// Capture the sink-relevant variables from the real process environment.
-    pub fn from_process() -> Self {
+    /// Read the sink-relevant variables from the captured process environment.
+    pub fn from_process(env: &Env) -> Self {
         Self {
-            columns: read_var(env_vars::COLUMNS),
-            format: read_var(env_vars::ORBIT_FORMAT),
-            no_color: read_var(env_vars::NO_COLOR),
-            clicolor_force: read_var(env_vars::CLICOLOR_FORCE),
-            term: read_var(env_vars::TERM),
+            columns: read_var(env.columns()),
+            format: read_var(env.orbit_format()),
+            no_color: read_var(env.no_color()),
+            clicolor_force: read_var(env.clicolor_force()),
+            term: read_var(env.term()),
         }
     }
 }
 
-fn read_var(key: &str) -> Option<String> {
-    std::env::var(key).ok()
+fn read_var(value: Option<&OsStr>) -> Option<String> {
+    value.and_then(OsStr::to_str).map(ToOwned::to_owned)
 }
 
 /// Everything a renderer is allowed to know about its destination, resolved
@@ -108,14 +109,14 @@ impl OutputSink {
     /// value, absent when the flag was not passed; `legacy_json` is whether the
     /// global `--json` or command-local `--ops` boolean was set (mode
     /// precedence rung 2, migration step 2).
-    pub fn from_process(requested: Option<FormatArg>, legacy_json: bool) -> Self {
+    pub fn from_process(env: &Env, requested: Option<FormatArg>, legacy_json: bool) -> Self {
         let is_tty = std::io::stdout().is_terminal();
         // Only ask the terminal for its size when there is a terminal; a
         // non-TTY sink has width 0 no matter what the ioctl would report.
         let terminal_width = if is_tty { query_terminal_width() } else { None };
         Self::resolve(
             is_tty,
-            &SinkEnv::from_process(),
+            &SinkEnv::from_process(env),
             terminal_width,
             requested,
             legacy_json,

@@ -33,7 +33,7 @@ fn every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions() {
         "properties": {"json": {"type": "boolean"}}
     });
     plugin.verbs.push(domain_input);
-    let mut tree = cli_command(&[plugin.clone()]);
+    let mut tree = cli_command(&[plugin.clone()], &orbit_common::Env::default());
     tree.build();
     let mut paths = Vec::new();
     check_leaves(&tree, "orbit", &mut paths);

@@ -8,7 +8,7 @@
 //! Mutations never read this snapshot: they call the CLI's operations, which
 //! load the file themselves and refuse a concurrent edit.
 
-use orbit_common::{OrbitError, StorageLayer};
+use orbit_common::{Env, OrbitError, StorageLayer};
 use orbit_registry::hosts::{
     HostRegistry, hosts_path, legacy_destinations_path, load_host_registry, validated_host_root,
 };
@@ -60,16 +60,22 @@ pub(crate) struct HostFileState {
     /// Serializes reloads so a swap and its error state change together.
     refresh_lock: Mutex<()>,
     generation_counter: AtomicU64,
+    #[cfg(feature = "test-support")]
+    gate_dir: Option<PathBuf>,
 }
 
 impl HostFileState {
-    pub(crate) fn new(global_root: PathBuf) -> Self {
+    pub(crate) fn new(global_root: PathBuf, env: &Env) -> Self {
+        #[cfg(not(feature = "test-support"))]
+        let _ = env;
         Self {
             global_root,
             published: Mutex::new(PublishedHosts::default()),
             last_fingerprint: Mutex::new(None),
             refresh_lock: Mutex::new(()),
             generation_counter: AtomicU64::new(INITIAL_GENERATION),
+            #[cfg(feature = "test-support")]
+            gate_dir: env.orbit_test_hosts_publish_gate().map(PathBuf::from),
         }
     }
 
@@ -86,9 +92,9 @@ impl HostFileState {
             }
         }
         #[cfg(feature = "test-support")]
-        gate_wait("pin-after-reload");
+        gate_wait(self.gate_dir.as_deref(), "pin-after-reload");
         #[cfg(feature = "test-support")]
-        gate_signal("pin-read-attempted");
+        gate_signal(self.gate_dir.as_deref(), "pin-read-attempted");
         let published = lock(&self.published);
         PinnedHosts {
             snapshot: published.snapshot.clone(),
@@ -133,7 +139,7 @@ impl HostFileState {
                     // here instead of seeing the new snapshot beside the
                     // error it replaces.
                     #[cfg(feature = "test-support")]
-                    gate_wait("publish-before-clear");
+                    gate_wait(self.gate_dir.as_deref(), "publish-before-clear");
                     published.load_error = None;
                 }
                 *lock(&self.last_fingerprint) = Some(fingerprint);
@@ -160,20 +166,12 @@ impl HostFileState {
 /// Only builds with `test-support` compile it, so production builds ignore the
 /// variable.
 #[cfg(feature = "test-support")]
-use orbit_common::env_vars::ORBIT_TEST_HOSTS_PUBLISH_GATE as PUBLISH_GATE_ENV;
-
-#[cfg(feature = "test-support")]
-fn gate_dir() -> Option<PathBuf> {
-    std::env::var_os(PUBLISH_GATE_ENV).map(PathBuf::from)
-}
-
-#[cfg(feature = "test-support")]
 #[allow(
     clippy::disallowed_methods,
     reason = "test-gate marker file in a scratch directory; durability is irrelevant"
 )]
-fn gate_wait(point: &str) {
-    let Some(dir) = gate_dir() else { return };
+fn gate_wait(gate_dir: Option<&Path>, point: &str) {
+    let Some(dir) = gate_dir else { return };
     if !dir.join(format!("{point}.armed")).exists() {
         return;
     }
@@ -190,8 +188,8 @@ fn gate_wait(point: &str) {
     clippy::disallowed_methods,
     reason = "test-gate marker file in a scratch directory; durability is irrelevant"
 )]
-fn gate_signal(point: &str) {
-    let Some(dir) = gate_dir() else { return };
+fn gate_signal(gate_dir: Option<&Path>, point: &str) {
+    let Some(dir) = gate_dir else { return };
     if dir.join(format!("{point}.armed")).exists() {
         let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
     }

@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 use orbit_core::bootstrap::browser_kit::{KIT_HOME_RELATIVE, KitLayout, WORKER_ENV_NAMES};
 use orbit_types::task::BROWSER_KIT_INSTALL_COMMAND;
@@ -15,8 +16,8 @@ use orbit_types::task::BROWSER_KIT_INSTALL_COMMAND;
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use crate::browser_kit::{KitStatus, NODE_FIX, find_in_path_value, kit_status};
 
-pub(super) fn browser_kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    let mut rows = kit_rows(runtime);
+pub(super) fn browser_kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
+    let mut rows = kit_rows(runtime, env);
     rows.extend(backlog_row(runtime));
     rows
 }
@@ -55,8 +56,8 @@ fn backlog_row(runtime: &OrbitRuntime) -> Option<WorkspaceDoctorResult> {
     ))
 }
 
-fn kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    let layout = match KitLayout::current_user(&orbit_core::composition::composition_env()) {
+fn kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
+    let layout = match KitLayout::current_user(env) {
         Ok(layout) => layout,
         Err(error) => {
             return vec![row(
@@ -67,7 +68,7 @@ fn kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
             )];
         }
     };
-    let status = kit_status(&layout);
+    let status = kit_status(&layout, env);
     if !status.inspection.present {
         // Shown as `~/...` rather than the absolute path, so the message does not
         // embed the home directory of whichever process rendered it.
@@ -98,7 +99,7 @@ fn kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
             None,
         ));
     }
-    rows.push(node_row(runtime));
+    rows.push(node_row(runtime, env));
     rows
 }
 
@@ -143,10 +144,10 @@ fn kit_row(status: &KitStatus) -> WorkspaceDoctorResult {
 /// login-shell PATH required validation resolves, so a `node` there reaches
 /// workers started by hand and by the clock. The clock service's own PATH is
 /// reported beside it.
-fn node_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+fn node_row(runtime: &OrbitRuntime, env: &Env) -> WorkspaceDoctorResult {
     let environment = runtime.validation_environment();
     let login = environment.program_paths("node").into_iter().next();
-    let service = clock_service_path();
+    let service = clock_service_path(env);
     let service_node = service
         .as_ref()
         .and_then(|(_, path)| find_in_path_value("node", path));
@@ -192,9 +193,8 @@ fn node_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 }
 
 /// The installed clock unit and the PATH it starts workers with.
-fn clock_service_path() -> Option<(String, String)> {
-    let home =
-        orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok()?;
+fn clock_service_path(env: &Env) -> Option<(String, String)> {
+    let home = orbit_common::fs::path::home_dir(env).ok()?;
     let systemd = home.join(".config/systemd/user/orbit-sweep.service");
     if let Ok(unit) = std::fs::read_to_string(&systemd) {
         let path = systemd_unit_path(&unit, &home)
