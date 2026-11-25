@@ -293,7 +293,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Update,
     cli_path: &["update"],
     tool_name: "orbit.friction.update",
-    tool_description: "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
+    tool_description: "Update triage metadata for a friction record or re-home it with `rehome_to`. Re-homing rules: the orbit skill's friction.md reference, section `Re-homing a friction to its owning workspace`.",
     cli_about: "Update triage metadata for a friction record",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

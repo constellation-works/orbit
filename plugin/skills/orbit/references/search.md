@@ -65,7 +65,9 @@ also participate in the duplicate check. Explicit task statuses still override
 
 Friction queries default to open; `--all` / `all: true` adds triaged and resolved.
 The tool's `kind: friction` listing without a query already covers every friction
-status unless an explicit `friction:` status narrows it.
+status unless an explicit `friction:` status narrows it, filtered by `tag` and
+ordered by creation time then ID, with each hit carrying the full `record` and a
+note reporting a listing cut at `limit`.
 
 `workspaces` or `all_workspaces` can widen search when advertised and authorized.
 Managed runs may only search their own workspace. Federated hits identify their

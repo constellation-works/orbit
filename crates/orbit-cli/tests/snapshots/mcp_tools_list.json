@@ -580,7 +580,7 @@
   },
   {
     "name": "orbit_task_eligible",
-    "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight.",
+    "description": "List backlog and proposed tasks with no lock conflict against work in flight (read-only).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -765,7 +765,7 @@
   },
   {
     "name": "orbit_task_show",
-    "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
+    "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` filters fail-closed. Use `fields` (`field`) for projections or `field: \"delivery\"` for commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {

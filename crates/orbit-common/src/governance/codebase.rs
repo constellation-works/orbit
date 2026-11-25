@@ -231,7 +231,7 @@ const RELATED: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Related,
     cli_path: &["related"],
     tool_name: "orbit.codebase.related",
-    tool_description: "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
+    tool_description: "Rank files by landed co-change Jaccard with a repository-relative file path (read-only). Fields and exclusions: the orbit skill's tool-surface-codebase.md reference, section `Codebase analytics and path detail`.",
     cli_about: "List files that usually change alongside a repository file",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

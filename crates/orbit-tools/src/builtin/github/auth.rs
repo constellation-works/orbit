@@ -42,7 +42,7 @@ fn quota_status() -> Value {
 super::gh_tool! {
     pub struct GithubAuthStatusTool;
     name: "github.auth.status";
-    description: "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error. Quota fields and detail: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.";
+    description: "Preflight the GitHub CLI surface (`available` and `authenticated`); neither absence nor missing credentials is an error. Quota details: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.";
     parameters: [];
     execute: |_ctx, input| {
         let req = build_exec_request(&input)?;

@@ -14,16 +14,22 @@ Residents report only through Orbit; there is no inbox to check.
   grant request count. Assignments that are done, archived, or rejected are
   hidden unless `include_ended` is set; a stopped mandate (state `ended`)
   whose assignment moved to `review` is still listed without it.
-- `orbit.resident.show` with `task_id` — the mandate, the effective authority
-  with its grant and narrowing history, open grant requests, the live cycle,
-  and the latest checkpoint: its outcome, actions, decisions, open requests
-  and costs. This is the status answer; quote the checkpoint, do not
+- `orbit.resident.show` with `task_id` — the mandate artifact (or why it is
+  missing or invalid), the effective authority (rights and workspaces both the
+  authority and the mandate cover) with its grant and narrowing history, open
+  grant requests, the live cycle, the status line (the mandate's one `info`
+  notice: title, body, when it was posted and lapses, and stale once lapsed),
+  the mandate's state (`active`, `handed_off`, `ended` or `invalid`), and the
+  latest checkpoint: its outcome, actions, decisions, open requests and costs.
+  Read-only. This is the status answer; quote the checkpoint, do not
   reconstruct progress from chat.
-- `orbit.resident.digest` — the derived manager view: resident state and
-  stalled flags, open escalations oldest first, reversible decisions still
-  awaiting veto, the top recurring pains by cost, evolution proposals awaiting
-  human approval, and metrics totals. Surface it at the start of a manager
-  session, on a regular cadence the human chooses, and on request.
+- `orbit.resident.digest` — the derived manager view (read-only; defaults to
+  `14d` and the top `5` pains): resident state, latest outcome, open requests
+  and stalled flag; open escalations oldest first; reversible decisions in the
+  window still awaiting veto; top recurring evolution pains by minutes plus slot
+  minutes with occurrence, cycle and mandate counts; evolution proposals
+  awaiting human approval; and resident metrics totals. Surface it at the start
+  of a manager session, on a regular cadence the human chooses, and on request.
 - `orbit resident metrics` (`orbit.resident.metrics`) — the widening measures
   behind widening decisions, derived read-only from task history, decision
   requests, checkpoints and audit rows.
@@ -81,9 +87,11 @@ next cycle then checkpoints even when idle. The cadence floor still applies.
 ## Control a resident, and take one over
 
 `orbit.resident.control` takes `task_id`, `action`, a non-empty `reason`
-(recorded in the assignment's history with the caller), optional
-`status_request` (only with `wake`) and optional `by_session`. Every action
-narrows or restores firing under the existing authority; none widens it.
+(recorded as a history entry with the caller), optional `status_request` (only
+with `wake`: makes the cycle checkpoint even when idle) and optional
+`by_session`. Any caller that can write the assignment may call it; every action
+narrows or restores firing under the existing authority and none widens it.
+Output is `{task_id, action, state, effective_at}`.
 
 | Action | From | Effect |
 |---|---|---|

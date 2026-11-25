@@ -1,7 +1,7 @@
 [
   {
     "name": "github.auth.status",
-    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error. Quota fields and detail: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.",
+    "description": "Preflight the GitHub CLI surface (`available` and `authenticated`); neither absence nor missing credentials is an error. Quota details: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -187,7 +187,7 @@
   },
   {
     "name": "orbit.agents.ci_failures",
-    "description": "Required-check failures on candidate heads, one record per head and check with the task, the run that produced the head, the check, its error signature and its cause class (code, flaky, infrastructure or unknown), newest first, with per-class counts. Each record lists the audited class changes later evidence made. Filter by window, task and class.",
+    "description": "List required-check failures on candidate heads newest first, with cause classes and counts. Fields and filters: the orbit skill's tool-surface-scorecards.md reference, section `CI failures by cause`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -656,7 +656,7 @@
   },
   {
     "name": "orbit.automation.explain",
-    "description": "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface-capability-map.md`, row `Condition explain`.",
+    "description": "Explain a routine or auto-task condition, or `job:<name>` steps, against live workspace state (read-only). Details: installed Orbit skill `references/tool-surface-capability-map.md`, row `Condition explain`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -795,7 +795,7 @@
   },
   {
     "name": "orbit.command.exec",
-    "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status, within a deadline. Requires operator capability and the workspace claim; withheld from managed runs. The child receives an allowlisted environment: baseline process context, git author and committer identity, and Orbit's execution envelope.",
+    "description": "Execute a command as an explicit argv array in an explicit working directory within a deadline. Authority and environment: the orbit skill's tool-surface-capability-map.md reference, row `Host commands`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -904,7 +904,7 @@
   },
   {
     "name": "orbit.decision.digest",
-    "description": "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeated calls reuse requests for unchanged task bindings; newly eligible tasks can add requests. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
+    "description": "Raise missing approval requests for a decision channel and return the digest. Rules and result fields: the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -921,7 +921,7 @@
   },
   {
     "name": "orbit.decision.submit",
-    "description": "Submit a human's answer to one open decision request through a registered decision channel. Callable only by the plugin the channel is bound to, through its callback session, or by the operator testing the channel, never by an agent session. Core verifies the channel, the request's binding, the answer and the single-use token, and checks a forwarded raw message's DKIM signature itself. A refusal returns its error code and applies nothing. The refusal codes, DKIM rules and retry behaviour are in the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
+    "description": "Submit a human's answer to one open decision request through a registered decision channel. Refusal codes, DKIM rules and retry: the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -980,7 +980,7 @@
   },
   {
     "name": "orbit.drain.claim.bind",
-    "description": "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
+    "description": "Bind an executor's local leaf run to its execution claim on the owner, moving it from `claimed` to `running`. Fencing and idempotency: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1009,7 +1009,7 @@
   },
   {
     "name": "orbit.drain.claim.effort",
-    "description": "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none. Attribution only; it changes no claim, task or run outcome. Who may call and the conflict refusals: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
+    "description": "Report after the fact the reasoning effort and model a claimed leaf ran at when settlement carried none (attribution only). Rules: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1050,7 +1050,7 @@
   },
   {
     "name": "orbit.drain.claim.settle",
-    "description": "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. A release (a cancelled drain giving back work it will not finish) returns the task to the backlog with its reason as a comment. Each releases only this claim's reservation. Retries replay the recorded outcome.",
+    "description": "Settle an execution claim on the owner (accept handoff to review, record failure to blocked, or release to backlog). Rules and replay: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1109,7 +1109,7 @@
   },
   {
     "name": "orbit.drain.claims",
-    "description": "List this workspace's execution claims for inspection and deliberate recovery: phase, age, reservation expiry, execution machine, bound run, last recorded event, unresolved merge intent, and landing invalidation. Age, an expired reservation, and an absent local run are diagnostics, not proof that a worker died — nothing here reclaims, rebinds, or repairs a claim.",
+    "description": "List this workspace's execution claims read-only for inspection and recovery diagnostics. Fields and recovery rules: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1119,7 +1119,7 @@
   },
   {
     "name": "orbit.drain.probe",
-    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner, version, protocol schema, held capabilities and ship configuration; creates no receipt, claim or task transition. Fields and caller_* inputs: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
+    "description": "Read-only preflight for the distributed drain on the workspace owner; creates no receipt or claim. Fields and caller_* inputs: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1154,7 +1154,7 @@
   },
   {
     "name": "orbit.drain.receipt.lookup",
-    "description": "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.",
+    "description": "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner (`found`, `expired` or `not_found`). Rules: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1212,7 +1212,7 @@
   },
   {
     "name": "orbit.evolution.list",
-    "description": "List evolution signatures in the bound workspace, sorted by summed minutes plus slot_minutes. Returns {count, records}; each includes occurrence_count, distinct_cycles, distinct_mandates, cycle_count, mandate_count, minutes, retries and slot_minutes derived over the requested window. Friction is excluded. Declined signatures become eligible when suppression expires or window cost doubles.",
+    "description": "List evolution signatures in the bound workspace, ranked by summed minutes plus slot_minutes. Fields and eligibility: the orbit skill's tool-surface-evolution.md reference, section `Evolution records`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1275,7 +1275,7 @@
   },
   {
     "name": "orbit.experiment.assign",
-    "description": "Force a nonterminal task with no arm assignment, or with an explicit_crew exclusion for this experiment, into an active arm of a running experiment, shadow or live. Records forced=true. Existing arm assignments and exclusions other than that explicit_crew exclusion are refused; overlapping experiment surfaces are refused. Operator only: an agent session is refused.",
+    "description": "Force an unassigned task into an active arm of a running experiment (operator only). Exclusions and rules: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1333,7 +1333,7 @@
   },
   {
     "name": "orbit.experiment.conclude",
-    "description": "Conclude a running or paused experiment. Records the chosen arm (or none), the reason, and the readout JSON at that moment on the conclusion event, which orbit experiment show returns. A chosen arm files one proposed task naming the experiment, arm, readout verdict and overlay; no arm files nothing. Assignment stops. A fresh admission applies no overlay from the concluded experiment; runs and claims already admitted keep the treatment they captured. Changes no configuration or repository file. Operator only: an agent session is refused.",
+    "description": "Conclude a running or paused experiment. Effects, promotion and operator rules: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1362,7 +1362,7 @@
   },
   {
     "name": "orbit.experiment.create",
-    "description": "Define a new experiment in draft: its arms (one control plus treatments, each with a weight and an overlay), the tasks it enrolls, its primary metric, guardrails and sample rules. Arms and overlays are validated on write and each overlay's digest is recorded. A draft assigns nothing. Operator only: an agent session is refused.",
+    "description": "Define a new draft experiment (arms, population, primary metric, guardrails, sample rules). Rules and validation: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1484,7 +1484,7 @@
   },
   {
     "name": "orbit.experiment.readout",
-    "description": "Compare experiment arms read-only: outcomes, intervals, differences, verdict. Computed now from its assignments and the records Orbit already keeps; `--metric` narrows the report while the verdict stays on the primary metric and guardrails. Estimator, exclusion and verdict details: https://orbit-cli.com/how-to/experiments/#read-the-readout.",
+    "description": "Compare experiment arms read-only: outcomes, intervals, differences, verdict. Details: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1530,7 +1530,7 @@
   },
   {
     "name": "orbit.experiment.reweight",
-    "description": "Change a running or paused experiment's arm weights, retire arms, or both. Each call opens a new segment, recorded in the event log with the weights before and after, so tasks assigned under different weights stay distinguishable. Operator only: an agent session is refused.",
+    "description": "Change arm weights or retire arms on a running or paused experiment. Segment rules: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1582,7 +1582,7 @@
   },
   {
     "name": "orbit.experiment.start",
-    "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+    "description": "Start a draft experiment (operator only). Requirements and limits: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1605,7 +1605,7 @@
   },
   {
     "name": "orbit.experiment.update",
-    "description": "Edit a draft experiment's definition: name, hypothesis, arms (the given list replaces every arm), population, metrics and sample rules. Only a draft can be edited; a started experiment is refused and changes only through pause, resume, reweight, conclude or abandon, or is cloned into a new draft. Operator only: an agent session is refused.",
+    "description": "Edit a draft experiment's definition (only drafts can be edited; operator only). Rules: the orbit skill's tool-surface-registry.md reference, section `Experiment tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1755,7 +1755,7 @@
   },
   {
     "name": "orbit.notice.close",
-    "description": "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent, a resident cycle included, may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
+    "description": "Close a fleet notice by id or dedupe_key with a reason. Permissions and inactive-notice behavior: the orbit skill's tool-surface-notices.md reference, section `Fleet notices`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2074,7 +2074,7 @@
   },
   {
     "name": "orbit.resident.checkpoint",
-    "description": "Append one validated resident.checkpoint v1 JSON comment to the mandate's assignment task. Requires the mandate's live, unexpired cycle and matching run_id. Malformed records, stale cycles and a second checkpoint for the same cycle are refused without writes. Returns {task_id, checkpoint}. Observed authority in the record grants no rights.",
+    "description": "Append one validated resident.checkpoint v1 JSON comment to the mandate's assignment task. Rules, cycle checks and output: the orbit skill's resident-cycle-escalate.md reference, section `Checkpoint`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2103,7 +2103,7 @@
   },
   {
     "name": "orbit.resident.control",
-    "description": "Control a resident mandate's firing: pause, resume, stop, wake (status_request makes the cycle checkpoint even when idle), takeover or release. Each action is a history entry with the caller and reason. Pause, stop and takeover start no new cycle; a live cycle keeps its frozen grant, checkpoints and exits at its boundary. Stop ends the mandate and moves the assignment to review once no cycle is live. Resume and release restore firing under the existing authority and never widen it. Any caller that can write the assignment may call it. Output {task_id, action, state, effective_at}.",
+    "description": "Control a resident mandate's firing: pause, resume, stop, wake, takeover or release. Rules, states and output: the orbit skill's manager-oversight.md reference, section `Control a resident, and take one over`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2158,7 +2158,7 @@
   },
   {
     "name": "orbit.resident.digest",
-    "description": "Read the manager digest in the bound workspace: resident state, latest outcome, open requests and stalled flag; open escalations oldest first; reversible decisions in the window still awaiting veto; top evolution pains by minutes plus slot minutes with occurrence, cycle and mandate counts; evolution proposals awaiting human approval; and resident metrics totals. Read-only. Defaults to 14d and the top 5 pains.",
+    "description": "Read the manager digest in the bound workspace (defaults: 14d, top 5 pains). Read-only. Included sections: the orbit skill's manager-oversight.md reference, section `Read checkpoints and the digest`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2287,7 +2287,7 @@
   },
   {
     "name": "orbit.resident.metrics",
-    "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: interventions, escalation load, reversals and crash-recovery cost. Read-only. Measure definitions: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
+    "description": "Report resident widening measures over a window (interventions, escalation load, reversals, crash-recovery cost). Read-only. Measure definitions: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2322,7 +2322,7 @@
   },
   {
     "name": "orbit.resident.relay",
-    "description": "Relay a human's direction or answer to a resident mandate: writes one resident.answer comment carrying `quote` verbatim with `source` provenance, records your session as relayed_by, and wakes the resident. A relay never changes authority: input naming rights, workspaces, status or other fields is refused; widen through orbit.resident.grant. Refused for an empty or over-long quote (>4000 characters) or an ended mandate. Output {task_id, comment, answer}: comment is {index, at, by} (comments carry no ids) and answer is the record as written.",
+    "description": "Relay a human's direction or answer verbatim to a resident mandate and wake it. Provenance, refusals and output shape: the orbit skill's manager-mandates.md reference, section `Relay directions verbatim`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2369,7 +2369,7 @@
   },
   {
     "name": "orbit.resident.show",
-    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, the status line (the mandate's one info notice: title, body, when it was posted and lapses, and stale once it has lapsed), and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+    "description": "Show one resident mandate, its effective authority, latest checkpoint, live cycle and state. Read-only. Returned fields: the orbit skill's manager-oversight.md reference, section `Read checkpoints and the digest`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2558,7 +2558,7 @@
   },
   {
     "name": "orbit.search",
-    "description": "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.",
+    "description": "Search tasks and frictions using lexical matching. Friction listings and filters: the orbit skill's search.md reference.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2930,7 +2930,7 @@
   },
   {
     "name": "orbit.task.eligible",
-    "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
+    "description": "List backlog and proposed tasks with no lock conflict against work in flight (read-only). Rules and fields: the orbit skill's task-fields-projections.md reference, section `Task lifecycle and listing`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -3139,7 +3139,7 @@
   },
   {
     "name": "orbit.task.pull",
-    "description": "Distributed-drain admission, served by the workspace owner. Selects the first ready, valid, conflict-free backlog task in the owner's order and, in one transaction, reserves its footprint, records an execution claim for the calling machine, moves it to `in-progress` and stores the request receipt. Answers `idle` (a receipt with no claim) when nothing is admissible. The calling machine is the session's, never a field of this input. A claim grants execution of that one attempt only; completion still needs owner approval.",
+    "description": "Admit the next ready, conflict-free backlog task for a distributed drain on the owner, or answer `idle`. Admission and receipt rules: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -3406,7 +3406,7 @@
   },
   {
     "name": "orbit.task.show",
-    "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
+    "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` filters fail-closed. Use `fields` (`field`) for projections or `field: \"delivery\"` for commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
     "enabled": true,
     "active": true,
     "status": "active",

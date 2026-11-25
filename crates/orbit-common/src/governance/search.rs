@@ -41,7 +41,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
     verb: SearchVerb::Query,
     cli_path: &["query"],
     tool_name: "orbit.search",
-    tool_description: "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.",
+    tool_description: "Search tasks and frictions using lexical matching. Friction listings and filters: the orbit skill's search.md reference.",
     cli_about: ABOUT,
     cli_help: CliHelp {
         long_about: None,

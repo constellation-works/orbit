@@ -298,6 +298,20 @@ apply to the path (`file:`, `dir:`, `symbol:` and bare paths, with
 bidirectional containment: a directory matches every selector under it).
 `--all` is a deprecated no-op, accepted and ignored.
 
+`orbit.task.eligible` (`orbit task eligible`) lists `backlog` and `proposed`
+tasks that can be picked up without colliding with work in flight, as
+`{tasks, total, truncated[, conflicting]}`. A task is eligible when its
+context-file lock surface overlaps no `in-progress` or `review` task's surface,
+decided by the same lock code automatic dispatch uses; no other gate applies
+(dependencies, complexity, groups, crew and overlap between candidates are not
+checked). Read-only.
+
+`orbit.task.lint` (`orbit task lint`) checks one task (or sweeps active tasks or
+those in `--status` when `id` is omitted) for stale paths, vague acceptance
+criteria and stale repository names; `--restore-pruned` (`restore_pruned`)
+re-declares `context_files` selectors recorded in task history by an earlier
+prune (without it nothing is written).
+
 ## Human CLI task update
 
 `orbit task update -h` keeps one line per flag; these are the rules behind
