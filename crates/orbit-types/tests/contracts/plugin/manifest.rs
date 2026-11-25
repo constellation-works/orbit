@@ -320,3 +320,24 @@ fn exact_file_writes_are_explicit_and_legacy_permissions_stay_unchanged() {
         "spec.permissions.fs.write_files[0]"
     );
 }
+
+/// An underscore in `metadata.name` is refused, and the diagnostic must not
+/// offer `_` as an allowed character: `is_valid_segment` rejects it so the
+/// MCP flattening `<ns>_<verb>` cannot collide.
+#[test]
+fn namespace_with_underscore_is_refused_without_offering_underscore() {
+    let mut manifest = minimal();
+    manifest.metadata.name = "my_plug".into();
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "metadata.name");
+    assert!(
+        error.message.contains("my_plug"),
+        "diagnostic must name the value: {}",
+        error.message
+    );
+    assert!(
+        !error.message.contains("'_'"),
+        "diagnostic must not offer '_' as allowed: {}",
+        error.message
+    );
+}
