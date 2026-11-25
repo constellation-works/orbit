@@ -3,7 +3,8 @@ summary: "Host Registry — Decisions"
 type: design
 title: "Host Registry — Decisions"
 owner: codex
-last_updated: 2026-10-26
+created_date: 2026-07-16
+updated_date: 2026-10-26
 last_validated: 2026-10-12
 status: Accepted
 feature: host-registry

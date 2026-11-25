@@ -1,7 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-11-16
+created_date: 2026-09-18
+updated_date: 2026-11-16
 last_validated: 2026-11-16
 status: Draft
 feature: distributed-drain

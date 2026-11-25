@@ -1,7 +1,8 @@
 ---
 title: Symbol Risk Index — Design
 owner: claude
-last_updated: 2026-11-06
+created_date: 2026-10-27
+updated_date: 2026-11-06
 last_validated: 2026-11-06
 status: Draft
 feature: symbol-risk-index

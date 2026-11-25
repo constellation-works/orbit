@@ -1,7 +1,8 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-11-16
+created_date: 2026-09-05
+updated_date: 2026-11-16
 last_validated: 2026-11-16
 status: Draft
 feature: automation-triggers

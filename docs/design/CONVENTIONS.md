@@ -72,7 +72,8 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 
 - `title` mirrors the H1 verbatim.
 - `owner` is the accountable agent family, not a committer list or full model string.
-- `last_updated` is the calendar date of the last meaningful content change. Trivial reformat commits should not reset it.
+- `created_date` is the document's creation date in `YYYY-MM-DD` form; use its first introducing commit date when known.
+- `updated_date` is the date of the last meaningful content change in `YYYY-MM-DD` form. Trivial reformat commits should not reset it.
 - `status` is `Draft` until the doc is approved by the feature lead, then `Accepted`. It moves back to `Draft` if a structural rewrite is in flight.
 - `stage` (entry doc only: `1_overview.md` or `1_scope.md`) is how far the feature is built, separate from the doc's `status`. One of:
   - `idea`: problem stated, no agreed design, nothing built.

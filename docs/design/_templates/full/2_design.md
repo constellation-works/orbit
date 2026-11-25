@@ -1,7 +1,8 @@
 ---
 title: <Feature> — Design
 owner: <agent family: codex | claude | grok | gemini>
-last_updated: YYYY-MM-DD
+created_date: YYYY-MM-DD
+updated_date: YYYY-MM-DD
 last_validated: 2026-10-14
 status: Draft
 feature: <feature-slug>

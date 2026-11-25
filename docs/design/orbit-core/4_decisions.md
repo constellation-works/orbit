@@ -1,7 +1,8 @@
 ---
 title: Orbit Core — Decisions
 owner: claude
-last_updated: 2026-11-24
+created_date: 2026-07-04
+updated_date: 2026-11-24
 status: Accepted
 feature: orbit-core
 doc_role: decisions

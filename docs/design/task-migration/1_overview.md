@@ -1,7 +1,8 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-11-15
+created_date: 2026-07-04
+updated_date: 2026-11-15
 last_validated: 2026-11-01
 status: Draft
 stage: shipped

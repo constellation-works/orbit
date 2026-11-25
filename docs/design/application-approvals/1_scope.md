@@ -1,7 +1,8 @@
 ---
 title: "Scope: bounded application approvals"
 owner: claude
-last_updated: 2026-11-14
+created_date: 2026-11-01
+updated_date: 2026-11-14
 last_validated: 2026-11-04
 status: Draft
 stage: building

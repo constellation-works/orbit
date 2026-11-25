@@ -1,7 +1,8 @@
 ---
 title: State Compatibility — Decisions
 owner: claude
-last_updated: 2026-10-26
+created_date: 2026-09-13
+updated_date: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
 feature: state-compatibility

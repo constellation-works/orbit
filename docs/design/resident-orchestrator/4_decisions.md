@@ -1,7 +1,8 @@
 ---
 title: Resident Orchestrator — Decisions
 owner: claude
-last_updated: 2026-11-22
+created_date: 2026-07-17
+updated_date: 2026-11-22
 last_validated: 2026-11-02
 status: Draft
 feature: resident-orchestrator

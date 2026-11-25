@@ -1,7 +1,8 @@
 ---
 title: Process Supervision — Design
 owner: claude
-last_updated: 2026-11-22
+created_date: 2026-10-12
+updated_date: 2026-11-22
 last_validated: 2026-11-22
 status: Draft
 feature: process-supervision

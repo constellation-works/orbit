@@ -8,7 +8,8 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-11-23
+created_date: 2026-09-26
+updated_date: 2026-11-23
 last_validated: 2026-11-15
 ---
 

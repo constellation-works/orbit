@@ -1,7 +1,8 @@
 ---
 title: "Scope: human decision channel"
 owner: claude
-last_updated: 2026-11-24
+created_date: 2026-10-24
+updated_date: 2026-11-24
 last_validated: 2026-11-24
 status: Accepted
 stage: shipped

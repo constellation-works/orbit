@@ -3,7 +3,8 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-11-11
+created_date: 2026-07-16
+updated_date: 2026-11-11
 last_validated: 2026-10-19
 status: Accepted
 feature: host-registry

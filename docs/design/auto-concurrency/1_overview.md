@@ -1,7 +1,8 @@
 ---
 title: Auto-concurrency — Overview
 owner: claude
-last_updated: 2026-11-04
+created_date: 2026-10-11
+updated_date: 2026-11-04
 last_validated: 2026-11-04
 status: Draft
 stage: shipped

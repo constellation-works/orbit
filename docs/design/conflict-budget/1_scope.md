@@ -1,7 +1,8 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-11-22
+created_date: 2026-10-25
+updated_date: 2026-11-22
 last_validated: 2026-11-21
 status: Draft
 stage: parked

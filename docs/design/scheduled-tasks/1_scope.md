@@ -1,7 +1,8 @@
 ---
 title: "Scope: Scheduled tasks (not_before)"
 owner: claude
-last_updated: 2026-11-15
+created_date: 2026-10-27
+updated_date: 2026-11-15
 last_validated: 2026-11-14
 status: Draft
 stage: shipped

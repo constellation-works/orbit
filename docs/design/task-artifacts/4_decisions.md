@@ -3,7 +3,8 @@ summary: "Task Artifacts — Decisions"
 type: design
 title: "Task Artifacts — Decisions"
 owner: codex
-last_updated: 2026-11-02
+created_date: 2026-05-10
+updated_date: 2026-11-02
 last_validated: 2026-10-11
 status: Draft
 feature: task-artifacts

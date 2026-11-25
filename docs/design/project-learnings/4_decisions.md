@@ -3,7 +3,8 @@ summary: "Project Learnings — Decisions: why the native learning subsystem was
 type: design
 title: "Project Learnings — Decisions"
 owner: claude
-last_updated: 2026-10-10
+created_date: 2026-05-09
+updated_date: 2026-10-10
 last_validated: 2026-10-10
 status: Accepted
 stage: parked

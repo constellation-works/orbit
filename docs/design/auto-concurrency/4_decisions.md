@@ -1,7 +1,8 @@
 ---
 title: Auto-concurrency — Decisions
 owner: claude
-last_updated: 2026-11-14
+created_date: 2026-10-11
+updated_date: 2026-11-14
 last_validated: 2026-10-13
 status: Draft
 feature: auto-concurrency

@@ -1,7 +1,8 @@
 ---
 title: Task Migration — Vision
 owner: claude
-last_updated: 2026-10-28
+created_date: 2026-09-10
+updated_date: 2026-10-28
 last_validated: 2026-10-30
 status: Draft
 feature: task-migration

@@ -1,7 +1,8 @@
 ---
 title: Owner Failover — Decisions
 owner: claude
-last_updated: 2026-11-01
+created_date: 2026-10-31
+updated_date: 2026-11-01
 last_validated: 2026-11-01
 status: Proposed
 feature: owner-failover

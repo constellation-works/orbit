@@ -1,7 +1,8 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-24
+created_date: 2026-07-17
+updated_date: 2026-11-24
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator

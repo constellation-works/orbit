@@ -1,7 +1,8 @@
 ---
 title: Crew Memory — Vision
 owner: claude
-last_updated: 2026-11-19
+created_date: 2026-11-08
+updated_date: 2026-11-19
 last_validated: 2026-11-08
 status: Accepted
 feature: crew-memory

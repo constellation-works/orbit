@@ -1,7 +1,8 @@
 ---
 title: Fleet Notices — Design
 owner: claude
-last_updated: 2026-11-08
+created_date: 2026-11-01
+updated_date: 2026-11-08
 last_validated: 2026-11-14
 status: Draft
 feature: fleet-notices

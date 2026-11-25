@@ -1,7 +1,8 @@
 ---
 title: "Eval Harness — Overview"
 owner: claude
-last_updated: 2026-11-15
+created_date: 2026-11-14
+updated_date: 2026-11-15
 last_validated: 2026-11-15
 status: Draft
 stage: designing

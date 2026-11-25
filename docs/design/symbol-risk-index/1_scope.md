@@ -1,7 +1,8 @@
 ---
 title: "Scope: symbol risk index"
 owner: claude
-last_updated: 2026-11-06
+created_date: 2026-10-27
+updated_date: 2026-11-06
 last_validated: 2026-11-06
 status: Draft
 stage: designing

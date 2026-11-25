@@ -1,7 +1,8 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-11-03
+created_date: 2026-09-13
+updated_date: 2026-11-03
 last_validated: 2026-11-03
 status: Draft
 feature: state-compatibility

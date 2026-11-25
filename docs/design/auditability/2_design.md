@@ -3,7 +3,8 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-11-14
+created_date: 2026-04-25
+updated_date: 2026-11-14
 last_validated: 2026-11-03
 status: Draft
 feature: auditability

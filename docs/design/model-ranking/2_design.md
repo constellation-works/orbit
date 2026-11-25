@@ -1,7 +1,8 @@
 ---
 title: Model Ranking — Design
 owner: claude
-last_updated: 2026-11-16
+created_date: 2026-11-08
+updated_date: 2026-11-16
 last_validated: 2026-11-11
 status: Accepted
 feature: model-ranking

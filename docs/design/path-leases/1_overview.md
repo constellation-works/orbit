@@ -1,7 +1,8 @@
 ---
 title: Path Leases — Overview
 owner: claude
-last_updated: 2026-11-20
+created_date: 2026-10-25
+updated_date: 2026-11-20
 last_validated: 2026-11-06
 status: Draft
 stage: parked

@@ -1,7 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-22
+created_date: 2026-07-03
+updated_date: 2026-11-22
 last_validated: 2026-10-19
 status: Accepted
 feature: routines

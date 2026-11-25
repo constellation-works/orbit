@@ -1,7 +1,8 @@
 ---
 title: Federated MCP — Vision
 owner: grok
-last_updated: 2026-11-17
+created_date: 2026-08-23
+updated_date: 2026-11-17
 last_validated: 2026-11-17
 status: Draft
 feature: federated-mcp

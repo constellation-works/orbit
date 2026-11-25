@@ -1,7 +1,8 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-11-20
+created_date: 2026-07-04
+updated_date: 2026-11-20
 last_validated: 2026-11-14
 status: Implemented
 stage: shipped

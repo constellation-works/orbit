@@ -1,7 +1,8 @@
 ---
 title: "Scope: UX rules"
 owner: claude
-last_updated: 2026-11-07
+created_date: 2026-10-29
+updated_date: 2026-11-07
 last_validated: 2026-11-05
 status: Deprecated
 feature: ux-rules

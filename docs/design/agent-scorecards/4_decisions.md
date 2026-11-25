@@ -1,7 +1,8 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-11-15
+created_date: 2026-10-18
+updated_date: 2026-11-15
 last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
