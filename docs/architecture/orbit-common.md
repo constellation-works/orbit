@@ -13,7 +13,7 @@ tags: [architecture, orbit-common]
 
 ## Main modules and types
 
-`error` (`OrbitError`), `fs`, `process` (`process::OwnedChild`, `process::supervisor`), `security`, `storage`, `protocol`, `observability`, `env_vars` (fixed process environment names and their reference entries), `text`, `governance`, `migration`, `model`, `model_defaults`. See ``crates/orbit-common/src/lib.rs``.
+`error` (`OrbitError`), `fs`, `process` (`process::OwnedChild`, `process::supervisor`), `security`, `storage`, `protocol`, `observability`, `env` (`Env`, the one capture of the process environment), `env_vars` (fixed process environment names and their reference entries), `text`, `governance`, `migration`, `model`, `model_defaults`. See ``crates/orbit-common/src/lib.rs``.
 
 ## Dependencies
 
@@ -30,7 +30,8 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 
 ## Ownership by module
 
-- `env_vars`: Names and reference entries for the fixed environment variables Orbit reads; imports no internal modules.
+- `env`: `Env`, the immutable snapshot each binary's `main` takes once with `Env::capture()` and passes to composition; run-time names and the full list for child environments; imports no internal modules.
+- `env_vars`: Names and reference entries for the fixed environment variables Orbit reads, and each name's typed accessor on `Env` (test hooks only in tests and `test-support` builds); imports `env`.
 - `error`: Workspace surface error type (`OrbitError`), structured refusal payloads, and error classification helpers; imports `fs` and `orbit-types`.
 - `fs`: Shared filesystem, locking, path-safety, atomic I/O, Git, glob, and selector primitives; imports `error`, `process`, and `orbit-types`.
 - `governance`: Shared operation registries, capability authorization, tool schemas, and governance specs; imports `error`, `protocol`, and `orbit-types`.

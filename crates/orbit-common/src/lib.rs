@@ -11,6 +11,7 @@
     deny(clippy::disallowed_methods)
 )]
 
+pub mod env;
 pub mod env_vars;
 mod error;
 pub mod fs;
@@ -34,6 +35,7 @@ pub mod test_fixtures;
 
 pub mod test_process;
 
+pub use env::Env;
 pub use error::{
     ArtifactOrigin, ArtifactOriginMode, BoundWorkspace, BoundWorkspaceRemedy, CandidateAbsorbed,
     ClaimRefusalKind, ConflictedFile, DecisionRefusalCode, DependencyNotDelivered,
