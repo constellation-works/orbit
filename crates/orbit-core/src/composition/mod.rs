@@ -20,9 +20,7 @@ pub use crate::runtime::{captured_env, install_captured_env};
 /// application and adapter code receives this value from its caller or from
 /// the runtime it was composed with.
 pub(crate) fn process_env() -> orbit_common::Env {
-    captured_env()
-        .cloned()
-        .unwrap_or_else(orbit_common::Env::capture)
+    crate::runtime::process_env()
 }
 
 /// Return the environment captured by Orbit's entry point, or capture it when

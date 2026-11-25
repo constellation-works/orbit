@@ -131,7 +131,9 @@ pub struct DeliveryRunResources {
 /// `ResourceUsageRepository::delivery_runs` since the epoch returns them, and
 /// each sampled run's shape when they were read, so a later
 /// `ResourceUsageRepository::reload_delivery_runs` re-reads only the runs whose
-/// shape moved.
+/// shape moved. When more than half of the current runs moved, which includes a
+/// first load with no previous shapes, the reload reads every run in one
+/// ordered scan instead.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeliveryRunsLoad {
     /// Ordered by workspace, then run id.

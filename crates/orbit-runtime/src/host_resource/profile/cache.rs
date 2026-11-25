@@ -89,8 +89,9 @@ struct Cached {
     tagged: BTreeSet<String>,
     profiles: Arc<ProfileSet>,
     /// The runs the build read, which the next build re-reads only where a
-    /// run's minute rows or `job_runs` row moved. `None` after a failed
-    /// build took it, so the next build reads every run.
+    /// run's minute rows or `job_runs` row moved, or every run when more than
+    /// half of them moved. `None` after a failed build took it, so the next
+    /// build reads every run.
     load: Option<DeliveryRunsLoad>,
 }
 

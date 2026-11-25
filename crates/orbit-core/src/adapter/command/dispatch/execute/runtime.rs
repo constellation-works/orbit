@@ -101,9 +101,37 @@ impl OrbitRuntime {
         agent_override: Option<String>,
         model_override: Option<String>,
         entry_point: ToolEntryPoint,
-        mut session_context: ToolSessionContext,
+        session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
         let env = self.execution_env_policy().process_env();
+        self.execute_tool_command_dispatch_with_session_context_and_env(
+            env,
+            name,
+            input,
+            agent_override,
+            model_override,
+            entry_point,
+            session_context,
+        )
+    }
+
+    /// Execute a tool using the caller's captured process environment.
+    ///
+    /// Transport adapters that own the process environment pass their startup
+    /// snapshot here. Runtime-only callers can use
+    /// [`Self::execute_tool_command_dispatch_with_session_context`], which uses
+    /// the environment captured when the runtime was composed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_tool_command_dispatch_with_session_context_and_env(
+        &self,
+        env: &Env,
+        name: &str,
+        input: Value,
+        agent_override: Option<String>,
+        model_override: Option<String>,
+        entry_point: ToolEntryPoint,
+        mut session_context: ToolSessionContext,
+    ) -> Result<ToolDispatchOutcome, OrbitError> {
         // The authorization decision and entry-point row describe one call.
         // CLI invocations have no transport-minted trace, so create it here
         // before either path receives the session (and preserve MCP's trace).

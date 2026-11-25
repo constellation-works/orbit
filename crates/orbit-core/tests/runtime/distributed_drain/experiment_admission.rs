@@ -446,6 +446,13 @@ fn assert_captured_owner_note(memory: &Value) {
 /// cannot write memory, so those bytes cannot have been read from its tables.
 /// A missing owner observation delivers nothing.
 fn owner_disable_suppresses_claimed_memory_delivery() {
+    let codex_dir = tempfile::tempdir().unwrap();
+    let (program, stdin_path) = install_fake_codex(codex_dir.path());
+    // Runtime composition captures provider overrides. Install the fake before
+    // constructing either runtime so simulated dispatch uses that snapshot.
+    // SAFETY: this scenario row owns the process environment; RowHome restores
+    // it before the next row.
+    unsafe { std::env::set_var("ORBIT_V2_CLI_CODEX", &program) };
     let pair = Pair::with_configs(
         "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n[experiments]\nenabled = true\n",
         "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n[experiments]\nenabled = false\n",
@@ -569,11 +576,6 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
 
     assert!(!pair.follower.crew_memory_experiment_running());
     assert!(owner.crew_memory_experiment_running());
-    let codex_dir = tempfile::tempdir().unwrap();
-    let (program, stdin_path) = install_fake_codex(codex_dir.path());
-    // SAFETY: this scenario row owns the process environment; RowHome restores
-    // it before the next row. The override points both runtimes at the fake.
-    unsafe { std::env::set_var("ORBIT_V2_CLI_CODEX", &program) };
     point_codex_at(owner, &program);
     point_codex_at(&pair.follower, &program);
 

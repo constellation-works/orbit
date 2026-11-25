@@ -131,6 +131,25 @@ fn assert_blocked_refused(error: OrbitError) {
     }
 }
 
+fn execute_tool_command_with_current_env(
+    runtime: &OrbitRuntime,
+    name: &str,
+    input: Value,
+) -> Result<Value, OrbitError> {
+    let env = orbit_common::Env::capture();
+    runtime
+        .execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
+            name,
+            input,
+            None,
+            None,
+            orbit_core::adapter::command::ToolEntryPoint::Cli,
+            orbit_types::tool::ToolSessionContext::default(),
+        )
+        .map(|outcome| outcome.value)
+}
+
 #[test]
 fn an_implementation_activity_cannot_set_status_blocked() {
     let test_name = "implement_blocker::an_implementation_activity_cannot_set_status_blocked";
@@ -146,49 +165,43 @@ fn an_implementation_activity_cannot_set_status_blocked() {
 
     {
         let _env = implementer_env("implement_one");
-        let refused = runtime
-            .execute_tool_command(
-                "orbit.task.update",
-                json!({
-                    "id": task_id,
-                    "status": "blocked",
-                    "model": "grok",
-                }),
-                None,
-                None,
-            )
-            .expect_err("implement_one cannot set blocked");
+        let refused = execute_tool_command_with_current_env(
+            &runtime,
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "status": "blocked",
+                "model": "grok",
+            }),
+        )
+        .expect_err("implement_one cannot set blocked");
         assert_blocked_refused(refused);
 
-        let guarded = runtime
-            .execute_tool_command(
-                "orbit.task.update",
-                json!({
-                    "id": task_id,
-                    "workspace": workspace,
-                    "request_id": "impl-block",
-                    "expected_revision": "not-a-real-revision",
-                    "status": "blocked",
-                    "model": "grok",
-                }),
-                None,
-                None,
-            )
-            .expect_err("a guarded edit is not a bypass");
+        let guarded = execute_tool_command_with_current_env(
+            &runtime,
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "workspace": workspace,
+                "request_id": "impl-block",
+                "expected_revision": "not-a-real-revision",
+                "status": "blocked",
+                "model": "grok",
+            }),
+        )
+        .expect_err("a guarded edit is not a bypass");
         assert_blocked_refused(guarded);
 
-        let updated = runtime
-            .execute_tool_command(
-                "orbit.task.update",
-                json!({
-                    "id": task_id,
-                    "execution_summary": "Outcome: blocked on the environment.",
-                    "model": "grok",
-                }),
-                None,
-                None,
-            )
-            .expect("the same envelope can still record a summary");
+        let updated = execute_tool_command_with_current_env(
+            &runtime,
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "execution_summary": "Outcome: blocked on the environment.",
+                "model": "grok",
+            }),
+        )
+        .expect("the same envelope can still record a summary");
         assert_eq!(
             updated["execution_summary"],
             "Outcome: blocked on the environment."
@@ -198,18 +211,16 @@ fn an_implementation_activity_cannot_set_status_blocked() {
 
     {
         let _env = implementer_env("agent_implement");
-        let refused = runtime
-            .execute_tool_command(
-                "orbit.task.update",
-                json!({
-                    "id": task_id,
-                    "status": "Blocked",
-                    "model": "grok",
-                }),
-                None,
-                None,
-            )
-            .expect_err("agent_implement cannot set blocked");
+        let refused = execute_tool_command_with_current_env(
+            &runtime,
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "status": "Blocked",
+                "model": "grok",
+            }),
+        )
+        .expect_err("agent_implement cannot set blocked");
         assert_blocked_refused(refused);
     }
     {

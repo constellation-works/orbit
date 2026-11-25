@@ -20,6 +20,7 @@ pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
 /// with the migration note instead of a did-you-mean, so the operator learns
 /// the key is gone rather than misspelled. Delete an entry together with its
 /// load warning once the release window has passed.
+// compat-until: 2026-11-17 (dbfbcc5b1550)
 pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
     "plugin.legacy_callback_identity",
     "plugin callbacks require the host-issued session descriptor; the environment token and \
@@ -35,10 +36,12 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
 /// them errors; move each to its replacement before then [ORB-13992].
 pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     (
+        // compat-until: 2026-12-21 (3919b9564, ORB-26501)
         "crew_memory.enabled",
         "ignored: crew memory has no switch of its own; it runs only while an experiment with a memory arm is running. Remove this key",
     ),
     (
+        // compat-until: 2026-12-07 (1bd67f79b9b9)
         "workflow.explore.enabled",
         "ignored: explorer delegation was removed; remove this key",
     ),
@@ -59,6 +62,7 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "ignored: explorer delegation was removed; remove this key",
     ),
     (
+        // compat-until: 2026-12-01 (4716319b4216)
         "workflow.purpose_crews.explorer",
         "ignored: explorer delegation was removed; remove this key",
     ),
@@ -71,17 +75,20 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "ignored: Implemented-By is no longer written; read the implementer from Co-authored-by or task attribution",
     ),
     (
+        // compat-until: 2026-11-03 (499c63001662)
         "operation.review_minutes",
         "translated to review.minutes, now the limit for one candidate's before-PR review; \
      move the value to [review] minutes",
     ),
     (
+        // compat-until: 2026-11-03 (499c63001662)
         "operation.review_policy",
         "translated: before-pr sets review.timing = \"before_pr\"; after-landing and none turn \
      neither on (after-landing review is the delivery-code-review auto-task's own enabled \
      flag: `orbit auto-task toggle delivery-code-review on|off`). Set review.timing \
      and the auto-task flag instead",
     ),
+    // compat-until: 2026-11-17 (fe505cbee017, ORB-16775)
     // [ORB-16775] Consolidated key families. Each loads through its
     // replacement and `orbit doctor --fix-retired-config-keys` rewrites it.
     (
@@ -103,6 +110,7 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
      boolean's mode. Set machine.worker_containment to off, warn or strict instead",
     ),
     (
+        // compat-until: 2026-12-07 (23aaa3cf8856)
         "workflow.validation_env.login_shell",
         VALIDATION_ENV_FIXED_NOTE,
     ),
@@ -110,6 +118,7 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "workflow.validation_env.interactive",
         VALIDATION_ENV_FIXED_NOTE,
     ),
+    // compat-until: 2026-11-10 (c9ebc0bc6079, ORB-15663)
     // [ORB-15663] System work names no lane of its own: auto-task templates,
     // the task pilot and step-failure / PR conflict recovery draw from the
     // complexity pools. The key loads and warns, but no longer routes.
@@ -120,14 +129,17 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
      complexity. Delete the key and set those pools instead",
     ),
     (
+        // compat-until: 2026-11-26 (82ca814c42c4)
         "workflow.regression_risk.record_sites",
         "ignored: regression.sites on regression_from links are always recorded; delete the key",
     ),
     (
+        // compat-until: 2026-11-26 (b455a59fbce6)
         "workflow.auto_ship",
         "ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` \
      drains or `orbit run ship`, and delete the key",
     ),
+    // compat-until: 2026-12-07 (a044751e2336)
     // [ORB-22803] The crew ladder was removed on 2026-11-07. Each key loads,
     // warns and is ignored; code-health-sweep deletes these entries after
     // 2026-12-07, when they become ordinary unknown settings.
@@ -267,6 +279,7 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("ux_rules.file_at", UX_RULES_REMOVED_NOTE),
     ("ux_rules.disabled", UX_RULES_REMOVED_NOTE),
     ("review.verify_findings", VERIFY_FINDINGS_REMOVED_NOTE),
+    // compat-until: 2026-12-08 (675afe26ab01, ORB-22808)
     // [ORB-22808] Web terminal browser sessions were removed on 2026-11-08.
     // Each key loads, warns and is ignored; code-health-sweep deletes these
     // entries after 2026-12-08, when they become ordinary unknown settings.

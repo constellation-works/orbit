@@ -334,6 +334,9 @@ impl RuntimeKernel {
         &self,
         observations: &[ProviderLimitObservation],
     ) -> Result<(), OrbitError> {
+        if observations.is_empty() {
+            return Ok(());
+        }
         self.stored()
             .stores()
             .host

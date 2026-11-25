@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// The key as written in `config.toml`.
 pub const TASK_TYPES_KEY: &str = "workflow.task_types";
+// compat-until: 2026-12-07 (b3ff9ea2f1e3)
 /// The deprecated spelling of [`TASK_TYPES_KEY`] [ORB-22804].
 pub(crate) const LEGACY_TASK_TYPES_KEY: &str = "workflow.crew_performance_types";
 
