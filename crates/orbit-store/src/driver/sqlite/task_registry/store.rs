@@ -10,7 +10,7 @@ use rusqlite::{Connection, OpenFlags};
 use super::change_stamps::TaskChangeStamps;
 use super::index::TaskIndexSnapshots;
 use super::schema::{assert_readable_schema, migrate_writable};
-use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
+use crate::driver::sqlite::host::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
 /// Root of the per-workspace bundle trees, derived from the canonical
@@ -40,7 +40,7 @@ pub struct TaskRegistryStore {
     pub(super) conn: Arc<Mutex<Connection>>,
     /// Read pool for writable registries. `None` when the registry was
     /// opened read-only, where reads fall back to the writer connection
-    /// (see [`crate::driver::sqlite::read_pool`]).
+    /// (see [`crate::driver::sqlite::host::read_pool`]).
     readers: Option<Arc<ReadPool>>,
     pub(super) workspaces_dir: PathBuf,
     /// Opened read-only before the registry adopted its ledger, so tables

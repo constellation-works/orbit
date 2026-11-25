@@ -2,7 +2,7 @@
 type: runbook
 summary: Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace.
 tags: [operations, upgrades, migrations, recovery]
-paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
+paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410, ORB-24411]
 last_validated: 2026-11-14
@@ -982,7 +982,7 @@ can report pending entries before `--confirm` applies them.
   `crates/orbit-store/src/workflow/layout/`. A missing marker means a pre-versioning workspace and is adopted
   as v1. Upgraders serialize on `state/layout.lock`.
 - **Store schema:** the `schema_meta` ledger table inside `orbit.db`, backed by
-  `crates/orbit-store/src/driver/sqlite/migration/`. Each migration and its ledger row commit in one
+  `crates/orbit-store/src/driver/sqlite/host/schema/` and `crates/orbit-store/src/driver/sqlite/host/ledger/`. Each migration and its ledger row commit in one
   transaction.
 
 Each ledger also carries a compatibility record written by whichever binary applied the
@@ -1486,12 +1486,12 @@ waits for nothing.
 
 Store schemas v87 (`crew_memory`) and v88 (`audit_session_model`) raise the store schema from 86
 to 88 in the v0.48.0 release. Both migrations are classified Additive in the migration registry
-(`crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`): v87 adds new crew-memory
+(`crates/orbit-store/src/driver/sqlite/host/schema/mod.rs`): v87 adds new crew-memory
 tables no existing row depends on, and v88 adds a nullable MCP session-model column that leaves
 existing rows NULL and is not part of `role`. An older binary that supports schema 86 therefore
 opens schema-88 state for reads *and* writes through the forward-compatibility record
 (`migration.compat`): when every migration above its supported version is Additive,
-`evaluate_newer_database` (`crates/orbit-store/src/driver/sqlite/migration/ledger/compatibility.rs`)
+`evaluate_newer_database` (`crates/orbit-store/src/driver/sqlite/host/ledger/compatibility.rs`)
 returns a writable forward-compatible open, and the older binary applies no migration to the newer
 state (see [Additive-newer: reads and writes](#additive-newer-reads-and-writes)). Upgrading the
 store to 88 alone does not force older binaries to refuse it.

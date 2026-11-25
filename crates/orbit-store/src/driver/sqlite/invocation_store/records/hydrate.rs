@@ -69,7 +69,7 @@ impl Store {
 
     fn connection_handle(
         &self,
-    ) -> Result<crate::driver::sqlite::read_pool::ReadGuard<'_>, OrbitError> {
+    ) -> Result<crate::driver::sqlite::host::read_pool::ReadGuard<'_>, OrbitError> {
         self.read()
     }
 }

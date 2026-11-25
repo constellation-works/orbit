@@ -32,7 +32,7 @@ use super::baseline::apply_registry_baseline;
 use super::decision_snapshots_schema::apply_decision_snapshots;
 use super::index_task_type::apply_index_task_type;
 use crate::contracts::{MigrationCompatibility, StateComponent};
-use crate::driver::sqlite::migration::{LedgeredDatabase, Migration};
+use crate::driver::sqlite::host::ledger::{LedgeredDatabase, Migration};
 
 /// `user_version` while every applied registry entry is `Additive`.
 pub(super) const PRE_LEDGER_COMPATIBLE: u32 = 5;

@@ -16,7 +16,7 @@ set -euo pipefail
 #     platform, Bubblewrap/Landlock on Linux)
 #   - crates/orbit-core/tests/sandbox_profile_goldens/ (resolved Linux sandbox)
 #   - store-ledger and task-registry-ledger sqlite_schema prefixes under
-#     orbit-store migration/tests/ and task_registry/tests/
+#     orbit-store host/schema/tests/ and task_registry/tests/
 #
 # Regeneration env vars (also printed by the failing tests):
 #   ORBIT_UPDATE_STORE_SCHEMA_GOLDENS=1
@@ -110,6 +110,6 @@ run_golden_test "$cargo" test -p orbit-exec -p orbit-cli --test sandbox_profile_
 run_golden_test "$cargo" test -p orbit-core -p orbit-cli --test sandbox_profile_goldens
 
 run_golden_test "$cargo" test -p orbit-store -p orbit-cli --lib \
-  driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact
+  driver::sqlite::host::schema::tests::ledger::registry::store_schema_prefix_goldens -- --exact
 run_golden_test "$cargo" test -p orbit-store -p orbit-cli --lib \
-  driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens -- --exact
+  driver::sqlite::host::schema::tests::ledger::registry::task_registry_schema_prefix_goldens -- --exact

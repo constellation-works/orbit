@@ -47,7 +47,7 @@ Slices M1–M4 were built and M5 concluded with no difference. M1 provided the s
 
 | Concern | Source or design | Task |
 |---------|------|------|
-| Spaces, revisions, proposals (owner store) | `crates/orbit-store/src/driver/sqlite/migration/crew_memory.rs`, `crates/orbit-store/src/driver/sqlite/crew_memory_store.rs` | [ORB-23113] |
+| Spaces, revisions, proposals (owner store) | `crates/orbit-store/src/driver/sqlite/host/schema/crew_memory_revisions.rs`, `crates/orbit-store/src/driver/sqlite/crew_memory_store.rs` | [ORB-23113] |
 | Write validation: caps, provenance, lint | `crates/orbit-core/src/application/crew_memory/validate.rs` | [ORB-23113] |
 | Memory key and the one write path | `crates/orbit-core/src/application/crew_memory/key.rs`, `operations.rs` | [ORB-23113] |
 | Memory overlay, receipt capture and dispatch resolution | `crates/orbit-core/src/application/experiment/definition.rs`, `crates/orbit-core/src/application/experiment/capture.rs`, `crates/orbit-core/src/application/experiment/overlay.rs`, `crates/orbit-core/src/application/crew_memory/delivery.rs`, `crates/orbit-engine/src/activity_job/cli_runner/envelope.rs` | [ORB-23114] |

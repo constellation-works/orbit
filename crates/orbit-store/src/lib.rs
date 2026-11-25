@@ -27,7 +27,7 @@ pub mod workflow;
 /// Operator-only SQLite and coordination-registry access. Ordinary consumers
 /// should depend on [`contracts`] and obtain implementations from composition.
 pub mod maintenance {
-    pub use crate::driver::sqlite::migration;
+    pub use crate::driver::sqlite::host::schema as migration;
     pub mod task_registry {
         pub use crate::contracts::WorkspaceConfig;
         pub use crate::driver::file::workspace_binding::{
@@ -81,8 +81,8 @@ pub use contracts::{
 pub use driver::file::session_log_store::SessionLogStore;
 pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;
 pub use driver::file::workspace_binding::workspace_id_for_orbit_dir;
-pub use driver::sqlite::connection::Store;
-pub(crate) use driver::sqlite::connection::StoreTx;
+pub use driver::sqlite::host::connection::Store;
+pub(crate) use driver::sqlite::host::connection::StoreTx;
 pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
 pub use fs::lock::read_lock_holder;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
