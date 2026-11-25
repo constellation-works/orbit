@@ -10,7 +10,7 @@
 //! to `claims`, `validation`, `recovery`, `invocation`, `host_metadata` or
 //! another named sibling, or adapts a type on the way through.
 
-mod activity_tools;
+pub(in crate::adapter::engine_host) mod activity_tools;
 mod agent;
 mod auto_task;
 mod checkpoints;
