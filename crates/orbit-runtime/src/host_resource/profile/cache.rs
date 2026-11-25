@@ -33,8 +33,10 @@ pub(crate) trait DeliveryRunSource {
         Ok(None)
     }
 
-    /// Every sampled run since the epoch, reusing each run of `previous`
-    /// whose shape still holds. A source that keeps no shapes reads every run.
+    /// Every sampled run since the epoch. The default reads every run; a
+    /// shape-aware source may reuse unchanged runs. The store reuses them when
+    /// at most half of current shapes changed, including exactly half; when
+    /// more than half changed, it reads all qualifying minutes in one scan.
     fn reload_delivery_runs(
         &self,
         previous: Option<DeliveryRunsLoad>,
@@ -88,10 +90,11 @@ struct Cached {
     templates: BTreeSet<String>,
     tagged: BTreeSet<String>,
     profiles: Arc<ProfileSet>,
-    /// The runs the build read, which the next build re-reads only where a
-    /// run's minute rows or `job_runs` row moved, or every run when more than
-    /// half of them moved. `None` after a failed build took it, so the next
-    /// build reads every run.
+    /// The runs the build read. A later build can reuse unchanged run shapes
+    /// when at most half of current shapes changed, including exactly half;
+    /// when more than half changed, the store reads all qualifying minutes in
+    /// one scan. `None` after a failed build took it, so the next build reads
+    /// every run.
     load: Option<DeliveryRunsLoad>,
 }
 
@@ -100,8 +103,10 @@ struct Cached {
 /// configured crews' models or a template's `no-diff-expected` tag change.
 /// The probe scans every minute row, so a pass runs it only when the store's
 /// change counter moved since the cached answer. A rebuild hands the store
-/// the runs the last one read, so only runs whose minute rows or `job_runs`
-/// row moved are read again.
+/// its previous run load. It reuses unchanged run shapes when at most half of
+/// current shapes changed, including exactly half; when more than half
+/// changed, it reads every qualifying minute in one ordered scan, including
+/// minutes from unchanged runs.
 ///
 /// Only profiles live here. What a forecast reads about running deliveries,
 /// reservations and the baseline is read fresh every pass, or two drains on

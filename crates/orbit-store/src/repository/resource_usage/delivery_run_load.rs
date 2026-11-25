@@ -8,11 +8,13 @@
 //! each joined to `job_runs` and decoded whole, cost most of that request
 //! (ORB-21826). So a reload first reads each sampled run's shape (its row
 //! count and last minute index, from the primary key, and its `job_runs`
-//! row) and re-reads the minutes only of runs whose shape moved, or every run
-//! in one scan when more than half of the current runs moved (a first load
-//! moves them all). A full read takes `job_runs` from the same shapes instead
-//! of joining every row. Either way the result is the runs, fields and minutes
-//! a whole read returns, in its order.
+//! row). When at most half of current shapes changed, including exactly half,
+//! it reuses unchanged runs and re-reads minutes only for changed shapes. When
+//! more than half changed, it reads all qualifying minutes in one scan,
+//! including unchanged runs. A first load has no reusable runs. A full read
+//! takes `job_runs` from the same shapes instead of joining every row. Either
+//! way the result is the runs, fields and minutes a whole read returns, in its
+//! order.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use orbit_common::OrbitError;
@@ -41,8 +43,10 @@ pub(super) fn load_delivery_runs(
     read_all(conn, since, &shapes)
 }
 
-/// [`load_delivery_runs`] since the epoch, reusing each run of `previous`
-/// whose shape is unchanged.
+/// [`load_delivery_runs`] since the epoch. Unchanged runs of `previous` are
+/// reused when at most half of current shapes changed, including exactly
+/// half; when more than half changed, every qualifying minute is read in one
+/// ordered scan.
 pub(super) fn reload_delivery_runs(
     conn: &Connection,
     previous: Option<DeliveryRunsLoad>,
@@ -51,7 +55,7 @@ pub(super) fn reload_delivery_runs(
     let since = DateTime::UNIX_EPOCH;
     let held = held_runs(&shapes, previous.unwrap_or_default());
     let moved = held.iter().filter(|run| run.is_none()).count();
-    // Past half the runs, one ordered scan beats a lookup per run.
+    // Only strictly past half: at exactly half, reuse unchanged runs.
     let runs = if moved * 2 > shapes.len() {
         read_all(conn, since, &shapes)?
     } else {
