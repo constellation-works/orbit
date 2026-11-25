@@ -167,10 +167,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./design/standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (7)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Architecture Restructure](./design/architecture-restructure/1_overview.md) | File the step 0 tasks: the ratchet check and the app table [ORB-28318] | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
@@ -245,6 +246,7 @@ a conservative title/status fallback.
 | [Agent Families](./design/agent-families/1_overview.md) | Orbit models AI coding systems as first-class agent families and groups concrete provider-model assignments into named crews. | Draft | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (implementers, reviewers, task pilots), ranked by model and recorded effort, where each problem counts against exactly one role. | Draft | claude |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Scope: parameterised application consent scopes (typed per-field constraints bound to live task state, bound read callbacks, named transitions) so an app can carry a user's approvals without operator authority | Draft | claude |
+| [Architecture Restructure](./design/architecture-restructure/1_overview.md) | Approved design to put the runtime behind orbit-core and split it into four layers that each add a capability, slice the application layer into one unit per subject with one entry point, give orbit-store one repository per record behind one write path, and read the environment once. | Accepted | claude |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Shipped predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Implemented | claude |
