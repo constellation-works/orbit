@@ -211,7 +211,7 @@ fn assert_captured_prompt_carries_diagnosis(
         .find_map(|line| {
             serde_json::from_str::<Value>(line)
                 .ok()
-                .filter(|v| v.get("schemaVersion").is_some())
+                .filter(|v| v.get("schemaVersion").is_some() && v["input"].is_object())
         })
         .expect("repair agent prompt must contain the execution envelope JSON");
     let resume_output = envelope["input"]["resume_candidate"]["output"]
