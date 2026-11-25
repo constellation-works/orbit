@@ -75,7 +75,7 @@ both absence and presence. Path fields live on `WorkspacePaths` in
 |---|---|---|
 | `config.yaml` | workspace identity (`workspace_id`) | authoritative |
 | `config.toml` | optional workspace runtime config (layers over global per key, with security-sensitive exceptions—see [CONFIG.md](../CONFIG.md)) | authoritative |
-| `frictions/` | legacy friction import/rollback tree; live records and taxonomy are published under the global root | preserve until migration evidence is no longer needed |
+| `frictions/` | workspace friction tag taxonomy (`tags.yaml`) plus legacy friction import/rollback records | preserve customized taxonomy; keep legacy records until migration evidence is no longer needed |
 | `resources/` | workspace overrides for activities/jobs/executors/policies | authoritative |
 | `graph/`, `knowledge/graph/` | retired graph state left by older Orbit versions | non-authoritative; remove explicitly with `orbit doctor --remove-graph` |
 | `state/layout.version` | plain-text workspace layout version marker | regenerable marker (see [upgrades](./upgrades.md)) |
@@ -97,7 +97,7 @@ both absence and presence. Path fields live on `WorkspacePaths` in
 | `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`, retained `job_run_states`, and `job_run_id_allocations`, which keeps archived and deleted run ids reserved), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for retained live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
 | `tasks/index.sqlite` (+ `-wal`, `-shm`) | global task-ID allocator + registry index, plus `task_envelope_stamps`, a cache of which `task.yaml` files already match the index | **authoritative** for the allocator's issued-id high-water mark and workspace bindings; index rows are regenerable (`orbit task reindex`) and stamps are re-recorded by the next listing. Losing it needs the [registry-loss procedure](../design/task-migration/1_overview.md#recovering-a-lost-task-registry) |
 | `tasks/workspaces/<ws-id>/<task-id>/` | canonical task bundles (survive repo moves) | **authoritative** |
-| `frictions/workspaces/<ws-id>/` | live tag taxonomy plus the published legacy record tree used for one-time import/rollback | mixed: taxonomy is authoritative configuration; record files are legacy evidence after SQLite import |
+| `frictions/workspaces/<ws-id>/` | published legacy record tree used for one-time import/rollback | legacy evidence after SQLite import |
 | `resources/activities/`, `resources/jobs/` | managed defaults plus operator-authored activity/job YAML; hidden manifests retain managed content provenance | mixed: current defaults are regenerable, but untracked YAML and `resources/.retired-managed/` backups are **authoritative until reviewed** |
 | other `resources/`, `skills/` | default executor/policy defs and skills; `resources/.orbit-global-defaults.json` records which embedded default set was last reconciled here | regenerable (`orbit init` reseeds) |
 | `state/logs/orbit.jsonl`, `state/logs/orbit-agent.jsonl` (+ rotated archives) | Operational and separately budgeted agent relay JSONL feeds | disposable |

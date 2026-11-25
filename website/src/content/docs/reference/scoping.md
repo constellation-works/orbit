@@ -25,7 +25,7 @@ see [Back up and move state](/how-to/state-and-backup/).
 ```text
 .orbit/
   auto_tasks/        # auto-task definitions
-  frictions/         # legacy friction records, kept for import and rollback
+  frictions/         # workspace friction tag taxonomy (tags.yaml) plus legacy friction records kept for import and rollback
   resources/         # workspace-local activities/, executors/, jobs/, policies/
   routines/          # routine definitions
   state/
