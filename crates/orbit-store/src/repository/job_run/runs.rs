@@ -319,7 +319,7 @@ impl<Access> JobRunRepository<'_, Access> {
 
     /// Up to `per_task_limit` recent runs of `job_id` for each requested
     /// task, ordered by recency descending, then run ID ascending, including
-    /// steps. See [`super::task_runs`].
+    /// steps. See `super::task_runs`.
     pub fn list_recent_for_tasks(
         &self,
         workspace_id: &str,
@@ -487,7 +487,7 @@ impl<Access> JobRunRepository<'_, Access> {
 impl JobRunRepository<'_, Tx<'_>> {
     /// Allocate the next free run id of `role` for the minute `submitted_at`
     /// falls in, across every workspace in the host's shared store. See
-    /// [`super::write`]. Insert the run in the same transaction.
+    /// `super::write`. Insert the run in the same transaction.
     pub fn next_id(
         &self,
         role: RunIdRole,
