@@ -201,7 +201,7 @@ impl DeliveryRefusal {
                 "Inspect explicit source repair for the publishing run, or discard the candidate (orbit task update <task-id> --status backlog --discard-candidate) so the next run implements fresh. The task is unchanged; do not resume this held run.".into()
             }
             Self::StaleBranch => {
-                "For a retained branch or worktree, inspect it, then move the branch aside or delete it only after confirming no retained work is needed. For a refused owner base, preserve the owner checkout's tracked changes and unpushed commits, reconcile it with origin, then start a new delivery attempt; do not delete anything. Retrying without that recovery will refuse again.".into()
+                "For a retained branch or worktree, inspect it, then move the branch aside or delete it only after confirming no retained work is needed. For an owner base that a checkout holds, preserve that checkout's tracked changes and unpushed commits, reconcile it with origin, and do not delete it. For a diverged owner base that no checkout holds, keep its commits and reconcile the branch itself: check it out in a temporary worktree (`git worktree add <dir> <branch>`), merge origin/<base> into it, then remove that worktree; do not delete the branch. Then start a new delivery attempt. Retrying without that recovery will refuse again.".into()
             }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()
