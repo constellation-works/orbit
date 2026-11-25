@@ -1,0 +1,404 @@
+//! Friction add, update, re-home and resolve mutations.
+
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Utc};
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_types::identity::validate_friction_id;
+use orbit_types::record::{FrictionRecord, FrictionStatus};
+
+use super::{WorkspaceFrictions, validate_workspace_id};
+use orbit_common::governance::friction::normalize_friction_tags as normalize_and_validate_tags;
+use orbit_store::contracts::{
+    FrictionAddParams, FrictionLandingOutcome, FrictionListFilter, FrictionRehomeOutcome,
+    FrictionRehomeParams, FrictionUpdateParams, StoredFrictionRecord,
+};
+use orbit_store::friction_taxonomy::load_tag_taxonomy;
+use orbit_store::workflow::friction as submission;
+
+impl WorkspaceFrictions {
+    /// Submit a new report and announce it after commit.
+    pub fn add(&self, params: FrictionAddParams) -> Result<StoredFrictionRecord, OrbitError> {
+        submission::add(&self.store, &self.workspace_id, &self.files_root, params)
+    }
+
+    /// Submit a report or return the oldest record with the same dedupe key.
+    pub fn add_or_reuse(
+        &self,
+        dedupe_key: &str,
+        params: FrictionAddParams,
+    ) -> Result<StoredFrictionRecord, OrbitError> {
+        submission::add_or_reuse(
+            &self.store,
+            &self.workspace_id,
+            &self.files_root,
+            dedupe_key,
+            params,
+        )
+    }
+
+    /// Submit only when the caller's scoped duplicate test finds no match.
+    pub fn add_unless_duplicate(
+        &self,
+        filter: &FrictionListFilter,
+        is_duplicate: &dyn Fn(&StoredFrictionRecord) -> bool,
+        params: FrictionAddParams,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+        let (row, created) = submission::submit(
+            &self.store,
+            &self.workspace_id,
+            &self.files_root,
+            params,
+            |tx| {
+                Ok(tx
+                    .friction()
+                    .list(&self.workspace_id, filter)?
+                    .into_iter()
+                    .find(is_duplicate))
+            },
+        )?;
+        Ok(created.then_some(row))
+    }
+
+    pub fn update(
+        &self,
+        id: &str,
+        params: FrictionUpdateParams,
+    ) -> Result<StoredFrictionRecord, OrbitError> {
+        self.update_unless(id, params, |_| false)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))
+    }
+
+    /// Apply `params` to `id` unless `keep` accepts the record as it stands
+    /// under the write lock, in which case it is returned untouched.
+    /// `Ok(None)` means no such record exists. The check and the write share
+    /// one `BEGIN IMMEDIATE` transaction, so no other writer can land between
+    /// them.
+    fn update_unless(
+        &self,
+        id: &str,
+        params: FrictionUpdateParams,
+        keep: impl FnOnce(&StoredFrictionRecord) -> bool,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+        validate_friction_id(id)?;
+        let taxonomy = match params.tags {
+            Some(_) => Some(load_tag_taxonomy(&self.files_root)?),
+            None => None,
+        };
+        let (month, seq) = split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+
+        self.store.write(|tx| {
+            let records = tx.friction();
+            let Some(mut stored) = records.get(&self.workspace_id, id)? else {
+                return Ok(None);
+            };
+            if keep(&stored) {
+                return Ok(Some(stored));
+            }
+            if let (Some(tags), Some(taxonomy)) = (params.tags.clone(), taxonomy.as_ref()) {
+                stored.record.tags = normalize_and_validate_tags(tags, taxonomy)?;
+            }
+            if let Some(title) = params.title.clone() {
+                stored.record.title = title;
+            }
+            if let Some(body) = params.body.clone() {
+                stored.record.body = body;
+            }
+            if let Some(status) = params.status {
+                stored.record.status = status;
+                stored.record.resolved_at = match status {
+                    FrictionStatus::Resolved => {
+                        Some(stored.record.resolved_at.unwrap_or(params.updated_at))
+                    }
+                    FrictionStatus::Open | FrictionStatus::Triaged => {
+                        stored.record.resolved_by_task = None;
+                        None
+                    }
+                };
+            }
+            // Unlike `resolved_at`, which keeps the first resolution
+            // instant, the resolving task is whatever the caller names:
+            // re-resolving against a corrected task must not silently
+            // keep the wrong one.
+            if let Some(resolved_by_task) = params.resolved_by_task.clone() {
+                stored.record.resolved_by_task = Some(resolved_by_task);
+            }
+            if let Some(rehome_to) = params.rehome_to.clone() {
+                stored.record.rehome_to = rehome_to;
+            }
+            records.put(
+                &self.workspace_id,
+                &stored.record,
+                &month,
+                seq,
+                stored
+                    .path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy())
+                    .as_deref(),
+            )?;
+            Ok(Some(stored))
+        })
+    }
+
+    /// Refuse, without writing, every re-home refusal that does not depend on
+    /// the write lock: a malformed id, a target that is this workspace, an
+    /// unreadable target taxonomy, and a tag set the target taxonomy rejects.
+    ///
+    /// `edits` are the changes the caller will land before the move; the tag
+    /// check runs against the tags the record will carry after them, so a
+    /// refusal [`Self::rehome`] would raise cannot follow committed edits.
+    /// A missing or already-resolved record is left to the caller and to
+    /// `rehome`, which read it under the lock.
+    pub fn preflight_rehome(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+        edits: &FrictionUpdateParams,
+    ) -> Result<(), OrbitError> {
+        let target_taxonomy = self.rehome_target_taxonomy(id, params)?;
+        let Some(current) = self.show(id)? else {
+            return Ok(());
+        };
+        let tags = match edits.tags.clone() {
+            Some(tags) => normalize_and_validate_tags(tags, &load_tag_taxonomy(&self.files_root)?)?,
+            None => current.record.tags,
+        };
+        let (kept, _) = partition_tags_by_taxonomy(tags, &target_taxonomy);
+        normalize_and_validate_tags(kept, &target_taxonomy)?;
+        Ok(())
+    }
+
+    /// The id and target checks shared by [`Self::preflight_rehome`] and
+    /// [`Self::rehome`]; returns the target workspace's tag taxonomy.
+    fn rehome_target_taxonomy(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        validate_friction_id(id)?;
+        validate_workspace_id(&params.target_workspace_id)?;
+        if params.target_workspace_id == self.workspace_id {
+            return Err(OrbitError::InvalidInput(format!(
+                "friction {id} already belongs to workspace '{}'; re-home needs another workspace",
+                params.target_label
+            )));
+        }
+        split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+        // Taxonomy load is file I/O; keep it outside the write transaction.
+        load_tag_taxonomy(&params.target_files_root)
+    }
+
+    /// Move `id` into the workspace that owns it.
+    ///
+    /// One transaction: the owning workspace gains a copy under an ID it
+    /// allocates — same title, reporter, creation time, task, triage status,
+    /// and body, plus a provenance note — and the source is resolved with
+    /// `rehome_to` set and a forwarding note naming the new ID. Tags the
+    /// owning taxonomy does not define are dropped and reported, never
+    /// invented. A resolved record has nothing left to move.
+    pub fn rehome(
+        &self,
+        id: &str,
+        params: FrictionRehomeParams,
+    ) -> Result<FrictionRehomeOutcome, OrbitError> {
+        let target_taxonomy = self.rehome_target_taxonomy(id, &params)?;
+        let (month, seq) = split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+        let at = params.rehomed_at;
+        let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        self.store.write(|tx| {
+            let records = tx.friction();
+            let mut source = records
+                .get(&self.workspace_id, id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))?;
+            if source.record.status == FrictionStatus::Resolved {
+                return Err(OrbitError::InvalidInput(format!(
+                    "friction {id} is already resolved; there is nothing to re-home"
+                )));
+            }
+
+            let (kept, dropped_tags) =
+                partition_tags_by_taxonomy(source.record.tags.clone(), &target_taxonomy);
+            let tags = normalize_and_validate_tags(kept, &target_taxonomy)?;
+            let target_month = source.record.created_at.format("%Y-%m").to_string();
+            let target_seq =
+                submission::next_friction_sequence(tx, &params.target_workspace_id, &target_month)?;
+            let target_id = format!("F{target_month}-{target_seq:03}");
+            let target = FrictionRecord {
+                id: target_id.clone(),
+                title: source.record.title.clone(),
+                model: source.record.model.clone(),
+                created_at: source.record.created_at,
+                status: source.record.status,
+                tags,
+                resolved_at: None,
+                during_task: source.record.during_task.clone(),
+                resolved_by_task: None,
+                rehome_to: None,
+                body: format!(
+                    "{}\n\n---\n\nRe-homed from workspace `{}` friction `{id}` on {stamp}.",
+                    source.record.body.trim_end(),
+                    params.source_label,
+                ),
+            };
+            records.put(
+                &params.target_workspace_id,
+                &target,
+                &target_month,
+                target_seq,
+                None,
+            )?;
+
+            source.record.body = format!(
+                "{}\n\n---\n\nRe-homed to workspace `{}` as friction `{target_id}` on {stamp}; \
+                     track it there.",
+                source.record.body.trim_end(),
+                params.target_label,
+            );
+            source.record.status = FrictionStatus::Resolved;
+            source.record.resolved_at = Some(at);
+            source.record.rehome_to = Some(params.target_label.clone());
+            records.put(
+                &self.workspace_id,
+                &source.record,
+                &month,
+                seq,
+                source
+                    .path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy())
+                    .as_deref(),
+            )?;
+
+            Ok(FrictionRehomeOutcome {
+                source,
+                target: StoredFrictionRecord {
+                    record: target,
+                    path: None,
+                },
+                dropped_tags,
+            })
+        })
+    }
+
+    pub fn resolve(
+        &self,
+        id: &str,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<StoredFrictionRecord, OrbitError> {
+        self.update(
+            id,
+            FrictionUpdateParams {
+                status: Some(FrictionStatus::Resolved),
+                tags: None,
+                title: None,
+                body: None,
+                resolved_by_task: None,
+                rehome_to: None,
+                updated_at: resolved_at,
+            },
+        )
+    }
+
+    pub fn resolve_by_task(
+        &self,
+        id: &str,
+        task_id: &str,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<StoredFrictionRecord, OrbitError> {
+        self.update(id, resolve_by_task_params(task_id, resolved_at))
+    }
+
+    /// Resolve `id` as a side effect of `task_id` completing, unless someone
+    /// already resolved it. A task's `resolves` relation is a claim, not an
+    /// override: an existing resolution (and the task it names) is kept and
+    /// returned untouched. The check happens under the write lock, so a
+    /// resolution committed by a concurrent writer is never overwritten.
+    /// `Ok(None)` means no such record exists locally.
+    pub fn auto_resolve_by_task(
+        &self,
+        id: &str,
+        task_id: &str,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+        self.update_unless(id, resolve_by_task_params(task_id, resolved_at), |stored| {
+            stored.record.status == FrictionStatus::Resolved
+        })
+    }
+
+    /// Resolve a workspace-local record and append verified delivery evidence
+    /// in the same transaction. Already-resolved records are left untouched;
+    /// reading the body under the write lock preserves concurrent edits.
+    pub fn auto_resolve_by_landing(
+        &self,
+        id: &str,
+        task_id: &str,
+        commit: &str,
+        pr_number: Option<u64>,
+        resolved_at: DateTime<Utc>,
+    ) -> Result<FrictionLandingOutcome, OrbitError> {
+        validate_friction_id(id)?;
+        let (month, seq) = split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+        self.store.write(|tx| {
+            let records = tx.friction();
+            let Some(mut stored) = records.get(&self.workspace_id, id)? else {
+                return Ok(FrictionLandingOutcome::Missing);
+            };
+            if stored.record.status == FrictionStatus::Resolved {
+                return Ok(FrictionLandingOutcome::AlreadyResolved);
+            }
+            let pr = pr_number.map_or_else(|| "none".to_string(), |number| format!("#{number}"));
+            stored.record.body.push_str(&format!(
+                "\n\nResolved by task {task_id}; commit {commit}; PR {pr}; at {}.\n",
+                resolved_at.to_rfc3339(),
+            ));
+            stored.record.status = FrictionStatus::Resolved;
+            stored.record.resolved_at = Some(resolved_at);
+            stored.record.resolved_by_task = Some(task_id.to_string());
+            records.put(
+                &self.workspace_id,
+                &stored.record,
+                &month,
+                seq,
+                stored
+                    .path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy())
+                    .as_deref(),
+            )?;
+            Ok(FrictionLandingOutcome::Resolved)
+        })
+    }
+}
+
+/// Split `tags` into those `taxonomy` defines and those it lacks.
+fn partition_tags_by_taxonomy(
+    tags: Vec<String>,
+    taxonomy: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    tags.into_iter().partition(|tag| taxonomy.contains(tag))
+}
+
+fn split_friction_id(id: &str) -> Option<(String, u32)> {
+    orbit_types::identity::validate_friction_id(id).ok()?;
+    let month = id.get(1..8)?.to_string();
+    let seq = id.get(9..12)?.parse::<u32>().ok()?;
+    (seq > 0).then_some((month, seq))
+}
+
+fn resolve_by_task_params(task_id: &str, resolved_at: DateTime<Utc>) -> FrictionUpdateParams {
+    FrictionUpdateParams {
+        status: Some(FrictionStatus::Resolved),
+        tags: None,
+        title: None,
+        body: None,
+        resolved_by_task: Some(task_id.to_string()),
+        rehome_to: None,
+        updated_at: resolved_at,
+    }
+}

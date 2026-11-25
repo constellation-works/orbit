@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::compose::auto_task::{cursor_state_path, load_cursor_state, with_cursor_lock};
+use orbit_store::compose::auto_task::{cursor_state_path, cursor_store};
 use orbit_types::workflow::automation::ConditionGuardMiss;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, AutoTaskSkipRecord, DedupePolicy, InactivePluginWarning,
@@ -140,11 +140,12 @@ fn fire_definition(
             fire_delivery(host, definition, false, now)
         });
     }
-    with_cursor_lock(state_path, |session| {
+    cursor_store(state_path).write(|tx| {
+        let mut session = tx.auto_task()?;
         if let Some(report) = admission_skip(definition, definition_path)? {
             return Ok(report);
         }
-        fire_locked(host, definition, session, now)
+        fire_locked(host, definition, &mut session, now)
     })
 }
 
@@ -157,7 +158,10 @@ fn first_inactive_plugin_warning(
     warning: InactivePluginWarning,
     dry_run: bool,
 ) -> bool {
-    let recorded = load_cursor_state(state_path)
+    let recorded = cursor_store(state_path)
+        .read()
+        .auto_task()
+        .get()
         .is_ok_and(|state| state.inactive_plugin_warnings.contains(&warning));
     if recorded {
         return false;
@@ -166,14 +170,16 @@ fn first_inactive_plugin_warning(
         return true;
     }
     // Recheck under the lock so overlapping ticks warn once between them.
-    with_cursor_lock(state_path, |session| {
-        if !session.state.inactive_plugin_warnings.insert(warning) {
-            return Ok(false);
-        }
-        session.save()?;
-        Ok(true)
-    })
-    .unwrap_or(true)
+    cursor_store(state_path)
+        .write(|tx| {
+            let mut session = tx.auto_task()?;
+            if !session.state.inactive_plugin_warnings.insert(warning) {
+                return Ok(false);
+            }
+            session.put()?;
+            Ok(true)
+        })
+        .unwrap_or(true)
 }
 
 /// Admission acts only on the revision discovery loaded. Deletion and the
@@ -295,7 +301,7 @@ fn dry_run_definition(
     state_path: &Path,
     now: DateTime<Utc>,
 ) -> Result<AutoTaskFireReport, OrbitError> {
-    let state = load_cursor_state(state_path)?;
+    let state = cursor_store(state_path).read().auto_task().get()?;
     if let Some(pending) = state
         .definitions
         .get(&definition.name)

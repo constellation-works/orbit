@@ -11,10 +11,9 @@
 //! store GC [ORB-16354] (design in `docs/design/routines/`).
 
 use std::path::Path;
-use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::RoutineStoreBackend;
+use orbit_store::Store;
 
 /// The host's OS clock, owned by the `orbit-clock` crate [ORB-22688]; this
 /// path is kept for existing consumers.
@@ -76,7 +75,7 @@ pub struct RoutineMachineIdentity {
 
 /// Open the config-resolved machine-local scheduler store for a mutating route.
 /// Creates and migrates it on first use.
-fn open_routine_store(global_root: &Path) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {
+fn open_routine_store(global_root: &Path) -> Result<Store, OrbitError> {
     let database = orbit_config::resolved_audit_db_path(
         &orbit_common::Env::capture(),
         &orbit_config::ConfigRoots::global_only(global_root),
@@ -99,7 +98,10 @@ pub(crate) fn host_routine_breakers(
     if !database.exists() {
         return Ok(std::collections::BTreeMap::new());
     }
-    open_existing_routine_store(global_root)?.routine_breakers()
+    open_existing_routine_store(global_root)?
+        .read()?
+        .routine()
+        .breakers()
 }
 
 /// Create and migrate the machine's scheduler store when it is absent. `orbit
@@ -112,9 +114,7 @@ pub fn ensure_routine_store(global_root: &Path) -> Result<(), OrbitError> {
 /// Open the existing scheduler store for a read-only projection. A read never
 /// creates or migrates it (STD-01 R31): a missing store is setup that has not
 /// been done, and the error names `orbit init`, which owns first-run creation.
-fn open_existing_routine_store(
-    global_root: &Path,
-) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {
+fn open_existing_routine_store(global_root: &Path) -> Result<Store, OrbitError> {
     let database = orbit_config::resolved_audit_db_path(
         &orbit_common::Env::capture(),
         &orbit_config::ConfigRoots::global_only(global_root),
@@ -125,8 +125,10 @@ fn open_existing_routine_store(
             database.display()
         )));
     }
-    Ok(Arc::new(orbit_store::Store::open_read_only(&database)?))
+    orbit_store::Store::open_read_only(&database)
 }
 
 #[cfg(test)]
 mod tests;
+
+pub use orbit_automation::routines::{breaker::request_breaker_bypass, sweep::record_fire_intent};

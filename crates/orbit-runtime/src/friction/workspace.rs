@@ -1,15 +1,24 @@
-//! FrictionStore construction and read surface.
+//! Workspace scope and read operations for friction records.
 
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::validate_friction_id;
 
-use super::{FrictionListFilter, FrictionStore, StoredFrictionRecord, queries};
-use crate::Store;
-use crate::driver::file::friction_store::{load_tag_taxonomy, load_tag_taxonomy_with_descriptions};
+use orbit_store::Store;
+use orbit_store::contracts::{FrictionListFilter, StoredFrictionRecord};
+use orbit_store::friction_taxonomy::{load_tag_taxonomy, load_tag_taxonomy_with_descriptions};
 
-impl FrictionStore {
+/// Application operations scoped to the workspace that owns the records.
+pub struct WorkspaceFrictions {
+    pub(super) store: Store,
+    pub(super) workspace_id: String,
+    pub(super) files_root: PathBuf,
+}
+
+impl WorkspaceFrictions {
+    /// Bind application operations to a workspace partition. The caller
+    /// runs the legacy import at its composition boundary.
     pub fn open(
         store: Store,
         workspace_id: impl Into<String>,
@@ -29,13 +38,15 @@ impl FrictionStore {
         &self,
         filter: &FrictionListFilter,
     ) -> Result<Vec<StoredFrictionRecord>, OrbitError> {
-        read_page(&self.store, &self.workspace_id, filter)
+        self.store
+            .read()?
+            .friction()
+            .list(&self.workspace_id, filter)
     }
 
     pub fn show(&self, id: &str) -> Result<Option<StoredFrictionRecord>, OrbitError> {
         validate_friction_id(id)?;
-        self.store
-            .with_read_connection(|conn| queries::show_record(conn, &self.workspace_id, id))
+        self.store.read()?.friction().get(&self.workspace_id, id)
     }
 
     /// Other workspaces on this host that already hold `id`.
@@ -46,7 +57,9 @@ impl FrictionStore {
     pub fn foreign_owners_of(&self, id: &str) -> Result<Vec<String>, OrbitError> {
         validate_friction_id(id)?;
         self.store
-            .with_read_connection(|conn| queries::foreign_owners_of(conn, &self.workspace_id, id))
+            .read()?
+            .friction()
+            .foreign_owners_of(&self.workspace_id, id)
     }
 
     pub fn tags(&self) -> Result<Vec<String>, OrbitError> {
@@ -58,15 +71,6 @@ impl FrictionStore {
             .into_iter()
             .collect())
     }
-}
-
-/// Read a bounded page through the SQL query used by the tool surfaces.
-fn read_page(
-    store: &Store,
-    workspace_id: &str,
-    filter: &FrictionListFilter,
-) -> Result<Vec<StoredFrictionRecord>, OrbitError> {
-    store.with_read_connection(|conn| queries::list_records(conn, workspace_id, filter))
 }
 
 pub(super) fn validate_workspace_id(workspace_id: &str) -> Result<(), OrbitError> {

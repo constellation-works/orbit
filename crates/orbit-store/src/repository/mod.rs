@@ -2,6 +2,7 @@
 
 pub(crate) mod admission_load;
 pub(crate) mod application_consent;
+pub(crate) mod auto_task;
 pub(crate) mod backlog_forecast;
 pub(crate) mod codebase_fact;
 pub(crate) mod crew_memory;
@@ -19,6 +20,7 @@ pub(crate) mod recovery_authority;
 pub(crate) mod reliability;
 pub(crate) mod resource_usage;
 pub(crate) mod retention;
+pub(crate) mod routine;
 pub(crate) mod script_grant;
 pub(crate) mod session_log;
 pub(crate) mod skill;

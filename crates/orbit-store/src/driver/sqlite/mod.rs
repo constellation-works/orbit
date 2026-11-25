@@ -3,7 +3,6 @@ pub(crate) mod authority;
 pub mod host;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
-pub(crate) mod routine_store;
 pub(crate) mod task_commit_journal;
 pub mod task_registry;
 pub(crate) mod task_reservation_store;
@@ -11,8 +10,6 @@ pub(crate) mod v2_audit_store;
 
 pub(crate) mod automation;
 pub(crate) mod review;
-
-pub(crate) mod friction_write;
 
 // SQLite text ordering requires every writer to use the same timestamp encoding.
 pub(crate) mod codec {

@@ -70,7 +70,9 @@ impl OrbitRuntime {
                 return Ok(Vec::new());
             }
             let store = orbit_store::Store::open_read_only(&database)?;
-            Ok::<_, orbit_common::OrbitError>(store.routine_pauses()?.into_keys().collect())
+            Ok::<_, orbit_common::OrbitError>(
+                store.read()?.routine().pauses()?.into_keys().collect(),
+            )
         };
         read().unwrap_or_else(|error| {
             tracing::warn!(%error, "task-pilot check read no routine pauses");

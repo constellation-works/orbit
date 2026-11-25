@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
-use orbit_store::compose::auto_task::{CursorSession, with_cursor_lock};
+use orbit_store::compose::auto_task::{AutoTaskWriteRepository, cursor_store};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition};
 use serde::Serialize;
@@ -242,7 +242,8 @@ impl OrbitRuntime {
         // Check refusals here so a task minted by a preceding pass or an
         // overlapping manual mint is visible, and finish the delete under it
         // so no pass observes a definition that is half removed.
-        let locked = with_cursor_lock(&cursor_state_path(&self.paths().state_dir), |session| {
+        let locked = cursor_store(&cursor_state_path(&self.paths().state_dir)).write(|tx| {
+            let mut session = tx.auto_task()?;
             let Some(definition) = self.find_validated_auto_task(name)? else {
                 return Ok(LockedDelete::Refused(AutoTaskDeleteRefusal::NotFound {
                     name: name.to_string(),
@@ -274,7 +275,7 @@ impl OrbitRuntime {
             })?;
             let removed = remove_definition_state(
                 self,
-                session,
+                &mut session,
                 &definition,
                 reason.as_deref().unwrap_or(DEFAULT_DELETE_REASON),
                 params.force,
@@ -454,7 +455,7 @@ struct RemovedState {
 /// runs last; only a ref release failing after it leaves that reset applied.
 fn remove_definition_state(
     runtime: &OrbitRuntime,
-    session: &mut CursorSession,
+    session: &mut AutoTaskWriteRepository<'_>,
     definition: &AutoTaskDefinition,
     reason: &str,
     force: bool,
@@ -475,7 +476,7 @@ fn remove_definition_state(
 
     let cursor = session.state.definitions.remove(name);
     let cursor_removed = cursor.is_some();
-    if cursor_removed && let Err(error) = session.save() {
+    if cursor_removed && let Err(error) = session.put() {
         return Err(revert_opt_out(opt_out, name, error));
     }
 
@@ -493,7 +494,7 @@ fn remove_definition_state(
 
 /// Put a removed scheduler cursor back after a later step failed.
 fn restore_cursor(
-    session: &mut CursorSession,
+    session: &mut AutoTaskWriteRepository<'_>,
     name: &str,
     cursor: Option<AutoTaskCursor>,
     error: OrbitError,
@@ -502,7 +503,7 @@ fn restore_cursor(
         return error;
     };
     session.state.definitions.insert(name.to_string(), cursor);
-    match session.save() {
+    match session.put() {
         Ok(()) => error,
         Err(restore_error) => OrbitError::Io(format!(
             "{error}; restoring the scheduler cursor of auto-task '{name}' also failed: {restore_error}"

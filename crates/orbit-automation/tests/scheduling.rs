@@ -794,9 +794,25 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
             assert_eq!(reports[0].reason.as_deref(), Some("overlap_in_flight"));
         }
     }
-    assert_eq!(store.routine_recent_fires("overlap", 20).unwrap().len(), 2);
     assert_eq!(
-        store.routine_cursor("overlap").unwrap().unwrap().last_slot,
+        store
+            .read()
+            .unwrap()
+            .routine()
+            .recent_fires("overlap", 20)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .read()
+            .unwrap()
+            .routine()
+            .cursor("overlap")
+            .unwrap()
+            .unwrap()
+            .last_slot,
         Some(at("2026-10-03T00:03:00Z").to_rfc3339())
     );
 
@@ -849,9 +865,12 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
                 "{name}: downtime must mint at most one task per latest slot"
             );
         }
-        let cursors = orbit_store::compose::auto_task::load_cursor_state(
+        let cursors = orbit_store::compose::auto_task::cursor_store(
             &orbit_store::compose::auto_task::cursor_state_path(&host.state_dir()),
         )
+        .read()
+        .auto_task()
+        .get()
         .unwrap();
         assert_eq!(
             cursors.definitions["catchup"].last_slot,
@@ -915,9 +934,12 @@ fn two_files_defining_one_auto_task_name_are_both_refused() {
         refused.sort();
         assert_eq!(refused, ["twin.yaml", "twin.yml"], "{now}");
     }
-    let cursors = orbit_store::compose::auto_task::load_cursor_state(
+    let cursors = orbit_store::compose::auto_task::cursor_store(
         &orbit_store::compose::auto_task::cursor_state_path(&host.state_dir()),
     )
+    .read()
+    .auto_task()
+    .get()
     .unwrap();
     assert!(!cursors.definitions.contains_key("twin"));
 }
@@ -1308,9 +1330,12 @@ fn blocked_candidate_precondition_skips_only_on_a_definite_none() {
         Some("no_blocked_candidates: 3 blocked task(s) read; no block episode awaits triage")
     );
     assert_eq!(host.minted.get(), 0, "a definite none mints nothing");
-    let cursors = orbit_store::compose::auto_task::load_cursor_state(
+    let cursors = orbit_store::compose::auto_task::cursor_store(
         &orbit_store::compose::auto_task::cursor_state_path(&host.state_dir()),
     )
+    .read()
+    .auto_task()
+    .get()
     .unwrap();
     let skip = cursors.definitions["triage"].last_skip.clone().unwrap();
     assert_eq!(skip.reason, "no_blocked_candidates");

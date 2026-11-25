@@ -76,7 +76,7 @@ pub use scheduler::{
     open_auto_task_instance, run_auto_task_scheduler_at,
 };
 pub use settings::{AutoTaskBody, AutoTaskLayering, StaleAutoTaskContract};
-pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
+pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, cursor_store};
 pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile};
 
 /// Shipped defaults whose bundled body is `enabled: true`. Every default

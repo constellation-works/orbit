@@ -146,5 +146,5 @@ pub fn recent_fires(
     limit: usize,
 ) -> Result<Vec<RoutineFireRecord>, OrbitError> {
     let store = super::super::open_existing_routine_store(global_root)?;
-    store.routine_recent_fires(name, limit)
+    store.read()?.routine().recent_fires(name, limit)
 }

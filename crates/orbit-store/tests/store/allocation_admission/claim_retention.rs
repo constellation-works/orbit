@@ -132,22 +132,51 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
     conn.execute_batch("DROP TRIGGER refuse_friction_receipt")
         .unwrap();
 
-    let store = compose::workspace_friction_store(
-        Store::open(&root.path().join("state.sqlite")).unwrap(),
-        PARTITION_ID,
-        root.path().join("frictions"),
-    )
-    .unwrap();
-    assert_eq!(store.list(&Default::default()).unwrap().len(), 1);
-    assert_eq!(store.show(&record.id).unwrap().unwrap().record, *record);
+    let store = Store::open(&root.path().join("state.sqlite")).unwrap();
+    let files_root = root.path().join("frictions");
+    compose::prepare_workspace_frictions(&store, PARTITION_ID, &files_root).unwrap();
+    assert_eq!(
+        store
+            .read()
+            .unwrap()
+            .friction()
+            .list(PARTITION_ID, &Default::default())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .read()
+            .unwrap()
+            .friction()
+            .get(PARTITION_ID, &record.id)
+            .unwrap()
+            .unwrap()
+            .record,
+        *record
+    );
 
     let mut automatic = params;
     automatic.body = "dedupe-key: report-once\nPrivate automation evidence".into();
-    let created = store
-        .add_or_reuse("report-once", automatic.clone())
-        .unwrap();
+    let created = orbit_store::workflow::friction::add_or_reuse(
+        &store,
+        PARTITION_ID,
+        &files_root,
+        "report-once",
+        automatic.clone(),
+    )
+    .unwrap();
     assert_eq!(
-        store.add_or_reuse("report-once", automatic).unwrap().record,
+        orbit_store::workflow::friction::add_or_reuse(
+            &store,
+            PARTITION_ID,
+            &files_root,
+            "report-once",
+            automatic
+        )
+        .unwrap()
+        .record,
         created.record
     );
     conn.execute_batch(
@@ -165,13 +194,21 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
         created_at: Utc::now(),
     };
     assert!(
-        store
-            .add(failed)
+        orbit_store::workflow::friction::add(&store, PARTITION_ID, &files_root, failed)
             .unwrap_err()
             .to_string()
             .contains("fixture refuses friction insert")
     );
-    assert_eq!(store.list(&Default::default()).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .read()
+            .unwrap()
+            .friction()
+            .list(PARTITION_ID, &Default::default())
+            .unwrap()
+            .len(),
+        2
+    );
 
     logging::shutdown_jsonl_writer();
     let log = std::fs::read_to_string(

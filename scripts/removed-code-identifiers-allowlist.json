@@ -123,5 +123,20 @@
     "identifier": "run_resource_minutes",
     "doc": "plugin/skills/orbit-setup/references/maintenance-storage.md",
     "reason": "Names the `run_resource_minutes` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
+  },
+  {
+    "identifier": "routine_breakers",
+    "doc": "docs/design/operator-attention/specs/attention-item.md",
+    "reason": "Names the unchanged SQLite table, rather than the removed Store method."
+  },
+  {
+    "identifier": "routine_breakers",
+    "doc": "docs/design/routines/2_design.md",
+    "reason": "Names the unchanged SQLite table, rather than the removed Store method."
+  },
+  {
+    "identifier": "routine_pauses",
+    "doc": "docs/runbooks/perf-timing-protocol.md",
+    "reason": "Names the unchanged state_distributions JSON field in the performance snapshot."
   }
 ]

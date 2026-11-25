@@ -10,9 +10,9 @@ use orbit_types::identity::{
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use super::{FrictionStore, stats};
+use super::WorkspaceFrictions;
 
-impl FrictionStore {
+impl WorkspaceFrictions {
     /// The `orbit.friction.stats` projection, computed entirely from SQL
     /// aggregates plus the caller's task attribution.
     pub fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError> {
@@ -31,20 +31,16 @@ impl FrictionStore {
             .single()
             .ok_or_else(|| OrbitError::Store("compute next friction month".to_string()))?;
 
-        let (counts, resolved_this_month, by_model, by_tag_model) =
-            self.store.with_read_connection(|conn| {
-                Ok((
-                    stats::status_counts(conn, &self.workspace_id)?,
-                    stats::resolved_in_window(
-                        conn,
-                        &self.workspace_id,
-                        month_start,
-                        next_month_start,
-                    )?,
-                    stats::counts_by_model(conn, &self.workspace_id)?,
-                    stats::counts_by_tag_and_model(conn, &self.workspace_id)?,
-                ))
-            })?;
+        let (counts, resolved_this_month, by_model, by_tag_model) = {
+            let snapshot = self.store.read()?;
+            let records = snapshot.friction();
+            (
+                records.counts_by_status(&self.workspace_id)?,
+                records.resolved_in_window(&self.workspace_id, month_start, next_month_start)?,
+                records.counts_by_model(&self.workspace_id)?,
+                records.counts_by_tag_and_model(&self.workspace_id)?,
+            )
+        };
 
         let tasks_done = completed_tasks_by_family(tasks);
         let mut frictions_by_family: BTreeMap<String, u64> = BTreeMap::new();
@@ -86,10 +82,10 @@ impl FrictionStore {
         }
 
         Ok(json!({
-            "total": counts.total(),
-            "open": counts.get("open"),
-            "triaged": counts.get("triaged"),
-            "resolved": counts.get("resolved"),
+            "total": counts.values().sum::<u64>(),
+            "open": counts.get("open").copied().unwrap_or(0),
+            "triaged": counts.get("triaged").copied().unwrap_or(0),
+            "resolved": counts.get("resolved").copied().unwrap_or(0),
             "resolved_this_month": resolved_this_month,
             "by_family": Value::Object(by_family),
             "by_tag": Value::Object(by_tag),
@@ -114,7 +110,7 @@ fn completed_tasks_by_family(tasks: &[Task]) -> BTreeMap<String, u64> {
     counts
 }
 
-pub(crate) fn friction_family_key(value: &str) -> String {
+fn friction_family_key(value: &str) -> String {
     let normalized = normalize_optional_attribution_label(Some(value), None).unwrap_or_default();
     infer_agent_family_from_model(&normalized).unwrap_or(normalized)
 }

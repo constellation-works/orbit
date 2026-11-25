@@ -240,7 +240,7 @@ seam (`submit`, `run_state`, `run_owner_liveness` in
 kills or proves stopped a build that passes the horizon. Only a run that itself reaches the
 `Cancelled` state is known stopped, because cancellation signals the owner and verifies
 termination. A timed-out fire is also no longer a blocking fire (only `intent` and
-`dispatched` rows block, in `routine_blocking_fire`), so the next scheduled fire may start
+`dispatched` rows block, in `snapshot.routine().blocking_fire()`), so the next scheduled fire may start
 while the earlier build is still running; the existing sweep fixture for an unprobeable
 owner being reclaimed at the policy timeout specifies exactly this. A retry re-dispatch
 (`retries: {max: 1}`) is a further scheduled start under the same slot. A direct

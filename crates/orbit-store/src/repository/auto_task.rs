@@ -19,20 +19,17 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::fs::io::atomic_write_text;
 use orbit_common::fs::open_read_only_no_follow;
-use orbit_types::workflow::{AutoTaskCursor, AutoTaskCursorState};
+use orbit_types::workflow::AutoTaskCursorState;
 
-/// Path of the cursor state file under a workspace state dir.
-pub fn cursor_state_path(state_dir: &Path) -> PathBuf {
-    state_dir.join("auto-tasks.json")
-}
+use crate::file_store::{AutoTaskSnapshot, AutoTaskTx};
 
 /// Read the current cursor state.
 ///
 /// A missing file is empty state. An existing file that cannot be read or
 /// parsed is an error; callers must not treat that as a baseline or rewrite it.
-pub fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
+fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
     let Some((resolved, mut file)) = open_cursor_state_file(path)? else {
         return Ok(AutoTaskCursorState::default());
     };
@@ -51,7 +48,7 @@ pub fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError>
 /// for anything terminating in `..`, so those shapes fail closed here rather
 /// than falling back to the unvalidated input. The contract deliberately stays
 /// "one normal component" instead of the fixed `auto-tasks.json` that
-/// [`cursor_state_path`] builds: [`load_cursor_state`] is public and callers
+/// the usual state directory layout builds: callers
 /// may point it at an alternate basename.
 fn validated_cursor_state_file_name(path: &Path) -> Result<PathBuf, OrbitError> {
     path.file_name().map(PathBuf::from).ok_or_else(|| {
@@ -70,7 +67,7 @@ fn validated_cursor_state_file_name(path: &Path) -> Result<PathBuf, OrbitError> 
 /// state dir or checkout projection — keep resolving [ORB-11948]. This
 /// directory is the authority every later probe and open is resolved against.
 /// A bare relative filename is owned by the current directory, matching where
-/// [`CursorSession::save`] would write it. `Ok(None)` means the directory does
+/// [`AutoTaskWriteRepository::put`] would write it. `Ok(None)` means the directory does
 /// not exist, which callers treat as empty baseline state.
 fn validated_cursor_state_dir(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let parent = path.parent().ok_or_else(|| {
@@ -198,58 +195,44 @@ fn parse_state(raw: &str, path: &Path) -> Result<AutoTaskCursorState, OrbitError
     })
 }
 
-/// Hold the sidecar lock, load current state, and run `op`.
-///
-/// `op` may [`CursorSession::save`] more than once (claim, then checkpoint).
-/// A successful `op` does not implicitly write; callers persist explicitly.
-pub fn with_cursor_lock<T, F>(path: &Path, op: F) -> Result<T, OrbitError>
-where
-    F: FnOnce(&mut CursorSession) -> Result<T, OrbitError>,
-{
-    if let Some(parent) = path.parent() {
-        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
-            OrbitError::Io(format!(
-                "create auto-tasks state dir {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-
-    with_exclusive_file_lock(path, "auto-task cursor", || {
-        let state = load_cursor_state(path)?;
-        let mut session = CursorSession {
-            path: path.to_path_buf(),
-            state,
-        };
-        op(&mut session)
-    })
+/// Read access to the scheduler's workspace-local cursor file.
+pub struct AutoTaskRepository<'a> {
+    snapshot: &'a AutoTaskSnapshot<'a>,
 }
 
-/// Locked cursor file session. Mutations are local until [`Self::save`].
-pub struct CursorSession {
-    path: PathBuf,
-    /// Current in-memory cursor map, including other definitions' rows.
+impl<'a> AutoTaskRepository<'a> {
+    pub(crate) fn for_snapshot(snapshot: &'a AutoTaskSnapshot<'_>) -> Self {
+        Self { snapshot }
+    }
+
+    /// Load the cursor map, treating a missing file as empty.
+    pub fn get(&self) -> Result<AutoTaskCursorState, OrbitError> {
+        load_cursor_state(self.snapshot.path())
+    }
+}
+
+/// Working cursor map loaded under the sidecar lock.
+pub struct AutoTaskWriteRepository<'a> {
+    tx: &'a AutoTaskTx<'a>,
+    /// Current working copy, including other definitions' rows.
     pub state: AutoTaskCursorState,
 }
 
-impl CursorSession {
-    /// Atomically replace the state file with `self.state`.
-    ///
-    /// The sidecar lock, not this inode, maintains exclusion. A write failure
-    /// leaves the previous complete JSON in place.
-    pub fn save(&self) -> Result<(), OrbitError> {
+impl<'a> AutoTaskWriteRepository<'a> {
+    pub(crate) fn for_tx(tx: &'a AutoTaskTx<'_>) -> Result<Self, OrbitError> {
+        Ok(Self {
+            tx,
+            state: load_cursor_state(tx.path())?,
+        })
+    }
+
+    /// Atomically replace the state file. A scheduler can write several
+    /// checkpoints inside the same locked scope to persist mint recovery
+    /// evidence before it advances a slot.
+    pub fn put(&self) -> Result<(), OrbitError> {
         let encoded = serde_json::to_string_pretty(&self.state)
             .map_err(|error| OrbitError::Io(format!("encode auto-tasks state: {error}")))?;
-        atomic_write_text(&self.path, &encoded)
-            .map_err(|error| OrbitError::from_write_io(&self.path, error))
+        let path = self.tx.path();
+        atomic_write_text(path, &encoded).map_err(|error| OrbitError::from_write_io(path, error))
     }
-}
-
-/// Upsert one definition's cursor under the sidecar lock,
-/// read-modify-writing so other definitions' cursors survive.
-pub fn upsert_cursor(path: &Path, name: &str, cursor: AutoTaskCursor) -> Result<(), OrbitError> {
-    with_cursor_lock(path, |session| {
-        session.state.definitions.insert(name.to_string(), cursor);
-        session.save()
-    })
 }

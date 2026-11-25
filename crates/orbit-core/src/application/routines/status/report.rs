@@ -126,8 +126,10 @@ pub fn routine_statuses_with_providers(
     let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
-    let pauses = store.routine_pauses()?;
-    let breakers = store.routine_breakers()?;
+    let snapshot = store.read()?;
+    let records = snapshot.routine();
+    let pauses = records.pauses()?;
+    let breakers = records.breakers()?;
     // One query each for every routine's cursor and fire history, instead of
     // two store reads per routine on the dashboard's poll path.
     let routine_names: Vec<String> = collection
@@ -135,8 +137,9 @@ pub fn routine_statuses_with_providers(
         .iter()
         .map(|routine| routine.definition.name.clone())
         .collect();
-    let cursors = store.routine_cursors_for(&routine_names)?;
-    let fires_by_routine = store.routine_recent_fires_for(&routine_names, FIRE_HISTORY_LIMIT)?;
+    let cursors = records.cursors_for(&routine_names)?;
+    let fires_by_routine = records.recent_fires_for(&routine_names, FIRE_HISTORY_LIMIT)?;
+    drop(snapshot);
     tracing::debug!(
         elapsed_ms = started.elapsed().as_millis(),
         "routine status fire history and cursors loaded"

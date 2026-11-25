@@ -21,7 +21,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::contracts::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireRecord,
-    RoutineFireState, RoutineStoreBackend,
+    RoutineFireState,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -128,7 +128,7 @@ enum GateAttempt {
 /// gate re-decides from the row that is actually stored, so the operator
 /// action is never overwritten by this pass.
 pub(crate) fn breaker_gate(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     breakers: &BTreeMap<String, RoutineBreakerRecord>,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
@@ -153,7 +153,7 @@ pub(crate) fn breaker_gate(
         match attempt {
             GateAttempt::Done(gate) => return Ok(gate),
             GateAttempt::Conflict => {
-                current = store.routine_breakers()?.remove(name);
+                current = store.read()?.routine().breakers()?.remove(name);
             }
         }
     }
@@ -168,7 +168,7 @@ pub(crate) fn breaker_gate(
 }
 
 fn maybe_trip(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     breaker: Option<&RoutineBreakerRecord>,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
@@ -211,7 +211,8 @@ fn maybe_trip(
         dispatch,
         now_utc,
     );
-    if !store.routine_breaker_transition_if_current(
+    if !replace_breaker_if_current(
+        store,
         breaker,
         &opened,
         &sweep_event(
@@ -236,7 +237,7 @@ fn maybe_trip(
 }
 
 fn open_gate(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     breaker: &RoutineBreakerRecord,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
@@ -278,7 +279,8 @@ fn open_gate(
                     source_workspace: routine.source_workspace.clone(),
                     ..breaker.clone()
                 };
-                if !store.routine_breaker_transition_if_current(
+                if !replace_breaker_if_current(
+                    store,
                     Some(breaker),
                     &closed,
                     &sweep_event(
@@ -305,7 +307,8 @@ fn open_gate(
                     dispatch,
                     now_utc,
                 );
-                if !store.routine_breaker_transition_if_current(
+                if !replace_breaker_if_current(
+                    store,
                     Some(breaker),
                     &reopened,
                     &sweep_event(
@@ -342,7 +345,8 @@ fn open_gate(
         source_workspace: routine.source_workspace.clone(),
         ..breaker.clone()
     };
-    if !store.routine_breaker_transition_if_current(
+    if !replace_breaker_if_current(
+        store,
         Some(breaker),
         &armed,
         &sweep_event(routine, "trial", Some(reason.into()), None, now_utc),
@@ -508,11 +512,14 @@ pub fn breaker_trial_status(
 /// state-, delivery- or condition-triggered routine, the runs its automation
 /// admitted. A run present in both is counted once.
 fn observed_fires(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
 ) -> Result<Vec<ObservedFire>, OrbitError> {
-    let cron_fires = store.routine_recent_fires(&routine.definition.name, OBSERVED_FIRE_LIMIT)?;
+    let cron_fires = store
+        .read()?
+        .routine()
+        .recent_fires(&routine.definition.name, OBSERVED_FIRE_LIMIT)?;
     let automation_runs = if is_event_driven(routine) {
         dispatch.routine_runs(routine, OBSERVED_FIRE_LIMIT)?
     } else {
@@ -590,4 +597,97 @@ fn failure_class(
 /// a caller may supply.
 fn fire_clock_now() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// Compare-and-swap a breaker and its event. The
+/// row is re-read inside the immediate transaction and the write lands
+/// only when it still equals `expected`. A concurrent operator reset or
+/// bypass commits a different row, so the stale write is refused
+/// (`Ok(false)`) instead of overwriting it.
+fn replace_breaker_if_current(
+    store: &orbit_store::Store,
+    expected: Option<&RoutineBreakerRecord>,
+    breaker: &RoutineBreakerRecord,
+    event: &RoutineBreakerEvent,
+) -> Result<bool, OrbitError> {
+    store.write(|tx| {
+        let routine = tx.routine();
+        let current = routine.breaker(&breaker.routine_name)?;
+        if current.as_ref() != expected {
+            return Ok(false);
+        }
+        routine.put_breaker(breaker)?;
+        routine.insert_breaker_event(event)?;
+        Ok(true)
+    })
+}
+
+/// Close `routine_name`'s breaker now and record the reset. Fires before
+/// now no longer count toward a trip. Returns `false` when it was not open.
+pub fn reset_breaker(
+    store: &orbit_store::Store,
+    routine_name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    store.write(|tx| {
+        let routine = tx.routine();
+        let Some(mut breaker) = routine.breaker(routine_name)? else {
+            return Ok(false);
+        };
+        if breaker.state != RoutineBreakerState::Open {
+            return Ok(false);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let detail = breaker.error_class.clone();
+        breaker.state = RoutineBreakerState::Closed;
+        breaker.trips = 0;
+        breaker.next_trial_at = None;
+        breaker.trial_started_at = None;
+        breaker.trial_reason = None;
+        breaker.bypass_requested_at = None;
+        breaker.floor_at = Some(now.clone());
+        breaker.updated_at = now.clone();
+        routine.put_breaker(&breaker)?;
+        routine.insert_breaker_event(&RoutineBreakerEvent {
+            routine_name: routine_name.to_string(),
+            event: "reset".into(),
+            actor: actor.to_string(),
+            detail,
+            run_id: None,
+            at: now,
+        })?;
+        Ok(true)
+    })
+}
+
+/// Ask the sweep to let one fire of `routine_name` through on its next
+/// pass, and record the request. Returns `false` when the breaker is not
+/// open.
+pub fn request_breaker_bypass(
+    store: &orbit_store::Store,
+    routine_name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    store.write(|tx| {
+        let routine = tx.routine();
+        let Some(mut breaker) = routine.breaker(routine_name)? else {
+            return Ok(false);
+        };
+        if breaker.state != RoutineBreakerState::Open {
+            return Ok(false);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        breaker.bypass_requested_at = Some(now.clone());
+        breaker.updated_at = now.clone();
+        routine.put_breaker(&breaker)?;
+        routine.insert_breaker_event(&RoutineBreakerEvent {
+            routine_name: routine_name.to_string(),
+            event: "bypass".into(),
+            actor: actor.to_string(),
+            detail: breaker.error_class.clone(),
+            run_id: None,
+            at: now,
+        })?;
+        Ok(true)
+    })
 }

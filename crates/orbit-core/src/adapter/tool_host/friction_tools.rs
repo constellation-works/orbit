@@ -22,8 +22,8 @@ use orbit_common::governance::friction::{
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionStoreBackend,
-    FrictionUpdateParams, StoredFrictionRecord,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionUpdateParams,
+    StoredFrictionRecord,
 };
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use serde_json::{Value, json};
@@ -111,15 +111,15 @@ pub(super) fn add_params(
 }
 
 fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    list_in(
-        crate::runtime::friction::store_for(runtime)?.as_ref(),
-        input,
-    )
+    list_in(&crate::runtime::friction::store_for(runtime)?, input)
 }
 
 /// Translate the wire filter into the store filter, including the page, so
 /// SQLite decides which rows exist before any body is decoded.
-fn list_in(store: &dyn FrictionStoreBackend, input: &OperationInput) -> Result<Value, OrbitError> {
+fn list_in(
+    store: &crate::runtime::friction::WorkspaceFrictions,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
     let response_mode = input.optional_string("response_mode")?;
     let with_notes = match response_mode.as_deref() {
         None => false,
@@ -195,13 +195,13 @@ fn list_payload(records: Vec<Value>, query: Option<&str>, with_notes: bool) -> V
 }
 
 fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    show_in(
-        crate::runtime::friction::store_for(runtime)?.as_ref(),
-        input,
-    )
+    show_in(&crate::runtime::friction::store_for(runtime)?, input)
 }
 
-fn show_in(store: &dyn FrictionStoreBackend, input: &OperationInput) -> Result<Value, OrbitError> {
+fn show_in(
+    store: &crate::runtime::friction::WorkspaceFrictions,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
     let id = input.required_string("id")?;
     let Some(stored) = store.show(&id)? else {
         return Err(OrbitError::not_found(NotFoundKind::Friction, id));

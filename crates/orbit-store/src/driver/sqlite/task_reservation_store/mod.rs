@@ -13,5 +13,5 @@ mod rows;
 mod tests;
 mod workspace_claim;
 
-pub(super) use rows::reserve_files_in_tx;
+pub(crate) use rows::reserve_files_in_tx;
 use rows::{expire_reservations_in_scope, reservation_scope_clause, unique_row_id};

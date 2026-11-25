@@ -2,7 +2,7 @@
 
 use super::{AutoHost, at, isolated};
 use orbit_automation::auto_tasks::scheduler::{SchedulerOptions, run_auto_task_scheduler_at};
-use orbit_store::compose::auto_task::{cursor_state_path, load_cursor_state, upsert_cursor};
+use orbit_store::compose::auto_task::{cursor_state_path, cursor_store};
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskPendingClaim};
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -47,7 +47,16 @@ fn dry_run_matches_pending_recovery_before_enabled_check_without_writes() {
                 }),
                 last_skip: None,
             };
-            upsert_cursor(&state_path, "pending", cursor.clone()).unwrap();
+            cursor_store(&state_path)
+                .write(|tx| {
+                    let mut records = tx.auto_task()?;
+                    records
+                        .state
+                        .definitions
+                        .insert(("pending").to_string(), cursor.clone());
+                    records.put()
+                })
+                .unwrap();
             let before = fs::read(&state_path).unwrap();
 
             let preview =
@@ -92,7 +101,7 @@ fn dry_run_matches_pending_recovery_before_enabled_check_without_writes() {
                 "pending recovery must agree for enabled={enabled}, task_id={task_id:?}"
             );
             assert_eq!(host.minted.get(), 0, "recovery must never remint");
-            let state = load_cursor_state(&state_path).unwrap();
+            let state = cursor_store(&state_path).read().auto_task().get().unwrap();
             let recovered = &state.definitions["pending"];
             if task_id.is_some() {
                 assert!(recovered.pending.is_none());

@@ -574,7 +574,7 @@ impl OrbitRuntime {
         // concurrent delete can remove the file before the lock is held.
         let preloaded = self.require_local_auto_task(name)?;
         self.validate_required_tools(&preloaded.template.required_tools)?;
-        // Same sidecar lock as `with_cursor_lock` and `auto_task_delete`.
+        // Same cursor sidecar lock as the scheduler and `auto_task_delete`.
         // Do not load or save the cursor: bytes stay unchanged, and a
         // malformed cursor must not block an explicit mint.
         let state_path = cursor_state_path(&self.paths().state_dir);

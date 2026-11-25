@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState, RoutineStoreBackend};
+use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState};
 
 use super::super::due::{MISSED_SLOT_SKIP_DETAIL, MissedSlotWalk, missed_slots_through};
 use super::super::loader::LoadedRoutine;
@@ -24,7 +24,7 @@ pub(super) struct SkipWindow<'a> {
 
 /// Record past-grace slots in `(lower_bound, through]`, oldest first.
 pub(super) fn record_missed_slots(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
     window: &SkipWindow<'_>,
     dry_run: bool,
@@ -43,22 +43,27 @@ pub(super) fn record_missed_slots(
     }
     for slot in &walk.slots {
         let slot_utc = slot.with_timezone(&Utc).to_rfc3339();
-        let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
-            routine_name: routine.definition.name.clone(),
-            slot: slot_utc.clone(),
-            attempt: 1,
-            source_workspace: routine.source_workspace.clone(),
-        })?;
+        let claimed = super::fire::record_fire_intent(
+            store,
+            &RoutineFireIntentParams {
+                routine_name: routine.definition.name.clone(),
+                slot: slot_utc.clone(),
+                attempt: 1,
+                source_workspace: routine.source_workspace.clone(),
+            },
+            true,
+        )?;
         if !claimed {
             continue;
         }
-        store.routine_mark_fire_outcome(
-            &routine.definition.name,
-            &slot_utc,
-            1,
-            RoutineFireState::Skipped,
-            Some(MISSED_SLOT_SKIP_DETAIL),
-        )?;
+        store.write(|tx| {
+            tx.routine().update_fire(
+                (&routine.definition.name, &slot_utc, 1),
+                RoutineFireState::Skipped,
+                None,
+                Some(MISSED_SLOT_SKIP_DETAIL),
+            )
+        })?;
     }
     Ok(walk)
 }

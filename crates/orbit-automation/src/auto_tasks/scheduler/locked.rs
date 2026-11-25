@@ -7,7 +7,7 @@ use crate::auto_tasks::schedule::{AutoTaskDueDecision, decide_due};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::compose::auto_task::CursorSession;
+use orbit_store::compose::auto_task::AutoTaskWriteRepository;
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, DedupePolicy,
 };
@@ -15,7 +15,7 @@ use orbit_types::workflow::{
 pub(super) fn fire_locked(
     host: &dyn AutoTaskDispatch,
     definition: &AutoTaskDefinition,
-    session: &mut CursorSession,
+    session: &mut AutoTaskWriteRepository<'_>,
     now: DateTime<Utc>,
 ) -> Result<AutoTaskFireReport, OrbitError> {
     if let Some(report) = recover_pending(definition, session, now)? {
@@ -38,7 +38,7 @@ pub(super) fn fire_locked(
                 last_skip: None,
             },
         );
-        session.save()?;
+        session.put()?;
         return Ok(action(definition, "baselined"));
     };
 
@@ -75,7 +75,7 @@ pub(super) fn fire_locked(
                         ..cursor
                     },
                 );
-                session.save()?;
+                session.put()?;
                 return Ok(AutoTaskFireReport {
                     slot: Some(slot),
                     ..skipped(definition, &reason)
@@ -95,7 +95,7 @@ pub(super) fn fire_locked(
                             ..cursor
                         },
                     );
-                    session.save()?;
+                    session.put()?;
                     Ok(AutoTaskFireReport {
                         slot: Some(slot),
                         ..skipped(definition, &reason)
@@ -120,7 +120,7 @@ pub(super) fn fire_locked(
 
 fn recover_pending(
     definition: &AutoTaskDefinition,
-    session: &mut CursorSession,
+    session: &mut AutoTaskWriteRepository<'_>,
     now: DateTime<Utc>,
 ) -> Result<Option<AutoTaskFireReport>, OrbitError> {
     let Some(cursor) = session.state.definitions.get(&definition.name).cloned() else {
@@ -151,7 +151,7 @@ fn recover_pending(
 fn fire_slot(
     host: &dyn AutoTaskDispatch,
     definition: &AutoTaskDefinition,
-    session: &mut CursorSession,
+    session: &mut AutoTaskWriteRepository<'_>,
     cursor: AutoTaskCursor,
     slot: String,
     now: DateTime<Utc>,
@@ -165,7 +165,7 @@ fn fire_slot(
         .state
         .definitions
         .insert(definition.name.clone(), claimed);
-    session.save()?;
+    session.put()?;
     fail_if_injected(SchedulerFault::AfterClaim)?;
 
     let task = match host.mint_task(definition) {
@@ -178,7 +178,7 @@ fn fire_slot(
                     ..cursor
                 },
             );
-            session.save()?;
+            session.put()?;
             return Ok(AutoTaskFireReport {
                 slot: Some(slot),
                 ..skipped(
@@ -199,7 +199,7 @@ fn fire_slot(
             ..cursor.clone()
         },
     );
-    session.save()?;
+    session.put()?;
     fail_if_injected(SchedulerFault::AfterMintBeforeCheckpoint)?;
 
     match checkpoint_consumed(session, definition, &cursor, &slot, &task, now) {
@@ -220,7 +220,7 @@ fn fire_slot(
                 },
             );
             let evidence = session
-                .save()
+                .put()
                 .err()
                 .map(|save_error| format!("; mint evidence also unpersisted: {save_error}"));
             Ok(AutoTaskFireReport {
@@ -237,7 +237,7 @@ fn fire_slot(
 }
 
 fn checkpoint_consumed(
-    session: &mut CursorSession,
+    session: &mut AutoTaskWriteRepository<'_>,
     definition: &AutoTaskDefinition,
     cursor: &AutoTaskCursor,
     slot: &str,
@@ -257,5 +257,5 @@ fn checkpoint_consumed(
             last_skip: None,
         },
     );
-    session.save()
+    session.put()
 }

@@ -2,152 +2,16 @@
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 
+use super::RoutineRepository;
 use super::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineSlotAttempts};
-use crate::Store;
+use crate::Tx;
 
-impl Store {
-    /// Record the intent to fire one (routine, slot, attempt) and advance the
-    /// cursor's `last_slot` in the same transaction. Returns `false` when the
-    /// idempotency key already exists — the slot was already claimed by an
-    /// earlier sweep (possibly one that crashed mid-dispatch), and the caller
-    /// must not dispatch again.
-    pub fn routine_record_fire_intent(
-        &self,
-        intent: &RoutineFireIntentParams,
-    ) -> Result<bool, OrbitError> {
-        self.routine_insert_fire_intent(intent, true)
-    }
-
-    /// Record the intent of one fire that consumes no scheduled slot, such as
-    /// an operator's circuit-breaker bypass [ORB-25103]. Unlike
-    /// [`Self::routine_record_fire_intent`] it leaves the cursor's
-    /// `last_slot` alone, so the routine's due slots stay unconsumed.
-    pub fn routine_record_unscheduled_fire_intent(
-        &self,
-        intent: &RoutineFireIntentParams,
-    ) -> Result<bool, OrbitError> {
-        self.routine_insert_fire_intent(intent, false)
-    }
-
-    fn routine_insert_fire_intent(
-        &self,
-        intent: &RoutineFireIntentParams,
-        advance_cursor: bool,
-    ) -> Result<bool, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let now = crate::now_string();
-            let inserted = tx
-                .tx
-                .execute(
-                    "INSERT OR IGNORE INTO routine_fires
-                     (routine_name, slot, attempt, state, run_id, source_workspace,
-                      detail, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6, ?6)",
-                    params![
-                        intent.routine_name,
-                        intent.slot,
-                        intent.attempt,
-                        RoutineFireState::Intent.as_str(),
-                        intent.source_workspace,
-                        now,
-                    ],
-                )
-                .map_err(sqlite_store_error)?;
-            if inserted == 0 {
-                return Ok(false);
-            }
-            if !advance_cursor {
-                return Ok(true);
-            }
-            // Slots are chrono RFC3339 UTC (`+00:00`), so the text order is
-            // chronological. A retry of an older slot must not rewind a cursor
-            // that a newer skipped slot already advanced.
-            tx.tx
-                .execute(
-                    "UPDATE routine_cursors SET last_slot = ?2, updated_at = ?3
-                     WHERE routine_name = ?1
-                       AND (last_slot IS NULL OR last_slot < ?2)",
-                    params![intent.routine_name, intent.slot, now],
-                )
-                .map_err(sqlite_store_error)?;
-            Ok(true)
-        })
-    }
-
-    /// Mark a recorded fire intent as dispatched, attaching the run id the
-    /// pipeline submission returned.
-    pub fn routine_mark_fire_dispatched(
-        &self,
-        routine_name: &str,
-        slot: &str,
-        attempt: u32,
-        run_id: &str,
-    ) -> Result<(), OrbitError> {
-        self.routine_update_fire(
-            routine_name,
-            slot,
-            attempt,
-            RoutineFireState::Dispatched,
-            Some(run_id),
-            None,
-        )
-    }
-
-    /// Record the terminal outcome of a fire (succeeded / failed / timed out
-    /// / error), with an optional human-readable detail message.
-    pub fn routine_mark_fire_outcome(
-        &self,
-        routine_name: &str,
-        slot: &str,
-        attempt: u32,
-        state: RoutineFireState,
-        detail: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        self.routine_update_fire(routine_name, slot, attempt, state, None, detail)
-    }
-
-    fn routine_update_fire(
-        &self,
-        routine_name: &str,
-        slot: &str,
-        attempt: u32,
-        state: RoutineFireState,
-        run_id: Option<&str>,
-        detail: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let now = crate::now_string();
-            tx.tx
-                .execute(
-                    "UPDATE routine_fires
-                     SET state = ?4,
-                         run_id = COALESCE(?5, run_id),
-                         detail = COALESCE(?6, detail),
-                         updated_at = ?7
-                     WHERE routine_name = ?1 AND slot = ?2 AND attempt = ?3",
-                    params![
-                        routine_name,
-                        slot,
-                        attempt,
-                        state.as_str(),
-                        run_id,
-                        detail,
-                        now
-                    ],
-                )
-                .map_err(sqlite_store_error)?;
-            Ok(())
-        })
-    }
-
+impl<Access> RoutineRepository<'_, Access> {
     /// Most recent fire attempt for one routine, if any.
-    pub fn routine_latest_fire(
-        &self,
-        routine_name: &str,
-    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        self.routine_one_fire(
+    pub fn latest_fire(&self, routine_name: &str) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        self.one_fire(
             &format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
                  WHERE routine_name = ?1
@@ -159,13 +23,13 @@ impl Store {
 
     /// Newest intent or dispatched fire for one routine, if work is in flight.
     ///
-    /// `overlap: forbid` uses this rather than [`Self::routine_latest_fire`]:
+    /// `overlap: forbid` uses this rather than [`Self::latest_fire`]:
     /// a later skipped slot is terminal and must not hide an older run.
-    pub fn routine_blocking_fire(
+    pub fn blocking_fire(
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        self.routine_one_fire(
+        self.one_fire(
             &format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
                  WHERE routine_name = ?1 AND state IN ('intent', 'dispatched')
@@ -177,11 +41,11 @@ impl Store {
 
     /// Newest fire that is not a skipped slot. Retry looks here so a later
     /// `missed_run: skip` row cannot bury a failed attempt that still has budget.
-    pub fn routine_latest_non_skip_fire(
+    pub fn latest_non_skip_fire(
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        self.routine_one_fire(
+        self.one_fire(
             &format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
                  WHERE routine_name = ?1 AND state != 'skipped'
@@ -197,12 +61,12 @@ impl Store {
     /// A drain-skipped retry occupies `highest` and is excluded from
     /// `non_skipped`, so retry selection can step past it without spending
     /// `retries.max`.
-    pub fn routine_slot_attempts(
+    pub fn slot_attempts(
         &self,
         routine_name: &str,
         slot: &str,
     ) -> Result<Option<RoutineSlotAttempts>, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let (highest, non_skipped) = conn
             .query_row(
                 "SELECT MAX(attempt),
@@ -228,11 +92,11 @@ impl Store {
 
     /// Newest successful fire. Freshness uses `updated_at`, so a catch-up slot
     /// that just succeeded counts as recent even when its scheduled slot is old.
-    pub fn routine_latest_succeeded_fire(
+    pub fn latest_succeeded_fire(
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        self.routine_one_fire(
+        self.one_fire(
             &format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
                  WHERE routine_name = ?1 AND state = 'succeeded'
@@ -242,12 +106,12 @@ impl Store {
         )
     }
 
-    fn routine_one_fire(
+    fn one_fire(
         &self,
         sql: &str,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         conn.query_row(sql, params![routine_name], fire_row)
             .optional()
             .map_err(sqlite_store_error)?
@@ -257,8 +121,8 @@ impl Store {
 
     /// All fires that have not reached a terminal state (intent recorded but
     /// never dispatched, or dispatched with the run outcome not yet synced).
-    pub fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError> {
-        let conn = self.read_connection()?;
+    pub fn unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError> {
+        let conn = self.conn;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
@@ -279,12 +143,12 @@ impl Store {
     }
 
     /// Recent fire attempts for one routine, newest first.
-    pub fn routine_recent_fires(
+    pub fn recent_fires(
         &self,
         routine_name: &str,
         limit: usize,
     ) -> Result<Vec<RoutineFireRecord>, OrbitError> {
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
@@ -300,7 +164,7 @@ impl Store {
 
     /// Recent fires for every named routine in one query (newest first, at
     /// most `limit` per routine), keyed by routine name.
-    pub fn routine_recent_fires_for(
+    pub fn recent_fires_for(
         &self,
         names: &[String],
         limit: usize,
@@ -309,7 +173,7 @@ impl Store {
             return Ok(std::collections::BTreeMap::new());
         }
         let placeholders = vec!["?"; names.len()].join(",");
-        let conn = self.read_connection()?;
+        let conn = self.conn;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {FIRE_COLUMNS} FROM (
@@ -411,5 +275,67 @@ impl RoutineFireRecord {
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
+    }
+}
+
+impl RoutineRepository<'_, Tx<'_>> {
+    /// Insert an intent row if its routine, slot and attempt key is absent.
+    pub fn insert_fire(
+        &self,
+        intent: &RoutineFireIntentParams,
+        now: &str,
+    ) -> Result<bool, OrbitError> {
+        let inserted = self
+            .access
+            .connection()
+            .execute(
+                "INSERT OR IGNORE INTO routine_fires
+                 (routine_name, slot, attempt, state, run_id, source_workspace,
+                  detail, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6, ?6)",
+                params![
+                    intent.routine_name,
+                    intent.slot,
+                    intent.attempt,
+                    RoutineFireState::Intent.as_str(),
+                    intent.source_workspace,
+                    now,
+                ],
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(inserted != 0)
+    }
+
+    /// Replace the fire's state and any supplied run ID or detail.
+    pub fn update_fire(
+        &self,
+        key: (&str, &str, u32),
+        state: RoutineFireState,
+        run_id: Option<&str>,
+        detail: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        let (routine_name, slot, attempt) = key;
+        let now = crate::now_string();
+        self.access
+            .connection()
+            .execute(
+                "UPDATE routine_fires
+                 SET state = ?4,
+                     run_id = COALESCE(?5, run_id),
+                     detail = COALESCE(?6, detail),
+                     updated_at = ?7
+                 WHERE routine_name = ?1 AND slot = ?2 AND attempt = ?3",
+                params![
+                    routine_name,
+                    slot,
+                    attempt,
+                    state.as_str(),
+                    run_id,
+                    detail,
+                    now
+                ],
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(())
     }
 }

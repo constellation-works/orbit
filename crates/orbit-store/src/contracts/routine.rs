@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Lifecycle of one fire attempt. `Intent` and `Dispatched` are the
-/// non-terminal states [`crate::Store::routine_unresolved_fires`] returns;
+/// non-terminal states returned by `snapshot.routine().unresolved_fires()`;
 /// everything else is terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

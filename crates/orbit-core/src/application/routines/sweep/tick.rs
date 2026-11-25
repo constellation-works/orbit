@@ -363,7 +363,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
         source_cache: SourceCache::default(),
     };
 
-    let mut reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
+    let mut reports = run_sweep_core(&store, &collection, &dispatch, options, now_utc)?;
     skipped_workspaces.extend(
         reports
             .iter()
