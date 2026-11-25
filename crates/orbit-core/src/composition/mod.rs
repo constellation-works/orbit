@@ -13,3 +13,9 @@ pub use crate::bootstrap::workspace_authority::{
     layout_migration_fenced_authorities, verify_workspace_layout_authority,
 };
 pub use crate::runtime::{captured_env, install_captured_env};
+
+/// Return the environment captured by Orbit's entry point, or capture it when
+/// called from a process that did not install one.
+pub fn composition_env() -> orbit_common::Env {
+    crate::runtime::process_env()
+}

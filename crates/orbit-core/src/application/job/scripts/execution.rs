@@ -197,7 +197,7 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
                 readable: &readable,
                 writable: &grant.write_roots,
                 masked,
-                home: home.as_deref(),
+                home,
                 inputs,
                 network,
             },
