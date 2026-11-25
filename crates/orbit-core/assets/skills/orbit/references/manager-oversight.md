@@ -19,8 +19,13 @@ Residents report only through Orbit; there is no inbox to check.
   authority and the mandate cover) with its grant and narrowing history, open
   grant requests, the live cycle, the status line (the mandate's one `info`
   notice: title, body, when it was posted and lapses, and stale once lapsed),
-  the mandate's state (`active`, `handed_off`, `ended` or `invalid`), and the
-  latest checkpoint: its outcome, actions, decisions, open requests and costs.
+  the mandate's state (`active`: fires when due; `paused`: no new cycle;
+  `taken_over`: a person holds it, and no cycle fires until `release`;
+  `handed_off`: the assignment is in `review`; `ended`: the assignment is done,
+  archived or rejected, or the mandate was stopped, even while a stopped
+  assignment waits in `review`; `invalid`: not tagged `resident`, or the mandate
+  or control record is missing or unreadable), and the latest checkpoint: its
+  outcome, actions, decisions, open requests and costs.
   Read-only. This is the status answer; quote the checkpoint, do not
   reconstruct progress from chat.
 - `orbit.resident.digest` — the derived manager view (read-only; defaults to
@@ -91,7 +96,10 @@ next cycle then checkpoints even when idle. The cadence floor still applies.
 with `wake`: makes the cycle checkpoint even when idle) and optional
 `by_session`. Any caller that can write the assignment may call it; every action
 narrows or restores firing under the existing authority and none widens it.
-Output is `{task_id, action, state, effective_at}`.
+Output is `{task_id, action, state, effective_at, by}`. `state` is the control
+state the action left (`active`, `paused`, `taken_over` or `ended`), and `by` is
+the caller recorded with the reason. A `stop` also returns `handoff`, which is
+explained below the table.
 
 | Action | From | Effect |
 |---|---|---|
@@ -114,6 +122,16 @@ checkpoints (or receives a synthesized checkpoint), and exits at its boundary.
 The deadline is the exception: a live cycle's next right-gated write reads the
 current deadline, so a passed deadline, including one shortened during the
 cycle, refuses that write while the cycle can still checkpoint for handoff.
+
+A `stop` result's `handoff` says where the assignment stands:
+
+- `review`: the assignment moved to `review` now, with a handoff summary.
+- `cycle_live`: a cycle was still running, so the assignment is not in review
+  yet. The cycle hands it to `review` when it finalizes; until then
+  `live_cycle` in `orbit.resident.show` names that cycle.
+- `already`: the assignment was already in `review` or ended; nothing moved.
+- `refused: <why>`: the lifecycle did not allow the move. The stop itself is
+  still recorded.
 
 To take a mandate over: `takeover` with `by_session` naming your session,
 then work in the same assignment task and comment as usual — no export or
