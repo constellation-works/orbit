@@ -181,18 +181,20 @@ impl OrbitRuntime {
         rule: &str,
         message: &str,
     ) -> Result<(), OrbitError> {
-        self.sqlite_store()?.write(|tx| {
-            tx.crew_memory().put_event(&CrewMemoryEventRow {
-                workspace_id: self.workspace_id()?,
-                memory_key: key.to_string(),
-                at: Utc::now().trunc_subsecs(6),
-                action: action.to_string(),
-                actor: "run".to_string(),
-                revision: None,
-                detail_json: json!({ "task_id": task_id, "rule": rule, "message": message })
-                    .to_string(),
-            })
-        })
+        // Resolve the workspace and build the row before the writer opens:
+        // resolving the workspace reads config.yaml from disk.
+        let event = CrewMemoryEventRow {
+            workspace_id: self.workspace_id()?,
+            memory_key: key.to_string(),
+            at: Utc::now().trunc_subsecs(6),
+            action: action.to_string(),
+            actor: "run".to_string(),
+            revision: None,
+            detail_json: json!({ "task_id": task_id, "rule": rule, "message": message })
+                .to_string(),
+        };
+        self.sqlite_store()?
+            .write(|tx| tx.crew_memory().put_event(&event))
     }
 
     /// `orbit.memory.show` for `caller`.

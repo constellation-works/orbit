@@ -159,27 +159,29 @@ impl OrbitRuntime {
                 continue;
             }
             let task = self.mint_dreaming_task(&key, &crew, &pack)?;
-            self.sqlite_store()?.write(|tx| {
-                tx.crew_memory().put_event(&CrewMemoryEventRow {
-                    workspace_id: self.workspace_id()?,
-                    memory_key: key.to_string(),
-                    at: now,
-                    action: DREAM_MINTED.to_string(),
-                    actor: ROUTINE_ACTOR.to_string(),
-                    revision: None,
-                    detail_json: json!({
-                        "task_id": task.id,
-                        "week": week,
-                        "crew": crew,
-                        "evidence_ids": pack.evidence_ids,
-                        "pack_digest": pack.digest,
-                        "pack_bytes": pack.bytes.len(),
-                        "dropped_tasks": pack.dropped_tasks,
-                        "dropped_occurrences": pack.dropped_occurrences,
-                    })
-                    .to_string(),
+            // Resolve the workspace and build the row before the writer opens:
+            // resolving the workspace reads config.yaml from disk.
+            let event = CrewMemoryEventRow {
+                workspace_id: self.workspace_id()?,
+                memory_key: key.to_string(),
+                at: now,
+                action: DREAM_MINTED.to_string(),
+                actor: ROUTINE_ACTOR.to_string(),
+                revision: None,
+                detail_json: json!({
+                    "task_id": task.id,
+                    "week": week,
+                    "crew": crew,
+                    "evidence_ids": pack.evidence_ids,
+                    "pack_digest": pack.digest,
+                    "pack_bytes": pack.bytes.len(),
+                    "dropped_tasks": pack.dropped_tasks,
+                    "dropped_occurrences": pack.dropped_occurrences,
                 })
-            })?;
+                .to_string(),
+            };
+            self.sqlite_store()?
+                .write(|tx| tx.crew_memory().put_event(&event))?;
             minted.push(json!({
                 "key": key,
                 "task_id": task.id,
@@ -226,18 +228,19 @@ impl OrbitRuntime {
         reason: &str,
         task_id: Option<&str>,
     ) -> Result<(), OrbitError> {
-        self.sqlite_store()?.write(|tx| {
-            tx.crew_memory().put_event(&CrewMemoryEventRow {
-                workspace_id: self.workspace_id()?,
-                memory_key: key.to_string(),
-                at: now,
-                action: DREAM_SKIPPED.to_string(),
-                actor: ROUTINE_ACTOR.to_string(),
-                revision: None,
-                detail_json: json!({ "week": week, "reason": reason, "task_id": task_id })
-                    .to_string(),
-            })
-        })
+        // Resolve the workspace and build the row before the writer opens:
+        // resolving the workspace reads config.yaml from disk.
+        let event = CrewMemoryEventRow {
+            workspace_id: self.workspace_id()?,
+            memory_key: key.to_string(),
+            at: now,
+            action: DREAM_SKIPPED.to_string(),
+            actor: ROUTINE_ACTOR.to_string(),
+            revision: None,
+            detail_json: json!({ "week": week, "reason": reason, "task_id": task_id }).to_string(),
+        };
+        self.sqlite_store()?
+            .write(|tx| tx.crew_memory().put_event(&event))
     }
 
     /// Record `no_revision` for each finished dreaming task whose run wrote
