@@ -66,12 +66,16 @@ fn failed_first_checkout_probe_recovers_to_inspection_slot_in_same_process() {
     )) {
         return;
     }
-    let fixture = GitRuntimeFixture::new();
+    let mut fixture = GitRuntimeFixture::new();
     let repo_root = canonical(&fixture.repo_root);
     let revision = git_stdout(&repo_root, &["rev-parse", "HEAD"]);
     let pool = repo_root.join(".orbit/state/source-inspections-v1");
     let slot = inspection_slot(&pool.join("0"), &repo_root.join(".git"), &revision);
     let count = install_fail_first_git(fixture._root.path());
+    // The runtime spawns git on the PATH of the Env it is built with, so it
+    // takes the shim's PATH from a fresh snapshot.
+    fixture.runtime =
+        crate::test_support::with_runtime_env(fixture.runtime, orbit_common::Env::capture());
 
     assert_eq!(
         resolved_root(&fixture.runtime, &slot),

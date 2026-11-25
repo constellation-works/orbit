@@ -370,7 +370,12 @@ fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
             (ORBIT_MANAGED_RUN_CONTEXT, Some("1")),
             (ORBIT_RUN_ID, Some(run_id)),
         ]);
-        let error = retry_tool(runtime, &request, McpCapability::Operator)
+        // The runtime reads the managed-run marker from the Env it is built with.
+        let managed = orbit_core::test_support::with_runtime_env(
+            runtime.clone(),
+            orbit_common::Env::capture(),
+        );
+        let error = retry_tool(&managed, &request, McpCapability::Operator)
             .expect_err("a managed run must not retry an owner handoff");
         assert!(
             matches!(

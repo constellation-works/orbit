@@ -128,6 +128,8 @@ fn recovery_tool_context(workspace_root: &Path, programs: Vec<String>) -> ToolCo
         fs_profile: Some("implementer".to_string()),
         proc_allowed_programs: programs,
         proc_spawn_activity_scoped: true,
+        // `proc.spawn` resolves a bare program on the context's PATH.
+        env: orbit_common::Env::capture(),
         ..Default::default()
     }
 }

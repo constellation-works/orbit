@@ -1187,7 +1187,8 @@ fn agent_task_deletion_is_denied_through_every_dispatch_path() {
     // Positive control: the same handler really deletes when an operator authorizes it.
     {
         let _operator = test_env::scoped([("ORBIT_OPERATOR", Some("1"))]);
-        runtime
+        // The runtime resolves the caller from the Env it is built with.
+        orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture())
             .run_tool("orbit.task.delete", input)
             .expect("operator reaches task deletion");
         assert!(

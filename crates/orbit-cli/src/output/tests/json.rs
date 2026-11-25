@@ -155,6 +155,8 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
         ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
         ("ORBIT_RUN_ID", Some(run.as_str())),
     ]);
+    // The runtime reads the managed-run marker from the Env it is built with.
+    let runtime = orbit_core::test_support::with_runtime_env(runtime, orbit_common::Env::capture());
 
     let input = json!({
         "id": watched,
