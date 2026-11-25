@@ -451,6 +451,15 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
    width to the name columns instead of spreading it across the counts. */
 .summary-table th.num, .summary-table td.num { width: 1%; text-align: right; white-space: nowrap; overflow-wrap: normal; }
 
+/* Reliability Tools tables use their content width so spare card space does not
+   stretch the name column away from its figures. On narrow screens, overflow stays
+   inside each card body; tool identifiers wrap at their explicit dot breakpoints. */
+#audit-summary-body .audit-summary-card .card-body { min-width: 0; overflow-x: auto; }
+#audit-summary-body .summary-table { width: max-content; max-width: 100%; }
+#audit-summary-body .summary-table th,
+#audit-summary-body .summary-table td { padding-inline: var(--space-12); }
+#audit-summary-body .summary-table td[data-column="tool"] { overflow-wrap: normal; }
+
 @media (min-width: 1184px) {
   /* This is the completion-by-complexity card, rendered first in this panel.
      Keep its five status columns inside the card instead of inheriting the
