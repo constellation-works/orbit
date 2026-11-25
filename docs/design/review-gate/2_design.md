@@ -1,7 +1,8 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-11-18
+created_date: 2026-09-21
+updated_date: 2026-11-18
 last_validated: 2026-11-14
 status: Implemented
 feature: review-gate

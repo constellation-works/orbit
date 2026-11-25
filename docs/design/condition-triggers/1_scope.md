@@ -1,7 +1,8 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-11-08
+created_date: 2026-10-27
+updated_date: 2026-11-08
 last_validated: 2026-11-03
 status: Draft
 stage: building

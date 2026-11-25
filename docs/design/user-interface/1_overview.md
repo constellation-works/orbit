@@ -3,7 +3,8 @@ summary: "User Interface — Overview"
 type: design
 title: "User Interface — Overview"
 owner: gemini
-last_updated: 2026-10-20
+created_date: 2026-04-26
+updated_date: 2026-10-20
 last_validated: 2026-11-11
 status: Draft
 stage: shipped

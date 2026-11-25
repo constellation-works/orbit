@@ -1,7 +1,8 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-11-11
+created_date: 2026-07-03
+updated_date: 2026-11-11
 last_validated: 2026-10-13
 status: Accepted
 feature: routines

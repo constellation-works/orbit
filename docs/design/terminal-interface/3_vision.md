@@ -1,7 +1,8 @@
 ---
 title: Terminal Interface — Vision
 owner: claude
-last_updated: 2026-11-02
+created_date: 2026-08-01
+updated_date: 2026-11-02
 last_validated: 2026-11-02
 status: Accepted
 feature: terminal-interface

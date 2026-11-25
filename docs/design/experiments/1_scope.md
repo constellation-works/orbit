@@ -1,7 +1,8 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-11-21
+created_date: 2026-10-25
+updated_date: 2026-11-21
 last_validated: 2026-11-21
 status: Draft
 stage: building

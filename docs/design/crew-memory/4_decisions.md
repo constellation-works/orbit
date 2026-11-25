@@ -1,7 +1,8 @@
 ---
 title: Crew Memory — Decisions
 owner: claude
-last_updated: 2026-11-21
+created_date: 2026-11-08
+updated_date: 2026-11-21
 last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory

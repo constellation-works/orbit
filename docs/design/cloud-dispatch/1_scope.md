@@ -9,7 +9,8 @@ doc_role: scope
 type: design
 summary: "Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence."
 tags: [cloud, dispatch, claude, copilot, routines, pr, polling]
-last_updated: 2026-11-05
+created_date: 2026-09-23
+updated_date: 2026-11-05
 last_validated: 2026-11-05
 ---
 

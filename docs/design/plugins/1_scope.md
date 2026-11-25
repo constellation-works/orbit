@@ -7,7 +7,8 @@ doc_role: scope
 type: design
 summary: "Implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions."
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-11-15
+created_date: 2026-09-20
+updated_date: 2026-11-15
 last_validated: 2026-11-15
 stage: shipped
 next: "—"

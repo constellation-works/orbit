@@ -3,7 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-11-05
+created_date: 2026-04-26
+updated_date: 2026-11-05
 last_validated: 2026-10-28
 status: Draft
 feature: user-interface

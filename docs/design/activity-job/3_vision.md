@@ -3,7 +3,8 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-11-03
+created_date: 2026-04-21
+updated_date: 2026-11-03
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job

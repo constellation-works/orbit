@@ -3,7 +3,8 @@ summary: "Lexical task search using SQLite FTS5 BM25."
 type: design
 title: "Task Search — Overview"
 owner: codex
-last_updated: 2026-11-15
+created_date: 2026-05-09
+updated_date: 2026-11-15
 last_validated: 2026-11-15
 status: Implemented
 stage: shipped

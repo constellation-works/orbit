@@ -3,7 +3,8 @@ summary: "User Interface — Design"
 type: design
 title: "User Interface — Design"
 owner: gemini
-last_updated: 2026-11-22
+created_date: 2026-04-26
+updated_date: 2026-11-22
 last_validated: 2026-11-17
 status: Draft
 feature: user-interface

@@ -1,7 +1,8 @@
 ---
 title: Crew Memory — Design
 owner: claude
-last_updated: 2026-11-24
+created_date: 2026-11-08
+updated_date: 2026-11-24
 last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory

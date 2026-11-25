@@ -1,7 +1,8 @@
 ---
 title: "Scope: Task risk relative to model capability"
 owner: codex
-last_updated: 2026-11-07
+created_date: 2026-10-29
+updated_date: 2026-11-07
 last_validated: 2026-11-07
 status: Draft
 stage: designing

@@ -3,7 +3,8 @@ summary: "Task Artifacts — Vision"
 type: design
 title: "Task Artifacts — Vision"
 owner: codex
-last_updated: 2026-11-02
+created_date: 2026-05-10
+updated_date: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
 feature: task-artifacts

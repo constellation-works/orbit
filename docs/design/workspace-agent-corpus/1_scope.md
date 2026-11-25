@@ -2,7 +2,8 @@
 title: Workspace agent corpus
 type: design
 owner: Orbit
-last_updated: 2026-11-22
+created_date: 2026-10-31
+updated_date: 2026-11-22
 status: Draft
 stage: shipped
 next: "—"

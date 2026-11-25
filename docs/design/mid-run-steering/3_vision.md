@@ -1,7 +1,8 @@
 ---
 title: Mid-Run Operator Steering — Vision
 owner: codex
-last_updated: 2026-10-31
+created_date: 2026-10-17
+updated_date: 2026-10-31
 last_validated: 2026-10-31
 status: Accepted
 feature: mid-run-steering

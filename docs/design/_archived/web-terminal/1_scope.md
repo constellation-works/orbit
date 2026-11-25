@@ -1,7 +1,8 @@
 ---
 title: "Scope: a terminal in the dashboard"
 owner: claude
-last_updated: 2026-11-08
+created_date: 2026-10-25
+updated_date: 2026-11-08
 last_validated: 2026-11-05
 status: Deprecated
 feature: web-terminal

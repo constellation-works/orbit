@@ -1,7 +1,8 @@
 ---
 title: "Scope: explore briefs from task-pilot"
 owner: claude
-last_updated: 2026-11-07
+created_date: 2026-10-25
+updated_date: 2026-11-07
 last_validated: 2026-11-07
 status: Deprecated
 feature: explore-brief

@@ -3,7 +3,8 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-11-20
+created_date: 2026-05-21
+updated_date: 2026-11-20
 last_validated: 2026-11-20
 status: Implemented
 feature: mcp-session-context

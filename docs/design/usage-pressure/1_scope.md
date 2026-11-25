@@ -9,7 +9,8 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
-last_updated: 2026-11-20
+created_date: 2026-10-23
+updated_date: 2026-11-20
 last_validated: 2026-11-20
 ---
 

@@ -1,7 +1,8 @@
 ---
 title: Bounded application approvals — Decisions
 owner: claude
-last_updated: 2026-11-01
+created_date: 2026-11-01
+updated_date: 2026-11-01
 last_validated: 2026-11-01
 status: Draft
 feature: application-approvals

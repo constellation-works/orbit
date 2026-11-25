@@ -1,7 +1,8 @@
 ---
 title: Executors — Decisions
 owner: claude
-last_updated: 2026-08-11
+created_date: 2026-06-13
+updated_date: 2026-08-11
 last_validated: 2026-10-12
 status: Draft
 stage: shipped

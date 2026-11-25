@@ -3,7 +3,8 @@ summary: "Agent Families — Overview"
 type: design
 title: "Agent Families — Overview"
 owner: grok
-last_updated: 2026-11-16
+created_date: 2026-05-15
+updated_date: 2026-11-16
 last_validated: 2026-11-19
 status: Draft
 stage: shipped

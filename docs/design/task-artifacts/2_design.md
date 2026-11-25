@@ -3,7 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-11-08
+created_date: 2026-05-10
+updated_date: 2026-11-08
 last_validated: 2026-11-08
 status: Draft
 feature: task-artifacts

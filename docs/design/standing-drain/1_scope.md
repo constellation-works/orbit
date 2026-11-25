@@ -1,7 +1,8 @@
 ---
 title: "Scope: standing drain intent for the owner workspace"
 owner: claude
-last_updated: 2026-11-20
+created_date: 2026-11-19
+updated_date: 2026-11-20
 last_validated: 2026-11-20
 status: Draft
 stage: building

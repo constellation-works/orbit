@@ -1,7 +1,8 @@
 ---
 title: Operator Attention — Vision
 owner: claude
-last_updated: 2026-11-24
+created_date: 2026-11-01
+updated_date: 2026-11-24
 last_validated: 2026-11-11
 status: Draft
 feature: operator-attention

@@ -1,7 +1,8 @@
 ---
 title: Path Leases — Vision
 owner: claude
-last_updated: 2026-10-30
+created_date: 2026-10-25
+updated_date: 2026-10-30
 last_validated: 2026-10-30
 status: Draft
 feature: path-leases

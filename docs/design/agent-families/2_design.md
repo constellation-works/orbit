@@ -3,7 +3,8 @@ summary: "Agent Families — Design"
 type: design
 title: "Agent Families — Design"
 owner: human
-last_updated: 2026-11-16
+created_date: 2026-05-15
+updated_date: 2026-11-16
 last_validated: 2026-10-29
 status: Draft
 feature: agent-families

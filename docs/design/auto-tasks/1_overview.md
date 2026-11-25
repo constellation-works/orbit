@@ -1,7 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-11-20
+created_date: 2026-07-12
+updated_date: 2026-11-20
 last_validated: 2026-11-15
 status: Implemented
 stage: shipped

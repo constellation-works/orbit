@@ -1,7 +1,8 @@
 ---
 title: Owner Failover — Overview
 owner: claude
-last_updated: 2026-11-04
+created_date: 2026-10-31
+updated_date: 2026-11-04
 last_validated: 2026-11-20
 status: Draft
 stage: designing

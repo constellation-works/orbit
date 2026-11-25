@@ -1,7 +1,8 @@
 ---
 title: Terminal Interface — Overview
 owner: claude
-last_updated: 2026-11-08
+created_date: 2026-08-01
+updated_date: 2026-11-08
 last_validated: 2026-11-08
 status: Implemented
 stage: shipped

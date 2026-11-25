@@ -3,7 +3,8 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-11-22
+created_date: 2026-04-21
+updated_date: 2026-11-22
 last_validated: 2026-11-14
 status: Draft
 feature: activity-job

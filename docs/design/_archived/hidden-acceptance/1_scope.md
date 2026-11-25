@@ -1,7 +1,8 @@
 ---
 title: "Scope: Hidden acceptance for unattended delivery"
 owner: claude
-last_updated: 2026-10-24
+created_date: 2026-10-24
+updated_date: 2026-10-24
 last_validated: 2026-10-24
 status: Deprecated
 feature: hidden-acceptance

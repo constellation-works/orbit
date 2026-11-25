@@ -1,7 +1,8 @@
 ---
 title: "Task pilot — assessment persistence"
 owner: orbit
-last_updated: 2026-11-22
+created_date: 2026-11-09
+updated_date: 2026-11-22
 status: Draft
 feature: task-pilot
 doc_role: scope

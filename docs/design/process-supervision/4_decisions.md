@@ -1,7 +1,8 @@
 ---
 title: Process Supervision — Decisions
 owner: claude
-last_updated: 2026-10-12
+created_date: 2026-10-12
+updated_date: 2026-10-12
 last_validated: 2026-10-12
 status: Draft
 feature: process-supervision

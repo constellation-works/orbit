@@ -1,7 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-11-22
+created_date: 2026-07-12
+updated_date: 2026-11-22
 last_validated: 2026-11-08
 status: Accepted
 feature: auto-tasks
