@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Fail when a code identifier removed in the diff is still named in live docs.
 
-From the delivery diff against the guardrails base (`CI_TEST_BASE`, with the
-merge-base fallback `scripts/ci-guardrails.sh` uses), take the identifiers whose
-definition the diff deletes:
+From the delivery diff against the guardrails base (the merge-base of HEAD and
+`CI_TEST_BASE`, so a base that moved on after the branch point adds nothing to
+the diff, with the agent-main merge-base fallback `scripts/ci-guardrails.sh`
+uses), take the identifiers whose definition the diff deletes:
 
 - Rust `const`, `static`, `fn`, `struct`, `enum`, `trait` and `type` names, outside
   comments and quoted literals;
@@ -89,9 +90,18 @@ def comparison_base():
     explicit = os.environ.get("CI_TEST_BASE")
     if explicit:
         result = git("rev-parse", "--verify", f"{explicit}^{{commit}}")
-        if result.returncode == 0:
-            return result.stdout.strip()
-        raise ValueError(f"cannot resolve CI_TEST_BASE {explicit!r} to a commit")
+        if result.returncode != 0:
+            raise ValueError(f"cannot resolve CI_TEST_BASE {explicit!r} to a commit")
+        # A pull request passes its base branch tip, which may have moved past
+        # the head's branch point. Diffing from that tip would read every
+        # identifier the base added since as one this diff removes, so compare
+        # from the merge-base. A push passes the previous tip, an ancestor of
+        # HEAD, which is its own merge-base, so push runs compare as before.
+        tip = result.stdout.strip()
+        fork = git("merge-base", tip, "HEAD")
+        if fork.returncode == 0 and fork.stdout.strip():
+            return fork.stdout.strip()
+        return tip
     for branch in ("refs/remotes/origin/agent-main", "refs/heads/agent-main"):
         if git("rev-parse", "--verify", "--quiet", branch).returncode == 0:
             result = git("merge-base", "HEAD", branch)
