@@ -1936,7 +1936,7 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
 fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr() {
     for job in NO_DIFF_ROUTES {
         let replay = Replay::new();
-        let fixture = CleanLeaf::resolved(&replay, &[Replay::SELECTOR]);
+        let fixture = CleanLeaf::resolved_without_report(&replay, &[Replay::SELECTOR]);
         let handoff = fixture.run_clean_pipeline(job);
         assert_eq!(
             replay.runs(),
@@ -1948,6 +1948,30 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
         );
         assert_eq!(handoff.candidate.candidate, handoff.candidate.base, "{job}");
         assert_eq!(handoff.candidate.base.commit, fixture.base, "{job}");
+        let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery else {
+            panic!("{job}: expected the NoDiff checkpoint")
+        };
+        let artifacts = fixture.owner_artifacts();
+        assert!(
+            artifacts
+                .iter()
+                .all(|artifact| artifact.path != "no-diff.json"),
+            "{job}: this fixture has no artifact-backed report"
+        );
+        let checkpoint = artifacts
+            .iter()
+            .find(|artifact| artifact.path == evidence.path)
+            .expect("the owner holds the report-free verifier checkpoint");
+        let checkpoint: Value = serde_json::from_slice(&checkpoint.content).unwrap();
+        assert_eq!(checkpoint["decision"], "verified_already_resolved", "{job}");
+        assert_eq!(checkpoint["task_id"], fixture.task, "{job}");
+        assert_eq!(checkpoint["job_run_id"], fixture.leaf, "{job}");
+        assert_eq!(checkpoint["base_sha"], fixture.base, "{job}");
+        assert_eq!(
+            checkpoint["already_resolved_evidence"]["selectors"],
+            json!([Replay::SELECTOR]),
+            "{job}"
+        );
         assert_eq!(
             fixture.owner_validated_commands(&handoff),
             vec![CHECK.to_string(), Replay::host_command()],
@@ -1968,6 +1992,55 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
         assert_settles_to_review(&fixture, &handoff, job);
         fixture.land(&handoff);
         assert_eq!(fixture.pair.owner_status(&fixture.task), "done", "{job}");
+        fixture.assert_no_blocked();
+    }
+}
+
+/// The owner still binds report-free already-resolved checkpoints to the
+/// claimed task and run and accepts only verifier decisions it understands.
+#[cfg(unix)]
+fn a_report_free_already_resolved_checkpoint_keeps_owner_identity_guards() {
+    for (field, value) in [
+        ("task_id", "another-task"),
+        ("job_run_id", "another-run"),
+        ("decision", "verified_already_resolved_v2"),
+    ] {
+        let replay = Replay::new();
+        let fixture = CleanLeaf::resolved_without_report(&replay, &[Replay::SELECTOR]);
+        let mut handoff = fixture.prepare_handoff();
+        let HandoffDelivery::NoDiff { evidence } = &mut handoff.candidate.delivery else {
+            panic!("expected NoDiff")
+        };
+        let artifact = fixture
+            .pair
+            .wire
+            .owner
+            .get_task_artifact(&fixture.task, &evidence.path)
+            .unwrap()
+            .unwrap();
+        let mut checkpoint: Value = serde_json::from_slice(&artifact.content).unwrap();
+        checkpoint[field] = json!(value);
+        let content = serde_json::to_vec(&checkpoint).unwrap();
+        fixture.attach(&evidence.path, checkpoint);
+        evidence.sha256 = sha256_hex(&content);
+
+        let error = fixture.settle(&handoff).expect_err(field);
+        assert!(
+            error
+                .to_string()
+                .contains("NoDiff requires this task/run's verified clean-tree checkpoint"),
+            "{field}: {error}"
+        );
+        fixture.assert_status("in-progress");
+        assert!(
+            fixture
+                .pair
+                .wire
+                .owner
+                .accepted_task_handoff(&handoff.claim_id)
+                .is_err(),
+            "{field}: invalid evidence must not be journaled as accepted"
+        );
         fixture.assert_no_blocked();
     }
 }
@@ -2161,5 +2234,6 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr_scenarios,
     a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr,
+    a_report_free_already_resolved_checkpoint_keeps_owner_identity_guards,
     a_failing_already_resolved_replay_blocks_the_task_with_its_output
 );

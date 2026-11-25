@@ -495,6 +495,25 @@ impl CleanLeaf {
         fixture
     }
 
+    /// A claimed clean base whose already-resolved selectors are the only
+    /// verifier evidence; there is no artifact-backed `no-diff.json` route.
+    #[cfg(unix)]
+    pub(crate) fn resolved_without_report(replay: &Replay, selectors: &[&str]) -> Self {
+        let mut fixture = Self::build_requiring(
+            false,
+            "done",
+            &[],
+            false.into(),
+            None,
+            CHECK,
+            &replay.config(),
+            None,
+            None,
+        );
+        fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
+        fixture
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_requiring(
         already_landed: bool,
@@ -750,7 +769,12 @@ impl CleanLeaf {
         assert!(
             matches!(
                 committed["decision"].as_str(),
-                Some("verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected")
+                Some(
+                    "verified_no_diff"
+                        | "verified_already_landed"
+                        | "verified_already_resolved"
+                        | "skipped_no_diff_expected"
+                )
             ),
             "{committed}"
         );
