@@ -67,8 +67,8 @@ macro_rules! env_vars {
 
 env_vars! {
     const CARGO_DENY_DB_PATH: cargo_deny_db_path = (
-        "Cargo-deny advisory database location that Orbit sets for a sandboxed worker that may write.",
-        "Unset. Cargo-deny uses its own default location.",
+        "Primary advisory database location for `scripts/cargo-deny.sh`; a non-empty value takes precedence over `ORBIT_CARGO_DENY_DB_PATH`. Orbit sets it for a sandboxed worker that may write.",
+        "If unset or empty, the wrapper uses `ORBIT_CARGO_DENY_DB_PATH`; if both are unset or empty, cargo-deny uses its own default location.",
     );
     const CARGO_HOME: cargo_home = (
         "Cargo home for toolchain discovery, build caches and credential paths.",
