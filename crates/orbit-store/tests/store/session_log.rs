@@ -76,9 +76,9 @@ fn symlinked_log_refuses_operations_without_touching_outside_target() {
             fs::write(&outside, bytes).unwrap();
         }
         let errors = [
-            store.list(SessionLogFilter::default()).unwrap_err(),
-            store.append(params("new entry")).unwrap_err(),
-            store.resolve(&valid.id).unwrap_err(),
+            store.read().session_log().list(SessionLogFilter::default()).unwrap_err(),
+            store.write(|tx| tx.session_log().append(params("new entry"))).unwrap_err(),
+            store.write(|tx| tx.session_log().resolve(&valid.id)).unwrap_err(),
         ];
         for error in errors {
             assert!(
@@ -113,7 +113,7 @@ fn listing_preserves_tail_bytes_until_append_repairs_under_lock() {
     ] {
         let root = TempDir::new().unwrap();
         let store = workspace_session_log_store(root.path().to_path_buf());
-        let first = store.append(params("first")).unwrap();
+        let first = store.write(|tx| tx.session_log().append(params("first"))).unwrap();
         let path = root.path().join("session-log.jsonl");
         let prefix = encoded(&first);
         let mut raw = prefix.clone();
@@ -126,7 +126,7 @@ fn listing_preserves_tail_bytes_until_append_repairs_under_lock() {
         fs::write(&path, &raw).unwrap();
 
         assert_eq!(
-            store.list(SessionLogFilter::default()).unwrap(),
+            store.read().session_log().list(SessionLogFilter::default()).unwrap(),
             vec![first]
         );
         assert_eq!(
@@ -135,11 +135,11 @@ fn listing_preserves_tail_bytes_until_append_repairs_under_lock() {
             "list must never repair the log"
         );
 
-        let second = store.append(params("second")).unwrap();
+        let second = store.write(|tx| tx.session_log().append(params("second"))).unwrap();
         let mut expected = prefix;
         expected.extend(encoded(&second));
         assert_eq!(fs::read(&path).unwrap(), expected);
-        assert_eq!(store.list(SessionLogFilter::default()).unwrap().len(), 2);
+        assert_eq!(store.read().session_log().list(SessionLogFilter::default()).unwrap().len(), 2);
         assert_eq!(second.id, "SL-0002");
     }
 }
@@ -151,20 +151,20 @@ fn resolution_replaces_recovered_records_without_repairing_failed_requests() {
     }
     let root = TempDir::new().unwrap();
     let store = workspace_session_log_store(root.path().to_path_buf());
-    let first = store.append(params("check this")).unwrap();
+    let first = store.write(|tx| tx.session_log().append(params("check this"))).unwrap();
     let path = root.path().join("session-log.jsonl");
     let mut raw = encoded(&first);
     raw.extend_from_slice(b"\xe2\x82");
     fs::write(&path, &raw).unwrap();
 
-    store.resolve("SL-9999").unwrap_err();
+    store.write(|tx| tx.session_log().resolve("SL-9999")).unwrap_err();
     assert_eq!(fs::read(&path).unwrap(), raw);
-    let resolved = store.resolve(&first.id).unwrap();
+    let resolved = store.write(|tx| tx.session_log().resolve(&first.id)).unwrap();
     assert!(resolved.resolved_at.is_some());
     assert_eq!(fs::read(&path).unwrap(), encoded(&resolved));
     assert!(
         store
-            .list(SessionLogFilter {
+            .read().session_log().list(SessionLogFilter {
                 unresolved_only: true,
                 ..SessionLogFilter::default()
             })
@@ -180,14 +180,14 @@ fn terminated_corruption_fails_without_modifying_the_log() {
     }
     let root = TempDir::new().unwrap();
     let store = workspace_session_log_store(root.path().to_path_buf());
-    let first = store.append(params("first")).unwrap();
+    let first = store.write(|tx| tx.session_log().append(params("first"))).unwrap();
     let path = root.path().join("session-log.jsonl");
     let mut raw = encoded(&first);
     raw.extend_from_slice(b"{\n");
     fs::write(&path, &raw).unwrap();
-    store.list(SessionLogFilter::default()).unwrap_err();
-    store.append(params("second")).unwrap_err();
-    store.resolve(&first.id).unwrap_err();
+    store.read().session_log().list(SessionLogFilter::default()).unwrap_err();
+    store.write(|tx| tx.session_log().append(params("second"))).unwrap_err();
+    store.write(|tx| tx.session_log().resolve(&first.id)).unwrap_err();
     assert_eq!(fs::read(&path).unwrap(), raw);
 }
 
@@ -199,10 +199,10 @@ fn missing_logs_stay_missing_and_nonregular_logs_are_refused() {
     let root = TempDir::new().unwrap();
     let path = root.path().join("session-log.jsonl");
     let store = workspace_session_log_store(root.path().to_path_buf());
-    assert!(store.list(SessionLogFilter::default()).unwrap().is_empty());
+    assert!(store.read().session_log().list(SessionLogFilter::default()).unwrap().is_empty());
     assert!(!path.exists());
     fs::create_dir(&path).unwrap();
-    assert_path_error(&path, store.list(SessionLogFilter::default()).unwrap_err());
+    assert_path_error(&path, store.read().session_log().list(SessionLogFilter::default()).unwrap_err());
 }
 
 fn assert_path_error(path: &Path, error: orbit_common::OrbitError) {

@@ -19,6 +19,7 @@ mod git_test_support;
 pub mod compose;
 pub mod contracts;
 mod driver;
+mod file_store;
 mod fs;
 pub(crate) mod json_schema;
 mod repository;
@@ -41,6 +42,7 @@ pub mod maintenance {
 
 pub mod skill_store {
     pub use crate::driver::file::skill_store::*;
+    pub use crate::repository::skill::SkillRepository;
 }
 
 /// Friction record access and default tag-taxonomy initialization.
@@ -88,12 +90,15 @@ pub use contracts::{
     TaskStoreBackend, TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter,
     V2AuditEventInsertParams, V2AuditEventRow,
 };
-pub use driver::file::session_log_store::SessionLogStore;
+pub use driver::file::executor_def_store::ExecutorDefDir;
+pub use driver::file::policy_def_store::PolicyDefDirs;
+pub use driver::file::session_log_store::SessionLogDir;
 pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;
 pub use driver::file::workspace_binding::workspace_id_for_orbit_dir;
 pub use driver::sqlite::host::connection::Store;
 pub(crate) use driver::sqlite::host::connection::StoreTx;
 pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
+pub use file_store::{FileSnapshot, FileStore, FileTx};
 pub use fs::lock::read_lock_holder;
 pub use repository::admission_load::AdmissionLoadRepository;
 pub use repository::application_consent::ApplicationConsentRepository;
@@ -101,14 +106,21 @@ pub use repository::backlog_forecast::BacklogForecastRepository;
 pub use repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
 pub use repository::crew_memory::CrewMemoryRepository;
 pub use repository::evolution::EvolutionRepository;
+pub use repository::executor_def::ExecutorDefRepository;
 pub use repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 pub use repository::landed_diff::LandedDiffRepository;
 pub use repository::notice::NoticeRepository;
+pub use repository::plugin::PluginRepository;
+pub use repository::policy_def::PolicyDefRepository;
 pub use repository::provider_limit::ProviderLimitRepository;
 pub use repository::reliability::ReliabilityRepository;
 pub use repository::resource_usage::{ResourceUsageRepository, WorkerResourceLimitRepository};
 pub use repository::retention::{RetentionRepository, visit_blob_reference_text};
+pub use repository::script_grant::ScriptGrantRepository;
+pub use repository::session_log::SessionLogRepository;
+pub use repository::skill::SkillRepository;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
+pub use repository::tool::ToolRepository;
 pub use store::{Snapshot, Tx};
 
 /// Hooks for tests in crates that depend on `orbit-store`, behind the

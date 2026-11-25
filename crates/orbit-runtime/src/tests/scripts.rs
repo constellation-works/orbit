@@ -44,9 +44,12 @@ fn script_grant_round_trips_and_verifies_only_with_its_witness() {
     let store = Store::open(&dir.path().join("orbit.db")).expect("store opens");
     let (grant, manifest, entry) = fixture_grant();
 
-    store.upsert_script_grant(&grant).expect("grant row writes");
+    store
+        .write(|tx| tx.script_grant().put(&grant))
+        .expect("grant row writes");
     let stored = store
-        .get_script_grant("ws_fixture", "package")
+        .read()
+        .and_then(|snapshot| snapshot.script_grant().get("ws_fixture", "package"))
         .expect("grant reads")
         .expect("grant exists");
     assert_eq!(stored, grant);
@@ -64,10 +67,11 @@ fn script_grant_round_trips_and_verifies_only_with_its_witness() {
     let mut widened = grant.clone();
     widened.network = ScriptNetwork::Any;
     store
-        .upsert_script_grant(&widened)
+        .write(|tx| tx.script_grant().put(&widened))
         .expect("widened row writes");
     let stored_widened = store
-        .get_script_grant("ws_fixture", "package")
+        .read()
+        .and_then(|snapshot| snapshot.script_grant().get("ws_fixture", "package"))
         .expect("widened grant reads")
         .expect("widened grant exists");
     let refused =
@@ -78,13 +82,14 @@ fn script_grant_round_trips_and_verifies_only_with_its_witness() {
     // leaves nothing behind.
     assert!(
         store
-            .delete_script_grant("ws_fixture", "package")
+            .write(|tx| tx.script_grant().delete("ws_fixture", "package"))
             .expect("grant deletes")
     );
     forget_script_grant_witness(dir.path(), "ws_fixture", "package");
     assert!(
         store
-            .get_script_grant("ws_fixture", "package")
+            .read()
+            .and_then(|snapshot| snapshot.script_grant().get("ws_fixture", "package"))
             .expect("grant reads after delete")
             .is_none()
     );

@@ -15,7 +15,9 @@ impl RuntimeKernel {
     pub fn configured_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         self.stores()
             .executors()
-            .get_executor_def(agent_cli)
+            .read()
+            .executor_def()
+            .get(agent_cli)
             .ok()
             .flatten()
             .and_then(|def| {

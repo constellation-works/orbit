@@ -1,11 +1,21 @@
-//! Host-local installed-plugin records (`plugins`, beside `tools`).
+//! Concrete repository for host-local installed-plugin records (`plugins`,
+//! beside `tools`).
+//!
+//! Reached only through [`Snapshot::plugin`] (read-only) and [`Tx::plugin`]
+//! (read-write inside [`crate::Store::write`]). Never synced; the workspace
+//! pin file is the versioned half. Install, enable and certification rules
+//! belong to the calling operation; this repository owns the SQL and the row
+//! mapping only.
+
+use std::marker::PhantomData;
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::plugin::{InstalledPlugin, PluginBuildRecord};
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::{Store, StoreTx, now_string};
+use crate::now_string;
+use crate::store::{Snapshot, Tx};
 
 const PLUGIN_COLUMNS: &str = "name, version, source, install_path, manifest_digest, enabled, \
      grants_json, first_party, installed_at, updated_at, certified_orbit_version, archive_digest, \
@@ -49,10 +59,27 @@ fn build_record_from_column(raw: Option<String>) -> rusqlite::Result<Option<Plug
     .transpose()
 }
 
-impl Store {
-    pub fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError> {
-        let conn = self.read_connection()?;
-        let mut stmt = conn
+/// Concrete plugin repository scoped to a [`Snapshot`] (read-only) or a [`Tx`]
+/// (read-write).
+pub struct PluginRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> PluginRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<Access> PluginRepository<'_, Access> {
+    /// Every installed plugin, ordered by name.
+    pub fn list(&self) -> Result<Vec<InstalledPlugin>, OrbitError> {
+        let mut stmt = self
+            .conn
             .prepare(&format!(
                 "SELECT {PLUGIN_COLUMNS} FROM plugins ORDER BY name"
             ))
@@ -64,9 +91,10 @@ impl Store {
             .map_err(sqlite_store_error)
     }
 
-    pub fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
-        let conn = self.read_connection()?;
-        let mut stmt = conn
+    /// The plugin named `name`, if installed.
+    pub fn get(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
+        let mut stmt = self
+            .conn
             .prepare(&format!(
                 "SELECT {PLUGIN_COLUMNS} FROM plugins WHERE name = ?1"
             ))
@@ -77,10 +105,17 @@ impl Store {
     }
 }
 
-impl StoreTx<'_> {
+impl<'a, 'tx> PluginRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
+    }
+
     /// Insert or replace the record for `plugin.name`; `installed_at` is
     /// kept from an existing row.
-    pub fn upsert_plugin(&mut self, plugin: &InstalledPlugin) -> Result<(), OrbitError> {
+    pub fn put(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError> {
         let grants_json = serde_json::to_string(&plugin.grants)
             .map_err(|error| OrbitError::Store(format!("serialize plugin grants: {error}")))?;
         let build_json = plugin
@@ -92,7 +127,7 @@ impl StoreTx<'_> {
                 OrbitError::Store(format!("serialize plugin build record: {error}"))
             })?;
         let now = now_string();
-        self.tx
+        self.conn
             .execute(
                 "INSERT INTO plugins(name, version, source, install_path, manifest_digest, enabled, \
                  grants_json, first_party, installed_at, updated_at, certified_orbit_version, \
@@ -125,9 +160,10 @@ impl StoreTx<'_> {
         Ok(())
     }
 
-    pub fn delete_plugin(&mut self, name: &str) -> Result<bool, OrbitError> {
+    /// Delete the plugin named `name`. Returns whether a row was deleted.
+    pub fn delete(&self, name: &str) -> Result<bool, OrbitError> {
         let affected = self
-            .tx
+            .conn
             .execute("DELETE FROM plugins WHERE name = ?1", params![name])
             .map_err(sqlite_store_error)?;
         Ok(affected > 0)
@@ -136,13 +172,13 @@ impl StoreTx<'_> {
     /// Record the Orbit version this plugin's `spec.tests` goldens passed on
     /// (design §5). A re-install keeps whatever the caller passes in the
     /// record; only a conformance run writes it here.
-    pub fn set_plugin_certification(
-        &mut self,
+    pub fn set_certification(
+        &self,
         name: &str,
         orbit_version: Option<&str>,
     ) -> Result<bool, OrbitError> {
         let affected = self
-            .tx
+            .conn
             .execute(
                 "UPDATE plugins SET certified_orbit_version = ?1, updated_at = ?2 WHERE name = ?3",
                 params![orbit_version, now_string(), name],
@@ -151,8 +187,10 @@ impl StoreTx<'_> {
         Ok(affected > 0)
     }
 
-    pub fn set_plugin_enabled(
-        &mut self,
+    /// Set the enabled flag and grants of the plugin named `name`. Returns
+    /// whether a row was updated.
+    pub fn set_enabled(
+        &self,
         name: &str,
         enabled: bool,
         grants: &[String],
@@ -160,7 +198,7 @@ impl StoreTx<'_> {
         let grants_json = serde_json::to_string(grants)
             .map_err(|error| OrbitError::Store(format!("serialize plugin grants: {error}")))?;
         let affected = self
-            .tx
+            .conn
             .execute(
                 "UPDATE plugins SET enabled = ?1, grants_json = ?2, updated_at = ?3 WHERE name = ?4",
                 params![enabled as i32, grants_json, now_string(), name],

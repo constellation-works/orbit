@@ -1,95 +1,22 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::plugin::InstalledPlugin;
 use orbit_types::telemetry::AuditEvent;
-use orbit_types::tool::StoredTool;
 
 use crate::contracts::{AuditEventFilter, AuditEventInsertParams};
 use crate::contracts::{
     AuditEventStoreBackend, LeaseExpandParams, LeaseExpandResult, LeaseInsertParams,
     LeaseInsertResult, LeaseListResult, LeaseMode, LeaseQueueGrantParams, LeaseQueueGrantResult,
     LeaseRecord, LeaseReleaseParams, LeaseReleaseResult, LeaseRenewParams, LeaseRenewResult,
-    PluginStoreBackend, TaskReservationCheckParams, TaskReservationCheckResult,
-    TaskReservationListResult, TaskReservationOwnedConflictsParams,
-    TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
-    TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
-    TaskReservationReleaseResult, TaskReservationReserveParams, TaskReservationReserveResult,
-    TaskReservationStoreBackend, ToolStoreBackend, WorkspaceClaimAcquireParams,
+    TaskReservationCheckParams, TaskReservationCheckResult, TaskReservationListResult,
+    TaskReservationOwnedConflictsParams, TaskReservationOwnedConflictsResult,
+    TaskReservationReleaseByOwnerParams, TaskReservationReleaseByOwnerResult,
+    TaskReservationReleaseParams, TaskReservationReleaseResult, TaskReservationReserveParams,
+    TaskReservationReserveResult, TaskReservationStoreBackend, WorkspaceClaimAcquireParams,
     WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams, WorkspaceClaimCheckResult,
     WorkspaceClaimReleaseParams, WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
 };
 use crate::repository::task::TaskCommitBoundary;
 use crate::{ActiveTaskReservation, Store};
-
-#[derive(Clone)]
-pub(crate) struct SqliteToolStoreBackend {
-    pub(crate) store: Store,
-}
-
-impl ToolStoreBackend for SqliteToolStoreBackend {
-    fn list_tools(&self) -> Result<Vec<StoredTool>, OrbitError> {
-        self.store.list_tools()
-    }
-
-    fn get_tool(&self, name: &str) -> Result<Option<StoredTool>, OrbitError> {
-        self.store.get_tool(name)
-    }
-
-    fn insert_tool(&self, tool: &StoredTool) -> Result<(), OrbitError> {
-        self.store.with_transaction(|tx| tx.insert_tool(tool))
-    }
-
-    fn delete_tool(&self, name: &str) -> Result<bool, OrbitError> {
-        self.store.with_transaction(|tx| tx.delete_tool(name))
-    }
-
-    fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<bool, OrbitError> {
-        self.store
-            .with_transaction(|tx| tx.set_tool_enabled(name, enabled))
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct SqlitePluginStoreBackend {
-    pub(crate) store: Store,
-}
-
-impl PluginStoreBackend for SqlitePluginStoreBackend {
-    fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError> {
-        self.store.list_plugins()
-    }
-
-    fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
-        self.store.get_plugin(name)
-    }
-
-    fn upsert_plugin(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError> {
-        self.store.with_transaction(|tx| tx.upsert_plugin(plugin))
-    }
-
-    fn delete_plugin(&self, name: &str) -> Result<bool, OrbitError> {
-        self.store.with_transaction(|tx| tx.delete_plugin(name))
-    }
-
-    fn set_plugin_certification(
-        &self,
-        name: &str,
-        orbit_version: Option<&str>,
-    ) -> Result<bool, OrbitError> {
-        self.store
-            .with_transaction(|tx| tx.set_plugin_certification(name, orbit_version))
-    }
-
-    fn set_plugin_enabled(
-        &self,
-        name: &str,
-        enabled: bool,
-        grants: &[String],
-    ) -> Result<bool, OrbitError> {
-        self.store
-            .with_transaction(|tx| tx.set_plugin_enabled(name, enabled, grants))
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct SqliteAuditEventStoreBackend {

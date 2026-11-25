@@ -16,10 +16,13 @@ use crate::repository::evolution::EvolutionRepository;
 use crate::repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 use crate::repository::landed_diff::LandedDiffRepository;
 use crate::repository::notice::NoticeRepository;
+use crate::repository::plugin::PluginRepository;
 use crate::repository::provider_limit::ProviderLimitRepository;
 use crate::repository::reliability::ReliabilityRepository;
 use crate::repository::resource_usage::{ResourceUsageRepository, WorkerResourceLimitRepository};
 use crate::repository::retention::RetentionRepository;
+use crate::repository::script_grant::ScriptGrantRepository;
+use crate::repository::tool::ToolRepository;
 
 /// One consistent read view of the host store.
 ///
@@ -113,6 +116,21 @@ impl Snapshot<'_> {
     /// Read-only access to worker resource-limit breach evidence in this snapshot.
     pub fn worker_resource_limit(&self) -> WorkerResourceLimitRepository<'_, Self> {
         WorkerResourceLimitRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to host-local installed-plugin records in this snapshot.
+    pub fn plugin(&self) -> PluginRepository<'_, Self> {
+        PluginRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to host-local script grant records in this snapshot.
+    pub fn script_grant(&self) -> ScriptGrantRepository<'_, Self> {
+        ScriptGrantRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to registered tool records in this snapshot.
+    pub fn tool(&self) -> ToolRepository<'_, Self> {
+        ToolRepository::for_snapshot(self)
     }
 }
 
@@ -217,6 +235,21 @@ impl Tx<'_> {
     /// Read-write access to worker resource-limit breach evidence inside this transaction.
     pub fn worker_resource_limit(&self) -> WorkerResourceLimitRepository<'_, Self> {
         WorkerResourceLimitRepository::for_tx(self)
+    }
+
+    /// Read-write access to host-local installed-plugin records inside this transaction.
+    pub fn plugin(&self) -> PluginRepository<'_, Self> {
+        PluginRepository::for_tx(self)
+    }
+
+    /// Read-write access to host-local script grant records inside this transaction.
+    pub fn script_grant(&self) -> ScriptGrantRepository<'_, Self> {
+        ScriptGrantRepository::for_tx(self)
+    }
+
+    /// Read-write access to registered tool records inside this transaction.
+    pub fn tool(&self) -> ToolRepository<'_, Self> {
+        ToolRepository::for_tx(self)
     }
 }
 

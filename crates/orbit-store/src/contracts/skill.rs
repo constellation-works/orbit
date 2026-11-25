@@ -1,4 +1,4 @@
-//! Skill catalog DTOs.
+//! Skill record shapes: a loaded skill and its catalog doctor rows.
 
 use std::path::PathBuf;
 

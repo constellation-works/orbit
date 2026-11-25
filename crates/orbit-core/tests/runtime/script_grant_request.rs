@@ -188,7 +188,7 @@ fn stored_script_grant_timeout_checks() {
         fx.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_script_grant(&grant)
+            .write(|tx| tx.script_grant().put(&grant))
             .unwrap();
         scripts::record_script_grant_witness(
             &fx.runtime.global_root(),

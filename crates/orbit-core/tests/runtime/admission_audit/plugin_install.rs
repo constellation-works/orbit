@@ -230,7 +230,8 @@ fn upgrade_broadens_a_templated_fs_default_only_when_the_resolved_root_grows() {
         "the widening report names the broader root: {diagnostic}"
     );
     let row = crate::admission_audit::store_support::plugins(&fixture.runtime)
-        .get_plugin("demo")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("demo"))
         .expect("read row")
         .expect("installed");
     assert!(!row.enabled);

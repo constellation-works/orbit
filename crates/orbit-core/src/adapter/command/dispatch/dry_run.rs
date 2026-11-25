@@ -41,7 +41,7 @@ impl OrbitRuntime {
         let admission = (|| {
             let callback = enforce_plugin_callback_allowlist(
                 &self.global_root(),
-                self.stores().plugins(),
+                self.stores().host_store(),
                 name,
             );
             // Dispatch consumes this attribution when it writes its audit row.

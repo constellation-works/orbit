@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use orbit_store::skill_store::SkillCatalog;
+use orbit_store::FileStore;
+use orbit_store::skill_store::SkillDirs;
 use orbit_tools::ToolRegistry;
 
 use crate::base::Base;
@@ -113,7 +114,7 @@ impl Host {
         self.execution.registry.as_ref()
     }
 
-    pub(crate) fn skill_catalog(&self) -> &SkillCatalog {
+    pub(crate) fn skill_catalog(&self) -> &FileStore<SkillDirs> {
         &self.execution.skill_catalog
     }
 

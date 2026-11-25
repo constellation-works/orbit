@@ -2,21 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_types::policy::PolicyDef;
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
-use orbit_types::workflow::ExecutorDef;
 
 use crate::contracts::{
-    AtomicTaskMutationOutcome, AtomicTaskMutationParams, ExecutorDefStoreBackend,
-    PolicyDefStoreBackend, RegisteredTaskResolution, TaskArtifactStoreBackend,
-    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend, TaskDocumentUpdateParams,
-    TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
+    AtomicTaskMutationOutcome, AtomicTaskMutationParams, RegisteredTaskResolution,
+    TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
+    TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
 };
-use crate::driver::file::executor_def_store::ExecutorDefFileStore;
-use crate::driver::file::policy_def_store::PolicyDefFileStore;
 use crate::repository::task::TaskV2Store;
 
 impl TaskStoreBackend for TaskV2Store {
@@ -656,37 +651,5 @@ impl TaskArtifactStoreBackend for TaskV2Store {
         params: TaskArtifactUpdateParams,
     ) -> Result<(), OrbitError> {
         self.upsert_task_artifacts(id, &params)
-    }
-}
-
-impl ExecutorDefStoreBackend for ExecutorDefFileStore {
-    fn list_executor_defs(&self) -> Result<Vec<ExecutorDef>, OrbitError> {
-        self.list_executor_defs()
-    }
-
-    fn get_executor_def(&self, name: &str) -> Result<Option<ExecutorDef>, OrbitError> {
-        self.get_executor_def(name)
-    }
-
-    fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
-        self.upsert_executor_def(def)
-    }
-
-    fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
-        self.delete_executor_def(name)
-    }
-}
-
-impl PolicyDefStoreBackend for PolicyDefFileStore {
-    fn list_policy_defs(&self) -> Result<Vec<PolicyDef>, OrbitError> {
-        self.list_policy_defs()
-    }
-
-    fn get_policy_def(&self, name: &str) -> Result<Option<PolicyDef>, OrbitError> {
-        self.get_policy_def(name)
-    }
-
-    fn upsert_policy_def(&self, def: &PolicyDef) -> Result<(), OrbitError> {
-        self.upsert_policy_def(def)
     }
 }

@@ -47,7 +47,9 @@ pub fn host_plugin_mcp_definitions(
 /// cached runtime is rebuilt on the next call.
 pub fn host_plugin_rows(global_root: &Path) -> Result<Vec<InstalledPlugin>, OrbitError> {
     let config = global_only_config(global_root)?;
-    orbit_store::Store::open_read_only(&config.persistence.audit_db)?.list_plugins()
+    orbit_store::Store::open_read_only(&config.persistence.audit_db)?
+        .read()
+        .and_then(|snapshot| snapshot.plugin().list())
 }
 
 /// Execute a `mcp_scope: global` plugin tool without a workspace runtime,

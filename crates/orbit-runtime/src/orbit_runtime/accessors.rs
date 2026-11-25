@@ -129,7 +129,7 @@ impl RuntimeKernel {
         self.host().plugin_load()
     }
 
-    pub fn skill_catalog(&self) -> &orbit_store::skill_store::SkillCatalog {
+    pub fn skill_catalog(&self) -> &orbit_store::FileStore<orbit_store::skill_store::SkillDirs> {
         self.host().skill_catalog()
     }
 
@@ -171,14 +171,14 @@ impl RuntimeKernel {
     pub fn list_executor_defs(
         &self,
     ) -> Result<Vec<orbit_types::workflow::ExecutorDef>, OrbitError> {
-        self.stores().executors().list_executor_defs()
+        self.stores().executors().read().executor_def().list()
     }
 
     pub fn get_executor_def(
         &self,
         name: &str,
     ) -> Result<Option<orbit_types::workflow::ExecutorDef>, OrbitError> {
-        self.stores().executors().get_executor_def(name)
+        self.stores().executors().read().executor_def().get(name)
     }
 
     /// Where a dispatch from this workspace would launch an executor's
@@ -195,24 +195,28 @@ impl RuntimeKernel {
         &self,
         def: &orbit_types::workflow::ExecutorDef,
     ) -> Result<(), OrbitError> {
-        self.stores().executors().upsert_executor_def(def)
+        self.stores()
+            .executors()
+            .write(|tx| tx.executor_def().put(def))
     }
 
     pub fn list_policy_defs(&self) -> Result<Vec<orbit_types::policy::PolicyDef>, OrbitError> {
-        self.stores().policies().list_policy_defs()
+        self.stores().policies().read().policy_def().list()
     }
 
     pub fn get_policy_def(
         &self,
         name: &str,
     ) -> Result<Option<orbit_types::policy::PolicyDef>, OrbitError> {
-        self.stores().policies().get_policy_def(name)
+        self.stores().policies().read().policy_def().get(name)
     }
 
     pub fn upsert_policy_def(
         &self,
         def: &orbit_types::policy::PolicyDef,
     ) -> Result<(), OrbitError> {
-        self.stores().policies().upsert_policy_def(def)
+        self.stores()
+            .policies()
+            .write(|tx| tx.policy_def().put(def))
     }
 }

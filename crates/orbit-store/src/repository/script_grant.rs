@@ -1,4 +1,8 @@
-//! Host-local script grant records (`script_grant`, beside `plugins`).
+//! Concrete repository for host-local script grant records (`script_grant`,
+//! beside `plugins`).
+//!
+//! Reached only through [`Snapshot::script_grant`] (read-only) and
+//! [`Tx::script_grant`] (read-write inside [`crate::Store::write`]).
 //!
 //! A row here is only half of a grant: the witness under the global
 //! root's `scripts/.grants/` is the other half, and the runtime refuses a
@@ -9,9 +13,11 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::activity_job::{
     ScriptGrant, ScriptGrantLimits, ScriptHostRole, ScriptNetwork,
 };
-use rusqlite::{OptionalExtension, Row, params};
+use std::marker::PhantomData;
 
-use crate::Store;
+use rusqlite::{Connection, OptionalExtension, Row, params};
+
+use crate::store::{Snapshot, Tx};
 
 const SCRIPT_GRANT_COLUMNS: &str = "workspace_id, name, grant_id, digest, manifest_digest, \
      entry_digest, interpreter_paths_json, network, read_roots_json, write_roots_json, \
@@ -74,10 +80,27 @@ fn serialize_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String, 
         .map_err(|error| OrbitError::Store(format!("serialize script grant {what}: {error}")))
 }
 
-impl Store {
-    pub fn list_script_grants(&self, workspace_id: &str) -> Result<Vec<ScriptGrant>, OrbitError> {
-        let conn = self.read_connection()?;
-        let mut stmt = conn
+/// Concrete script grant repository scoped to a [`Snapshot`] (read-only) or a
+/// [`Tx`] (read-write).
+pub struct ScriptGrantRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> ScriptGrantRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<Access> ScriptGrantRepository<'_, Access> {
+    /// The workspace's grants, ordered by name.
+    pub fn list(&self, workspace_id: &str) -> Result<Vec<ScriptGrant>, OrbitError> {
+        let mut stmt = self
+            .conn
             .prepare(&format!(
                 "SELECT {SCRIPT_GRANT_COLUMNS} FROM script_grant \
                  WHERE workspace_id = ?1 ORDER BY name"
@@ -90,13 +113,10 @@ impl Store {
             .map_err(sqlite_store_error)
     }
 
-    pub fn get_script_grant(
-        &self,
-        workspace_id: &str,
-        name: &str,
-    ) -> Result<Option<ScriptGrant>, OrbitError> {
-        let conn = self.read_connection()?;
-        let mut stmt = conn
+    /// The grant for `(workspace_id, name)`, if any.
+    pub fn get(&self, workspace_id: &str, name: &str) -> Result<Option<ScriptGrant>, OrbitError> {
+        let mut stmt = self
+            .conn
             .prepare(&format!(
                 "SELECT {SCRIPT_GRANT_COLUMNS} FROM script_grant \
                  WHERE workspace_id = ?1 AND name = ?2"
@@ -106,67 +126,74 @@ impl Store {
             .optional()
             .map_err(sqlite_store_error)
     }
+}
+
+impl<'a, 'tx> ScriptGrantRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
+    }
 
     /// Insert or replace the grant for `(workspace_id, name)`.
-    pub fn upsert_script_grant(&self, grant: &ScriptGrant) -> Result<(), OrbitError> {
+    pub fn put(&self, grant: &ScriptGrant) -> Result<(), OrbitError> {
         let interpreter_paths_json = serialize_json(&grant.interpreter_paths, "interpreter paths")?;
         let read_roots_json = serialize_json(&grant.read_roots, "read roots")?;
         let write_roots_json = serialize_json(&grant.write_roots, "write roots")?;
         let env_pass_json = serialize_json(&grant.env_pass, "env pass")?;
         let limits_json = serialize_json(&grant.limits, "limits")?;
-        self.with_transaction(|tx| {
-            tx.tx
-                .execute(
-                    "INSERT INTO script_grant(workspace_id, name, grant_id, digest, \
-                     manifest_digest, entry_digest, interpreter_paths_json, network, \
-                     read_roots_json, write_roots_json, env_pass_json, limits_json, \
-                     host_role, grantor, granted_at, provenance, expires_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
-                     ON CONFLICT(workspace_id, name) DO UPDATE SET grant_id = excluded.grant_id, \
-                     digest = excluded.digest, manifest_digest = excluded.manifest_digest, \
-                     entry_digest = excluded.entry_digest, \
-                     interpreter_paths_json = excluded.interpreter_paths_json, \
-                     network = excluded.network, read_roots_json = excluded.read_roots_json, \
-                     write_roots_json = excluded.write_roots_json, \
-                     env_pass_json = excluded.env_pass_json, limits_json = excluded.limits_json, \
-                     host_role = excluded.host_role, grantor = excluded.grantor, \
-                     granted_at = excluded.granted_at, provenance = excluded.provenance, \
-                     expires_at = excluded.expires_at",
-                    params![
-                        grant.workspace_id,
-                        grant.name,
-                        grant.grant_id,
-                        grant.digest,
-                        grant.manifest_digest,
-                        grant.entry_digest,
-                        interpreter_paths_json,
-                        grant.network.as_str(),
-                        read_roots_json,
-                        write_roots_json,
-                        env_pass_json,
-                        limits_json,
-                        grant.host_role.as_str(),
-                        grant.grantor,
-                        grant.granted_at,
-                        grant.provenance,
-                        grant.expires_at,
-                    ],
-                )
-                .map_err(sqlite_store_error)?;
-            Ok(())
-        })
+        self.conn
+            .execute(
+            "INSERT INTO script_grant(workspace_id, name, grant_id, digest, \
+                 manifest_digest, entry_digest, interpreter_paths_json, network, \
+                 read_roots_json, write_roots_json, env_pass_json, limits_json, \
+                 host_role, grantor, granted_at, provenance, expires_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+                 ON CONFLICT(workspace_id, name) DO UPDATE SET grant_id = excluded.grant_id, \
+                 digest = excluded.digest, manifest_digest = excluded.manifest_digest, \
+                 entry_digest = excluded.entry_digest, \
+                 interpreter_paths_json = excluded.interpreter_paths_json, \
+                 network = excluded.network, read_roots_json = excluded.read_roots_json, \
+                 write_roots_json = excluded.write_roots_json, \
+                 env_pass_json = excluded.env_pass_json, limits_json = excluded.limits_json, \
+                 host_role = excluded.host_role, grantor = excluded.grantor, \
+                 granted_at = excluded.granted_at, provenance = excluded.provenance, \
+                 expires_at = excluded.expires_at",
+                params![
+                    grant.workspace_id,
+                    grant.name,
+                    grant.grant_id,
+                    grant.digest,
+                    grant.manifest_digest,
+                    grant.entry_digest,
+                    interpreter_paths_json,
+                    grant.network.as_str(),
+                    read_roots_json,
+                    write_roots_json,
+                    env_pass_json,
+                    limits_json,
+                    grant.host_role.as_str(),
+                    grant.grantor,
+                    grant.granted_at,
+                    grant.provenance,
+                    grant.expires_at,
+                ],
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(())
     }
 
-    pub fn delete_script_grant(&self, workspace_id: &str, name: &str) -> Result<bool, OrbitError> {
-        self.with_transaction(|tx| {
-            let affected = tx
-                .tx
-                .execute(
-                    "DELETE FROM script_grant WHERE workspace_id = ?1 AND name = ?2",
-                    params![workspace_id, name],
-                )
-                .map_err(sqlite_store_error)?;
-            Ok(affected > 0)
-        })
+    /// Delete the grant for `(workspace_id, name)`. Returns whether a row was
+    /// deleted.
+    pub fn delete(&self, workspace_id: &str, name: &str) -> Result<bool, OrbitError> {
+        let affected = self
+            .conn
+            .execute(
+                "DELETE FROM script_grant WHERE workspace_id = ?1 AND name = ?2",
+                params![workspace_id, name],
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(affected > 0)
     }
 }

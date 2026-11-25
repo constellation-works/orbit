@@ -344,7 +344,7 @@ fn load_host_plugins_with_audit(
     workspace_toggles: &BTreeMap<String, bool>,
     audit_refusals: bool,
 ) -> PluginHostLoad {
-    let installed = match store.list_plugins() {
+    let installed = match store.read().and_then(|snapshot| snapshot.plugin().list()) {
         Ok(installed) => installed,
         Err(error) => {
             return PluginHostLoad {

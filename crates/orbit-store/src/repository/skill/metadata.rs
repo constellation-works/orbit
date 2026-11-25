@@ -7,7 +7,7 @@ use crate::json_schema::validate_schema_document;
 use orbit_common::OrbitError;
 use serde_json::{Map, Value};
 
-use super::types::SkillMeta;
+use crate::contracts::SkillMeta;
 
 const META_NAME: &str = "name";
 const META_SUMMARY: &str = "summary";

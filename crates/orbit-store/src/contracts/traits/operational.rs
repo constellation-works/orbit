@@ -19,7 +19,6 @@ use crate::contracts::routine::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineCursor, RoutineFireIntentParams,
     RoutineFireRecord, RoutineFireState, RoutinePauseRecord, RoutineSlotAttempts,
 };
-use crate::contracts::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
 use crate::contracts::v2_audit::{
     V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
     V2AuditKindForwardPayloads, V2AuditKindForwardQuery,
@@ -28,12 +27,6 @@ use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
     AuditRoleAggregate, AuditToolAggregate, AuditToolModelAggregate,
 };
-
-pub trait SessionLogStoreBackend: Send + Sync {
-    fn append(&self, params: SessionLogAppendParams) -> Result<SessionLogEntry, OrbitError>;
-    fn list(&self, filter: SessionLogFilter) -> Result<Vec<SessionLogEntry>, OrbitError>;
-    fn resolve(&self, id: &str) -> Result<SessionLogEntry, OrbitError>;
-}
 
 pub trait RoutineStoreBackend: Send + Sync {
     fn routine_cursor(&self, routine_name: &str) -> Result<Option<RoutineCursor>, OrbitError>;

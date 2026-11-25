@@ -94,15 +94,17 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
 
     runtime
         .stores()
-        .tools()
-        .insert_tool(&StoredTool {
-            // A family action is disabled with its family.
-            name: "orbit.auto_task".into(),
-            path: String::new(),
-            description: String::new(),
-            enabled: false,
-            builtin: true,
-            parameters: Vec::new(),
+        .host_store()
+        .write(|tx| {
+            tx.tool().put(&StoredTool {
+                // A family action is disabled with its family.
+                name: "orbit.auto_task".into(),
+                path: String::new(),
+                description: String::new(),
+                enabled: false,
+                builtin: true,
+                parameters: Vec::new(),
+            })
         })
         .unwrap();
     // A disabled tool the implementer may still require stays a warning.
@@ -113,14 +115,16 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
     let warning_only = "orbit.task.show";
     runtime
         .stores()
-        .tools()
-        .insert_tool(&StoredTool {
-            name: warning_only.into(),
-            path: String::new(),
-            description: String::new(),
-            enabled: false,
-            builtin: true,
-            parameters: Vec::new(),
+        .host_store()
+        .write(|tx| {
+            tx.tool().put(&StoredTool {
+                name: warning_only.into(),
+                path: String::new(),
+                description: String::new(),
+                enabled: false,
+                builtin: true,
+                parameters: Vec::new(),
+            })
         })
         .unwrap();
     assert_eq!(

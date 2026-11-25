@@ -788,7 +788,7 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
     let mut faults = Vec::new();
 
     if catalog.kind == ArtifactKind::Skill {
-        let rows = match runtime.skill_catalog().doctor() {
+        let rows = match runtime.skill_catalog().read().skill().doctor() {
             Ok(rows) => rows,
             Err(error) => {
                 faults.push(LoadFault {

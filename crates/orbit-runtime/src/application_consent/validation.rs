@@ -578,8 +578,9 @@ impl RuntimeKernel {
                 }
                 let installed = self
                     .stores()
-                    .plugins()
-                    .get_plugin(&expected.name)?
+                    .host_store()
+                    .read()
+                    .and_then(|snapshot| snapshot.plugin().get(&expected.name))?
                     .ok_or_else(|| {
                         OrbitError::CapabilityDenied("consented plugin is not installed".into())
                     })?;

@@ -71,6 +71,8 @@ pub(crate) fn scan_unresolved_work(
 
     let mut check_later_ids: Vec<String> =
         workspace_session_log_store(runtime.paths().orbit_dir.clone())
+            .read()
+            .session_log()
             .list(SessionLogFilter {
                 kind: Some(SessionLogKind::CheckLater),
                 unresolved_only: true,

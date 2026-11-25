@@ -757,10 +757,16 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
     };
     seed();
     let store = orbit_store::compose::global_executor_def_store(global.join("resources/executors"));
-    let defs = store.list_executor_defs().expect("load seeded catalog");
+    let defs = store
+        .read()
+        .executor_def()
+        .list()
+        .expect("load seeded catalog");
     assert!(defs.len() > 1, "the shipped catalog is more than muse");
     let muse = store
-        .get_executor_def("muse")
+        .read()
+        .executor_def()
+        .get("muse")
         .unwrap()
         .expect("muse seeded");
     let expected_sandbox = match std::env::consts::OS {
@@ -773,12 +779,14 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
     let mut customized = muse;
     customized.host_os = Some(BTreeSet::from([HostOs::Linux, HostOs::Macos]));
     store
-        .upsert_executor_def(&customized)
+        .write(|tx| tx.executor_def().put(&customized))
         .expect("operator host_os");
     seed();
     assert_eq!(
         store
-            .get_executor_def("muse")
+            .read()
+            .executor_def()
+            .get("muse")
             .unwrap()
             .expect("muse present")
             .host_os,
@@ -793,12 +801,14 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
     // declaration it cannot tell preservation from overwrite.)
     customized.host_os = Some(BTreeSet::from([HostOs::Linux]));
     store
-        .upsert_executor_def(&customized)
+        .write(|tx| tx.executor_def().put(&customized))
         .expect("narrow operator host_os");
     seed();
     assert_eq!(
         store
-            .get_executor_def("muse")
+            .read()
+            .executor_def()
+            .get("muse")
             .unwrap()
             .expect("muse present")
             .host_os,

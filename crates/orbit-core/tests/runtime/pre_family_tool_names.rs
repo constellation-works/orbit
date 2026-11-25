@@ -234,22 +234,24 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
     std::fs::create_dir_all(&install).unwrap();
     let manifest = "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: callback\n  version: 1.0.0\nspec:\n  permissions:\n    # callbacks it makes\n    orbit_tools: [orbit.task.show, orbit.task.artifact.get]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: hello\n      execution_kind: read_only\n      mcp_scope: workspace\n";
     std::fs::write(install.join("plugin.yaml"), manifest).unwrap();
-    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
+    let plugins = runtime.sqlite_store().unwrap();
     plugins
-        .upsert_plugin(&InstalledPlugin {
-            name: "callback".into(),
-            version: "1.0.0".into(),
-            source: "fixture".into(),
-            install_path: install.to_string_lossy().into_owned(),
-            archive_digest: None,
-            manifest_digest: orbit_tools::plugin::manifest_digest(manifest.as_bytes()),
-            enabled: true,
-            grants: vec!["orbit_tools".into()],
-            first_party: false,
-            certified_orbit_version: None,
-            build: None,
-            installed_at: String::new(),
-            updated_at: String::new(),
+        .write(|tx| {
+            tx.plugin().put(&InstalledPlugin {
+                name: "callback".into(),
+                version: "1.0.0".into(),
+                source: "fixture".into(),
+                install_path: install.to_string_lossy().into_owned(),
+                archive_digest: None,
+                manifest_digest: orbit_tools::plugin::manifest_digest(manifest.as_bytes()),
+                enabled: true,
+                grants: vec!["orbit_tools".into()],
+                first_party: false,
+                certified_orbit_version: None,
+                build: None,
+                installed_at: String::new(),
+                updated_at: String::new(),
+            })
         })
         .unwrap();
     drop(runtime);
@@ -325,7 +327,8 @@ fn upgrade_from_a_pre_family_store_rewrites_every_stored_tool_name() {
     );
     assert_eq!(
         plugins
-            .get_plugin("callback")
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get("callback"))
             .unwrap()
             .unwrap()
             .manifest_digest,
@@ -454,22 +457,24 @@ fn record_callback(runtime: &OrbitRuntime, install: &Path, manifest: &str) {
 }
 
 fn record_plugin(runtime: &OrbitRuntime, name: &str, install: &Path, manifest: &str) {
-    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
+    let plugins = runtime.sqlite_store().unwrap();
     plugins
-        .upsert_plugin(&InstalledPlugin {
-            name: name.into(),
-            version: "1.0.0".into(),
-            source: "fixture".into(),
-            install_path: install.to_string_lossy().into_owned(),
-            archive_digest: None,
-            manifest_digest: orbit_tools::plugin::manifest_digest(manifest.as_bytes()),
-            enabled: true,
-            grants: vec!["orbit_tools".into()],
-            first_party: false,
-            certified_orbit_version: None,
-            build: None,
-            installed_at: String::new(),
-            updated_at: String::new(),
+        .write(|tx| {
+            tx.plugin().put(&InstalledPlugin {
+                name: name.into(),
+                version: "1.0.0".into(),
+                source: "fixture".into(),
+                install_path: install.to_string_lossy().into_owned(),
+                archive_digest: None,
+                manifest_digest: orbit_tools::plugin::manifest_digest(manifest.as_bytes()),
+                enabled: true,
+                grants: vec!["orbit_tools".into()],
+                first_party: false,
+                certified_orbit_version: None,
+                build: None,
+                installed_at: String::new(),
+                updated_at: String::new(),
+            })
         })
         .unwrap();
     // The loader trusts the grant set only when `orbit plugin enable` wrote
@@ -605,10 +610,14 @@ fn a_failed_plugin_digest_record_does_not_refuse_the_plugin() {
 
     // A rewrite that landed on disk without its digest (the restore itself
     // failed) is finished on the next pass, and the pass after that loads it.
-    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
-    let mut installed = plugins.get_plugin("callback").unwrap().unwrap();
+    let plugins = runtime.sqlite_store().unwrap();
+    let mut installed = plugins
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("callback"))
+        .unwrap()
+        .unwrap();
     installed.manifest_digest = orbit_tools::plugin::manifest_digest(CALLBACK_MANIFEST.as_bytes());
-    plugins.upsert_plugin(&installed).unwrap();
+    plugins.write(|tx| tx.plugin().put(&installed)).unwrap();
     drop(plugins);
     drop(runtime);
     fixture.forget_migration();
@@ -624,10 +633,14 @@ fn a_failed_plugin_digest_record_does_not_refuse_the_plugin() {
     // A competing opener can record the new digest before this opener's
     // failed update restores the old manifest bytes. The next pass must
     // recognize the digest of the consented rewrite and finish the file.
-    let plugins = orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap());
-    let mut installed = plugins.get_plugin("callback").unwrap().unwrap();
+    let plugins = runtime.sqlite_store().unwrap();
+    let mut installed = plugins
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("callback"))
+        .unwrap()
+        .unwrap();
     installed.manifest_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
-    plugins.upsert_plugin(&installed).unwrap();
+    plugins.write(|tx| tx.plugin().put(&installed)).unwrap();
     drop(plugins);
     std::fs::write(install.join("plugin.yaml"), CALLBACK_MANIFEST).unwrap();
     drop(runtime);

@@ -83,7 +83,8 @@ pub fn host_plugin_cli_groups(
 ) -> Result<Vec<PluginCliGroup>, OrbitError> {
     let store = Store::open_read_only(audit_db)?;
     if !store
-        .list_plugins()?
+        .read()
+        .and_then(|snapshot| snapshot.plugin().list())?
         .iter()
         .any(|installed| installed.enabled)
     {

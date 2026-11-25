@@ -423,7 +423,7 @@ deterministic, matching the archive-digest finding that already exists.
 | Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
 | Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build/` |
 | Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `application/plugin/install/flow.rs` |
-| Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `plugin_store.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
+| Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `repository/plugin.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
 | Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |
 | Doctor and `plugin show` (§3.9) | `orbit-core` `application/plugin/inspect/doctor.rs`; the `plugin-builds` row of `orbit doctor` |
 

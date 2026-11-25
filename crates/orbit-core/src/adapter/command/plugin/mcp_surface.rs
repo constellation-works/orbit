@@ -53,7 +53,7 @@ struct DefinitionStamp {
 
 impl PluginStamp {
     fn read(store: &Store, global_root: &Path) -> Result<Self, OrbitError> {
-        let rows = store.list_plugins()?;
+        let rows = store.read().and_then(|snapshot| snapshot.plugin().list())?;
         let files = rows
             .iter()
             .flat_map(|row| {
@@ -157,7 +157,9 @@ impl HostPluginMcpCache {
     ) -> Result<Vec<InstalledPlugin>, OrbitError> {
         let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let host = ensure_cached_host(&mut cached, global_root)?;
-        host.store.list_plugins()
+        host.store
+            .read()
+            .and_then(|snapshot| snapshot.plugin().list())
     }
 
     /// Return the same snapshot while plugin admission inputs remain unchanged.

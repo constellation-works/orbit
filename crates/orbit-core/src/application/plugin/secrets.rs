@@ -260,7 +260,12 @@ pub(super) fn unset_secret_rows(
         .map(|summary| (summary.name.as_str(), summary.status))
         .collect();
     let mut rows = Vec::new();
-    for installed in runtime.stores().plugins().list_plugins()? {
+    for installed in runtime
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().list())?
+    {
         // A row whose install this host refuses is already its own finding;
         // its tree is not evidence of what the plugin declares.
         if verify_install_path(&global_root, &installed).is_err() {

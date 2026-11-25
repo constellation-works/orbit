@@ -140,7 +140,7 @@ fn write_to_read_only_store_is_classified_access_denied() {
 
     let store = Store::open_read_only(&database).expect("supported schema remains readable");
     assert!(store.is_read_only(), "fixture must open observationally");
-    let written = tool_store_sqlite(store).set_tool_enabled("fixture", false);
+    let written = store.write(|tx| tx.tool().set_enabled("fixture", false));
 
     let error = written.expect_err("a read-only store refuses the write");
     assert!(

@@ -37,8 +37,9 @@ pub(super) fn attach_build(fixture: &PluginFixture, build: &PluginBuildRecord) {
     let mut installed = fixture
         .runtime
         .stores()
-        .plugins()
-        .get_plugin("demo")
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("demo"))
         .expect("read the row")
         .expect("the plugin is installed");
     installed.build = Some(build.clone());
@@ -46,7 +47,7 @@ pub(super) fn attach_build(fixture: &PluginFixture, build: &PluginBuildRecord) {
     fixture
         .runtime
         .stores()
-        .plugins()
-        .upsert_plugin(&installed)
+        .host_store()
+        .write(|tx| tx.plugin().put(&installed))
         .expect("record the build");
 }

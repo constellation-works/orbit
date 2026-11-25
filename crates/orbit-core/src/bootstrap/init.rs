@@ -281,9 +281,8 @@ pub fn init_workspace_at_root(
             // shipped sandbox and wipe an operator `spec.sandbox: off`.
             // `--force` still resets them by deleting the root first.
             let refreshed_default_executors =
-                seed_default_executors(executor_store.as_ref(), options.force)?;
-            let refreshed_default_policies =
-                seed_default_policies(policy_store.as_ref(), overwrite)?;
+                seed_default_executors(&executor_store, options.force)?;
+            let refreshed_default_policies = seed_default_policies(&policy_store, overwrite)?;
             let activity_reconciliation =
                 seed_default_activities(&layout.activities_dir, overwrite)?;
             let job_reconciliation = seed_default_jobs(&layout.jobs_dir, overwrite)?;

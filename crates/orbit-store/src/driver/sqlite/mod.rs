@@ -3,13 +3,10 @@ pub(crate) mod authority;
 pub mod host;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
-pub(crate) mod plugin_store;
 pub(crate) mod routine_store;
-pub(crate) mod script_grant_store;
 pub(crate) mod task_commit_journal;
 pub mod task_registry;
 pub(crate) mod task_reservation_store;
-pub(crate) mod tool_store;
 pub(crate) mod v2_audit_store;
 
 pub(crate) mod automation;
