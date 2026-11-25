@@ -1,5 +1,5 @@
 //! Artifact and validation evidence for an observed handoff.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
@@ -78,8 +78,14 @@ impl TaskCommitBoundary {
         }
         let mut passed = BTreeSet::new();
         let mut clean_passed = BTreeSet::new();
+        let mut counts = BTreeMap::new();
+        let mut paths = BTreeSet::new();
+        let mut replay_overlaps = BTreeSet::new();
         let mut known = Vec::new();
         for reference in &handoff.validation {
+            if !paths.insert(&reference.path) {
+                return Err(invalid("validation artifact referenced more than once"));
+            }
             let log: HandoffValidationLog =
                 serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, reference)?)
                     .map_err(|e| invalid(&format!("invalid validation log: {e}")))?;
@@ -101,12 +107,13 @@ impl TaskCommitBoundary {
                 || log.tested_head != handoff.candidate.candidate.commit
                 || log.candidate != handoff.candidate
                 || log.command.trim().is_empty()
-                || !passed.insert(log.command.clone())
             {
                 return Err(invalid(
                     "validation must pass for the exact claim/run/candidate/base",
                 ));
             }
+            passed.insert(log.command.clone());
+            *counts.entry(log.command.clone()).or_insert(0usize) += 1;
             if let Some(flaky) = &log.flaky
                 && (!flaky.valid()
                     || report.is_some()
@@ -158,10 +165,17 @@ impl TaskCommitBoundary {
                 let admitted = AlreadyResolved { selectors }
                     .admit()
                     .map_err(|_| invalid("already-resolved selectors missing or invalid"))?;
-                if !admitted
-                    .iter()
-                    .all(|command| clean_passed.contains(&command.host_command()))
-                {
+                replay_overlaps.extend(
+                    admitted
+                        .iter()
+                        .map(|command| command.host_command())
+                        .filter(|command| commands.contains(command.as_str())),
+                );
+                if !admitted.iter().all(|command| {
+                    let command = command.host_command();
+                    clean_passed.contains(&command)
+                        && (!replay_overlaps.contains(&command) || counts.get(&command) == Some(&2))
+                }) {
                     return Err(invalid(
                         "already-resolved selector replay validation missing or failed",
                     ));
@@ -181,6 +195,11 @@ impl TaskCommitBoundary {
             {
                 return Err(invalid("NoDiff skip requires a no-diff-expected task"));
             }
+        }
+        if counts.iter().any(|(command, count)| {
+            *count > 1 && (*count != 2 || !replay_overlaps.contains(command))
+        }) {
+            return Err(invalid("validation command duplicated"));
         }
         // [ORB-15764] Only that tagged skip is exempt: its leaf runs no
         // required command, as the owner's own pipelines skip `validate` for
