@@ -22,7 +22,10 @@ pub(super) fn advance_local_base_for_admission(
     if !git_command_success(repo_root, &["remote", "get-url", "origin"])? {
         return Ok(None);
     }
-    if let Err(error) = fetch_remote_base(repo_root, &branch) {
+    // Keep the selected spelling here: fetch_remote_base normalizes once
+    // itself, and passing `branch` would strip a second `origin/` from a
+    // literal branch such as `origin/train`.
+    if let Err(error) = fetch_remote_base(repo_root, base) {
         tracing::warn!(
             branch,
             %error,

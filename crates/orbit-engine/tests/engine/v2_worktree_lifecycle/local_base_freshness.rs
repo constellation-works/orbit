@@ -82,6 +82,87 @@ fn a_clean_owner_behind_origin_starts_at_origin_without_moving_owner() {
     assert_eq!(host.admitted().len(), 1, "the clean owner admits the task");
 }
 
+/// A selected branch named `origin/train` refreshes that exact remote ref,
+/// even when a separate `train` branch has a different tip.
+fn a_literal_origin_prefixed_base_fetches_its_exact_remote_branch() {
+    let (fixture, host) = Fixture::hosted();
+    let owner_tip = head(&fixture.repo);
+    git(&fixture.repo, &["branch", "origin/train", &owner_tip]);
+    git(
+        &fixture.repo,
+        &[
+            "push",
+            "origin",
+            "refs/heads/origin/train:refs/heads/origin/train",
+        ],
+    );
+
+    git(&fixture.repo, &["branch", "train", &owner_tip]);
+    git(&fixture.repo, &["switch", "train"]);
+    let train_tip = commit_file(&fixture.repo, "train-only.txt", "decoy train branch\n");
+    git(&fixture.repo, &["push", "origin", "train"]);
+    git(&fixture.repo, &["switch", BASE]);
+
+    let origin = fixture.root.path().join("origin.git");
+    let elsewhere = fixture.root.path().join("elsewhere-origin-train");
+    git(
+        fixture.root.path(),
+        &[
+            "clone",
+            "--branch",
+            "origin/train",
+            path_str(&origin),
+            path_str(&elsewhere),
+        ],
+    );
+    git(&elsewhere, &["config", "user.name", "Orbit Test"]);
+    git(
+        &elsewhere,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+    let literal_origin_tip = commit_file(
+        &elsewhere,
+        "literal-origin-train.txt",
+        "literal origin/train branch\n",
+    );
+    git(
+        &elsewhere,
+        &["push", "origin", "HEAD:refs/heads/origin/train"],
+    );
+
+    host.add_task("T-ORIGIN-TRAIN", TaskStatus::Backlog);
+    let mut input = setup_input(&["T-ORIGIN-TRAIN"], "jrun-origin-train");
+    input["base"] = json!("origin/origin/train");
+    let output = action(&host, "worktree_setup", &input)
+        .expect("the literal origin/train base is fetched and admitted");
+
+    assert_eq!(output["base_sha"], literal_origin_tip);
+    assert_eq!(
+        head(&Checkout::from_setup(&output).path),
+        literal_origin_tip,
+        "the run starts from the advanced literal origin/train branch"
+    );
+    assert_ne!(literal_origin_tip, train_tip, "the decoy train tip differs");
+    assert_eq!(
+        git(
+            &fixture.repo,
+            &["rev-parse", "refs/remotes/origin/origin/train"]
+        ),
+        literal_origin_tip,
+        "fetch refreshes the exact remote-tracking ref"
+    );
+    assert_eq!(
+        git(&fixture.repo, &["rev-parse", "refs/remotes/origin/train"]),
+        train_tip,
+        "the separate train branch remains a distinct ref"
+    );
+    assert_eq!(
+        head(&fixture.repo),
+        owner_tip,
+        "the owner branch is unchanged"
+    );
+}
+
 /// A large set of incoming paths must not be captured during admission.
 fn a_large_clean_advance_is_admitted() {
     let (fixture, host) = Fixture::hosted();
@@ -436,6 +517,10 @@ fn local_base_freshness_contracts() {
             (
                 "a_clean_owner_behind_origin_starts_at_origin_without_moving_owner",
                 a_clean_owner_behind_origin_starts_at_origin_without_moving_owner,
+            ),
+            (
+                "a_literal_origin_prefixed_base_fetches_its_exact_remote_branch",
+                a_literal_origin_prefixed_base_fetches_its_exact_remote_branch,
             ),
             (
                 "a_large_clean_advance_is_admitted",
