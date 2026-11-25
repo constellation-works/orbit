@@ -2,6 +2,7 @@
 //! command, check the held commit out into a standalone shallow repository,
 //! run the script there confined by Bubblewrap, and judge its SARIF.
 
+#[cfg(target_os = "linux")]
 use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
