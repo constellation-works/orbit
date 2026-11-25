@@ -192,6 +192,13 @@ certifies the repaired head as both the original head and publication lease.
 - `an_uncertified_rewrite_is_never_reset_during_authenticated_sync`
 - `exhausted_preparation_never_dispatches_source_recovery`
 
+### `v2_worktree_lifecycle::local_base_freshness::local_base_freshness_contracts`
+
+- `a_clean_owner_behind_origin_is_fast_forwarded_before_the_worktree_is_cut`
+- `a_dirty_owner_behind_origin_is_refused_and_left_unmoved`
+- `a_diverged_owner_base_is_refused_and_left_unmoved`
+- `local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable`
+
 ### `v2_worktree_lifecycle::absorbed_candidate::absorption_contracts_1`
 
 - `an_identical_landed_patch_settles_before_candidate_validation`
