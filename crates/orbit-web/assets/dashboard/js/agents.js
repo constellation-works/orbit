@@ -483,8 +483,8 @@ function rows() {
     return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score, interval: null,
       below_support: tier.units < scorecard.min_support, rank: null }] : [];
   });
-  ranking.sort((a, b) => Number(a.below_support) - Number(b.below_support) || b.score - a.score
-    || b.units - a.units || a.crew.localeCompare(b.crew) || a.model.localeCompare(b.model));
+  ranking.sort((first, second) => Number(first.below_support) - Number(second.below_support) || second.score - first.score
+    || second.units - first.units || first.crew.localeCompare(second.crew) || first.model.localeCompare(second.model));
   let nextRank = 0;
   ranking.forEach((row) => { if (!row.below_support && !row.unjudged) row.rank = ++nextRank; });
   return ranking;
@@ -593,8 +593,8 @@ function weight(value) {
   return value < 0 ? `−${text}` : `+${text}`;
 }
 
-function plural(n, one, many = `${one}s`) {
-  return `${n} ${n === 1 ? one : many}`;
+function plural(count, one, many = `${one}s`) {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 // The window as the panel header names it: a count window keeps to its count,
@@ -1163,7 +1163,7 @@ function radarNode(row) {
         .filter((each) => !gap(axis, each) && expectedCount(axis, each) != null)
         .map((each) => excess(axis, each))
         .filter(Number.isFinite)
-        .sort((a, b) => a - b);
+        .sort((first, second) => first - second);
       const negatives = fleetExcesses.filter((value) => value < 0);
       const positives = fleetExcesses.filter((value) => value > 0);
       // Zero-anchored percentile in the supported fleet: meeting expectation
@@ -1190,7 +1190,7 @@ function radarNode(row) {
         axisContribution,
       };
     }
-    const rates = fleet.filter((each) => !gap(axis, each)).map((each) => rate(axis, each)).sort((a, b) => a - b);
+    const rates = fleet.filter((each) => !gap(axis, each)).map((each) => rate(axis, each)).sort((first, second) => first - second);
     const middle = Math.floor(rates.length / 2);
     const median = rates.length ? (rates[middle] + rates[Math.floor((rates.length - 1) / 2)]) / 2 : null;
     // Percentile in the supported fleet, median anchored at 0.5: an
@@ -1241,25 +1241,25 @@ function radarNode(row) {
       : `Agent profile for ${rowLabel(row)} versus ranked fleet median; outward is better`;
   const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": plotAria });
   for (const level of [0.25, 0.5, 0.75, 1]) {
-    plot.append(svg("polygon", { points: axes.map((_, i) => point(i, level).join(",")).join(" "), class: "agents-radar-grid" }));
+    plot.append(svg("polygon", { points: axes.map((_, axisIndex) => point(axisIndex, level).join(",")).join(" "), class: "agents-radar-grid" }));
   }
-  values.forEach(({ axis }, i) => {
-    const [x, y] = point(i, 1);
-    plot.append(svg("line", { x1: 150, y1: 130, x2: x, y2: y, class: `agents-radar-spoke${axis.unscored ? " is-unscored" : ""}` }));
+  values.forEach(({ axis }, axisIndex) => {
+    const [spokeX, spokeY] = point(axisIndex, 1);
+    plot.append(svg("line", { x1: 150, y1: 130, x2: spokeX, y2: spokeY, class: `agents-radar-spoke${axis.unscored ? " is-unscored" : ""}` }));
   });
   for (const series of ["fleet", "own"]) {
-    const points = values.map((value, i) => value[series] == null ? null : point(i, value[series]));
+    const points = values.map((value, axisIndex) => value[series] == null ? null : point(axisIndex, value[series]));
     if (points.every(Boolean)) {
-      plot.append(svg("polygon", { points: points.map((p) => p.join(",")).join(" "), class: `agents-radar-${series}` }));
+      plot.append(svg("polygon", { points: points.map((coords) => coords.join(",")).join(" "), class: `agents-radar-${series}` }));
     } else {
       // Never close or fill across absent evidence, including the wraparound.
-      points.forEach((p, i) => {
-        const next = points[(i + 1) % points.length];
-        if (p && next) plot.append(svg("line", { x1: p[0], y1: p[1], x2: next[0], y2: next[1], class: `agents-radar-${series}` }));
+      points.forEach((coords, pointIndex) => {
+        const next = points[(pointIndex + 1) % points.length];
+        if (coords && next) plot.append(svg("line", { x1: coords[0], y1: coords[1], x2: next[0], y2: next[1], class: `agents-radar-${series}` }));
       });
     }
-    points.forEach((p) => {
-      if (p) plot.append(svg("circle", { cx: p[0], cy: p[1], r: 3, class: `agents-radar-${series}` }));
+    points.forEach((coords) => {
+      if (coords) plot.append(svg("circle", { cx: coords[0], cy: coords[1], r: 3, class: `agents-radar-${series}` }));
     });
   }
   const tooltip = el("p", { id: "agents-radar-tooltip", class: "agents-radar-tooltip", role: "status", text: "Hover or focus a vertex for its evidence." });
@@ -1270,7 +1270,7 @@ function radarNode(row) {
     return node;
   };
   const labels = el("ol", { class: "agents-radar-axes" });
-  values.forEach(({ axis, usesExpected, referenceRate, expectedCount: expectedAxisCount, own, reason, axisContribution }, i) => {
+  values.forEach(({ axis, usesExpected, referenceRate, expectedCount: expectedAxisCount, own, reason, axisContribution }, axisIndex) => {
     const label = `${axis.label}${axis.weight < 0 ? " (fewer is better)" : " (more is better)"}${axis.unscored ? " · unscored" : ""}`;
     const ownText = reason ? "—" : `${number(rate(axis, row))} per 100 ${termUnit(axis)}`;
     const refBasis = usesExpected ? "expected" : "fleet median";
@@ -1283,15 +1283,15 @@ function radarNode(row) {
       : `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
     const contribLabel = usesExpected ? "contribution" : "contribution vs fleet median";
     const info = `${label}: agent ${ownText}; ${refBasis} ${refRateText}; weight ${weightText}; ${contribLabel} ${contributionText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
-    const [x, y] = point(i, own ?? 1);
+    const [vertexX, vertexY] = point(axisIndex, own ?? 1);
     const vertex = svg("g", { tabindex: 0, role: "button", "aria-label": info, "aria-describedby": "agents-radar-tooltip", class: `agents-radar-vertex${reason ? " is-gap" : ""}` });
     vertex.dataset.term = axis.key;
-    vertex.append(svg("circle", { cx: x, cy: y, r: 12, class: "agents-radar-hit" }));
-    vertex.append(svg("circle", { cx: x, cy: y, r: 4, class: "agents-radar-marker" }));
+    vertex.append(svg("circle", { cx: vertexX, cy: vertexY, r: 12, class: "agents-radar-hit" }));
+    vertex.append(svg("circle", { cx: vertexX, cy: vertexY, r: 4, class: "agents-radar-marker" }));
     // At the centre, several genuine zero-radius values can coincide. The
     // numbered endpoint is another hover target for each of those vertices.
-    const [lx, ly] = point(i, 1.16);
-    vertex.append(svg("text", { x: lx, y: ly, "text-anchor": "middle", "dominant-baseline": "central", class: "agents-radar-label" }, String(i + 1)));
+    const [lx, ly] = point(axisIndex, 1.16);
+    vertex.append(svg("text", { x: lx, y: ly, "text-anchor": "middle", "dominant-baseline": "central", class: "agents-radar-label" }, String(axisIndex + 1)));
     // No SVG <title>: the vertex is a button, and a native tooltip is refused
     // (STD-07 §R41). The accessible name is aria-label; the status line below
     // the plot shows the same evidence on hover and focus.

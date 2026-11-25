@@ -32,8 +32,8 @@ function outcomeCount(row, key) {
   return typeof value === "number" ? value : 0;
 }
 
-function plural(n, one, many = `${one}s`) {
-  return `${n} ${n === 1 ? one : many}`;
+function plural(count, one, many = `${one}s`) {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 function render({ rows }) {

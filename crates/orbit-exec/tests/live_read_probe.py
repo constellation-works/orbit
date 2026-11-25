@@ -189,7 +189,7 @@ def prepare(root):
 
     profile_name = "orbit-live-read-" + hashlib.sha256(str(root).encode()).hexdigest()[:16]
     env = {"PATH": ":".join(dict.fromkeys(
-               str(Path(p).parent) for p in programs.values() if p)),
+               str(Path(program_path).parent) for program_path in programs.values() if program_path)),
            "HOME": str(workspace / "home"), "CARGO_HOME": str(workspace / "cargo-home"),
            "RUSTUP_HOME": str(rustup_home), "RUSTUP_NO_UPDATE_CHECK": "1",
            "TMPDIR": str(workspace / "tmp"), "GH_CONFIG_DIR": str(workspace / "gh-config"),
