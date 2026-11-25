@@ -8,6 +8,8 @@ use orbit_types::workflow::{
 
 use crate::error::OrbitError;
 
+/// Decode an auto-task definition only after verifying its schema version, then validate the
+/// definition.
 pub fn parse_auto_task_yaml(yaml: &str) -> Result<AutoTaskDefinition, OrbitError> {
     let header: SchemaHeader = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("auto-task header: {error}")))?;
@@ -23,6 +25,8 @@ pub fn parse_auto_task_yaml(yaml: &str) -> Result<AutoTaskDefinition, OrbitError
     Ok(definition)
 }
 
+/// Decode a routine definition only after verifying its schema version, then validate the
+/// definition.
 pub fn parse_routine_yaml(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
     let header: SchemaHeader = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("routine header: {error}")))?;
@@ -38,6 +42,8 @@ pub fn parse_routine_yaml(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
     Ok(definition)
 }
 
+/// Require a current Policy resource header and a valid resource name. Use `label` to identify the
+/// document in parse errors.
 pub fn parse_policy_resource(yaml: &str, label: &str) -> Result<PolicyResource, OrbitError> {
     let header: ResourceHeader = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("failed to parse {label}: {error}")))?;

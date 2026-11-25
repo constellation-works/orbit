@@ -116,15 +116,20 @@ pub(super) fn clear_pending(pending_root: &Path, published: &str) {
 /// One stored blob or pending marker.
 #[derive(Debug, Clone)]
 pub struct SweepEntry {
+    /// Lower-case SHA-256 name shared by a blob and its pending marker.
     pub hash: String,
+    /// Path observed by the sweep under the blob or pending root.
     pub path: PathBuf,
+    /// On-disk length at enumeration, in bytes.
     pub bytes: u64,
+    /// Last modification time observed at enumeration for the grace-window check.
     pub modified: SystemTime,
 }
 
 /// What [`AuditBlobRoot::remove_unless_protected`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SweepOutcome {
+    /// The sweep removed the entry after checking its publication and retention protections.
     Removed,
     /// A pending marker or a fresh mtime protected it; it is back in place.
     Retained,
@@ -144,16 +149,19 @@ pub struct SweepLock {
 }
 
 impl AuditBlobRoot {
+    /// Select the parent of the audit blob and pending roots without touching disk.
     pub fn new(audit_root: impl Into<PathBuf>) -> Self {
         Self {
             audit_root: audit_root.into(),
         }
     }
 
+    /// Return the directory containing the hash-sharded audit blobs.
     pub fn blobs_dir(&self) -> PathBuf {
         self.audit_root.join(BLOBS_DIR)
     }
 
+    /// Return the directory of markers for blobs that may still be published.
     pub fn pending_dir(&self) -> PathBuf {
         pending_root(&self.audit_root)
     }

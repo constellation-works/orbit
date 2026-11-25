@@ -109,6 +109,7 @@ impl CandidateAdmission {
 /// The executable generation an updater that renames nothing re-pins: the
 /// digest and reported compatibility identity of the installed executable.
 pub struct InstalledGeneration<'a> {
+    /// SHA-256 of the installed image, matched against participant records.
     pub digest: &'a str,
     /// `None` for an executable that reports no compatibility identity: then
     /// no live participant is known to run its generation.
@@ -190,6 +191,7 @@ pub struct FenceRefusal {
     /// The updater's pin, held again; `None` only when even that shared hold
     /// could not be retaken.
     pub restored: Option<GenerationGuard>,
+    /// Admission or quiescence failure that prevented an exclusive fence.
     pub error: OrbitError,
 }
 

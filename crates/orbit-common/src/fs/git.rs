@@ -75,13 +75,18 @@ const _: () = assert!(
 /// commit headers and worktree lists, all far smaller.
 pub const GIT_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
+/// What the checkout's HEAD resolves to, distinguishing detached and unresolved states.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentBranchStatus {
+    /// HEAD names a branch, including an unborn branch with no commits.
     Named(String),
+    /// HEAD resolves to a commit without a symbolic branch.
     DetachedHead,
+    /// Git reported neither a branch name nor a resolvable HEAD.
     NoCurrentBranch,
 }
 
+/// Read symbolic HEAD first, then probe the commit to distinguish a detached checkout.
 pub fn current_branch(workspace_path: &Path) -> Result<CurrentBranchStatus, OrbitError> {
     let symbolic = run_git(
         workspace_path,
@@ -103,6 +108,7 @@ pub fn current_branch(workspace_path: &Path) -> Result<CurrentBranchStatus, Orbi
     Ok(CurrentBranchStatus::NoCurrentBranch)
 }
 
+/// Prefer a recorded remote default, then a conventional local branch or the sole local branch.
 pub fn default_branch(workspace_path: &Path) -> Result<Option<String>, OrbitError> {
     for remote in preferred_remotes(workspace_path)? {
         if let Some(branch) = remote_default_branch(workspace_path, &remote)? {
@@ -190,6 +196,7 @@ fn local_branches(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
         .collect())
 }
 
+/// Resolve Git's absolute common directory, shared by every linked worktree.
 pub fn git_common_dir(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
     let output = run_git(
         workspace_path,
@@ -212,6 +219,7 @@ pub fn git_common_dir(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
     Ok(PathBuf::from(raw))
 }
 
+/// Derive the shared lock target for Orbit's remote-tracking ref updates.
 pub fn git_fetch_lock_target(git_common_dir: &Path) -> PathBuf {
     git_common_dir.join(GIT_FETCH_LOCK_NAME)
 }
@@ -250,10 +258,12 @@ pub fn is_git_ref_update_contention(stderr: &str) -> bool {
     text.contains("cannot lock ref") || text.contains("unable to update local ref")
 }
 
+/// Retry only a local ref update race while the zero-based attempt still leaves budget.
 pub fn should_retry_git_ref_cas(attempt: u32, stderr: &str) -> bool {
     attempt + 1 < GIT_FETCH_CAS_ATTEMPTS && is_git_ref_update_contention(stderr)
 }
 
+/// The pause between attempts to fetch after a ref update race.
 pub fn git_fetch_cas_retry_delay() -> Duration {
     GIT_FETCH_CAS_RETRY_DELAY
 }
@@ -486,7 +496,12 @@ pub enum GitAncestry {
     NotAncestor,
     /// Any other exit (such as 128, an unresolvable revision): Git could not
     /// answer. `code` is `None` when a signal ended the process.
-    Unanswered { code: Option<i32>, stderr: String },
+    Unanswered {
+        /// Child exit code, or `None` if the process was terminated by a signal.
+        code: Option<i32>,
+        /// Git's diagnostic for why it could not answer the ancestry question.
+        stderr: String,
+    },
 }
 
 /// Ask Git whether `ancestor` is an ancestor of `descendant` in `repo`.
@@ -519,10 +534,14 @@ pub fn git_ancestry(
     })
 }
 
+/// A completed Git subprocess. Nonzero exit is available to callers as data.
 pub struct GitCommandOutput {
+    /// Whether Git exited normally with status zero.
     pub success: bool,
     /// Git's exit status; `None` when a signal ended the process.
     pub code: Option<i32>,
+    /// Captured standard output decoded with lossy UTF-8.
     pub stdout: String,
+    /// Captured diagnostic output decoded with lossy UTF-8.
     pub stderr: String,
 }

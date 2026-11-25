@@ -57,6 +57,9 @@ signal-hook = { version = "0.4", optional = true }
 name = "sidecar_lifecycle"
 harness = false
 
+[lints.rust]
+missing_docs = "warn"
+
 [lints.clippy]
 await_holding_lock = "deny"
 dbg_macro = "deny"

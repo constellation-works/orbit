@@ -59,10 +59,12 @@ impl Plan {
         self
     }
 
+    /// The artifact family used to label plan errors.
     pub fn kind(&self) -> &'static str {
         self.kind
     }
 
+    /// The current schema version this forward-only plan produces.
     pub fn target(&self) -> u32 {
         self.target
     }

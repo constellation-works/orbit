@@ -36,6 +36,8 @@ impl ApplicationCredential {
         Ok(Self { id, value })
     }
 
+    /// Return the public consent identifier without exposing the credential needed to authorize
+    /// calls.
     pub fn consent_id(&self) -> &str {
         &self.id
     }

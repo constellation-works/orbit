@@ -359,6 +359,7 @@ impl OrbitError {
         }
     }
 
+    /// Report a host-registry refusal with a stable code and separate reader guidance.
     pub fn host_registry(code: HostRegistryCode, message: impl Into<String>) -> Self {
         Self::HostRegistry {
             code,
@@ -374,6 +375,7 @@ impl OrbitError {
         }
     }
 
+    /// Report a missing resource without suggesting a follow-up command.
     pub fn not_found(kind: NotFoundKind, id: impl Into<String>) -> Self {
         Self::NotFound {
             kind,
@@ -433,6 +435,8 @@ impl OrbitError {
         )
     }
 
+    /// Attach recovery candidates to an input error. An empty list produces
+    /// the plain input-error variant.
     pub fn invalid_input_with_suggestions(
         message: impl Into<String>,
         did_you_mean: Vec<String>,
@@ -447,6 +451,8 @@ impl OrbitError {
         }
     }
 
+    /// Report an unsuccessful federated artifact read and retain the owning
+    /// checkout's identity.
     pub fn remote_artifact_unavailable(
         kind: NotFoundKind,
         id: impl Into<String>,
@@ -459,6 +465,7 @@ impl OrbitError {
         }
     }
 
+    /// Report a nonlocal artifact and retain the checkout needed for a follow-up read.
     pub fn artifact_not_local(
         kind: NotFoundKind,
         id: impl Into<String>,
@@ -471,6 +478,7 @@ impl OrbitError {
         }
     }
 
+    /// Report a workspace-local friction reference found in other workspaces on this host.
     pub fn friction_not_local(
         friction_id: impl Into<String>,
         task_id: impl Into<String>,
@@ -485,6 +493,8 @@ impl OrbitError {
         }))
     }
 
+    /// Return cross-workspace friction evidence, including the reference and
+    /// the workspaces where it was found.
     pub fn friction_not_local_details(&self) -> Option<&FrictionNotLocal> {
         match self {
             Self::FrictionNotLocal(details) => Some(details),
@@ -492,6 +502,7 @@ impl OrbitError {
         }
     }
 
+    /// Return the protected tag an update tried to remove, if this error refused that update.
     pub fn dropped_system_tag(&self) -> Option<&str> {
         match self {
             Self::SystemIdentityTagDropped { tag } => Some(tag),
@@ -499,6 +510,7 @@ impl OrbitError {
         }
     }
 
+    /// Return the artifact location for both unavailable and nonlocal artifact errors.
     pub fn artifact_origin(&self) -> Option<&ArtifactOrigin> {
         match self {
             Self::RemoteArtifactUnavailable {
@@ -511,6 +523,7 @@ impl OrbitError {
         }
     }
 
+    /// Return the nonempty list of recovery candidates carried by an invalid-input diagnostic.
     pub fn did_you_mean(&self) -> Option<&[String]> {
         match self {
             Self::InvalidInputDiagnostic { did_you_mean, .. } if !did_you_mean.is_empty() => {
@@ -552,6 +565,7 @@ impl OrbitError {
         }
     }
 
+    /// Return the affected task ID, bundle path and corruption reason, in that order.
     pub fn task_bundle_corruption(&self) -> Option<(&str, &str, &str)> {
         match self {
             Self::TaskBundleCorrupt {
@@ -563,6 +577,7 @@ impl OrbitError {
         }
     }
 
+    /// Return the timed-out lock's structured evidence without parsing the diagnostic.
     pub fn file_lock_timeout(&self) -> Option<&crate::fs::io::FileLockTimeout> {
         match self {
             Self::FileLockTimeout(timeout) => Some(timeout),
@@ -570,6 +585,7 @@ impl OrbitError {
         }
     }
 
+    /// Return the bootstrap phase and database evidence if SQLite exhausted its busy timeout.
     pub fn sqlite_contention(&self) -> Option<&SqliteContention> {
         match self {
             Self::SqliteContention(contention) => Some(contention),

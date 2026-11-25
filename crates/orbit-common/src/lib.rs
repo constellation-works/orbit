@@ -5,7 +5,6 @@
 //! protocol, observability, security, and text.
 
 #![deny(clippy::print_stderr, clippy::print_stdout)]
-#![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 #![cfg_attr(
     not(any(test, feature = "test-support")),

@@ -63,6 +63,8 @@ pub fn derive_cost_usd(
     )
 }
 
+/// Convert reported input to cache-exclusive tokens using the price row active at `at`. Return
+/// `None` when no row matches or the reported counts cannot be reconciled.
 pub fn normalize_token_usage(
     model: &str,
     at: DateTime<Utc>,

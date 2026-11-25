@@ -51,6 +51,8 @@ pub struct DirectoryLockWaitGuard {
     observer: DirectoryLockWaitObserver,
 }
 
+/// Install a test observer for contended directory locks, replacing the previous observer.
+/// Drop the returned guard to unregister this observer if it is still installed.
 #[doc(hidden)]
 pub fn observe_directory_lock_waits(
     observer: impl Fn(&Path) + Send + Sync + 'static,

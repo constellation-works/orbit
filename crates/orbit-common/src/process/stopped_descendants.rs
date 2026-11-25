@@ -62,6 +62,8 @@ pub fn stopped_descendant_threshold() -> Duration {
 /// it did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoppedDescendant {
+    /// PID observed stopped past the threshold, paired with the recorded start identity when
+    /// available.
     pub pid: u32,
     /// Versioned start identity token for `pid`, read before it was signalled.
     pub pid_start_time: Option<String>,

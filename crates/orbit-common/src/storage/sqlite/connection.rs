@@ -411,6 +411,7 @@ pub fn filesystem_is_read_only(path: &Path) -> Result<bool, OrbitError> {
     Ok(stats.f_flag & libc::ST_RDONLY != 0)
 }
 
+/// Report `Ok(false)` because mount flags cannot be inspected on this platform.
 #[cfg(not(unix))]
 pub fn filesystem_is_read_only(_path: &Path) -> Result<bool, OrbitError> {
     Ok(false)

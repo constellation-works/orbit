@@ -10,6 +10,7 @@ use std::collections::HashMap;
 /// A live process as the kernel names it: pid plus start time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProcessStartKey {
+    /// Kernel PID, meaningful as identity only together with the start time.
     pub pid: u32,
     /// Kernel start time. Linux: `/proc/<pid>/stat` field 22 (clock ticks
     /// since boot). macOS: `pbi_start_tvsec` packed with microseconds.
@@ -38,6 +39,7 @@ pub fn current_process_group() -> Option<u32> {
     u32::try_from(pgid).ok().filter(|pgid| *pgid > 1)
 }
 
+/// Process group lookup is unavailable on this platform and returns `None`.
 #[cfg(not(unix))]
 pub fn current_process_group() -> Option<u32> {
     None
@@ -52,6 +54,7 @@ pub fn current_parent_pid() -> Option<u32> {
     u32::try_from(ppid).ok().filter(|ppid| *ppid > 0)
 }
 
+/// Parent PID lookup is unavailable on this platform and returns `None`.
 #[cfg(not(unix))]
 pub fn current_parent_pid() -> Option<u32> {
     None
@@ -95,6 +98,7 @@ fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
 /// combines them without that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessTreeProcess {
+    /// Stable identity of this sampled process, including its kernel start time.
     pub key: ProcessStartKey,
     /// The tree member that listed this process as its child; `None` for the
     /// root and for an orphan `SessionTree` adopted from launchd.
@@ -178,6 +182,7 @@ struct Tracked {
 }
 
 impl TreeCpuAccount {
+    /// Start a fresh account whose first snapshot establishes the baseline.
     pub fn new() -> Self {
         Self::default()
     }
@@ -350,6 +355,7 @@ pub struct SessionTree {
 
 #[cfg(target_os = "macos")]
 impl SessionTree {
+    /// Track this root from the first snapshot, which discovers its owned sessions.
     pub fn new(root: u32) -> Self {
         Self {
             root,

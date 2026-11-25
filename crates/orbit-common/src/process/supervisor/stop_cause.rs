@@ -16,14 +16,26 @@ pub const PERIODIC_STOP_NOTE: &str = "process stopped by a periodic supervision 
 pub enum ProcessStopCause {
     /// A caller's policy check requested termination. The reason identifies
     /// that policy independently of anything the child printed.
-    Requested { reason: &'static str },
+    Requested {
+        /// Caller-provided policy reason, independent of subprocess output.
+        reason: &'static str,
+    },
     /// A captured stream exceeded its byte ceiling, including during drain
     /// after the child exited.
-    OutputCaptureLimit { stream: &'static str },
+    OutputCaptureLimit {
+        /// Label of the captured stream that crossed its byte limit.
+        stream: &'static str,
+    },
     /// An incoming signal interrupted supervision.
-    InterruptedSignal { signal: i32 },
+    InterruptedSignal {
+        /// Signal number received by the supervisor.
+        signal: i32,
+    },
     /// The child terminated without an exit code, such as by a Unix signal.
-    TerminationStatus { status: std::process::ExitStatus },
+    TerminationStatus {
+        /// Original child status for termination without a numeric exit code.
+        status: std::process::ExitStatus,
+    },
     /// The request's periodic check asked the supervisor to stop the run.
     Periodic,
 }

@@ -148,6 +148,8 @@ fn proper_prefix_table(pat: &[u8]) -> Vec<usize> {
     table
 }
 
+/// Redact recognized sensitive environment values in JSON string values, preserving object keys
+/// and nonstrings.
 pub fn redact_sensitive_env_json(value: Value) -> Value {
     redact_json_with(value, redact_sensitive_env_text)
 }

@@ -92,14 +92,18 @@ impl fmt::Display for ParticipantRole {
 /// One live participant, as its own record describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParticipantRecord {
+    /// PID recorded by the participant. The record lock establishes liveness.
     pub pid: u32,
+    /// Role reported to an updater deciding how to wait for this participant.
     pub role: ParticipantRole,
     /// When this process image joined the authority. Participants join
     /// before bootstrap, so this is the start of the running image.
     pub started_at: DateTime<Utc>,
+    /// Access mode under which the process joined the authority.
     pub access: Access,
     /// SHA-256 of the executable image.
     pub digest: String,
+    /// Compatibility identity declared by the running executable.
     pub identity: CompatibilityIdentity,
     /// The resume capability this process hands over with once a candidate
     /// is renamed over its executable; `None` when it cannot hand over.
@@ -344,11 +348,13 @@ fn read_record<T: for<'de> Deserialize<'de>>(file: &mut File) -> Option<T> {
 pub struct PendingSwitch {
     /// The waiting process.
     pub pid: u32,
+    /// Role of the requester waiting for exclusive admission.
     pub role: ParticipantRole,
     /// Executable digest of the waiting binary.
     pub digest: String,
     /// The identity it will record once admitted.
     pub target: CompatibilityIdentity,
+    /// UTC instant at which the waiter registered the pending switch.
     pub requested_at: DateTime<Utc>,
     /// When the waiter gives up and refuses.
     pub deadline: DateTime<Utc>,

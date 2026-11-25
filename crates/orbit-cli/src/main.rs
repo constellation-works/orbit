@@ -20,8 +20,6 @@
 //! # Dependency direction
 //! orbit-core, orbit-types → `orbit-cli` (binary crate, no dependents)
 
-// Legacy CLI binary surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
 // The CLI binary prints genuine user-facing command output.
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.

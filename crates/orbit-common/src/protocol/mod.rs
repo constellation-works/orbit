@@ -1,6 +1,8 @@
 //! Canonical JSON ordering, YAML codecs, and shared tool-input parsing; imports `error` and `orbit-types`.
 
+/// Shared tool-argument decoding, including alias precedence and structured input errors.
 pub mod tool_input;
+/// YAML decoding for supported workflow and policy resource schema versions.
 pub mod yaml;
 
 use serde_json::Value;

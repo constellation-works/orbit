@@ -80,6 +80,7 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
+    /// Create starting state and the receiver that must be passed to [`supervise`].
     pub fn new() -> (Arc<Self>, Receiver<Control>) {
         let (control, receiver) = mpsc::sync_channel(CONTROL_CAPACITY);
         let sidecar = Arc::new(Self {
@@ -97,14 +98,18 @@ impl Sidecar {
         (sidecar, receiver)
     }
 
+    /// Snapshot the status page payload with `phase`, `title` and optional `detail`.
     pub fn status(&self) -> Value {
         lock(&self.status).clone()
     }
 
+    /// Ask the supervisor to skip the current retry delay. A full queue drops the request.
     pub fn retry(&self) {
         let _ = self.control.try_send(Control::Retry);
     }
 
+    /// Ask the supervisor to stop its current server and launch a fresh one.
+    /// A full queue drops the request.
     pub fn restart(&self) {
         let _ = self.control.try_send(Control::Restart);
     }
@@ -141,7 +146,7 @@ impl Sidecar {
         }
     }
 
-    /// Stop the server and wait for it, bounded by [`STOP_TIMEOUT`]. A
+    /// Stop the server and give it a bounded window to drain. A
     /// server that is being started is waited for and stopped too. Overlapping
     /// callers wait for the same server to be stopped and reaped.
     pub fn shutdown(&self) {
@@ -153,6 +158,7 @@ impl Sidecar {
         let _ = self.control.try_send(Control::Shutdown);
     }
 
+    /// Return whether teardown was requested, including while the server is still draining.
     pub fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::SeqCst)
     }
