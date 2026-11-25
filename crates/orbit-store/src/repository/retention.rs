@@ -4,10 +4,15 @@
 //! accounting.
 //!
 //! Reached through [`Snapshot::retention`] (read-only) and [`Tx::retention`]
-//! (read-write inside [`crate::Store::write`]). Every writing method touches
-//! at most `limit` rows, so a caller sweeping a large history never holds the
-//! write lock for longer than one batch; when to sweep and how to batch is the
-//! calling operation's. [`visit_blob_reference_text`] is the one read that
+//! (read-write inside [`crate::Store::write`]). The caller sizes each batch,
+//! in the unit the writer works in: [`RetentionRepository::delete_audit_batch`]
+//! deletes at most `limit` rows, [`RetentionRepository::archive_run_states`]
+//! archives at most `limit` runs (each run costs one state-row delete and one
+//! run-row update), and [`RetentionRepository::delete_applied_journal_rows`]
+//! takes no limit and deletes every ID in the slice it is given, so the caller
+//! must chunk the IDs. Keeping each call to one batch means a sweep of a large
+//! history never holds the write lock for longer than one batch; when to sweep
+//! and how to batch is the calling operation's. [`visit_blob_reference_text`] is the one read that
 //! spans snapshots, one per chunk, so a scan of the whole history never pins
 //! one read transaction.
 //!
@@ -201,7 +206,8 @@ impl<'a, 'tx> RetentionRepository<'a, Tx<'tx>> {
     }
 
     /// Delete the named journal rows that are still `applied`. Returns how
-    /// many went.
+    /// many went. No limit applies: every ID in `journal_ids` is processed,
+    /// so the caller chunks the slice.
     pub fn delete_applied_journal_rows(&self, journal_ids: &[String]) -> Result<usize, OrbitError> {
         {
             let mut delete = self
