@@ -128,10 +128,13 @@ spec:
     `resume_delivery` for a blocked task's exact stopped failed or held run.
     Give the observed failure and remaining task work in `diagnosis`. One
     attempt per cycle. The recovery leaf resumes the preserved candidate on
-    the current base and may make the source changes needed to finish it; it
-    runs fresh validation and review, then stops at review. Record the returned
-    action key and watch the leaf through that handoff. Use `land` with
-    `merge` only when the repaired head has review and required checks.
+    the current base and may make the source changes needed to finish it. It
+    submits the candidate to the normal PR pipeline with review as the
+    completion target; fresh validation and review run where their normal
+    gates apply, subject to the usual light-delivery exemptions. The handoff
+    remains at review. Record the returned action key and watch the leaf
+    through that handoff. Use `land` with `merge` only when required checks
+    pass on the repaired head and any applicable review gate is satisfied.
 
     Answerable decisions. A security choice on a machine-owned repair, and
     every other escalation, is raised only on a related human-crew task.
