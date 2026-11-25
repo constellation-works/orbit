@@ -8,8 +8,10 @@ pub(crate) const BEFORE_PR_VALUE_DEPRECATION_NOTE: &str = "review.timing = `befo
      deprecated but still holds PR creation for a reviewer; new setups use `off` or \
      `before_landing`, and new run requests use `--review before-landing`. Migrate only with an \
      explicit `orbit config set review.timing before_landing` (add `--global` only for the global layer)";
+// compat-until: 2026-11-17 (fe505cbee017, ORB-16775)
 /// The deprecated before-PR switch, translated to [`REVIEW_TIMING_KEY`].
 pub(crate) const LEGACY_REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
+// compat-until: 2026-11-17 (fe505cbee017, ORB-16775)
 /// The deprecated before-landing switch, translated to [`REVIEW_TIMING_KEY`].
 pub(crate) const LEGACY_REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
 /// Machines whose claimed leaves review before landing even while the
@@ -17,8 +19,10 @@ pub(crate) const LEGACY_REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing
 pub const REVIEW_BEFORE_LANDING_HOSTS_KEY: &str = "review.before_landing_hosts";
 /// The before-PR review's time limit.
 pub const REVIEW_MINUTES_KEY: &str = "review.minutes";
+// compat-until: 2026-11-03 (499c63001662)
 /// The retired review timing enum, translated on load.
 pub const LEGACY_REVIEW_POLICY_KEY: &str = "operation.review_policy";
+// compat-until: 2026-11-03 (499c63001662)
 /// The retired lineage minutes, translated to [`REVIEW_MINUTES_KEY`].
 pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 
@@ -31,5 +35,6 @@ pub(crate) const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 pub const REVIEW_CREW_KEY: &str = "workflow.purpose_crews.review";
 /// The crew, or crew pool, of before-PR and before-landing review.
 pub const PRE_LANDING_REVIEW_CREW_KEY: &str = "workflow.purpose_crews.pre_landing_review";
+// compat-until: 2026-11-17 (fe505cbee017, ORB-16775)
 /// The deprecated spelling of [`REVIEW_CREW_KEY`].
 pub(crate) const LEGACY_REVIEW_CREW_KEY: &str = "operation.review_crew";

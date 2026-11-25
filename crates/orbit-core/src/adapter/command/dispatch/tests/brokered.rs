@@ -48,7 +48,16 @@ impl FamilyDispatch for OrbitRuntime {
         input: Value,
     ) -> Result<super::super::execute::ToolDispatchOutcome, OrbitError> {
         let (tool, input) = orbit_types::tool::tool_family_call(operation, input);
-        self.execute_tool_command_dispatch(&tool, input, None, None, ToolEntryPoint::Mcp)
+        let env = orbit_common::Env::capture();
+        self.execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
+            &tool,
+            input,
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            orbit_types::tool::ToolSessionContext::default(),
+        )
     }
 }
 
@@ -977,14 +986,17 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
         .expect_err("no pull request to land")
         .to_string();
     assert!(error.contains("task_landing_refused"), "{error}");
+    let env = orbit_common::Env::capture();
     let completed = runtime
-        .execute_tool_command_dispatch(
+        .execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
             UPDATE,
             json!({"id": delivered, "status": "done", "execution_summary": "Delivered.",
                    "model": "codex"}),
             None,
             None,
             ToolEntryPoint::Mcp,
+            orbit_types::tool::ToolSessionContext::default(),
         )
         .expect("the host completes the task")
         .value;

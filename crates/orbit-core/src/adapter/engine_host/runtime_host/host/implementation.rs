@@ -726,8 +726,10 @@ impl RuntimeHost for OrbitRuntime {
         #[cfg(target_os = "macos")] subprocess_cwd: Option<&Path>,
         #[cfg(not(target_os = "macos"))] _subprocess_cwd: Option<&Path>,
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        let env = crate::runtime::process_env();
         sandbox::resolve_executor_sandbox(
             self,
+            &env,
             provider,
             #[cfg(target_os = "macos")]
             fs_profile,
