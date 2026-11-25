@@ -93,8 +93,9 @@ request. The snapshot reads only the active file. The Errors tab also reads
 rotated archives that reach into its window, reading each only back to its first
 record older than the window (a 60 s margin allows for out-of-order stamps) and not
 opening an archive last written before the window. When retention has already pruned
-the start of the window, its header shows "covers since" with the oldest
-retained instant.
+the start of the window, the Errors panel body shows "covers since" with the
+oldest retained instant, repeated in the count summary tooltip; the
+single-line header itself does not show it.
 
 The Tasks dock's **Log** view (`#tasks?dock=log`) and the bottom status bar put the message before
 structured context. Agent relays show the provider event kind (or the stream
