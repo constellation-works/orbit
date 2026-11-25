@@ -253,11 +253,13 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
 /// The environment of the scope launcher (`systemd-run --user`) and the
 /// sandbox wrapper it execs, composed from this process's environment.
 ///
-/// The user-bus locators are admitted here, and only here: without them the
-/// launcher cannot reach the user manager (jrun-20261101-0131-t1, every
-/// contained script step exiting 1 in ~2 ms). They never reach the script,
-/// whose environment is exactly [`script_env_with_env`]; the wrapper clears its
-/// environment and sets only that inside the sandbox.
+/// The user-bus locators in [`USER_BUS_LOCATOR_ENV_VARS`] are admitted into this
+/// launcher's environment so it can reach the user manager. The script's
+/// environment is composed separately in [`run_in_scratch`]: it starts with
+/// [`script_env_with_env`] and adds explicitly granted `env_pass` variables.
+/// User-bus locators do not reach the script by default, but can be passed when
+/// explicitly granted. The wrapper clears its environment and sets this
+/// composed script environment inside the sandbox.
 pub(super) fn script_launcher_env(env: &Env) -> Vec<(String, String)> {
     orbit_common::security::child_env::allowlisted_child_env(env, &[], &USER_BUS_LOCATOR_ENV_VARS)
 }
