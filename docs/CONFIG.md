@@ -2399,8 +2399,9 @@ existing recovery activities, final validation and push do the repair:
   admitted from the same attempt budget.
 - When a failed required check is a dependency waiter, auto-fix uses the
   authenticated workflow and job evidence to include bounded excerpts from
-  the failed dependencies in the repair input. If the complete proof or a
-  dependency log is unavailable, the repair retains the waiter excerpt.
+  the failed dependencies in the repair input. If a dependency log or the
+  complete proof is unavailable, the repair retains the waiter excerpt and
+  explains the gap using the run and job IDs from the provider.
 - A job log that exceeds the display or full-command retention limit can still
   supply bounded failure regions. Recovery requires a fully scanned source,
   complete command and region selection, and exactly one provider-reported
