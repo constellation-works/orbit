@@ -78,7 +78,7 @@ which the seeded task-pilot routine uses), when deliveries land on a branch
   the machine named in `owner_machine`.
 - **Missed slots collapse.** After a sleep, `missed_run: skip` waits for the
   next slot and `catch_up_once` fires one make-up run. `orbit doctor` warns
-  when an enabled routine's last success is older than three times its
+  when an enabled cron routine's last success is older than three times its
   interval.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.

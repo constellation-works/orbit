@@ -321,6 +321,7 @@ orbit plugin test ./demo --update-goldens
 |---|---|
 | `--case <name>` | Runs one case. A filtered run does not certify the full suite. |
 | `--update-goldens` | Replaces mismatched `expect.output` values with the actual output. Review the diff. |
+| `--fixture-config <file>` | Supplies fixture plugin settings, a JSON file, over the manifest defaults. Settings in the host's `[plugins.<ns>]` section are always excluded. |
 | `--grant <grants>`, `--accept-requested` | Consent for this run only, never a host grant. One is required when the manifest asks for an unconfined backend, a write root outside the run's temporary directory, `network: any` or `env_pass`. |
 
 ## Dashboard panels and links
