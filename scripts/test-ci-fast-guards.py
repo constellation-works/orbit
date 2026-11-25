@@ -4327,6 +4327,41 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         self.assertIn(f"{self.DOC}:3", result.stderr)
         self.assertNotIn("audit_event", result.stderr)
 
+    def test_shallow_checkout_without_common_ancestor_reports_insufficient_history(self):
+        # The base tip adds audit_event after the head's branch point. A clone that
+        # keeps only the two tips cannot reach their merge-base, so the guard must
+        # stop with an insufficient-history report instead of reading the base's
+        # addition as a removal from the tip.
+        self.branch_behind_a_base_that_adds("audit_event")
+        clone_parent = tempfile.TemporaryDirectory(
+            prefix="removed-identifiers-shallow-", dir=self.root.parent)
+        self.addCleanup(clone_parent.cleanup)
+        clone = Path(clone_parent.name) / "clone"
+        clone_result = subprocess.run(
+            ["git", "clone", "-q", "--depth", "1", "--branch", "pr",
+             f"file://{self.root}", str(clone)],
+            env=self.env, capture_output=True, text=True)
+        self.assertEqual(clone_result.returncode, 0, clone_result.stderr)
+        fetch_result = subprocess.run(
+            ["git", "-C", str(clone), "fetch", "-q", "--depth", "1",
+             f"file://{self.root}", "main"],
+            env=self.env, capture_output=True, text=True)
+        self.assertEqual(fetch_result.returncode, 0, fetch_result.stderr)
+        base_tip = subprocess.run(
+            ["git", "-C", str(clone), "rev-parse", "FETCH_HEAD"],
+            env=self.env, capture_output=True, text=True).stdout.strip()
+        # The fixture must really lack a merge-base, or it proves nothing.
+        fork = subprocess.run(
+            ["git", "-C", str(clone), "merge-base", base_tip, "HEAD"],
+            env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(fork.returncode, 0, fork.stdout)
+        result = subprocess.run(
+            [sys.executable, str(clone / "scripts/check-removed-code-identifiers.py")],
+            env=dict(self.env, CI_TEST_BASE=base_tip), text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("insufficient history", result.stderr)
+        self.assertNotIn("audit_event", result.stderr)
+
     def test_removed_const_named_through_a_path_prefix_fails(self):
         self.write(self.SOURCE, "// constant moved out of this module\n")
         self.write(self.DOC, f"# Overview\n\nThe `orbit_core::{self.CONST}` job name.\n")
