@@ -51,6 +51,7 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             assert_eq!(body["enabled"], false, "{body}");
             assert_eq!(body["trusted_hosts"], json!([]));
             assert_eq!(body["restart_required"], false);
+            assert_eq!(body["configured_policy_error"], Value::Null);
             assert_eq!(body["tailscale"]["state"], "ok", "{body}");
             assert_eq!(
                 body["tailscale"]["handlers"][0]["to_dashboard"], true,
@@ -100,6 +101,7 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             );
             assert_eq!(body["trusted_logins"], json!(["alice@example.com"]));
             assert_eq!(body["restart_required"], false);
+            assert_eq!(body["configured_policy_error"], Value::Null);
             assert_eq!(body["warnings"], json!([]), "{body}");
             let connections = &body["connections"];
             assert!(connections["tracking_since"].is_string(), "{body}");
@@ -119,17 +121,60 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             assert_eq!(items[0]["login"], "mallory@example.com");
             assert_eq!(items[0]["count_24h"], 1);
 
-            // The keys are read at start: an edit now needs a restart.
+            // An incomplete saved pair cannot start the dashboard. Keep
+            // showing the running pair and direct the operator to add a login.
+            fs::write(
+                &config,
+                format!("{base}\n[machine.web]\ntrusted_hosts = [\"new.tailnet.ts.net\"]\n"),
+            )
+            .unwrap();
+            let body = super::support::json_ok(on.get("/api/remote-access"));
+            assert_eq!(
+                body["trusted_hosts"],
+                json!([{"host": "dash.tailnet.ts.net", "url": "https://dash.tailnet.ts.net"}]),
+                "{body}"
+            );
+            assert_eq!(body["trusted_logins"], json!(["alice@example.com"]));
+            assert_eq!(
+                body["configured"]["trusted_hosts"],
+                json!(["new.tailnet.ts.net"])
+            );
+            assert_eq!(body["configured"]["trusted_logins"], json!([]));
+            assert_eq!(body["restart_required"], false, "{body}");
+            assert!(
+                body["configured_policy_error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("trusted_logins is empty")),
+                "{body}"
+            );
+
+            // Completing the pair makes the save restart-ready. The running
+            // policy remains visible until the process restarts.
             fs::write(
                 &config,
                 format!(
-                    "{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\n\
-                     trusted_logins = [\"alice@example.com\", \"bob@example.com\"]\n"
+                    "{base}\n[machine.web]\ntrusted_hosts = [\"new.tailnet.ts.net\"]\n\
+                     trusted_logins = [\"bob@example.com\"]\n"
                 ),
             )
             .unwrap();
             let body = super::support::json_ok(on.get("/api/remote-access"));
+            assert_eq!(
+                body["trusted_hosts"],
+                json!([{"host": "dash.tailnet.ts.net", "url": "https://dash.tailnet.ts.net"}]),
+                "{body}"
+            );
+            assert_eq!(body["trusted_logins"], json!(["alice@example.com"]));
+            assert_eq!(
+                body["configured"]["trusted_hosts"],
+                json!(["new.tailnet.ts.net"])
+            );
+            assert_eq!(
+                body["configured"]["trusted_logins"],
+                json!(["bob@example.com"])
+            );
             assert_eq!(body["restart_required"], true, "{body}");
+            assert_eq!(body["configured_policy_error"], Value::Null);
         },
     );
 }
