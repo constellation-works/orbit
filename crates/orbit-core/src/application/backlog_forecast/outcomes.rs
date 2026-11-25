@@ -339,14 +339,32 @@ impl ReturnCurve {
         })
     }
 
-    /// Whether a wait already `age` hours old has no observation left
-    /// to draw its future from.
+    /// Whether the curve still has at least one recorded event atom not yet
+    /// elapsed at `age`.
+    pub(super) fn has_future_atom(&self, age: f64) -> bool {
+        self.atoms
+            .iter()
+            .any(|atom| !return_atom_elapsed(age, atom.0))
+    }
+
+    /// Whether a wait already `age` hours old has no supported outcome left
+    /// to draw its future from: either there are no observations at all, or
+    /// the tail past the last observation is unsupported and no event atom
+    /// remains unelapsed at `age`.
     ///
     /// An observation counts as passed only once `return_atom_elapsed`
-    /// says so. A fresh block is therefore not past a pool whose last
-    /// observation sits at age 0.
+    /// says so. A fresh block is therefore not past a return atom recorded
+    /// at age 0.
     pub(super) fn unsupported_at(&self, age: f64) -> bool {
-        self.support == 0 || (self.tail_unsupported && return_atom_elapsed(age, self.last_observed))
+        self.support == 0 || (self.tail_unsupported && !self.has_future_atom(age))
+    }
+
+    /// Whether this curve can draw a supported outcome past `age`: it has at
+    /// least one unelapsed event atom, or observations reach the 90-day
+    /// return horizon.
+    pub(super) fn supports_age(&self, age: f64) -> bool {
+        self.support > 0
+            && (self.has_future_atom(age) || self.last_observed >= RETURN_HORIZON_HOURS)
     }
 }
 

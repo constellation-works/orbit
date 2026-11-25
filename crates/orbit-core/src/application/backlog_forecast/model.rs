@@ -65,7 +65,14 @@ use super::review_modes::ReviewMode;
 /// 23: the weighted quantile accepts a cumulative weight within a relative
 /// tolerance of the target, so equal residuals at a finite-sample rank
 /// select that rank instead of the next one [ORB-26752].
-pub(super) const MODEL_VERSION: u32 = 23;
+/// 24: a currently blocked task whose count-selected return cell has an
+/// unsupported tail at its elapsed age falls back along the return-basis
+/// chain to the first wider pool that supports draws past that age; if no
+/// pool in the chain supports that age, the task is marked unforecastable
+/// (`return_tail_unsupported`) and remaining work is reported in
+/// `schedulable_subset` instead of drawing unsupported `Follow::Censored`
+/// mass as horizon censoring [ORB-28343].
+pub(super) const MODEL_VERSION: u32 = 24;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -281,11 +288,11 @@ struct Pool {
     samples: Vec<usize>,
 }
 
-/// The cell fallback chain over any history rows: complexity × crew pool ×
-/// review mode, dropping crew then complexity while preserving mode at
-/// [`MIN_CELL_SAMPLES`], then the mode-pooled cell, complexity and
-/// workspace.
-fn resolve_pool<R: CellRow>(item: &Item, rows: &[R]) -> Pool {
+/// Eligible pools along the fallback chain, narrowest first: complexity ×
+/// crew pool × review mode, dropping crew then complexity while preserving
+/// mode at [`MIN_CELL_SAMPLES`], then the mode-pooled cell, complexity and
+/// workspace. Also returns the raw cell count before fallback.
+fn pool_candidates<R: CellRow>(item: &Item, rows: &[R]) -> (usize, Vec<(Basis, Vec<usize>)>) {
     let assessed = item.complexity != UNSET_BUCKET;
     let of_complexity: Vec<usize> = (0..rows.len())
         .filter(|index| assessed && rows[*index].complexity() == item.complexity)
@@ -307,21 +314,38 @@ fn resolve_pool<R: CellRow>(item: &Item, rows: &[R]) -> Pool {
     let mode_complexity: Vec<usize> = of_complexity.iter().copied().filter(matches_mode).collect();
     let mode_workspace: Vec<usize> = (0..rows.len()).filter(matches_mode).collect();
     let cell_samples = cell.len();
-    let (basis, samples) = if cell.len() >= MIN_CELL_SAMPLES {
-        (Basis::Cell, cell)
-    } else if mode_complexity.len() >= MIN_CELL_SAMPLES {
-        (Basis::ReviewComplexity, mode_complexity)
-    } else if mode_workspace.len() >= MIN_CELL_SAMPLES {
-        (Basis::ReviewWorkspace, mode_workspace)
-    } else if pooled_cell.len() >= MIN_CELL_SAMPLES {
-        (Basis::ModePooledCell, pooled_cell)
-    } else if !of_complexity.is_empty() {
-        (Basis::Complexity, of_complexity)
-    } else if !rows.is_empty() {
-        (Basis::Workspace, (0..rows.len()).collect())
-    } else {
-        (Basis::None, Vec::new())
-    };
+    let mut candidates = Vec::new();
+    if cell.len() >= MIN_CELL_SAMPLES {
+        candidates.push((Basis::Cell, cell));
+    }
+    if mode_complexity.len() >= MIN_CELL_SAMPLES {
+        candidates.push((Basis::ReviewComplexity, mode_complexity));
+    }
+    if mode_workspace.len() >= MIN_CELL_SAMPLES {
+        candidates.push((Basis::ReviewWorkspace, mode_workspace));
+    }
+    if pooled_cell.len() >= MIN_CELL_SAMPLES {
+        candidates.push((Basis::ModePooledCell, pooled_cell));
+    }
+    if !of_complexity.is_empty() {
+        candidates.push((Basis::Complexity, of_complexity));
+    }
+    if !rows.is_empty() {
+        candidates.push((Basis::Workspace, (0..rows.len()).collect()));
+    }
+    (cell_samples, candidates)
+}
+
+/// The cell fallback chain over any history rows: complexity × crew pool ×
+/// review mode, dropping crew then complexity while preserving mode at
+/// [`MIN_CELL_SAMPLES`], then the mode-pooled cell, complexity and
+/// workspace.
+fn resolve_pool<R: CellRow>(item: &Item, rows: &[R]) -> Pool {
+    let (cell_samples, candidates) = pool_candidates(item, rows);
+    let (basis, samples) = candidates
+        .into_iter()
+        .next()
+        .unwrap_or((Basis::None, Vec::new()));
     Pool {
         basis,
         cell_samples,
@@ -331,6 +355,29 @@ fn resolve_pool<R: CellRow>(item: &Item, rows: &[R]) -> Pool {
         ),
         samples,
     }
+}
+
+/// Resolve a task's return curve along the fallback chain. When a currently
+/// blocked task's count-selected pool has an unsupported tail at its elapsed
+/// age, keep walking wider bases until one supports draws past that age; if
+/// none does, retain the initial pool so the unsupported tail stays explicit.
+fn resolve_returns(item: &Item, waits: &[AwayWait]) -> (Basis, ReturnCurve) {
+    let (_, candidates) = pool_candidates(item, waits);
+    let mut candidates = candidates.into_iter();
+    let Some((first_basis, first_samples)) = candidates.next() else {
+        return (Basis::None, ReturnCurve::default());
+    };
+    let first_curve = ReturnCurve::estimate(waits, &first_samples);
+    if !item.blocked || !first_curve.unsupported_at(item.age_hours) {
+        return (first_basis, first_curve);
+    }
+    for (basis, samples) in candidates {
+        let curve = ReturnCurve::estimate(waits, &samples);
+        if curve.supports_age(item.age_hours) {
+            return (basis, curve);
+        }
+    }
+    (first_basis, first_curve)
 }
 
 pub(super) fn resolve_forecast_item(
@@ -366,7 +413,7 @@ pub(super) fn resolve_forecast_item(
     };
     let setback_tokens = setbacks(&|episode| episode.tokens);
     let setback_costs = setbacks(&|episode| episode.usd);
-    let returns = resolve_pool(item, waits);
+    let (return_basis, returns) = resolve_returns(item, waits);
     Resolved {
         basis: pool.basis,
         cell_samples: pool.cell_samples,
@@ -378,8 +425,8 @@ pub(super) fn resolve_forecast_item(
         episodes: outcomes.samples,
         setback_tokens,
         setback_costs,
-        return_basis: returns.basis,
-        returns: ReturnCurve::estimate(waits, &returns.samples),
+        return_basis,
+        returns,
     }
 }
 

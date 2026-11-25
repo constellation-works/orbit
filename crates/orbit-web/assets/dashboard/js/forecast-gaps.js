@@ -6,7 +6,7 @@ import {
   el, forecastView, forecastCard, pinnedInfoHint, forecastMoreSection, reportsReviewMode,
 } from './forecast-shared.js';
 import {
-  forecastBaselineFigures, forecastBoundedGap, forecastCount, forecastUnavailableInfo, num, recordedPoolsContainGaps,
+  forecastBaselineFigures, forecastBoundedGap, forecastCount, forecastUnavailableInfo, hasUnsupportedReturnTail, num, quantilePair, recordedPoolsContainGaps,
   regressionGapReasonPhrase, regressionHistoryIsAbsent,
 } from './forecast-summary.js';
 import * as forecastSummary from './forecast-summary.js';
@@ -95,7 +95,7 @@ function coverageItems() {
     ["outcome_fallbacks", "Attempt-outcome fallbacks", coverage.outcome_fallbacks, `Fewer than ${min} recorded attempts of the same complexity, crew pool and review mode: outcomes sampled from a wider pool.`],
     ["outcome_no_history", "No attempt history", coverage.outcome_no_history, "No recorded attempt to sample: every first attempt is assumed to deliver."],
     ["return_unsupported", "No return history", coverage.return_unsupported, "Blocked, with no recorded wait to draw a return from. Left out of the full totals."],
-    ["return_tail_unsupported", "Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before 90 days: a draw past the last one counts as no return."],
+    ["return_tail_unsupported", "Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before the task's wait age (or before 90 days) across every fallback pool: a blocked task past all recorded return history is left out of the full totals."],
     ["phase_age_unknown", "Unknown elapsed time", coverage.phase_age_unknown, "Running or blocked, but the history does not say since when: treated as just started."],
     ["arrivals_missing_tokens", "Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens across the full history lookback."],
     ["arrivals_missing_usd", "Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost across the full history lookback."],
@@ -188,6 +188,9 @@ function gapsSentence() {
     return forecastBaselineFigures(forecast.pre_regression_baseline)
       ? `${info.label}, so totals show the baseline only.`
       : `${info.label}, so there is no forecast.`;
+  }
+  if (!quantilePair(forecast.time_to_drain_hours) && hasUnsupportedReturnTail(forecast, forecastView.payload.coverage)) {
+    return "A blocked task has an unsupported return tail, so full totals are withheld.";
   }
   const open = openCoverageCount();
   const approved = proposedForecastUnavailable();

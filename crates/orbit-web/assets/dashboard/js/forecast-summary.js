@@ -71,6 +71,7 @@ export function quantilePair(quantiles) {
 
 // Unforecastable dependencies withhold every full total, whatever the history.
 export const SUBSET_REASON = "Not every task can be scheduled.";
+export const UNSUPPORTED_RETURN_TAIL_SUBSET_REASON = "A blocked task has an unsupported return tail, so there is no full total.";
 
 /// Why one adjusted total (`usd` or `tokens`) has no quantiles in the selected
 /// scenario, naming the evidence of that scenario only: per-task coverage, the
@@ -80,7 +81,9 @@ export const SUBSET_REASON = "Not every task can be scheduled.";
 export function forecastMetricReason(scenario, quantiles, metric, arrivals) {
   if (quantiles?.p90 != null) return metric === "tokens" ? "Normalized tokens." : null;
   const { source, coverage = {} } = scenario;
-  if (source?.schedulable_subset) return SUBSET_REASON;
+  if (source?.schedulable_subset) {
+    return hasUnsupportedReturnTail(source, coverage) ? UNSUPPORTED_RETURN_TAIL_SUBSET_REASON : SUBSET_REASON;
+  }
   const reasons = [];
   if (metric === "tokens" && num(coverage.uncovered_model)) reasons.push("Some tasks have no token history for the model.");
   if (metric === "usd" && num(coverage.uncosted)) reasons.push("Some tasks have no costed history.");
@@ -110,7 +113,7 @@ export function forecastCount(value) {
 // history-level counters describe a shared pool and must not be added.
 // A missing counter in either population stays unknown, never a measured zero.
 export function proposedForecastCoverage(payload) {
-  const keys = ["tasks", "uncosted", "uncovered_model", "no_history", "regression_history_missing", "regression_history_bounded", "risk_unestimated", "regression_history_thin"];
+  const keys = ["tasks", "uncosted", "uncovered_model", "no_history", "regression_history_missing", "regression_history_bounded", "risk_unestimated", "regression_history_thin", "return_unsupported", "return_tail_unsupported"];
   return Object.fromEntries(keys.map((key) => {
     const current = payload.coverage?.[key];
     const proposed = payload.proposed_coverage?.[key];
@@ -301,6 +304,7 @@ export function forecastUnavailableInfo(forecast, payload = {}) {
   }
   if (unavailable.risk_unestimated) reasons.push({ kind: "risk_unestimated", label: "Risk not estimated", detail: "Regression risk is not estimated for some tasks, so the adjusted forecast is unavailable." });
   if (unavailable.arrival_conflict_unknown) reasons.push({ kind: "arrival_conflict_unknown", label: "Arrival conflicts unknown", detail: "Whether arriving tasks would conflict with this backlog is unknown, so the adjusted forecast is unavailable." });
+  if (unavailable.return_tail_unsupported) reasons.push({ kind: "return_tail_unsupported", label: "Unsupported return tail", detail: "A blocked task has waited past all recorded return history, so the full forecast is unavailable." });
   if (!reasons.length) return null;
   const support = supportText(forecast, payload);
   return { kind: reasons[0].kind, reasons, label: reasons.map((r) => r.label).join(" · "), detail: [reasons.map((r) => r.detail).join(" "), support].filter(Boolean).join(" "), support };
@@ -313,7 +317,26 @@ function quantileText(quantiles, fmt) {
   return `p50 ${p50 == null ? "unknown" : fmt(p50)} · p90 ${p90 == null ? "unknown" : fmt(p90)}`;
 }
 
-export function hasHorizonCensoringEvidence(forecast) {
+export function returnTailUnforecastableCount(forecast) {
+  return taskPredictions(forecast).filter((row) => row?.unforecastable === "return_tail_unsupported").length;
+}
+
+/// Whether non-draining or missing totals stem from an unsupported return tail
+/// rather than supported draws exceeding the 90-day horizon.
+export function hasUnsupportedReturnTail(forecast, coverage = {}) {
+  if (forecast?.unavailable?.return_tail_unsupported) return true;
+  if (returnTailUnforecastableCount(forecast) > 0) return true;
+  if (num(coverage?.return_tail_unsupported) > 0) return true;
+  return num(forecast?.outcomes?.no_return) > 0
+    && taskPredictions(forecast).some((row) => !row?.unforecastable && !row?.drain_hold
+      && row?.return_support?.tail_unsupported === true
+      && num(row?.completion_probability) != null
+      && num(row?.completion_probability) < 1
+      && (row?.status === "blocked" || num(forecast?.outcomes?.blocked_attempts) > 0));
+}
+
+export function hasHorizonCensoringEvidence(forecast, coverage = {}) {
+  if (hasUnsupportedReturnTail(forecast, coverage)) return false;
   const drainProbability = num(forecast?.drain_probability);
   const completionProbability = num(forecast?.completion_probability);
   const unfinished = num(forecast?.not_expected_to_drain);
@@ -408,13 +431,27 @@ export function backlogForecastSummary(payload) {
   const tasks = num(forecast.tasks);
   const history = num(payload.inputs?.history_deliveries);
   const coverage = payload.coverage || {};
+  const unsupportedTail = hasUnsupportedReturnTail(forecast, coverage);
   let reasonKind = "unknown";
   let reason = UNREPORTED_FORECAST_REASON;
   let detail = "The forecast did not report why it is unavailable.";
   if (tasks === 0) { reasonKind = "empty"; reason = "No backlog to forecast"; detail = "No backlog or in-progress tasks in this workspace."; }
   else if (history === 0 || (tasks != null && tasks > 0 && num(coverage.no_history) != null && num(coverage.no_history) >= tasks)) { reasonKind = "no_history"; reason = "No delivery history to sample"; detail = "There is no delivery history to sample for this backlog."; }
+  else if (forecast.schedulable_subset && unsupportedTail) {
+    const count = returnTailUnforecastableCount(forecast);
+    reasonKind = "return_tail_unsupported";
+    reason = "Unsupported return tail";
+    detail = count > 1
+      ? `${count} blocked tasks have waited past all recorded return history, so there is no full total.`
+      : "A blocked task has waited past all recorded return history, so there is no full total.";
+  }
   else if (forecast.schedulable_subset) { reasonKind = "subset"; reason = "Not every task can be scheduled"; detail = "Some tasks depend on work the drain cannot start, so there is no full total."; }
-  else if (tasks != null && tasks > 0 && hasHorizonCensoringEvidence(forecast)) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
+  else if (tasks != null && tasks > 0 && unsupportedTail) {
+    reasonKind = "return_tail_unsupported";
+    reason = "Unsupported return tail";
+    detail = "Recorded return waits run out before 90 days, so return time cannot be estimated for a blocked task.";
+  }
+  else if (tasks != null && tasks > 0 && hasHorizonCensoringEvidence(forecast, coverage)) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
   const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
   return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, scope, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
 }

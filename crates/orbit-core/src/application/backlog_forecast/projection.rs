@@ -111,6 +111,9 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
             }
             match reasons[index] {
                 Some("return_unsupported") => bump("return_unsupported"),
+                // Counted below under `return_tail_unsupported`, not as a
+                // dependency gap.
+                Some("return_tail_unsupported") => {}
                 Some(reason) => {
                     bump("dependency_unforecastable");
                     *unforecastable.entry(reason).or_default() += 1;

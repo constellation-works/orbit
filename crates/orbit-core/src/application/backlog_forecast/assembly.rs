@@ -317,13 +317,23 @@ pub(super) fn assemble_forecast_simulation(
     }
     let status_by_id = runtime.dependency_status_index(queued.iter().copied())?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
-    // Held work and blocked tasks without return evidence have no drain start.
+    // Held work and blocked tasks without supported return evidence have no
+    // drain start.
     let no_return_support: Vec<Option<&'static str>> = items
         .iter()
         .zip(&resolved)
         .map(|(item, resolved)| {
             item.drain_hold.as_ref().map(DrainHold::reason).or_else(|| {
-                (item.blocked && resolved.returns.support == 0).then_some("return_unsupported")
+                if !item.blocked {
+                    return None;
+                }
+                if resolved.returns.support == 0 {
+                    Some("return_unsupported")
+                } else if resolved.returns.unsupported_at(item.age_hours) {
+                    Some("return_tail_unsupported")
+                } else {
+                    None
+                }
             })
         })
         .collect();
