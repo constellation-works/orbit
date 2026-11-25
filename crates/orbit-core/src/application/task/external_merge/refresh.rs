@@ -207,7 +207,7 @@ impl OrbitRuntime {
             }
         };
 
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let Some(blockers) = forge.pull_request_required_checks(&repo_root, number)? else {
             return Err(refresh_refused(
@@ -306,7 +306,7 @@ impl OrbitRuntime {
             return refused(format!("task '{primary}' is '{}'", task.status));
         }
         let number = request.pr_number;
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let Some(blockers) = forge.pull_request_required_checks(&repo_root, number)? else {
             return refused(format!("pull request #{number} is not open"));
@@ -362,7 +362,7 @@ impl OrbitRuntime {
         actor: Option<&str>,
         step: &str,
     ) -> Result<PullRequestRefreshOutcome, OrbitError> {
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let pull_request = number.to_string();
         let request_detail = json!({

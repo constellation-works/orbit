@@ -99,11 +99,8 @@ impl OrbitRuntime {
                         weight: member.weight,
                     })
                     .collect::<Vec<_>>();
-                let entries = canonical_crew_pool_entries(
-                    &entries,
-                    self.context.settings().crews(),
-                    &source,
-                )?;
+                let entries =
+                    canonical_crew_pool_entries(&entries, self.settings().crews(), &source)?;
                 return Ok(Some(ExperimentCrewPool {
                     entries,
                     source,
@@ -145,7 +142,7 @@ impl OrbitRuntime {
                         orbit_types::identity::human_crew_refusal(&source, &human.name),
                     ));
                 }
-                canonical_crew_pool_entries(&entries, self.context.settings().crews(), &source)?;
+                canonical_crew_pool_entries(&entries, self.settings().crews(), &source)?;
                 for member in &entries {
                     self.resolve_crew_for_task(Some(&member.name), None)?;
                 }

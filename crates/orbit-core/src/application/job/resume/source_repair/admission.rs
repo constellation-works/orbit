@@ -238,8 +238,8 @@ impl OrbitRuntime {
             "machine":self.automation_machine_identity(), "actor":actor, "provenance":provenance,
             "definition":definition, "review":fresh,
             "gates":self.host_validation_gates().gates,
-            "operation":self.operation_policy(), "crews":self.context.settings().crews(),
-            "validation_policy":format!("{:?}",self.context.settings().validation_env()),
+            "operation":self.operation_policy(), "crews":self.settings().crews(),
+            "validation_policy":format!("{:?}",self.settings().validation_env()),
             "environment":format!("{environment:?}"),
         }))
     }

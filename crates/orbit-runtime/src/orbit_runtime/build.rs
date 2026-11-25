@@ -8,17 +8,21 @@ use orbit_types::workflow::ShipMode;
 
 use super::{HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel};
 use crate::application_port::ApplicationPort;
+use crate::base::Base;
+use crate::host::Host;
 use crate::host_resource::{HostResourceMonitor, default_host_resource_probe};
-use crate::host_signal::{FixedHostSignals, default_host_signal_probe};
-use crate::task_pr_forge::{NoTaskPrForge, default_task_pr_forge};
+use crate::host_signal::{FixedHostSignals, HostSignalProbe, default_host_signal_probe};
+use crate::run::Run;
+use crate::stored::Stored;
+use crate::task_pr_forge::{NoTaskPrForge, TaskPrForge, default_task_pr_forge};
 use crate::workspace::binding::WorkspaceRuntimeBinding;
-use crate::{builder, event_bus, worker_coordination};
+use crate::{builder, worker_coordination};
 
 impl RuntimeKernel {
     /// Set the observation clock for deterministic CI-failure filing.
     /// Without an override, filing uses the current UTC time.
     pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
-        self.ci_failure_time = Some(now);
+        self.base_mut().ci_failure_time = Some(now);
         self
     }
 
@@ -106,7 +110,7 @@ impl RuntimeKernel {
             config_loader,
             application,
         )?;
-        runtime.write_free = true;
+        runtime.stored_mut().write_free = true;
         Ok(runtime)
     }
 
@@ -116,7 +120,7 @@ impl RuntimeKernel {
     /// be skipped rather than attempted. Tool audit appends use a separate
     /// connection without granting writes to these runtime state handles.
     pub fn is_write_free(&self) -> bool {
-        self.write_free
+        self.stored().write_free
     }
 
     fn finish_from_context(
@@ -130,49 +134,68 @@ impl RuntimeKernel {
         let host_resources = Arc::new(
             HostResourceMonitor::new(
                 default_host_resource_probe(),
-                context.settings().resource_throttle().clone(),
+                context.settings.resource_throttle().clone(),
             )
             .with_shared_history(global_root)
             .sampled_in_background(),
         );
-        Ok(Self {
+        let worker_invocation = worker_coordination::restore_process_binding(global_root)?;
+        Ok(Self::from_layers(
             application,
-            host_resources,
-            resource_profiles: Default::default(),
-            admission_policy: Default::default(),
-            admission_policy_snapshot: None,
-            config_loader,
-            host_load: Default::default(),
             context,
-            write_free: false,
-            workspace_binding: binding.map(Arc::new),
-            workspace_explicitly_selected: false,
-            worker_invocation: worker_coordination::restore_process_binding(global_root)?,
-            owner_coordinator: None,
-            drain_owner_transport: None,
-            coordination_write_owner: None,
-            automation_execution_location: None,
-            host_os: orbit_types::task::HostOs::current(),
-            registered_host_oses: Default::default(),
-            browser_kit_home: None,
-            claim_known_red_budget: std::time::Duration::from_secs(600),
-            ci_failure_time: None,
-            workspace_catalog: None,
-            composition_snapshot: None,
-            opened_registered_workspace: None,
-            host_signals: default_host_signal_probe(),
-            task_pr_forge: default_task_pr_forge(),
-            event_log: event_bus::EventLog::default(),
-            layout_report: Arc::new(layout_report),
-            _temp_dir: None,
+            config_loader,
+            binding.map(Arc::new),
+            None,
+            layout_report,
+            host_resources,
+            default_host_signal_probe(),
+            default_task_pr_forge(),
+            None,
+            worker_invocation,
+        ))
+    }
+
+    /// Sort one open's parts into the four layers, bottom up.
+    #[allow(clippy::too_many_arguments)]
+    fn from_layers(
+        application: &'static dyn ApplicationPort,
+        context: crate::context::OrbitContext,
+        config_loader: RuntimeConfigLoader,
+        binding: Option<Arc<WorkspaceRuntimeBinding>>,
+        temp_dir: Option<Arc<builder::TempDir>>,
+        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        host_resources: Arc<HostResourceMonitor>,
+        host_signals: Arc<dyn HostSignalProbe>,
+        task_pr_forge: Arc<dyn TaskPrForge>,
+        browser_kit_home: Option<std::path::PathBuf>,
+        worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
+    ) -> Self {
+        let base = Base::new(
+            context.paths,
+            context.policy,
+            context.settings,
+            config_loader,
+            binding,
+            temp_dir,
+        );
+        let stored = Stored::new(base, context.stores, layout_report);
+        let host = Host::new(
+            stored,
+            context.execution,
+            host_resources,
+            host_signals,
+            task_pr_forge,
+            browser_kit_home,
+        );
+        Self {
+            application,
+            run: Run::new(host, worker_invocation),
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
-            validated_trees: Arc::default(),
-            pr_repair_checks: Arc::default(),
             #[cfg(any(test, feature = "test-support"))]
             transition_read_hook: Arc::new(Mutex::new(None)),
             #[cfg(any(test, feature = "test-support"))]
             transition_run_hook: Arc::new(Mutex::new(None)),
-        })
+        }
     }
 
     pub fn build_in_memory_from_resolved_config(
@@ -211,53 +234,28 @@ impl RuntimeKernel {
         let host_resources = Arc::new(
             HostResourceMonitor::new(
                 default_host_resource_probe(),
-                context.settings().resource_throttle().clone(),
+                context.settings.resource_throttle().clone(),
             )
             .with_shared_history(data_root)
             .sampled_in_background(),
         );
-        Ok(Self {
+        Ok(Self::from_layers(
             application,
-            host_resources,
-            resource_profiles: Default::default(),
-            admission_policy: Default::default(),
-            admission_policy_snapshot: None,
-            config_loader,
-            host_load: Default::default(),
             context,
-            write_free: false,
-            workspace_binding: Some(Arc::new(binding)),
-            workspace_explicitly_selected: false,
-            worker_invocation: None,
-            owner_coordinator: None,
-            drain_owner_transport: None,
-            coordination_write_owner: None,
-            automation_execution_location: None,
-            host_os: orbit_types::task::HostOs::current(),
-            registered_host_oses: Default::default(),
+            config_loader,
+            Some(Arc::new(binding)),
+            Some(Arc::new(temp_dir)),
+            orbit_store::workflow::layout::LayoutUpgradeReport::default(),
+            host_resources,
+            // An in-memory runtime is not bound to a host lifecycle.
+            Arc::new(FixedHostSignals::none()),
+            // Nor is it bound to a repository whose PRs it could close.
+            Arc::new(NoTaskPrForge),
             // An in-memory runtime reads no user's browser kit: its data root
             // holds none.
-            browser_kit_home: Some(data_root.to_path_buf()),
-            claim_known_red_budget: std::time::Duration::from_secs(600),
-            ci_failure_time: None,
-            workspace_catalog: None,
-            composition_snapshot: None,
-            opened_registered_workspace: None,
-            // An in-memory runtime is not bound to a host lifecycle.
-            host_signals: Arc::new(FixedHostSignals::none()),
-            // Nor is it bound to a repository whose PRs it could close.
-            task_pr_forge: Arc::new(NoTaskPrForge),
-            event_log: event_bus::EventLog::default(),
-            layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
-            _temp_dir: Some(Arc::new(temp_dir)),
-            orphan_reconcile_hook: Arc::new(Mutex::new(None)),
-            validated_trees: Arc::default(),
-            pr_repair_checks: Arc::default(),
-            #[cfg(any(test, feature = "test-support"))]
-            transition_read_hook: Arc::new(Mutex::new(None)),
-            #[cfg(any(test, feature = "test-support"))]
-            transition_run_hook: Arc::new(Mutex::new(None)),
-        })
+            Some(data_root.to_path_buf()),
+            None,
+        ))
     }
 
     /// Install a one-shot hook run at the start of the next orphaned-leaf
@@ -286,14 +284,14 @@ impl RuntimeKernel {
     /// Shorten the owner settlement budget in deterministic boundary fixtures.
     #[cfg(feature = "test-support")]
     pub fn with_claim_known_red_budget(mut self, budget: std::time::Duration) -> Self {
-        self.claim_known_red_budget = budget;
+        self.host_mut().claim_known_red_budget = budget;
         self
     }
 
     /// Outcome of the workspace-layout pre-flight that ran when this runtime
     /// opened: which layout migrations (if any) were auto-applied.
     pub fn layout_upgrade_report(&self) -> &orbit_store::workflow::layout::LayoutUpgradeReport {
-        &self.layout_report
+        &self.stored().layout_report
     }
 
     #[cfg(any(test, feature = "test-support"))]

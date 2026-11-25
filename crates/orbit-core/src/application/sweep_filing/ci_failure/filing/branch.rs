@@ -45,12 +45,7 @@ pub(super) fn partition_branch_failures(
     let mut excluded_branch_failures = Vec::new();
     for failure in branch_failures {
         let Some(owner) = task_branch_owner(
-            &runtime
-                .context
-                .settings()
-                .pr_settings()
-                .conventions
-                .branch_name,
+            &runtime.settings().pr_settings().conventions.branch_name,
             &failure,
         ) else {
             excluded_branch_failures.push(failure);

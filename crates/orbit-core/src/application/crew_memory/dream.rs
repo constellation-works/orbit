@@ -203,8 +203,7 @@ impl OrbitRuntime {
     /// model at its own effort, else the one at the lowest configured
     /// effort, by name on a tie. `None` when no enabled crew runs the model.
     pub(super) fn crew_memory_base_crew(&self, key: &MemoryKey) -> Option<String> {
-        self.context
-            .settings()
+        self.settings()
             .crews()
             .values()
             .filter(|crew| crew.enabled && crew.assignment.model.trim() == key.as_str())

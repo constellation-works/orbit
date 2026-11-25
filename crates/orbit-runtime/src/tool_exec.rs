@@ -445,11 +445,11 @@ fn resolve_workspace_root_from_context(
 
 fn canonical_repo_root(runtime: &RuntimeKernel) -> PathBuf {
     runtime
-        .context
+        .base()
         .paths()
         .repo_root
         .canonicalize()
-        .unwrap_or_else(|_| runtime.context.paths().repo_root.clone())
+        .unwrap_or_else(|_| runtime.base().paths().repo_root.clone())
 }
 
 /// Memoised positively verified checkout roots, keyed by `(canonical cwd,

@@ -55,7 +55,7 @@ impl<'a> OperatorCovers<'a> {
         Ok(Self {
             runtime,
             source: Source::new(&runtime.paths().repo_root),
-            now: runtime.ci_failure_time.unwrap_or_else(Utc::now),
+            now: runtime.ci_failure_time().unwrap_or_else(Utc::now),
             suppression: Duration::hours(OPERATOR_SUPPRESSION_HOURS),
             covers: BTreeMap::new(),
             decisions: BTreeMap::new(),

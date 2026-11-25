@@ -17,6 +17,14 @@
 //! 2. **Workspace root** — the nearest ancestor `.orbit/` directory from cwd:
 //!    houses workspace-local tasks, knowledge, optional skill overrides, and runtime state.
 //!
+//! # Four layers
+//!
+//! The kernel's state is four structs, each holding the one below and reached
+//! by an accessor, never by `Deref`: [`Base`] (what every operation has),
+//! [`Stored`] (the opened stores), [`Host`] (this machine as a place work
+//! runs) and [`Run`] (the run this process carries). [`RuntimeKernel`] holds
+//! the top one.
+//!
 //! The `resolve` sub-module implements root discovery. The `builder` sub-module
 //! wires together stores, policy, tool registry, and event bus into a complete
 //! [`RuntimeKernel`], whose `orbit_runtime` module separates construction,
@@ -53,6 +61,7 @@ mod application_port;
 pub mod assets;
 pub mod audit;
 pub mod authorization;
+pub mod base;
 pub mod builder;
 pub mod command_exec;
 mod config_path;
@@ -64,6 +73,7 @@ pub mod event_bus;
 pub mod friction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod git_sandbox;
+pub mod host;
 pub mod host_resource;
 pub mod host_signal;
 pub mod mutation;
@@ -73,8 +83,10 @@ pub mod plugin;
 pub mod recovery_authority;
 pub mod recovery_decision;
 mod resolve;
+pub mod run;
 pub mod run_input;
 pub mod scripts;
+pub mod stored;
 pub mod task;
 // Preserve the public forge path without exposing task runtime internals.
 pub use task::pr_forge as task_pr_forge;
@@ -96,10 +108,14 @@ pub mod workspace;
 mod tests;
 
 pub use application_port::ApplicationPort;
+pub use base::Base;
 pub use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
+pub use host::Host;
 pub use orbit_runtime::{
     AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
 };
+pub use run::Run;
+pub use stored::Stored;
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
 pub use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};

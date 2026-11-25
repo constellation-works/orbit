@@ -5,8 +5,8 @@ use orbit_types::identity::Crew;
 
 #[derive(Clone)]
 pub struct OrbitRuntimeSettings {
-    pub(super) persistence: PersistenceConfig,
-    pub(super) actor: ActorIdentity,
+    pub(crate) persistence: PersistenceConfig,
+    pub(crate) actor: ActorIdentity,
     pr_config: PrConfig,
     /// Config-owned `[pr]` settings; the PR closure on a task's terminal
     /// decision reads `delivery_authors` from here.

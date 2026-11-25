@@ -134,7 +134,7 @@ impl OrbitRuntime {
     ) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         let mut observations = self.provider_limits()?;
         let policy = self.provider_limit_policy();
-        let registry = self.context.settings().crews();
+        let registry = self.settings().crews();
         for budget in &policy.budgets {
             let (provider, account) = match &budget.target {
                 ProviderLimitTarget::Provider(provider) => (provider.as_str(), None),

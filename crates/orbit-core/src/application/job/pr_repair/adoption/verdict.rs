@@ -341,12 +341,7 @@ impl OrbitRuntime {
                 format!("the run recorded pull request '{number}'"),
             );
         };
-        let branch_template = &self
-            .context
-            .settings()
-            .pr_settings()
-            .conventions
-            .branch_name;
+        let branch_template = &self.settings().pr_settings().conventions.branch_name;
         if !branch_template.branch_names_task(&head, DEFAULT_BRANCH_PREFIX, task_id) {
             return skip(
                 "not_orbit_pull_request",
@@ -356,7 +351,7 @@ impl OrbitRuntime {
         if !reads.fresh
             && held.is_none()
             && self
-                .pr_repair_checks
+                .pr_repair_checks()
                 .lock()
                 .ok()
                 .and_then(|checks| checks.get(&pull_number).copied())
@@ -398,7 +393,7 @@ impl OrbitRuntime {
             );
         }
         let authors = reads.authors.get_or_insert_with(|| {
-            let repo_root = self.context.paths().repo_root.clone();
+            let repo_root = self.paths().repo_root.clone();
             self.delivery_authors(self.task_pr_forge(), &repo_root)
                 .map_err(|error| error.to_string())
         });
@@ -556,7 +551,7 @@ impl OrbitRuntime {
                 Some(refusal)
             }
             (None, None) => {
-                if let Ok(mut checks) = self.pr_repair_checks.lock() {
+                if let Ok(mut checks) = self.pr_repair_checks().lock() {
                     checks.insert(pull_number, Instant::now());
                 }
                 return skip(
@@ -692,7 +687,7 @@ impl OrbitRuntime {
                 "not read after this pass's earlier forge failure: {error}"
             ));
         }
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let _span = tracing::debug_span!("pr_repair_forge").entered();
         match self
             .task_pr_forge()

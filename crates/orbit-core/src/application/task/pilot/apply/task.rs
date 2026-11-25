@@ -179,7 +179,7 @@ fn escalation(
         .get(&partition_index)?
         .auto_effort
         .as_ref()?;
-    let settings = context.runtime.context.settings();
+    let settings = context.runtime.settings();
     let crew = settings
         .crews()
         .get(orbit_types::identity::auto_effort_base(&choice.requested)?)?;

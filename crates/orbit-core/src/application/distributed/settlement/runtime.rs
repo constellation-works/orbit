@@ -243,11 +243,7 @@ impl crate::OrbitRuntime {
         let mut owner_busy = OwnerBusyReleases::default();
         let default_crew = match &preflight {
             Some(preflight) => preflight.default_crew.clone(),
-            None => self
-                .context
-                .settings()
-                .default_crew()
-                .map(ToOwned::to_owned),
+            None => self.settings().default_crew().map(ToOwned::to_owned),
         };
         for record in self
             .stores()
@@ -424,7 +420,7 @@ impl crate::OrbitRuntime {
         // [ORB-14697] Recomputed on every pass, so a crew whose reading
         // lapses is runnable again in the same window.
         let gate = self.provider_limit_gate(now);
-        for crew in self.context.settings().crews().values() {
+        for crew in self.settings().crews().values() {
             if excluded.iter().any(|exclusion| exclusion.crew == crew.name) {
                 continue;
             }
@@ -504,7 +500,6 @@ impl crate::OrbitRuntime {
         let usage_pressure = if self.provider_limit_policy().usage_pressure.applies() {
             let read = self.usage_pressure_read(now);
             let mut crews: Vec<_> = self
-                .context
                 .settings()
                 .crews()
                 .values()
@@ -589,7 +584,7 @@ impl crate::OrbitRuntime {
     /// matches each name by crew family, so excluding `opus` also keeps every
     /// `opus@<effort>` reference off the failed account.
     fn crews_sharing_account(&self, failed: &str) -> Vec<String> {
-        let registry = self.context.settings().crews();
+        let registry = self.settings().crews();
         let Some((provider, account)) = orbit_types::identity::find_crew(failed, registry)
             .and_then(|crew| {
                 orbit_types::workflow::Provider::parse(&crew.assignment.provider)

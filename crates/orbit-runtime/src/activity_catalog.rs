@@ -153,11 +153,11 @@ impl RuntimeKernel {
         }
 
         dirs.push(
-            self.context.paths().global_dir.join("resources/activities"),
+            self.base().paths().global_dir.join("resources/activities"),
             V2ActivityCatalogDirKind::Global,
         );
         dirs.push(
-            self.context.paths().activities_dir.clone(),
+            self.base().paths().activities_dir.clone(),
             V2ActivityCatalogDirKind::WorkspaceLocal,
         );
         dirs.into_vec()

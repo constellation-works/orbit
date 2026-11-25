@@ -258,7 +258,7 @@ pub(crate) fn configured_pool_members(
     entries: &[String],
     key: &str,
 ) -> Result<Vec<ReviewCrewPoolMember>, OrbitError> {
-    let pool = canonical_crew_pool(entries, runtime.context.settings().crews(), key)?;
+    let pool = canonical_crew_pool(entries, runtime.settings().crews(), key)?;
     Ok(pool
         .entries
         .into_iter()

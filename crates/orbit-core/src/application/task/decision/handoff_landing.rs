@@ -171,7 +171,7 @@ impl OrbitRuntime {
             .pull_request
             .parse::<u64>()
             .map_err(|_| handoff_answer_refused("the receipt has no valid pull request number"))?;
-        let repo = &self.context.paths().repo_root;
+        let repo = &self.paths().repo_root;
         let forge = self.task_pr_forge();
         let pull = forge
             .handoff_landing_pull_request(repo, number)

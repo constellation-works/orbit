@@ -85,7 +85,6 @@ impl OrbitRuntime {
                 .map(|member| self.resolve_crew_for_task(Some(&member.crew), None))
                 .collect::<Result<Vec<_>, _>>()?,
             None => self
-                .context
                 .settings()
                 .crews()
                 .values()

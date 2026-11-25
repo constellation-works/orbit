@@ -9,7 +9,7 @@ impl RuntimeKernel {
     /// `pub` for the direct v2 activity runner in `orbit-cmd` [ORB-10016],
     /// which records the standard activity-run lifecycle events.
     pub fn record_event(&self, event: OrbitEvent) -> Result<(), OrbitError> {
-        self.event_log.append(event);
+        self.base().event_log.append(event);
         Ok(())
     }
 
@@ -27,7 +27,7 @@ impl RuntimeKernel {
     {
         let (result, event) = f()?;
         if let Some(event) = event {
-            self.event_log.append(event);
+            self.base().event_log.append(event);
         }
         Ok(result)
     }

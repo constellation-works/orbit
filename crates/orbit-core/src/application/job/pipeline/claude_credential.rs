@@ -86,8 +86,7 @@ impl OrbitRuntime {
     pub fn configured_crew_env_sources(
         &self,
     ) -> Vec<(String, Vec<orbit_types::identity::CrewEnvVar>)> {
-        self.context
-            .settings()
+        self.settings()
             .crews()
             .values()
             .filter(|crew| crew.enabled)
@@ -149,7 +148,7 @@ impl OrbitRuntime {
         &self,
         requested: Vec<String>,
     ) -> Result<Vec<String>, OrbitError> {
-        let crews = self.context.settings().crews();
+        let crews = self.settings().crews();
         let blocked: Vec<(&Crew, Unrunnable)> = crews
             .values()
             .filter_map(|crew| self.crew_unrunnable(crew).map(|reason| (crew, reason)))
@@ -212,7 +211,7 @@ impl OrbitRuntime {
         if still_passed || !CLAUDE_CREDENTIAL_ENV.iter().any(|name| unset(name)) {
             return Vec::new();
         }
-        let crews = self.context.settings().crews();
+        let crews = self.settings().crews();
         if window.is_empty() {
             return crews
                 .values()
@@ -232,8 +231,7 @@ impl OrbitRuntime {
     /// The submission warning for a drain whose window excludes Claude crews
     /// for want of the credential [ORB-16663]. `None` when none is excluded.
     pub(crate) fn claude_worker_credential_warning(&self) -> Option<String> {
-        self.context
-            .settings()
+        self.settings()
             .crews()
             .values()
             .any(|crew| {

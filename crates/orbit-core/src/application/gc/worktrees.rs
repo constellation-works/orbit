@@ -39,7 +39,7 @@ impl OrbitRuntime {
     /// Best-effort space recovery at admission; active workers are protected
     /// by the collector, including runs sharing a terminal run's path.
     pub(crate) fn reclaim_worktrees_on_admission(&self) {
-        let Some(threshold) = self.context.settings().worktree_reclaim_below_free_mib() else {
+        let Some(threshold) = self.settings().worktree_reclaim_below_free_mib() else {
             return;
         };
         let state = &self.paths().state_dir;
@@ -166,7 +166,7 @@ impl OrbitRuntime {
         };
         // Uninitialized legacy runtimes allocate under ORB. Registered runtime
         // composition keeps the allocator and machine identity in agreement.
-        let local_prefix = self.context.settings().machine_task_prefix();
+        let local_prefix = self.settings().machine_task_prefix();
         let Some(prefix) = task_id_prefix(task_id) else {
             return WorktreeGcTaskLookup::TaskPrefixUnroutable;
         };
@@ -418,11 +418,8 @@ impl OrbitRuntime {
                 })
             })
             .transpose()?;
-        let parked_older_than = worktree_parked_cutoff(
-            self.context
-                .settings()
-                .worktree_parked_reclaim_after_hours(),
-        );
+        let parked_older_than =
+            worktree_parked_cutoff(self.settings().worktree_parked_reclaim_after_hours());
         let runs = self.list_job_runs_for_worktree_gc()?;
         collect_worktrees(
             &self.paths().repo_root,

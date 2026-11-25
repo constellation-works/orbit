@@ -2,7 +2,7 @@
 //! identity, host probes, persistence, configuration, and internal accessors.
 
 mod accessors;
-mod admission_policy;
+pub(crate) mod admission_policy;
 pub use admission_policy::AdmissionCrewSettings;
 mod build;
 mod config;
@@ -11,131 +11,32 @@ mod identity;
 mod persistence;
 mod validation_warning;
 
-use std::any::Any;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use super::host_resource::HostResourceMonitor;
-use super::host_resource::forecast::HostLoadProbe;
-use super::host_resource::profile::ResourceProfileCache;
-use super::host_signal::HostSignalProbe;
-use super::task_pr_forge::TaskPrForge;
-use super::workspace::binding::WorkspaceRuntimeBinding;
-use super::workspace::catalog;
-use super::{builder, event_bus};
-use crate::application_port::ApplicationPort;
-use crate::context::OrbitContext;
+pub use crate::base::RuntimeConfigLoader;
 
-/// Configuration reload supplied by the composition root. Runtime policy
-/// refreshes may call it after config files change, but runtime never opens
-/// config layers itself.
-pub type RuntimeConfigLoader =
-    Arc<dyn Fn() -> Result<orbit_config::ResolvedConfig, orbit_common::OrbitError> + Send + Sync>;
+use crate::application_port::ApplicationPort;
+use crate::run::Run;
 
 /// One-shot callback for the next orphaned-leaf reconciliation on a runtime.
 type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
 type OrphanReconcileHook = Arc<Mutex<Option<OrphanReconcileCallback>>>;
-pub(crate) type ValidatedTrees =
-    Arc<Mutex<std::collections::BTreeMap<String, orbit_engine::ValidatedTree>>>;
-pub(crate) type PrRepairChecks = Arc<Mutex<std::collections::BTreeMap<u64, std::time::Instant>>>;
 
+/// The whole runtime of one process: the four layers, reached through
+/// [`Self::run`], [`Self::host`], [`Self::stored`] and [`Self::base`], plus
+/// the application callback and the test seams that are not yet layered.
 #[derive(Clone)]
 pub struct RuntimeKernel {
     /// The application operations this kernel calls back into, supplied by
     /// the composition root that builds it.
     pub(crate) application: &'static dyn ApplicationPort,
-    pub(super) worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
-    pub(super) owner_coordinator: Option<Arc<dyn orbit_tools::OwnerCoordinator>>,
-    /// A follower drain's owner transport, supplied by the registry-owning
-    /// composition layer that holds the federated destinations [ORB-13625].
-    /// Absent on a standalone runtime, whose pull drain then refuses rather
-    /// than reaching for a local store.
-    pub(super) drain_owner_transport: Option<Arc<dyn orbit_tools::DrainOwnerTransport>>,
-    pub context: OrbitContext,
-    /// This process joined a live executable generation other than its own
-    /// without recording itself, so it opened Orbit's state without write
-    /// access. Reads work; operational state mutations must be skipped. Tool
-    /// dispatch may append an audit row through a separate migration-free path.
-    write_free: bool,
-    workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
-    /// The workspace was named by an explicit selector rather than discovered
-    /// from the caller's working directory. Supplied by the composition layer
-    /// that resolved the selector; never inferred by the kernel.
-    workspace_explicitly_selected: bool,
-    /// A higher-level registry may mark this local checkout as a replica. Core
-    /// stays registry-neutral; it only carries the refusal supplied by that
-    /// owner so every task-record writer shares one fail-closed gate.
-    coordination_write_owner: Option<Arc<str>>,
-    automation_execution_location: Option<Arc<orbit_types::task::ExecutionLocation>>,
-    /// The operating system admission matches a task's `os:` tags against.
-    /// This binary's own by default; a fixture composes another so one process
-    /// can stand in for a host of each OS.
-    host_os: Option<orbit_types::task::HostOs>,
-    /// Registered remote hosts by machine id with their recorded operating
-    /// system, supplied by the registry-owning composition layer.
-    /// Registration alone does not make a host serve this workspace: a
-    /// registered host counts for creation-time complexity draws only when
-    /// this workspace's own claim records show it pulled work recently (see
-    /// `serving_host_oses`). Admission and activity draws keep checking
-    /// only [`Self::host_os`]. Empty on a standalone runtime, which then
-    /// draws exactly as a single-host owner always has.
-    registered_host_oses: Vec<(String, orbit_types::task::HostOs)>,
-    /// The home whose headless browser kit admission reads for `ui` tasks.
-    /// `None` is the current user's, read again on every admission pass; a
-    /// fixture points it at a home it controls.
-    browser_kit_home: Option<std::path::PathBuf>,
-    /// One shared base-run budget per owner claim settlement. Leaves five
-    /// minutes of the routed call's fifteen for observation, cleanup and reply.
-    pub claim_known_red_budget: std::time::Duration,
-    pub ci_failure_time: Option<chrono::DateTime<chrono::Utc>>,
-    /// Supplied by the same registry-owning composition layer, for reads that
-    /// span more than one workspace. Absent on a standalone runtime, which
-    /// then answers only for its own checkout [ORB-11027].
-    workspace_catalog: Option<Arc<dyn catalog::WorkspaceCatalog>>,
-    /// Data the registry-owning composition layer already loaded while opening
-    /// this runtime. Opaque here: the kernel does not inspect it and does not
-    /// load config to refill it. Composition downcasts its own snapshot.
-    composition_snapshot: Option<Arc<dyn Any + Send + Sync>>,
-    /// Registry identity `(id, name)` of this runtime's checkout, resolved
-    /// from the `workspaces.json` the registry-owning layer loaded for this
-    /// open. The outer `None` means the open carried no registry; the inner
-    /// `None` is a recorded miss (an unregistered checkout).
-    opened_registered_workspace: Option<Option<(String, String)>>,
-    /// Host lifecycle signals unattended admission consults before starting
-    /// new work [ORB-12968]. The platform probe by default; tests inject one.
-    host_signals: Arc<dyn HostSignalProbe>,
-    /// Forge that closes a task's Orbit-authored PRs on its terminal
-    /// decision. `gh` by default; tests inject a fake.
-    task_pr_forge: Arc<dyn TaskPrForge>,
-    host_resources: Arc<HostResourceMonitor>,
-    /// The host's resource profiles, shared by clones and kept across
-    /// admission passes until a delivery finishes.
-    resource_profiles: Arc<ResourceProfileCache>,
-    admission_policy: Arc<Mutex<Option<admission_policy::CachedPolicy>>>,
-    admission_policy_snapshot: Option<Arc<admission_policy::AdmissionPolicy>>,
-    config_loader: RuntimeConfigLoader,
-    /// The host's measured load for the forecast baseline. It keeps only the
-    /// previous CPU tick reading that utilization is measured against.
-    host_load: Arc<HostLoadProbe>,
-    pub event_log: event_bus::EventLog,
-    /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
-    /// this runtime opened (empty `applied` when the layout was already
-    /// current). Surfaced by `orbit migrate`.
-    layout_report: Arc<orbit_store::workflow::layout::LayoutUpgradeReport>,
-    _temp_dir: Option<Arc<builder::TempDir>>,
+    /// The top layer, which holds the three below it.
+    run: Run,
     /// One-shot hook run at the start of the next orphaned-leaf reconciliation.
     /// The pull-refill boundary test persists a graceful cancel there. Empty
     /// in production. Instance-scoped so concurrent tests cannot collide.
     orphan_reconcile_hook: OrphanReconcileHook,
-    /// The last tree each run passed full required validation on
-    /// [ORB-16784]. Held in this process only, where no agent can write it:
-    /// a run resumed by another process validates its next candidate in
-    /// full. Shared by clones.
-    pub validated_trees: ValidatedTrees,
-    /// When an `--auto-fix` drain last found each pull request it may repair
-    /// out of run without a blocker, so a pass does not ask the forge again
-    /// before the recheck interval. Held in this process; shared by clones.
-    pub pr_repair_checks: PrRepairChecks,
     /// Test-only seam for approve/start/reject: after the locked `get_task`,
     /// mutate the named task so compare-and-set can observe a lost race.
     /// Instance-scoped so concurrent `cargo test` threads cannot collide on

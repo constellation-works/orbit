@@ -161,7 +161,7 @@ impl OrbitRuntime {
                         "stale_claim: the owner already ended this claim; its pending handoff is obsolete",
                     ));
                 }
-                let deadline = std::time::Instant::now() + self.claim_known_red_budget;
+                let deadline = std::time::Instant::now() + self.claim_known_red_budget();
                 let mut observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
                 let known_red = self.observe_known_red(&handoff, &observation, deadline)?;
                 if !known_red.contradicted.is_empty() {

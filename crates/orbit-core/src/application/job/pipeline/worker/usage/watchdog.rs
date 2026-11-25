@@ -48,7 +48,7 @@ impl OrbitRuntime {
         run: &JobRun,
         read_tree: impl FnMut() -> Option<Vec<ProcessTreeProcess>> + Send + 'static,
     ) -> Result<Option<WorkerWatchdog>, OrbitError> {
-        let settings = self.context.settings().worker_containment();
+        let settings = self.settings().worker_containment();
         if !settings.enabled {
             return Ok(None);
         }

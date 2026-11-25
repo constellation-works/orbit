@@ -37,7 +37,7 @@ pub(super) fn load_clock_env_for(
                 .iter_mut()
                 .chain(&mut discovered.replicas)
             {
-                runtime.context.apply_child_env_defaults(&defaults);
+                runtime.apply_child_env_defaults(&defaults);
             }
             defaults.into_iter().map(|(name, _)| name).collect()
         }
