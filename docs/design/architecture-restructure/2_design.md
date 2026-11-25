@@ -309,17 +309,17 @@ Each rule gets the strongest mechanism available (STD-02 §R6).
 
 ## 11. Order of work
 
-Each task lands on its own, leaves every check green and changes no behaviour. The work is filed as 95 tasks in eight phases, each tagged `architecture-restructure` and `architecture-restructure:phase-N`. The decided order (ratchets, environment, store, the surface boundary, the inside of core, the engine host) is the order in which the gates close. The tasks' dependencies say what may run side by side.
+Each task lands on its own, leaves every check green and changes no behaviour. The work is filed as 95 tasks in eight phases, each tagged `architecture-restructure` and `architecture-restructure:phase-N`. The decided order (ratchets, environment, store, the surface boundary, the inside of core, the engine host) is the order in which the gates close. The tasks' dependencies say what must finish first. Two tasks with no dependency between them can still declare the same file (see the one-writer rule below).
 
 | Phase | What | Tasks | Waits for |
 |---|---|---|---|
 | 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing |
-| 1 | Environment | ORB-28365 to ORB-28371 | the ratchet check, except the opening tasks |
-| 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except the opening tasks |
+| 1 | Environment | ORB-28365 to ORB-28371 | the ratchet check (ORB-28362), directly for ORB-28365 to ORB-28370 and through them for ORB-28371 |
+| 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except ORB-28373 (no dependencies) and ORB-28384 (waits for ORB-28373 only) |
 | 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 |
-| 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check and the app table |
+| 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check, the app table and ORB-28365 (ORB-28416 waits for it) |
 | 5 | Inside core | ORB-28418 to ORB-28454 | phases 2, 3 and 4 complete |
-| 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except the opening tasks |
+| 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except ORB-28408 (no dependencies) |
 | 7 | Finish | ORB-28455 to ORB-28457 | phases 5 and 6 |
 
 0. **Ratchets.** The ratchet check and its baseline land [ORB-28362]. `docs/architecture/orbit-core.md` gets the table of which module becomes which app or subsystem unit, and the declared order [ORB-28364].
@@ -328,7 +328,7 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 3. **Runtime layers.** The kernel's fields are carved into the four layers inside `orbit-runtime`, with `RuntimeKernel` still holding them, so no caller changes [ORB-28387]. The files move to the layout of §4 after the store and the environment are done, because those phases edit the same files at their old paths. Then the role is resolved once in `Base`, the role checks are folded into `Role` and the task access, and `ApplicationPort` is emptied.
 4. **The surface boundary.** `Core` and `app/exec.rs` land with the friction app [ORB-28396]. The other surface families switch side by side, then the generic tool and MCP entries, the CLI entry and the dashboard. When no surface names `OrbitRuntime`, `orbit-core` closes its exports [ORB-28417].
 5. **Inside core, in two passes.**
-   - **Pass A moves.** Each module's `impl OrbitRuntime` blocks become functions in `app/<subject>/` or `unit/<name>/` that still take `rt: &OrbitRuntime`, and its ports are rebound in `app/port.rs`. The eleven modules outside the declared chain move side by side. The chain then moves from the top down, one module at a time, with `task` last. The last task dissolves `contracts` and deletes `application/` [ORB-28450].
+   - **Pass A moves.** Each module's `impl OrbitRuntime` blocks become functions in `app/<subject>/` or `unit/<name>/` that still take `rt: &OrbitRuntime`, and its ports are rebound in `app/port.rs`. The eleven first-wave work items (ORB-28418 to ORB-28428) cover more than eleven modules, so a work item is not a module. Dependency readiness does not establish file independence: all eleven share the same predecessors, yet every pair declares `app/port.rs` and `scripts/check-dependency-direction.sh`, and no dependency orders any pair. They can run side by side only once each pair that shares a file is ordered by a dependency, and the filed dependencies do not do that yet. The chain (ORB-28429 to ORB-28450) then moves from the top down, one module at a time, with `task` last. The last task dissolves `contracts` and deletes `application/` [ORB-28450].
    - **Pass B narrows.** A report script gives the lowest layer each function reaches. Four tasks change the parameter to that layer, lowest first: `&Base`, `&Stored`, `&Host`, `&Run` [ORB-28451] to [ORB-28454].
 6. **The engine host.** The five traits, `RunSettings`, an adapter struct, then narrower bounds one engine module at a time, and `NullRuntimeHost` deleted.
 7. **Finish.** `RuntimeKernel`, the wrapper and the `unsafe` cast are deleted and each process builds only the layers it needs [ORB-28455]. The remaining ratchets become gates, and these docs are marked built.
@@ -339,7 +339,7 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 - **Why the layers are carved early.** The carve changes only `orbit-runtime` and keeps every accessor. Folding the role checks is the one part that is not a move (§12), and it has to be done before pass B can sort flows into the four layers.
 - **The unit of work differs by phase:** a family of records in the store, a surface family at the boundary, a module inside core. A subject's repositories, its entry and its functions are therefore converted in three tasks, not one.
 - **A conversion is a move.** Function bodies do not change, only where they live and what they receive. Tests are not rewritten, and the frozen surface fixtures stay as they are.
-- **One writer per set of files.** Tasks that may run side by side declare disjoint files, and the dependencies put the rest in a line.
+- **One writer per set of files.** Tasks that may run side by side declare disjoint files. Readiness is not disjointness: two tasks with the same predecessors can declare the same file, and a dependency must order any two that share one.
 - **Decided at filing, not measured.** The app table in [ORB-28364] is a starting table that the task checks against the code. The two passes and the place of the runtime layout come from reading the code, not from a trial conversion.
 
 ## 12. Concerns & Honest Limitations
