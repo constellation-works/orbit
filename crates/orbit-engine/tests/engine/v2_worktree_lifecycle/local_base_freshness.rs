@@ -2,7 +2,7 @@
 //!
 //! A local run cuts its worktree from the owner checkout's `<base>` branch,
 //! which a push from another checkout leaves behind `origin/<base>`. Setup
-//! fast-forwards a clean owner to origin before cutting the worktree. A dirty
+//! selects the fetched commit without moving the owner. A dirty
 //! or diverged owner is refused and left unmoved, naming the checkout and both
 //! commits.
 
@@ -56,13 +56,13 @@ fn assert_owner_base_refusal(error: &OrbitError, checkout: &Path, owner: &str, o
     }
 }
 
-/// Behind and clean: the owner advances to origin, the run records that commit
-/// as its base, and the owner's working tree carries the new file.
-fn a_clean_owner_behind_origin_is_fast_forwarded_before_the_worktree_is_cut() {
+/// Behind and clean: the run starts at origin while the owner stays intact.
+fn a_clean_owner_behind_origin_starts_at_origin_without_moving_owner() {
     let (fixture, host) = Fixture::hosted();
     let owner_before = head(&fixture.repo);
     let origin_tip = push_to_origin_from_elsewhere(&fixture, "from-elsewhere.txt");
     assert_ne!(owner_before, origin_tip, "origin moved ahead of the owner");
+    let index_before = git(&fixture.repo, &["ls-files", "--stage"]);
     host.add_task("T-FF", TaskStatus::Backlog);
     let output = action(&host, "worktree_setup", &setup_input(&["T-FF"], "jrun-ff"))
         .expect("a clean owner that origin fast-forwards is admitted");
@@ -76,16 +76,9 @@ fn a_clean_owner_behind_origin_is_fast_forwarded_before_the_worktree_is_cut() {
         origin_tip,
         "the worktree is cut from origin"
     );
-    assert_eq!(
-        head(&fixture.repo),
-        origin_tip,
-        "the owner advanced by a fast-forward"
-    );
-    assert_eq!(
-        read(fixture.repo.join("from-elsewhere.txt")),
-        "pushed elsewhere\n",
-        "the owner's working tree carries the fast-forwarded commit"
-    );
+    assert_eq!(head(&fixture.repo), owner_before, "owner ref is unchanged");
+    assert!(!fixture.repo.join("from-elsewhere.txt").exists());
+    assert_eq!(git(&fixture.repo, &["ls-files", "--stage"]), index_before);
     assert_eq!(host.admitted().len(), 1, "the clean owner admits the task");
 }
 
@@ -160,49 +153,32 @@ fn ignore_owner_file(fixture: &Fixture, file: &str, contents: &str) {
     fs::write(fixture.repo.join(file), contents).unwrap();
 }
 
-/// Origin starts tracking the path of an ignored owner file: setup refuses
-/// before admission, names the path, and preserves the ref, index and bytes.
-fn an_ignored_owner_file_that_origin_would_overwrite_is_refused_and_preserved() {
+/// An ignored file at a path newly tracked by origin stays untouched.
+fn an_ignored_owner_file_at_a_new_origin_path_is_preserved() {
     let (fixture, host) = Fixture::hosted();
-    let owner_before = head(&fixture.repo);
+    let owner = head(&fixture.repo);
     ignore_owner_file(&fixture, "local-notes.txt", "unpublished bytes\n");
-    let origin_tip = push_to_origin_from_elsewhere(&fixture, "local-notes.txt");
-    let index_before = git(&fixture.repo, &["ls-files", "--stage"]);
-    let checkouts = registered_worktrees(&fixture.repo);
+    let origin = push_to_origin_from_elsewhere(&fixture, "local-notes.txt");
+    let index = git(&fixture.repo, &["ls-files", "--stage"]);
     host.add_task("T-IGNORED", TaskStatus::Backlog);
-    let error = action(
+    let output = action(
         &host,
         "worktree_setup",
         &setup_input(&["T-IGNORED"], "jrun-ignored"),
     )
-    .expect_err("an ignored owner file that origin would overwrite is refused");
-    assert_owner_base_refusal(&error, &fixture.repo, &owner_before, &origin_tip);
-    assert!(
-        error.to_string().contains("local-notes.txt"),
-        "the refusal must name the conflicting path: {error}"
-    );
-    assert_eq!(head(&fixture.repo), owner_before, "the owner ref is kept");
-    assert_eq!(
-        git(&fixture.repo, &["ls-files", "--stage"]),
-        index_before,
-        "the owner index is kept"
-    );
+    .unwrap();
+    assert_eq!(output["base_sha"], origin);
+    assert_eq!(head(&fixture.repo), owner);
+    assert_eq!(git(&fixture.repo, &["ls-files", "--stage"]), index);
     assert_eq!(
         read(fixture.repo.join("local-notes.txt")),
-        "unpublished bytes\n",
-        "the ignored owner file keeps its bytes"
-    );
-    assert!(host.admitted().is_empty(), "a refused setup admits no task");
-    assert_eq!(
-        registered_worktrees(&fixture.repo),
-        checkouts,
-        "a refused setup creates no worktree"
+        "unpublished bytes\n"
     );
 }
 
 /// An ignored owner file at an unrelated path stays byte-identical and does not
-/// stop an otherwise safe fast-forward.
-fn an_unrelated_ignored_owner_file_does_not_block_the_fast_forward() {
+/// stop admission.
+fn an_unrelated_ignored_owner_file_does_not_block_admission() {
     let (fixture, host) = Fixture::hosted();
     ignore_owner_file(&fixture, "local-notes.txt", "unpublished bytes\n");
     let origin_tip = push_to_origin_from_elsewhere(&fixture, "from-elsewhere.txt");
@@ -212,9 +188,9 @@ fn an_unrelated_ignored_owner_file_does_not_block_the_fast_forward() {
         "worktree_setup",
         &setup_input(&["T-UNRELATED"], "jrun-unrelated"),
     )
-    .expect("an unrelated ignored file does not block the fast-forward");
+    .expect("an unrelated ignored file does not block admission");
     assert_eq!(output["base_sha"], origin_tip, "the run is cut from origin");
-    assert_eq!(head(&fixture.repo), origin_tip, "the owner advanced");
+    assert_ne!(head(&fixture.repo), origin_tip, "the owner is unchanged");
     assert_eq!(
         read(fixture.repo.join("local-notes.txt")),
         "unpublished bytes\n",
@@ -260,14 +236,89 @@ fn local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable() {
     );
 }
 
+/// Equal and locally ahead bases retain the owner's commit.
+fn equal_and_ahead_owner_bases_are_used() {
+    for ahead in [false, true] {
+        let (fixture, host) = Fixture::hosted();
+        let owner = if ahead {
+            commit_file(&fixture.repo, "owner-only.txt", "owner commit\n")
+        } else {
+            head(&fixture.repo)
+        };
+        host.add_task("T-OWNER", TaskStatus::Backlog);
+        let output = action(
+            &host,
+            "worktree_setup",
+            &setup_input(&["T-OWNER"], "jrun-owner"),
+        )
+        .unwrap();
+        assert_eq!(output["base_sha"], owner);
+        assert_eq!(head(&fixture.repo), owner);
+        assert_eq!(head(&Checkout::from_setup(&output).path), owner);
+    }
+}
+
+// Intercept the first holder listing after Git has produced it, then change
+// attachment before returning the observed listing to setup.
+#[cfg(unix)]
+fn attachment_changes_after_holder_observation() {
+    for attach_base in [false, true] {
+        let (fixture, host) = Fixture::hosted();
+        let owner = head(&fixture.repo);
+        git(&fixture.repo, &["switch", "-c", "other"]);
+        commit_file(&fixture.repo, "other.txt", "other bytes\n");
+        if !attach_base {
+            git(&fixture.repo, &["switch", BASE]);
+        }
+        let origin = push_to_origin_from_elsewhere(&fixture, "remote.txt");
+        let bin = fixture.root.path().join("git-wrapper");
+        fs::create_dir_all(&bin).unwrap();
+        let wrapper = bin.join("git");
+        let marker = fixture.root.path().join("listing-seen");
+        let target = if attach_base { BASE } else { "other" };
+        let script = format!(
+            "#!/bin/sh\ncase \" $* \" in\n  *' worktree list --porcelain '*)\n    if [ ! -e '{}' ]; then\n      /usr/bin/git \"$@\"\n      touch '{}'\n      /usr/bin/git switch '{}' >&2 || exit $?\n      exit 0\n    fi;;\nesac\nexec /usr/bin/git \"$@\"\n",
+            marker.display(),
+            marker.display(),
+            target
+        );
+        fs::write(&wrapper, script).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let old_path = std::env::var_os("PATH").unwrap();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(&old_path));
+        // This family runs in an isolated process.
+        unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
+        host.add_task("T-RACE", TaskStatus::Backlog);
+        let output = action(
+            &host,
+            "worktree_setup",
+            &setup_input(&["T-RACE"], "jrun-race"),
+        )
+        .unwrap();
+        unsafe { std::env::set_var("PATH", old_path) };
+        assert!(marker.exists(), "holder listing was intercepted");
+        assert_eq!(output["base_sha"], origin);
+        assert_eq!(git(&fixture.repo, &["rev-parse", BASE]), owner);
+        assert_eq!(git(&fixture.repo, &["branch", "--show-current"]), target);
+        assert_eq!(git(&fixture.repo, &["status", "--porcelain"]), "");
+        assert_eq!(fixture.repo.join("other.txt").exists(), !attach_base);
+        assert!(!fixture.repo.join("remote.txt").exists());
+        assert_eq!(head(&Checkout::from_setup(&output).path), origin);
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn local_base_freshness_contracts() {
     isolated_in(module_path!(), "local_base_freshness_contracts", || {
+        #[cfg(unix)]
+        attachment_changes_after_holder_observation();
+        equal_and_ahead_owner_bases_are_used();
         crate::git_fixture::run_scenarios(&[
             (
-                "a_clean_owner_behind_origin_is_fast_forwarded_before_the_worktree_is_cut",
-                a_clean_owner_behind_origin_is_fast_forwarded_before_the_worktree_is_cut,
+                "a_clean_owner_behind_origin_starts_at_origin_without_moving_owner",
+                a_clean_owner_behind_origin_starts_at_origin_without_moving_owner,
             ),
             (
                 "a_dirty_owner_behind_origin_is_refused_and_left_unmoved",
@@ -278,12 +329,12 @@ fn local_base_freshness_contracts() {
                 a_diverged_owner_base_is_refused_and_left_unmoved,
             ),
             (
-                "an_ignored_owner_file_that_origin_would_overwrite_is_refused_and_preserved",
-                an_ignored_owner_file_that_origin_would_overwrite_is_refused_and_preserved,
+                "an_ignored_owner_file_at_a_new_origin_path_is_preserved",
+                an_ignored_owner_file_at_a_new_origin_path_is_preserved,
             ),
             (
-                "an_unrelated_ignored_owner_file_does_not_block_the_fast_forward",
-                an_unrelated_ignored_owner_file_does_not_block_the_fast_forward,
+                "an_unrelated_ignored_owner_file_does_not_block_admission",
+                an_unrelated_ignored_owner_file_does_not_block_admission,
             ),
             (
                 "local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable",
