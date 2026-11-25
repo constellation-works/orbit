@@ -392,6 +392,24 @@ task_prefix = "ORB"
 | `machine.mcp.toolsets` | `[]` | Yes (`--global`) | MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role, or beside the default surface without one (`notice`, `tasks-write`, `default`, `all`, …). A server's `--toolset` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
 | `machine.github_quota.*` | `20` / `10` / `60` | Yes (`--global`) | The host's GitHub API quota reserves and refresh interval. See [`[machine.github_quota]`](#machinegithub_quota--the-hosts-github-api-quota). |
 | `machine.mcp.role` | unset | Yes (`--global`) | The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
+| `machine.web.trusted_hosts` | `[]` | Yes (`--global`) | **Advanced.** DNS names, besides loopback, that `orbit web serve` admits as `Host`: lowercase, no scheme or port, not an IP address or `localhost`. A request through one needs a listed `Tailscale-User-Login`. Read at startup. See [Dashboard over Tailscale Serve](#dashboard-over-tailscale-serve). |
+| `machine.web.trusted_logins` | `[]` | Yes (`--global`) | **Advanced.** Tailscale login names admitted through a trusted host, matched exactly. Required when `machine.web.trusted_hosts` is set: `orbit web serve` refuses to start without it. |
+
+### Dashboard over Tailscale Serve
+
+The dashboard has no login and binds loopback only. Tailscale Serve can front it on the tailnet, with the tailnet identity as the login:
+
+```sh
+tailscale serve --bg 7878     # https://<node>.<tailnet>.ts.net → 127.0.0.1:7878, tailnet only
+orbit config set --global machine.web.trusted_hosts '["<node>.<tailnet>.ts.net"]'
+orbit config set --global machine.web.trusted_logins '["you@example.com"]'
+# restart orbit web serve
+```
+
+- A request whose `Host` is a trusted host (no port, or `:443`) is admitted only with exactly one `Tailscale-User-Login` header listed in `trusted_logins`. When it carries `Origin`, or its method is `POST`, `PUT`, `PATCH` or `DELETE`, `Origin` must be exactly `https://<that host>`. A browser `Sec-Fetch-Site` other than `same-origin` or `none` is refused, as on loopback. Anything else answers 403 `cross-origin requests not allowed`.
+- Serve strips client-supplied `Tailscale-User-*` headers and sets them for tailnet users. Funnel and tagged-device requests carry none, so they are refused. The check holds only because the dashboard stays loopback-bound: any local process can send the header, the same trust loopback requests already get.
+- Loopback requests are unchanged and ignore the header. Operator capability still comes only from `orbit web serve --operator`; a trusted login gets whatever that server grants.
+
 
 ### MCP roles and toolsets
 

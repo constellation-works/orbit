@@ -171,9 +171,10 @@ pub use registry::{
     AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
     AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY,
     ConfigAllowedValues, ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, ConfigSnapshot,
-    ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
-    StandingDrainSettings, WorkerContainmentSettings, admit_config_key, admit_settable_config_key,
-    config_key_options, describe as describe_config_key, immutable_key_note, is_global_only_key,
+    ExperimentSettings, MachineSettings, MachineWebSettings, MidRunSteeringSettings,
+    ResourceThrottleSettings, StandingDrainSettings, WorkerContainmentSettings, admit_config_key,
+    admit_settable_config_key, config_key_options, describe as describe_config_key,
+    immutable_key_note, is_global_only_key,
 };
 pub use regression_layers::RegressionLayerDefinition;
 pub use resolved::{
@@ -205,6 +206,18 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
     match config_toml::read_config_toml(&path)? {
         Some(document) => MachineSettings::admit(&document, &path),
         None => Ok(MachineSettings::default()),
+    }
+}
+
+/// Read `[machine.web]` from the global `config.toml` at `global_root`, for
+/// `orbit web serve`. Narrow like [`load_machine_settings`]: an unrelated
+/// problem elsewhere in the file must not stop the dashboard. A missing file
+/// has no trusted hosts.
+pub fn load_machine_web_settings(global_root: &Path) -> Result<MachineWebSettings, OrbitError> {
+    let path = global_root.join("config.toml");
+    match config_toml::read_config_toml(&path)? {
+        Some(document) => MachineWebSettings::admit(&document, &path),
+        None => Ok(MachineWebSettings::default()),
     }
 }
 

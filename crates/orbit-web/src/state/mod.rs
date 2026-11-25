@@ -64,6 +64,7 @@ mod dashboard;
 mod hosts;
 mod registry;
 mod request;
+mod trusted_hosts;
 
 pub(crate) use dashboard::DashboardState;
 use dashboard::StateInner;
@@ -73,6 +74,7 @@ pub(crate) use hosts::{PinnedHosts, host_error_code};
 pub(crate) use registry::RegistrySource;
 use registry::{CheckoutFingerprint, RegistryFingerprint, checkout_fingerprints};
 pub(crate) use request::{ConfigFileWs, Pinned, RefreshFailure, Ws, WsRejection};
+pub(crate) use trusted_hosts::TrustedHosts;
 
 /// Synthetic workspace id used by [`DashboardState::single`].
 pub(crate) const SINGLE_WORKSPACE_ID: &str = "default";

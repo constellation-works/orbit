@@ -2,7 +2,7 @@
 title: "Remote Access — Decisions"
 owner: codex
 created_date: 2026-07-02
-updated_date: 2026-11-14
+updated_date: 2026-11-25
 last_validated: 2026-10-13
 status: Accepted
 feature: remote-access
@@ -44,6 +44,16 @@ These choices describe the current implementation.
 **Consequences.** Network authentication, encryption, and host verification use the operator's SSH configuration. Cost: remote use requires SSH access and grants the forwarded client the remote dashboard's full authority.
 
 **Authority rule.** A dashboard's operator authority comes only from `orbit web serve --operator`, never from the server's terminal or `ORBIT_OPERATOR`; `orbit web connect` passes the flag by default and `--no-operator` leaves governed controls refused even though the remote `serve` runs on the `ssh -tt` pty. Host and Origin checks do not authenticate a request: any local process reaching an `--operator` dashboard's loopback port can drive its governed writes, which are audited with provenance `session`, not `interactive-terminal` ([ORB-23047], [The dashboard takes operator authority from its session only](../operations-as-data/4_decisions.md#the-dashboard-takes-operator-authority-from-its-session-only)).
+
+## Admit trusted Tailscale Serve hosts
+
+**Context.** An operator wants the dashboard from a phone on the tailnet, which has no SSH client for `web connect`. Tailscale Serve can front the loopback port, but the Host gate refuses its `<node>.<tailnet>.ts.net` Host.
+
+**Decision.** `orbit web serve` reads two global keys at startup, `machine.web.trusted_hosts` and `machine.web.trusted_logins`. A request whose Host is a trusted name (no port or 443) is admitted only with exactly one listed `Tailscale-User-Login`, and its Origin, when present or for an unsafe method, must be exactly `https://<host>`. The `Sec-Fetch-Site` rule and the loopback path are unchanged; hosts without logins refuse startup. The check lives in the Host gate both the API and the shell use (`crates/orbit-web/src/api/origin.rs`), and the policy is held on `DashboardState` so the host-forward router applies it too. The keys are read alone, so an unrelated problem elsewhere in the global config does not stop the dashboard.
+
+**Deviation.** `STD-05@1 §R16` and `§R17` approve only loopback Hosts and loopback `http` Origins. A trusted host is neither. The bind stays loopback (`§R19` holds), so the network reaches the server only through Serve, which strips client copies of the identity header and sets it for tailnet users. That header is the authentication `STD-05@1` asks of a network-reachable service, and R16/R17's intent, a validated Host and a matching Origin on every browser route, applies with the HTTPS origin.
+
+**Consequences.** A listed tailnet login gets whatever the served dashboard grants, including operator capability when it runs with `--operator`. A local process can forge the header, the same trust the loopback path already extends. Funnel and tagged-device requests carry no identity and are refused.
 
 ## Connect attaches before spawning
 

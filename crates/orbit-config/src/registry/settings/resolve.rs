@@ -650,6 +650,63 @@ pub(super) fn resolve_mcp_toolsets(raw: Option<Vec<String>>) -> Result<Vec<Strin
     Ok(kept)
 }
 
+/// `machine.web.trusted_hosts`: lowercase DNS names in first-seen order
+/// without duplicates. A scheme, port, path, IP literal or loopback name is
+/// refused: loopback Hosts already have their own gate, and the dashboard
+/// matches a trusted Host only on its default HTTPS port.
+pub(super) fn resolve_web_trusted_hosts(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    const KEY: &str = "machine.web.trusted_hosts";
+    let mut hosts: Vec<String> = Vec::new();
+    for entry in raw.unwrap_or_default() {
+        let host = entry.trim().to_ascii_lowercase();
+        let valid_label = |label: &str| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        };
+        let dns_name = !host.is_empty() && host.len() <= 253 && host.split('.').all(valid_label);
+        if !dns_name || host.parse::<std::net::IpAddr>().is_ok() || host == "localhost" {
+            return Err(OrbitError::InvalidInput(format!(
+                "{KEY} has invalid entry '{}'; expected a DNS name without scheme or port, \
+                 such as node.tailnet.ts.net, that is not an IP address or localhost",
+                entry.trim()
+            )));
+        }
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    Ok(hosts)
+}
+
+/// `machine.web.trusted_logins`: trimmed login names in first-seen order
+/// without duplicates, compared exactly against `Tailscale-User-Login`.
+pub(super) fn resolve_web_trusted_logins(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    const KEY: &str = "machine.web.trusted_logins";
+    let mut logins: Vec<String> = Vec::new();
+    for entry in raw.unwrap_or_default() {
+        let login = entry.trim();
+        if login.is_empty() || login.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(OrbitError::InvalidInput(format!(
+                "{KEY} has invalid entry '{}'; expected a Tailscale login name such as user@example.com",
+                login.escape_debug()
+            )));
+        }
+        if !logins.iter().any(|kept| kept == login) {
+            logins.push(login.to_string());
+        }
+    }
+    Ok(logins)
+}
+
 /// `machine.mcp.role`: unset, or one role name.
 pub(super) fn resolve_mcp_role(raw: Option<String>) -> Result<Option<String>, OrbitError> {
     let Some(raw) = resolve_optional_non_empty(raw, "machine.mcp.role")? else {

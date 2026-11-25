@@ -19,6 +19,22 @@ macro_rules! with_housekeeping_keys {
         allowed: one_of(&orbit_types::tool::McpRole::NAMES),
         resolve: |raw: Option<String>| resolve_mcp_role(raw),
     },
+    machine_web_trusted_hosts: Vec<String> => Vec<String> {
+        key: "machine.web.trusted_hosts", value_type: "array<string>",
+        description: "DNS names besides loopback that orbit web serve admits as Host, such as a Tailscale Serve name; each request needs a listed Tailscale-User-Login.",
+        section: ConfigSection::Machine, order: 87,
+        tier: ConfigKeyTier::Advanced,
+        allowed: format("DNS names without scheme or port"),
+        resolve: |raw: Option<Vec<String>>| resolve_web_trusted_hosts(raw),
+    },
+    machine_web_trusted_logins: Vec<String> => Vec<String> {
+        key: "machine.web.trusted_logins", value_type: "array<string>",
+        description: "Tailscale login names orbit web serve admits through a trusted host; required when machine.web.trusted_hosts is set.",
+        section: ConfigSection::Machine, order: 88,
+        tier: ConfigKeyTier::Advanced,
+        allowed: format("Tailscale login names"),
+        resolve: |raw: Option<Vec<String>>| resolve_web_trusted_logins(raw),
+    },
     decision_channel_enabled: bool => bool {
         key: "decision_channel.enabled", value_type: "bool",
         description: "Raise decision requests for work held on a human decision.",

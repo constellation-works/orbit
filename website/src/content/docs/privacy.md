@@ -121,7 +121,9 @@ under their own terms.
   only when the peer's user id is the server's, and refuses a different user
   or a remote TCP client before reading any message.
 - `orbit web serve` (the dashboard) binds `127.0.0.1:7878` and refuses
-  addresses that are not loopback. Its content security policy lets pages load
+  addresses that are not loopback. A Tailscale Serve name you list in
+  `machine.web.trusted_hosts` is admitted only with a Tailscale login you list
+  in `machine.web.trusted_logins`. Its content security policy lets pages load
   scripts, styles, and other resources only from the dashboard itself.
 
 ## Agent plugins

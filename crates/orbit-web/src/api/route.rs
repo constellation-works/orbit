@@ -23,6 +23,7 @@ pub(crate) fn request_shutdown() {
 }
 
 pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state::DashboardState> {
+    let trusted_hosts = state.trusted_hosts();
     Router::new()
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
         .route("/host/resources", get(host::resources))
@@ -372,7 +373,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(plugins::read_panel),
         )
         .layer(middleware::map_response(json_client_error))
-        .layer(middleware::from_fn(require_localhost_origin))
+        .layer(middleware::from_fn_with_state(
+            trusted_hosts,
+            require_localhost_origin,
+        ))
         // Outer so Host/Origin 403s and handler JSON both carry nosniff.
         .layer(middleware::map_response(nosniff_json_responses))
 }

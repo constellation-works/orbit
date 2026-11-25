@@ -201,6 +201,6 @@ pub use settings::{
     AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT, AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
     AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
     AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot,
-    ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
-    StandingDrainSettings, WorkerContainmentSettings,
+    ExperimentSettings, MachineSettings, MachineWebSettings, MidRunSteeringSettings,
+    ResourceThrottleSettings, StandingDrainSettings, WorkerContainmentSettings,
 };

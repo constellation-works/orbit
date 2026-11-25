@@ -70,7 +70,8 @@ pub struct ServeArgs {
 }
 
 /// Boot the dashboard for a single, already-built runtime and block until
-/// shutdown (ctrl-c or SIGTERM). Single-workspace mode is no longer reachable
+/// shutdown (ctrl-c or SIGTERM). Admits loopback Hosts only: the
+/// `machine.web.trusted_*` keys apply to [`serve_from_env`]. Single-workspace mode is no longer reachable
 /// from `orbit web serve` (see [`serve_from_env`], ORB-10029); this stays for
 /// callers that already hold an `OrbitRuntime` and want it embedded directly.
 /// The supplied runtime is retained for the server's lifetime. Config writes
@@ -105,9 +106,28 @@ pub fn serve_from_env(
     env: &Env,
 ) -> Result<(), OrbitError> {
     heap::configure();
+    let trusted = trusted_hosts_from_config(root_override)?;
     let state = build_state(root_override, args.workspace.as_deref(), env)?;
     state.set_operator_session(args.operator);
+    if trusted.hosts().next().is_some() {
+        tracing::info!(
+            hosts = %trusted.hosts().collect::<Vec<_>>().join(","),
+            logins = trusted.login_count(),
+            "dashboard admits trusted hosts with a listed Tailscale-User-Login"
+        );
+    }
+    state.set_trusted_hosts(trusted);
     run_server(&args, state, env)
+}
+
+/// The trusted-host policy from the global `machine.web.trusted_hosts` and
+/// `machine.web.trusted_logins` keys. Hosts without logins refuse startup.
+fn trusted_hosts_from_config(
+    root_override: Option<&Path>,
+) -> Result<state::TrustedHosts, OrbitError> {
+    let global_root = registry_runtime::global_root_for(root_override)?;
+    let web = orbit_config::load_machine_web_settings(&global_root)?;
+    state::TrustedHosts::new(web.trusted_hosts, web.trusted_logins)
 }
 
 /// Resolve dashboard state from the environment: registry-backed global mode
@@ -172,28 +192,36 @@ pub(crate) fn build_state(
 /// systemd's SIGKILL.
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
-/// `/healthz` with the same Host/Origin and nosniff layers as `/api`.
+/// `/healthz` with the same Host/Origin and nosniff layers as `/api`, under
+/// `state`'s trusted-host policy.
 ///
 /// The detailed form returns workspace names and the log-sink path, so it
 /// must not skip the DNS-rebinding Host gate that `/api` already has
 /// (ORB-12531). The dashboard shell and assets take the Host and supplied
 /// Origin checks in [`build_app`].
-pub(crate) fn health_router() -> Router<state::DashboardState> {
+pub(crate) fn health_router(state: &state::DashboardState) -> Router<state::DashboardState> {
     Router::new()
         .route("/healthz", get(health::healthz))
-        .layer(middleware::from_fn(api::require_localhost_origin))
+        .layer(middleware::from_fn_with_state(
+            state.trusted_hosts(),
+            api::require_localhost_origin,
+        ))
         // Outer so Host/Origin 403s and handler bodies both carry nosniff.
         .layer(middleware::map_response(api::nosniff_json_responses))
 }
 
 /// The complete dashboard app: embedded assets, `/healthz` and `/api`, all
-/// behind [`security_headers`]. The embedded assets require an approved loopback
-/// Host and validate a supplied Origin (STD-05 §§R16–R17), so a rebound
-/// hostname or untrusted Origin cannot read the shell.
+/// behind [`security_headers`]. The embedded assets require an admitted Host
+/// (loopback, or a trusted host with a listed Tailscale login) and validate a
+/// supplied Origin (STD-05 §§R16–R17), so a rebound hostname or untrusted
+/// Origin cannot read the shell.
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
-        .layer(middleware::from_fn(api::require_localhost_host))
-        .merge(health_router())
+        .layer(middleware::from_fn_with_state(
+            state.trusted_hosts(),
+            api::require_localhost_host,
+        ))
+        .merge(health_router(&state))
         .nest("/api", api::router(state.clone()))
         // Stream JSON through gzip when negotiated. SSE and other media stay
         // untouched; tower-http also preserves already-encoded remote bodies
@@ -499,7 +527,10 @@ pub(crate) async fn drain_with_grace_period(
 /// They are NOT an access-control boundary. Binding to a non-loopback address
 /// would expose the full unauthenticated read/write API to the network, so we
 /// refuse. For remote access, bind loopback and front the dashboard with an
-/// authenticated tunnel/reverse proxy (e.g. `ssh -L`).
+/// authenticated tunnel/reverse proxy: `ssh -L`, or Tailscale Serve with the
+/// Serve name in `machine.web.trusted_hosts`. That path authenticates through
+/// the `Tailscale-User-Login` header Serve sets, which only holds because
+/// this bind keeps every other network client out.
 pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitError> {
     if host == IpAddr::V4(Ipv4Addr::LOCALHOST) || host == IpAddr::V6(Ipv6Addr::LOCALHOST) {
         return Ok(());
