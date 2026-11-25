@@ -153,6 +153,30 @@ class DashboardLastItemStretchTests(unittest.TestCase):
                 self.assertIn("lets a stacked item", result.stderr)
                 self.task_detail.write_text(original, encoding="utf-8")
 
+    def test_rejects_zero_growth_scoped_to_unmatched_history_children(self):
+        # Rendered history items are div.history-kv-item, so a zero-growth rule
+        # scoped to other elements or classes never styles the items.
+        baseline = ".history-kv-list > * { flex: none; }\n"
+        original = self.task_detail.read_text(encoding="utf-8")
+        self.assertIn(baseline, original)
+        unmatched_rules = (
+            ".history-kv-list > em { flex: none; }\n",
+            ".history-kv-list > em:last-child { flex-grow: 0; }\n",
+            ".history-kv-list > .history-kv-note { flex: none; }\n",
+        )
+        for rule in unmatched_rules:
+            with self.subTest(rule=rule):
+                self.task_detail.write_text(original.replace(baseline, rule), encoding="utf-8")
+                try:
+                    result = self.run_guard()
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("items need an explicit flex:none or flex-grow:0 rule", result.stderr)
+                finally:
+                    self.task_detail.write_text(original, encoding="utf-8")
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_keeps_sibling_chain_for_stack_items(self):
         original = self.task_detail.read_text(encoding="utf-8")
         self.task_detail.write_text(

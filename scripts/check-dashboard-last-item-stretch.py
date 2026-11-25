@@ -158,9 +158,13 @@ def compound_matches_item(compound, stack):
     if "::" in compound:
         return False
     if stack.child == "*":
-        # Callers pass only direct children of the stack, and `*` stacks
-        # hold any child element, so every such compound is a stacked item.
-        return True
+        # Callers pass only direct children of the stack. A `*` stack's items
+        # are the child aliases (for example `.history-kv-item` on a div), so a
+        # compound styles them only when it names no element type and no class
+        # an item lacks. `*`, `*:last-child` and `.history-kv-item` qualify;
+        # `em` or `.history-kv-note` style something other than the items.
+        item_classes = {name.removeprefix(".") for name in stack.child_aliases}
+        return not re.match(r"[A-Za-z]", compound) and positive_class_names(compound) <= item_classes
     if stack.child == "li":
         return compound == "*" or compound.startswith("li") or ":last-child" in compound
     child_class = stack.child.removeprefix(".")
