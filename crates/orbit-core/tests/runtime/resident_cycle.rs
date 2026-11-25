@@ -144,8 +144,10 @@ pub(super) fn call(
 ) -> Result<Value, String> {
     // MCP names a family action through its family.
     let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
+    let env = orbit_common::Env::capture();
     runtime
-        .execute_tool_command_dispatch_with_session_context(
+        .execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
             &tool,
             input,
             None,
