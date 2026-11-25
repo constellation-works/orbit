@@ -76,7 +76,7 @@ fn serialize_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String, 
 
 impl Store {
     pub fn list_script_grants(&self, workspace_id: &str) -> Result<Vec<ScriptGrant>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {SCRIPT_GRANT_COLUMNS} FROM script_grant \
@@ -95,7 +95,7 @@ impl Store {
         workspace_id: &str,
         name: &str,
     ) -> Result<Option<ScriptGrant>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {SCRIPT_GRANT_COLUMNS} FROM script_grant \

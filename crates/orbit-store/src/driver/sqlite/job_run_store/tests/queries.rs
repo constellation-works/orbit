@@ -12,7 +12,7 @@ use rusqlite::types::Value;
 #[test]
 fn recency_pages_walk_an_index_instead_of_sorting_the_workspace() {
     let store = Store::open_in_memory().unwrap();
-    let conn = store.read().unwrap();
+    let conn = store.read_connection().unwrap();
     // A `created_since` window on a single-state recency page (the failed-run
     // page behind the auth-failure scan) must still walk the state-recency
     // index. Without planner statistics, which the store never collects,
@@ -73,7 +73,7 @@ fn recency_pages_walk_an_index_instead_of_sorting_the_workspace() {
 #[test]
 fn live_run_scans_seek_the_state_index_instead_of_walking_history() {
     let store = Store::open_in_memory().unwrap();
-    let conn = store.read().unwrap();
+    let conn = store.read_connection().unwrap();
     for query in [
         JobRunQuery {
             state: Some(JobRunState::Running),

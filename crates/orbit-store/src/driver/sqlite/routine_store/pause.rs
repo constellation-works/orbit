@@ -42,7 +42,7 @@ impl Store {
 
     /// All host-local pauses, keyed by routine name.
     pub fn routine_pauses(&self) -> Result<BTreeMap<String, RoutinePauseRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare("SELECT routine_name, paused_at, actor FROM routine_pauses")
             .map_err(sqlite_store_error)?;

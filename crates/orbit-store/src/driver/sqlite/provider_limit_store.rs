@@ -131,7 +131,7 @@ impl ProviderLimitStoreBackend for Store {
     }
 
     fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         // [ORB-17288] Rows of the default login's table, every one recorded
         // before accounts were named included, carry no account.
         let mut statement = conn
@@ -217,7 +217,7 @@ impl ProviderLimitStoreBackend for Store {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare(
                 r#"

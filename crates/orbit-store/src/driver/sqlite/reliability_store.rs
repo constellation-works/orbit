@@ -56,7 +56,7 @@ impl Store {
                 truncated: false,
             });
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -116,7 +116,7 @@ impl Store {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<ActivityInvocationCount>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -198,7 +198,7 @@ impl Store {
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             bound.iter().map(|value| value.as_ref()).collect();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         conn.query_row(&sql, param_refs.as_slice(), |row| {
             Ok(InvocationRunCoverage {
                 total_job_runs: row.get::<_, i64>(0)?.max(0) as u64,

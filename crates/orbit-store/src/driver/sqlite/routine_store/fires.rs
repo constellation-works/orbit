@@ -202,7 +202,7 @@ impl Store {
         routine_name: &str,
         slot: &str,
     ) -> Result<Option<RoutineSlotAttempts>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let (highest, non_skipped) = conn
             .query_row(
                 "SELECT MAX(attempt),
@@ -247,7 +247,7 @@ impl Store {
         sql: &str,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         conn.query_row(sql, params![routine_name], fire_row)
             .optional()
             .map_err(sqlite_store_error)?
@@ -258,7 +258,7 @@ impl Store {
     /// All fires that have not reached a terminal state (intent recorded but
     /// never dispatched, or dispatched with the run outcome not yet synced).
     pub fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
@@ -284,7 +284,7 @@ impl Store {
         routine_name: &str,
         limit: usize,
     ) -> Result<Vec<RoutineFireRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
@@ -309,7 +309,7 @@ impl Store {
             return Ok(std::collections::BTreeMap::new());
         }
         let placeholders = vec!["?"; names.len()].join(",");
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {FIRE_COLUMNS} FROM (

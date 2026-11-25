@@ -10,7 +10,7 @@ use crate::contracts::{TaskCommitJournalRecord, TaskCommitJournalState};
 impl Store {
     /// A durable boundary must reopen the same file-backed decision journal.
     pub(crate) fn task_commit_database_path(&self) -> Result<std::path::PathBuf, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let path: String = conn
             .query_row(
                 "SELECT file FROM pragma_database_list WHERE name = 'main'",

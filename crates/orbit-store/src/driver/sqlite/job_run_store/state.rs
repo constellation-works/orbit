@@ -24,7 +24,7 @@ impl Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<String>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         read_state_json_conn(&conn, workspace_id, run_id)
     }
 
@@ -39,7 +39,7 @@ impl Store {
         if run_ids.is_empty() {
             return Ok(states);
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
             let placeholders = (0..chunk.len())
                 .map(|index| format!("?{}", index + 2))
@@ -83,7 +83,7 @@ impl Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<PipelineState>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let raw = read_state_json_conn(&conn, workspace_id, run_id)?;
         raw.map(|raw| {
             serde_json::from_str(&raw)
@@ -129,7 +129,7 @@ impl Store {
         if run_ids.is_empty() {
             return Ok(states);
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
             let placeholders = (0..chunk.len())
                 .map(|index| format!("?{}", index + 2))

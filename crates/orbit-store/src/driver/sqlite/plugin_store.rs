@@ -51,7 +51,7 @@ fn build_record_from_column(raw: Option<String>) -> rusqlite::Result<Option<Plug
 
 impl Store {
     pub fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {PLUGIN_COLUMNS} FROM plugins ORDER BY name"
@@ -65,7 +65,7 @@ impl Store {
     }
 
     pub fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {PLUGIN_COLUMNS} FROM plugins WHERE name = ?1"

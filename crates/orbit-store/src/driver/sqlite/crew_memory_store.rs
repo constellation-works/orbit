@@ -91,7 +91,7 @@ impl CrewMemoryStoreBackend for Store {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<CrewMemoryProposalRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         open_proposals(&conn, workspace_id)
     }
 
@@ -100,7 +100,7 @@ impl CrewMemoryStoreBackend for Store {
         workspace_id: &str,
         limit: usize,
     ) -> Result<Vec<CrewMemoryClosedProposalRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT workspace_id, id, proposing_key, proposing_run_id, text, evidence_json, \
@@ -218,7 +218,7 @@ impl CrewMemoryStoreBackend for Store {
         memory_key: &str,
         revision: Option<u32>,
     ) -> Result<Option<CrewMemoryRevisionRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         conn.query_row(
             &format!(
                 "SELECT {REVISION_COLUMNS} FROM crew_memory_revisions \
@@ -237,7 +237,7 @@ impl CrewMemoryStoreBackend for Store {
         workspace_id: &str,
         memory_key: &str,
     ) -> Result<Vec<CrewMemoryRevisionRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {REVISION_COLUMNS} FROM crew_memory_revisions \
@@ -254,7 +254,7 @@ impl CrewMemoryStoreBackend for Store {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<CrewMemoryRevisionRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {REVISION_COLUMNS} FROM crew_memory_revisions AS r \
@@ -275,7 +275,7 @@ impl CrewMemoryStoreBackend for Store {
         workspace_id: &str,
         memory_key: &str,
     ) -> Result<Vec<CrewMemoryEventRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {EVENT_COLUMNS} FROM crew_memory_events \
