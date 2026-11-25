@@ -128,6 +128,26 @@ class DashboardLastItemStretchTests(unittest.TestCase):
         self.assertIn("lets grid rows stretch", result.stderr)
         self.assertIn("fills a stacked grid row", result.stderr)
 
+    def test_rejects_flexible_rows_declared_apart_from_display_and_alignment(self):
+        original = self.task_detail.read_text(encoding="utf-8")
+        split_rows = (
+            ".decision-requests { grid-auto-rows: 1fr; min-height: 20rem; }\n",
+            ".decision-answers { grid-template-rows: 1fr; min-height: 20rem; }\n",
+        )
+        for rule in split_rows:
+            with self.subTest(rule=rule):
+                self.task_detail.write_text(original + rule, encoding="utf-8")
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("fills a stacked grid row", result.stderr)
+
+        self.task_detail.write_text(
+            original + ".decision-requests { grid-auto-rows: auto; min-height: 20rem; }\n",
+            encoding="utf-8",
+        )
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
