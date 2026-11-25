@@ -4,7 +4,7 @@ owner: claude
 created_date: 2026-11-25
 updated_date: 2026-11-25
 last_validated: 2026-11-25
-status: Draft
+status: Accepted
 feature: architecture-restructure
 doc_role: design
 type: design
@@ -17,7 +17,7 @@ related_artifacts: [ORB-28318, ORB-27886, ORB-17906, ORB-15932, ORB-10358]
 
 # Architecture Restructure — Design
 
-This doc describes the proposed target, not current code: every section says what exists today and what it becomes. Nothing here is implemented. The choices Daniel is asked to make, with their alternatives, are in [3_vision.md](3_vision.md); the measurements behind the motivation are in [1_overview.md](1_overview.md). Counts are from `agent-main` at `b81eca83`.
+This doc describes the approved target, not current code: every section says what exists today and what it becomes. Nothing here is implemented. The decisions are in [4_decisions.md](4_decisions.md) and the alternatives in [3_vision.md](3_vision.md); the measurements behind the motivation are in [1_overview.md](1_overview.md). Counts are from `agent-main` at `b81eca83`.
 
 ## 1. The target in one picture
 
@@ -311,7 +311,7 @@ Each rule gets the strongest mechanism available (STD-02 §R6).
 
 Each step lands on its own, leaves every check green and changes no behaviour. Steps 1 and 2 do not depend on the runtime question and are useful alone.
 
-0. **Decisions and ratchets.** Daniel's answers are recorded in `4_decisions.md`; the ratchet check and its baseline land; `docs/architecture/orbit-core.md` gets the table of which module becomes which app or subsystem unit, and the declared order.
+0. **Ratchets.** The ratchet check and its baseline land; `docs/architecture/orbit-core.md` gets the table of which module becomes which app or subsystem unit, and the declared order.
 1. **Environment.** `Env::capture`, the local constants folded into `env_vars.rs`, readers converted crate by crate, then the Clippy ban.
 2. **Store.** First `Store::read` and `Store::write` with the private writer. Then one record at a time: its SQL to `repository/<record>.rs`, its `Backend` trait to a concrete type, its operation-named methods split. The schema files are moved in one move-only change. The other three databases follow.
 3. **The surface boundary.** `Core` and `app/exec.rs` land with the first app. Surfaces switch one subject at a time. When a surface crate's count is zero its ratchet locks; when all are zero, `orbit-core` closes its exports.
@@ -343,7 +343,7 @@ Each step lands on its own, leaves every check green and changes no behaviour. S
 
 ## Task References
 
-- [ORB-28318] — carries this proposal to Daniel's decision.
+- [ORB-28318] — carried this proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.

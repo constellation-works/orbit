@@ -4,13 +4,13 @@ owner: claude
 created_date: 2026-11-25
 updated_date: 2026-11-25
 last_validated: 2026-11-25
-status: Draft
+status: Accepted
 stage: designing
-next: "Daniel reviews the proposal [ORB-28318]; implementation tasks are filed only after approval"
+next: "File the step 0 tasks: the ratchet check and the app table [ORB-28318]"
 feature: architecture-restructure
 doc_role: overview
 type: design
-summary: Proposal to put the runtime behind orbit-core and split it into four layers that each add a capability, slice the application layer into one unit per subject with one entry point, give orbit-store one repository per record behind one write path, and read the environment once.
+summary: Approved design to put the runtime behind orbit-core and split it into four layers that each add a capability, slice the application layer into one unit per subject with one entry point, give orbit-store one repository per record behind one write path, and read the environment once.
 tags: [architecture-restructure, orbit-core, orbit-store, orbit-runtime, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-store/**", "crates/orbit-engine/src/context/hosts/**", "crates/orbit-cmd/**", "crates/orbit-common/src/env_vars.rs"]
 related_features: [orbit-core, operations-as-data]
@@ -19,15 +19,15 @@ related_artifacts: [ORB-28318, ORB-27886, ORB-17906, ORB-15932, ORB-10358, ORB-1
 
 # Architecture Restructure — Overview
 
-This is a proposal. Nothing here is built or approved. It describes the shape Orbit's code is moved to, a step at a time, so that five things become true: a surface (the CLI, the dashboard, the MCP server) never holds the runtime; every subject a user can name is one unit in `orbit-core` with one entry point; the runtime is four layers, and each operation names the lowest one it needs; `orbit-store` has one repository per record behind one write path; and the process environment is read in one place. It changes no behaviour, no persisted format and no crate list. It is the restructure that [the recorded STD-02 deviations](../orbit-core/4_decisions.md#standing-against-std-025-r2-r6-r18-r39r44) defer to, and it gives the handlers of [operations as data](../operations-as-data/1_overview.md) a home.
+Daniel approved this design on 2026-11-25; nothing in it is built yet. It describes the shape Orbit's code is moved to, a step at a time, so that five things become true: a surface (the CLI, the dashboard, the MCP server) never holds the runtime; every subject a user can name is one unit in `orbit-core` with one entry point; the runtime is four layers, and each operation names the lowest one it needs; `orbit-store` has one repository per record behind one write path; and the process environment is read in one place. It changes no behaviour, no persisted format and no crate list. It is the restructure that [the recorded STD-02 deviations](../orbit-core/4_decisions.md#standing-against-std-025-r2-r6-r18-r39r44) defer to, and it gives the handlers of [operations as data](../operations-as-data/1_overview.md) a home.
 
 Daniel set the direction on 2026-11-25: "I want to slowly start fixing up orbit", naming the runtime god trait, `orbit-store` on the store design the Rust CLI template now uses, and one place for environment variables; and "runtime can stay in orbit-runtime crate. and runtime is used in orbit-core, not orbit-cli". On the first draft he added: "I think we need layers of runtime. the lowest level runtime will encompass all operations. […] each layer can be thought of as bestowing certain capabilities to operations", and asked for a crate structure "clear enough to suggest this layers of runtime" [ORB-28318].
 
-## Decisions asked of Daniel
+## Decisions
 
-Each row is a choice this proposal makes and asks him to confirm or change. The reasoning and the alternatives are in [3_vision.md §1](3_vision.md#1-open-questions).
+Daniel approved all eleven as proposed: "let's take it easy and go with your current design. design approved" [ORB-28318]. They are recorded in [4_decisions.md](4_decisions.md); the alternatives are in [3_vision.md §1](3_vision.md#1-open-questions).
 
-| # | Decision | Proposed |
+| # | Decision | Decided |
 |---|---|---|
 | 1 | What a surface holds | An opaque `Core` handle. It calls `app::<subject>::exec` and nothing else; `orbit-core` stops exporting `OrbitRuntime`, `orbit_runtime::*` and store items. |
 | 2 | Where operations live | Functions in `orbit-core/src/app/<subject>/`, not methods on `OrbitRuntime`. The `OrbitRuntime` wrapper and its `unsafe` cast are deleted at the end; the runtime stays in `orbit-runtime`. |
@@ -112,7 +112,7 @@ Nothing is built, so the Task column is empty. The File column is where each con
 
 ## Task References
 
-- [ORB-28318] — carries this proposal to Daniel's decision.
+- [ORB-28318] — carried this proposal to Daniel's approval.
 - [ORB-27886] — recorded Orbit's standing against STD-02@5 and the deviations deferred until a restructure.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — started the planned noun-by-noun migration to the operation registry.

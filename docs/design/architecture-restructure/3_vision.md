@@ -4,11 +4,11 @@ owner: claude
 created_date: 2026-11-25
 updated_date: 2026-11-25
 last_validated: 2026-11-25
-status: Draft
+status: Accepted
 feature: architecture-restructure
 doc_role: vision
 type: design
-summary: The decisions the restructure proposal asks of Daniel, each with its options and a recommendation, the questions left for the Orbit captain, and the prior work it builds on.
+summary: The options behind each of the restructure's eleven decisions, the questions left for the Orbit captain, and the prior work it builds on.
 tags: [architecture-restructure, orbit-core, orbit-store, orbit-runtime, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-store/**"]
 related_features: [orbit-core, operations-as-data]
@@ -17,11 +17,11 @@ related_artifacts: [ORB-28318, ORB-27886, ORB-15932]
 
 # Architecture Restructure — Vision
 
-This doc holds what is not settled. §1 lists the decisions [2_design.md](2_design.md) makes provisionally, each with its options and the one recommended, for Daniel to confirm or change. Answers are recorded in `4_decisions.md` when he gives them. §2 lists the earlier work this builds on, and what would come after.
+§1 lists the options behind each decision in [2_design.md](2_design.md), and the questions that are still open. Daniel approved the recommended option of all eleven on 2026-11-25 ([4_decisions.md](4_decisions.md)). §2 lists the earlier work this builds on, and what would come after.
 
 ## 1. Open Questions
 
-### For Daniel
+### Decided by Daniel: option A of each
 
 1. **What does a surface hold?**
    - A (recommended): an opaque `Core`, and it calls `app::<subject>::exec`. `orbit-core` exports nothing else. This is his direction ("runtime is used in orbit-core, not orbit-cli") made a compile error: the surfaces have no Cargo edge to `orbit-runtime`.
@@ -33,7 +33,7 @@ This doc holds what is not settled. §1 lists the decisions [2_design.md](2_desi
    - A (recommended, his direction of 2026-11-25): a runtime in four layers, `Base`, `Stored`, `Host` and `Run`, each a struct that holds the one below, with the process's role resolved once in `Base`. A flow takes the lowest layer it needs. The kernel already has these groups flattened into one struct: 14 of its 34 fields are optional because only some processes have them. `orbit-runtime/src` is laid out as the four layers ([2_design.md §4](2_design.md#4-the-runtime-layers-that-each-add-a-capability)).
    - B: the kernel as one wide context holding mechanisms only. It makes the conversion a pure move, and every operation can still reach what only a drain has. This was the first draft's recommendation.
    - C: a narrow handle per app, listing the stores and effects that app may use. It is the strongest boundary, and it adds a struct and its wiring for each of about forty units before any of them has shown the need. It can be added later for one app on top of A.
-   - Within A, two things are his to confirm: four layers and not more (search, the recovery authority and plugins are side capabilities handed out by a layer, not layers), and one crate with a checked module order, not a crate for each layer.
+   - Within A he confirmed four layers in one crate with a checked module order, with search, the recovery authority and plugins as side capabilities. A finer form, where each flow lists the groups of a layer it needs as parameters, was weighed and left out: it changes every signature in a call chain during a move that should change nothing, and it can be added later for one group.
 4. **How is `RuntimeHost` reduced?**
    - A (recommended): five traits along its five existing groups, configuration getters turned into one `RunSettings` value, then narrower bounds per engine module.
    - B: one trait per engine module from the start. Finer, but it means deciding every boundary before measuring which methods each module uses.
@@ -61,7 +61,7 @@ This doc holds what is not settled. §1 lists the decisions [2_design.md](2_desi
     - A (recommended): ratchets, environment, store, the surface boundary, the inside of core, the engine host.
     - B: the runtime first, since it is the largest pain. It is also the largest change, and it is easier once the surface can no longer reach inside.
 
-### For the Orbit captain, once the direction is approved
+### Open, for the Orbit captain
 
 12. Which of the current `application/` modules is an app, which a subsystem unit, and what is the order between them?
 13. Which writes bypass `with_transaction` for a reason that should stay?
@@ -110,7 +110,7 @@ Nothing in the target is new: it is the template's shape and STD-02's rules. Wha
 
 ## Task References
 
-- [ORB-28318] — carries this proposal to Daniel's decision.
+- [ORB-28318] — carried this proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations deferred until a restructure.
 - [ORB-15932] — set the noun-by-noun order.
 
