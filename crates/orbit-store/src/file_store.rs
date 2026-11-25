@@ -9,10 +9,13 @@
 //! `snapshot.<record>()` on a [`FileSnapshot`] and `tx.<record>()` on a
 //! [`FileTx`], and every writing method takes the `FileTx`.
 //!
-//! A file write scope is not one atomic transaction across files. Each
-//! writing method keeps the guarantee its record had before: an atomic
-//! replace of the one file it writes, and, for the session log, the
-//! advisory lock held for the whole read-modify-write.
+//! A file write scope is not one atomic transaction across files, and its
+//! writing methods do not share one per-file guarantee. YAML `put` methods
+//! atomically replace the one file they write, session-log `resolve`
+//! atomically replaces the whole log, `executor_def` `delete` unlinks its
+//! file, and session-log `append` adds a row in place. Session-log reads and
+//! writes hold the advisory lock for their whole operation, so reads ignore
+//! a torn tail left by an interrupted append and the next append repairs it.
 
 use std::sync::Arc;
 
