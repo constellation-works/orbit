@@ -16,7 +16,9 @@
 //! name and the SHA-256 of its bytes are recorded under `.orbit/state/` for
 //! provenance.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
+
+use orbit_common::Env;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -393,7 +395,9 @@ impl WorkspacePreset {
             workspace: "workspace".to_string(),
             orbit_dir: workspace_orbit_root.to_path_buf(),
         };
+        let env = crate::runtime::process_env();
         let catalog_lookup = effective_routine_catalog_lookup(
+            &env,
             global_root,
             workspace_orbit_root,
             staged_plugin_sections,
@@ -539,6 +543,7 @@ fn seeded_file_matches(dir: &Path, name: &str, loaded_path: &Path, loaded_name: 
 /// `enable_preset_definitions` re-checks every routine through the opened
 /// runtime before enabling anything.
 fn effective_routine_catalog_lookup(
+    env: &Env,
     global_root: &Path,
     workspace_orbit_root: &Path,
     staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
@@ -548,9 +553,10 @@ fn effective_routine_catalog_lookup(
     let global_jobs_dir = global_root.join("resources/jobs");
     let workspace_jobs_dir = workspace_orbit_root.join("resources/jobs");
     let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(raw) = std::env::var(env_vars::ORBIT_JOB_DIR)
-        .ok()
-        .or_else(|| std::env::var(env_vars::ORBIT_V2_JOB_DIR).ok())
+    if let Some(raw) = env
+        .orbit_job_dir()
+        .and_then(OsStr::to_str)
+        .or_else(|| env.orbit_v2_job_dir().and_then(OsStr::to_str))
     {
         dirs.extend(
             raw.split(':')

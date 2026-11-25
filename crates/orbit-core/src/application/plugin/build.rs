@@ -11,10 +11,10 @@
 //! cannot pass it. macOS refuses a manifest that declares a network `fetch`
 //! phase (§3.3); its offline builds run.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError, env_vars};
 use orbit_tools::plugin::{
     LoadedPlugin, PluginBuildHostEnv, PluginBuildPlan, PluginBuildResult, PluginBuildRun,
     ResolvedSource, install_plugin_build_outputs, plan_plugin_build, plugin_artifact_digest,
@@ -31,14 +31,24 @@ use crate::runtime::plugin::sandbox_mask::plugin_trees_masked;
 
 /// Environment names whose presence means no operator is at this command
 /// line (§3.8): a managed-run envelope, or a plugin backend child.
-const UNATTENDED_ENV: &[&str] = &[
-    env_vars::ORBIT_MANAGED_RUN_CONTEXT,
-    env_vars::ORBIT_RUN_ID,
-    env_vars::ORBIT_PLUGIN,
-    env_vars::ORBIT_PLUGIN_CALLBACK,
-    env_vars::ORBIT_PLUGIN_CALLBACK_FD,
-    env_vars::ORBIT_PLUGIN_BROKER,
-];
+fn first_unattended_env(env: &Env) -> Option<&'static str> {
+    [
+        (
+            env_vars::ORBIT_MANAGED_RUN_CONTEXT,
+            env.orbit_managed_run_context(),
+        ),
+        (env_vars::ORBIT_RUN_ID, env.orbit_run_id()),
+        (env_vars::ORBIT_PLUGIN, env.orbit_plugin()),
+        (env_vars::ORBIT_PLUGIN_CALLBACK, env.orbit_plugin_callback()),
+        (
+            env_vars::ORBIT_PLUGIN_CALLBACK_FD,
+            env.orbit_plugin_callback_fd(),
+        ),
+        (env_vars::ORBIT_PLUGIN_BROKER, env.orbit_plugin_broker()),
+    ]
+    .into_iter()
+    .find_map(|(name, value)| value.is_some_and(|value| !value.is_empty()).then_some(name))
+}
 
 /// A build that ran and whose outputs wait to be copied into staging.
 pub(super) struct PreparedBuild {
@@ -105,7 +115,8 @@ pub(super) fn prepare_build(
             plan.source
         )));
     }
-    if let Some(reason) = unattended_reason(&global_root) {
+    let env = crate::runtime::process_env();
+    if let Some(reason) = unattended_reason(&global_root, &env) {
         return Err(OrbitError::PluginBuildConsentUnavailable(format!(
             "{PLUGIN_BUILD_CONSENT_FLAG} was refused: {reason}. Only an operator at their own \
              command line can consent to a plugin build; nothing was built or installed"
@@ -118,13 +129,13 @@ pub(super) fn prepare_build(
         ));
     }
     let log = build_log_path(&global_root, name);
-    let home = std::env::var_os(env_vars::HOME);
+    let home = env.home();
     let result = run_plugin_build(&PluginBuildRun {
         plan: &plan,
         checkout: &commit.checkout,
         namespace_dir: &plugin_namespace_dir(&global_root, name),
         log_path: &log,
-        home: home.as_deref(),
+        home,
     })?;
     Ok(Some(PreparedBuild { plan, result, log }))
 }
@@ -174,10 +185,16 @@ pub(super) fn finish_build(
         artifact_digest,
         consent: PluginBuildConsent {
             at: chrono::Utc::now().to_rfc3339(),
-            os_user: [env_vars::USER, env_vars::LOGNAME]
-                .iter()
-                .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
-                .unwrap_or_else(|| "unknown".to_string()),
+            os_user: {
+                let env = crate::runtime::process_env();
+                [env.user(), env.logname()]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(OsStr::to_str)
+                    .find(|value| !value.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string()
+            },
             orbit_version: env!("CARGO_PKG_VERSION").to_string(),
             flag: PLUGIN_BUILD_CONSENT_FLAG.to_string(),
         },
@@ -186,11 +203,8 @@ pub(super) fn finish_build(
 }
 
 /// Why no operator can be consenting here, if so.
-fn unattended_reason(global_root: &Path) -> Option<String> {
-    if let Some(name) = UNATTENDED_ENV
-        .iter()
-        .find(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
-    {
+fn unattended_reason(global_root: &Path, env: &Env) -> Option<String> {
+    if let Some(name) = first_unattended_env(env) {
         return Some(format!(
             "this process carries `{name}`, so it is a managed run or a plugin backend"
         ));

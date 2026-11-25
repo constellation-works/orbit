@@ -9,7 +9,9 @@
 //! composition implements.
 
 use std::ops::{Deref, DerefMut};
+use std::sync::OnceLock;
 
+use orbit_common::Env;
 pub use orbit_runtime::*;
 
 mod builders;
@@ -17,6 +19,32 @@ mod forwarders;
 
 #[cfg(test)]
 mod tests;
+
+/// The environment `main` captured, kept where runtimes and core operations
+/// resolve it.
+static CAPTURED_ENV: OnceLock<Env> = OnceLock::new();
+
+/// Keep the environment `main` captured with [`Env::capture`] for
+/// composition. The first value stays: a later call changes nothing.
+pub fn install_captured_env(env: Env) {
+    let installed = CAPTURED_ENV.set(env).is_ok();
+    debug_assert!(
+        installed,
+        "the process environment is captured once, in main"
+    );
+}
+
+/// The environment `main` captured, or `None` in a process that never ran
+/// `main`, such as a test binary.
+pub fn captured_env() -> Option<&'static Env> {
+    CAPTURED_ENV.get()
+}
+
+/// The environment `main` captured, or a fresh capture in a process that never
+/// ran `main`, such as a test binary.
+pub(crate) fn process_env() -> Env {
+    captured_env().cloned().unwrap_or_else(Env::capture)
+}
 
 /// The fully initialized Orbit runtime: the [`RuntimeKernel`] plus the
 /// application and adapter operations defined on it in this crate.

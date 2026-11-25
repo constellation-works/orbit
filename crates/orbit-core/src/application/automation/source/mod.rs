@@ -23,6 +23,7 @@ pub(super) use revision::{arm_expire_source_after_next_head, clear_expired_sourc
 use super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
 use orbit_automation::{AutomationError, delivery::digest};
+use orbit_common::Env;
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -38,6 +39,7 @@ struct ObservationLimits {
 
 pub(crate) struct Source<'a> {
     root: &'a Path,
+    env: Env,
     started: BudgetClock,
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,

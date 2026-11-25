@@ -449,6 +449,8 @@ fn write_store_conditional<T, R>(
         ConfigScope::Global => global_config_path(runtime),
         ConfigScope::Workspace => workspace_config_path(runtime),
     };
+    #[cfg(feature = "test-support")]
+    let env = crate::runtime::process_env();
     let transaction = || {
         ConfigStore::with_write_lock(&path, || {
             let mut store = match scope {
@@ -467,10 +469,13 @@ fn write_store_conditional<T, R>(
             match edit(&mut store)? {
                 ConditionalEdit::Save(edited) => {
                     #[cfg(feature = "test-support")]
-                    write_gate::wait(match scope {
-                        ConfigScope::Global => "global-before-save",
-                        ConfigScope::Workspace => "workspace-before-save",
-                    });
+                    write_gate::wait(
+                        &env,
+                        match scope {
+                            ConfigScope::Global => "global-before-save",
+                            ConfigScope::Workspace => "workspace-before-save",
+                        },
+                    );
                     store.save()?;
                     Ok(ConditionalWrite::Saved(Box::new(store), edited))
                 }
@@ -483,7 +488,7 @@ fn write_store_conditional<T, R>(
         // takes, so two such writers never wait on each other. The lock is
         // reentrant when both scopes name one file.
         #[cfg(feature = "test-support")]
-        write_gate::signal("workspace-fallback-lock");
+        write_gate::signal(&env, "workspace-fallback-lock");
         ConfigStore::with_write_lock(&global_config_path(runtime), transaction)
     } else {
         transaction()
@@ -500,10 +505,10 @@ fn write_store_conditional<T, R>(
 mod write_gate {
     use std::path::PathBuf;
 
-    use orbit_common::env_vars::ORBIT_TEST_CONFIG_WRITE_GATE as GATE_ENV;
+    use orbit_common::Env;
 
-    fn armed(point: &str) -> Option<PathBuf> {
-        let dir = PathBuf::from(std::env::var_os(GATE_ENV)?);
+    fn armed(env: &Env, point: &str) -> Option<PathBuf> {
+        let dir = PathBuf::from(env.orbit_test_config_write_gate()?);
         dir.join(format!("{point}.armed")).exists().then_some(dir)
     }
 
@@ -511,8 +516,10 @@ mod write_gate {
         clippy::disallowed_methods,
         reason = "test-gate marker file in a scratch directory; durability is irrelevant"
     )]
-    pub(super) fn wait(point: &str) {
-        let Some(dir) = armed(point) else { return };
+    pub(super) fn wait(env: &Env, point: &str) {
+        let Some(dir) = armed(env, point) else {
+            return;
+        };
         let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
         let release = dir.join(format!("{point}.release"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -525,8 +532,8 @@ mod write_gate {
         clippy::disallowed_methods,
         reason = "test-gate marker file in a scratch directory; durability is irrelevant"
     )]
-    pub(super) fn signal(point: &str) {
-        if let Some(dir) = armed(point) {
+    pub(super) fn signal(env: &Env, point: &str) {
+        if let Some(dir) = armed(env, point) {
             let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
         }
     }

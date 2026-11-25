@@ -231,7 +231,8 @@ fn instructions_in_process(
         .revparse_single(revision)
         .and_then(|object| object.peel_to_tree())
         .map_err(local_git_error)?;
-    let started = BudgetClock::start();
+    let env = crate::runtime::process_env();
+    let started = BudgetClock::start(&env);
     let mut paths = Vec::new();
     let mut failure = None;
     let mut listed_bytes = 0u64;

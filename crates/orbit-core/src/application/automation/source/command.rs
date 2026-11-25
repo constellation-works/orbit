@@ -3,10 +3,10 @@
 use super::super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
 use orbit_automation::{AutomationError, DeferredReason};
-use orbit_common::OrbitError;
 use orbit_common::process::supervisor::{
     Outcome, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
+use orbit_common::{Env, OrbitError};
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
     path::Path,
@@ -37,9 +37,12 @@ impl<'a> Source<'a> {
     }
 
     pub(crate) fn at(root: &'a Path, now: DateTime<Utc>) -> Self {
+        let env = crate::runtime::process_env();
+        let started = BudgetClock::start(&env);
         Self {
             root,
-            started: BudgetClock::start(),
+            env,
+            started,
             cache: None,
             now,
             fetch_origin: true,
@@ -166,7 +169,7 @@ impl<'a> Source<'a> {
         // a read the guard refuses defers this pass and runs nothing. Bound any
         // rate-limit probe to what remains of this command and source budget,
         // and re-check both before spawning the provider command.
-        let mut quota_request = gh_quota_request(program, args, env, self.root);
+        let mut quota_request = gh_quota_request(&self.env, program, args, env, self.root);
         // The instant the request's finite budget runs out, so a throttle the
         // child reports after the wait is recorded inside that budget.
         let mut quota_deadline = None;
@@ -476,6 +479,7 @@ const FAILURE_TEXT_LIMIT: u64 = 4096;
 /// child inherits this process's environment plus `env`, in `root`. `None`
 /// for any other program.
 fn gh_quota_request(
+    process_env: &Env,
     program: &str,
     args: &[&str],
     env: &[(&str, &str)],
@@ -487,7 +491,12 @@ fn gh_quota_request(
     let environment_mode = if env.is_empty() {
         orbit_exec::EnvironmentMode::Inherit
     } else {
-        let mut merged = std::env::vars().collect::<Vec<_>>();
+        let mut merged = process_env
+            .vars()
+            .filter_map(|(name, value)| {
+                Some((name.to_str()?.to_owned(), value.to_str()?.to_owned()))
+            })
+            .collect::<Vec<_>>();
         for (key, value) in env {
             merged.retain(|(name, _)| name != key);
             merged.push(((*key).to_string(), (*value).to_string()));

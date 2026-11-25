@@ -1,7 +1,7 @@
 //! Scoped task-write provenance and owner-side `task.mutation` audit rows.
 
-use orbit_common::env_vars;
 use std::cell::RefCell;
+use std::ffi::OsStr;
 
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -133,6 +133,7 @@ impl OrbitRuntime {
         let origin_session_id = session_context
             .and_then(|context| context.origin_session_id.clone())
             .or_else(|| caller.map(ToOwned::to_owned));
+        let env = crate::runtime::process_env();
         let params = AuditEventInsertParams {
             execution_id: audit_execution_id("task-mutation"),
             command: TASK_MUTATION_AUDIT_COMMAND.to_string(),
@@ -149,7 +150,10 @@ impl OrbitRuntime {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: error_message.map(|message| redact_sensitive_env_text(&message)),
-            host: std::env::var(env_vars::HOSTNAME).ok(),
+            host: env
+                .hostname()
+                .and_then(OsStr::to_str)
+                .map(ToOwned::to_owned),
             pid: std::process::id(),
             session_id: None,
             workspace_id,
@@ -170,14 +174,19 @@ impl OrbitRuntime {
             mcp_call_id: session_context.and_then(|context| context.mcp_call_id.clone()),
             lease_id: None,
             task_id: target_id.map(ToOwned::to_owned),
-            job_run_id: std::env::var(env_vars::ORBIT_RUN_ID)
-                .ok()
-                .filter(|value| !value.is_empty()),
-            activity_id: std::env::var(env_vars::ORBIT_ACTIVITY_ID)
-                .ok()
-                .filter(|value| !value.is_empty()),
-            step_index: std::env::var(env_vars::ORBIT_STEP_INDEX)
-                .ok()
+            job_run_id: env
+                .orbit_run_id()
+                .and_then(OsStr::to_str)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            activity_id: env
+                .orbit_activity_id()
+                .and_then(OsStr::to_str)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            step_index: env
+                .orbit_step_index()
+                .and_then(OsStr::to_str)
                 .and_then(|value| value.parse().ok()),
         };
         let invocation = || AuditInvocationFields {

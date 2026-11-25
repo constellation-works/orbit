@@ -5,8 +5,8 @@ mod owner;
 mod recovery;
 mod review;
 
-pub(super) use owner::execute_brokered;
 pub use owner::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
+pub(super) use owner::{bridge_claimed_owner_call_with_env, execute_brokered};
 
 #[cfg(test)]
 mod tests;

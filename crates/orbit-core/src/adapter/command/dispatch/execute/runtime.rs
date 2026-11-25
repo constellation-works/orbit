@@ -1,12 +1,11 @@
 //! `OrbitRuntime` tool entry methods: the CLI and in-process entry points and
 //! the runtime-backed dispatch that resolves identity, policy and capability.
 
-use orbit_common::env_vars;
 #[cfg(unix)]
 use std::path::Path;
 
-use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_common::{Env, OrbitError};
 use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::tool::{ToolSessionContext, is_tool_family_operation, tool_family};
 use serde_json::Value;
@@ -104,6 +103,7 @@ impl OrbitRuntime {
         entry_point: ToolEntryPoint,
         mut session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
+        let env = crate::runtime::process_env();
         // The authorization decision and entry-point row describe one call.
         // CLI invocations have no transport-minted trace, so create it here
         // before either path receives the session (and preserve MCP's trace).
@@ -127,6 +127,7 @@ impl OrbitRuntime {
                 }
                 Err(error) => {
                     return self.execute_tool_dispatch_with(
+                        &env,
                         name,
                         input,
                         ToolDispatchAuditContext {
@@ -164,6 +165,7 @@ impl OrbitRuntime {
                 orbit_tools::plugin::HostRouteOutcome::Unanswered(error) => error,
             };
             return self.execute_tool_dispatch_with(
+                &env,
                 name,
                 input,
                 ToolDispatchAuditContext {
@@ -197,12 +199,9 @@ impl OrbitRuntime {
                     && crate::runtime::run_input::managed_run_context_run_id_from_env()
                         .is_some_and(|run_id| self.is_live_resident_cycle_run(&run_id))));
         #[cfg(unix)]
-        if let Some(socket) = std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER)
+        if let Some(socket) = env.orbit_plugin_broker()
             && session_context.application.is_none()
-            && std::env::var_os(
-                orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
-            )
-            .is_none()
+            && env.orbit_application_credential_fd().is_none()
             && (host_read || resident_call || self.tool_registry().plugin_binding(name).is_some())
         {
             let forwarded = input.clone();
@@ -217,7 +216,7 @@ impl OrbitRuntime {
                 .map(|_| self.workspace_id())
                 .transpose()?;
             let result = crate::runtime::plugin::broker::forward_call_with_status(
-                Path::new(&socket),
+                Path::new(socket),
                 name,
                 forwarded,
                 &cwd,
@@ -235,6 +234,7 @@ impl OrbitRuntime {
                 }
                 Err(crate::runtime::plugin::broker::ForwardCallError::CallerAudit(error)) => {
                     return self.execute_tool_dispatch_with(
+                        &env,
                         name,
                         input,
                         ToolDispatchAuditContext {
@@ -262,14 +262,12 @@ impl OrbitRuntime {
         let mut claimed_owner_refusal = None;
         #[cfg(unix)]
         match if session_context.application.is_some()
-            || std::env::var_os(
-                orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
-            )
-            .is_some()
+            || env.orbit_application_credential_fd().is_some()
         {
             None
         } else {
-            super::super::claimed::bridge_claimed_owner_call(
+            super::super::claimed::bridge_claimed_owner_call_with_env(
+                &env,
                 &self.global_root(),
                 self.worker_invocation(),
                 self.automation_machine_identity(),
@@ -294,6 +292,7 @@ impl OrbitRuntime {
         }
         let audit_session_context = session_context.clone();
         self.execute_tool_dispatch_with(
+            &env,
             name,
             input,
             ToolDispatchAuditContext {
@@ -347,22 +346,23 @@ impl OrbitRuntime {
                 }
                 let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
                 let activity_tool_policy = if trusted_env {
-                    read_activity_tool_policy_from_env()
+                    read_activity_tool_policy_from_env(&env)
                 } else {
                     Default::default()
                 };
                 let (agent_name, model_name) = resolve_agent_identity_for_entry_point(
+                    &env,
                     entry_point,
                     agent_override,
                     model_override,
                 )?;
                 let proc_allowed_programs = if trusted_env {
-                    read_proc_allowed_programs_from_env()
+                    read_proc_allowed_programs_from_env(&env)
                 } else {
                     Vec::new()
                 };
                 let proc_disallowed_programs = if trusted_env {
-                    read_proc_disallowed_programs_from_env()
+                    read_proc_disallowed_programs_from_env(&env)
                 } else {
                     None
                 };
@@ -370,7 +370,7 @@ impl OrbitRuntime {
                 // Only a managed run's envelope carries an activity deadline;
                 // an interactive call keeps the unscoped ceiling.
                 let proc_spawn_budget = if proc_spawn_activity_scoped {
-                    read_proc_spawn_budget_from_env()
+                    read_proc_spawn_budget_from_env(&env)
                 } else {
                     None
                 };
@@ -392,7 +392,7 @@ impl OrbitRuntime {
                     proc_spawn_activity_scoped,
                     proc_spawn_budget,
                     reservation_owner: reservation_owner_from_env(),
-                    activity_binding: activity_binding_from_env(),
+                    activity_binding: activity_binding_from_env(&env),
                     ..Default::default()
                 };
                 if proc_spawn_activity_scoped {
@@ -429,7 +429,9 @@ impl OrbitRuntime {
     where
         F: FnOnce(Value) -> Result<Value, OrbitError>,
     {
+        let env = crate::runtime::process_env();
         self.execute_tool_dispatch_with(
+            &env,
             name,
             input,
             ToolDispatchAuditContext {
@@ -459,7 +461,9 @@ impl OrbitRuntime {
     where
         F: FnOnce(Value) -> Result<Value, OrbitError>,
     {
+        let env = crate::runtime::process_env();
         self.execute_tool_dispatch_with(
+            &env,
             name,
             input,
             ToolDispatchAuditContext {
@@ -476,6 +480,7 @@ impl OrbitRuntime {
 
     fn execute_tool_dispatch_with<F>(
         &self,
+        env: &Env,
         name: &str,
         input: Value,
         audit: ToolDispatchAuditContext,
@@ -511,6 +516,7 @@ impl OrbitRuntime {
             ToolEntryPoint::Mcp => CapabilityEnforcement::McpSessionOnly,
         };
         execute_tool_dispatch_with_audit_store(
+            env,
             name,
             input,
             execution_kind,

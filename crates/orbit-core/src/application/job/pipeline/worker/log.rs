@@ -522,7 +522,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     if let Some(profile) = pipeline_worker_profile_file(
         &logs_dir,
         run_id,
-        std::env::var_os(env_vars::LLVM_PROFILE_FILE).as_deref(),
+        crate::runtime::process_env().llvm_profile_file(),
     )? {
         command.env(env_vars::LLVM_PROFILE_FILE, profile);
     }

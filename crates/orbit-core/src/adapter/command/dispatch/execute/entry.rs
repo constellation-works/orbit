@@ -16,7 +16,7 @@ pub fn tool_suggestion_context(
     session_context: ToolSessionContext,
 ) -> ToolContext {
     let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context() {
-        read_activity_tool_policy_from_env()
+        read_activity_tool_policy_from_env(&crate::runtime::process_env())
     } else {
         Default::default()
     };

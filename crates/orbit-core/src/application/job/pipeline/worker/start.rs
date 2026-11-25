@@ -134,9 +134,9 @@ impl OrbitRuntime {
         // service manager; the live containment test opts in on its own
         // supervisor.
         let settings = self.settings().worker_containment();
-        let inherited = std::env::var_os(scope::STRICT_WORKER_CONTAINMENT_ENV);
-        let strict =
-            effective_strict_containment(settings.strict, strict_override, inherited.as_deref());
+        let env = crate::runtime::process_env();
+        let inherited = env.orbit_worker_containment_strict();
+        let strict = effective_strict_containment(settings.strict, strict_override, inherited);
         let limits = if (cfg!(test) || worker_substituted_process_wide()) && !strict {
             None
         } else {

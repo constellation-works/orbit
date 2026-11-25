@@ -2,9 +2,12 @@
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(feature = "test-support")]
+use std::ffi::OsStr;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
+use orbit_common::Env;
 use orbit_common::fs::selector::Selector;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, LegacyContextPruningRecord, Task,
@@ -30,10 +33,13 @@ pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_MAX_GENERATED as MAX_GENERAT
 
 /// The generation bound: [`MAX_GENERATED`] unless a test fixture
 /// substituted another through [`MAX_GENERATED_ENV`].
-pub(super) fn max_generated() -> usize {
+pub(super) fn max_generated(env: &Env) -> usize {
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
     #[cfg(feature = "test-support")]
-    if let Some(count) = std::env::var(MAX_GENERATED_ENV)
-        .ok()
+    if let Some(count) = env
+        .orbit_test_forecast_max_generated()
+        .and_then(OsStr::to_str)
         .and_then(|value| value.parse().ok())
         .filter(|count: &usize| *count > 0)
     {
@@ -521,6 +527,10 @@ pub(super) fn recorded_fix_footprint(
 
 /// Sample whole bundles once per iteration; both scenarios replay these
 /// draws. Donors already in the initial cohort cannot be duplicated.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "rework, cohort, episodes, rng, correction, deadline and generation bound are independent inputs"
+)]
 pub(super) fn draw_regression_bundles(
     rework: &RegressionRework,
     items: &[Item],
@@ -529,6 +539,7 @@ pub(super) fn draw_regression_bundles(
     rng: &mut SplitMix64,
     correction: &Correction,
     deadline: Option<Instant>,
+    max_generated: usize,
 ) -> (Vec<ForecastGeneratedNode>, bool) {
     let mut nodes = Vec::new();
     let mut seen = BTreeSet::new();
@@ -568,7 +579,7 @@ pub(super) fn draw_regression_bundles(
                 known -= 1;
                 continue;
             }
-            if nodes.len() == max_generated() {
+            if nodes.len() == max_generated {
                 return (nodes, true);
             }
             // The caller discards this iteration on an expired deadline.

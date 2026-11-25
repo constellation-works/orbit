@@ -56,7 +56,8 @@ impl OrbitRuntime {
                 ),
             )?;
 
-            let activity_policy = read_activity_tool_policy_from_env();
+            let env = crate::runtime::process_env();
+            let activity_policy = read_activity_tool_policy_from_env(&env);
             let mut context = ToolContext {
                 cwd: std::env::current_dir()
                     .ok()

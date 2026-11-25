@@ -55,7 +55,6 @@
 //! under the workspace confinement `orbit.task.artifact.put` already applies,
 //! and sends the bytes.
 
-use orbit_common::env_vars;
 use std::path::Path;
 
 use base64::Engine as _;
@@ -63,7 +62,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use orbit_common::governance::task::{
     TASK_ID_WIRE_ALIAS, normalize_task_id_alias, task_id_alias_conflict_error,
 };
-use orbit_common::{OrbitError, RemoteToolCode};
+use orbit_common::{Env, OrbitError, RemoteToolCode};
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact_path};
 use orbit_types::tool::{
     CLAIMED_OWNER_TOOLS, ToolSessionContext, WorkerInvocation, is_claimed_owner_tool,
@@ -127,7 +126,32 @@ pub fn bridge_claimed_owner_call(
     workspace_root: &Path,
     entry_point: ToolEntryPoint,
 ) -> Option<ClaimedOwnerRoute> {
-    let socket = std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER).map(std::path::PathBuf::from);
+    bridge_claimed_owner_call_with_env(
+        &crate::runtime::process_env(),
+        global_root,
+        binding,
+        process_machine_id,
+        name,
+        input,
+        cwd,
+        workspace_root,
+        entry_point,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::adapter::command::dispatch) fn bridge_claimed_owner_call_with_env(
+    env: &Env,
+    global_root: &Path,
+    binding: Option<&WorkerInvocation>,
+    process_machine_id: Option<&str>,
+    name: &str,
+    input: &Value,
+    cwd: &Path,
+    workspace_root: &Path,
+    entry_point: ToolEntryPoint,
+) -> Option<ClaimedOwnerRoute> {
+    let socket = env.orbit_plugin_broker().map(Path::new);
     // The bridge and the broker behind it key on the operation a family
     // call reaches; the owner's dispatch receives the family call again.
     let (name, input) = if tool_family(name).is_some() {
@@ -143,7 +167,7 @@ pub fn bridge_claimed_owner_call(
         )
     };
     bridge_through(
-        socket.as_deref(),
+        socket,
         global_root,
         binding,
         process_machine_id,

@@ -1,6 +1,5 @@
 //! `orbit plugin validate`.
 
-use orbit_common::env_vars;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -81,7 +80,7 @@ pub fn validate_plugin_dir_for_workspace(
         // record them.
         resolve_declared_programs(
             &plugin.manifest.spec.requires.programs,
-            std::env::var_os(env_vars::PATH).as_deref(),
+            crate::runtime::process_env().path(),
         )
         .0,
         // Validation never calls the backend, so nothing is read.

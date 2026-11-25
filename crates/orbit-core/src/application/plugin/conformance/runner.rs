@@ -1,4 +1,3 @@
-use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -104,7 +103,7 @@ pub fn test_plugin_dir(
         // record them.
         resolve_declared_programs(
             &plugin.manifest.spec.requires.programs,
-            std::env::var_os(env_vars::PATH).as_deref(),
+            crate::runtime::process_env().path(),
         )
         .0,
         // The goldens' fixtures, swapped in per case; never the host store.

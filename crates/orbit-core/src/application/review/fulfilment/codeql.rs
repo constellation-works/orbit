@@ -3,7 +3,7 @@
 //! run the script there confined by Bubblewrap, and judge its SARIF.
 
 #[cfg(target_os = "linux")]
-use orbit_common::env_vars;
+use orbit_common::Env;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::{Child, Stdio};
@@ -55,14 +55,15 @@ const MAX_SARIF_TEXT_BYTES: usize = 512;
 struct EvidenceCodeqlSandbox {
     checkout: PathBuf,
     profile: ResolvedFsProfile,
+    env: Env,
 }
 
 #[cfg(target_os = "linux")]
 impl EvidenceCodeqlSandbox {
-    fn new(checkout: &Path) -> Self {
+    fn new(checkout: &Path, env: &Env) -> Self {
         let checkout = checkout.to_path_buf();
         let mut modify = vec![checkout.display().to_string()];
-        for cargo_home in cargo_home_candidates() {
+        for cargo_home in cargo_home_candidates(env) {
             for relative in ["registry", "git"] {
                 let path = cargo_home.join(relative);
                 if path.exists() {
@@ -83,17 +84,18 @@ impl EvidenceCodeqlSandbox {
                 modify,
             },
             checkout,
+            env: env.clone(),
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn cargo_home_candidates() -> Vec<PathBuf> {
+fn cargo_home_candidates(env: &Env) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os(env_vars::CARGO_HOME).filter(|home| !home.is_empty()) {
+    if let Some(home) = env.cargo_home().filter(|home| !home.is_empty()) {
         candidates.push(PathBuf::from(home));
     }
-    if let Some(home) = std::env::var_os(env_vars::HOME).filter(|home| !home.is_empty()) {
+    if let Some(home) = env.home().filter(|home| !home.is_empty()) {
         candidates.push(PathBuf::from(home).join(".cargo"));
     }
     let current_dir = std::env::current_dir().ok();
@@ -144,7 +146,7 @@ impl Sandbox for EvidenceCodeqlSandbox {
             StdinMode::Bytes(_) => Stdio::piped(),
         };
         let mut plan = orbit_exec::compile_linux_bwrap_argv(
-            &orbit_common::Env::capture(),
+            &self.env,
             &self.profile,
             &request.program,
             &request.args,
@@ -202,6 +204,7 @@ impl OrbitRuntime {
         let source = self.paths().repo_root.to_string_lossy().into_owned();
         // Every command after `init` names the new repository explicitly, so
         // a failed `init` can never fall through to an enclosing one.
+        let process_env = crate::runtime::process_env();
         for (args, deadline) in [
             (vec!["init", "--quiet", "--template="], GIT_LOCAL_TIMEOUT),
             (
@@ -230,7 +233,7 @@ impl OrbitRuntime {
                 GIT_CHECKOUT_TIMEOUT,
             ),
         ] {
-            let output = run_git_within(&orbit_common::Env::capture(), &path, &args, deadline)?;
+            let output = run_git_within(&process_env, &path, &args, deadline)?;
             if !output.success {
                 return Err(OrbitError::Execution(format!(
                     "prepare evidence checkout {} at {commit}: git {}: {}",
@@ -299,10 +302,11 @@ impl OrbitRuntime {
                 environment_mode: EnvironmentMode::ClearAndSet(env),
                 debug: false,
             };
+            let process_env = crate::runtime::process_env();
             run_process(
-                &orbit_common::Env::capture(),
+                &process_env,
                 &request,
-                &EvidenceCodeqlSandbox::new(checkout),
+                &EvidenceCodeqlSandbox::new(checkout, &process_env),
             )
         };
         #[cfg(not(target_os = "linux"))]

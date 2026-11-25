@@ -1,14 +1,11 @@
 //! The plugin callback boundary: which Orbit tools a plugin backend's child
 //! may reach, and the provenance its calls are audited with.
 
-use orbit_common::env_vars;
 use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::path::Path;
 
-use orbit_common::OrbitError;
-use orbit_common::security::child_env::{
-    ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
-};
+use orbit_common::{Env, OrbitError};
 use orbit_store::Store;
 use orbit_store::contracts::PluginStoreBackend;
 use orbit_tools::ProcSpawnBudget;
@@ -313,47 +310,45 @@ fn recorded_orbit_tools(
     Ok(loaded.manifest.spec.permissions.orbit_tools.clone())
 }
 
-pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {
-    std::env::var(env_vars::ORBIT_PROC_ALLOWED_PROGRAMS)
-        .ok()
-        .map(|raw| split_env_list(&raw))
+pub(super) fn read_proc_allowed_programs_from_env(env: &Env) -> Vec<String> {
+    env.orbit_proc_allowed_programs()
+        .and_then(OsStr::to_str)
+        .map(split_env_list)
         .unwrap_or_default()
 }
 
 /// Only a complete, explicit deny envelope selects the new program mode.
 /// Missing or unknown markers retain the legacy allowlist boundary.
-pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
-    if std::env::var(env_vars::ORBIT_PROC_PROGRAM_POLICY)
-        .ok()
-        .as_deref()
-        != Some("deny")
-    {
+pub(super) fn read_proc_disallowed_programs_from_env(env: &Env) -> Option<Vec<String>> {
+    if env.orbit_proc_program_policy().and_then(OsStr::to_str) != Some("deny") {
         return None;
     }
-    std::env::var(env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS)
-        .ok()
-        .map(|raw| split_env_list(&raw))
+    env.orbit_proc_disallowed_programs()
+        .and_then(OsStr::to_str)
+        .map(split_env_list)
 }
 
 /// The `proc.spawn` budget of the managed activity this process serves: the
 /// deadline its CLI runner stamped, under the fixed per-call ceiling.
 /// A missing or malformed deadline keeps the unscoped ceiling.
-pub(super) fn read_proc_spawn_budget_from_env() -> Option<ProcSpawnBudget> {
-    let mut deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
-        .ok()?
+pub(super) fn read_proc_spawn_budget_from_env(env: &Env) -> Option<ProcSpawnBudget> {
+    let mut deadline_ms = env
+        .orbit_activity_deadline_unix_ms()
+        .and_then(OsStr::to_str)?
         .trim()
         .parse::<u64>()
         .ok()?;
     // A fresh call gets the activity's admission credit accumulated so far;
     // the per-call ceiling remains independent and unchanged.
-    if let (Ok(directory), Some(timeout_ms)) = (
-        std::env::var(orbit_common::process::build_budget::WAIT_DIRECTORY_ENV),
-        std::env::var(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV)
-            .ok()
+    if let (Some(directory), Some(timeout_ms)) = (
+        env.orbit_activity_build_budget_dir()
+            .and_then(OsStr::to_str),
+        env.orbit_activity_timeout_ms()
+            .and_then(OsStr::to_str)
             .and_then(|value| value.parse::<u64>().ok()),
     ) {
         let waits = orbit_common::process::build_budget::read_waits(
-            std::path::Path::new(&directory),
+            std::path::Path::new(directory),
             timeout_ms,
         );
         deadline_ms = deadline_ms.saturating_add(waits.deadline_extension_ms);
@@ -364,20 +359,15 @@ pub(super) fn read_proc_spawn_budget_from_env() -> Option<ProcSpawnBudget> {
     })
 }
 
-pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
-    if std::env::var(env_vars::ORBIT_TASK_ACTOR_KIND)
-        .ok()
-        .as_deref()
-        != Some("agent")
-    {
+pub(super) fn read_activity_tool_policy_from_env(env: &Env) -> ActivityToolPolicyEnv {
+    if env.orbit_task_actor_kind().and_then(OsStr::to_str) != Some("agent") {
         return ActivityToolPolicyEnv::default();
     }
-    let env = |name: &str| std::env::var(name).ok();
     activity_tool_policy_from_env_values(
-        env(ACTIVITY_TOOL_POLICY_ENV).as_deref(),
-        env(ACTIVITY_TOOLS_DENY_ENV).as_deref(),
-        env(ACTIVITY_NAME_ENV).as_deref(),
-        env(env_vars::ORBIT_ACTIVITY_TOOLS).as_deref(),
+        env.orbit_activity_tool_policy().and_then(OsStr::to_str),
+        env.orbit_activity_tools_deny().and_then(OsStr::to_str),
+        env.orbit_activity_name().and_then(OsStr::to_str),
+        env.orbit_activity_tools().and_then(OsStr::to_str),
     )
 }
 

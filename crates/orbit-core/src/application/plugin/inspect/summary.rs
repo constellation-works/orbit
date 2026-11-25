@@ -1,6 +1,5 @@
 //! `orbit plugin list` and `show`: one projected summary per plugin.
 
-use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -432,7 +431,7 @@ pub(in crate::application::plugin) fn summary_for_installed(
                     &plugin_state_dir(global_root, &installed.name),
                 );
                 // Inspection reads the operator's PATH; the call path never does.
-                mark_resolution_drift(&mut programs, std::env::var_os(env_vars::PATH).as_deref());
+                mark_resolution_drift(&mut programs, crate::runtime::process_env().path());
                 programs
             })
             .unwrap_or_default(),

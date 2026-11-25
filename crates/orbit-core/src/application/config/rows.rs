@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use orbit_common::Env;
 use orbit_config::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigScope, ConfigSection, ConfigSnapshot,
     ConfigStore, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
@@ -58,11 +59,9 @@ pub(super) fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// Hash of the process environment. Config resolution admits environment
 /// defaults, so every cache of resolved values in this module keys on it:
 /// a changed environment can never be served the previous one's values.
-pub(super) fn environment_hash() -> u64 {
-    let mut vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
-    vars.sort();
+pub(super) fn environment_hash(env: &Env) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for (name, value) in &vars {
+    for (name, value) in env.vars() {
         for byte in format!("{name:?}={value:?};").as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
