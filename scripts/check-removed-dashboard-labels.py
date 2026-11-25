@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Fail when a dashboard label removed in the diff is still named in docs.
 
-From the delivery diff against the guardrails base (`CI_TEST_BASE`, with the
-merge-base fallback `scripts/ci-guardrails.sh` uses), take quoted multi-word
+From the delivery diff against the guardrails base (the merge-base of HEAD and
+`CI_TEST_BASE`, so a base that moved on after the branch point adds nothing to
+the diff, with the agent-main merge-base fallback `scripts/ci-guardrails.sh`
+uses), take quoted multi-word
 labels on lines removed from `crates/orbit-web/assets/dashboard/**`, drop any
 label the same diff re-adds or the dashboard still renders elsewhere, and
 fail when the label is still present in current-state docs, the website or
@@ -16,6 +18,10 @@ judged only when this diff removes that same label: it is stale when the
 named document no longer contains it. An earlier delivery's entry is left
 alone, and a diff that removes no dashboard label does not judge the
 allowlist.
+
+A checkout that holds no merge-base with `CI_TEST_BASE` (a shallow clone without
+the common ancestor) fails with an insufficient-history report before any removal
+is scanned, rather than comparing from the base tip.
 """
 
 import json
@@ -80,9 +86,24 @@ def comparison_base():
     explicit = os.environ.get("CI_TEST_BASE")
     if explicit:
         result = git("rev-parse", "--verify", f"{explicit}^{{commit}}")
-        if result.returncode == 0:
-            return result.stdout.strip()
-        raise ValueError(f"cannot resolve CI_TEST_BASE {explicit!r} to a commit")
+        if result.returncode != 0:
+            raise ValueError(f"cannot resolve CI_TEST_BASE {explicit!r} to a commit")
+        # A pull request passes its base branch tip, which may have moved past
+        # the head's branch point. Diffing from that tip would read every
+        # label the base added since as one this diff removes, so compare
+        # from the merge-base. A push passes the previous tip, an ancestor of
+        # HEAD, which is its own merge-base, so push runs compare as before.
+        tip = result.stdout.strip()
+        fork = git("merge-base", tip, "HEAD")
+        if fork.returncode == 0 and fork.stdout.strip():
+            return fork.stdout.strip()
+        # A shallow checkout can hold both tips without their common ancestor.
+        # The tip would then count every base addition since the branch point as
+        # a removal, so stop before scanning instead of comparing from it.
+        raise ValueError(
+            f"insufficient history: no common ancestor of CI_TEST_BASE {explicit!r} and HEAD "
+            "in this checkout; fetch enough history to reach it (git fetch --unshallow "
+            "in a shallow clone)")
     for branch in ("refs/remotes/origin/agent-main", "refs/heads/agent-main"):
         if git("rev-parse", "--verify", "--quiet", branch).returncode == 0:
             result = git("merge-base", "HEAD", branch)

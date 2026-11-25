@@ -4235,6 +4235,43 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def branch_behind_a_base_that_adds(self, label):
+        """Cut `pr` where a doc already names `label`, then move main on with
+        the dashboard `label` it describes, and leave `pr` checked out with main's tip
+        as the CI base: a pull request whose head predates that base commit."""
+        self.doc.write_text(
+            f"# Overview\n\nThe {self.LABEL} panel lists things.\n\n"
+            f"The {label} panel is described here.\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "doc names base label")
+        self.git("checkout", "-qb", "pr")
+        self.git("checkout", "-q", "main")
+        self.panel.write_text(
+            f'export const title = "{self.LABEL}";\n'
+            f'export const extra = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "base adds dashboard label")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("checkout", "-q", "pr")
+
+    def test_label_the_base_added_after_the_branch_point_passes(self):
+        label = "Base Added Panel"
+        self.branch_behind_a_base_that_adds(label)
+        unrelated = self.root / "crates/orbit-web/assets/dashboard/js/unrelated.js"
+        unrelated.write_text('export const extra = "Unrelated Panel Label";\n')
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_label_a_stale_head_removes_still_fails(self):
+        label = "Base Added Panel"
+        self.branch_behind_a_base_that_adds(label)
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{self.LABEL}"', result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+        self.assertNotIn(label, result.stderr)
+
 
 class RemovedCodeIdentifierTests(unittest.TestCase):
     """Drive scripts/check-removed-code-identifiers.py in a miniature repo."""
