@@ -1730,8 +1730,10 @@ closed, merged or non-conflicting PR, or a failed read keeps the original
 merge failure. This path never sends another merge. `handoff_land` does not opt
 in, so the refusal still fails its landing.
 
-A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504)
-can mean that the merge landed but its response was lost. `pr_complete` makes
+A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504),
+or a response that ends before it decodes (`unexpected end of JSON input`, with
+an empty or truncated body), can mean that the merge landed but its response
+was lost. `pr_complete` makes
 one fresh authenticated status read within the original completion deadline.
 It accepts only explicit `MERGED` state with a merge timestamp and commit for
 the same published/reviewed head, PR number, repository URL, head branch and

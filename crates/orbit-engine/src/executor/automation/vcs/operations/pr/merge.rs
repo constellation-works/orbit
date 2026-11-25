@@ -19,6 +19,10 @@ const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the
 /// into a base that advanced after its mergeability check (F2026-11-440).
 const MERGE_CONFLICT_REASON: &str = "Pull Request has merge conflicts";
 
+/// The JSON decoder's whole diagnostic when a merge response ends before it
+/// decodes [F2026-11-509]. The forge answered, so the merge may have landed.
+const MERGE_RESPONSE_DECODE_DIAGNOSTIC: &str = "unexpected end of JSON input";
+
 pub(in crate::executor::automation::vcs::operations) fn pr_merge(
     process_env: &orbit_common::Env,
     input: &Value,
@@ -116,8 +120,10 @@ struct ReviewedMergeReports {
 /// permits one status read and never a second mutation. Other failures,
 /// including a base-modification or conflict refusal without its opt-in,
 /// stay errors unless
-/// `report_ambiguous` opts into reporting an uncertain server response. That
-/// outcome permits the completion caller one read, never a second mutation.
+/// `report_ambiguous` opts into reporting an uncertain server response: an
+/// exact HTTP 500/502/503/504 diagnostic, or a response that ends before it
+/// decodes. That outcome permits the completion caller one read, never a
+/// second mutation.
 fn pr_merge_reviewed(
     process_env: &orbit_common::Env,
     selector: &str,
@@ -192,7 +198,9 @@ fn pr_merge_reviewed(
             "stderr": result.stderr,
         }));
     }
-    let ambiguous = reports.ambiguous && is_ambiguous_merge_server_failure(&result);
+    let ambiguous = reports.ambiguous
+        && (is_ambiguous_merge_server_failure(&result)
+            || is_ambiguous_merge_decode_failure(&result));
     let result = match succeeded(result, "reviewed PR merge") {
         Err(error) if ambiguous => {
             return Ok(json!({
@@ -268,6 +276,23 @@ fn is_exact_merge_refusal(result: &orbit_exec::ExecutionResult, reason: &str) ->
         && body
             .get("status")
             .is_none_or(|status| status.as_str() == Some("405") || status.as_u64() == Some(405))
+}
+
+/// A completed `gh` run whose whole diagnostic is the JSON decoder's `unexpected
+/// end of JSON input` [F2026-11-509]. The forge answered, but its response
+/// ended before it decoded, so the merge may have landed. Only an empty body or
+/// a truncated JSON document (the decoder's end-of-input error, not a syntax
+/// error) qualifies. Any other body, extra stderr or a timeout keeps its error.
+fn is_ambiguous_merge_decode_failure(result: &orbit_exec::ExecutionResult) -> bool {
+    if result.success
+        || result.timed_out
+        || result.exit_code.is_none()
+        || result.stderr.trim() != MERGE_RESPONSE_DECODE_DIAGNOSTIC
+    {
+        return false;
+    }
+    let body = result.stdout.trim();
+    body.is_empty() || serde_json::from_str::<Value>(body).is_err_and(|error| error.is_eof())
 }
 
 /// Only completed synchronous server errors with an exact provider diagnostic

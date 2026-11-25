@@ -1446,11 +1446,13 @@ backlog with the candidate kept (or blocks once the landing repair budget is
 spent), and the held run is not resumed. Transport failures after a merge,
 auto-merge or rebase request (in that run or recorded in the task's history)
 also remain failures, except that a narrowly classified synchronous HTTP
-500/502/503/504 merge server error permits one read-only reconciliation within
-the original deadline. Only fresh `MERGED` evidence matching the published and
-reviewed candidate, PR, repository, head branch and base branch permits
-completion; a failed response grants no managed-merge attribution. An
-inconclusive read retains the original failure and mutation provenance and
+500/502/503/504 merge server error, or a merge response that ends before it
+decodes (`unexpected end of JSON input` with an empty or truncated body),
+permits one read-only reconciliation within the original deadline. Only
+fresh `MERGED` evidence matching the published and reviewed candidate, PR,
+repository, head branch and base branch permits completion; a failed
+response grants no managed-merge attribution. An inconclusive read retains
+the original failure and mutation provenance and
 never sends another merge request. A transient auto-fix required-check read in completion's primary observation
 holds as `delivery_check_evidence_inconclusive` when completion mutation
 provenance is present in the invocation or task history. The auto-fix base-tip comparison and repair-admission recheck of required checks hold as that code on a read that persists through the provider's bounded retries, with or without that provenance; they get no in-run observation retry, and the next auto-fix pass hands the task back to completion. In particular,

@@ -1498,6 +1498,8 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         "server_error_trailing" => ("HTTP 403");
         "server_error_wrong_status" => ("HTTP 502");
         "server_error_auth_detail" => ("HTTP 502");
+        "decode_html" => ("unexpected end of JSON input");
+        "decode_trailing" => ("unexpected end of JSON input");
         "invalid_success" => ("invalid JSON");
         "unconfirmed_success" => ("did not confirm a synchronous merge")
     } {
@@ -1519,6 +1521,14 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{outcome}");
         test_env::record_scenario_pass(&format!("merge-refusal-{outcome}"));
     }
+    ambiguous_reconciliation_refuses(sandbox, "server_error", "Server Error (HTTP 502)");
+    ambiguous_reconciliation_refuses(sandbox, "decode", "unexpected end of JSON input");
+    ambiguous_reconciliation_refuses(sandbox, "decode_truncated", "unexpected end of JSON input");
+}
+/// Each uncertain merge outcome, with its original diagnostic, runs the same
+/// evidence matrix: an unmerged, mismatched or unreadable reconciliation read
+/// keeps the failure, with one merge request and at most one further read.
+fn ambiguous_reconciliation_refuses(sandbox: &Path, outcome: &str, diagnostic: &str) {
     for case in [
         "open",
         "closed",
@@ -1545,7 +1555,7 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
     ] {
         let (fx, host) = fx_host(sandbox);
         open_for_completion(&fx, &host);
-        fx.script_merges(&["server_error"]);
+        fx.script_merges(&[outcome]);
         let mut evidence = json!({"number":42,"url":"https://github.com/orbit/test/pull/42",
             "state":"MERGED","mergedAt":"2026-11-05T08:24:36Z","mergeCommit":{"oid":fx.candidate},
             "headRefName":BRANCH,"headRefOid":fx.candidate,"baseRefName":BASE});
@@ -1600,8 +1610,8 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         }
         let error = action_err(&host, "pr_complete", &input).to_string();
         assert!(
-            error.contains("Server Error (HTTP 502)"),
-            "{case}: original diagnostic: {error}"
+            error.contains(diagnostic),
+            "{outcome} {case}: original diagnostic: {error}"
         );
         assert!(
             error.contains("read-only reconciliation was inconclusive"),
@@ -1635,7 +1645,9 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
             "{case}"
         );
         assert_eq!(fx.head(), fx.candidate, "{case}: no rewrite");
-        test_env::record_scenario_pass(&format!("ambiguous-reconciliation-refused-{case}"));
+        test_env::record_scenario_pass(&format!(
+            "ambiguous-reconciliation-refused-{outcome}-{case}"
+        ));
     }
 }
 /// Shared by the two refresh-refusal tests: after one base-modification refusal, the fresh read in each case must refuse without a second merge request, leaving the checkout, landings and task untouched.
@@ -1696,6 +1708,8 @@ fn an_already_merged_refresh_reconciles_without_another_merge_request(sandbox: &
         ("unavailable+merged", true),
         ("gateway_timeout+merged", true),
         ("empty_error_body+merged", true),
+        ("decode+merged", true),
+        ("decode_truncated+merged", true),
         ("base_modified+merged", true),
     ] {
         let (fx, host) = fx_host(sandbox);
@@ -7115,6 +7129,13 @@ merge() {
         unavailable+merged) land "$sha"; refuse 503 "Service Unavailable" ;;
         gateway_timeout+merged) land "$sha"; refuse 504 "Gateway Timeout" ;;
         empty_error_body+merged) land "$sha"; printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        # [F2026-11-509] The response ended before it decoded; the status is unknown.
+        decode) echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode+merged) land "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_truncated) printf '{"sha":"%s","merged":' "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_truncated+merged) land "$sha"; printf '{"sha":"%s","merged":' "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_html) printf '<html>upstream error</html>\n'; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_trailing) echo 'unexpected end of JSON input' >&2; echo 'warning: retried after a proxy reset' >&2; exit 1 ;;
         server_error) refuse 502 "Server Error" ;;
         server_error_mixed_auth) refuse 502 "Bad credentials" ;;
         server_error_malformed)
