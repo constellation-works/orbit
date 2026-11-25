@@ -65,8 +65,11 @@ orbit decision channel rotate-key <channel>
   submit through this channel). `--allow-sender` is optional and repeatable:
   when any senders are registered, a submission must present one of them.
 
-  Registration generates the channel key, mirrors it to the bound plugin's
-  `channel_key` secret, and starts key epoch 1. `--require-dkim-verification`
+  Registration generates the channel key and mirrors it to the bound plugin's
+  `channel_key` secret; a new channel name starts at key epoch 1. An active name
+  cannot be registered again; revoke it first (or use `rotate-key` to replace its
+  key). Re-registering a revoked name uses the previous epoch + 1.
+  `--require-dkim-verification`
   is the per-channel switch (off by default) that makes core-side DKIM
   verification required: every submission on that channel must forward the
   raw message and pass core's own DKIM check, or it is refused.

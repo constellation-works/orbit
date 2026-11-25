@@ -151,9 +151,11 @@ orbit decision channel register human-approvals \
 orbit decision channel list
 ```
 
-Registration creates a key, mirrors it to the plugin's `channel_key` secret and
-starts key epoch 1. `list` shows each registration with its epoch and revocation
-state, never key material.
+Registration creates a key and mirrors it to the plugin's `channel_key` secret;
+a new channel name starts at key epoch 1. An active name cannot be registered
+again; revoke it first (or use `rotate-key` to replace its key). Re-registering
+a revoked name uses the previous epoch + 1. `list` shows each registration with
+its epoch and revocation state, never key material.
 
 | Argument | Rules |
 |---|---|
