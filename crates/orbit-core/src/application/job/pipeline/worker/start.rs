@@ -144,7 +144,7 @@ impl OrbitRuntime {
         };
         PipelineWorkerSupervisor::new(
             Arc::clone(&self.stores().job_run),
-            Arc::clone(&self.stores().audit_event),
+            self.stores().host_store().clone(),
             self.paths().clone(),
             self.event_log().clone(),
             WorkerCommandConfig::for_paths(self.paths(), self.execution_env_policy().process_env())

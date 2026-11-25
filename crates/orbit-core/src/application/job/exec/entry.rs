@@ -335,7 +335,7 @@ impl OrbitRuntime {
         let workspace_path = self.paths().repo_root.clone();
         let writer = V2AuditWriter::with_disk_sinks(
             &audit_root,
-            self.v2_audit_store()?,
+            self.stores().host_store().clone(),
             self.workspace_id()?,
             &run_id,
             SYSTEM_AUDIT_IDENTITY,

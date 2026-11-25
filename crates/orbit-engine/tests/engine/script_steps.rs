@@ -300,7 +300,7 @@ fn audited_writer(
     fs::create_dir_all(&blob_dir).unwrap();
     let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
     let envelope = Arc::new(V2SqliteSink::for_audit_root(
-        Arc::clone(&store) as Arc<dyn orbit_store::contracts::V2AuditStoreBackend>,
+        (*store).clone(),
         "ws_scripts",
         run_id,
         audit_root.path(),
@@ -315,7 +315,10 @@ fn audited_writer(
 /// Every `script.execution` payload, oldest first.
 fn script_executions(store: &orbit_store::Store) -> Vec<Value> {
     let mut rows = store
-        .list_v2_audit_events(&V2AuditEventFilter {
+        .read()
+        .expect("open store snapshot")
+        .v2_audit()
+        .list(&V2AuditEventFilter {
             workspace_id: "ws_scripts".to_string(),
             event_type: Some(V2_EVENT_TYPE_SCRIPT_EXECUTION.to_string()),
             oldest_first: true,

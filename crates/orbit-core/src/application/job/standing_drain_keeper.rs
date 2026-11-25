@@ -388,10 +388,11 @@ impl OrbitRuntime {
         &self,
     ) -> Result<Option<KeeperLastDecision>, OrbitError> {
         let workspace_id = self.workspace_id()?;
+        let snapshot = self.stores().host_store().read()?;
+        let audit = snapshot.audit_event();
         let latest = |tool: &str| {
-            self.stores()
-                .audit_events()
-                .list_audit_events(&AuditEventFilter {
+            audit
+                .list(&AuditEventFilter {
                     tool_name: Some(tool.to_string()),
                     workspace_id: Some(workspace_id.clone()),
                     limit: 1,

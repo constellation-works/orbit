@@ -9,10 +9,12 @@ use chrono::DateTime;
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
+#[cfg(unix)]
+use orbit_store::Store;
+#[cfg(unix)]
+use orbit_store::contracts::AuditEventFilter;
 use orbit_store::contracts::TaskReservationReleaseReason;
 use orbit_store::contracts::V2AuditEventInsertParams;
-#[cfg(unix)]
-use orbit_store::contracts::{AuditEventFilter, AuditEventStoreBackend};
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::activity_job::{
@@ -884,10 +886,10 @@ pub(super) fn cancellation_result(
 /// from the audit store alone.
 #[cfg(unix)]
 pub(crate) fn active_cancellation_request(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     run_id: &str,
 ) -> Result<Option<String>, OrbitError> {
-    Ok(newest_active_cancellation(audit_events, run_id)?.map(|active| active.request_id))
+    Ok(newest_active_cancellation(store, run_id)?.map(|active| active.request_id))
 }
 
 /// Whether a cancellation of `run_id` may still finish and record its outcome.
@@ -896,12 +898,9 @@ pub(crate) fn active_cancellation_request(
 /// [`CANCELLATION_SETTLE_GRACE_SECONDS`] so a canceller that died without
 /// reporting cannot hold the run; reconciliation then finalizes it as usual.
 #[cfg(unix)]
-pub(super) fn cancellation_is_settling(
-    audit_events: &dyn AuditEventStoreBackend,
-    run_id: &str,
-) -> Result<bool, OrbitError> {
+pub(super) fn cancellation_is_settling(store: &Store, run_id: &str) -> Result<bool, OrbitError> {
     let settle_grace = chrono::Duration::seconds(CANCELLATION_SETTLE_GRACE_SECONDS);
-    Ok(newest_active_cancellation(audit_events, run_id)?
+    Ok(newest_active_cancellation(store, run_id)?
         .and_then(|active| active.requested_at)
         .is_some_and(|requested_at| Utc::now().signed_duration_since(requested_at) < settle_grace))
 }
@@ -914,10 +913,10 @@ struct ActiveCancellation {
 
 #[cfg(unix)]
 fn newest_active_cancellation(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     run_id: &str,
 ) -> Result<Option<ActiveCancellation>, OrbitError> {
-    let audits = audit_events.list_audit_events(&AuditEventFilter {
+    let audits = store.read()?.audit_event().list(&AuditEventFilter {
         job_run_id: Some(run_id.to_string()),
         limit: 200,
         ..AuditEventFilter::default()

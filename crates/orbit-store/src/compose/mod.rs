@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use crate::Store;
 use crate::contracts::{
-    AuditEventStoreBackend, InvocationStoreBackend, JobRunStoreBackend, TaskArtifactStoreBackend,
-    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
-    TaskStoreBackend, V2AuditStoreBackend,
+    JobRunStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
@@ -15,9 +14,7 @@ use crate::driver::file::session_log_store::SessionLogDir;
 use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::file_store::FileStore;
-use crate::repository::sqlite_backends::{
-    SqliteAuditEventStoreBackend, SqliteTaskReservationStoreBackend,
-};
+use crate::repository::sqlite_backends::SqliteTaskReservationStoreBackend;
 use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
 use crate::workflow::friction::import_workspace_frictions;
 
@@ -116,32 +113,6 @@ pub fn workspace_session_log_store(orbit_dir: PathBuf) -> FileStore<SessionLogDi
 
 pub fn routine_store(database: &std::path::Path) -> Result<Store, orbit_common::OrbitError> {
     Store::open(database)
-}
-
-pub fn invocation_store(
-    database: &std::path::Path,
-) -> Result<Arc<dyn InvocationStoreBackend>, orbit_common::OrbitError> {
-    Ok(invocation_store_from_store(Store::open(database)?))
-}
-
-/// Compose invocation accounting over an already-opened host store.
-pub fn invocation_store_from_store(store: Store) -> Arc<dyn InvocationStoreBackend> {
-    Arc::new(store)
-}
-
-pub fn v2_audit_store(
-    database: &std::path::Path,
-) -> Result<Arc<dyn V2AuditStoreBackend>, orbit_common::OrbitError> {
-    Ok(v2_audit_store_from_store(Store::open(database)?))
-}
-
-/// Compose the v2 audit contract over an already-opened host store.
-pub fn v2_audit_store_from_store(store: Store) -> Arc<dyn V2AuditStoreBackend> {
-    Arc::new(store)
-}
-
-pub fn audit_event_store_sqlite(store: Store) -> Arc<dyn AuditEventStoreBackend> {
-    Arc::new(SqliteAuditEventStoreBackend { store })
 }
 
 /// One workspace's task backends, reservation store, and the commit boundary

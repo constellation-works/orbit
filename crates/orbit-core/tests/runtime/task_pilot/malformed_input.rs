@@ -481,9 +481,12 @@ fn explicit_status_is_refused_before_assessment() {
     }
     let rows = workspace
         .runtime
-        .v2_audit_store()
+        .stores()
+        .host_store()
+        .read()
         .unwrap()
-        .list_v2_audit_events(&orbit_store::contracts::V2AuditEventFilter {
+        .v2_audit()
+        .list(&orbit_store::contracts::V2AuditEventFilter {
             workspace_id: workspace.runtime.workspace_id().unwrap(),
             limit: Some(1000),
             ..Default::default()

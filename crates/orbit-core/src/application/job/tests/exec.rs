@@ -443,7 +443,7 @@ fn detached_worker_persists_unrecognized_audit_step_outcomes_as_failed() {
         .unwrap();
     let writer = V2AuditWriter::with_disk_sinks(
         &runtime.paths().audit_dir,
-        runtime.v2_audit_store().unwrap(),
+        runtime.stores().host_store().clone(),
         runtime.workspace_id().unwrap(),
         &run.run_id,
         "fixture",

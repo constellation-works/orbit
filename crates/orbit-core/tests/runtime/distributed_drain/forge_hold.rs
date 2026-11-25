@@ -280,7 +280,7 @@ fn a_forge_outage_holds_the_claim_and_the_same_head_reaches_pr_open() {
 
     let audit = V2AuditWriter::with_disk_sinks(
         &follower.join(".orbit/tmp/pipeline-audit"),
-        bound.v2_audit_store().unwrap(),
+        bound.stores().host_store().clone(),
         bound.workspace_id().unwrap(),
         &leaf,
         "forge-hold-fixture",

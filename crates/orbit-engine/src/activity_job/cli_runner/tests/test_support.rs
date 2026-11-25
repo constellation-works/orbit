@@ -167,7 +167,7 @@ pub(in crate::activity_job::cli_runner) fn persisted_writer(
 ) -> Arc<V2AuditWriter> {
     V2AuditWriter::with_disk_sinks(
         audit_root,
-        Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite store")),
+        orbit_store::Store::open_in_memory().expect("open sqlite store"),
         "ws-test",
         run_id,
         agent_identity,

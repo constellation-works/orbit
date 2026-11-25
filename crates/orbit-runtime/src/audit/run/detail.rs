@@ -18,11 +18,10 @@ use std::collections::{HashMap, HashSet};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::storage::blob_store::BlobStore;
-use orbit_store::V2AuditEventRow;
-use orbit_store::contracts::V2AuditStoreBackend;
+use orbit_store::{V2AuditEventRow, V2AuditRepository};
 
 use crate::RuntimeKernel;
-use orbit_store::V2AuditEventFilter;
+use orbit_store::{Snapshot, V2AuditEventFilter};
 
 use super::body::{RunTrailBody, RunTrailRow};
 use super::projection::{
@@ -152,9 +151,10 @@ impl RuntimeKernel {
         P: Fn(u32, Option<&str>) -> ProcessLiveness,
     {
         let workspace_id = self.workspace_id()?;
-        let store = self.v2_audit_store()?;
-        let present = store
-            .list_v2_audit_run_ids_with_events(&workspace_id, &[run_id.to_string()], Some(SOURCE))?
+        let snapshot = self.stores().host_store().read()?;
+        let v2 = snapshot.v2_audit();
+        let present = v2
+            .run_ids_with_events(&workspace_id, &[run_id.to_string()], Some(SOURCE))?
             .contains(run_id);
         if !present {
             return Ok(BoundedRunProgress {
@@ -167,7 +167,7 @@ impl RuntimeKernel {
             });
         }
         let mut reader = TrailReader {
-            store: store.as_ref(),
+            v2,
             workspace_id,
             run_id,
             rows_read: 0,
@@ -202,7 +202,9 @@ impl RuntimeKernel {
     /// Read the lifecycle, structural and sample windows for bounded
     /// progress. Each window reads one probe row past its budget to tell
     /// whether it is complete.
-    fn read_progress_windows(reader: &mut TrailReader) -> Result<ProgressWindows, OrbitError> {
+    fn read_progress_windows(
+        reader: &mut TrailReader<'_, '_>,
+    ) -> Result<ProgressWindows, OrbitError> {
         let (lifecycle, steps_complete) =
             reader.window(&STEP_LIFECYCLE_KINDS, true, None, STEP_LIFECYCLE_ROW_BUDGET)?;
         let (mut structural, structural_complete) = reader.window(
@@ -243,7 +245,7 @@ impl RuntimeKernel {
     /// provider bound or when the structural window overflowed; the active
     /// step is reported only when the lifecycle prefix is complete.
     fn project_bounded_progress<P>(
-        reader: &mut TrailReader,
+        reader: &mut TrailReader<'_, '_>,
         windows: &ProgressWindows,
         extra: &[ParsedRow],
         run_id: &str,
@@ -329,9 +331,10 @@ impl RuntimeKernel {
     ) -> Result<BoundedRunDetail, OrbitError> {
         let row_budget = BOUNDED_PROGRESS_ROW_BUDGET + log_limit;
         let workspace_id = self.workspace_id()?;
-        let store = self.v2_audit_store()?;
-        let present = store
-            .list_v2_audit_run_ids_with_events(&workspace_id, &[run_id.to_string()], Some(SOURCE))?
+        let snapshot = self.stores().host_store().read()?;
+        let v2 = snapshot.v2_audit();
+        let present = v2
+            .run_ids_with_events(&workspace_id, &[run_id.to_string()], Some(SOURCE))?
             .contains(run_id);
         if !present {
             return Ok(BoundedRunDetail {
@@ -348,13 +351,13 @@ impl RuntimeKernel {
         }
 
         let mut reader = TrailReader {
-            store: store.as_ref(),
+            v2,
             workspace_id,
             run_id,
             rows_read: 0,
         };
         let windows = Self::read_progress_windows(&mut reader)?;
-        let logs_total = usize::try_from(reader.store.count_v2_audit_events(&reader.filter(
+        let logs_total = usize::try_from(reader.v2.count(&reader.filter(
             &[LOG_KIND],
             true,
             None,
@@ -411,14 +414,14 @@ impl RuntimeKernel {
 }
 
 /// Reads one run's v2 envelope rows by kind and id, counting every row loaded.
-struct TrailReader<'a> {
-    store: &'a dyn V2AuditStoreBackend,
+struct TrailReader<'a, 's> {
+    v2: V2AuditRepository<'a, Snapshot<'s>>,
     workspace_id: String,
     run_id: &'a str,
     rows_read: usize,
 }
 
-impl TrailReader<'_> {
+impl TrailReader<'_, '_> {
     fn filter(
         &self,
         kinds: &[&str],
@@ -439,7 +442,7 @@ impl TrailReader<'_> {
     }
 
     fn list(&mut self, filter: V2AuditEventFilter) -> Result<Vec<V2AuditEventRow>, OrbitError> {
-        let rows = self.store.list_v2_audit_events(&filter)?;
+        let rows = self.v2.list(&filter)?;
         self.rows_read += rows.len();
         Ok(rows)
     }

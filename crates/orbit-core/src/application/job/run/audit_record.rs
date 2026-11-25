@@ -15,9 +15,8 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{
-    AuditEventInsertParams, AuditEventStoreBackend, JobRunStepParams, JobRunStoreBackend,
-};
+use orbit_store::Store;
+use orbit_store::contracts::{AuditEventInsertParams, JobRunStepParams, JobRunStoreBackend};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
 use serde_json::Value;
@@ -38,14 +37,14 @@ pub(crate) struct PipelineAuditRow<'a> {
 }
 
 pub(crate) fn pipeline_audit(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     working_directory: &Path,
     row: PipelineAuditRow<'_>,
 ) -> Result<(), OrbitError> {
     let arguments_json = serde_json::to_string(&row.arguments)
         .map_err(|error| OrbitError::Store(format!("serialize pipeline audit args: {error}")))?;
     let execution_id = audit_execution_id("exec");
-    audit_events.insert_audit_event_record(&AuditEventInsertParams {
+    let params = AuditEventInsertParams {
         execution_id,
         command: "tool".to_string(),
         subcommand: Some("run".to_string()),
@@ -82,7 +81,8 @@ pub(crate) fn pipeline_audit(
         job_run_id: row.target_id.map(ToOwned::to_owned),
         activity_id: None,
         step_index: None,
-    })
+    };
+    store.write(|tx| tx.audit_event().insert(&params))
 }
 
 /// [ORB-10002] Record a terminal diagnostic step with an explicit state
@@ -230,7 +230,7 @@ impl OrbitRuntime {
         error_message: Option<String>,
     ) -> Result<(), OrbitError> {
         pipeline_audit(
-            self.stores().audit_events(),
+            self.stores().host_store(),
             &self.paths().repo_root,
             PipelineAuditRow {
                 tool_name,
@@ -254,6 +254,6 @@ impl OrbitRuntime {
             workspace_id: Some(self.workspace_id()?),
             ..row
         };
-        pipeline_audit(self.stores().audit_events(), &self.paths().repo_root, row)
+        pipeline_audit(self.stores().host_store(), &self.paths().repo_root, row)
     }
 }

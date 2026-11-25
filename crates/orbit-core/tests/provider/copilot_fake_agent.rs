@@ -7,7 +7,6 @@
 #![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
@@ -139,7 +138,7 @@ fn dispatch(harness: &Harness, spec: AgentLoopSpec) -> DispatchOutcome {
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        orbit_store::Store::open_in_memory().expect("audit store"),
         "ws_test",
         "copilot-fake",
         "copilot:claude-sonnet-4.5".to_string(),

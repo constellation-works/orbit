@@ -1,95 +1,60 @@
-//! Audit-event inserts, on the Store connection or inside a caller's
-//! transaction.
+//! Audit-event inserts inside a write transaction and on the narrow
+//! migration-free append path.
+
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::canonical_actor_for_role_label;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
-use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
 
 use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use crate::driver::sqlite::host::schema::{SUPPORTED_SCHEMA_VERSION, current_schema_version};
-use crate::{Store, StoreTx, now_string};
+use crate::now_string;
 
-impl Store {
-    /// Append an audit row without opening the rest of the store for writes.
-    ///
-    /// Foreign-generation readers use this narrow path while retaining their
-    /// read-only state handles. It never creates or migrates a database, changes
-    /// file permissions, or writes a schema this binary does not support exactly.
-    pub fn append_audit_event_at_path(
-        path: &Path,
-        params: &AuditEventInsertParams,
-        invocation: AuditInvocationFields<'_>,
-    ) -> Result<(), OrbitError> {
-        let path = validated_audit_append_path(path)?;
-        if std::fs::metadata(&path)?.permissions().readonly() {
-            return Err(OrbitError::Store("audit database is read-only".into()));
-        }
-        let mut conn = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )
-        .map_err(sqlite_store_error)?;
-        conn.busy_timeout(Duration::from_millis(u64::from(
-            orbit_common::storage::sqlite::sqlite_busy_timeout_ms(),
-        )))
-        .map_err(sqlite_store_error)?;
-        // Hold the writer lock across the schema check and insert so another
-        // process cannot migrate the database between them.
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let version = current_schema_version(&tx)?;
-        if version != SUPPORTED_SCHEMA_VERSION {
-            return Err(OrbitError::Migration(format!(
-                "cannot append audit event: store schema {version} differs from supported schema {SUPPORTED_SCHEMA_VERSION}"
-            )));
-        }
-        insert_audit_event_record_on_connection(&tx, params, invocation)?;
-        tx.commit().map_err(sqlite_store_error)
-    }
-
-    pub fn insert_audit_event_record(
-        &self,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError> {
-        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        arm_audit_busy_timeout(&conn)?;
-        insert_audit_event_record_on_connection(&conn, params, AuditInvocationFields::default())
-    }
-
-    /// Insert a canonical audit row with the transport-neutral invocation
-    /// fields carried by a tool session. The legacy insert DTO remains stable
-    /// for non-tool producers; new invocation producers use this focused seam.
-    pub fn insert_audit_event_record_with_invocation(
-        &self,
-        params: &AuditEventInsertParams,
-        invocation: AuditInvocationFields<'_>,
-    ) -> Result<(), OrbitError> {
-        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        arm_audit_busy_timeout(&conn)?;
-        insert_audit_event_record_on_connection(&conn, params, invocation)
-    }
-}
-
-/// Wait the store's normal busy timeout before this insert reports
-/// `database is locked`.
+/// Append an audit row at `path` without opening the full store for writes.
 ///
-/// The connection is shared with writers that briefly set `busy_timeout` to
-/// zero and restore it before releasing the mutex. Re-arming the default here
-/// covers a restore that did not run, so an audit insert lost to a lock waits
-/// instead of failing the moment it is attempted.
-fn arm_audit_busy_timeout(conn: &Connection) -> Result<(), OrbitError> {
+/// Named second write path outside [`crate::Store::write`]: foreign-generation
+/// read-only readers (`is_write_free`) hold a read-only `Store`, and checkout
+/// rebind recovery appends its audit line before/without opening the full
+/// store. Opening a narrow `NOFOLLOW` connection with its own `IMMEDIATE`
+/// transaction lets those audit lines survive independently without creating or
+/// migrating a database, changing file permissions, or writing a schema this
+/// binary does not support exactly.
+pub(crate) fn append_at_path(
+    path: &Path,
+    params: &AuditEventInsertParams,
+    invocation: AuditInvocationFields<'_>,
+) -> Result<(), OrbitError> {
+    let path = validated_audit_append_path(path)?;
+    if std::fs::metadata(&path)?.permissions().readonly() {
+        return Err(OrbitError::Store("audit database is read-only".into()));
+    }
+    let mut conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(sqlite_store_error)?;
     conn.busy_timeout(Duration::from_millis(u64::from(
         orbit_common::storage::sqlite::sqlite_busy_timeout_ms(),
     )))
-    .map_err(sqlite_store_error)
+    .map_err(sqlite_store_error)?;
+    // Hold the writer lock across the schema check and insert so another
+    // process cannot migrate the database between them.
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_store_error)?;
+    let version = current_schema_version(&tx)?;
+    if version != SUPPORTED_SCHEMA_VERSION {
+        return Err(OrbitError::Migration(format!(
+            "cannot append audit event: store schema {version} differs from supported schema {SUPPORTED_SCHEMA_VERSION}"
+        )));
+    }
+    insert_on_connection(&tx, params, invocation)?;
+    tx.commit().map_err(sqlite_store_error)
 }
 
 /// Resolve the configured audit database through its existing parent and
@@ -154,24 +119,8 @@ fn validated_audit_append_path(path: &Path) -> Result<PathBuf, OrbitError> {
     Ok(canonical_path)
 }
 
-impl StoreTx<'_> {
-    /// Insert one canonical audit row inside the caller's existing Store
-    /// transaction. Vertical features use this when their domain mutation and
-    /// its audit outcome must commit or roll back together.
-    pub fn insert_audit_event_record(
-        &mut self,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError> {
-        insert_audit_event_record_on_connection(
-            self.connection(),
-            params,
-            AuditInvocationFields::default(),
-        )
-    }
-}
-
-fn insert_audit_event_record_on_connection(
-    conn: &rusqlite::Connection,
+pub(super) fn insert_on_connection(
+    conn: &Connection,
     params: &AuditEventInsertParams,
     invocation: AuditInvocationFields<'_>,
 ) -> Result<(), OrbitError> {

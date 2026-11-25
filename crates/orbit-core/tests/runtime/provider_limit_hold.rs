@@ -97,8 +97,6 @@ fn resetting_at(resets_at: DateTime<Utc>) -> ProviderLimitFailure {
 #[cfg(unix)]
 #[test]
 fn an_antigravity_quota_holds_every_antigravity_crew_until_the_reported_reset() {
-    use std::sync::Arc;
-
     use orbit_engine::{V2AuditWriter, execute_job_with_resume};
     use orbit_types::telemetry::ProviderLimitSource;
     use orbit_types::workflow::activity_job::Provider;
@@ -123,7 +121,7 @@ fn an_antigravity_quota_holds_every_antigravity_crew_until_the_reported_reset() 
     let host = Pipeline::new(&fx, agy.path.clone());
     let audit = V2AuditWriter::with_disk_sinks(
         &fx.repo.join("audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_fixture",
         &run,
         "fixture",

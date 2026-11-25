@@ -108,8 +108,11 @@ fn live_agent_counts(runtime: &OrbitRuntime) -> Result<LiveAgentCounts, OrbitErr
     let run_ids: Vec<String> = runs.into_iter().map(|run| run.run_id).collect();
     let workspace_id = runtime.workspace_id()?;
     let present = runtime
-        .v2_audit_store()?
-        .list_v2_audit_run_ids_with_events(&workspace_id, &run_ids, Some("v2_envelope"))?;
+        .stores()
+        .host_store()
+        .read()?
+        .v2_audit()
+        .run_ids_with_events(&workspace_id, &run_ids, Some("v2_envelope"))?;
     for run_id in run_ids {
         if !present.contains(&run_id) {
             continue;

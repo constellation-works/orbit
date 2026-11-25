@@ -138,5 +138,35 @@
     "identifier": "routine_pauses",
     "doc": "docs/runbooks/perf-timing-protocol.md",
     "reason": "Names the unchanged state_distributions JSON field in the performance snapshot."
+  },
+  {
+    "identifier": "audit_events",
+    "doc": "docs/design/activity-job/2_design.md",
+    "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
+  },
+  {
+    "identifier": "audit_events",
+    "doc": "docs/design/auditability/specs/actor-identity.md",
+    "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
+  },
+  {
+    "identifier": "audit_events",
+    "doc": "docs/design/auditability/specs/self-reported-actor.md",
+    "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
+  },
+  {
+    "identifier": "audit_events",
+    "doc": "docs/design/owner-failover/2_design.md",
+    "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
+  },
+  {
+    "identifier": "audit_events",
+    "doc": "docs/runbooks/audit-trail.md",
+    "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
+  },
+  {
+    "identifier": "audit_events",
+    "doc": "docs/runbooks/state-and-backup.md",
+    "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
   }
 ]

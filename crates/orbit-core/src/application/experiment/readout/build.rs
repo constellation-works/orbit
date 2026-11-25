@@ -660,13 +660,16 @@ impl OrbitRuntime {
             min_delivered_rate,
             now,
         )?;
-        let facts = self.sqlite_store()?.list_invocation_accounting_facts(
-            &orbit_store::contracts::InvocationAccountingQuery {
+        let facts = self
+            .stores()
+            .host_store()
+            .read()?
+            .invocation()
+            .list_accounting_facts(&orbit_store::contracts::InvocationAccountingQuery {
                 workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
                 since: Some(record.experiment.created_at),
                 until: now,
-            },
-        )?;
+            })?;
         if let Some(overhead) = &dreaming {
             for arm in readout
                 .arms
@@ -711,7 +714,7 @@ impl OrbitRuntime {
                 .map(|task| (task.task_id.as_str(), task.assigned_at))
                 .collect::<BTreeMap<_, _>>();
             arm.effort_breakdown =
-                orbit_store::contracts::agent_effort_usage(facts.iter().filter(|fact| {
+                orbit_runtime::engine::agent_effort_usage(facts.iter().filter(|fact| {
                     fact.task_ids.iter().any(|id| {
                         assigned
                             .get(id.as_str())

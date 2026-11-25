@@ -379,7 +379,7 @@ fn dispatch_envelope(host: &OrbitRuntime, run_id: &str, task_id: &str, stdin_pat
     let audit_dir = tempfile::tempdir().unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_memory",
         run_id,
         "codex:test".to_string(),

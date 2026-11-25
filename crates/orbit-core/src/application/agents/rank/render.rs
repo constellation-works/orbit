@@ -186,7 +186,7 @@ pub(super) fn effort_split(
             },
         )
         .collect();
-    json!(orbit_store::contracts::agent_effort_usage(
+    json!(orbit_runtime::engine::agent_effort_usage(
         invocations.iter().map(std::convert::AsRef::as_ref)
     ))
 }

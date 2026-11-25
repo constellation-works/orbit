@@ -570,7 +570,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
     let run_id = format!("run-{}", case.name);
     let audit = V2AuditWriter::with_disk_sinks(
         &dir.join("audit"),
-        fixture.runtime.v2_audit_store().unwrap(),
+        fixture.runtime.stores().host_store().clone(),
         fixture.runtime.workspace_id().unwrap(),
         &run_id,
         "fixture",

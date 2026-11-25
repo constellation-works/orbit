@@ -464,7 +464,9 @@ fn record_checkout_rebind_audit(
     decision: &RebindDecision,
 ) -> Result<(), OrbitError> {
     if Store::open_read_only(&global_root.join("orbit.db"))?
-        .audit_execution_is_recorded(&decision.execution_id)?
+        .read()?
+        .audit_event()
+        .execution_exists(&decision.execution_id)?
     {
         return Ok(());
     }

@@ -248,17 +248,19 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                                     .runtime
                                     .sqlite_store()
                                     .unwrap()
-                                    .begin_agent_execution(
-                                        fixture.runtime.stores().jobs().workspace_id(),
-                                        &run,
-                                        activity,
-                                        "fixture",
-                                        Some(model),
-                                        &orbit_types::telemetry::AgentExecutionIdentity {
-                                            crew: Some(crew.into()),
-                                            reasoning_effort: Some(effort),
-                                        },
-                                    )
+                                    .write(|tx| {
+                                        tx.invocation().insert_agent_execution(
+                                            fixture.runtime.stores().jobs().workspace_id(),
+                                            &run,
+                                            activity,
+                                            "fixture",
+                                            Some(model),
+                                            &orbit_types::telemetry::AgentExecutionIdentity {
+                                                crew: Some(crew.into()),
+                                                reasoning_effort: Some(effort),
+                                            },
+                                        )
+                                    })
                                     .unwrap(),
                             ),
                             job_run_id: run.clone(),

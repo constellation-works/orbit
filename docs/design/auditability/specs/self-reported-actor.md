@@ -112,7 +112,7 @@ producers have no claim to supply and should not have to name the field.
 
 ## Aggregates
 
-`get_audit_tool_call_counts_by_attribution` covers every tool-call row in the window and
+`AuditEventRepository::tool_call_counts_by_attribution` covers every tool-call row in the window and
 classifies each into exactly one of three disjoint buckets:
 
 | attribution | condition | grouped on |
@@ -131,7 +131,7 @@ could authenticate. Those rows are not duplicates to merge. Merging them is exac
 unverifiable count gets published as a measured one.
 
 A NULL `actor_kind` (a row the v16 backfill could not reach) reads as unattributed, matching
-`get_audit_event_aggregates_by_actor`, so it falls through to self-reported or anonymous
+`AuditEventRepository::aggregates_by_actor`, so it falls through to self-reported or anonymous
 rather than counting as authenticated.
 
 ## Surfaces

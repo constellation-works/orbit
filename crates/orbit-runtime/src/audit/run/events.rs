@@ -143,7 +143,12 @@ impl RuntimeKernel {
                 };
                 // One read snapshot: a row committed after the count cannot
                 // move this page relative to the total that describes it.
-                let page = self.v2_audit_store()?.list_v2_audit_event_tail(&filter)?;
+                let page = self
+                    .stores()
+                    .host_store()
+                    .read()?
+                    .v2_audit()
+                    .tail(&filter)?;
                 Ok(RunEventsPageResult::Tail {
                     events: page
                         .events
@@ -214,16 +219,19 @@ impl RuntimeKernel {
         let V2AuditKindForwardPayloads {
             payloads,
             past_scan_limit,
-        } = self.v2_audit_store()?.list_v2_audit_kind_forward_payloads(
-            &V2AuditKindForwardQuery {
+        } = self
+            .stores()
+            .host_store()
+            .read()?
+            .v2_audit()
+            .kind_forward_payloads(&V2AuditKindForwardQuery {
                 workspace_id,
                 run_id,
                 source: RUN_EVENTS_SOURCE,
                 canonical_event_type: event_type_for_body_kind(kind),
                 known_event_types: &known_event_types,
                 scan_limit: RUN_EVENTS_MAX_SCAN_ROWS,
-            },
-        )?;
+            })?;
         let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
         let mut matched: usize = 0;
         for payload in payloads {

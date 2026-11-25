@@ -10,11 +10,9 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_common::storage::sqlite::sqlite_store_error;
 
-use super::super::v2_audit_store::{clear_tail_snapshot_rendezvous, set_tail_snapshot_rendezvous};
+use super::super::rendezvous::{clear_tail_snapshot_rendezvous, set_tail_snapshot_rendezvous};
 use crate::Store;
-use crate::contracts::{
-    V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventTailPage, V2AuditStoreBackend,
-};
+use crate::contracts::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventTailPage};
 
 const WORKSPACE: &str = "ws-tail";
 
@@ -145,18 +143,20 @@ fn seed(store: &Store, run_id: &str, base: DateTime<Utc>) {
 
 fn insert(store: &Store, run_id: &str, event_id: &str, ts: DateTime<Utc>) {
     store
-        .insert_v2_audit_event(&V2AuditEventInsertParams {
-            workspace_id: WORKSPACE.to_string(),
-            event_id: event_id.to_string(),
-            source: "v2_envelope".to_string(),
-            schema_version: 1,
-            event_type: "activity_started".to_string(),
-            ts,
-            run_id: run_id.to_string(),
-            agent_identity: "fixture".to_string(),
-            parent_event_id: None,
-            workspace_path: None,
-            payload_json: "{}".to_string(),
+        .write(|tx| {
+            tx.v2_audit().insert(&V2AuditEventInsertParams {
+                workspace_id: WORKSPACE.to_string(),
+                event_id: event_id.to_string(),
+                source: "v2_envelope".to_string(),
+                schema_version: 1,
+                event_type: "activity_started".to_string(),
+                ts,
+                run_id: run_id.to_string(),
+                agent_identity: "fixture".to_string(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: "{}".to_string(),
+            })
         })
         .expect("insert audit event");
 }
@@ -173,19 +173,31 @@ fn filter(run_id: &str, limit: usize, offset: usize) -> V2AuditEventFilter {
 }
 
 fn tail(store: &Store, run_id: &str, limit: usize, offset: usize) -> V2AuditEventTailPage {
-    V2AuditStoreBackend::list_v2_audit_event_tail(store, &filter(run_id, limit, offset))
+    store
+        .read()
+        .expect("read snapshot")
+        .v2_audit()
+        .tail(&filter(run_id, limit, offset))
         .expect("tail page")
 }
 
 fn count(store: &Store, run_id: &str) -> i64 {
-    V2AuditStoreBackend::count_v2_audit_events(store, &filter(run_id, 100, 0)).expect("count")
+    store
+        .read()
+        .expect("read snapshot")
+        .v2_audit()
+        .count(&filter(run_id, 100, 0))
+        .expect("count")
 }
 
 fn list_oldest(store: &Store, run_id: &str) -> Vec<String> {
     let mut query = filter(run_id, 300, 0);
     query.oldest_first = true;
     store
-        .list_v2_audit_events(&query)
+        .read()
+        .expect("read snapshot")
+        .v2_audit()
+        .list(&query)
         .expect("list")
         .into_iter()
         .map(|row| row.event_id)

@@ -89,7 +89,7 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 | Concern | Where it lives | Delivery evidence |
 |---------|----------------|-----------------|
 | Audit design ownership | `docs/design/auditability/` | Landed: [T20260426-0605] |
-| Command audit records and queries | `crates/orbit-types/src/telemetry/audit_event.rs`, `crates/orbit-cli/src/command/audit/`, `crates/orbit-store/src/driver/sqlite/audit_event_store/` | Landed: [T20260426-0605] |
+| Command audit records and queries | `crates/orbit-types/src/telemetry/audit_event.rs`, `crates/orbit-cli/src/command/audit/`, `crates/orbit-store/src/repository/audit/event/` | Landed: [T20260426-0605] |
 | MCP session context, server composition, and direct Core tool audit | `crates/orbit-mcp/src/remote/identity.rs`, `crates/orbit-mcp/src/adapter/dispatch.rs`, `crates/orbit-cli/src/command/mcp/server/`, `crates/orbit-core/src/adapter/command/dispatch/` | Landed: [ORB-10228], [ORB-10319] |
 | V2 activity/job envelopes and SQLite sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | Landed: [T20260419-0002], [T20260426-0519] |
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-runtime/src/audit/run/trail.rs` | Landed: [T20260426-0705], [T20260426-0709] |
@@ -97,7 +97,7 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 | Redaction utilities | [crates/orbit-common/src/security/redaction/](../../../crates/orbit-common/src/security/redaction/) | Landed: [T20260426-0605], [T20260426-2349] |
 | Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers, `crates/orbit-store/src/workflow/friction/submission.rs` | Landed: [T20260426-2343], [T20260427-0023] |
 | Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | Landed: [T20260510-13], [ORB-00062] |
-| V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | Landed: [T20260426-0526] |
+| V2 invocation metrics persistence | `crates/orbit-store/src/repository/invocation/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | Landed: [T20260426-0526] |
 | Task attribution fields | `crates/orbit-types/src/task/model/task.rs`, task update/runtime host paths | Landed: [T20260426-0605], [T20260427-47] |
 | Workflow git commit identity attribution | `crates/orbit-engine/src/executor/automation/vcs/commit/` | Landed: [T20260508-22], [T20260509-12] |
 | Friction live-tracing projection | `crates/orbit-store/src/workflow/friction/submission.rs`, `crates/orbit-store/src/repository/task/coordination/journal_commit.rs` | Landed: [ORB-21797] |

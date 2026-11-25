@@ -249,7 +249,7 @@ impl BrokerHost {
     fn run(&self, run_id: &str, timeout: Duration) -> Result<DispatchOutcome, DispatchError> {
         let audit = V2AuditWriter::with_disk_sinks(
             &self.audit_root.join(run_id),
-            Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+            orbit_store::Store::open_in_memory().expect("audit store"),
             "ws_test",
             run_id,
             "codex:test",

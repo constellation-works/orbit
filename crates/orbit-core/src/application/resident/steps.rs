@@ -833,15 +833,13 @@ impl OrbitRuntime {
         {
             return format_checkpoint_refusal_error(refusal);
         }
-        if let Ok(events) = self
-            .stores()
-            .audit_events()
-            .list_audit_events(&AuditEventFilter {
+        if let Ok(events) = self.stores().host_store().read().and_then(|snapshot| {
+            snapshot.audit_event().list(&AuditEventFilter {
                 job_run_id: Some(cycle.run_id.clone()),
                 limit: 50,
                 ..Default::default()
             })
-        {
+        }) {
             for event in events {
                 if !matches!(
                     event.status,

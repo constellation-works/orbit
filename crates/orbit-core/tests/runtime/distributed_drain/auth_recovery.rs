@@ -69,7 +69,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
     let audit_dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_test",
         leaf,
         "claude:fixture",

@@ -119,7 +119,7 @@ fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
     };
     let audit = V2AuditWriter::with_disk_sinks(
         &root.join("audit"),
-        Arc::new(Store::open_in_memory().unwrap()),
+        Store::open_in_memory().unwrap(),
         "ws-sandbox",
         "step-identity",
         "codex".to_string(),
@@ -323,7 +323,7 @@ fn missing_macos_wrapper_preserves_provider_confinement_and_honest_audit() {
         };
         let audit = V2AuditWriter::with_disk_sinks(
             &temp.path().join("audit"),
-            Arc::new(Store::open_in_memory().unwrap()),
+            Store::open_in_memory().unwrap(),
             "ws-sandbox",
             "missing-wrapper",
             "codex".to_string(),
@@ -717,7 +717,7 @@ fn dispatch_registration_failure_ends_the_provider_group() {
         .unwrap();
         let audit = V2AuditWriter::with_disk_sinks(
             &root.join("audit"),
-            Arc::new(Store::open_in_memory().unwrap()),
+            Store::open_in_memory().unwrap(),
             "ws-registration",
             "registration-refusal",
             "codex".to_string(),

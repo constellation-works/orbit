@@ -301,7 +301,6 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
 
     // Pin actual graph execution, including the short active-pilot branch
     // and the final authority join; checking the job text would prove neither.
-    let audit = workspace.runtime.v2_audit_store().unwrap();
     let filter = orbit_store::contracts::V2AuditEventFilter {
         workspace_id: workspace.runtime.workspace_id().unwrap(),
         run_id: Some(drain.clone()),
@@ -309,7 +308,15 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
         oldest_first: true,
         ..Default::default()
     };
-    let rows = audit.list_v2_audit_events(&filter).unwrap();
+    let rows = workspace
+        .runtime
+        .stores()
+        .host_store()
+        .read()
+        .unwrap()
+        .v2_audit()
+        .list(&filter)
+        .unwrap();
     let events: Vec<Value> = rows
         .iter()
         .map(|row| serde_json::from_str(&row.payload_json).unwrap())

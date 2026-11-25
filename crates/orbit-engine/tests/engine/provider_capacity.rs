@@ -134,7 +134,7 @@ pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
     fs::create_dir_all(&audit).unwrap();
     V2AuditWriter::with_disk_sinks(
         &audit,
-        Arc::new(Store::open_in_memory().unwrap()),
+        Store::open_in_memory().unwrap(),
         "ws_capacity",
         run_id,
         "capacity".to_string(),

@@ -204,15 +204,19 @@ fn batch_invocations_by_run(
 ) -> Option<HashMap<String, Vec<PilotInvocation>>> {
     let workspace_id = runtime.stores().jobs().workspace_id().to_string();
     let facts = runtime
-        .sqlite_store()
-        .and_then(|store| {
-            store.list_invocation_accounting_facts(&InvocationAccountingQuery {
-                workspace_id: Some(workspace_id),
-                since: None,
-                // The detailed read is unbounded; a day of slack covers a
-                // clock that recorded an invocation slightly ahead.
-                until: Utc::now() + chrono::Duration::days(1),
-            })
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .invocation()
+                .list_accounting_facts(&InvocationAccountingQuery {
+                    workspace_id: Some(workspace_id),
+                    since: None,
+                    // The detailed read is unbounded; a day of slack covers a
+                    // clock that recorded an invocation slightly ahead.
+                    until: Utc::now() + chrono::Duration::days(1),
+                })
         })
         .ok()?;
     let mut by_run: HashMap<String, Vec<PilotInvocation>> = HashMap::new();

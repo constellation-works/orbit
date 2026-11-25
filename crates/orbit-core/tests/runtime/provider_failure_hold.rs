@@ -708,7 +708,7 @@ fn a_content_filter_refusal_moves_the_next_admission_to_another_provider() {
     let host = Pipeline::new(&fx, codex.path.clone());
     let audit = V2AuditWriter::with_disk_sinks(
         &fx.repo.join("audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_fixture",
         &run,
         "fixture",
