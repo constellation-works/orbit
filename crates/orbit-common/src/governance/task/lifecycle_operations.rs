@@ -293,7 +293,7 @@ pub(super) const RESUME_DELIVERY: TaskOperation = TaskOperation {
     verb: TaskVerb::ResumeDelivery,
     cli_path: &[],
     tool_name: "orbit.task.resume_delivery",
-    tool_description: "Start a review-only recovery leaf for a blocked task's preserved delivery via a cycle with the `recover` right. Limits and rules: the orbit skill's tool-surface-registry.md reference, section `Artifact and recovery tools`.",
+    tool_description: "Start a recovery leaf for a blocked task's preserved delivery via a cycle with the `recover` right; the leaf may edit the candidate, targets review, and validates per normal gates. Rules: the orbit skill's tool-surface-registry.md reference, section `Artifact and recovery tools`.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

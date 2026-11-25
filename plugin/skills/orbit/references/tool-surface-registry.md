@@ -297,10 +297,14 @@ require operator capability; agent sessions are refused. `show`, `list` and
   footprint, scope changed beyond a bounded edit, or the prior assessment is
   too old or was a re-check; `full` forces a full assessment.
 - `orbit.task.recover` action `resume_delivery` (`orbit.task.resume_delivery`)
-  starts a review-only recovery leaf for a blocked task's preserved delivery
+  starts a recovery leaf for a blocked task's preserved delivery
   through an authenticated cycle with the `recover` right, continuing on the
-  current base with fresh validation and review (limit: one attempt per cycle,
-  one per task per 24 hours; landing requires separate `merge` authority).
+  current base; the leaf may edit the preserved candidate and submits it to
+  the normal PR pipeline with review as the completion target. Fresh
+  validation and review run where their gates apply, subject to normal
+  light-delivery exemptions (limit: one attempt per cycle, one per task per
+  24 hours; landing requires separate `merge` authority; handoff remains at
+  review).
 - `orbit.task.recover` action `retry_handoff` (`orbit.task.retry_handoff`)
   retries a stopped or uncertain authorized handoff on its explicit owner
   workspace (operator only; managed runs refused). It compares the exact
