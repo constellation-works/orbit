@@ -137,7 +137,10 @@ impl TaskCommitBoundary {
                 || !matches!(
                     report["decision"].as_str(),
                     Some(
-                        "verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected"
+                        "verified_no_diff"
+                            | "verified_already_landed"
+                            | "verified_already_resolved"
+                            | "skipped_no_diff_expected"
                     )
                 )
             {
