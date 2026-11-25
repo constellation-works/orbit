@@ -107,12 +107,28 @@ fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
 fn task_show_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
     let workspace = TestWorkspace::new("task-show-prose", TaskSeed::new(""));
     let mut seed = workspace.task_seed("Wrapped task show");
-    seed.description = "The description is long enough to wrap on a sixty-column terminal.\nA second paragraph keeps its own explicit line break.".into();
+    seed.description = "A scratch task for review with a long description that should wrap nicely at narrow widths and so every reader can see the complete sentence and its continuation across a range of terminal widths without losing the last words.\nA second paragraph keeps its own explicit line break.".into();
     seed.acceptance_criteria = vec![
         "The criterion is one long sentence naming several observable outcomes, so it must wrap onto continuation lines at every width the command supports.".into(),
     ];
     let seeded = workspace.seed_tasks(&[seed]).remove(0);
     let id = seeded["id"].as_str().expect("task id").to_owned();
+    let plan = "Step one is to do something long enough that the plan line wraps past the eighty column width too yes and continues across the widest terminal with additional words that make the wrapping visible to readers.";
+    workspace.run(&["task", "update", &id, "--plan", plan], "set plan");
+    workspace.run(
+        &["task", "update", &id, "--status", "backlog"],
+        "queue task",
+    );
+    let readiness = ["run", "readiness", id.as_str()];
+    let readiness_pipe = workspace.run(&readiness, "piped readiness");
+    let readiness_plain = workspace.run(
+        &["run", "readiness", &id, "--format", "plain"],
+        "plain readiness",
+    );
+    assert_eq!(readiness_pipe.stdout, readiness_plain.stdout);
+    let readiness_json = workspace.run(&["run", "readiness", &id, "--json"], "JSON readiness");
+    let expected_readiness_json: serde_json::Value =
+        serde_json::from_slice(&readiness_json.stdout).unwrap();
     let show = ["task", "show", id.as_str()];
     let plain = ["task", "show", id.as_str(), "--format", "plain"];
     let json = ["task", "show", id.as_str(), "--json"];
@@ -142,6 +158,80 @@ fn task_show_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
             stdout.split_whitespace().collect::<Vec<_>>(),
             piped_words,
             "task show at {width} columns must keep every word, in order"
+        );
+
+        for label in ["Description: ", "Plan: "] {
+            let lines: Vec<_> = stdout.lines().collect();
+            let index = lines
+                .iter()
+                .position(|line| line.starts_with(label))
+                .unwrap();
+            let continuation = lines[index + 1];
+            assert!(
+                continuation.starts_with(&" ".repeat(label.len())),
+                "{label} continuation at {width}: {continuation:?}"
+            );
+            let next_word = continuation.split_whitespace().next().unwrap();
+            assert!(
+                lines[index].chars().count() + 1 + next_word.chars().count() > limit,
+                "{label} wrapped early at {width}: {:?} / {continuation:?}",
+                lines[index]
+            );
+        }
+        let lines: Vec<_> = stdout.lines().collect();
+        for marker in ["  - missing_context_files", "  - The criterion"] {
+            let index = lines
+                .iter()
+                .position(|line| line.starts_with(marker))
+                .unwrap();
+            assert!(
+                lines[index + 1].starts_with("    "),
+                "bullet continuation at {width}: {:?}",
+                lines[index + 1]
+            );
+        }
+        let ready = run_cli_on_terminal_at_width(&workspace, &readiness, width);
+        let ready_raw = String::from_utf8(ready.stdout).unwrap();
+        let ready_text = ansi.replace_all(&ready_raw, "");
+        let ready_lines: Vec<_> = ready_text.lines().collect();
+        let row = ready_lines
+            .iter()
+            .position(|line| line.starts_with(&format!("{id}: ")))
+            .expect("readiness row");
+        let pipe_text = String::from_utf8_lossy(&readiness_pipe.stdout);
+        let pipe_row = pipe_text
+            .lines()
+            .find(|line| line.starts_with(&format!("{id}: ")))
+            .unwrap();
+        if pipe_row.chars().count() > limit {
+            assert!(
+                ready_lines[row + 1].starts_with(&" ".repeat(id.len() + 2)),
+                "readiness continuation: {ready_text}"
+            );
+        }
+        if limit == 60 {
+            assert!(
+                pipe_row.chars().count() > limit,
+                "fixture must wrap: {pipe_row}"
+            );
+        }
+        let ready_plain = run_cli_on_terminal_at_width(
+            &workspace,
+            &["run", "readiness", &id, "--format", "plain"],
+            width,
+        );
+        assert_eq!(
+            String::from_utf8(ready_plain.stdout)
+                .unwrap()
+                .replace("\r\n", "\n")
+                .as_bytes(),
+            readiness_pipe.stdout
+        );
+        let ready_json =
+            run_cli_on_terminal_at_width(&workspace, &["run", "readiness", &id, "--json"], width);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&ready_json.stdout).unwrap(),
+            expected_readiness_json
         );
 
         let plain_terminal = run_cli_on_terminal_at_width(&workspace, &plain, width);
@@ -317,7 +407,11 @@ fn failed_run_header_wraps_without_changing_plain_or_json_output() {
             "root cause exceeds {width} columns:\n{}",
             cause_lines.join("\n")
         );
-        let cause = cause_lines.join(" ");
+        let cause = cause_lines
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             cause.contains(long_message),
             "the wrapped lines remain associated with their label:\n{stdout}"
