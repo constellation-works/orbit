@@ -40,7 +40,7 @@ impl CodebaseFactsStoreBackend for Store {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<CodebaseTaskFactsRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         if !table_exists(&conn)? {
             return Ok(Vec::new());
         }
@@ -122,7 +122,7 @@ impl CodebaseFactsStoreBackend for Store {
 
 impl AgentFactsStoreBackend for Store {
     fn agent_task_facts(&self, workspace_id: &str) -> Result<Vec<AgentTaskFactsRow>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         if !table_exists_named(&conn, AGENT_TABLE)? {
             return Ok(Vec::new());
         }

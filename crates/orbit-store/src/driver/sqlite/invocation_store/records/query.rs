@@ -30,7 +30,7 @@ impl Store {
         }
         let ids =
             serde_json::to_string(run_ids).map_err(|error| OrbitError::Store(error.to_string()))?;
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT job_run_id, model FROM invocations
@@ -55,7 +55,7 @@ impl Store {
         &self,
         filter: &InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let (sql, params) = build_invocation_list_query(filter);
         let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
 
@@ -96,7 +96,7 @@ impl Store {
         if provider_names.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut filters = InvocationListQuery::default();
         filters.push_filter("i.ts >= ?", (since - Duration::seconds(1)).to_rfc3339());
         let names = provider_names
@@ -151,7 +151,7 @@ impl Store {
         &self,
         query: &InvocationAccountingQuery,
     ) -> Result<Vec<InvocationAccountingFact>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut filters = InvocationListQuery::default();
         if let Some(workspace_id) = &query.workspace_id {
             filters.push_filter("i.workspace_id = ?", workspace_id.clone());

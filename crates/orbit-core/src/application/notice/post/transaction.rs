@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{NoticeEventRow, NoticePostPlan, NoticePostSnapshot, NoticeRow};
+use orbit_store::contracts::{NoticeEventRow, NoticeRow};
 use orbit_types::record::{
     AuthorClass, EffectiveStatus, Notice, NoticeReports, NoticeScope, NoticeWorkspace, PostOutcome,
 };
@@ -8,6 +8,38 @@ use orbit_types::record::{
 use super::super::authority::NoticePoster;
 use super::super::{LinkedDone, limits, notice_row, parse_notice_row, refuse};
 use super::request::{self, ValidatedPost};
+
+/// What a post's decision reads inside the posting transaction.
+#[derive(Debug, Clone, Default)]
+pub(super) struct NoticePostSnapshot {
+    /// Every stored-open notice of the home workspace, and every stored-open
+    /// `global` notice in this store, whatever its home.
+    pub(super) unclosed: Vec<NoticeRow>,
+    /// Post events since the poster's rate-limit window start.
+    pub(super) poster_events: Vec<NoticeEventRow>,
+    /// The latest event of any poster for each stored-open notice in the
+    /// home workspace, ordered by insertion sequence rather than timestamp.
+    pub(super) latest_events: Vec<NoticeEventRow>,
+}
+
+/// The write a post's decision chose.
+#[derive(Debug, Clone)]
+pub(super) enum NoticePostPlan {
+    /// Return a snapshot row without writing a notice, event or purge.
+    Unchanged { row: NoticeRow },
+    /// A new notice.
+    Insert {
+        row: NoticeRow,
+        event: NoticeEventRow,
+    },
+    /// Replace an open notice computed from the snapshot at
+    /// `expected_revision`.
+    Update {
+        row: NoticeRow,
+        expected_revision: u32,
+        event: NoticeEventRow,
+    },
+}
 
 /// Whether a stored-open row is in force at `now`.
 fn effective_open(row: &NoticeRow, now: DateTime<Utc>, linked_done: &LinkedDone) -> bool {

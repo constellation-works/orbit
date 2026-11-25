@@ -38,7 +38,7 @@ impl Store {
     /// rest of the audit store, so unrelated audit traffic leaves them
     /// unchanged.
     pub fn routine_state_fingerprint(&self) -> Result<(String, String), OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         conn.query_row(
             "SELECT
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(id), 0) FROM routine_fires),

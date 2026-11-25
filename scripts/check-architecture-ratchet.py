@@ -40,7 +40,7 @@ SURFACE_CRATES = ("orbit-cli", "orbit-web", "orbit-cmd")
 STORE_CRATE = "orbit-store"
 # The one file that takes the writer connection by definition: the
 # transaction protocol itself. Every other driver file is counted.
-WRITER_DEFINITION = "crates/orbit-store/src/driver/sqlite/connection.rs"
+WRITER_DEFINITION = "crates/orbit-store/src/driver/sqlite/host/connection.rs"
 STORE_DRIVER = "crates/orbit-store/src/driver/"
 RUNTIME_SRC = "crates/orbit-runtime/src"
 RUNTIME_LAYERS = ("base", "stored", "host", "run")

@@ -28,7 +28,7 @@ impl Store {
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let sql = "WITH decisions AS (
             SELECT COALESCE(tool_name, target_id, 'unknown') AS operation,
                    CASE
@@ -88,7 +88,7 @@ impl Store {
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<AuditAttributionAggregate>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let authenticated = "actor_kind IS NOT NULL AND actor_kind != 'unattributed'";
         let attribution = format!(
@@ -162,7 +162,7 @@ impl Store {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditToolAggregate>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let sql = "SELECT COALESCE(tool_name, 'unknown') AS tool, \
                    COUNT(*), \
@@ -211,7 +211,7 @@ impl Store {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditToolModelAggregate>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let sql = "SELECT COALESCE(NULLIF(tool_name, ''), 'unknown') AS tool, \
                    COALESCE(NULLIF(session_model, ''), NULLIF(actor_model, ''), NULLIF(actor_family, ''), 'unknown') AS model, \
                    COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0), \
@@ -253,7 +253,7 @@ impl Store {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditRoleAggregate>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         // `+role` keeps the planner off `idx_audit_events_role`: walking it to
         // skip the GROUP BY sort visits every row of the table, where the
@@ -300,7 +300,7 @@ impl Store {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditActorAggregate>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         // COALESCE guards a row the backfill could not reach (a database
         // opened read-only mid-upgrade); it reports as unattributed rather

@@ -30,7 +30,7 @@ impl Store {
         &self,
         filter: &AuditEventFilter,
     ) -> Result<Vec<AuditEvent>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let (mut conditions, mut param_values) =
             since_tool_filter(filter.since.as_ref(), filter.tool_name.as_deref());
@@ -137,7 +137,7 @@ impl Store {
     }
 
     pub fn get_audit_event(&self, id: i64) -> Result<Option<AuditEvent>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let mut stmt = conn
             .prepare(&format!(
@@ -185,7 +185,7 @@ impl Store {
         }
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|value| value.as_ref()).collect();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), audit_event_from_row)

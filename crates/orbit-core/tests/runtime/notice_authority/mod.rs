@@ -711,52 +711,43 @@ fn commit_open_corroboration(
     dedupe_key: &str,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Value {
-    use orbit_store::contracts::{
-        NoticeEventRow, NoticePostPlan, NoticePostQuery, NoticeStoreBackend,
-    };
+    use orbit_store::contracts::NoticeEventRow;
 
     let store = runtime.sqlite_store().unwrap();
     let workspace_id = runtime.workspace_id().unwrap();
     let written = store
-        .post_notice(
-            &NoticePostQuery {
-                workspace_id: &workspace_id,
+        .write(|tx| {
+            let notices = tx.notice();
+            let unclosed = notices.list_unclosed(&workspace_id)?;
+            let matched = unclosed
+                .iter()
+                .find(|row| row.dedupe_key == dedupe_key)
+                .expect("the notice is still stored open");
+            let mut document: Value =
+                serde_json::from_str(&matched.record_json).expect("notice document");
+            let count = document["reports"]["count"].as_u64().expect("report count") + 1;
+            document["reports"]["count"] = json!(count);
+            document["reports"]["last_at"] = json!(at);
+            let mut row = matched.clone();
+            row.record_json = serde_json::to_string(&document).expect("notice document");
+            let expected_revision = matched.revision;
+            let event = NoticeEventRow {
+                workspace_id: row.workspace_id.clone(),
+                notice_id: row.id.clone(),
+                at,
+                action: "corroborated".into(),
+                poster_class: "orchestrator".into(),
+                poster_crew: Some("sol".into()),
                 poster_task_id: None,
-                poster_crew: None,
-                events_since: at,
-                purge_before: None,
-            },
-            &|snapshot| {
-                let matched = snapshot
-                    .unclosed
-                    .iter()
-                    .find(|row| row.dedupe_key == dedupe_key)
-                    .expect("the notice is still stored open");
-                let mut document: Value =
-                    serde_json::from_str(&matched.record_json).expect("notice document");
-                let count = document["reports"]["count"].as_u64().expect("report count") + 1;
-                document["reports"]["count"] = json!(count);
-                document["reports"]["last_at"] = json!(at);
-                let mut row = matched.clone();
-                row.record_json = serde_json::to_string(&document).expect("notice document");
-                let expected_revision = matched.revision;
-                let event = NoticeEventRow {
-                    workspace_id: row.workspace_id.clone(),
-                    notice_id: row.id.clone(),
-                    at,
-                    action: "corroborated".into(),
-                    poster_class: "orchestrator".into(),
-                    poster_crew: Some("sol".into()),
-                    poster_task_id: None,
-                    detail_json: json!({ "revision": expected_revision }).to_string(),
-                };
-                Ok(NoticePostPlan::Update {
-                    row,
-                    expected_revision,
-                    event,
-                })
-            },
-        )
+                detail_json: json!({ "revision": expected_revision }).to_string(),
+            };
+            assert!(
+                notices.replace_open(&row, expected_revision)?,
+                "corroboration updates open notice"
+            );
+            notices.put_event(&event)?;
+            Ok(row)
+        })
         .expect("corroboration commits");
     let document: Value = serde_json::from_str(&written.record_json).expect("written notice");
     json!({

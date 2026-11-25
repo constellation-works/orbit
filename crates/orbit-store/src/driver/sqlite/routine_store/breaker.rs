@@ -16,7 +16,7 @@ const BREAKER_COLUMNS: &str = "routine_name, source_workspace, state, error_clas
 impl Store {
     /// Every routine breaker row on this host, keyed by routine name.
     pub fn routine_breakers(&self) -> Result<BTreeMap<String, RoutineBreakerRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!("SELECT {BREAKER_COLUMNS} FROM routine_breakers"))
             .map_err(sqlite_store_error)?;
@@ -145,7 +145,7 @@ impl Store {
         routine_name: &str,
         limit: usize,
     ) -> Result<Vec<RoutineBreakerEvent>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT routine_name, event, actor, detail, run_id, at

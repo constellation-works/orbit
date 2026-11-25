@@ -15,7 +15,7 @@ impl Store {
         since: Option<&DateTime<Utc>>,
         tool: Option<&str>,
     ) -> Result<(i64, i64, i64, i64, f64, i64), OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let (conditions, param_values) = since_tool_filter(since, tool);
         let where_clause = where_clause(&conditions);
@@ -52,7 +52,7 @@ impl Store {
     /// Callers that only need the event denominator use this instead of
     /// loading every duration in the window.
     pub fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let (conditions, param_values) = since_tool_filter(since, None);
         let where_clause = where_clause(&conditions);
         let sql = format!("SELECT COUNT(*) FROM audit_events {where_clause}");
@@ -66,7 +66,7 @@ impl Store {
         since: Option<&DateTime<Utc>>,
         tool: Option<&str>,
     ) -> Result<Vec<i64>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let (conditions, param_values) = since_tool_filter(since, tool);
         let where_clause = where_clause(&conditions);
@@ -94,7 +94,7 @@ impl Store {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<(String, i64)>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let sql = "SELECT strftime('%Y-%m-%dT%H:00:00Z', timestamp) AS bucket, COUNT(*) \
                    FROM audit_events WHERE timestamp >= ?1 \
