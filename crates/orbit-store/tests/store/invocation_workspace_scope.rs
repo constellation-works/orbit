@@ -16,20 +16,22 @@ fn colliding_runs() -> (Store, String) {
 
 fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_id: &str) {
     store
-        .insert_invocation_trace_record(
-            workspace_id,
-            &InvocationInsertParams {
-                agent_execution_id: None,
-                job_run_id: run_id.to_string(),
-                account: None,
-                activity_id: activity_id.to_string(),
-                agent: "claude".to_string(),
-                provider: None,
-                model: None,
-                task_ids: Vec::new(),
-                trace: InvocationTrace::default(),
-            },
-        )
+        .write(|tx| {
+            tx.invocation().insert(
+                workspace_id,
+                &InvocationInsertParams {
+                    agent_execution_id: None,
+                    job_run_id: run_id.to_string(),
+                    account: None,
+                    activity_id: activity_id.to_string(),
+                    agent: "claude".to_string(),
+                    provider: None,
+                    model: None,
+                    task_ids: Vec::new(),
+                    trace: InvocationTrace::default(),
+                },
+            )
+        })
         .expect("record invocation");
 }
 
@@ -45,7 +47,10 @@ fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
 
     let run_listing = |workspace: &str| {
         store
-            .list_invocation_records(&InvocationQuery {
+            .read()
+            .unwrap()
+            .invocation()
+            .list(&InvocationQuery {
                 workspace_id: Some(workspace.to_string()),
                 job_run_id: Some(run_id.clone()),
                 ..InvocationQuery::default()
@@ -60,20 +65,29 @@ fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
 
     assert!(
         store
-            .read().unwrap().reliability().count_invocations_by_activity("ws_a", since, until)
+            .read()
+            .unwrap()
+            .reliability()
+            .count_invocations_by_activity("ws_a", since, until)
             .expect("count ws_a")
             .is_empty(),
         "ws_a's reliability counts included ws_b's invocation"
     );
     let b_counts = store
-        .read().unwrap().reliability().count_invocations_by_activity("ws_b", since, until)
+        .read()
+        .unwrap()
+        .reliability()
+        .count_invocations_by_activity("ws_b", since, until)
         .expect("count ws_b");
     assert_eq!(b_counts.len(), 1);
     assert_eq!(b_counts[0].invocation_count, 1);
 
     let coverage = |workspace: &str| {
         store
-            .read().unwrap().reliability().count_invocation_job_runs(workspace, since, until, &["implement_one".to_string()])
+            .read()
+            .unwrap()
+            .reliability()
+            .count_invocation_job_runs(workspace, since, until, &["implement_one".to_string()])
             .expect("count run coverage")
     };
     assert_eq!(coverage("ws_a").total_job_runs, 0);
@@ -215,25 +229,27 @@ fn stored_sol_costs_preserve_history_and_reprice_from_the_august_21_cut() {
     for (index, (at, usage, requests, _)) in cases.iter().enumerate() {
         let activity = format!("sol-{index}");
         store
-            .insert_invocation_trace_record(
-                "ws_sol",
-                &InvocationInsertParams {
-                    agent_execution_id: None,
-                    job_run_id: "pricing-replay".to_string(),
-                    account: None,
-                    activity_id: activity.clone(),
-                    agent: "codex".to_string(),
-                    provider: Some("openai".to_string()),
-                    model: Some("gpt-5.6-sol".to_string()),
-                    task_ids: Vec::new(),
-                    trace: InvocationTrace {
-                        usage: usage.clone(),
-                        provider_cost_usd: Some(42.125),
-                        long_prompt_requests: requests.clone(),
-                        ..Default::default()
+            .write(|tx| {
+                tx.invocation().insert(
+                    "ws_sol",
+                    &InvocationInsertParams {
+                        agent_execution_id: None,
+                        job_run_id: "pricing-replay".to_string(),
+                        account: None,
+                        activity_id: activity.clone(),
+                        agent: "codex".to_string(),
+                        provider: Some("openai".to_string()),
+                        model: Some("gpt-5.6-sol".to_string()),
+                        task_ids: Vec::new(),
+                        trace: InvocationTrace {
+                            usage: usage.clone(),
+                            provider_cost_usd: Some(42.125),
+                            long_prompt_requests: requests.clone(),
+                            ..Default::default()
+                        },
                     },
-                },
-            )
+                )
+            })
             .unwrap();
         // Timestamp setup is private to this disposable fixture; assertions
         // exercise the public stored-invocation read boundary.
@@ -244,14 +260,20 @@ fn stored_sol_costs_preserve_history_and_reprice_from_the_august_21_cut() {
         .unwrap();
     }
     let rows = store
-        .list_invocation_records(&InvocationQuery {
+        .read()
+        .unwrap()
+        .invocation()
+        .list(&InvocationQuery {
             workspace_id: Some("ws_sol".to_string()),
             ..Default::default()
         })
         .unwrap();
     assert_eq!(rows.len(), cases.len());
     let facts = store
-        .list_invocation_accounting_facts(&InvocationAccountingQuery {
+        .read()
+        .unwrap()
+        .invocation()
+        .list_accounting_facts(&InvocationAccountingQuery {
             workspace_id: Some("ws_sol".to_string()),
             since: None,
             until: "2030-01-01T00:00:00Z".parse().unwrap(),

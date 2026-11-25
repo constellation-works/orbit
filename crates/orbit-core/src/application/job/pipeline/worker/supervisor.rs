@@ -19,7 +19,8 @@ use orbit_common::env_vars;
 use std::sync::Arc;
 
 use chrono::DateTime;
-use orbit_store::contracts::{AuditEventStoreBackend, JobRunStoreBackend};
+use orbit_store::Store;
+use orbit_store::contracts::JobRunStoreBackend;
 
 use super::command::WorkerCommandConfig;
 use super::exit::note_exit_after_reconciliation;
@@ -180,7 +181,7 @@ impl PipelineRunHost for OrbitRuntime {
 #[derive(Clone)]
 pub(crate) struct PipelineWorkerSupervisor {
     runs: Arc<dyn JobRunStoreBackend>,
-    audit_events: Arc<dyn AuditEventStoreBackend>,
+    store: Store,
     paths: WorkspacePaths,
     event_log: EventLog,
     command: WorkerCommandConfig,
@@ -190,7 +191,7 @@ pub(crate) struct PipelineWorkerSupervisor {
 impl PipelineWorkerSupervisor {
     pub(crate) fn new(
         runs: Arc<dyn JobRunStoreBackend>,
-        audit_events: Arc<dyn AuditEventStoreBackend>,
+        store: Store,
         paths: WorkspacePaths,
         event_log: EventLog,
         command: WorkerCommandConfig,
@@ -198,7 +199,7 @@ impl PipelineWorkerSupervisor {
     ) -> Self {
         Self {
             runs,
-            audit_events,
+            store,
             paths,
             event_log,
             command,
@@ -655,9 +656,7 @@ impl PipelineWorkerSupervisor {
         exit_status: &str,
         actor: Option<&str>,
     ) -> Result<bool, OrbitError> {
-        let Some(request_id) =
-            active_cancellation_request(self.audit_events.as_ref(), &run.run_id)?
-        else {
+        let Some(request_id) = active_cancellation_request(&self.store, &run.run_id)? else {
             return Ok(false);
         };
         self.record_audit(
@@ -710,7 +709,7 @@ impl PipelineWorkerSupervisor {
             return Ok(true);
         }
         #[cfg(unix)]
-        if active_cancellation_request(self.audit_events.as_ref(), &run.run_id)?.is_some() {
+        if active_cancellation_request(&self.store, &run.run_id)?.is_some() {
             return Ok(true);
         }
         if !self.host.providers_stopped(&run.run_id) {
@@ -872,7 +871,7 @@ impl PipelineWorkerSupervisor {
         error_message: Option<String>,
     ) -> Result<(), OrbitError> {
         audit_record::pipeline_audit(
-            self.audit_events.as_ref(),
+            &self.store,
             self.workspace(),
             PipelineAuditRow {
                 tool_name,

@@ -1174,7 +1174,14 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
 
     let runtime = agents.reopen();
     let store = runtime.sqlite_store().unwrap();
-    let executions = |run_id: &str| store.agent_executions(&workspace, run_id).unwrap();
+    let executions = |run_id: &str| {
+        store
+            .read()
+            .unwrap()
+            .invocation()
+            .agent_executions(&workspace, run_id)
+            .unwrap()
+    };
     let backfilled = executions("jrun-backfill-0");
     assert_eq!(backfilled.len(), 2, "{backfilled:?}");
     let executor = backfilled
@@ -1273,7 +1280,13 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
     );
     let store = runtime.sqlite_store().unwrap();
     agents.begin_execution(run_id, "claude", "review-crew", Some(ReasoningEffort::Low));
-    let dispatch_at = store.agent_executions(&workspace, run_id).unwrap()[0].started_at;
+    let dispatch_at = store
+        .read()
+        .unwrap()
+        .invocation()
+        .agent_executions(&workspace, run_id)
+        .unwrap()[0]
+        .started_at;
     let audit = |event_id: &str, event_type: &str, at: chrono::DateTime<Utc>, payload: Value| {
         agents.audit(
             run_id,
@@ -1342,7 +1355,12 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
 
     let runtime = agents.reopen();
     let store = runtime.sqlite_store().unwrap();
-    let rows = store.agent_executions(&workspace, run_id).unwrap();
+    let rows = store
+        .read()
+        .unwrap()
+        .invocation()
+        .agent_executions(&workspace, run_id)
+        .unwrap();
     assert_eq!(rows.len(), 2, "{rows:?}");
     let low = rows
         .iter()
@@ -1394,7 +1412,12 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
             ("launch_only_unmatched", 1),
         ],
     );
-    let quiet = store.agent_executions(&workspace, run_id).unwrap();
+    let quiet = store
+        .read()
+        .unwrap()
+        .invocation()
+        .agent_executions(&workspace, run_id)
+        .unwrap();
     assert_eq!(quiet.len(), 2, "{quiet:?}");
     assert_eq!(quiet[0].id, rows[0].id, "{quiet:?}");
     assert_eq!(quiet[1].id, rows[1].id, "{quiet:?}");
@@ -1544,6 +1567,9 @@ fn migrate_backfill_records_a_launch_its_causal_links_prove() {
     let runtime = agents.reopen();
     let store = runtime.sqlite_store().unwrap();
     let mut rows: Vec<_> = store
+        .read()
+        .unwrap()
+        .invocation()
         .agent_executions(&workspace, run_id)
         .unwrap()
         .into_iter()
@@ -1583,5 +1609,14 @@ fn migrate_backfill_records_a_launch_its_causal_links_prove() {
             ("launch_only_unreadable", 1),
         ],
     );
-    assert_eq!(store.agent_executions(&workspace, run_id).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .read()
+            .unwrap()
+            .invocation()
+            .agent_executions(&workspace, run_id)
+            .unwrap()
+            .len(),
+        2
+    );
 }

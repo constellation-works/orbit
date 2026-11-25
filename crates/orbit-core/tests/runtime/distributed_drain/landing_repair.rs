@@ -741,7 +741,7 @@ impl OwnerLocal {
         );
         let audit = V2AuditWriter::with_disk_sinks(
             &pair.owner_repo.join(".orbit/tmp/pipeline-audit").join(leaf),
-            bound.v2_audit_store().unwrap(),
+            bound.stores().host_store().clone(),
             bound.workspace_id().unwrap(),
             leaf,
             "landing-repair-fixture",

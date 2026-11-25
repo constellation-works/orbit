@@ -316,8 +316,10 @@ impl OrbitRuntime {
         limit: usize,
     ) -> Result<Vec<AuditEvent>, OrbitError> {
         self.stores()
-            .audit_events()
-            .list_audit_events(&AuditEventFilter {
+            .host_store()
+            .read()?
+            .audit_event()
+            .list(&AuditEventFilter {
                 since,
                 tool_name: tool,
                 target_type,
@@ -357,7 +359,12 @@ impl OrbitRuntime {
         };
         let mut events: Vec<AuditEvent> = Vec::new();
         loop {
-            let page = self.stores().audit_events().list_audit_events(&filter)?;
+            let page = self
+                .stores()
+                .host_store()
+                .read()?
+                .audit_event()
+                .list(&filter)?;
             let fetched = page.len();
             // Pages run newest first by id; an event recorded mid-export
             // shifts later pages, so skip rows an earlier page returned.
@@ -377,7 +384,11 @@ impl OrbitRuntime {
         &self,
         filter: &AuditEventFilter,
     ) -> Result<Vec<AuditEvent>, OrbitError> {
-        self.stores().audit_events().list_audit_events(filter)
+        self.stores()
+            .host_store()
+            .read()?
+            .audit_event()
+            .list(filter)
     }
 
     /// Returns exact persistent audit rows by their database IDs, newest first.
@@ -387,8 +398,10 @@ impl OrbitRuntime {
         workspace_id: Option<&str>,
     ) -> Result<Vec<AuditEvent>, OrbitError> {
         self.stores()
-            .audit_events()
-            .list_audit_events_by_ids(ids, workspace_id)
+            .host_store()
+            .read()?
+            .audit_event()
+            .list_by_ids(ids, workspace_id)
     }
 
     /// The audit listing of `orbit audit list` and `GET /api/audit`: selects
@@ -518,13 +531,17 @@ impl OrbitRuntime {
 
     pub fn show_audit_event(&self, id: i64) -> Result<AuditEvent, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_event(id)?
+            .host_store()
+            .read()?
+            .audit_event()
+            .get(id)?
             .ok_or_else(|| OrbitError::InvalidInput(format!("audit event not found: {id}")))
     }
 
     pub fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError> {
-        self.stores().audit_events().prune_audit_events(older_than)
+        self.stores()
+            .host_store()
+            .write(|tx| tx.audit_event().prune(older_than))
     }
 
     pub fn audit_event_stats(
@@ -532,15 +549,12 @@ impl OrbitRuntime {
         since: Option<DateTime<Utc>>,
         tool: Option<String>,
     ) -> Result<AuditStats, OrbitError> {
+        let snapshot = self.stores().host_store().read()?;
+        let audit = snapshot.audit_event();
         let (total, success_count, failure_count, denied_count, avg_duration_ms, max_duration_ms) =
-            self.stores()
-                .audit_events()
-                .get_audit_event_stats(since.as_ref(), tool.as_deref())?;
+            audit.stats(since.as_ref(), tool.as_deref())?;
 
-        let durations = self
-            .stores()
-            .audit_events()
-            .get_audit_event_durations(since.as_ref(), tool.as_deref())?;
+        let durations = audit.durations(since.as_ref(), tool.as_deref())?;
 
         let p95_duration_ms = compute_p95(&durations);
 
@@ -562,8 +576,10 @@ impl OrbitRuntime {
     /// [`Self::audit_event_stats`] reads and sorts to compute a percentile.
     pub fn audit_event_count(&self, since: Option<DateTime<Utc>>) -> Result<i64, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_event_count(since.as_ref())
+            .host_store()
+            .read()?
+            .audit_event()
+            .count(since.as_ref())
     }
 
     pub fn record_audit_event(&self, params: &AuditEventInsertParams) -> Result<(), OrbitError> {
@@ -578,8 +594,10 @@ impl OrbitRuntime {
         since: &DateTime<Utc>,
     ) -> Result<Vec<(String, i64)>, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_event_hourly_buckets(since)
+            .host_store()
+            .read()?
+            .audit_event()
+            .hourly_buckets(since)
     }
 
     /// Canonical SQLite capability/policy decisions by operation, excluding
@@ -589,8 +607,10 @@ impl OrbitRuntime {
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_denials_by_operation(since)
+            .host_store()
+            .read()?
+            .audit_event()
+            .denials_by_operation(since)
     }
 
     /// Shared policy-denial population for the dashboard and audit CLI.
@@ -668,8 +688,10 @@ impl OrbitRuntime {
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<AuditAttributionAggregate>, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_tool_call_counts_by_attribution(since)
+            .host_store()
+            .read()?
+            .audit_event()
+            .tool_call_counts_by_attribution(since)
     }
 
     /// Per-tool aggregate of audit events at or after `since`. One row per
@@ -681,8 +703,10 @@ impl OrbitRuntime {
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditToolAggregate>, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_event_aggregates_by_tool(since)
+            .host_store()
+            .read()?
+            .audit_event()
+            .aggregates_by_tool(since)
     }
 
     /// Callable tool calls at or after `since`, one row per tool and
@@ -692,8 +716,10 @@ impl OrbitRuntime {
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditToolModelAggregate>, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_event_aggregates_by_tool_model(since)
+            .host_store()
+            .read()?
+            .audit_event()
+            .aggregates_by_tool_model(since)
     }
 
     /// Per-canonical-actor aggregate of audit events at or after `since`
@@ -708,8 +734,10 @@ impl OrbitRuntime {
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditActorAggregate>, OrbitError> {
         self.stores()
-            .audit_events()
-            .get_audit_event_aggregates_by_actor(since)
+            .host_store()
+            .read()?
+            .audit_event()
+            .aggregates_by_actor(since)
     }
 
     /// Failure incidents grouped from the raw failed/denied audit rows in

@@ -1590,21 +1590,23 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
                     runtime
                         .sqlite_store()
                         .unwrap()
-                        .begin_agent_execution(
-                            runtime.stores().jobs().workspace_id(),
-                            &run_id,
-                            activity,
-                            "codex",
-                            *model,
-                            &orbit_types::telemetry::AgentExecutionIdentity {
-                                crew: Some("fixture".into()),
-                                reasoning_effort: match case_index % 4 {
-                                    0 => Some(orbit_types::identity::ReasoningEffort::High),
-                                    1 => Some(orbit_types::identity::ReasoningEffort::Xhigh),
-                                    _ => None,
+                        .write(|tx| {
+                            tx.invocation().insert_agent_execution(
+                                runtime.stores().jobs().workspace_id(),
+                                &run_id,
+                                activity,
+                                "codex",
+                                *model,
+                                &orbit_types::telemetry::AgentExecutionIdentity {
+                                    crew: Some("fixture".into()),
+                                    reasoning_effort: match case_index % 4 {
+                                        0 => Some(orbit_types::identity::ReasoningEffort::High),
+                                        1 => Some(orbit_types::identity::ReasoningEffort::Xhigh),
+                                        _ => None,
+                                    },
                                 },
-                            },
-                        )
+                            )
+                        })
                         .unwrap()
                 });
                 runtime

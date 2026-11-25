@@ -3,7 +3,8 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
-use orbit_store::contracts::{AuditEventStoreBackend, TaskReservationReleaseReason};
+use orbit_store::Store;
+use orbit_store::contracts::TaskReservationReleaseReason;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 
@@ -302,7 +303,7 @@ impl OrbitRuntime {
         // writes `interrupted` / `worker_terminated`. The supervisor can name
         // the sender afterwards and cannot change the terminal state.
         let (state, error_code, message) =
-            orphan_settlement(self.stores().audit_events(), &current, error_code, message);
+            orphan_settlement(self.stores().host_store(), &current, error_code, message);
         // [ORB-12969] The diagnostic is handed to finalization so the coupled
         // tasks' interruption block names the error code; the step itself is
         // recorded below, only once the terminal write has won.
@@ -311,7 +312,7 @@ impl OrbitRuntime {
         let settlement_message = append_run_clauses(
             &message,
             reconciled_worker_exit_clause(
-                self.stores().audit_events(),
+                self.stores().host_store(),
                 &current,
                 &self.paths().logs_dir,
             ),
@@ -341,7 +342,7 @@ impl OrbitRuntime {
         let message = append_run_clauses(
             &message,
             reconciled_worker_exit_clause(
-                self.stores().audit_events(),
+                self.stores().host_store(),
                 &current,
                 &self.paths().logs_dir,
             ),
@@ -374,7 +375,7 @@ impl OrbitRuntime {
     /// disposition, rather than `interrupted`. Unreadable evidence defers.
     #[cfg(unix)]
     fn cancellation_owns_outcome(&self, run_id: &str) -> bool {
-        cancellation_is_settling(self.stores().audit_events(), run_id).unwrap_or_else(|error| {
+        cancellation_is_settling(self.stores().host_store(), run_id).unwrap_or_else(|error| {
             tracing::warn!(
                 target: "orbit.core.job_run",
                 run_id,
@@ -471,7 +472,7 @@ impl OrbitRuntime {
     fn orphaned_worker_exit_at(&self, run: &JobRun) -> Option<DateTime<Utc>> {
         let now = Utc::now();
         let floor = run.started_at.unwrap_or(run.scheduled_at);
-        worker_exit::recorded_worker_exit(self.stores().audit_events(), &run.run_id, run.pid?)
+        worker_exit::recorded_worker_exit(self.stores().host_store(), &run.run_id, run.pid?)
             .unwrap_or_else(|error| {
                 tracing::debug!(
                     target: "orbit.core.job_run",
@@ -563,13 +564,13 @@ fn append_run_clauses(
 /// `held` / `operator_stopped` when `run`'s recorded exit is a host-manager
 /// stop; otherwise the stale diagnostic's interrupted failure.
 fn orphan_settlement(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     run: &JobRun,
     error_code: String,
     message: String,
 ) -> (JobRunState, String, String) {
     let host_stop =
-        error_code == WORKER_TERMINATED_ERROR_CODE && recorded_host_manager_stop(audit_events, run);
+        error_code == WORKER_TERMINATED_ERROR_CODE && recorded_host_manager_stop(store, run);
     if host_stop {
         (
             JobRunState::Held,

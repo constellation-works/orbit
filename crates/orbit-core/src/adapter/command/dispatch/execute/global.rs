@@ -56,7 +56,8 @@ where
                 env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
-            Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
+            Store::open(&audit_db)?
+                .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
         },
         dispatch,
     )
@@ -138,7 +139,7 @@ impl GlobalAuditStoreCache {
         invocation: AuditInvocationFields<'_>,
     ) -> Result<(), OrbitError> {
         self.store(global_root)?
-            .insert_audit_event_record_with_invocation(params, invocation)
+            .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
     }
 
     fn store(&self, global_root: &Path) -> Result<Store, OrbitError> {
@@ -279,7 +280,8 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
                 &orbit_common::Env::capture(),
                 &orbit_config::ConfigRoots::global_only(&global_root),
             )?;
-            Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
+            Store::open(&audit_db)?
+                .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
         },
         |input| {
             #[cfg(unix)]

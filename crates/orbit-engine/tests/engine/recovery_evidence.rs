@@ -2,7 +2,7 @@
 //! executor, without asking the recovering agent to observe operator runs.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
@@ -151,7 +151,7 @@ fn prior_attempt(index: usize, diagnostic: String) -> V2AuditEventKind {
 
 fn run(host: &Host, events: Vec<V2AuditEventKind>) -> (Value, Value) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(orbit_store::Store::open_in_memory().unwrap());
+    let store = orbit_store::Store::open_in_memory().unwrap();
     let writer = V2AuditWriter::with_disk_sinks(
         dir.path(),
         store.clone(),
@@ -562,7 +562,7 @@ fn conflict_recovery_hands_over_only_managed_sync_validation() {
         let dir = tempfile::tempdir().unwrap();
         let writer = V2AuditWriter::with_disk_sinks(
             dir.path(),
-            Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            orbit_store::Store::open_in_memory().unwrap(),
             "fixture",
             RUN,
             "test-agent",
@@ -619,7 +619,7 @@ fn events_snapshot_returns_every_event_oldest_first_beyond_the_default_page() {
     let dir = tempfile::tempdir().unwrap();
     let writer = V2AuditWriter::with_disk_sinks(
         dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "fixture",
         RUN,
         "test-agent",

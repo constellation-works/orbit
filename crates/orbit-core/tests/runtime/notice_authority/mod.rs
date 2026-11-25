@@ -115,7 +115,7 @@ fn dispatched_deny_list(runtime: &OrbitRuntime, root: &Path, activity: &str) -> 
         .unwrap();
     let audit = orbit_engine::V2AuditWriter::with_disk_sinks(
         &root.join("audit"),
-        std::sync::Arc::new(runtime.sqlite_store().unwrap()),
+        runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
         &run.run_id,
         "fixture",

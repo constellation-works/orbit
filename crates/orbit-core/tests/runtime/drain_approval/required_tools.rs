@@ -138,7 +138,7 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
     resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         &workspace._root.path().join("audit"),
-        workspace.runtime.v2_audit_store().unwrap(),
+        workspace.runtime.stores().host_store().clone(),
         workspace.runtime.workspace_id().unwrap(),
         &pilot,
         "codex",

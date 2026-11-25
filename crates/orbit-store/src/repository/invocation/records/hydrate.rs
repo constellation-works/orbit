@@ -3,82 +3,71 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use rusqlite::types::ToSql;
-
 use orbit_common::OrbitError;
 use orbit_common::model::pricing::derive_cost_usd;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::TokenUsage;
+use rusqlite::Connection;
+use rusqlite::types::ToSql;
 
-use crate::Store;
 use crate::contracts::{InvocationAccountingFact, InvocationRecord, InvocationToolCallRecord};
-
-impl Store {
-    pub(super) fn load_invocation_task_ids(
-        &self,
-        invocation_ids: &[i64],
-    ) -> Result<HashMap<i64, Vec<String>>, OrbitError> {
-        let conn = self.connection_handle()?;
-        load_grouped_strings(
-            &conn,
-            invocation_ids,
-            "SELECT invocation_id, task_id FROM invocation_tasks WHERE invocation_id IN ({placeholders}) ORDER BY invocation_id ASC, task_id ASC",
-        )
-    }
-
-    fn load_invocation_tool_calls(
-        &self,
-        invocation_ids: &[i64],
-    ) -> Result<HashMap<i64, Vec<InvocationToolCallRecord>>, OrbitError> {
-        if invocation_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let conn = self.connection_handle()?;
-        let mut grouped: HashMap<i64, Vec<InvocationToolCallRecord>> = HashMap::new();
-        for chunk in invocation_ids.chunks(SQL_IN_LIST_CHUNK) {
-            let placeholders = sql_placeholders(chunk.len());
-            let sql = format!(
-                "SELECT invocation_id, seq, tool_name, result_bytes FROM tool_calls WHERE invocation_id IN ({placeholders}) ORDER BY invocation_id ASC, seq ASC"
-            );
-            let params: Vec<Box<dyn ToSql>> = chunk
-                .iter()
-                .map(|id| Box::new(*id) as Box<dyn ToSql>)
-                .collect();
-            let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
-
-            let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
-            let rows = stmt
-                .query_map(param_refs.as_slice(), |row| {
-                    Ok(InvocationToolCallRecord {
-                        invocation_id: row.get(0)?,
-                        seq: row.get::<_, i64>(1)? as u64,
-                        tool_name: row.get(2)?,
-                        result_bytes: row.get::<_, i64>(3)? as u64,
-                    })
-                })
-                .map_err(sqlite_store_error)?;
-
-            for row in rows {
-                let call = row.map_err(sqlite_store_error)?;
-                grouped.entry(call.invocation_id).or_default().push(call);
-            }
-        }
-        Ok(grouped)
-    }
-
-    fn connection_handle(
-        &self,
-    ) -> Result<crate::driver::sqlite::host::read_pool::ReadGuard<'_>, OrbitError> {
-        self.read_connection()
-    }
-}
 
 /// Ids per `IN (...)` list. SQLite caps bound parameters per statement
 /// (`SQLITE_MAX_VARIABLE_NUMBER`, 32766 on the bundled build), and the
 /// accounting path hydrates every invocation in a window in one go, so an
 /// unchunked list fails outright once the window holds more rows than that.
 const SQL_IN_LIST_CHUNK: usize = 500;
+
+pub(super) fn load_invocation_task_ids(
+    conn: &Connection,
+    invocation_ids: &[i64],
+) -> Result<HashMap<i64, Vec<String>>, OrbitError> {
+    load_grouped_strings(
+        conn,
+        invocation_ids,
+        "SELECT invocation_id, task_id FROM invocation_tasks WHERE invocation_id IN ({placeholders}) ORDER BY invocation_id ASC, task_id ASC",
+    )
+}
+
+fn load_invocation_tool_calls(
+    conn: &Connection,
+    invocation_ids: &[i64],
+) -> Result<HashMap<i64, Vec<InvocationToolCallRecord>>, OrbitError> {
+    if invocation_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut grouped: HashMap<i64, Vec<InvocationToolCallRecord>> = HashMap::new();
+    for chunk in invocation_ids.chunks(SQL_IN_LIST_CHUNK) {
+        let placeholders = sql_placeholders(chunk.len());
+        let sql = format!(
+            "SELECT invocation_id, seq, tool_name, result_bytes FROM tool_calls WHERE invocation_id IN ({placeholders}) ORDER BY invocation_id ASC, seq ASC"
+        );
+        let params: Vec<Box<dyn ToSql>> = chunk
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn ToSql>)
+            .collect();
+        let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
+
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(InvocationToolCallRecord {
+                    invocation_id: row.get(0)?,
+                    seq: row.get::<_, i64>(1)? as u64,
+                    tool_name: row.get(2)?,
+                    result_bytes: row.get::<_, i64>(3)? as u64,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+
+        for row in rows {
+            let call = row.map_err(sqlite_store_error)?;
+            grouped.entry(call.invocation_id).or_default().push(call);
+        }
+    }
+    Ok(grouped)
+}
 
 pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRecord> {
     let ts_raw: String = row.get(1)?;
@@ -182,14 +171,14 @@ pub(super) fn map_invocation_accounting_fact(
 }
 
 pub(super) fn hydrate_invocation_records(
-    store: &Store,
+    conn: &Connection,
     records: &mut [InvocationRecord],
     with_tool_calls: bool,
 ) -> Result<(), OrbitError> {
     let invocation_ids = records.iter().map(|record| record.id).collect::<Vec<_>>();
-    let task_ids = store.load_invocation_task_ids(&invocation_ids)?;
+    let task_ids = load_invocation_task_ids(conn, &invocation_ids)?;
     let tool_calls = if with_tool_calls {
-        store.load_invocation_tool_calls(&invocation_ids)?
+        load_invocation_tool_calls(conn, &invocation_ids)?
     } else {
         Default::default()
     };
@@ -234,7 +223,7 @@ fn parse_rfc3339_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
 }
 
 fn load_grouped_strings(
-    conn: &rusqlite::Connection,
+    conn: &Connection,
     invocation_ids: &[i64],
     sql_template: &str,
 ) -> Result<HashMap<i64, Vec<String>>, OrbitError> {

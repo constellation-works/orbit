@@ -423,7 +423,7 @@ fn run_refused_recovery_commit(fixture: &ClaimedRecoveryFixture, audit_root: &Pa
         .unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         audit_root,
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_fixture",
         &fixture.leaf,
         "fixture",

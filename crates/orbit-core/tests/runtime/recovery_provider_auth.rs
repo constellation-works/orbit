@@ -34,7 +34,7 @@ model = "fixture"
 fn audit(fx: &Fixture, run: &str) -> std::sync::Arc<V2AuditWriter> {
     V2AuditWriter::with_disk_sinks(
         &fx.repo.join(".orbit/audit"),
-        std::sync::Arc::new(fx.runtime.sqlite_store().unwrap()),
+        fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
         run,
         "fixture",

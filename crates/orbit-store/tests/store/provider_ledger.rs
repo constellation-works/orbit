@@ -38,28 +38,30 @@ fn record(
     age: provider_ledger_Duration,
 ) {
     store
-        .insert_invocation_trace_record(
-            "ws_ledger",
-            &InvocationInsertParams {
-                agent_execution_id: None,
-                job_run_id: "run".to_string(),
-                account: None,
-                activity_id: "implement_one".to_string(),
-                agent: agent.to_string(),
-                provider: provider.map(ToOwned::to_owned),
-                model: None,
-                task_ids: Vec::new(),
-                trace: InvocationTrace {
-                    usage: TokenUsage {
-                        input: tokens.0,
-                        output: tokens.1,
-                        ..TokenUsage::default()
+        .write(|tx| {
+            tx.invocation().insert(
+                "ws_ledger",
+                &InvocationInsertParams {
+                    agent_execution_id: None,
+                    job_run_id: "run".to_string(),
+                    account: None,
+                    activity_id: "implement_one".to_string(),
+                    agent: agent.to_string(),
+                    provider: provider.map(ToOwned::to_owned),
+                    model: None,
+                    task_ids: Vec::new(),
+                    trace: InvocationTrace {
+                        usage: TokenUsage {
+                            input: tokens.0,
+                            output: tokens.1,
+                            ..TokenUsage::default()
+                        },
+                        provider_cost_usd: cost,
+                        ..InvocationTrace::default()
                     },
-                    provider_cost_usd: cost,
-                    ..InvocationTrace::default()
                 },
-            },
-        )
+            )
+        })
         .unwrap();
     Connection::open(path)
         .unwrap()
@@ -136,6 +138,9 @@ fn spend_is_attributed_by_provider_else_agent_inside_the_window() {
 
     let since = Utc::now() - hour * 5;
     let grok = store
+        .read()
+        .unwrap()
+        .invocation()
         .list_provider_ledger_entries(&names(&["grok", "xai"]), None, since)
         .unwrap();
     assert_eq!(
@@ -148,16 +153,25 @@ fn spend_is_attributed_by_provider_else_agent_inside_the_window() {
     assert!(grok[0].ts < grok[1].ts, "oldest first");
 
     let antigravity = store
+        .read()
+        .unwrap()
+        .invocation()
         .list_provider_ledger_entries(&names(&["antigravity"]), None, since)
         .unwrap();
     assert_eq!(antigravity.len(), 1, "attributed by provider, not by agent");
     assert_eq!(antigravity[0].tokens, 10);
     let gemini = store
+        .read()
+        .unwrap()
+        .invocation()
         .list_provider_ledger_entries(&names(&["gemini", "google"]), None, since)
         .unwrap();
     assert_eq!(gemini.len(), 1, "the Antigravity row is not Gemini's");
     assert!(
         store
+            .read()
+            .unwrap()
+            .invocation()
             .list_provider_ledger_entries(&[], None, since)
             .unwrap()
             .is_empty()
@@ -205,6 +219,9 @@ fn an_existing_store_gains_the_provider_column_additively() {
             .unwrap();
         assert_eq!(migration, "invocation_provider");
         let entries = store
+            .read()
+            .unwrap()
+            .invocation()
             .list_provider_ledger_entries(
                 &names(&["grok"]),
                 None,

@@ -963,7 +963,7 @@ fn absorbed_step() -> Value {
 /// Run `job` as `prepared`'s run, keeping its audit events.
 fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> AbsorbedRun {
     let audit_root = TempDir::new().unwrap();
-    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
+    let store = orbit_store::Store::open_in_memory().expect("open sqlite sink");
     let envelope = Arc::new(V2SqliteSink::for_audit_root(
         store,
         "ws_absorbed",

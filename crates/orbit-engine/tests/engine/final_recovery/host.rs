@@ -355,7 +355,7 @@ pub(super) fn run_with_input(
 ) -> Run {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
-    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
+    let store = orbit_store::Store::open_in_memory().expect("open sqlite sink");
     let audit_writer = |run_id: &str| {
         let sink = Arc::new(V2SqliteSink::for_audit_root(
             store.clone(),

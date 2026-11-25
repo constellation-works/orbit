@@ -202,7 +202,7 @@ fn dispatch_with_audit(yaml: &str, input: Value, host: &ShellHost) -> AuditedDis
     std::fs::create_dir_all(&blob_dir).expect("create blob dir");
     let sink = Arc::new(InMemorySink::new(blob_dir));
     let envelope = Arc::new(V2SqliteSink::for_audit_root(
-        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        orbit_store::Store::open_in_memory().expect("audit store"),
         "ws_local_shell",
         "jrun-local-shell",
         audit_root.path(),

@@ -1,122 +1,19 @@
-use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::telemetry::AuditEvent;
 
-use crate::contracts::{AuditEventFilter, AuditEventInsertParams};
 use crate::contracts::{
-    AuditEventStoreBackend, LeaseExpandParams, LeaseExpandResult, LeaseInsertParams,
-    LeaseInsertResult, LeaseListResult, LeaseMode, LeaseQueueGrantParams, LeaseQueueGrantResult,
-    LeaseRecord, LeaseReleaseParams, LeaseReleaseResult, LeaseRenewParams, LeaseRenewResult,
-    TaskReservationCheckParams, TaskReservationCheckResult, TaskReservationListResult,
-    TaskReservationOwnedConflictsParams, TaskReservationOwnedConflictsResult,
-    TaskReservationReleaseByOwnerParams, TaskReservationReleaseByOwnerResult,
-    TaskReservationReleaseParams, TaskReservationReleaseResult, TaskReservationReserveParams,
-    TaskReservationReserveResult, TaskReservationStoreBackend, WorkspaceClaimAcquireParams,
-    WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams, WorkspaceClaimCheckResult,
-    WorkspaceClaimReleaseParams, WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
+    LeaseExpandParams, LeaseExpandResult, LeaseInsertParams, LeaseInsertResult, LeaseListResult,
+    LeaseMode, LeaseQueueGrantParams, LeaseQueueGrantResult, LeaseRecord, LeaseReleaseParams,
+    LeaseReleaseResult, LeaseRenewParams, LeaseRenewResult, TaskReservationCheckParams,
+    TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
+    TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
+    TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
+    TaskReservationReleaseResult, TaskReservationReserveParams, TaskReservationReserveResult,
+    TaskReservationStoreBackend, WorkspaceClaimAcquireParams, WorkspaceClaimAcquireResult,
+    WorkspaceClaimCheckParams, WorkspaceClaimCheckResult, WorkspaceClaimReleaseParams,
+    WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
 };
 use crate::repository::task::TaskCommitBoundary;
 use crate::{ActiveTaskReservation, Store};
-
-#[derive(Clone)]
-pub(crate) struct SqliteAuditEventStoreBackend {
-    pub(crate) store: Store,
-}
-
-impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
-    fn insert_audit_event_record(&self, params: &AuditEventInsertParams) -> Result<(), OrbitError> {
-        self.store.insert_audit_event_record(params)
-    }
-
-    fn list_audit_events(&self, filter: &AuditEventFilter) -> Result<Vec<AuditEvent>, OrbitError> {
-        self.store.list_audit_events(filter)
-    }
-
-    fn list_audit_events_by_ids(
-        &self,
-        ids: &[i64],
-        workspace_id: Option<&str>,
-    ) -> Result<Vec<AuditEvent>, OrbitError> {
-        self.store.list_audit_events_by_ids(ids, workspace_id)
-    }
-
-    fn get_audit_event(&self, id: i64) -> Result<Option<AuditEvent>, OrbitError> {
-        self.store.get_audit_event(id)
-    }
-
-    fn get_audit_event_stats(
-        &self,
-        since: Option<&DateTime<Utc>>,
-        tool: Option<&str>,
-    ) -> Result<(i64, i64, i64, i64, f64, i64), OrbitError> {
-        self.store.get_audit_event_stats(since, tool)
-    }
-
-    fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError> {
-        self.store.get_audit_event_count(since)
-    }
-
-    fn get_audit_event_durations(
-        &self,
-        since: Option<&DateTime<Utc>>,
-        tool: Option<&str>,
-    ) -> Result<Vec<i64>, OrbitError> {
-        self.store.get_audit_event_durations(since, tool)
-    }
-
-    fn get_audit_event_hourly_buckets(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<(String, i64)>, OrbitError> {
-        self.store.get_audit_event_hourly_buckets(since)
-    }
-
-    fn get_audit_denials_by_operation(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<(String, i64)>, OrbitError> {
-        self.store.get_audit_denials_by_operation(since)
-    }
-
-    fn get_audit_tool_call_counts_by_attribution(
-        &self,
-        since: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<crate::AuditAttributionAggregate>, OrbitError> {
-        self.store.get_audit_tool_call_counts_by_attribution(since)
-    }
-
-    fn get_audit_event_aggregates_by_tool(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<crate::AuditToolAggregate>, OrbitError> {
-        self.store.get_audit_event_aggregates_by_tool(since)
-    }
-
-    fn get_audit_event_aggregates_by_tool_model(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<crate::AuditToolModelAggregate>, OrbitError> {
-        self.store.get_audit_event_aggregates_by_tool_model(since)
-    }
-
-    fn get_audit_event_aggregates_by_role(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<crate::AuditRoleAggregate>, OrbitError> {
-        self.store.get_audit_event_aggregates_by_role(since)
-    }
-
-    fn get_audit_event_aggregates_by_actor(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<crate::AuditActorAggregate>, OrbitError> {
-        self.store.get_audit_event_aggregates_by_actor(since)
-    }
-
-    fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError> {
-        self.store.prune_audit_events(older_than)
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct SqliteTaskReservationStoreBackend {

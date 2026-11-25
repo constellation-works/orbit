@@ -10,7 +10,7 @@ status: Implemented
 feature: mcp-session-context
 doc_role: design
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/command/**", "crates/orbit-store/src/driver/sqlite/audit_event_store/**", "crates/orbit-agent/src/providers/codex/**", "crates/orbit-engine/src/activity_job/cli_runner/**", "crates/orbit-common/src/security/child_env.rs"]
+paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/command/**", "crates/orbit-store/src/repository/audit/event/**", "crates/orbit-agent/src/providers/codex/**", "crates/orbit-engine/src/activity_job/cli_runner/**", "crates/orbit-common/src/security/child_env.rs"]
 related_features: ["mcp-session-context"]
 related_artifacts: []
 ---

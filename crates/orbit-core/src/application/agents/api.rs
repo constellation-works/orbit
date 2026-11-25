@@ -117,7 +117,7 @@ pub(super) fn role_header(
     let spec = roles::spec(role);
     let mut payload = query.header(facts, window, cache_ttl);
     payload["role"] = json!(role.as_str());
-    payload["effort_breakdown"] = json!(orbit_store::contracts::agent_effort_usage(
+    payload["effort_breakdown"] = json!(orbit_runtime::engine::agent_effort_usage(
         facts
             .invocations
             .iter_invocations()
@@ -448,7 +448,7 @@ fn row_effort_breakdown(
     _effort: &super::effort::RecordedEffort,
 ) -> Value {
     let crew = crews.first().map(String::as_str).unwrap_or_default();
-    let rows = orbit_store::contracts::agent_effort_usage(
+    let rows = orbit_runtime::engine::agent_effort_usage(
         facts.invocations.iter_invocations().filter(|fact| {
             window.admits(fact.ts)
                 && fact
