@@ -5,7 +5,7 @@ title: "Auditability — Overview"
 owner: codex
 created_date: 2026-04-25
 updated_date: 2026-11-14
-last_validated: 2026-10-31
+last_validated: 2026-11-25
 status: Draft
 stage: shipped
 next: "—"

@@ -2,7 +2,7 @@
 title: Routines — Decisions
 owner: claude
 created_date: 2026-07-03
-updated_date: 2026-11-11
+updated_date: 2026-11-25
 last_validated: 2026-10-13
 status: Accepted
 feature: routines
@@ -285,12 +285,9 @@ Remove the `[routines]` config section. The tick evaluates definitions from ever
 - [ORB-10129] shipped the initial default triage routine and per-workspace seeding.
 - [ORB-10149] introduced recurring auto-task definitions and their original scheduler routine.
 - [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
-- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
-- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
 - [ORB-10720] made the host sweep-clock cadence configurable and controllable.
 - [ORB-10739] seeded the disabled task-pilot routine.
 - [ORB-10986] re-armed Linux timers on installation and bounded timer coalescing.
-- [ORB-11082] made clock enable repair stale installed Linux timer units.
 - [ORB-12107] derived seeded routine names from registered workspace names.
 - [ORB-12236] removed routine host pins and the routine-source role.
 - [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.

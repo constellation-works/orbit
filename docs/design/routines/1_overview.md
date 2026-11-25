@@ -2,9 +2,9 @@
 title: Routines — Overview
 owner: claude
 created_date: 2026-07-03
-updated_date: 2026-11-11
-last_validated: 2026-11-03
-status: Accepted
+updated_date: 2026-11-25
+last_validated: 2026-11-25
+status: Implemented
 stage: shipped
 next: "—"
 feature: routines
@@ -162,11 +162,8 @@ fragmentation this feature exists to end.
 ## Task References
 
 - [ORB-00374] removed the shell activity variant and run_shell dispatch.
-- [ORB-10001] authored the routines design proposal (historical citation).
 - [ORB-10021] implemented routines v1 and its OS clock integration.
 - [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
-- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
-- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
 - [ORB-10720] made the host sweep-clock cadence configurable and controllable.
 - [ORB-10739] seeded the disabled task-pilot routine.
 - [ORB-11107] added host-owned CI evidence collection and failure filing.

@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Decisions"
 owner: codex
 created_date: 2026-04-25
-updated_date: 2026-11-14
+updated_date: 2026-11-25
 last_validated: 2026-10-15
 status: Draft
 feature: auditability
@@ -673,7 +673,6 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 - [ORB-10598] — Retitled the four non-identifying friction records after deployment.
 - [ORB-10888] — Added the canonical actor projection beside the unchanged raw role.
 - [ORB-11284] — Correlated provider completions by invocation ancestry.
-- [ORB-23935] — Capture final Claude request usage from partial message events without exhausting bounded stdout capture.
 - [ORB-24019] — Drop redundant Claude `content_block_*` stream events from the `agent_output` relay, keeping the relay consistent with the bounded capture.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

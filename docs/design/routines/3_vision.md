@@ -2,8 +2,8 @@
 title: Routines — Vision
 owner: claude
 created_date: 2026-07-03
-updated_date: 2026-11-03
-last_validated: 2026-11-05
+updated_date: 2026-11-25
+last_validated: 2026-11-25
 status: Draft
 feature: routines
 doc_role: vision
@@ -147,16 +147,9 @@ External:
 - [ORB-21244] implemented resident-orchestrator slice 3: the `resident_due` kind and cycle routine.
 - [ORB-21249] implemented resident-orchestrator slice 8: the evolution-pass routine.
 - [ORB-22844] removed the evolution-pass routine.
-- [ORB-10001] authored the routines design proposal (historical citation).
-- [ORB-10021] implemented routines v1 and its OS clock integration.
 - [ORB-10138] exposed routine and clock health through the dashboard API.
 - [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
-- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
-- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
 - [ORB-10395] retired the v1 executor stack and External Executor Protocol.
-- [ORB-11315] specified shared state and delivery triggers with durable coverage.
-- [ORB-12236] removed routine host pins and the routine-source role.
-- [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.
 - [ORB-12718] made all .orbit definitions per-user checkout state rather than git-shared files.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
