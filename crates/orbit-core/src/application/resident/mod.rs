@@ -37,6 +37,8 @@ mod worktree;
 
 #[cfg(feature = "test-support")]
 pub use cycle::test_support::with_resident_cycle_admission_checkpoint;
+#[cfg(feature = "test-support")]
+pub use guard::with_resident_action_close_failure;
 
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::ResidentRight;
