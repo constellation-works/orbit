@@ -21,7 +21,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, JobTargetType, PipelineState,
@@ -566,7 +566,7 @@ fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
 // The control transaction lands after the old root-cause reader took its
 // snapshot, or just before the transactional writer acquires its snapshot.
 fn root_cause_preserves_interleaved_control_and_backlog_policy() {
-    use orbit_store::contracts::TaskReservationReleaseReason;
+    use orbit_store::contract::TaskReservationReleaseReason;
     use orbit_tools::ToolContext;
     use orbit_types::workflow::{ChildDispatch, TaskCancellationPolicy};
 
@@ -662,7 +662,7 @@ fn root_cause_preserves_interleaved_control_and_backlog_policy() {
 fn an_owner_signoff_hold_blocks_its_task_outside_the_recovery_backstop() {
     use orbit_core::application::task::EpisodeDisposition;
     use orbit_engine::blocked_workflow_failure_update;
-    use orbit_store::contracts::TaskReservationReleaseReason;
+    use orbit_store::contract::TaskReservationReleaseReason;
 
     let fixture = Fixture::new();
     let held_task = fixture.task();

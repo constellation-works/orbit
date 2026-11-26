@@ -3,7 +3,7 @@ use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::AutoTaskAddParams;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireIntentParams,
     RoutineFireState,
 };

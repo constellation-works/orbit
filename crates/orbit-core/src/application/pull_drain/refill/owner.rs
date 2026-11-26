@@ -3,7 +3,7 @@
 //! captured [ORB-13908].
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionShipContract, PullDestination};
+use orbit_store::contract::{AdmissionShipContract, PullDestination};
 use serde_json::Value;
 
 use super::crews::crew_window;

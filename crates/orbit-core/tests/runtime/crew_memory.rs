@@ -10,7 +10,7 @@ use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     CrewMemoryClosedProposalRow, CrewMemoryEventRow, CrewMemoryProposalDecision,
     CrewMemoryProposalOutcome, CrewMemoryProposalRow,
 };

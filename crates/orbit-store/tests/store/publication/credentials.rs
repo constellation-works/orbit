@@ -13,7 +13,7 @@ use orbit_common::{process, test_env};
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
-use orbit_store::workflow::task::{
+use orbit_store::migrate::task::{
     AttachmentPolicy, AttachmentPolicyKind, PublicationCallerRole, PublicationPublishRequest,
     PublicationPublishStatus, ScannerFailureBehavior, publish_task_snapshot,
 };
@@ -222,7 +222,7 @@ esac
     let published = publish().expect("explicit askpass must authenticate unattended");
     assert_eq!(published.status, PublicationPublishStatus::Initialized);
     let mut acknowledged = request.clone();
-    acknowledged.last_success = Some(orbit_store::workflow::task::PublicationLastSuccess {
+    acknowledged.last_success = Some(orbit_store::migrate::task::PublicationLastSuccess {
         generation: published.generation,
         commit: published.commit_id,
     });

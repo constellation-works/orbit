@@ -1,8 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionLookup, AdmissionReceipt, ExecutionClaim,
-};
+use orbit_store::contract::{AdmissionIdentity, AdmissionLookup, AdmissionReceipt, ExecutionClaim};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::tool::ToolSessionContext;
 

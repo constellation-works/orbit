@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Duration as ChronoDuration, Utc};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionAffinityClass, AdmissionCrewCapability, AdmissionCrewPressure,
     EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCapability, ExecutorCensus, ExecutorCensusEntry,
     TaskDocumentUpdateParams,

@@ -45,7 +45,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::json;

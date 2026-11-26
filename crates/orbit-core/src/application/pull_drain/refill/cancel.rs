@@ -1,7 +1,7 @@
 //! A pass of a gracefully cancelled pull drain [ORB-13663].
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{LocalPullAdmission, PullDestination};
+use orbit_store::contract::{LocalPullAdmission, PullDestination};
 use orbit_types::workflow::DrainCancelRequest;
 use serde_json::{Value, json};
 

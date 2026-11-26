@@ -285,12 +285,12 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
             let stored = runtime.get_job_run_backend(&run.run_id).unwrap().unwrap();
             let case = format!("{job}, as_error={as_error}: {:?}", stored.steps);
             let deferred = runtime
-                .audit_failure_incidents(&orbit_store::contracts::FailureIncidentQuery::default())
+                .audit_failure_incidents(&orbit_store::contract::FailureIncidentQuery::default())
                 .unwrap()
                 .incidents
                 .into_iter()
                 .filter(|incident| {
-                    incident.surface == orbit_store::contracts::RUN_DEFERRED_SURFACE
+                    incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
                         && incident.run_ids.contains(&run.run_id)
                 })
                 .map(|incident| incident.class)
@@ -310,7 +310,7 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
             );
             assert_eq!(
                 deferred,
-                [orbit_store::contracts::FailureClass::Deferred],
+                [orbit_store::contract::FailureClass::Deferred],
                 "{case}"
             );
         }

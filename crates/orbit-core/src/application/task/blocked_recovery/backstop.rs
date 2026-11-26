@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     FAULT_JUDGED_BY_FIELD, FailureHandoffDecision, FinalRecoveryDecision, JobRun, JobRunState,

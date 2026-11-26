@@ -3,7 +3,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::FlakyValidation;
 

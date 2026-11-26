@@ -254,7 +254,7 @@ fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
         let claim = record.receipt.unwrap().claim.unwrap();
         let settlement = ClaimMutation::Release(ClaimEvidence {
             summary: Some("released by follower drain: the owner's store stayed locked".into()),
-            failure: Some(orbit_store::contracts::ClaimFailure {
+            failure: Some(orbit_store::contract::ClaimFailure {
                 class,
                 review_decision_pending: false,
                 reason: "database is locked".into(),

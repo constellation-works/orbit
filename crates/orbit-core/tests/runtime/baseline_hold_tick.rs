@@ -13,7 +13,7 @@ use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWor
 use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
 use orbit_core::application::task::BASELINE_HOLD_REFRESH_JOB;
 use orbit_core::{JobRunState, OrbitError, OrbitRuntime};
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::Value;
 

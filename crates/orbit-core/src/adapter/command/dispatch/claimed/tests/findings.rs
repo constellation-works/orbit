@@ -14,7 +14,7 @@
 //! [`RunDispatch`]: crate::adapter::command::dispatch::brokered::RunDispatch
 
 use base64::Engine as _;
-use orbit_store::contracts::{ClaimCandidateRef, ClaimEvidence, ClaimMutation, LocalPullMutation};
+use orbit_store::contract::{ClaimCandidateRef, ClaimEvidence, ClaimMutation, LocalPullMutation};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     FINAL_RECOVERY_ACTIVITY, REVIEW_EVIDENCE_FINDINGS_ARTIFACT, REVIEW_EVIDENCE_HOLD_ARTIFACT,

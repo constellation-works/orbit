@@ -31,7 +31,7 @@
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimMutation, LocalPullAdmission, LocalPullPhase, TaskReservationReleaseReason,
 };
 use orbit_types::record::OrbitEvent;

@@ -1,5 +1,5 @@
 //! Hydrating only some top-level keys of a run's stored input
-//! ([`JobRunQuery::input_keys`](crate::contracts::JobRunQuery::input_keys)).
+//! ([`JobRunQuery::input_keys`](crate::contract::JobRunQuery::input_keys)).
 
 use std::fmt;
 

@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use super::super::super::ledger::run_store_migrations;
 use super::super::*;
 use crate::Store;
-use crate::contracts::JobRunQuery;
+use crate::contract::JobRunQuery;
 use orbit_common::storage::sqlite::ledger::Migration;
 
 /// The registry up to, not including, v38.

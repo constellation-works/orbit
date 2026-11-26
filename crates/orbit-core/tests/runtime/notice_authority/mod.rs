@@ -711,7 +711,7 @@ fn commit_open_corroboration(
     dedupe_key: &str,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Value {
-    use orbit_store::contracts::NoticeEventRow;
+    use orbit_store::contract::NoticeEventRow;
 
     let store = runtime.sqlite_store().unwrap();
     let workspace_id = runtime.workspace_id().unwrap();

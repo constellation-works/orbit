@@ -693,10 +693,10 @@
         "repository/job_run/tests/queries.rs::recency_pages_walk_an_index_instead_of_sorting_the_workspace",
         "repository/task_index/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
         "repository/task_reservation/tests/plans.rs::active_reservation_statements_seek_an_index",
-        "workflow/layout/tests/mod.rs::failed_migration_keeps_the_marker_at_the_last_applied_version",
-        "workflow/task/tests/archive.rs::packing_failure_preserves_destination_and_cleans_staging_file",
-        "workflow/task/tests/git.rs::git_failure_redacts_remote_credentials_in_arguments",
-        "workflow/task/tests/publish.rs::concurrent_losing_push_preserves_landed_evidence_across_failed_saves"
+        "migrate/layout/tests/mod.rs::failed_migration_keeps_the_marker_at_the_last_applied_version",
+        "migrate/task/tests/archive.rs::packing_failure_preserves_destination_and_cleans_staging_file",
+        "migrate/task/tests/git.rs::git_failure_redacts_remote_credentials_in_arguments",
+        "migrate/task/tests/publish.rs::concurrent_losing_push_preserves_landed_evidence_across_failed_saves"
       ]
     },
     "orbit-tools": {

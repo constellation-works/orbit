@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{AdmissionForecastPoint, ForecastDelivery};
+use orbit_store::contract::{AdmissionForecastPoint, ForecastDelivery};
 
 use super::{HostLoadForecast, MemoryTerms};
 use crate::host_resource::profile::{ProfileLookup, ProfileSet};

@@ -407,14 +407,6 @@ impl AdmissionCrewCapability {
         }
     }
 
-    fn malformed(&self) -> bool {
-        let blank = |name: &str| name.trim().is_empty();
-        self.runnable.iter().flatten().any(|name| blank(name))
-            || self.default_crew.as_deref().is_some_and(blank)
-            || self.excluded.iter().any(|exclusion| blank(&exclusion.crew))
-            || self.usage_pressure.iter().any(|entry| blank(&entry.crew))
-    }
-
     /// `crew`'s reported weekly usage pressure in milli-units, or neutral
     /// (1000 = 1.0) when this capability reports none for it [ORB-17773].
     #[must_use]
@@ -601,16 +593,6 @@ pub struct AdmissionRequest {
 
 fn is_zero_visual_resolution(version: &u32) -> bool {
     *version == 0
-}
-
-impl AdmissionRequest {
-    /// Whether the declared crew capability is malformed (a blank name).
-    #[must_use]
-    pub fn crews_malformed(&self) -> bool {
-        self.crews
-            .as_ref()
-            .is_some_and(AdmissionCrewCapability::malformed)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

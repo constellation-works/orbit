@@ -5,7 +5,7 @@ use super::partition_id::validate_partition_id;
 use super::queries::{decode_task_bundle_binding, task_bundle_by_id, workspace_by_id};
 use super::store::TaskRegistryStore;
 use super::util::{now_string, path_to_string};
-use crate::contracts::TaskBundleBinding;
+use crate::contract::TaskBundleBinding;
 use crate::fs::path_safety::normalize_path;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};

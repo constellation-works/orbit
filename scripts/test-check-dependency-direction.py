@@ -1471,9 +1471,9 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=True)
         store = self.root / "crates/orbit-store/src"
         for relative, source in (
-            ("contracts/probe.rs", "use crate::{Other, repository::Probe};\n"),
+            ("contract/probe.rs", "use crate::{Other, repository::Probe};\n"),
             ("driver/file/probe.rs", "use crate::{Other, driver::sqlite::Probe};\n"),
-            ("driver/sqlite/probe.rs", "use crate::{Other, workflow::{Probe}};\n"),
+            ("driver/sqlite/probe.rs", "use crate::{Other, migrate::{Probe}};\n"),
             ("fs/probe.rs", "use crate::{Other, driver::{file::Probe}};\n"),
         ):
             with self.subTest(relative=relative):
@@ -1495,17 +1495,17 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=False)
         store = self.root / "crates/orbit-store/src"
         self.check_rows([
-            ("contracts/probe.rs", "use super::super::repository::Probe;\n"),
-            ("contracts/driver.rs", "use super::super::driver::Probe;\n"),
+            ("contract/probe.rs", "use super::super::repository::Probe;\n"),
+            ("contract/driver.rs", "use super::super::driver::Probe;\n"),
             ("driver/file/probe.rs", "use super::super::super::driver::sqlite::Probe;\n"),
             ("driver/file/store.rs", "use super::super::super::Store;\n"),
             ("driver/file/tx.rs", "use super::super::super::StoreTx;\n"),
             ("driver/sqlite/probe.rs", "use super::super::super::repository::Probe;\n"),
             ("driver/sqlite/file.rs", "use super::super::super::driver::file::Probe;\n"),
-            ("fs/probe.rs", "use super::super::workflow::Probe;\n"),
+            ("fs/probe.rs", "use super::super::migrate::Probe;\n"),
         ], rejected=True, base=store)
         self.check_rows([
-            ("driver/file/probe.rs", "use super::super::super::contracts::Probe;\n"),
+            ("driver/file/probe.rs", "use super::super::super::contract::Probe;\n"),
         ], rejected=False, base=store)
 
     def test_inline_module_super_resolves_at_its_lexical_depth(self):
@@ -1564,10 +1564,10 @@ class RelativeImportTests(unittest.TestCase):
     )
     # Named-path callers already resolved inline depth; they stay in step.
     INLINE_DEPTH_STORE_CALLERS = (
-        ("contracts/probe.rs", 2, "repository"),
+        ("contract/probe.rs", 2, "repository"),
         ("driver/file/probe.rs", 3, "driver::sqlite"),
         ("driver/sqlite/probe.rs", 3, "repository"),
-        ("fs/probe.rs", 2, "workflow"),
+        ("fs/probe.rs", 2, "migrate"),
     )
 
     @staticmethod

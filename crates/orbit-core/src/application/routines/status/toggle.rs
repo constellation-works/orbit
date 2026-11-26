@@ -310,7 +310,7 @@ pub fn routine_breaker_events(
     global_root: &Path,
     name: &str,
     limit: usize,
-) -> Result<Vec<orbit_store::contracts::RoutineBreakerEvent>, OrbitError> {
+) -> Result<Vec<orbit_store::contract::RoutineBreakerEvent>, OrbitError> {
     let store = super::super::open_existing_routine_store(opener, global_root)?;
     store.read()?.routine().breaker_events(name, limit)
 }

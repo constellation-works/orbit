@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use orbit_store::contracts::AdmissionForecastRecord;
+use orbit_store::contract::AdmissionForecastRecord;
 use orbit_types::task::Task;
 use orbit_types::workflow::{
     DrainAdmissionForecast, DrainAdmissionPass, DrainPassObservation, RunStateUpdate,

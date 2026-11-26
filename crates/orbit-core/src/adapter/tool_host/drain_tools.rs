@@ -9,7 +9,7 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, ClaimAttribution, ClaimMutation, PROVIDER_DEFAULT_REPORTED_EFFORT,
 };
 use orbit_types::tool::ToolSessionContext;
@@ -44,11 +44,11 @@ pub(super) fn prepare_input(verb: DrainVerb, input: &mut Value) -> Result<(), Or
     match verb {
         DrainVerb::Pull => {
             if let Some(caller) = input.get("caller_fingerprint").and_then(Value::as_str)
-                && caller != orbit_store::contracts::distributed_drain_protocol_fingerprint()
+                && caller != orbit_store::contract::distributed_drain_protocol_fingerprint()
             {
                 return Err(OrbitError::ProtocolSkew(format!(
                     "caller fingerprint {caller}; owner fingerprint {}",
-                    orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+                    orbit_store::contract::distributed_drain_protocol_fingerprint(),
                 )));
             }
             // The shipped schema asks new callers to send this diagnostic,
@@ -97,7 +97,7 @@ fn receipt_lookup(
     let input = input.as_value();
     let request_id = orbit_tools::require_str(input, "request_id")?;
     let lookup_schema = optional_u32(input, "lookup_schema")?
-        .unwrap_or(orbit_store::contracts::ADMISSION_RECEIPT_LOOKUP_SCHEMA);
+        .unwrap_or(orbit_store::contract::ADMISSION_RECEIPT_LOOKUP_SCHEMA);
     let machine_id = optional_string(input, "machine_id");
     let lookup = runtime.lookup_admission_receipt(
         session,
@@ -118,7 +118,7 @@ fn pull(
     let input = input.as_value();
     // The allowed keys come from the actual request type, so a new field
     // cannot be fingerprinted but silently dropped by a parallel field list.
-    let schema = orbit_store::contracts::admission_request_schema();
+    let schema = orbit_store::contract::admission_request_schema();
     let properties = schema["properties"]
         .as_object()
         .ok_or_else(|| OrbitError::Store("pull request schema has no properties".into()))?;

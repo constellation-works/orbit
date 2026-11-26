@@ -5,7 +5,7 @@ use super::super::partition_id::validate_partition_id;
 use super::super::queries::{TaskIndexWriter, task_bundle_by_id, task_ids_for_workspace};
 use super::super::relations::validate_replacement_relations;
 use super::super::store::TaskRegistryStore;
-use crate::contracts::{
+use crate::contract::{
     TaskCompletionByComplexity, TaskDefectFiling, TaskIndexFilter, TaskTerminalTransition,
 };
 use chrono::{DateTime, Utc};

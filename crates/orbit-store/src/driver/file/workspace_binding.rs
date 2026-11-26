@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::fs::path_safety::validate_partition_id;
 use crate::fs::yaml::{parse_yaml_with, write_yaml_atomic_with};
 
-use crate::contracts::WorkspaceConfig;
+use crate::contract::WorkspaceConfig;
 
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "config.yaml";

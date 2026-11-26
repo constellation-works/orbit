@@ -2,7 +2,7 @@
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInspection, JobRunQuery};
+use orbit_store::contract::{ClaimInspection, JobRunQuery};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 

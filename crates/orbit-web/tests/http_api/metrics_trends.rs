@@ -5,7 +5,7 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRunState, JobRunStep, JobTargetType};
-use orbit_store::contracts::InvocationInsertParams;
+use orbit_store::contract::InvocationInsertParams;
 use orbit_types::task::{
     TaskComplexity, TaskEventRowV2, TaskRelation, TaskRelationType, TaskStatus, TaskType,
 };
@@ -23,7 +23,7 @@ fn diff_stats_keeps_named_crews_distinct_from_attribution_buckets() {
     isolated(
         "metrics_trends::diff_stats_keeps_named_crews_distinct_from_attribution_buckets",
         || {
-            use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+            use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
 
             let fixture = Fixture::new();
             let store = fixture.runtime.sqlite_store().unwrap();
@@ -1893,7 +1893,7 @@ fn diff_stats_keeps_lead_only_crews_for_per_day() {
     isolated(
         "metrics_trends::diff_stats_keeps_lead_only_crews_for_per_day",
         || {
-            use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+            use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
 
             let fixture = Fixture::new();
             let store = fixture.runtime.sqlite_store().unwrap();

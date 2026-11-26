@@ -18,7 +18,7 @@ use super::rows::{
 };
 use super::write::{next_run_id_conn, upsert_job_run_for_workspace_conn};
 use super::{LATEST_JOB_ID_CHUNK, STEP_RUN_ID_CHUNK};
-use crate::contracts::{JOB_RUN_TASK_INPUT_KEYS, JobRunQuery};
+use crate::contract::{JOB_RUN_TASK_INPUT_KEYS, JobRunQuery};
 use crate::store::Tx;
 
 /// The window read behind [`JobRunRepository::list_keyed_window`]: one job's

@@ -50,10 +50,10 @@ pub(super) fn update_task_from_activity(
         }
         runtime.route_worker_host_tool("orbit.task.update", serde_json::json!({
             "id": task_id,
-            "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
+            "_worker_update": orbit_store::contract::ClaimWorkerUpdate {
                 status: Some(update.status), expected_status: Some(update.expected_status),
                 status_note: update.note,
-                evidence: orbit_store::contracts::ClaimEvidence {review_settlement: None, summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None, leaf_run: None},
+                evidence: orbit_store::contract::ClaimEvidence {review_settlement: None, summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None, leaf_run: None},
                 ..Default::default()
             }
         }))?;
@@ -108,8 +108,8 @@ pub(super) fn record_claim_handoff(
     runtime.stores().jobs().mutate_local_pull(
         &leaf.admission.destination,
         &leaf.admission.request.request_id,
-        &orbit_store::contracts::LocalPullMutation::Settle(Box::new(
-            orbit_store::contracts::ClaimMutation::AcceptHandoff(handoff.clone()),
+        &orbit_store::contract::LocalPullMutation::Settle(Box::new(
+            orbit_store::contract::ClaimMutation::AcceptHandoff(handoff.clone()),
         )),
     )?;
     Ok(())
@@ -118,7 +118,7 @@ pub(super) fn record_claim_handoff(
 pub(super) fn kept_claim_candidate(
     runtime: &OrbitRuntime,
     task_id: &str,
-) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
+) -> Result<Option<orbit_store::contract::KeptClaimCandidate>, OrbitError> {
     // Without an identity this host is no machine a candidate lives on,
     // so only a durable one is offered.
     runtime.stores().tasks().kept_claim_candidate(
@@ -175,7 +175,7 @@ pub(super) fn mark_job_run_running(
 pub(super) fn complete_job_run_step(
     runtime: &OrbitRuntime,
     run_id: &str,
-    params: &orbit_store::contracts::JobRunStepParams,
+    params: &orbit_store::contract::JobRunStepParams,
 ) -> Result<bool, OrbitError> {
     runtime
         .stores()
@@ -195,7 +195,7 @@ pub(super) fn finalize_job_run(
         state,
         finished_at,
         duration_ms,
-        orbit_store::contracts::TaskReservationReleaseReason::RunTerminal,
+        orbit_store::contract::TaskReservationReleaseReason::RunTerminal,
     )
 }
 

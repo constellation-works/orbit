@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::Store;
-use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_store::contract::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{
     LoadedPlugin, PluginToolBinding, PluginValidationPolicy, refuse_covering_fs_write_roots,

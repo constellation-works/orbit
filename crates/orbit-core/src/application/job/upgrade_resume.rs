@@ -29,7 +29,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
+use orbit_store::contract::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{DRAIN_JOBS, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};

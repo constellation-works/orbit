@@ -4,7 +4,7 @@
 //! new optional field with a serde default needs no edit here or at a call site.
 //! Callers set scenario values with struct update syntax.
 
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
 };

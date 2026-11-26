@@ -139,7 +139,7 @@ pub(super) fn friction_attention_items(
     host: &AttentionHost,
     now: DateTime<Utc>,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
-    use orbit_store::contracts::FrictionListFilter;
+    use orbit_store::contract::FrictionListFilter;
     use orbit_types::record::FrictionStatus;
     let store = crate::runtime::friction::store_for(runtime)?;
     let records = store.list(&FrictionListFilter {

@@ -51,7 +51,7 @@ fn owner_reason(pair: &Pair, leaf: &str) -> String {
         .expect("owner durably recorded the leaf release");
     assert_eq!(
         settlement.kind,
-        Some(orbit_store::contracts::ClaimSettlementKind::Release)
+        Some(orbit_store::contract::ClaimSettlementKind::Release)
     );
     assert_eq!(settlement.failure_class, Some(ClaimFailureClass::Transient));
     assert_eq!(pair.owner_status(&pair.claimed_task(leaf)), "backlog");
@@ -189,7 +189,7 @@ fn an_unobserved_worker_release_carries_available_scope_evidence() {
         if scope {
             let unit = format!("orbit-worker-{leaf}-fixture.scope");
             pair.follower
-                .record_audit_event(&orbit_store::contracts::AuditEventInsertParams {
+                .record_audit_event(&orbit_store::contract::AuditEventInsertParams {
                     execution_id: format!("claim-{leaf}"),
                     command: "pipeline".into(),
                     subcommand: None,

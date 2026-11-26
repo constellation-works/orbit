@@ -9,7 +9,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::canonical_actor_for_role_label;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
-use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use crate::contract::{AuditEventInsertParams, AuditInvocationFields};
 use crate::driver::sqlite::host::schema::{SUPPORTED_SCHEMA_VERSION, current_schema_version};
 use crate::now_string;
 

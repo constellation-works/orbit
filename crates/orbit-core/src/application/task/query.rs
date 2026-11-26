@@ -353,13 +353,13 @@ impl OrbitRuntime {
         &self,
         statuses: &[TaskStatus],
         updated_since: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<orbit_store::contracts::TaskLifecycleStamp>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::TaskLifecycleStamp>, OrbitError> {
         if self.worker_invocation().is_some() {
             return Ok(self
                 .list_task_metadata()?
                 .into_iter()
                 .filter(|task| statuses.contains(&task.status) || task.updated_at >= updated_since)
-                .map(|task| orbit_store::contracts::TaskLifecycleStamp {
+                .map(|task| orbit_store::contract::TaskLifecycleStamp {
                     id: task.id,
                     status: task.status,
                     created_at: task.created_at,

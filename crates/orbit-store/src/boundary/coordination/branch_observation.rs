@@ -11,7 +11,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::task::TaskArtifact;
 
 use crate::boundary::v2::normalize_v2_artifact_path;
-use crate::contracts::{
+use crate::contract::{
     BranchObservationOutcome, ClaimCommitEffects, ClaimEvidence, DEFERRED_BRANCH_OBSERVATION_KIND,
     DeferredBranchObservation, TaskCoordinationCommitOutcome, TaskCoordinationCommitParams,
     TaskCoordinationRow,

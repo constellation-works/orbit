@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-pub use orbit_store::contracts::JobRunOrder;
+pub use orbit_store::contract::JobRunOrder;
 use orbit_types::workflow::JobRunState;
 use serde::Serialize;
 use serde_json::{Value, json};

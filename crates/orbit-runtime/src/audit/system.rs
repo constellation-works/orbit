@@ -12,7 +12,7 @@ use orbit_types::telemetry::AuditEventStatus;
 
 use crate::RuntimeKernel;
 use orbit_store::AuditEventInsertParams;
-use orbit_store::contracts::AuditInvocationFields;
+use orbit_store::contract::AuditInvocationFields;
 
 /// Where a system audit row takes its run attribution from.
 pub enum AuditRunAttribution {

@@ -717,7 +717,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
                     &format!("landing:{}:{}", request.handoff_id, stopped.attempt + 1),
                 )
                 .unwrap();
-            let orbit_store::contracts::KeyedJobRunAdmission::Admitted(run) = admission else {
+            let orbit_store::contract::KeyedJobRunAdmission::Admitted(run) = admission else {
                 panic!("one new run")
             };
             // This crash window intentionally stops at persistence: no worker

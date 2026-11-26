@@ -3,7 +3,7 @@
 use chrono::{Duration, Utc};
 use orbit_core::metrics::reliability::ReliabilityWindow;
 use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
-use orbit_store::contracts::ReviewSettlement;
+use orbit_store::contract::ReviewSettlement;
 use orbit_types::workflow::{
     JobRunState, REVIEW_MANIFEST_ARTIFACT, ReviewLedger, ReviewVerdict, ReviewerInvocationEvent,
 };
@@ -177,7 +177,7 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
                     orbit_core::test_support::review_ledger::review_reset(
                         tx,
                         &workspace,
-                        &orbit_store::contracts::ReviewResetRequest {
+                        &orbit_store::contract::ReviewResetRequest {
                             lineage_key: lineage,
                             task_id: &fixture.task_id,
                             actor: "human:operator",

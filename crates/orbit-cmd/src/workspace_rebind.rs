@@ -8,7 +8,7 @@ use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, workspace_live_run_ids};
 use orbit_registry::workspace_registry;
 use orbit_store::compose::workspace_observational_backends;
-use orbit_store::contracts::{AuditEventInsertParams, BindWorkspaceParams};
+use orbit_store::contract::{AuditEventInsertParams, BindWorkspaceParams};
 use orbit_store::maintenance::task_registry::{
     TaskRegistryStore, read_workspace_config, task_registry_path,
 };

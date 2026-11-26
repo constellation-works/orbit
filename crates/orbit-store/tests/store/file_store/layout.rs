@@ -1,10 +1,10 @@
 use super::*;
 #[cfg(unix)]
 use orbit_common::fs::io::create_dir_symlink;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     CompatibilityRecord, CompatibilityRefusal, StateComponent, evaluate_newer_state,
 };
-use orbit_store::workflow::layout::upgrade_workspace_layout;
+use orbit_store::migrate::layout::upgrade_workspace_layout;
 use std::fs;
 
 #[test]

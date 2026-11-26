@@ -1,6 +1,6 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimAttribution, ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
     ExecutionClaim,
 };

@@ -3,7 +3,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_runtime::JobRuns;
-use orbit_store::contracts::FrictionListFilter;
+use orbit_store::contract::FrictionListFilter;
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, CrewPoolExclusion, PipelineState};
 use serde_json::json;
@@ -59,7 +59,7 @@ fn seed_run(jobs: &JobRuns, run_id: &str, reason: &str) {
 fn open_pool_crew_frictions(
     runtime: &crate::OrbitRuntime,
     crew: &str,
-) -> Vec<orbit_store::contracts::StoredFrictionRecord> {
+) -> Vec<orbit_store::contract::StoredFrictionRecord> {
     let frictions = crate::runtime::friction::store_for(runtime).expect("friction store");
     frictions
         .list(&FrictionListFilter {

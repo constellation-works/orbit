@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use super::super::TaskCommitBoundary;
 use super::codec::{FRICTION, RELEASE_BUDGET_WINDOW_HOURS};
 use super::{decode, decode_state};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     /// What a drain run on `machine_id` already gave back for a task-scoped

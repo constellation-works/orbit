@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::CodebaseTaskFactsRow;
+use orbit_store::contract::CodebaseTaskFactsRow;
 
 use super::facts::{HistoryFacts, SettledFailure};
 use crate::OrbitRuntime;

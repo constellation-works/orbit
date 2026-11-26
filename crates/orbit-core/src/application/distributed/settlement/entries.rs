@@ -4,7 +4,7 @@
 //! `application::contracts`.
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{LocalPullAdmission, LocalPullPhase};
+use orbit_store::contract::{LocalPullAdmission, LocalPullPhase};
 use serde::Serialize;
 
 use crate::application::contracts::SETTLEMENT_REFUSAL_REMEDY;

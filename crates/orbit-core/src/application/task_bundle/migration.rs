@@ -3,7 +3,7 @@
 //! These keep the crate boundary intact: `orbit-cli` calls these methods /
 //! functions rather than opening the `TaskRegistryStore` itself. The heavy
 //! lifting (archive packing, transactional import, reindex) lives in
-//! [`orbit_store::workflow::task`]; this layer only resolves the registry path,
+//! [`orbit_store::migrate::task`]; this layer only resolves the registry path,
 //! the target workspace id, and the clock.
 
 use std::collections::BTreeSet;
@@ -15,7 +15,7 @@ use orbit_common::OrbitError;
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path, task_workspaces_dir,
 };
-use orbit_store::workflow::task::{
+use orbit_store::migrate::task::{
     audit_relation_targets, export_tasks, import_tasks, reindex_workspace,
 };
 use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
@@ -26,7 +26,7 @@ use crate::OrbitRuntime;
 // orbit-core, not orbit-store) can name them without crossing the crate
 // boundary.
 pub use orbit_store::maintenance::task_registry::DanglingRelationTarget;
-pub use orbit_store::workflow::task::{
+pub use orbit_store::migrate::task::{
     ExportOutcome, ExportSelection, ImportAction, ImportConflictPolicy, ImportOutcome,
     ImportedTask, ReindexOutcome,
 };

@@ -64,7 +64,7 @@ The detector can't see hidden flags, output-shape changes or new validation, so 
 A breaking on-disk change must ship its migration in the same PR:
 
 - **SQLite schema:** add to `MIGRATIONS` and bump `SUPPORTED_SCHEMA_VERSION` in `crates/orbit-store/src/driver/sqlite/host/schema/mod.rs`.
-- **Everything else** (directories, non-SQLite state files, log and index locations, file formats): add a `LAYOUT_MIGRATIONS` entry and bump `SUPPORTED_LAYOUT_VERSION` in `crates/orbit-store/src/workflow/layout/registry.rs`.
+- **Everything else** (directories, non-SQLite state files, log and index locations, file formats): add a `LAYOUT_MIGRATIONS` entry and bump `SUPPORTED_LAYOUT_VERSION` in `crates/orbit-store/src/migrate/layout/registry.rs`.
 
 Each entry declares `MigrationCompatibility::Additive` (older binaries can read the state and keep writing), `::ReadCompatible` (older binaries open SQLite state read-only; newer layout state requires an updated binary) or `::Breaking` (older binaries refuse and name the migration). Declare `Breaking` when unsure. The contract is in [docs/design/state-compatibility](docs/design/state-compatibility/2_design.md).
 

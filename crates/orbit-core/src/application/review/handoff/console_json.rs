@@ -1,6 +1,6 @@
 //! JSON renderers for the owner operator console.
 
-use orbit_store::contracts::{ClaimInspection, ClaimMutationResult, ExecutionClaimPhase};
+use orbit_store::contract::{ClaimInspection, ClaimMutationResult, ExecutionClaimPhase};
 use orbit_types::workflow::handoff::{
     AcceptedHandoff, LandingAttempt, LandingAttemptState, LandingStartRequest, LandingStartState,
 };

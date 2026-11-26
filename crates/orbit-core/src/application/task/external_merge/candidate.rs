@@ -2,7 +2,7 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, ClaimInspection, ExecutionClaimPhase,
 };
 use orbit_types::task::{

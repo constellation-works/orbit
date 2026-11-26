@@ -1,7 +1,7 @@
 //! Refused settlements cannot create ledgers or replace operator reset history.
 
 use super::*;
-use orbit_store::contracts::{ClaimAttribution, ClaimedReviewCarry, ReviewResetRequest};
+use orbit_store::contract::{ClaimAttribution, ClaimedReviewCarry, ReviewResetRequest};
 use orbit_types::workflow::{ReviewBudget, ReviewLedger};
 
 fn session(machine: &str) -> ToolSessionContext {

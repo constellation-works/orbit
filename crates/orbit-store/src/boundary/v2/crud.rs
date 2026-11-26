@@ -1,5 +1,5 @@
 use super::*;
-use crate::contracts::TaskListFilter;
+use crate::contract::TaskListFilter;
 use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
@@ -416,7 +416,7 @@ impl TaskV2Store {
     /// bundle is gone.
     fn read_registered_owner_bundle(
         &self,
-        binding: &crate::contracts::TaskBundleBinding,
+        binding: &crate::contract::TaskBundleBinding,
     ) -> Result<Option<TaskBundleV2>, OrbitError> {
         let id = binding.task_id.as_str();
         let owner = TaskBundleStoreV2::new(self.registry.clone(), binding.partition_id.clone());
@@ -456,7 +456,7 @@ impl TaskV2Store {
     /// error naming the owner instead of a prerequisite declared missing.
     fn ensure_registered_bundle_absent(
         &self,
-        binding: &crate::contracts::TaskBundleBinding,
+        binding: &crate::contract::TaskBundleBinding,
         bundle_dir: &Path,
     ) -> Result<(), OrbitError> {
         if bundle_dir.try_exists().unwrap_or(false) {

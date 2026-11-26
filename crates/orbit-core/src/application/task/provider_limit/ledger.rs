@@ -21,7 +21,7 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_config::{ProviderLimitBudget, ProviderLimitBudgetUnit, ProviderLimitTarget};
-use orbit_store::contracts::ProviderLedgerEntry;
+use orbit_store::contract::ProviderLedgerEntry;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::Provider;
 

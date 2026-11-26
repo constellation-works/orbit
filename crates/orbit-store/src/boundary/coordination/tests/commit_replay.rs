@@ -14,7 +14,7 @@ use orbit_common::fs::io::FileLockOptions;
 use super::super::apply::apply_fault::{self, Fault};
 use super::claim_section::Owner;
 use crate::boundary::v2_bundle::COMMIT_LEASE_DIR;
-use crate::contracts::{ExecutionClaimPhase, RetentionWorkspaceScope, TaskCommitJournalState};
+use crate::contract::{ExecutionClaimPhase, RetentionWorkspaceScope, TaskCommitJournalState};
 
 /// The partition's commit leases, by name.
 pub(super) fn leases(owner: &Owner) -> Vec<std::path::PathBuf> {

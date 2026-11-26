@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::overlap_index::OverlapIndex;
-use orbit_store::contracts::{ActiveTaskReservation, TaskListFilter};
+use orbit_store::contract::{ActiveTaskReservation, TaskListFilter};
 use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
 use serde_json::{Value, json};
 

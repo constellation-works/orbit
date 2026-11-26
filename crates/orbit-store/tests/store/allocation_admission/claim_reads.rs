@@ -1,7 +1,7 @@
 //! Targeted claim reads and batched lifecycle inspection through composition.
 
 use orbit_common::ClaimRefusalKind;
-use orbit_store::contracts::{BranchObservationOutcome, DeferredBranchObservation};
+use orbit_store::contract::{BranchObservationOutcome, DeferredBranchObservation};
 
 use super::*;
 

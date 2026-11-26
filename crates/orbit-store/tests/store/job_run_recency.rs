@@ -1,7 +1,7 @@
 // Per-job streak reads must not walk other jobs' retained history.
 #[test]
 fn per_job_recency_reads_do_not_scan_unrelated_runs() {
-    use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+    use orbit_store::contract::{JobRunOrder, JobRunQuery};
     use rusqlite::StatementStatus;
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
 

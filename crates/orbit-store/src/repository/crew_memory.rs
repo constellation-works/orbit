@@ -15,7 +15,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::contracts::{
+use crate::contract::{
     CrewMemoryClosedProposalRow, CrewMemoryEventRow, CrewMemoryProposalDecision,
     CrewMemoryProposalRow, CrewMemoryRevisionRow,
 };

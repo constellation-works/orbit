@@ -9,7 +9,7 @@ use rusqlite::{ErrorCode, OptionalExtension, TransactionBehavior, params};
 
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
-use crate::contracts::TaskDecisionSnapshot;
+use crate::contract::TaskDecisionSnapshot;
 
 impl TaskRegistryStore {
     /// Derived projections in this partition. A pre-ledger read-only

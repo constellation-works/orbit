@@ -270,7 +270,7 @@ fn landed_facts_notify_only_matching_bases_once() {
     .history
     .update_task_history(
         &task.id,
-        orbit_store::contracts::TaskHistoryUpdateParams {
+        orbit_store::contract::TaskHistoryUpdateParams {
             actor: "fixture".into(),
             append_history: vec![orbit_types::task::TaskHistoryEntry {
                 at: chrono::Utc::now(),

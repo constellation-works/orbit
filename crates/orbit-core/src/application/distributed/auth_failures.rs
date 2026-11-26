@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+use orbit_store::contract::{JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{
     ActivityCrewDraw, CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState,

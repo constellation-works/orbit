@@ -31,7 +31,7 @@ use std::path::Path;
 
 use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::fs::overlap_index::OverlapIndex;
-use orbit_store::contracts::ExecutionClaim;
+use orbit_store::contract::ExecutionClaim;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 

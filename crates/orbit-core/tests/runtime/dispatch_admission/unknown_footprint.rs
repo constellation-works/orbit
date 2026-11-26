@@ -97,7 +97,7 @@ fn record_pilot_assessment(runtime: &OrbitRuntime, task: &str) {
     .history
     .update_task_history(
         task,
-        orbit_store::contracts::TaskHistoryUpdateParams {
+        orbit_store::contract::TaskHistoryUpdateParams {
             actor: "task-pilot".into(),
             append_comments: vec![orbit_types::task::TaskComment {
                 at,

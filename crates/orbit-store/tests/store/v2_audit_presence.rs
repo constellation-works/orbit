@@ -1,4 +1,4 @@
-use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams};
+use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
 
 #[test]
 fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {

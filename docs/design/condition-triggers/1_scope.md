@@ -60,7 +60,7 @@ about missing predicates or edge state describe the motivation, not current gaps
 - **Keyed actions.** Members claim attempts with an `action_key`. Before a job is
   submitted, the job store resolves that key to any existing run
   (`automation_job_for_key`,
-  `crates/orbit-store/src/contracts/job_run.rs`). Task
+  `crates/orbit-store/src/contract/job_run.rs`). Task
   creation can reserve a key, its input digest and the task ID before it writes the
   bundle (`add_task_admitted_guarded`, `crates/orbit-core/src/application/task/add.rs`).
   Time-scheduled auto-tasks use a different method. They claim a slot in a cursor
@@ -112,7 +112,7 @@ The current code shapes the fix in four ways:
 - **No workspace-wide change feed exists.** Task events are appended to each task's
   own events file (`TaskEventRowV2`, `crates/orbit-types/src/task/artifacts.rs`).
   The store's task query filters by status and tag
-  (`crates/orbit-store/src/contracts/task/query.rs`), but has no "changed since"
+  (`crates/orbit-store/src/contract/task/query.rs`), but has no "changed since"
   filter.
 - **Orbit runs no long-lived watcher.** The clock tick is a stateless one-shot
   started by launchd or systemd. Coordination-state automation runs only in owner

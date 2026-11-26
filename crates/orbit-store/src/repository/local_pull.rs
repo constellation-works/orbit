@@ -14,7 +14,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::contracts::{LocalPullAdmission, PullDestination};
+use crate::contract::{LocalPullAdmission, PullDestination};
 use crate::store::{Snapshot, Tx};
 
 /// Serialized names (`LocalPullPhase` is `snake_case`) of the phases that no

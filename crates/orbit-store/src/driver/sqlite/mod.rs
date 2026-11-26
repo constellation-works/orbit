@@ -9,7 +9,7 @@ pub(crate) mod codec {
     use orbit_common::storage::sqlite::sqlite_store_error;
     use rusqlite::{Connection, Row, params};
 
-    use crate::contracts::{HostResourceMinute, RunResourceMinute};
+    use crate::contract::{HostResourceMinute, RunResourceMinute};
 
     /// Fixed-width UTC RFC3339 text (microseconds, `Z`) for lexical comparisons.
     pub(crate) fn stamp(at: DateTime<Utc>) -> String {

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{AdmissionLoad, AdmissionRun};
+use orbit_store::contract::{AdmissionLoad, AdmissionRun};
 use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 
 use super::baseline::{CurrentUse, YoungDelivery, baseline};
@@ -176,7 +176,7 @@ pub(crate) fn build_forecast(
 
 /// `a_r`: whole minutes since the reservation was written.
 fn reservation_age(
-    reservation: &orbit_store::contracts::AdmissionReservation,
+    reservation: &orbit_store::contract::AdmissionReservation,
     now: DateTime<Utc>,
 ) -> usize {
     let seconds = (now - reservation.reserved_at).num_seconds().max(0);
@@ -250,7 +250,7 @@ fn run_task(run: &AdmissionRun) -> Option<&str> {
 /// workspace since it was written.
 fn has_run(
     load: &AdmissionLoad,
-    reservation: &orbit_store::contracts::AdmissionReservation,
+    reservation: &orbit_store::contract::AdmissionReservation,
 ) -> bool {
     load.runs.iter().any(|run| {
         run.workspace_id == reservation.workspace_id

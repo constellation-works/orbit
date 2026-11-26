@@ -19,7 +19,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
-use crate::contracts::{
+use crate::contract::{
     AdmissionForecastPoint, AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS,
     CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunInterval, DeliveryRunResources,
     DeliveryRunsFreshness, DeliveryRunsLoad, HostResourceMinute, ResourceHistoryKeep,

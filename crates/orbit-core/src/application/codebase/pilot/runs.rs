@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     InvocationAccountingFact, InvocationAccountingQuery, InvocationQuery, InvocationRecord,
     JobRunQuery,
 };

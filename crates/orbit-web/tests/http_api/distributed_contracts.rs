@@ -2,7 +2,7 @@ use super::support::{Fixture, Server, error_code, isolated};
 use axum::http::StatusCode;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRunContext, ClaimInspection, ExecutionClaim, ExecutionClaimPhase,
 };
 use orbit_types::task::ExecutionLocation;

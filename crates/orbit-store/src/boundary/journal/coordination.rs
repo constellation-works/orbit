@@ -6,7 +6,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::{ExecutorCensusEntry, TaskCoordinationRow};
+use crate::contract::{ExecutorCensusEntry, TaskCoordinationRow};
 
 /// v90 `idx_task_coordination_claims_by_task`. The kind is a literal so the
 /// partial index applies, and `json_extract` is spelled exactly as the

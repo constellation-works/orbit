@@ -50,7 +50,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::file_lock::{FileLockGuard, FileLockOptions, acquire_exclusive_file_lock};
 use orbit_common::fs::generation::{GenerationUpdate, authority_root};
-use orbit_store::workflow::layout::{
+use orbit_store::migrate::layout::{
     SUPPORTED_LAYOUT_VERSION, current_layout_version, layout_ever_stamped,
 };
 use serde::{Deserialize, Serialize};

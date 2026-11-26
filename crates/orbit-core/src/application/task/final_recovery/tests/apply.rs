@@ -8,7 +8,7 @@ use crate::runtime::friction::WorkspaceFrictions as FrictionStore;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, Task, TaskRelation, TaskRelationType, TaskStatus};
 use serde_json::{Value, json};

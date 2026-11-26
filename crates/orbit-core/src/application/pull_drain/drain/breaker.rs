@@ -19,9 +19,9 @@
 //!
 //! Only claims whose failure could be this host's count: released claims and
 //! Orbit's refusals of an implementer's handoff do not
-//! ([`orbit_store::contracts::ClaimFailure::trips_breaker`]).
+//! ([`orbit_types::workflow::is_contract_refusal`]).
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::PullFailureStreak;
+use orbit_store::contract::PullFailureStreak;
 use orbit_types::workflow::PullBreaker;
 
 /// Consecutive claims a drain settled as failures, with no handoff between

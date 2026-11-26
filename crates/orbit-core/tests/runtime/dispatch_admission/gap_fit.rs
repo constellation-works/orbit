@@ -14,7 +14,7 @@ use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
 use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionForecastPoint, AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase,
     ExecutionLocation, FrictionListFilter, RunResourceMinute,
 };
@@ -141,7 +141,7 @@ impl Fixture {
                         resumed: false,
                         delivery_admitted_at: Some(admitted),
                         cpu_cores: *cores,
-                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        cpu_accounting: Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.into()),
                         memory_bytes: memory,
                         samples: 12,
                         crew_model: None,

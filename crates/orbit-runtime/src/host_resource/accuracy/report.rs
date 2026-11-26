@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources, HostResourceMinute,
 };
 

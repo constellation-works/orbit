@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
 use super::{CLAIM_KIND, RECEIPT_KIND, StoredReceipt, decode, receipt_key};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     pub(super) fn receipt_row(

@@ -119,7 +119,7 @@ fn local_done_task(pair: &Pair) -> String {
 
 fn mirror_tasks(pair: &Pair, source: &OrbitRuntime) {
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
-    use orbit_store::workflow::task::{
+    use orbit_store::migrate::task::{
         ExportSelection, ImportConflictPolicy, export_tasks, import_tasks,
     };
 

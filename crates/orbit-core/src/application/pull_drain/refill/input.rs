@@ -2,7 +2,7 @@
 
 use chrono::Duration;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::PullDestination;
+use orbit_store::contract::PullDestination;
 use serde_json::Value;
 
 use super::super::drain::DEFAULT_BREAKER_COOLDOWN_SECONDS;

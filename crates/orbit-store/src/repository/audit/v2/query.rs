@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 
-use crate::contracts::{V2AuditEventFilter, V2AuditEventRow};
+use crate::contract::{V2AuditEventFilter, V2AuditEventRow};
 
 use super::rows::{collect_rows, row_to_v2_audit_event};
 

@@ -4,7 +4,7 @@ mod attempts;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::Tx;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ReviewInvocationRecord, ReviewRelease, ReviewReserveRequest, ReviewResetRequest,
     ReviewSettlement,
 };

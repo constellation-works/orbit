@@ -2,7 +2,7 @@
 
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{OrbitError, StorageLayer};
-use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
+use orbit_store::contract::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 

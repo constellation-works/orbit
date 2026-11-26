@@ -4,7 +4,7 @@ use super::partition_id::validate_partition_id;
 use super::queries::workspace_by_id;
 use super::store::TaskRegistryStore;
 use super::util::now_string;
-use crate::contracts::AllocatorSeedOutcome;
+use crate::contract::AllocatorSeedOutcome;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{

@@ -2,7 +2,7 @@
 
 use crate::application::task::{TaskListFilter, metadata_task};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExecutorCapability, ExecutorCensus};
+use orbit_store::contract::{ExecutorCapability, ExecutorCensus};
 use orbit_types::task::TaskStatus;
 
 use crate::OrbitRuntime;

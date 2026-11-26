@@ -9,7 +9,7 @@ use orbit_core::adapter::HubCoordinationExecutor;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams};
+use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use orbit_tools::ToolContext;
 use orbit_types::tool::{McpCapability, ToolSessionContext};

@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionLookup, AdmissionRequest};
+use orbit_store::contract::{AdmissionLookup, AdmissionRequest};
 use orbit_types::tool::ToolSessionContext;
 
 use crate::OrbitRuntime;

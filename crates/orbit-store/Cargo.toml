@@ -37,6 +37,7 @@ tempfile.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+orbit-store = { path = ".", features = ["test-support"] }
 sha2.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -1,7 +1,7 @@
 //! A no-diff grant checks persistent holders while retaining no files.
 
 use super::*;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };
 

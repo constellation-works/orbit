@@ -147,7 +147,7 @@ fn perf_claim_only_holds_the_lane_on_its_execution_machine() {
     ) {
         return;
     }
-    use orbit_store::contracts::{
+    use orbit_store::contract::{
         AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
     };
     for (machine, local) in [("remote", false), ("owner", true)] {

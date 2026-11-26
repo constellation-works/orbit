@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 use super::steps::{
     apply_archive_friction_tasks, apply_baseline_layout, remove_legacy_task_projections,
 };
-use crate::contracts::MigrationCompatibility;
+use crate::contract::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.

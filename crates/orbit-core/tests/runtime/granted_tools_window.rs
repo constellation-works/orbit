@@ -3,7 +3,7 @@
 use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };
 use orbit_types::task::{Task, TaskStatus};

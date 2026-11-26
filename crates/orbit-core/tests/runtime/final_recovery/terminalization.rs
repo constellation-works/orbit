@@ -14,7 +14,7 @@ use orbit_engine::{
     FinalRecoveryApplied, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
     WORKFLOW_RUN_FAILED_EVENT, execute_job_with_resume,
 };
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_tools::ToolContext;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::activity_job::{JobV2, V2AuditEventKind};

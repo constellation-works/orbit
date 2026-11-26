@@ -49,8 +49,12 @@ allowed_internal_deps() {
       # keeping a second parser and a second set of validators.
       echo "orbit-common orbit-config orbit-types"
       ;;
-    orbit-policy | orbit-exec | orbit-store)
+    orbit-policy | orbit-exec)
       echo "orbit-common orbit-types"
+      ;;
+    orbit-store)
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-common orbit-store orbit-types"
       ;;
     orbit-auth)
       # Credential code only: no HTTP framework, runtime handle or Orbit store,
@@ -119,6 +123,10 @@ allowed_dev_only_deps() {
     orbit-tools)
       # Tools' own integration tests enable its `test-support` feature.
       echo "orbit-tools"
+      ;;
+    orbit-store)
+      # Store's own integration tests enable its `test-support` feature.
+      echo "orbit-store"
       ;;
     orbit-mcp)
       # Only integration tests enable its test-support transport hooks.
@@ -267,11 +275,30 @@ for raw_path in sys.argv[2:]:
     path = pathlib.Path(raw_path)
     manifest = path.relative_to(workspace_manifest.parent)
     data = tomllib.loads(path.read_text())
+    crate_name = data.get("package", {}).get("name", "")
     for section in ("dependencies", "dev-dependencies", "build-dependencies"):
         check_group(manifest, section, data.get(section, {}))
     for target, groups in data.get("target", {}).items():
         for section in ("dependencies", "dev-dependencies", "build-dependencies"):
             check_group(manifest, f"target.{target}.{section}", groups.get(section, {}))
+    # Only the four SQLite-owning crates may depend on `rusqlite` in production
+    # (`[dependencies]` / `[build-dependencies]`).
+    if crate_name not in ("orbit-store", "orbit-search", "orbit-auth", "orbit-common"):
+        for section in ("dependencies", "build-dependencies"):
+            if "rusqlite" in data.get(section, {}):
+                print(
+                    f"{manifest}: {section}.rusqlite is forbidden outside "
+                    "orbit-store, orbit-search, orbit-auth and orbit-common"
+                )
+                failed = True
+        for target, groups in data.get("target", {}).items():
+            for section in ("dependencies", "build-dependencies"):
+                if "rusqlite" in groups.get(section, {}):
+                    print(
+                        f"{manifest}: target.{target}.{section}.rusqlite is forbidden outside "
+                        "orbit-store, orbit-search, orbit-auth and orbit-common"
+                    )
+                    failed = True
 
 sys.exit(1 if failed else 0)
 PY
@@ -1934,37 +1961,39 @@ if dependency_matches -n 'ResolvedConfig::load|ConfigRoots::' \
 fi
 
 # orbit-store is intentionally one crate, but its internal persistence graph
-# is directional: contracts and shared fs mechanics are leaves; each driver is
+# is directional: contract and shared fs mechanics are leaves; each driver is
 # isolated; task writes across drivers belong to the commit boundary.
 store_src="$repo_root/crates/orbit-store/src"
-if ! super_chains_into "$store_src" contracts 'crate::driver|crate::repository|crate::workflow|crate::boundary' named-path ||
+if ! super_chains_into "$store_src" contract 'crate::driver|crate::repository|crate::migrate|crate::boundary' named-path ||
   dependency_matches -n '\brusqlite\b' \
-    "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
-  echo "orbit-store contracts must not import persistence implementations"
+    "$store_src/contract" -g '*.rs' -g '!**/tests/**'; then
+  echo "orbit-store contract must not import persistence implementations"
   fail=1
 fi
 
-if ! super_chains_into "$store_src" driver/file 'crate::driver::sqlite|crate::repository|crate::workflow|crate::boundary|crate::Store|crate::StoreTx' named-path; then
-  echo "orbit-store file driver must not import SQLite, repositories, workflows, or the task boundary"
+if ! super_chains_into "$store_src" driver/file 'crate::driver::sqlite|crate::repository|crate::migrate|crate::boundary|crate::Store|crate::StoreTx' named-path; then
+  echo "orbit-store file driver must not import SQLite, repositories, migrations, or the task boundary"
   fail=1
 fi
 
-if ! super_chains_into "$store_src" driver/sqlite 'crate::driver::file|crate::repository|crate::workflow|crate::boundary' named-path; then
-  echo "orbit-store SQLite driver must not import file drivers, repositories, workflows, or the task boundary"
+if ! super_chains_into "$store_src" driver/sqlite 'crate::driver::file|crate::repository|crate::migrate|crate::boundary' named-path; then
+  echo "orbit-store SQLite driver must not import file drivers, repositories, migrations, or the task boundary"
   fail=1
 fi
 
-if ! super_chains_into "$store_src" fs 'crate::driver|crate::repository|crate::workflow|crate::boundary' named-path; then
+if ! super_chains_into "$store_src" fs 'crate::driver|crate::repository|crate::migrate|crate::boundary' named-path; then
   echo "orbit-store filesystem primitives must not import drivers or orchestration"
   fail=1
 fi
 
 for retired_path in \
   "$store_src/backend" \
+  "$store_src/contracts" \
   "$store_src/file" \
   "$store_src/sqlite" \
   "$store_src/state_io" \
-  "$store_src/task_migration"; do
+  "$store_src/task_migration" \
+  "$store_src/workflow"; do
   if [[ -e "$retired_path" ]]; then
     echo "retired orbit-store ownership path still exists: $retired_path"
     fail=1

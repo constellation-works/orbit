@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, TimeZone, Utc};
-use orbit_core::{
-    JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime, V2AuditEventInsertParams,
-};
+use orbit_core::test_support::V2AuditEventInsertParams;
+use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime};
 use orbit_types::workflow::{ChildDispatch, PipelineState};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
@@ -1376,8 +1375,8 @@ pub(super) fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<
     );
 }
 
-pub(super) fn pull_destination() -> orbit_store::contracts::PullDestination {
-    orbit_store::contracts::PullDestination {
+pub(super) fn pull_destination() -> orbit_store::contract::PullDestination {
+    orbit_store::contract::PullDestination {
         owner_machine_id: "hm_owner".into(),
         owner_workspace_id: "ws_owner".into(),
         selector: "owner/workspace".into(),
@@ -1388,7 +1387,7 @@ pub(super) fn pull_destination() -> orbit_store::contracts::PullDestination {
 pub(super) fn pull_request(
     run: &JobRun,
     request_id: &str,
-) -> orbit_store::contracts::AdmissionRequest {
+) -> orbit_store::contract::AdmissionRequest {
     serde_json::from_value(json!({
         "request_id": request_id, "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
         "run_context": { "run_id": run.run_id, "job_name": run.job_id, "machine_name": "follower" },
@@ -1398,7 +1397,7 @@ pub(super) fn pull_request(
 
 /// Bind `task_id`'s run to another host in the task document store.
 pub(super) fn bind_task_run_to_host(fixture: &Fixture, task_id: &str, run_id: &str) {
-    use orbit_store::contracts::TaskDocumentUpdateParams;
+    use orbit_store::contract::TaskDocumentUpdateParams;
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
     let documents = orbit_store::compose::workspace_coordinated_backends(
@@ -1429,7 +1428,7 @@ pub(super) fn persist_admission(
     store: &orbit_store::Store,
     workspace: &str,
     request_id: &str,
-    admission: &orbit_store::contracts::LocalPullAdmission,
+    admission: &orbit_store::contract::LocalPullAdmission,
 ) {
     store.connection().lock().unwrap().execute(
         "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",

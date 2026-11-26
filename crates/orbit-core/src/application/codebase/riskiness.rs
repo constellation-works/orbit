@@ -41,7 +41,7 @@ use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::LandedDiffStats;
+use orbit_store::contract::LandedDiffStats;
 use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 use serde_json::Value;

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use chrono::{SubsecRound, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{CrewMemoryEventRow, CrewMemoryRevisionRow};
+use orbit_store::contract::{CrewMemoryEventRow, CrewMemoryRevisionRow};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 

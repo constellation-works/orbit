@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskHistoryEntry};
 
 use crate::boundary::TaskV2Store;
-use crate::contracts::TaskHistoryUpdateParams;
+use crate::contract::TaskHistoryUpdateParams;
 
 /// History records of a workspace's task store.
 #[derive(Clone)]
@@ -29,7 +29,7 @@ impl TaskHistoryRepository {
     pub fn get_task_histories(
         &self,
         ids: &[String],
-    ) -> Vec<crate::contracts::TaskHistoryReadOutcome> {
+    ) -> Vec<crate::contract::TaskHistoryReadOutcome> {
         self.store.read_task_histories(ids)
     }
 
@@ -62,7 +62,7 @@ impl TaskHistoryRepository {
         &self,
         id: &str,
         params: TaskHistoryUpdateParams,
-    ) -> Result<crate::contracts::TaskRow, OrbitError> {
+    ) -> Result<crate::contract::TaskRow, OrbitError> {
         self.store.update_task_history(id, &params)
     }
 

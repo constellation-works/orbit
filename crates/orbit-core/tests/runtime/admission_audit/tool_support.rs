@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskCreateParams;
+use orbit_store::contract::TaskCreateParams;
 use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};

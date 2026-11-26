@@ -36,7 +36,7 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
                 &claim.claim_id,
                 Some(&leaf),
                 mutation,
-                orbit_store::contracts::ClaimAttribution::default(),
+                orbit_store::contract::ClaimAttribution::default(),
             )
             .expect_err("another session machine must not settle this claim");
         assert_eq!(
@@ -74,12 +74,12 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
             &claim.claim_id,
             Some(&leaf),
             ClaimMutation::Release(evidence),
-            orbit_store::contracts::ClaimAttribution::default(),
+            orbit_store::contract::ClaimAttribution::default(),
         )
         .expect("the owning session machine can still settle its attempt");
     assert_eq!(
         settled.phase,
-        orbit_store::contracts::ExecutionClaimPhase::Revoked
+        orbit_store::contract::ExecutionClaimPhase::Revoked
     );
     assert_eq!(pair.owner_status(&claim.task_id), "backlog");
 }
@@ -796,7 +796,7 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
 /// not re-apply its crew attribution after an operator re-pinned the task.
 fn replayed_settlement_leaves_newer_crew_unchanged(
     mutation: ClaimMutation,
-    expected_phase: orbit_store::contracts::ExecutionClaimPhase,
+    expected_phase: orbit_store::contract::ExecutionClaimPhase,
 ) {
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
@@ -811,7 +811,7 @@ fn replayed_settlement_leaves_newer_crew_unchanged(
         effective_capabilities: BTreeSet::from([McpCapability::Agent]),
         ..ToolSessionContext::default()
     };
-    let attribution = orbit_store::contracts::ClaimAttribution {
+    let attribution = orbit_store::contract::ClaimAttribution {
         crew: Some("luna".into()),
         ..Default::default()
     };
@@ -908,7 +908,7 @@ fn a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchange
             summary: Some("leaf failed".into()),
             ..Default::default()
         }),
-        orbit_store::contracts::ExecutionClaimPhase::Failed,
+        orbit_store::contract::ExecutionClaimPhase::Failed,
     );
 }
 
@@ -918,7 +918,7 @@ fn a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_uncha
             summary: Some("leaf released".into()),
             ..Default::default()
         }),
-        orbit_store::contracts::ExecutionClaimPhase::Revoked,
+        orbit_store::contract::ExecutionClaimPhase::Revoked,
     );
 }
 
@@ -950,7 +950,7 @@ fn an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchan
         effective_capabilities: BTreeSet::from([McpCapability::Agent]),
         ..ToolSessionContext::default()
     };
-    let attribution = orbit_store::contracts::ClaimAttribution {
+    let attribution = orbit_store::contract::ClaimAttribution {
         crew: Some("luna".into()),
         ..Default::default()
     };
@@ -1016,7 +1016,7 @@ fn an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchan
         .expect("the checkpoint ran the other settlement");
     assert_eq!(
         first.phase,
-        orbit_store::contracts::ExecutionClaimPhase::Failed
+        orbit_store::contract::ExecutionClaimPhase::Failed
     );
     assert_eq!(after_first["crew"], "luna", "{after_first:#}");
     assert_eq!(
@@ -1069,12 +1069,12 @@ fn a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back() {
                 crew: Some("luna".into()),
                 ..Default::default()
             }),
-            orbit_store::contracts::ClaimAttribution::default(),
+            orbit_store::contract::ClaimAttribution::default(),
         )
         .expect("a failure reporting its crew settles");
     assert_eq!(
         settled.phase,
-        orbit_store::contracts::ExecutionClaimPhase::Failed
+        orbit_store::contract::ExecutionClaimPhase::Failed
     );
     let after = pair.owner_task(&task);
     assert_eq!(after["crew"], "luna", "{after:#}");

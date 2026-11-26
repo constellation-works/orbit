@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimEvidence, ClaimWorkerUpdate};
+use orbit_store::contract::{ClaimEvidence, ClaimWorkerUpdate};
 use orbit_types::task::{self, RecordedReviewSettlement, ReviewSettlementGate};
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
 use serde_json::json;

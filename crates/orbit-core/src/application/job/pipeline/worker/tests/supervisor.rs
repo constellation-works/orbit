@@ -44,7 +44,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::contracts::*;
+use orbit_store::contract::*;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use orbit_types::workspace::WorkspacePaths;
 
@@ -368,7 +368,7 @@ impl PipelineRunHost for RescueHost {
         Ok(matches!(
             self.inner
                 .finalize_job_run_with_outcome(run_id, state, finished_at, Some(0))?,
-            orbit_store::contracts::JobRunFinalization::Finalized
+            orbit_store::contract::JobRunFinalization::Finalized
         ))
     }
 }

@@ -18,21 +18,21 @@ mod git_test_support;
 
 mod boundary;
 pub mod compose;
-pub mod contracts;
+pub mod contract;
 mod driver;
 mod file_store;
 mod fs;
 pub(crate) mod json_schema;
+pub mod migrate;
 mod repository;
 mod store;
-pub mod workflow;
 
 /// Operator-only SQLite and coordination-registry access. Ordinary consumers
-/// should depend on [`contracts`] and obtain implementations from composition.
+/// should depend on [`contract`] and obtain implementations from composition.
 pub mod maintenance {
     pub use crate::driver::sqlite::host::schema as migration;
     pub mod task_registry {
-        pub use crate::contracts::WorkspaceConfig;
+        pub use crate::contract::WorkspaceConfig;
         pub use crate::driver::file::workspace_binding::{
             read_workspace_config, read_workspace_config_optional, workspace_config_path,
             write_workspace_config,
@@ -66,13 +66,12 @@ use chrono::{DateTime, Utc};
 
 pub use boundary::TaskV2Store;
 pub use boundary::{TaskCommitBoundary, TaskCoordination, admission_refusal};
-pub use contracts::incident::{
+pub use contract::incident::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
     FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,
     JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
-    is_failure_only_diagnostic_surface,
 };
-pub(crate) use contracts::{
+pub(crate) use contract::{
     ActiveTaskReservation, ExpiredTaskReservation, ReleasedTaskReservation,
     TaskReservationCheckParams, TaskReservationCheckResult, TaskReservationListResult,
     TaskReservationOwnedConflictsParams, TaskReservationOwnedConflictsResult,
@@ -83,7 +82,7 @@ pub(crate) use contracts::{
     WorkspaceClaimCheckResult, WorkspaceClaimHolder, WorkspaceClaimReleaseParams,
     WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
 };
-pub use contracts::{
+pub use contract::{
     ActivityInvocationCount, ActivityInvocationMetrics, AuditEventFilter, AuditEventInsertParams,
     AuditToolAggregate, AuditToolModelAggregate, InvocationInsertParams, InvocationQuery,
     InvocationRecord, InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams,

@@ -1,7 +1,7 @@
 //! Handoff attribution must not introduce an enum value into older clients' lifecycle rows.
 
 use super::*;
-use orbit_store::contracts::{ClaimAttribution, ClaimInspection, ClaimSettlementKind};
+use orbit_store::contract::{ClaimAttribution, ClaimInspection, ClaimSettlementKind};
 
 // The closed settlement vocabulary shipped in v0.30.0 (34b2240d16c3a8eb5c1a00eeb0a7211b6702027d).
 #[derive(Debug, PartialEq, Eq, serde::Deserialize)]

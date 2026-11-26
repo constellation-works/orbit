@@ -8,7 +8,7 @@
 //! [`RUN_DEFERRED_SURFACE`] audit row, which the incident classifier lists
 //! as `deferred` rather than as a failure.
 
-use orbit_store::contracts::RUN_DEFERRED_SURFACE;
+use orbit_store::contract::RUN_DEFERRED_SURFACE;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{HeldFailure, JobRun};
 use serde_json::{Value, json};

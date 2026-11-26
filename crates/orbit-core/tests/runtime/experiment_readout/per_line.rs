@@ -9,7 +9,7 @@ use orbit_core::application::experiment::{
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     DiffClassCounts, ExperimentAssignment, LandedDiffSource, LandedDiffStats, ReviewableLines,
 };
 use orbit_types::task::TaskHistoryEntry;
@@ -164,7 +164,7 @@ fn backdate_created_at(global: &Path, task_id: &str, done_at: DateTime<Utc>, hou
 
 fn cost(runtime: &OrbitRuntime, task_id: &str, usd: f64) {
     runtime
-        .insert_invocation_trace_record(&orbit_store::contracts::InvocationInsertParams {
+        .insert_invocation_trace_record(&orbit_store::contract::InvocationInsertParams {
             agent_execution_id: None,
             job_run_id: format!("fixture-{task_id}"),
             account: None,

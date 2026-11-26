@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{AgentExecutionRecord, InvocationAccountingFact};
+use orbit_store::contract::{AgentExecutionRecord, InvocationAccountingFact};
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::AgentExecutionIdentity;

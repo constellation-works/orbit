@@ -6,9 +6,9 @@
 //! five completions are the one-hour draws.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::StoredBacklogForecast;
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contracts::InvocationInsertParams;
+use orbit_store::contract::InvocationInsertParams;
+use orbit_store::contract::StoredBacklogForecast;
 use orbit_types::task::{TaskComplexity, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};

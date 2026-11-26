@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimSteeringReading, ClaimSteeringRecord};
+use orbit_store::contract::{ClaimSteeringReading, ClaimSteeringRecord};
 use orbit_tools::OwnerCoordinator;
 use orbit_types::task::{Task, TaskComment};
 use orbit_types::tool::ToolSessionContext;

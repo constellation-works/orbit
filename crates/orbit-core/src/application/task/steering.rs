@@ -33,7 +33,7 @@ use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_engine::{SteeringGateReading, SteeringRoundAdmission};
-use orbit_store::contracts::{ClaimSteeringReading, ClaimSteeringRecord};
+use orbit_store::contract::{ClaimSteeringReading, ClaimSteeringRecord};
 use orbit_types::task::{
     Task, TaskComment, TaskHistoryEntry, TaskStatus, refuses_implementer_writes,
 };

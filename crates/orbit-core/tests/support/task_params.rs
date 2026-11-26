@@ -1,7 +1,7 @@
 //! A minimal [`TaskCreateParams`] for orbit-core's unit tests (`lib.rs`) and the
 //! `runtime` integration binary, which cannot import `cfg(test)` library helpers.
 
-use orbit_store::contracts::TaskCreateParams;
+use orbit_store::contract::TaskCreateParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use serde_json::json;
 

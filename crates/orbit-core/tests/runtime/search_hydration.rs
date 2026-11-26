@@ -10,7 +10,7 @@ use orbit_common::test_env::{self, FixtureProgress};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
 use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitError, OrbitRuntime};
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use serde_json::json;
 use tempfile::TempDir;
 use tracing_subscriber::{Layer, layer::Context};

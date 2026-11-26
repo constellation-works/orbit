@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimFailure, ClaimMutation,
     LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination, PullFailureStreak,
 };
@@ -264,9 +264,9 @@ impl PullDrain<'_> {
             AdmissionLookup::Expired | AdmissionLookup::NotFound => {
                 let closed = self.update(record, LocalPullMutation::Refuse(refusal.to_string()))?;
                 let obsolete = record.request.caller_fingerprint.as_deref()
-                    != Some(orbit_store::contracts::distributed_drain_protocol_fingerprint());
+                    != Some(orbit_store::contract::distributed_drain_protocol_fingerprint());
                 let older_revision = record.request.caller_schema
-                    != orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
+                    != orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
                 if obsolete
                     && (matches!(refusal, OrbitError::ProtocolSkew(_))
                         || (older_revision && is_owner_refusal(&refusal)))

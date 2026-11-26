@@ -1,7 +1,7 @@
 // Retained reservation history must not turn active reads into table scans.
 #[test]
 fn retained_task_reservation_reads_do_not_scan_the_table() {
-    use orbit_store::contracts::{
+    use orbit_store::contract::{
         TaskReservationCheckParams, TaskReservationReleaseByOwnerParams,
         TaskReservationReleaseParams, TaskReservationReleaseReason,
     };

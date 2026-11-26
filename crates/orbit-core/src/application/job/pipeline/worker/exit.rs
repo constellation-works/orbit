@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::JobRunState;
 
 use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;

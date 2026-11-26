@@ -240,7 +240,7 @@ fn park_source(f: &mut Fixture, state: JobRunState, decision_hold: bool) {
             .runtime
             .complete_job_run_step(
                 &run.run_id,
-                &orbit_store::contracts::JobRunStepParams {
+                &orbit_store::contract::JobRunStepParams {
                     step_index: 40,
                     target_type: orbit_types::workflow::JobTargetType::Activity,
                     target_id: "review_gate_settle".into(),

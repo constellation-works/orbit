@@ -40,7 +40,7 @@ use rusqlite::Connection;
 use self::baseline::apply_registry_baseline;
 use self::decision_snapshots::apply_decision_snapshots;
 use self::index_task_type::apply_index_task_type;
-use crate::contracts::{MigrationCompatibility, StateComponent};
+use crate::contract::{MigrationCompatibility, StateComponent};
 use orbit_common::storage::sqlite::ledger::{LedgeredDatabase, Migration};
 
 /// `user_version` while every applied registry entry is `Additive`.

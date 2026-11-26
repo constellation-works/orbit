@@ -8,7 +8,7 @@ use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, agent_context_declared,
 };
 use orbit_common::security::application_credential::ApplicationCredential;
-use orbit_store::contracts::ApplicationConsentRecord;
+use orbit_store::contract::ApplicationConsentRecord;
 use orbit_types::tool::{
     ApplicationConsent, ApplicationConsentRequest, ApplicationInvocation, McpCapability,
     ToolSessionContext,
@@ -238,7 +238,7 @@ impl RuntimeKernel {
         consent: &ApplicationConsent,
         action: &str,
     ) -> Result<(), OrbitError> {
-        use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+        use orbit_store::contract::{AuditEventInsertParams, AuditInvocationFields};
         let invocation = ApplicationInvocation::new(consent.clone(), 0, false);
         self.record_audit_event_with_invocation(
             &AuditEventInsertParams {

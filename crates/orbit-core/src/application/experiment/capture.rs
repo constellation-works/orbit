@@ -44,7 +44,7 @@ impl OrbitRuntime {
     fn capture_experiment_assignments(
         &self,
         task_id: &str,
-        rows: Vec<orbit_store::contracts::ExperimentAssignment>,
+        rows: Vec<orbit_store::contract::ExperimentAssignment>,
     ) -> Result<CapturedExperiments, OrbitError> {
         let task = self.get_task(task_id)?;
         let explicit = self.task_crew_source(&task)? == Some(CrewSource::Explicit);

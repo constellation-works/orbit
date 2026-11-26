@@ -15,7 +15,7 @@ use super::{
     StoredReceipt, ValidationHold, admission_refusal, decode, digest, encode, receipt_key, row,
 };
 use crate::boundary::v2::{task_comment_from_row, task_from_bundle, task_history_from_events};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     /// One internal owner admission. Identity and resolved ship authority are
@@ -512,7 +512,7 @@ fn validate_request(
                 .caller_fingerprint
                 .as_deref()
                 .unwrap_or("unavailable"),
-            crate::contracts::distributed_drain_protocol_fingerprint(),
+            crate::contract::distributed_drain_protocol_fingerprint(),
         ))),
         // A caller that sends no fingerprint predates fingerprint negotiation.
         // Its build classifies only `invalid_input` as an owner refusal, so it

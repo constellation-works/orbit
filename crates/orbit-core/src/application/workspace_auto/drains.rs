@@ -1,6 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
+use orbit_store::contract::{DrainLeafOccupancy, JobRunQuery};
 use orbit_types::workflow::{
     AutoConcurrencyMode, DrainAdmissionsStop, DrainWorkerLimit, JobRun, PipelineState,
 };

@@ -894,7 +894,7 @@ impl RoutineDispatch for FlakyDispatch {
 #[test]
 fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds() {
     use orbit_automation::routines::breaker::BREAKER_OPEN_REASON;
-    use orbit_store::contracts::RoutineBreakerState;
+    use orbit_store::contract::RoutineBreakerState;
 
     let store = Store::open_in_memory().expect("in-memory store");
     let coll = collection(vec![routine("job", "forbid")]);
@@ -1086,7 +1086,7 @@ fn in_flight_fire_prevents_trip_until_its_outcome_is_known() {
 #[test]
 fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
     use orbit_automation::routines::breaker::BREAKER_OPEN_REASON;
-    use orbit_store::contracts::{RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState};
+    use orbit_store::contract::{RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState};
 
     let store = Store::open_in_memory().expect("in-memory store");
     let coll = collection(vec![routine_spec(
@@ -1268,7 +1268,7 @@ fn interleaving_fixture(
     InterleavingDispatch,
     DateTime<Utc>,
 ) {
-    use orbit_store::contracts::{RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState};
+    use orbit_store::contract::{RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState};
 
     let store = std::rc::Rc::new(Store::open_in_memory().expect("in-memory store"));
     let coll = collection(vec![routine_spec(
@@ -1343,7 +1343,7 @@ fn breaker_events(store: &Store) -> Vec<String> {
 /// lose the reset floor.
 #[test]
 fn operator_reset_committed_mid_sweep_is_not_undone_by_the_stale_pass() {
-    use orbit_store::contracts::RoutineBreakerState;
+    use orbit_store::contract::RoutineBreakerState;
 
     let (store, coll, dispatch, base) = interleaving_fixture(InterleavedOperatorAction::Reset);
     let reports = run_sweep_core(

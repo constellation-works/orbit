@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInspection, JobRunQuery};
+use orbit_store::contract::{ClaimInspection, JobRunQuery};
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskHistoryEntry, TaskStatus,
     names_task_delivery_pull_request,

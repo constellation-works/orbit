@@ -8,7 +8,7 @@
 //! claimed handoff never completes past review without the owner's approval,
 //! so neither does a recovered one.
 
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimFinalRecovery, ClaimMutationResult, ExecutionClaim, ExecutionClaimPhase,
 };
 use orbit_types::task::TaskStatus;

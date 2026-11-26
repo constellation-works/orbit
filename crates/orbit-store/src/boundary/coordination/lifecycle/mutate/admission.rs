@@ -1,7 +1,7 @@
 use super::super::super::TaskCommitBoundary;
 use super::super::codec::RECEIPT;
 use super::super::{encode, invalid};
-use crate::contracts::*;
+use crate::contract::*;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 

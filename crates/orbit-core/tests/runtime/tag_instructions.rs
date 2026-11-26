@@ -13,7 +13,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_engine::{DispatchError, RuntimeHost};
-use orbit_store::contracts::V2AuditEventInsertParams;
+use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_types::workflow::{
     MAX_TAG_INSTRUCTION_FILE_BYTES, PipelineState, TagInstruction, TagInstructionSource,
     V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,

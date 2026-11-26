@@ -172,7 +172,8 @@ pub mod test_support {
     /// The review ledger requests that admit an attempt and record its
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
-    pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    pub use orbit_store::V2AuditEventInsertParams;
+    pub use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
     /// Review ledger operations for delivery fixtures that drive a reviewer directly.
     pub mod review_ledger {
         pub use crate::application::review::ledger::{
@@ -277,25 +278,21 @@ pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{
     AuditEventFilter, AuditEventInsertParams, AuditToolAggregate, AuditToolModelAggregate,
-    V2AuditEventFilter, V2AuditEventInsertParams,
+    V2AuditEventFilter,
 };
 pub use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,
     TaskStatus, TaskType,
 };
-pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
-pub use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
-pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
-// Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
-// the dashboard's incident and audit-summary surfaces.
-pub use orbit_store::{
+pub use orbit_types::telemetry::incident::{
     DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident, FailureIncidentQuery,
     FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
     PropagationLink, is_failure_only_diagnostic_surface,
 };
+pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
+pub use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
+pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Landed-delivery diff stats behind the dashboard's Metrics diff trend.
-pub use orbit_store::contracts::LandedDiffStats;
-// Stored backlog forecasts behind the dashboard's Analytics › Forecast.
-pub use orbit_store::contracts::StoredBacklogForecast;
+pub use orbit_store::contract::LandedDiffStats;
 pub use runtime::OrbitRuntime;
 pub use runtime::engine::ResolvedCrewProjection;

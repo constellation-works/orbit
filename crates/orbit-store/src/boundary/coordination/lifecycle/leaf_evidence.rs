@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use super::super::TaskCommitBoundary;
 use super::codec::{CLAIM, LEAF_RUN_EVIDENCE};
 use super::{decode, invalid, row};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     /// Record `report` as the leaf-run evidence of the settled claim

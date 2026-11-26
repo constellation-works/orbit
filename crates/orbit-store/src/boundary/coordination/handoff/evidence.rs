@@ -11,7 +11,7 @@ use super::review::known_red_validation;
 use orbit_types::plugin::is_full_commit_id;
 
 use super::TaskCommitBoundary;
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     pub(super) fn artifact_bytes(

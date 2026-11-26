@@ -2,7 +2,7 @@
 //! the successful grant would hold no files.
 
 use super::*;
-use orbit_store::contracts::TaskReservationReserveParams;
+use orbit_store::contract::TaskReservationReserveParams;
 use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 
 #[test]

@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     LeaseExpandParams, LeaseMode, LeaseQueueGrant, LeaseQueueGrantParams, LeaseQueueKind,
 };
 use orbit_types::telemetry::AuditEventStatus;

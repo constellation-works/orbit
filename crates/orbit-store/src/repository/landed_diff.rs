@@ -13,7 +13,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, Row, params};
 
-use crate::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats, ReviewableLines};
+use crate::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats, ReviewableLines};
 use crate::driver::sqlite::codec::stamp;
 use crate::store::{Snapshot, Tx};
 

@@ -567,7 +567,7 @@ fn claimed_final_recovery_refused_commit_routes_patch_to_owner_or_fallback() {
             "orbit.task.update",
             json!({
                 "id": accepted.task,
-                "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
+                "_worker_update": orbit_store::contract::ClaimWorkerUpdate {
                     evidence: ClaimEvidence {
                         artifacts: vec![TaskArtifact::from_text("direct.patch", "diff")],
                         ..Default::default()

@@ -259,9 +259,9 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
                     .runtime
                     .stores()
                     .tasks()
-                    .record_executor_census(&orbit_store::contracts::ExecutorCensusEntry {
+                    .record_executor_census(&orbit_store::contract::ExecutorCensusEntry {
                         machine_id: "hm_remote_mac".into(),
-                        capability: orbit_store::contracts::ExecutorCapability {
+                        capability: orbit_store::contract::ExecutorCapability {
                             os: Some(orbit_types::task::HostOs::Macos),
                             ..Default::default()
                         },

@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::{redact_all, redact_all_json};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationReleaseReason,
 };
 use orbit_types::telemetry::AuditEventStatus;

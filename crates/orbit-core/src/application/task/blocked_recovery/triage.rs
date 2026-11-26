@@ -195,7 +195,7 @@ pub fn triage_candidacy(
     let operator_prerequisite = history[start]
         .note
         .as_deref()
-        .and_then(orbit_store::contracts::ClaimFailedNote::parse)
+        .and_then(orbit_store::contract::ClaimFailedNote::parse)
         .and_then(|note| note.failure_class)
         .is_some_and(orbit_types::workflow::ClaimFailureClass::requires_operator_decision);
     let basis = match &decision {

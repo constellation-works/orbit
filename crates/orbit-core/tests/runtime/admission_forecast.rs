@@ -17,7 +17,7 @@ use orbit_core::runtime::host_resource::forecast::{
 };
 use orbit_core::runtime::host_resource::profile::{ProfileLookup, ProfileSource};
 use orbit_store::Store;
-use orbit_store::contracts::{HostResourceMinute, NewAdmissionReservation, RunResourceMinute};
+use orbit_store::contract::{HostResourceMinute, NewAdmissionReservation, RunResourceMinute};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -149,7 +149,7 @@ impl Fixture {
                         resumed: false,
                         delivery_admitted_at: Some(admitted),
                         cpu_cores: *cores,
-                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        cpu_accounting: Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.into()),
                         memory_bytes: *bytes,
                         samples: 12,
                         crew_model: None,
@@ -183,7 +183,7 @@ impl Fixture {
                     resumed: false,
                     delivery_admitted_at: Some(admitted),
                     cpu_cores: sample.cpu_cores,
-                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                    cpu_accounting: Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.into()),
                     memory_bytes: sample.memory_bytes,
                     samples: sample.samples,
                     crew_model: None,

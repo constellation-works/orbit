@@ -4,7 +4,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{
     EvidenceHostOs, JobRun, JobRunState, JobRunTrigger, ReviewEvidenceHold, ReviewEvidenceKind,

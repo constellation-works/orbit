@@ -1,5 +1,5 @@
 use super::*;
-use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
+use crate::contract::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, CrewSource, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT,
@@ -266,7 +266,7 @@ impl TaskV2Store {
         &self,
         id: &str,
         fields: &TaskDocumentUpdateParams,
-    ) -> Result<crate::contracts::TaskRow, OrbitError> {
+    ) -> Result<crate::contract::TaskRow, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         if fields.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -688,7 +688,7 @@ impl TaskV2Store {
         &self,
         id: &str,
         fields: &TaskHistoryUpdateParams,
-    ) -> Result<crate::contracts::TaskRow, OrbitError> {
+    ) -> Result<crate::contract::TaskRow, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         if fields.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(

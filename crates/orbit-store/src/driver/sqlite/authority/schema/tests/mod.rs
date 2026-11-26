@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::{Connection, params, types::Value};
 use tempfile::TempDir;
 
-use crate::contracts::{CompatibilityRecord, MigrationCompatibility};
+use crate::contract::{CompatibilityRecord, MigrationCompatibility};
 use crate::driver::sqlite::authority::FILE_NAME;
 use crate::repository::recovery_authority::{
     RecoveryAttemptRecord, RecoveryAuthorityReadOnly, RecoveryAuthorityStore,

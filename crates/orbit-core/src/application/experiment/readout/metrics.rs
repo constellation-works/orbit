@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use orbit_store::contracts::ExperimentRecord;
+use orbit_store::contract::ExperimentRecord;
 
 use crate::application::experiment::definition::{Better, Kind, MetricSpec, metric_spec};
 use crate::application::experiment::readout::model::{

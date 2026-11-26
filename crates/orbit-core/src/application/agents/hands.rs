@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{InvocationQuery, TaskRow};
+use orbit_store::contract::{InvocationQuery, TaskRow};
 use orbit_types::identity::infer_agent_family_from_model;
 use orbit_types::task::{
     FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, TaskDecision, TaskHistoryEntry, TaskStatus,

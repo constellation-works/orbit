@@ -1,4 +1,4 @@
-use orbit_store::contracts::{AdmissionReceipt, ExecutionClaimPhase};
+use orbit_store::contract::{AdmissionReceipt, ExecutionClaimPhase};
 use serde::Serialize;
 
 /// What `orbit.task.pull` answers: the immutable receipt and, separately, the

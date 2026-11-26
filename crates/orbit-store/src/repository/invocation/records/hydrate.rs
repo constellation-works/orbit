@@ -10,7 +10,7 @@ use orbit_types::telemetry::TokenUsage;
 use rusqlite::Connection;
 use rusqlite::types::ToSql;
 
-use crate::contracts::{InvocationAccountingFact, InvocationRecord, InvocationToolCallRecord};
+use crate::contract::{InvocationAccountingFact, InvocationRecord, InvocationToolCallRecord};
 
 /// Ids per `IN (...)` list. SQLite caps bound parameters per statement
 /// (`SQLITE_MAX_VARIABLE_NUMBER`, 32766 on the bundled build), and the

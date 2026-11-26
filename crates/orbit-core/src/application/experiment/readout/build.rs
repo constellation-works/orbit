@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExperimentRecord;
+use orbit_store::contract::ExperimentRecord;
 use orbit_types::workflow::TagInstructionRole;
 use serde_json::Value;
 
@@ -376,7 +376,7 @@ fn build_readout(
 }
 
 fn arm_readout(
-    arm: &orbit_store::contracts::ExperimentArmRow,
+    arm: &orbit_store::contract::ExperimentArmRow,
     tasks: &[TaskOutcome],
     run_digests: Option<&BTreeSet<String>>,
     dispatch_roles: Option<&TreatmentRequirements>,
@@ -665,7 +665,7 @@ impl OrbitRuntime {
             .host_store()
             .read()?
             .invocation()
-            .list_accounting_facts(&orbit_store::contracts::InvocationAccountingQuery {
+            .list_accounting_facts(&orbit_store::contract::InvocationAccountingQuery {
                 workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
                 since: Some(record.experiment.created_at),
                 until: now,

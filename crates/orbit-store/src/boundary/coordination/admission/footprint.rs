@@ -5,7 +5,7 @@ use orbit_types::task::TaskStatus;
 
 use super::super::TaskCommitBoundary;
 use super::canonical_footprint;
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     pub(crate) fn guard_ordinary_footprint(

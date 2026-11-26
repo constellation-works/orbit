@@ -15,9 +15,7 @@ use std::collections::BTreeSet;
 
 use chrono::{SubsecRound, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
-    CrewMemoryEventRow, CrewMemoryProposalOutcome, CrewMemoryProposalRow,
-};
+use orbit_store::contract::{CrewMemoryEventRow, CrewMemoryProposalOutcome, CrewMemoryProposalRow};
 use orbit_types::task::Task;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

@@ -7,7 +7,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::baseline::is_adoptable;
 use super::{MIGRATIONS, PRE_LEDGER_COMPATIBLE, REGISTRY_DATABASE, SUPPORTED_REGISTRY_VERSION};
-use crate::contracts::ForwardCompatibleOpen;
+use crate::contract::ForwardCompatibleOpen;
 use orbit_common::storage::sqlite::ledger::{
     current_schema_version, evaluate_newer_database, run_database_migrations,
 };

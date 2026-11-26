@@ -19,7 +19,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 
 use self::markdown::parse_skill_markdown;
 use self::metadata::{ParsedMetaJson, parse_meta_json};
-use crate::contracts::{LoadedSkill, SkillCatalogDoctorRow, SkillCatalogDoctorStatus};
+use crate::contract::{LoadedSkill, SkillCatalogDoctorRow, SkillCatalogDoctorStatus};
 use crate::driver::file::skill_store::SkillDirs;
 use crate::file_store::{FileSnapshot, FileTx};
 

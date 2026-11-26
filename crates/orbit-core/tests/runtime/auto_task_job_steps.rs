@@ -525,7 +525,7 @@ fn nested_parallel_branch_waits_observe_durable_outcomes() {
 fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
     use chrono::{Duration, Utc};
     use orbit_engine::{AutoTaskAdmission, AutoTaskStepRequest, RuntimeHost};
-    use orbit_store::contracts::AdmissionRunContext;
+    use orbit_store::contract::AdmissionRunContext;
     use orbit_types::tool::{McpTransport, ToolSessionContext};
     use orbit_types::workflow::{
         AUTO_TASK_CHECKPOINT_VERSION, AutoTaskRunCheckpoint, AutoTaskStepRecord,

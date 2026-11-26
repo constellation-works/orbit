@@ -11,7 +11,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest};
-use orbit_store::contracts::{ReviewInvocationRecord, ReviewRelease};
+use orbit_store::contract::{ReviewInvocationRecord, ReviewRelease};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewerInvocationEvent, seconds_between,

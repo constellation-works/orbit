@@ -17,7 +17,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 
-use crate::contracts::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter, SessionLogKind};
+use crate::contract::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter, SessionLogKind};
 use crate::driver::file::session_log_store::SessionLogDir;
 use crate::file_store::{FileSnapshot, FileTx};
 

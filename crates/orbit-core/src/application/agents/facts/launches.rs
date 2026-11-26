@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use orbit_store::contracts::AgentExecutionRecord;
+use orbit_store::contract::AgentExecutionRecord;
 
 /// Keep scan order for aggregate readers and narrow launch attribution to
 /// its own run without repeatedly walking every workspace launch.

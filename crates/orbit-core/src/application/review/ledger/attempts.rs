@@ -10,7 +10,7 @@ use orbit_types::workflow::{
     ReviewerInvocation, ReviewerInvocationEvent,
 };
 
-use orbit_store::contracts::ReviewReserveRequest;
+use orbit_store::contract::ReviewReserveRequest;
 
 fn attempt_id(lineage_key: &str, index: u32) -> String {
     let digest = sha256_hex(lineage_key.as_bytes());

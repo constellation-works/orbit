@@ -6,7 +6,7 @@ use super::*;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::{HandoffLandingStep, HandoffLandingUpdate, TaskAutomationUpdate};
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::{DirectLandingRequest, UNATTRIBUTED_NO_LANDING_TASK};

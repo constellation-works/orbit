@@ -1,6 +1,6 @@
 //! Settlement, binding and delivery of one admission to its owner.
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionLookup, ClaimEvidence, ClaimMutation, LocalPullAdmission, LocalPullMutation,
     LocalPullPhase, SettlementRefusal,
 };

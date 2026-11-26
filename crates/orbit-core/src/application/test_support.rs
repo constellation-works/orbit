@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionReceipt, AdmissionRequest, AdmissionTaskSummary, ExecutionClaim,
 };
 use orbit_types::timestamp::UtcTimestamp;

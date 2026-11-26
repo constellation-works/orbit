@@ -3,7 +3,7 @@
 //! write.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{LeasePrincipalClass, LeasePriority};
+use orbit_store::contract::{LeasePrincipalClass, LeasePriority};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::Value;
 

@@ -12,7 +12,7 @@ use super::super::codec::{
 };
 use super::super::releases::release_budget_comment;
 use super::super::{ClaimAuthority, MutationReceipt, decode_state, encode, invalid, row};
-use crate::contracts::*;
+use crate::contract::*;
 
 /// Steps of a claim mutation's admission section, so a long hold's report
 /// names where it went rather than the section's whole operation.

@@ -20,7 +20,7 @@ use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::load_job_asset;
 use orbit_engine::{AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness};
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{JobStepInvocation, Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     AUTO_TASK_CHECKPOINT_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskReceipt,

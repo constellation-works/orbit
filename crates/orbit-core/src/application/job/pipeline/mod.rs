@@ -21,7 +21,7 @@ use chrono::Utc;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, KeyedJobRunAdmission,
     KeyedJobRunParams, TaskReservationReleaseReason,
 };

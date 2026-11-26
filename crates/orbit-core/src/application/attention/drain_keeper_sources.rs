@@ -9,7 +9,7 @@ use crate::OrbitRuntime;
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
-use orbit_store::contracts::DrainIntentState;
+use orbit_store::contract::DrainIntentState;
 use orbit_types::tool::{
     AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity,
     AttentionWorkspace,

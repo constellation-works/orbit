@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_store::contracts::{InvocationInsertParams, TaskArtifactUpdateParams};
+use orbit_store::contract::{InvocationInsertParams, TaskArtifactUpdateParams};
 use orbit_types::task::{ArtifactWriter, TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use serde_json::Value;

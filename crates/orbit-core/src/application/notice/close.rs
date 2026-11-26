@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_store::Store;
-use orbit_store::contracts::{NoticeEventRow, NoticeRow, NoticeScopeFilter};
+use orbit_store::contract::{NoticeEventRow, NoticeRow, NoticeScopeFilter};
 use orbit_types::record::{
     AuthorClass, EffectiveStatus, NoticeAuthor, NoticeCloseCause, NoticeClosed,
 };

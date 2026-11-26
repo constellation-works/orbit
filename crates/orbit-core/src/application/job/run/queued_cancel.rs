@@ -11,7 +11,7 @@
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{PendingJobRunCancellation, TaskReservationReleaseReason};
+use orbit_store::contract::{PendingJobRunCancellation, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRunState, RunCancellationProvenance, TaskCancellationPolicy};
 

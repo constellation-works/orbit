@@ -35,7 +35,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskLockConflict;
+use orbit_store::contract::TaskLockConflict;
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::workflow::JobRunState;

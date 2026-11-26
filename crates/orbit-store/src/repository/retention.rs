@@ -29,7 +29,7 @@ use rusqlite::{Connection, params};
 use std::marker::PhantomData;
 
 use crate::Store;
-use crate::contracts::{
+use crate::contract::{
     AuditRetentionTable, JournalRetentionCandidates, RetentionIdSource, RetentionSelection,
     RetentionWorkspaceScope, StoreSpace, TaskLockDenialRecord,
 };

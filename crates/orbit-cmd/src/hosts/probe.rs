@@ -42,7 +42,7 @@ pub(super) fn local_binary_version() -> &'static str {
 }
 
 pub(super) fn local_protocol_fingerprint() -> &'static str {
-    orbit_store::contracts::distributed_drain_protocol_fingerprint()
+    orbit_store::contract::distributed_drain_protocol_fingerprint()
 }
 
 /// Open the session federated serve uses (`ssh -T -- <target> orbit mcp

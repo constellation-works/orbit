@@ -14,14 +14,6 @@ use orbit_store::{TaskCoordination, TaskV2Store};
 use orbit_tools::ToolRegistry;
 use std::sync::Arc;
 
-/// Host SQLite handle.
-///
-/// Accessors clone the handle; they must not call `Store::open` again.
-#[derive(Clone)]
-pub(crate) struct OrbitHostStore {
-    pub(crate) sqlite: Store,
-}
-
 #[derive(Clone)]
 pub struct OrbitStores {
     pub(crate) task: Arc<TaskV2Store>,
@@ -34,7 +26,8 @@ pub struct OrbitStores {
     pub job_run: Arc<JobRuns>,
     pub(crate) executor_def: FileStore<ExecutorDefDir>,
     pub(crate) policy_def: FileStore<PolicyDefDirs>,
-    pub(crate) host: OrbitHostStore,
+    /// Host SQLite handle. Accessors clone it; they must not call `Store::open` again.
+    pub(crate) host: Store,
 }
 
 impl OrbitStores {
@@ -46,7 +39,7 @@ impl OrbitStores {
         job_run: Arc<JobRuns>,
         executor_def: FileStore<ExecutorDefDir>,
         policy_def: FileStore<PolicyDefDirs>,
-        host: OrbitHostStore,
+        host: Store,
     ) -> Self {
         Self {
             task: tasks.task,
@@ -102,7 +95,7 @@ impl OrbitStores {
     /// The host SQLite store: tool, plugin and script grant records, among
     /// others, reached as `read()?.<record>()` and `write(|tx| tx.<record>())`.
     pub fn host_store(&self) -> &Store {
-        &self.host.sqlite
+        &self.host
     }
 
     /// The global executor definitions.

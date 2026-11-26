@@ -4,7 +4,7 @@
 //! still replay; nothing writes that form now, so the fixture appends the old
 //! rows to the bundle as raw JSON lines.
 
-use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
+use orbit_store::contract::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::task::{TaskComment, TaskHistoryEntry};
 
 use super::*;

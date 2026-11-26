@@ -15,7 +15,7 @@ use crate::runtime::task::locks::{
     TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
 
-pub use orbit_store::contracts::{
+pub use orbit_store::contract::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
     TaskPage, TaskRow,
 };
@@ -163,7 +163,7 @@ fn with_task_residual<T>(
     os_readout: Option<&super::TaskOsReadout>,
     select: impl FnOnce(
         &TaskV2Store,
-        orbit_store::contracts::TaskResidualFilter<'_>,
+        orbit_store::contract::TaskResidualFilter<'_>,
         TaskListHydration,
     ) -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {

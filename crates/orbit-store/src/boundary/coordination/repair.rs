@@ -30,7 +30,7 @@ use super::TaskCommitBoundary;
 use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
 use super::selection::{DependencyReach, Screen};
-use crate::contracts::*;
+use crate::contract::*;
 
 /// How long a pending repair waits for its original executor before the
 /// owner's local drain may take it.

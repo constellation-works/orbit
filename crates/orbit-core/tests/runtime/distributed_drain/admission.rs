@@ -6,7 +6,7 @@ use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::runtime::JobRuns;
-use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
+use orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::{HostOs, TaskStatus};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, DrainAdmissionPass,
@@ -151,7 +151,7 @@ fn session_metadata_does_not_corrupt_owner_probe_or_pull_pass() {
     let reply = owner_call(&pair, "orbit.drain.probe", json!({})).unwrap();
     assert_eq!(
         reply["protocol_fingerprint"],
-        orbit_store::contracts::distributed_drain_protocol_fingerprint()
+        orbit_store::contract::distributed_drain_protocol_fingerprint()
     );
     // Also cover the exact incident substring even if the generated request
     // shape changes its fingerprint in a later build.
@@ -170,7 +170,7 @@ fn session_metadata_does_not_corrupt_owner_probe_or_pull_pass() {
 /// corrupted fingerprint must leave the window alive for the next pass.
 fn redacted_owner_identity_retries_without_protocol_skew() {
     let pair = Pair::new(0);
-    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let fingerprint = orbit_store::contract::distributed_drain_protocol_fingerprint();
     let drain = pair.run_drain();
     {
         // A realistic mixed hex credential can overlap a legitimate hash.
@@ -216,7 +216,7 @@ fn redacted_owner_identity_retries_without_protocol_skew() {
 fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
     let pair = Pair::new(1);
     let probe = owner_call(&pair, "orbit.drain.probe", json!({})).unwrap();
-    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let fingerprint = orbit_store::contract::distributed_drain_protocol_fingerprint();
     let request = json!({
         "request_id": "redacted-receipt-request", "caller_version": probe["binary_version"],
         "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, "caller_fingerprint": fingerprint,
@@ -251,7 +251,7 @@ fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
 /// An unanswered request from before both hosts upgraded must not fail the
 /// current drain after its probe matches; receipt lookup releases the old slot.
 fn obsolete_persisted_request_skew_does_not_fail_a_matching_drain() {
-    let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let current = orbit_store::contract::distributed_drain_protocol_fingerprint();
     for (old_fingerprint, schema) in [
         (
             Some("older-request-shape"),
@@ -566,7 +566,7 @@ fn fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal() {
         "a fingerprint-less older revision must keep the invalid_input refusal: {legacy}"
     );
 
-    let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let current = orbit_store::contract::distributed_drain_protocol_fingerprint();
     let fingerprinted = pull("old-fingerprinted-request", Some(current));
     assert!(
         matches!(fingerprinted, OrbitError::ProtocolSkew(_)),
@@ -581,7 +581,7 @@ fn fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal() {
 fn probe_fingerprint_tracks_request_types_and_refuses_changed_shapes() {
     let pair = Pair::new(1);
     let probe = owner_call(&pair, "orbit.drain.probe", json!({})).unwrap();
-    let schema = orbit_store::contracts::admission_request_schema();
+    let schema = orbit_store::contract::admission_request_schema();
     let fingerprint = sha256_hex(schema.to_string().as_bytes());
     assert_eq!(
         probe["protocol_fingerprint"], fingerprint,
@@ -629,7 +629,7 @@ fn owner_checks_fingerprint_before_deserializing_an_incompatible_pull() {
     )
     .unwrap_err();
     assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
-    let matching = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let matching = orbit_store::contract::distributed_drain_protocol_fingerprint();
     for input in [
         json!({"caller_fingerprint": matching, "unknown_new_field": true}),
         json!({"caller_fingerprint": matching, "ship": "malformed"}),
@@ -2949,7 +2949,7 @@ fn pull_from_owner(
             },
         )
         .expect("probe owner");
-    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let fingerprint = orbit_store::contract::distributed_drain_protocol_fingerprint();
     owner
         .run_tool_with_context(
             "orbit.task.pull",

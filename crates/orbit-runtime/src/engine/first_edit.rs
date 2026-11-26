@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::InvocationQuery;
+use orbit_store::contract::InvocationQuery;
 
 use crate::RuntimeKernel;
 use crate::cost::IMPLEMENT_INVOCATION_IDS;

@@ -46,7 +46,6 @@ orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 rsa.workspace = true
-rusqlite.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
@@ -70,6 +69,8 @@ orbit-exec = { path = "../orbit-exec", features = ["test-support"] }
 orbit-policy = { path = "../orbit-policy" }
 # The decision-channel tests sign DKIM fixture messages with a test key.
 rsa.workspace = true
+# Runtime integration fixtures inspect and inject SQLite faults in orbit.db.
+rusqlite.workspace = true
 sha2.workspace = true
 base64.workspace = true
 tracing-subscriber.workspace = true

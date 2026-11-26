@@ -17,7 +17,7 @@ use super::support;
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
-use orbit_store::workflow::task::{
+use orbit_store::migrate::task::{
     AttachmentPolicy, AttachmentPolicyKind, PublicationCallerRole, PublicationPublishOutcome,
     PublicationPublishRequest, PublicationPublishStatus, ScannerFailureBehavior,
     publish_task_snapshot,

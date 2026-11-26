@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInvocation, ClaimMutation};
+use orbit_store::contract::{ClaimInvocation, ClaimMutation};
 use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_missing};
 

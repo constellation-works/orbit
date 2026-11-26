@@ -4,7 +4,7 @@ use std::path::Path;
 
 use chrono::Duration;
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::{
     CommitObservationStatus, JobRun, JobRunState, JobTargetType, PipelineState,
 };
@@ -95,7 +95,7 @@ impl Fixture {
                 kind,
             };
             self.runtime
-                .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+                .insert_v2_audit_event(&orbit_core::test_support::V2AuditEventInsertParams {
                     workspace_id: self.runtime.workspace_id().unwrap(),
                     event_id: event.envelope.event_id.clone(),
                     source: "v2_envelope".into(),

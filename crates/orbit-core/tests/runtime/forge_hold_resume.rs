@@ -21,7 +21,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{
     DeliveryRefusal, FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT,

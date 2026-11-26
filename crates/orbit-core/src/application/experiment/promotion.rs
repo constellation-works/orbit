@@ -4,7 +4,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::ExperimentRecord;
+use orbit_store::contract::ExperimentRecord;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskType};
 
 use super::definition::{ExperimentOverlay, InstructionOverlay, OverlayRole};

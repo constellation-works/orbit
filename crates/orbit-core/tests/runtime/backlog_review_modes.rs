@@ -5,7 +5,7 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{InvocationInsertParams, JobRunStepParams};
+use orbit_store::contract::{InvocationInsertParams, JobRunStepParams};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use orbit_types::workflow::{
@@ -660,7 +660,7 @@ fn drain_scope_separates_scheduled_and_no_drain_work_from_completion() {
     // A mature snapshot can finish its drain while held work remains open.
     // Exercise the public scoring API with the same held population.
     let mature_at = Utc::now() - Duration::days(90);
-    runtime.record_backlog_forecast(orbit_core::StoredBacklogForecast {
+    runtime.record_backlog_forecast(orbit_store::contract::StoredBacklogForecast {
         workspace_id: String::new(),
         forecast_at: mature_at,
         model_version: result["model_version"].as_u64().unwrap() as u32,

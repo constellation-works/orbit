@@ -2,7 +2,7 @@
 //! backoff arithmetic and half-open admission are pure, and a boundary test
 //! cannot step a real drain's clock through a cooldown.
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use orbit_store::contracts::PullFailureStreak;
+use orbit_store::contract::PullFailureStreak;
 use orbit_types::workflow::PullBreaker;
 
 use super::super::{BreakerGate, admits_request, breaker_gate, settle_breaker};

@@ -19,7 +19,7 @@ use super::partition_id::validate_partition_id;
 use super::queries::workspace_by_id;
 use super::store::TaskRegistryStore;
 use super::util::{parse_relation_type_name, relation_type_name};
-use crate::contracts::DanglingRelationTarget;
+use crate::contract::DanglingRelationTarget;
 
 // Keep each walk below SQLite's older 999-variable limit. The seed set can
 // span many statements without losing paths: each walk is transitive, and the

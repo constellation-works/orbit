@@ -20,7 +20,7 @@
 //!   are dropped; a payload without an `event_id` is still returned.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{V2AuditKindForwardPayloads, V2AuditKindForwardQuery};
+use orbit_store::contract::{V2AuditKindForwardPayloads, V2AuditKindForwardQuery};
 use orbit_types::workflow::JobRun;
 use orbit_types::workflow::activity_job::audit_envelope::{
     V2_AUDIT_BODY_KIND_EVENT_TYPES, event_type_for_body_kind,

@@ -7,7 +7,7 @@
 //! are copied into an audit table the importer does not roll back.
 
 use orbit_store::maintenance::task_registry::task_workspaces_dir;
-use orbit_store::workflow::task::{ImportAction, ImportOutcome};
+use orbit_store::migrate::task::{ImportAction, ImportOutcome};
 use orbit_types::task::TaskRelationType;
 use rusqlite::Connection;
 
@@ -281,7 +281,7 @@ fn unresolved_known_prefix_relation_fails_before_import_mutation() {
         .document
         .update_task_document(
             &foreign_child.id,
-            orbit_store::contracts::TaskDocumentUpdateParams {
+            orbit_store::contract::TaskDocumentUpdateParams {
                 actor: "codex".into(),
                 title: Some("foreign child renamed".into()),
                 ..Default::default()

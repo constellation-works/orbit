@@ -90,7 +90,7 @@ fn open_routine_store(opener: StoreOpener, global_root: &Path) -> Result<Store, 
 pub(crate) fn host_routine_breakers(
     store: &Store,
 ) -> Result<
-    std::collections::BTreeMap<String, orbit_store::contracts::RoutineBreakerRecord>,
+    std::collections::BTreeMap<String, orbit_store::contract::RoutineBreakerRecord>,
     OrbitError,
 > {
     store.read()?.routine().breakers()

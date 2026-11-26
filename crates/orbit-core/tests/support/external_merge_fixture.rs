@@ -19,7 +19,7 @@ use orbit_core::runtime::task_pr_forge::{
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRunContext,
     AdmissionShipContract, ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun,
     ExecutionClaimPhase, ExecutionLocation, HandoffObservation,

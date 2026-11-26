@@ -2,7 +2,7 @@
 
 use orbit_types::workflow::JobRunState;
 
-use crate::contracts::{JobRunOrder, JobRunQuery};
+use crate::contract::{JobRunOrder, JobRunQuery};
 
 /// The run-row `SELECT` and its bound parameters for a [`JobRunQuery`]:
 /// filter, order, and `LIMIT`. Steps are read separately.

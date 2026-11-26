@@ -2,7 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
-use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
+use orbit_store::contract::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     FailureHandoffDecision, REVIEW_EVIDENCE_FINDINGS_ARTIFACT, REVIEW_EVIDENCE_FINDINGS_EVENT,

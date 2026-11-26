@@ -28,7 +28,7 @@ use orbit_common::fs::generation::{
     ParticipantRole, PendingSwitch, RESUME_DRAIN_ADOPT, handover_target,
     pending_switch_for_this_process, process_participation, reexec,
 };
-use orbit_store::contracts::TaskReservationReleaseReason;
+use orbit_store::contract::TaskReservationReleaseReason;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::JobRunState;
 

@@ -1,7 +1,7 @@
 //! Pull-drain evidence shared by full run-detail surfaces.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::DrainLeafOccupancy;
+use orbit_store::contract::DrainLeafOccupancy;
 use orbit_types::workflow::{PipelineState, PullBreaker};
 use serde_json::{Value, json};
 

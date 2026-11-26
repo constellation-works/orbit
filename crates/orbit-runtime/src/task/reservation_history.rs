@@ -1,7 +1,7 @@
 //! Read-only history of the workspace's file reservations.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskReservationRecord;
+use orbit_store::contract::TaskReservationRecord;
 
 use crate::RuntimeKernel;
 

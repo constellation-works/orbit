@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::fs::selector::Selector;
-use orbit_store::contracts::{ClaimFailedNote, ClaimSettlementEvidence};
+use orbit_store::contract::{ClaimFailedNote, ClaimSettlementEvidence};
 use orbit_types::identity::all_agent_families;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{

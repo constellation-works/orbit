@@ -1,5 +1,5 @@
 use super::*;
-use orbit_store::contracts::V2AuditEventInsertParams;
+use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_types::workflow::{
     ExperimentOverlayRecord, TagInstructionRole, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };

@@ -19,7 +19,7 @@
 use super::*;
 
 use orbit_core::application::review::ExpectedCandidate;
-use orbit_store::contracts::ClaimSettlementKind;
+use orbit_store::contract::ClaimSettlementKind;
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
     DesktopTaskRequest, DesktopTaskSnapshot,
@@ -654,7 +654,7 @@ impl Delivery {
         assert_eq!(stored["state"], "full");
         assert_eq!(
             stored["receipt"]["request"]["caller_schema"],
-            orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+            orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
         );
         assert_eq!(stored["receipt"]["request"]["ship"]["before_pr"], false);
         assert!(stored["receipt"]["request"]["ship"].get("review").is_none());
@@ -2339,7 +2339,7 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
     // A settlement on one host/run cannot substitute for another binding.
     // Build these hostile documents through the public store fixture surface;
     // production callers cannot rewrite the trusted execution location.
-    use orbit_store::contracts::TaskDocumentUpdateParams;
+    use orbit_store::contract::TaskDocumentUpdateParams;
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     let documents = orbit_store::compose::workspace_coordinated_backends(
         TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap(),

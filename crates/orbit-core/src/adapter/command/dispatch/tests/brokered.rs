@@ -709,7 +709,7 @@ fn resident_cycle_run(
         )
         .expect("grant");
     let jobs = orbit_runtime::JobRuns::shared(runtime.sqlite_store().expect("store"), workspace);
-    let orbit_store::contracts::KeyedJobRunAdmission::Admitted(job_run) = jobs
+    let orbit_store::contract::KeyedJobRunAdmission::Admitted(job_run) = jobs
         .insert_automation_job_run(
             "resident_cycle_pipeline",
             json!({"task_ids": [mandate]}),

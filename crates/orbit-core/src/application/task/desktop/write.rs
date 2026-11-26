@@ -5,7 +5,7 @@ use orbit_common::{
     OrbitError,
     security::{redaction::redact_all, release::sha256_hex},
 };
-use orbit_store::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
+use orbit_store::contract::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use orbit_types::{
     desktop::*,
     task::{DesktopMutationReceipt, Task, TaskDecision, TaskHistoryEntry, TaskStatus},

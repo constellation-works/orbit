@@ -11,7 +11,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
-use orbit_store::contracts::{ExecutionClaim, claim_refusing_work_start};
+use orbit_store::contract::{ExecutionClaim, claim_refusing_work_start};
 use orbit_types::task::{Task, is_no_diff_expected};
 use serde_json::{Value, json};
 

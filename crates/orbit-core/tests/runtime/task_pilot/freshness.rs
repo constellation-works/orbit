@@ -395,7 +395,7 @@ fn automatic_discovery_retries_failed_repilot_only_after_new_requirements() {
             .history
             .update_task_history(
                 &task.id,
-                orbit_store::contracts::TaskHistoryUpdateParams {
+                orbit_store::contract::TaskHistoryUpdateParams {
                     actor: "system".into(),
                     append_history: vec![orbit_types::task::TaskHistoryEntry {
                         at: Utc::now(),

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use orbit_core::application::distributed::{
     FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest, PullCrewWindow,
 };
-use orbit_store::contracts::ClaimSettlementKind;
+use orbit_store::contract::ClaimSettlementKind;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, CrewExclusion,
@@ -1492,7 +1492,7 @@ fn a_candidate_failure_still_blocks_the_task() {
     let failed = &settlement_of(&pair, &leaf)["Fail"];
     assert_eq!(failed["failure"]["class"], "candidate", "{failed}");
     assert!(failed["failure"]["review_decision_pending"].is_null());
-    let legacy_failure: orbit_store::contracts::ClaimFailure =
+    let legacy_failure: orbit_store::contract::ClaimFailure =
         serde_json::from_value(failed["failure"].clone()).unwrap();
     assert!(!legacy_failure.review_decision_pending);
     assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
@@ -1502,7 +1502,7 @@ fn a_candidate_failure_still_blocks_the_task() {
         false,
         "the settlements JSON must distinguish markerless candidate failures"
     );
-    let legacy_record: orbit_store::contracts::ClaimSettlementRecord =
+    let legacy_record: orbit_store::contract::ClaimSettlementRecord =
         serde_json::from_value(json!({
             "kind": "fail", "evidence": "failure", "failure_class": "candidate",
             "reason": "cargo test: 3 tests failed", "settled_at": owner_record.settled_at,
@@ -1571,7 +1571,7 @@ fn a_pending_decision_flag_on_a_release_stays_a_failure() {
     let claim = pair.admission(&leaf).receipt.unwrap().claim.unwrap();
     let settlement = ClaimMutation::Release(ClaimEvidence {
         summary: Some("released by follower drain".into()),
-        failure: Some(orbit_store::contracts::ClaimFailure {
+        failure: Some(orbit_store::contract::ClaimFailure {
             class: ClaimFailureClass::Transient,
             review_decision_pending: true,
             reason: "the pull request stays open and unmerged until a recorded decision lands it"

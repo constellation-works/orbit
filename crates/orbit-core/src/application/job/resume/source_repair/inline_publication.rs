@@ -417,7 +417,7 @@ impl OrbitRuntime {
         } else {
             Value::Null
         };
-        let rows = self.list_v2_audit_events(orbit_store::contracts::V2AuditEventFilter {
+        let rows = self.list_v2_audit_events(orbit_store::contract::V2AuditEventFilter {
             workspace_id: self.workspace_id()?,
             run_id: Some(retry.run_id.clone()),
             source: Some("v2_envelope".into()),

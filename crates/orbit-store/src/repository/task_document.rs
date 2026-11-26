@@ -3,7 +3,7 @@ use std::sync::Arc;
 use orbit_common::OrbitError;
 
 use crate::boundary::TaskV2Store;
-use crate::contracts::TaskDocumentUpdateParams;
+use crate::contract::TaskDocumentUpdateParams;
 
 /// Document records of a workspace's task store.
 #[derive(Clone)]
@@ -16,7 +16,7 @@ impl TaskDocumentRepository {
         &self,
         id: &str,
         params: TaskDocumentUpdateParams,
-    ) -> Result<crate::contracts::TaskRow, OrbitError> {
+    ) -> Result<crate::contract::TaskRow, OrbitError> {
         self.store.update_task_document(id, &params)
     }
 

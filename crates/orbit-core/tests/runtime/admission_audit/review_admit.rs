@@ -6,7 +6,7 @@ use std::fs;
 use chrono::{Duration, Utc};
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_engine::{DispatchError, RuntimeHost};
-use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     JobRunState, ReviewAttemptState, ReviewBudget, ReviewReservation, ReviewVerdict,
@@ -30,7 +30,7 @@ fn each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over() {
             orbit_core::test_support::review_ledger::settle(
                 tx,
                 &runtime.workspace_id().expect("workspace"),
-                &orbit_store::contracts::ReviewSettlement {
+                &orbit_store::contract::ReviewSettlement {
                     lineage_key: first["lineage_key"].as_str().expect("lineage"),
                     attempt_id: first["attempt_id"].as_str().expect("attempt"),
                     verdict: ReviewVerdict::Accept,
@@ -210,7 +210,7 @@ fn a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base
 }
 
 fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start() {
-    use orbit_store::contracts::{ReviewResetRequest, ReviewSettlement};
+    use orbit_store::contract::{ReviewResetRequest, ReviewSettlement};
     let gated = gated_fixture(BEFORE_PR);
     let first = gated.admit().expect("admit the candidate's review");
     gated.reviewer_ran(&gated.run_id, &first, 8000);

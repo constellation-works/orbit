@@ -5,7 +5,7 @@ use crate::application::job::resume::ResumePlan;
 use crate::runtime::audit::run::AuditStepOutcome;
 use orbit_common::OrbitError;
 use orbit_engine::JobOutcome;
-use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
+use orbit_store::contract::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{
     HeldFailure, JobRun, JobRunState, JobRunTrigger, JobTargetType, PipelineState,

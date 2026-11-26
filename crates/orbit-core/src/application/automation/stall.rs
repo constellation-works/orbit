@@ -25,7 +25,7 @@ use chrono::{DateTime, Utc};
 use orbit_automation::delivery::adopt::AdoptionReport;
 use orbit_automation::delivery::stall::StallReport;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
+use orbit_store::contract::{FrictionAddParams, FrictionListFilter};
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::automation::recovery::{AutomationStall, CrewOsHold};
 use std::fmt::Write as _;

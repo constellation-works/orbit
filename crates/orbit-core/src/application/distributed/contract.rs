@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::{OrbitError, RemoteToolCode};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionReviewContract,
     AdmissionRunContext, AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
     ExecutionLocation,
@@ -440,7 +440,7 @@ pub(crate) fn protocol_skew(report: &serde_json::Value) -> Option<OrbitError> {
     let fingerprint = report
         .get("protocol_fingerprint")
         .and_then(serde_json::Value::as_str);
-    let caller = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let caller = orbit_store::contract::distributed_drain_protocol_fingerprint();
     (owner != Some(u64::from(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA)) || fingerprint != Some(caller)).then(|| {
         let owner = owner.map_or_else(|| "unknown".to_string(), |value| value.to_string());
         OrbitError::ProtocolSkew(format!(
@@ -470,7 +470,7 @@ pub(crate) fn probe_pull_contract(
         return Err(error);
     }
     input["caller_fingerprint"] =
-        serde_json::json!(orbit_store::contracts::distributed_drain_protocol_fingerprint());
+        serde_json::json!(orbit_store::contract::distributed_drain_protocol_fingerprint());
     let report = transport
         .call(selector, "orbit.drain.probe", input)
         .map_err(owner_protocol_error)?;

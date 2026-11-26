@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{ClaimSettlementKind, ExecutionClaimPhase};
+use orbit_store::contract::{ClaimSettlementKind, ExecutionClaimPhase};
 
 use crate::OrbitRuntime;
 use crate::application::distributed::LeafSettlement;

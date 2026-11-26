@@ -48,7 +48,7 @@ pub(crate) fn context_conflict_check(
     let reservation_check = runtime
         .stores()
         .task_reservations()
-        .check_task_reservation_conflicts(orbit_store::contracts::TaskReservationCheckParams {
+        .check_task_reservation_conflicts(orbit_store::contract::TaskReservationCheckParams {
             workspace_orbit_dir: workspace_orbit_dir(runtime),
             workspace_id: workspace_task_reservation_id(runtime)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,

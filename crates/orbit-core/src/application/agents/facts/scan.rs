@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::InvocationQuery;
+use orbit_store::contract::InvocationQuery;
 use orbit_types::task::TaskRelationType;
 
 use super::super::attribution;
@@ -202,7 +202,7 @@ pub(in crate::application::agents) fn scan(
     let snapshot = runtime.stores().host_store().read()?;
     let invocation_repo = snapshot.invocation();
     let invocations = invocation_repo.list_accounting_facts(
-        &orbit_store::contracts::InvocationAccountingQuery {
+        &orbit_store::contract::InvocationAccountingQuery {
             workspace_id: Some(workspace_id.clone()),
             since: Some(horizon),
             until: computed_at,
@@ -212,7 +212,7 @@ pub(in crate::application::agents) fn scan(
     // completed; a failed read leaves those units effort-unknown rather
     // than failing every scorecard, as the other telemetry reads do.
     let launches = invocation_repo
-        .list_agent_executions(&orbit_store::contracts::AgentExecutionQuery {
+        .list_agent_executions(&orbit_store::contract::AgentExecutionQuery {
             workspace_id: Some(workspace_id),
             since: Some(horizon),
             until: computed_at,

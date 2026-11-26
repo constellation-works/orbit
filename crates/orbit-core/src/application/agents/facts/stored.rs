@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::AgentTaskFactsRow;
+use orbit_store::contract::AgentTaskFactsRow;
 use orbit_types::task::{Task, TaskHistoryEntry};
 
 use super::super::records::block_cause;

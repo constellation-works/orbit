@@ -8,7 +8,7 @@ use orbit_types::task::{
 };
 
 use super::*;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AtomicTaskMutationOutcome, AtomicTaskMutationParams, DesktopTaskMutationParams,
     TaskDocumentUpdateParams,
 };

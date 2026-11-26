@@ -185,7 +185,7 @@ impl OrbitRuntime {
         let runs =
             self.stores()
                 .jobs()
-                .list_job_runs_filtered(&orbit_store::contracts::JobRunQuery {
+                .list_job_runs_filtered(&orbit_store::contract::JobRunQuery {
                     job_id: Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB.into()),
                     task_id: Some(task_id.into()),
                     limit: Some(super::successor::SUCCESSOR_CHAIN_WINDOW),

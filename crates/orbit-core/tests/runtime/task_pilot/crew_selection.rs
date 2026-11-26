@@ -5,7 +5,7 @@
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
-use orbit_store::contracts::TaskDocumentUpdateParams;
+use orbit_store::contract::TaskDocumentUpdateParams;
 use serde_json::{Value, json};
 
 use super::{Workspace, runtime_at};

@@ -1,7 +1,7 @@
 //! Guarded operator admission for an existing authorized owner handoff.
 
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use orbit_store::contracts::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
+use orbit_store::contract::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
 use orbit_types::workflow::handoff::{LandingAttemptState, LandingRetryRequest};
 
 use super::{LANDING_JOB, LandingDispatch};

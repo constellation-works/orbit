@@ -48,7 +48,6 @@ use orbit_types::workflow::{
     TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock, TransientInfraRequeue,
     TransientInfrastructure,
 };
-use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{self, SYSTEM_ACTOR_LABEL, is_automation_actor};
@@ -233,9 +232,7 @@ impl OrbitRuntime {
     fn transient_infrastructure_clear_for(&self, class: TransientInfrastructure) -> bool {
         if !self
             .sqlite_store()
-            .and_then(|store| {
-                store.with_transaction_behavior(TransactionBehavior::Immediate, |_| Ok(()))
-            })
+            .and_then(|store| store.write(|_| Ok(())))
             .is_ok()
         {
             return false;

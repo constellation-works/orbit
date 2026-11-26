@@ -136,8 +136,8 @@ pub(super) fn persist_final_recovery_evidence(
             "orbit.task.update",
             json!({
                 "id": task_id,
-                "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
-                    evidence: orbit_store::contracts::ClaimEvidence {
+                "_worker_update": orbit_store::contract::ClaimWorkerUpdate {
+                    evidence: orbit_store::contract::ClaimEvidence {
                         summary: Some(evidence.execution_summary), ..Default::default()
                     },
                     ..Default::default()

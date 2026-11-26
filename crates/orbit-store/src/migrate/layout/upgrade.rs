@@ -9,7 +9,7 @@ use super::marker::{
     write_compat_record, write_marker,
 };
 use super::registry::{LAYOUT_MIGRATIONS, LayoutMigration, SUPPORTED_LAYOUT_VERSION};
-use crate::contracts::{
+use crate::contract::{
     CompatibilityRefusal, ForwardCompatibleOpen, StateComponent, evaluate_newer_state,
 };
 

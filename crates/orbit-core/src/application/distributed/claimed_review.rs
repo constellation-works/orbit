@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimEvidence, ClaimedReviewCarry, ExecutionClaim};
+use orbit_store::contract::{ClaimEvidence, ClaimedReviewCarry, ExecutionClaim};
 use orbit_types::workflow::{FinalRecoveryDecision, ReviewLedger};
 
 use crate::OrbitRuntime;

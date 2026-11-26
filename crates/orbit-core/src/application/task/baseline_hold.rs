@@ -38,7 +38,7 @@ use orbit_common::OrbitError;
 use orbit_engine::{
     BaselineHoldStatus, DispatchError, baseline_hold_status, recorded_baseline_hold_status,
 };
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_VERDICT_EVENT, BaselineHoldVerdict, BaselineRedHold, JobRunState,

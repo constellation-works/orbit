@@ -62,7 +62,7 @@ use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSet
 use crate::application::distributed::{PendingPullSettlements, is_owner_transport_failure};
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, WORKTREE_IDENTITY_INPUT_KEYS, run_worktree_has_reclaim_output};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
 use orbit_types::workflow::JobRun;

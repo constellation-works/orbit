@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use super::index::IndexUsable;
 use super::*;
-use crate::contracts::{
+use crate::contract::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskLifecycleStamp, TaskListFilter,
     TaskListHydration, TaskPage, TaskResidualFilter, TaskRow,
 };

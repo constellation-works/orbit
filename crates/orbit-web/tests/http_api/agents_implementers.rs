@@ -999,7 +999,7 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
                     Vec::new(),
                 ));
             }
-            use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+            use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
             for (index, id) in ids.iter().take(3).enumerate() {
                 fixture
                     .runtime

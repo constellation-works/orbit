@@ -4,7 +4,7 @@ use crate::OrbitRuntime;
 use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimAttribution, ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery,
     ClaimMutation, ClaimPullRequest, ClaimedReviewCarry, LeafRootCause, LeafRunReport,
     LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
@@ -39,7 +39,7 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// [ORB-15573], a missing validation tool, an unreachable owner, a red base,
 /// an inconclusive or interrupted run) releases it, and the drain excludes
 /// the leaf's crew for its window when the failure
-/// [says so](ClaimFailure::excludes_crew). External-prerequisite releases
+/// [says so](crate::application::distributed::claim_failure_excludes_crew). External-prerequisite releases
 /// retain that evidence, but the owner holds their tasks for an operator.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
@@ -797,7 +797,7 @@ fn release_reason(
         why.push_str(", and this drain claims no more work on this host in its window");
     } else if failure.provider_limit {
         why.push_str(", and this drain runs no more tasks on that provider's crews in its window");
-    } else if failure.excludes_crew() {
+    } else if crate::application::distributed::claim_failure_excludes_crew(failure) {
         why.push_str(&format!(
             ", and this drain runs no more `{crew}` tasks in its window"
         ));

@@ -35,7 +35,7 @@ use orbit_types::task::{Task, TaskHistoryEntry, declares_no_footprint};
 use super::exclusions::clears_complexity_gate;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
-use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
+use orbit_store::contract::{TaskLockConflict, TaskLockHolder};
 
 use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 

@@ -35,7 +35,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_config::StandingDrainSettings;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AuditEventFilter, DrainIntentRecord, DrainIntentState, JobRunOrder, JobRunQuery,
 };
 use orbit_types::task::TaskStatus;

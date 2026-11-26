@@ -14,7 +14,7 @@
 //! cannot be started, redirected or impersonated by editing a run's input.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExecutionClaim, LocalPullAdmission, LocalPullPhase};
+use orbit_store::contract::{ExecutionClaim, LocalPullAdmission, LocalPullPhase};
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::{
     HostValidationGates, JobRunState, ValidationGateSource, ValidationGates,

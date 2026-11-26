@@ -7,7 +7,7 @@ use orbit_common::process::build::current_orbit_build;
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{JobRunFinalization, JobRunStepParams, PendingJobRunCancellation};
+use orbit_store::contract::{JobRunFinalization, JobRunStepParams, PendingJobRunCancellation};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
     JobRun, JobRunStartOutcome, JobRunState, JobRunStep, RunEvent, StepFailureCode,

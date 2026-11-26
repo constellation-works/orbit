@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState};
 
-pub use orbit_store::contracts::TaskChangeStamp;
+pub use orbit_store::contract::TaskChangeStamp;
 
 use crate::OrbitRuntime;
 

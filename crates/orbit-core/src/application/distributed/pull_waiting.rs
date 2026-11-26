@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use orbit_store::contracts::{AdmissionDiagnostic, AdmissionReceipt};
+use orbit_store::contract::{AdmissionDiagnostic, AdmissionReceipt};
 use orbit_types::workflow::DrainWaitingTask;
 
 /// Reason codes a pull drain records. The first, third, fourth and fifth are

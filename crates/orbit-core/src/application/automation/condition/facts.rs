@@ -11,7 +11,7 @@ use orbit_automation::condition::{
     TaskFacts, TaskPrefilter,
 };
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::automation::{CONDITION_FIRED_EVENT, ConditionOrigin};
 use orbit_types::workflow::{AutoTaskAcceptedHistory, AutoTaskDefinition, JobRunState};

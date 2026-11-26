@@ -1,6 +1,6 @@
 //! The distributed owner's side of the review-owned port [ORB-17939].
 
-use orbit_store::contracts::AdmissionShipContract;
+use orbit_store::contract::AdmissionShipContract;
 
 use crate::OrbitRuntime;
 use crate::application::review::ReviewDistributedPort;

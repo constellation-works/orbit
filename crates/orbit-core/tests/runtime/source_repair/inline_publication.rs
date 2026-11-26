@@ -236,7 +236,7 @@ fn expired_inline_publication_gets_fresh_same_pr_repair() {
         .iter()
         .map(|member| {
             f.runtime
-                .list_v2_audit_events(orbit_store::contracts::V2AuditEventFilter {
+                .list_v2_audit_events(orbit_store::contract::V2AuditEventFilter {
                     workspace_id: f.runtime.workspace_id().unwrap(),
                     run_id: Some(member.run_id.clone()),
                     ..Default::default()

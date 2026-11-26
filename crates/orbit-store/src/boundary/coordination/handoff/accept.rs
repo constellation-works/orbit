@@ -15,7 +15,7 @@ use super::review::review_refused;
 use orbit_types::plugin::is_full_commit_id;
 
 use super::{HANDOFF, TaskCommitBoundary};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     pub(in super::super) fn accept_typed_handoff(

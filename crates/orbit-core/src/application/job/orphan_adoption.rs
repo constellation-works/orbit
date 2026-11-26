@@ -57,7 +57,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
+use orbit_store::contract::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{self, DeliveryRefusal, JobRun, JobRunState};

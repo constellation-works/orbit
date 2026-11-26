@@ -9,22 +9,24 @@ tags: [architecture, orbit-store]
 
 ## What it owns
 
-Persistence. Record shapes and query filters in `contracts`, the `store` read/write facade (`Store::read`, `Store::write`), private `driver/file` + `driver/sqlite`, concrete record repositories in `repository`, task commit and recovery in `boundary`, `workflow` import/export/repair, and `compose` construction.
+Persistence. Record shapes and query parameters in `contract` (no backend traits, no application rules), the `store` and `file_store` read/write facades (`Store::read`, `Store::write`, `FileStore::read`, `FileStore::write`), private `driver/file` + `driver/sqlite`, concrete per-record and cross-driver repositories in `repository`, task commit and recovery in `boundary`, one-shot import/export/repair/layout-upgrade in `migrate`, and `compose` construction.
 
 ## Main modules and types
 
-`store` (`Store::read` returning `Snapshot`, `Store::write` passing `&Tx`), `contracts` (record shapes and query filters), `driver`, `repository` (concrete record repositories such as `crates/orbit-store/src/repository/notice.rs` alongside cross-driver repositories), `boundary` (task commits and recovery), `workflow`, `compose`, `fs`. See ``crates/orbit-store/src/lib.rs``.
+`store` (`Store::read` returning `Snapshot`, `Store::write` passing `&Tx`), `file_store` (`FileStore::read` returning `FileSnapshot`, `FileStore::write` passing `&FileTx`, plus `AutoTaskStore`), `contract` (record shapes and query parameters), `driver` (private SQLite and file drivers with private writer connections), `repository` (concrete per-record repositories such as `crates/orbit-store/src/repository/notice.rs` alongside cross-driver repositories), `boundary` (task commits and recovery), `migrate` (import, export, repair, layout upgrade), `compose`, `fs`, `json_schema`. See `crates/orbit-store/src/lib.rs`.
 
 ## Read and write path
 
-Converted records are reached through two methods on `Store` (`crates/orbit-store/src/store.rs`):
+Every SQLite record on `orbit.db` is reached through two methods on `Store` (`crates/orbit-store/src/store.rs`):
 
 - `Store::read() -> Result<Snapshot<'_>, OrbitError>`: opens one consistent `BEGIN DEFERRED` read view on the pooled `query_only=ON` reader connection (or the in-memory writer connection) and rolls it back on drop. A repository obtained from `snapshot.<record>()` exposes read methods only.
-- `Store::write(|tx| …)`: runs a callback inside one `IMMEDIATE` write transaction over the serialized writer connection, committing on `Ok` and rolling back on error or unwind. Only `Store::write` constructs `Tx`, and repository writing methods are exposed only on `tx.<record>()`, so a write outside `Store::write` does not compile.
+- `Store::write(|tx| …)`: runs a callback inside one `IMMEDIATE` write transaction over the serialized writer connection, committing on `Ok` and rolling back on error or unwind. Only `Store::write` constructs `Tx`, the writer connection is private to `crates/orbit-store/src/driver/sqlite/host/connection.rs`, and repository writing methods are exposed only on `tx.<record>()`, so a production write outside `Store::write` does not compile.
 
-Each converted record owns one concrete repository module under `crates/orbit-store/src/repository/` (`admission_load.rs`, `application_consent.rs`, `crates/orbit-store/src/repository/automation/mod.rs`, `backlog_forecast.rs`, `codebase_fact.rs`, `crates/orbit-store/src/repository/condition.rs`, `crew_memory.rs`, `drain_intent.rs`, `evolution.rs`, `experiment.rs`, `crates/orbit-store/src/repository/friction/mod.rs`, `incident.rs`, `crates/orbit-store/src/repository/job_run/mod.rs`, `landed_diff.rs`, `lease_notice.rs`, `local_pull.rs`, `notice.rs`, `plugin.rs`, `provider_limit.rs`, `reliability.rs`, `resource_usage.rs`, `retention.rs`, `crates/orbit-store/src/repository/review/mod.rs`, `routine.rs`, `script_grant.rs`, `tool.rs`), reached only via `snapshot.<record>()` and `tx.<record>()`. Repository methods are named for the record (`get`, `list`, `put`, `close`) and hold SQL and row mapping only; domain rules run in the calling operation inside `Store::write`. Legacy `*Backend` traits in `contracts/` and `driver/sqlite/*_store.rs` coexist on `Store` until their records are converted. A retention mechanic that must not pin one read stays a named second path: `visit_blob_reference_text` takes the `Store` and opens one snapshot per chunk.
+Each record owns one concrete repository module under `crates/orbit-store/src/repository/` (`admission_load.rs`, `application_consent.rs`, `crates/orbit-store/src/repository/audit/mod.rs`, `crates/orbit-store/src/repository/automation/mod.rs`, `backlog_forecast.rs`, `codebase_fact.rs`, `crates/orbit-store/src/repository/condition.rs`, `crew_memory.rs`, `drain_intent.rs`, `evolution.rs`, `experiment.rs`, `crates/orbit-store/src/repository/friction/mod.rs`, `incident.rs`, `crates/orbit-store/src/repository/invocation/mod.rs`, `crates/orbit-store/src/repository/job_run/mod.rs`, `landed_diff.rs`, `lease_notice.rs`, `local_pull.rs`, `notice.rs`, `plugin.rs`, `provider_limit.rs`, `reliability.rs`, `resource_usage.rs`, `retention.rs`, `crates/orbit-store/src/repository/review/mod.rs`, `routine.rs`, `script_grant.rs`, `tool.rs`), reached only via `snapshot.<record>()` and `tx.<record>()`. Repository methods are named for the record (`get`, `list`, `put`, `close`) and hold SQL and row mapping only; domain rules run in the calling operation inside `Store::write`. No `*Backend` traits remain in `orbit-store`. Two named second paths stay documented beside `Store::read`/`Store::write`: `Store::append_audit_event_at_path` for read-only/foreign-generation audit lines that must survive outside a writable handle, and `visit_blob_reference_text` for bounded retention chunks that must not pin one read snapshot.
 
-The task index (the `index.sqlite` file under the global root's `tasks` directory) is a separate file with the same shape. `crates/orbit-store/src/driver/sqlite/task_index/` holds its file name, the one place it is opened, its pragmas and its schema, whose `crates/orbit-store/src/driver/sqlite/task_index/schema/mod.rs` is the one ordered step list. Its SQL and row mapping are `TaskRegistryStore` in `crates/orbit-store/src/repository/task_index/`, which reaches the file only through the driver handle: `read` for a pooled reader, `write` for one IMMEDIATE transaction, and `cache_write` as the named second path for derived caches that must never wait for the write lock. Task callers hold the concrete `TaskV2Store`.
+The host recovery authority (`authority.db`) is a separate SQLite file under `crates/orbit-store/src/driver/sqlite/authority/` with its concrete repository in `crates/orbit-store/src/repository/recovery_authority.rs`.
+
+The task index (the `index.sqlite` file under the global root's `tasks` directory) is a separate file with the same shape. `crates/orbit-store/src/driver/sqlite/task_index/` holds its file name, the one place it is opened, its pragmas, its private writer connection, and its schema, whose `crates/orbit-store/src/driver/sqlite/task_index/schema/mod.rs` is the one ordered step list. Its SQL and row mapping are `TaskRegistryStore` in `crates/orbit-store/src/repository/task_index/`, which reaches the file only through the driver handle: `read` for a pooled reader, `write` for one IMMEDIATE transaction, and `cache_write` as the named second path for derived caches that must never wait for the write lock. Task callers hold the concrete `TaskV2Store`.
 
 Workspace composition also supplies `TaskCoordination` for owner-wave admission, execution-claim resolution, and worker-claim verification. These operations use the workspace's shared `TaskCommitBoundary`. With legacy uncoordinated composition, owner-wave admission admits every candidate without publishing its footprint, and the two claim operations report that the claim lifecycle is unavailable.
 
@@ -36,26 +38,27 @@ Auto-task cursors use `AutoTaskStore::read` and `AutoTaskStore::write` in the sa
 
 ## Dependencies
 
-- Depends on (internal, production): `orbit-common`, `orbit-types`.
+- Depends on (internal, production): `orbit-common`, `orbit-types` (dev: `orbit-store` for `test-support`).
 - Depended on by: `orbit-automation`, `orbit-cmd`, `orbit-core`, `orbit-engine`, `orbit-runtime`.
+- `rusqlite` in production (`[dependencies]`) is confined to `orbit-store`, `orbit-search`, `orbit-auth`, and `orbit-common`.
 
 Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 
 ## Entry points
 
-Start reading at [`crates/orbit-store/src/lib.rs`](../../crates/orbit-store/src/lib.rs). The rules for how the store's modules depend on each other (private drivers, `repository` invariants, explicit `workflow` operations, `compose` construction) are in [Crates in ARCHITECTURE.md](../../ARCHITECTURE.md#crates). Task writes commit through one boundary: [task commit boundary](../design-patterns/task_commit_boundary.md).
+Start reading at [`crates/orbit-store/src/lib.rs`](../../crates/orbit-store/src/lib.rs). The rules for how the store's modules depend on each other (private drivers, `repository` invariants, explicit `migrate` operations, `compose` construction) are in [Crates in ARCHITECTURE.md](../../ARCHITECTURE.md#crates). Task writes commit through one boundary: [task commit boundary](../design-patterns/task_commit_boundary.md).
 
 Design intent: [docs/design/state-compatibility/](../../docs/design/state-compatibility/) — this page describes the code as it is; the design folder holds intent.
 
 ## Ownership by module
 
 - `boundary`: Coordinates task mutations that span canonical files, the registry index and host reservations, including journal recovery and bulk maintenance writes. The document, history, artifact and reservation repositories share the workspace’s commit boundary.
-- `compose`: Composition constructors that assemble driver, repository, and workflow store backends; imports `contracts`, `driver`, `repository`, `workflow`, and `orbit-common`.
-- `contracts`: Consumer-facing persistence traits, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only (no persistence drivers).
-- `driver`: Private single-technology persistence drivers (`driver/file` and `driver/sqlite`, never importing each other); imports `contracts`, `fs`, `json_schema`, `orbit-common`, and `orbit-types`. The host store, task registry, and recovery authority own separate ordered registries run by `orbit-common`'s SQLite ledger.
+- `compose`: Composition constructors that assemble driver, repository, and migration store handles; imports `contract`, `driver`, `repository`, `migrate`, and `orbit-common`.
+- `contract`: Record shapes and query parameters with no backend traits or application rules; imports `orbit-common` and `orbit-types` only (no persistence drivers, no `rusqlite`).
+- `driver`: Private single-technology persistence drivers (`driver/file` and `driver/sqlite`, never importing each other) with private SQLite writer connections; imports `contract`, `fs`, `json_schema`, `orbit-common`, and `orbit-types`. The host store, task registry, and recovery authority own separate ordered registries run by `orbit-common`'s SQLite ledger.
 - `file_store`: Facade exposing `FileStore::read` (`FileSnapshot`) and `FileStore::write` (`FileTx`) over one family of file-backed records and handing out their concrete repositories; imports `driver`, `repository`, and `orbit-common`.
-- `fs`: Narrow filesystem mechanics (locks, path safety, atomic writes, YAML) shared by drivers and workflows; imports `orbit-common` and `orbit-types` only.
+- `fs`: Narrow filesystem mechanics (locks, path safety, atomic writes, YAML) shared by drivers and migrations; imports `orbit-common` and `orbit-types` only.
 - `json_schema`: JSON Schema draft validation and compilation helper for stored skill/tool schemas; imports `jsonschema`, `orbit-common`, and `serde_json` only.
-- `repository`: Concrete per-record repositories (such as `repository/notice.rs`, reached through `Snapshot` and `Tx`) and cross-driver repositories enforcing invariants across file and SQLite drivers; imports `contracts`, `driver`, `fs`, `store`, `workflow`, `orbit-common`, and `orbit-types`.
+- `migrate`: Explicit one-shot import, export, repair, and layout-upgrade migrations, plus the friction submission shared with the task commit boundary; imports `contract`, `driver`, `fs`, `repository`, `orbit-common`, and `orbit-types`.
+- `repository`: Concrete per-record repositories (such as `repository/notice.rs`, reached through `Snapshot` and `Tx`) and cross-driver repositories enforcing invariants across file and SQLite drivers; imports `contract`, `driver`, `fs`, `store`, `migrate`, `orbit-common`, and `orbit-types`.
 - `store`: Facade exposing `Store::read` (`Snapshot`) and `Store::write` (`Tx`) over the host SQLite driver and handing out concrete repositories; imports `driver`, `repository`, and `orbit-common`.
-- `workflow`: Explicit import, export, repair, and layout-upgrade workflows, plus the friction submission shared with the task commit boundary; imports `contracts`, `driver`, `fs`, `repository`, `orbit-common`, and `orbit-types`.

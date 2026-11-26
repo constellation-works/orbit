@@ -1,4 +1,4 @@
-//! Composition constructors that assemble driver, repository, and workflow store backends; imports `contracts`, `driver`, `repository`, `workflow`, and `orbit-common`.
+//! Composition constructors that assemble driver, repository, and migration store handles; imports `contract`, `driver`, `repository`, `migrate`, and `orbit-common`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,8 +9,8 @@ use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
 use crate::driver::file::session_log_store::SessionLogDir;
 use crate::file_store::FileStore;
+use crate::migrate::friction::import_workspace_frictions;
 use crate::repository::task_index::TaskRegistryStore;
-use crate::workflow::friction::import_workspace_frictions;
 use crate::{
     TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
     TaskReservationRepository,

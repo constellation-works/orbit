@@ -330,7 +330,7 @@ fn a_review_pool_owner_captures_one_reviewer_crew_per_claim() {
         assert_eq!(probe["admits"], true, "{probe}");
         assert_eq!(
             probe["protocol_fingerprint"],
-            orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+            orbit_store::contract::distributed_drain_protocol_fingerprint(),
             "{probe}"
         );
         let crew = probe["ship"]["review"]["crew"].as_str().unwrap_or_default();
@@ -366,7 +366,7 @@ fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
             "orbit.drain.probe",
             json!({
                 "caller_version": orbit_core::application::distributed::owner_binary_version(),
-                "caller_schema": orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                "caller_schema": orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             }),
             ToolContext {
                 session_context: ToolSessionContext {

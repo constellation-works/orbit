@@ -14,7 +14,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::contracts::{
+use crate::contract::{
     ExperimentArmRow, ExperimentAssignment, ExperimentEventRow, ExperimentRecord, ExperimentRow,
 };
 use crate::driver::sqlite::codec::stamp;

@@ -23,7 +23,7 @@ mod sweep_rate_limit;
 use chrono::Duration;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_engine::TaskAutomationUpdate;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, DEFERRED_BRANCH_OBSERVATION_KIND,
     DeferredBranchObservation,
 };
@@ -1946,7 +1946,7 @@ fn ci_failure_branch_routing_retains_evidence_for_configurable_task_prefixes() {
 fn protecting_branch_claim(
     runtime: &OrbitRuntime,
     owner_id: &str,
-) -> orbit_store::contracts::ExecutionClaim {
+) -> orbit_store::contract::ExecutionClaim {
     use orbit_engine::TaskAutomationUpdate;
     use orbit_types::task::TaskStatus;
     let claim_id = format!("claim-{owner_id}");
@@ -1974,8 +1974,8 @@ fn protecting_branch_claim(
 fn insert_protecting_claim(
     runtime: &OrbitRuntime,
     owner_id: &str,
-) -> orbit_store::contracts::ExecutionClaim {
-    use orbit_store::contracts::{
+) -> orbit_store::contract::ExecutionClaim {
+    use orbit_store::contract::{
         AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
     };
     let claim_id = format!("claim-{owner_id}");
@@ -2029,7 +2029,7 @@ fn ci_failure_claimed_branch_defers_attribution_until_the_claim_settles() {
         return;
     }
     use orbit_core::application::task::TaskUpdateParams;
-    use orbit_store::contracts::ExecutionClaimPhase;
+    use orbit_store::contract::ExecutionClaimPhase;
     use orbit_types::task::TaskStatus;
     let (_root, runtime) = bare_runtime();
     let owner = add_planned(&runtime, "Follower-claimed branch owner");
@@ -2233,7 +2233,7 @@ fn ci_failure_branch_receipt_retains_after_settlement_precedes_insertion() {
         return;
     }
     use orbit_store::compose::workspace_coordinated_backends;
-    use orbit_store::contracts::{
+    use orbit_store::contract::{
         BranchObservationOutcome, DEFERRED_BRANCH_OBSERVATION_KIND, DeferredBranchObservation,
     };
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};

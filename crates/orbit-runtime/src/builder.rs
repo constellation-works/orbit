@@ -26,8 +26,7 @@ use orbit_types::workspace::WorkspacePaths;
 
 use crate::context::OrbitContext;
 use crate::context::{
-    ActorIdentity, OrbitExecutionAssets, OrbitHostStore, OrbitPolicyContext, OrbitRuntimeSettings,
-    OrbitStores,
+    ActorIdentity, OrbitExecutionAssets, OrbitPolicyContext, OrbitRuntimeSettings, OrbitStores,
 };
 use crate::{HostLifetime, OrbitRuntimeRoots, WorkspaceRuntimeBinding};
 use orbit_store::FileStore;
@@ -147,9 +146,6 @@ pub(crate) fn build_context_from_roots(
 
     // Executors and policies are global-only. Jobs always persist run state
     // under the workspace state directory.
-    let host_store = OrbitHostStore {
-        sqlite: store.clone(),
-    };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());
     let global_policy_store = global_policy_def_store(persistence.policy_dir.clone());
     let workspace_policy_store = workspace_policy_def_store(paths.policies_dir.clone());
@@ -288,7 +284,7 @@ pub(crate) fn build_context_from_roots(
             job_runs,
             executor_def_store,
             policy_def_store,
-            host_store,
+            store,
         ),
         OrbitExecutionAssets::new(Arc::new(registry), skill_catalog, plugin_load),
         OrbitPolicyContext::new(

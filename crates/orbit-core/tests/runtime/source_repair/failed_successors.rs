@@ -35,7 +35,7 @@ fn audit_started(f: &Fixture, run: &JobRun, step_id: &str) {
         kind,
     };
     f.runtime
-        .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+        .insert_v2_audit_event(&orbit_core::test_support::V2AuditEventInsertParams {
             workspace_id: f.runtime.workspace_id().unwrap(),
             event_id: event.envelope.event_id.clone(),
             source: "v2_envelope".into(),
@@ -103,7 +103,7 @@ fn step_row(f: &Fixture, run: &JobRun, index: usize, target: Option<&str>) {
     f.runtime
         .complete_job_run_step(
             &run.run_id,
-            &orbit_store::contracts::JobRunStepParams {
+            &orbit_store::contract::JobRunStepParams {
                 step_index: index,
                 target_type: orbit_types::workflow::JobTargetType::Activity,
                 target_id: target.into(),

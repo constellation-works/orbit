@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+use orbit_store::contract::{JobRunOrder, JobRunQuery};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 

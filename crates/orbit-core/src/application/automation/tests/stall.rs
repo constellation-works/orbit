@@ -11,7 +11,7 @@ use crate::runtime::friction::WorkspaceFrictions as FrictionStore;
 use chrono::{TimeZone, Utc};
 use orbit_automation::delivery::stall::StallReport;
 use orbit_store::Store;
-use orbit_store::contracts::FrictionListFilter;
+use orbit_store::contract::FrictionListFilter;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::automation::recovery::HistoryDivergence;
 

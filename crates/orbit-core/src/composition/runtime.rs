@@ -415,11 +415,11 @@ fn runtime_config_loader(env: Env, global_root: &Path, shared_root: &Path) -> Ru
 fn observe_or_upgrade_layout(
     shared_root: &Path,
     write_free: bool,
-) -> Result<orbit_store::workflow::layout::LayoutUpgradeReport, OrbitError> {
+) -> Result<orbit_store::migrate::layout::LayoutUpgradeReport, OrbitError> {
     if write_free {
-        let current = orbit_store::workflow::layout::current_layout_version(shared_root)?;
-        if current < orbit_store::workflow::layout::SUPPORTED_LAYOUT_VERSION {
-            return Ok(orbit_store::workflow::layout::LayoutUpgradeReport {
+        let current = orbit_store::migrate::layout::current_layout_version(shared_root)?;
+        if current < orbit_store::migrate::layout::SUPPORTED_LAYOUT_VERSION {
+            return Ok(orbit_store::migrate::layout::LayoutUpgradeReport {
                 from_version: current,
                 to_version: current,
                 applied: Vec::new(),
@@ -427,7 +427,7 @@ fn observe_or_upgrade_layout(
             });
         }
     }
-    match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
+    match orbit_store::migrate::layout::upgrade_workspace_layout(shared_root) {
         Ok(report) => Ok(report),
         Err(error) if error.is_readonly_or_access_failure() => {
             tracing::warn!(
@@ -436,7 +436,7 @@ fn observe_or_upgrade_layout(
                 error = %error,
                 "skipped incidental workspace layout persistence"
             );
-            Ok(orbit_store::workflow::layout::LayoutUpgradeReport::default())
+            Ok(orbit_store::migrate::layout::LayoutUpgradeReport::default())
         }
         Err(error) => Err(error),
     }

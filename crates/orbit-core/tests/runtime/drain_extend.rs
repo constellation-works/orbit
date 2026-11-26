@@ -9,7 +9,7 @@ use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimit
 use orbit_core::runtime::JobRuns;
 use orbit_core::{DrainWindowExtensionRequest, DrainWorkerLimitRequest, OrbitError, OrbitRuntime};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::AuditEventFilter;
+use orbit_store::contract::AuditEventFilter;
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};

@@ -96,7 +96,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
                                 .iter()
                                 .find(|arm| arm.name == "treatment")
                                 .unwrap();
-                            Ok(vec![orbit_store::contracts::ExperimentAssignment {
+                            Ok(vec![orbit_store::contract::ExperimentAssignment {
                                 experiment: experiment.id.clone(),
                                 task_id: task.clone(),
                                 arm: Some(arm.name.clone()),
@@ -248,7 +248,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
                     crew: Some("luna".into()),
                     ..Default::default()
                 }),
-                orbit_store::contracts::ClaimAttribution::default(),
+                orbit_store::contract::ClaimAttribution::default(),
             )
             .unwrap();
         owner
@@ -508,7 +508,7 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
                         .iter()
                         .find(|arm| arm.name == "treatment")
                         .unwrap();
-                    Ok(vec![orbit_store::contracts::ExperimentAssignment {
+                    Ok(vec![orbit_store::contract::ExperimentAssignment {
                         experiment: experiment.id.clone(),
                         task_id: task.clone(),
                         arm: Some(arm.name.clone()),

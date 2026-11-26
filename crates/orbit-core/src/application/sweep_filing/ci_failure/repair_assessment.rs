@@ -3,7 +3,7 @@
 //! No command from an artifact or a CI log is executed here.
 
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::BranchObservationOutcome;
+use orbit_store::contract::BranchObservationOutcome;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

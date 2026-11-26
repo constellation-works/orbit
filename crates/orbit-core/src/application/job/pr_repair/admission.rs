@@ -299,7 +299,7 @@ impl OrbitRuntime {
                 &status,
             )?;
         }
-        let observation = orbit_store::contracts::HandoffObservation {
+        let observation = orbit_store::contract::HandoffObservation {
             candidate: accepted.handoff.candidate.clone(),
             footprint_widening: accepted.handoff.footprint_widening.clone(),
             required_commands: self.workflow_required_validation_commands().to_vec(),
@@ -313,7 +313,7 @@ impl OrbitRuntime {
             light_delivery: self
                 .owner_light_delivery(&accepted.handoff.task_id, &accepted.handoff.candidate)?,
         };
-        let auth = orbit_store::contracts::ClaimInvocation::trusted_operator(
+        let auth = orbit_store::contract::ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
             claim.claim.claim_id,
             "owner-base-update".into(),
@@ -442,7 +442,7 @@ impl OrbitRuntime {
                     &status,
                 )?;
             }
-            let observation = orbit_store::contracts::HandoffObservation {
+            let observation = orbit_store::contract::HandoffObservation {
                 candidate: candidate.clone(),
                 footprint_widening: accepted.handoff.footprint_widening.clone(),
                 required_commands: self.workflow_required_validation_commands().to_vec(),
@@ -451,7 +451,7 @@ impl OrbitRuntime {
                 known_red: vec![],
                 light_delivery: self.owner_light_delivery(&accepted.handoff.task_id, candidate)?,
             };
-            let auth = orbit_store::contracts::ClaimInvocation::trusted_operator(
+            let auth = orbit_store::contract::ClaimInvocation::trusted_operator(
                 claim.claim.task_id.clone(),
                 claim.claim.claim_id,
                 "owner-ci-retry".into(),

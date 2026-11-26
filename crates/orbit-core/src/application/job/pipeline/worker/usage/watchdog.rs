@@ -15,7 +15,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::process::ancestry::{self, ProcessStartKey, ProcessTreeProcess};
 use orbit_config::{MemoryLimit, MemoryUnit};
-use orbit_store::contracts::WorkerResourceLimitEvidence;
+use orbit_store::contract::WorkerResourceLimitEvidence;
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use super::tree::TreeSampler;

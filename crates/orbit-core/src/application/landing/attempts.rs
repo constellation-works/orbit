@@ -1,7 +1,7 @@
 //! Landing attempt bookkeeping and the claim mutations that record it.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInspection, ClaimInvocation, ClaimMutation};
+use orbit_store::contract::{ClaimInspection, ClaimInvocation, ClaimMutation};
 use orbit_types::workflow::handoff::LandingAttempt;
 
 use crate::OrbitRuntime;

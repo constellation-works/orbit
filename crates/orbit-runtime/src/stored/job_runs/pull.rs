@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
     LocalPullMutation, LocalPullPhase, PullDestination, PullFailureStreak,
 };
@@ -150,7 +150,11 @@ impl JobRuns {
                 }
                 match record.settlement {
                     Some(ClaimMutation::Fail(evidence)) => match evidence.failure {
-                        Some(failure) if !failure.trips_breaker() => true,
+                        Some(failure)
+                            if orbit_types::workflow::is_contract_refusal(&failure.reason) =>
+                        {
+                            true
+                        }
                         Some(failure) => {
                             streak.classes.push(failure.class.as_str().to_string());
                             true

@@ -37,7 +37,7 @@ fn call_with(runtime: &OrbitRuntime, input: Value, session: ToolSessionContext) 
 }
 
 fn add_open_friction(runtime: &OrbitRuntime) -> String {
-    use orbit_store::contracts::FrictionAddParams;
+    use orbit_store::contract::FrictionAddParams;
     let store = orbit_core::runtime::friction::store_for(runtime).unwrap();
     store
         .add(FrictionAddParams {
@@ -530,7 +530,7 @@ fn friction_untriaged_lists_only_open() {
     std::fs::write(orbit.join("config.toml"), "").unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &orbit).unwrap();
     let store = orbit_core::runtime::friction::store_for(&runtime).unwrap();
-    use orbit_store::contracts::FrictionAddParams;
+    use orbit_store::contract::FrictionAddParams;
     let open = store
         .add(FrictionAddParams {
             model: "test".into(),

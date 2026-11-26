@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, params};
 
-use crate::contracts::{AgentTaskFactsRow, CodebaseTaskFactsRow};
+use crate::contract::{AgentTaskFactsRow, CodebaseTaskFactsRow};
 use crate::store::{Snapshot, Tx};
 
 const CODEBASE_TABLE: &str = "codebase_task_facts";

@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use serde::Serialize;
 
-use crate::contracts::{ClaimInspection, TaskCoordinationRow};
+use crate::contract::{ClaimInspection, TaskCoordinationRow};
 
 pub(in super::super) const CLAIM: &str = "distributed-execution-claim-v1";
 pub(in super::super) const STATE: &str = "distributed-claim-lifecycle-v1";

@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{JobRun, JobRunState, JobTargetType, V2AuditEventInsertParams};
+use orbit_core::test_support::V2AuditEventInsertParams;
+use orbit_core::{JobRun, JobRunState, JobTargetType};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
     DrainCancelRequest, RunCancellationProvenance, RunRootCause, TaskCancellationPolicy,
@@ -1050,7 +1051,7 @@ scenario_test!(
 );
 
 fn pull_request_holds_body(fixture: &Fixture) {
-    use orbit_store::contracts::{LocalPullPhase, SettlementRefusal};
+    use orbit_store::contract::{LocalPullPhase, SettlementRefusal};
     use orbit_types::workflow::PullBreaker;
 
     let pull = "workspace_pull_pipeline";
@@ -1131,7 +1132,7 @@ scenario_test!(
 );
 
 fn pull_budget_body(fixture: &Fixture) {
-    use orbit_store::contracts::{LocalPullMutation, LocalPullPhase, SettlementRefusal};
+    use orbit_store::contract::{LocalPullMutation, LocalPullPhase, SettlementRefusal};
     use orbit_types::workflow::ReviewGateAdmissionOutput;
 
     let seed = |i: &str, j: &str, s: JobRunState| fixture.seed_run(i, j, s);
@@ -1178,7 +1179,7 @@ fn pull_budget_body(fixture: &Fixture) {
         .allocate_pull_request(&destination, &request, 1)
         .unwrap();
     let mut admission = allocated.unwrap();
-    let persist = |admission: &orbit_store::contracts::LocalPullAdmission| {
+    let persist = |admission: &orbit_store::contract::LocalPullAdmission| {
         persist_admission(&store, &workspace, &request.request_id, admission);
     };
     admission.phase = LocalPullPhase::Launching;

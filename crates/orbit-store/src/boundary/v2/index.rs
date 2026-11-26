@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::envelope_cache;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
-use crate::contracts::{
+use crate::contract::{
     EnvelopeStampRecord, TaskCompletionByComplexity, TaskDefectFiling, TaskTerminalTransition,
 };
 use crate::driver::file::task_bundle::bundle_lock_target;
@@ -125,7 +125,7 @@ impl TaskV2Store {
 
     pub fn task_change_stamps(
         &self,
-    ) -> Result<Arc<Vec<crate::contracts::TaskChangeStamp>>, OrbitError> {
+    ) -> Result<Arc<Vec<crate::contract::TaskChangeStamp>>, OrbitError> {
         self.registry.task_change_stamps(&self.workspace_id)
     }
 

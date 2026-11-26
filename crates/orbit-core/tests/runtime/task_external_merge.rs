@@ -8,8 +8,8 @@ use orbit_common::OrbitError;
 use orbit_core::TaskStatus;
 use orbit_core::application::task::EXTERNAL_MERGE_SETTLED_EVENT;
 use orbit_core::runtime::task_pr_forge::ForgePullRequest;
-use orbit_store::contracts::HandoffObservation;
-use orbit_store::contracts::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
+use orbit_store::contract::HandoffObservation;
+use orbit_store::contract::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
 use orbit_types::task::ExternalRef;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState, LandingStartState};
@@ -672,7 +672,7 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
         number: u64,
         branch: &str,
         mutation_id: &str,
-    ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
+    ) -> Result<orbit_store::contract::ClaimMutationResult, OrbitError> {
         let operator = ClaimInvocation::trusted_operator(
             handoff.task.clone(),
             handoff.claim_id.clone(),

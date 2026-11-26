@@ -59,7 +59,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_types::task::TaskEnvelopeV2;
 
-use crate::contracts::{EnvelopeStampRecord, TaskBundleBinding};
+use crate::contract::{EnvelopeStampRecord, TaskBundleBinding};
 use crate::repository::task_index::TaskIndexProofRow;
 
 /// Filesystem evidence that an envelope file is the one a cached parse came

@@ -6,7 +6,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::AuditEventFilter;
+use orbit_store::contract::AuditEventFilter;
 use orbit_types::record::Notice;
 use orbit_types::task::{TaskComment, TaskHistoryEntry};
 use orbit_types::telemetry::AuditEventStatus;

@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 use orbit_common::OrbitError;
 use rusqlite::Connection;
 
-use crate::contracts::{
+use crate::contract::{
     V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
     V2AuditKindForwardPayloads, V2AuditKindForwardQuery,
 };

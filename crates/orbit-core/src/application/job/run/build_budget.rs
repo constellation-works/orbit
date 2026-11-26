@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::process::build_budget::BuildBudgetCapacity;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;

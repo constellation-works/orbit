@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     CPU_ACCOUNTING_LINUX, DeliveryRunResources, DeliveryRunsFreshness, ResourceMinuteLoad,
 };
 

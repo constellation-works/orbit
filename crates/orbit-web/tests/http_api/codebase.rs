@@ -2673,7 +2673,7 @@ analytics_test!(
 /// A landed-delivery row of `lines` changed lines for `task_id`; `seq`
 /// keeps each row's commit distinct.
 fn landed_row(fixture: &Fixture, task_id: &str, seq: usize, lines: u64) {
-    use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+    use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
     fixture
         .runtime
         .sqlite_store()

@@ -5,7 +5,7 @@
 //! from naming rules, so an unrecorded value is reported as unrecorded.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInspection, ClaimRun};
+use orbit_store::contract::{ClaimInspection, ClaimRun};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 

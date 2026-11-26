@@ -8,7 +8,7 @@ use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::Connection;
 
 use super::ledger;
-use crate::contracts::{
+use crate::contract::{
     ForwardCompatibleOpen, MigrationCompatibility, StateComponent, evaluate_newer_state,
 };
 

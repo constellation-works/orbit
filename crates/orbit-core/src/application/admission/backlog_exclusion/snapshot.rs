@@ -1,7 +1,7 @@
 use std::cell::LazyCell;
 use std::collections::BTreeMap;
 
-use orbit_store::contracts::TaskRow;
+use orbit_store::contract::TaskRow;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;

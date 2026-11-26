@@ -220,7 +220,7 @@ pub(in crate::application::codebase) fn scan(
         if let (Some(landed), Some(scanner)) = (&landed, &landed_scan) {
             for base in &notice_bases {
                 if scanner.base_contains(base, &landed.commit) {
-                    let landing = orbit_store::contracts::LeaseLandedNoticeParams {
+                    let landing = orbit_store::contract::LeaseLandedNoticeParams {
                         workspace_id: runtime.workspace_id()?,
                         workspace_orbit_dir: runtime
                             .paths()

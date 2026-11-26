@@ -3,7 +3,7 @@
 
 pub use crate::application::contracts::{OwnerBusyBackoff, PullCrewWindow};
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::{AdmissionCrewCapability, LocalPullPhase};
+use orbit_store::contract::{AdmissionCrewCapability, LocalPullPhase};
 use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
 

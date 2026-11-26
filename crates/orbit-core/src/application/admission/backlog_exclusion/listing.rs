@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use orbit_engine::DispatchError;
-use orbit_store::contracts::{ExecutionClaim, OwnerWaveCandidate};
+use orbit_store::contract::{ExecutionClaim, OwnerWaveCandidate};
 use orbit_types::task::{
     EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots, is_no_diff_expected,
 };

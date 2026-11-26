@@ -5,7 +5,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, PipelineWaitStatus, ShipMode, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::task::{ExecutionLocation, ExternalRef};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState};
 use serde_json::{Value, json};
@@ -516,7 +516,7 @@ impl Fixture {
         .document
         .update_task_document(
             &self.task,
-            orbit_store::contracts::TaskDocumentUpdateParams {
+            orbit_store::contract::TaskDocumentUpdateParams {
                 actor: "fixture".into(),
                 external_refs: Some(refs),
                 ..Default::default()

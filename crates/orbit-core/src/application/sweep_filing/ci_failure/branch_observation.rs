@@ -7,7 +7,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::{BranchObservationOutcome, DeferredBranchObservation};
+use orbit_store::contract::{BranchObservationOutcome, DeferredBranchObservation};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;

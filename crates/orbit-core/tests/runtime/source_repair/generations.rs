@@ -1,6 +1,6 @@
 //! A fully published repair becomes the next cancelled recovery source.
 use super::*;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::JobTargetType;
 
 // The fixture's compact definition keeps its original publication indices.

@@ -8,7 +8,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::record::FrictionRecord;
 use rusqlite::Connection;
 
-use crate::contracts::{FrictionListFilter, FrictionReportedCount, StoredFrictionRecord};
+use crate::contract::{FrictionListFilter, FrictionReportedCount, StoredFrictionRecord};
 use crate::{Snapshot, Tx};
 
 pub(crate) mod legacy;

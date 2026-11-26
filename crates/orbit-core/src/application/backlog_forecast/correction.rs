@@ -40,7 +40,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::StoredBacklogForecast;
+use orbit_store::contract::StoredBacklogForecast;
 use orbit_types::task::{Task, TaskStatus, complexity_bucket};
 use serde::Deserialize;
 use serde_json::{Value, json};

@@ -41,7 +41,7 @@ use std::thread::{self, JoinHandle};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use orbit_store::Store;
-use orbit_store::contracts::{HostResourceMinute, RunResourceMinute};
+use orbit_store::contract::{HostResourceMinute, RunResourceMinute};
 use orbit_types::workflow::JobRun;
 
 use super::super::delivery_class::DeliveryResourceClass;
@@ -412,9 +412,9 @@ impl RunResourceSampler {
                 0.0
             },
             cpu_accounting: if cfg!(target_os = "macos") {
-                Some(orbit_store::contracts::CPU_ACCOUNTING_MACOS.to_string())
+                Some(orbit_store::contract::CPU_ACCOUNTING_MACOS.to_string())
             } else if cfg!(target_os = "linux") {
-                Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.to_string())
+                Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.to_string())
             } else {
                 None
             },

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCensusEntry, browser_kit_unavailable,
     labels_unavailable_with_tag_requirements, os_unavailable,
 };

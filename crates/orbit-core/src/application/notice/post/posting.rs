@@ -1,6 +1,6 @@
 use chrono::Duration;
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{NoticePosterEventFilter, NoticeScopeFilter};
+use orbit_store::contract::{NoticePosterEventFilter, NoticeScopeFilter};
 use orbit_types::record::{
     AuthorClass, Notice, NoticeKind, NoticeScope, NoticeWorkspace, PostOutcome,
     resident_status_notice_key,

@@ -33,7 +33,7 @@ fn expected_item(run: &JobRun) -> Value {
 /// LIMIT; returned row counts alone cannot detect a scan of success history.
 fn page_work(
     store: &orbit_store::Store,
-    query: &orbit_store::contracts::JobRunQuery,
+    query: &orbit_store::contract::JobRunQuery,
 ) -> (Vec<String>, usize) {
     use std::sync::{
         Arc,
@@ -74,7 +74,7 @@ fn multi_state_pages_do_not_scan_unrelated_success_history() {
     isolated(
         "job_run_lists::multi_state_pages_do_not_scan_unrelated_success_history",
         || {
-            use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+            use orbit_store::contract::{JobRunOrder, JobRunQuery};
 
             let fixture = Fixture::new();
             let template = fixture.seed_run("template", "list-fixture", JobRunState::Success);

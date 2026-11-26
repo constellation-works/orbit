@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_common::fs::path::orbit_scratch_dir;
 use orbit_engine::ScratchGcReport;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::JobRunState;
 
 use crate::{OrbitError, OrbitRuntime};

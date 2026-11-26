@@ -21,7 +21,7 @@ use super::TaskCommitBoundary;
 use super::admission::canonical_footprint;
 use super::lifecycle::DrainReleases;
 use crate::boundary::v2::{TaskV2Store, task_history_from_events};
-use crate::contracts::*;
+use crate::contract::*;
 
 fn is_in_flight(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::InProgress | TaskStatus::Review)

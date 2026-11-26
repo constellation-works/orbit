@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::application::store_opener::StoreOpener;
 use orbit_common::OrbitError;
 use orbit_runtime::JobRuns;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_types::workflow::JobRunState;
 

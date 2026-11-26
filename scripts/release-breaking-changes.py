@@ -37,7 +37,8 @@ BREAKING_TAG = "breaking-change"
 
 SCHEMA_REGISTRY = "crates/orbit-store/src/driver/sqlite/host/schema/mod.rs"
 LEGACY_SCHEMA_REGISTRY = "crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs"
-LAYOUT_REGISTRY = "crates/orbit-store/src/workflow/layout/registry.rs"
+LAYOUT_REGISTRY = "crates/orbit-store/src/migrate/layout/registry.rs"
+LEGACY_LAYOUT_REGISTRY = "crates/orbit-store/src/workflow/layout/registry.rs"
 HELP_GOLDENS = "crates/orbit-cli/tests/help_goldens"
 MCP_SNAPSHOT = "crates/orbit-cli/tests/snapshots/mcp_tools_list.json"
 CONFIG_KEYS = "crates/orbit-config/src/registry/key.rs"
@@ -115,7 +116,7 @@ def detect_version_bumps(git, parent, commit, changed):
     found = []
     for paths, name, kind in (
         ((SCHEMA_REGISTRY, LEGACY_SCHEMA_REGISTRY), "SUPPORTED_SCHEMA_VERSION", "schema-version"),
-        ((LAYOUT_REGISTRY,), "SUPPORTED_LAYOUT_VERSION", "layout-version"),
+        ((LAYOUT_REGISTRY, LEGACY_LAYOUT_REGISTRY), "SUPPORTED_LAYOUT_VERSION", "layout-version"),
     ):
         if changed.isdisjoint(paths):
             continue

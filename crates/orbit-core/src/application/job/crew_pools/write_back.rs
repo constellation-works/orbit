@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{
     CREW_ASSIGNED_EVENT, CrewAssignmentState, CrewSource, RecordedCrewAssignment, RedrawReason,
     TaskDecision, TaskHistoryEntry,

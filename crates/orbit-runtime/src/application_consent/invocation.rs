@@ -10,7 +10,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::application_credential::ApplicationCredential;
-use orbit_store::contracts::ApplicationConsentRecord;
+use orbit_store::contract::ApplicationConsentRecord;
 use orbit_types::tool::{
     ApplicationAdmissionMatch, ApplicationAuditRefusal, ApplicationInvocation, ToolSessionContext,
 };

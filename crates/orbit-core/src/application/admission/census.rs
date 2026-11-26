@@ -11,7 +11,7 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ExecutorCapability, ExecutorCensus, ExecutorCensusEntry, census_dispatch_order,
 };
 use orbit_types::task::{ADMISSION_AFFINITY, ExecutorOsLimit, Task};

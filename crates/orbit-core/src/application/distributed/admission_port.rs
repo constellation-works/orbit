@@ -9,7 +9,7 @@
 //! runtime binds it.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExecutorCapability, ExecutorCensus};
+use orbit_store::contract::{ExecutorCapability, ExecutorCensus};
 
 /// The reconciliation and census operations implemented by `admission`.
 pub(in crate::application) trait DistributedAdmissionPort {

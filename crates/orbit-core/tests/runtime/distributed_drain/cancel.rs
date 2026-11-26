@@ -16,7 +16,7 @@ fn cancellation_retains_claim_and_reservation_until_provider_teardown_is_confirm
         return;
     }
     use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
-    use orbit_store::contracts::V2AuditEventInsertParams;
+    use orbit_store::contract::V2AuditEventInsertParams;
 
     let cases = vec![
         (None, false),

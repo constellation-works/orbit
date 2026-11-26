@@ -6,7 +6,7 @@ use std::sync::{Mutex, PoisonError};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::Store;
-use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_store::contract::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;

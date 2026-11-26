@@ -7,7 +7,7 @@ use orbit_core::application::experiment::{
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ExperimentAssignment, ExperimentEventRow, ExperimentWrite, ExperimentWriteOutcome,
     InvocationInsertParams,
 };

@@ -10,7 +10,7 @@
 //! changes through them.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use std::collections::HashSet;

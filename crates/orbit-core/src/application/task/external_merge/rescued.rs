@@ -5,7 +5,7 @@
 //! it never reopens a claim or relaxes the handoff journal's authority checks.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
+use orbit_store::contract::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
 use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::Task;
 use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState};

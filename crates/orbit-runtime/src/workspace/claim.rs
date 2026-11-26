@@ -28,7 +28,7 @@
 
 use orbit_common::protocol::tool_input::{optional_string, optional_u32_alias};
 use orbit_common::{OrbitError, WorkspaceClaimHeld};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     WorkspaceClaimAcquireParams, WorkspaceClaimCheckParams, WorkspaceClaimHolder,
     WorkspaceClaimReleaseParams,
 };
@@ -317,7 +317,7 @@ fn claim_actor_label(
 
 fn record_expired_claims(
     runtime: &RuntimeKernel,
-    expired: &[orbit_store::contracts::ExpiredTaskReservation],
+    expired: &[orbit_store::contract::ExpiredTaskReservation],
 ) -> Result<(), OrbitError> {
     for claim in expired {
         record_claim_audit(

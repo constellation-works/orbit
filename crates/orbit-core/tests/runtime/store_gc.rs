@@ -12,7 +12,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::RuntimeHost;
 use orbit_store::Store;
 #[cfg(unix)]
-use orbit_store::contracts::V2AuditEventInsertParams;
+use orbit_store::contract::V2AuditEventInsertParams;
 #[cfg(unix)]
 use orbit_types::workflow::JobRunState;
 use rusqlite::Connection;

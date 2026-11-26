@@ -83,7 +83,7 @@ fn desktop_legacy_edit_receipt_survives_status_contract_extension() {
     crate::admission_audit::store_support::tasks(&runtime)
         .apply_desktop_task_mutation(
             &snapshot.task.id,
-            &orbit_store::contracts::DesktopTaskMutationParams {
+            &orbit_store::contract::DesktopTaskMutationParams {
                 write_provenance: None,
                 actor: "codex".into(),
                 request_id: "legacy-edit".into(),
@@ -146,7 +146,7 @@ fn desktop_typed_receipts_control_runtime_and_store_replay() {
             },
         },
     };
-    let params = orbit_store::contracts::DesktopTaskMutationParams {
+    let params = orbit_store::contract::DesktopTaskMutationParams {
         write_provenance: None,
         actor: "codex".into(),
         request_id: request.request_id.clone(),
@@ -227,7 +227,7 @@ fn desktop_typed_receipts_control_runtime_and_store_replay() {
                 assert!(core_result.unwrap().replayed, "{shape}");
                 assert_eq!(
                     store_result.unwrap(),
-                    orbit_store::contracts::AtomicTaskMutationOutcome::AlreadyApplied,
+                    orbit_store::contract::AtomicTaskMutationOutcome::AlreadyApplied,
                     "{shape}"
                 );
             }
@@ -241,7 +241,7 @@ fn desktop_typed_receipts_control_runtime_and_store_replay() {
                 );
                 assert_eq!(
                     store_result.unwrap(),
-                    orbit_store::contracts::AtomicTaskMutationOutcome::Stale
+                    orbit_store::contract::AtomicTaskMutationOutcome::Stale
                 );
             }
             _ => {
@@ -350,7 +350,7 @@ fn desktop_replays_pre_upgrade_redacted_resident_comment() {
     super::store_support::tasks(&runtime)
         .apply_desktop_task_mutation(
             &id,
-            &orbit_store::contracts::DesktopTaskMutationParams {
+            &orbit_store::contract::DesktopTaskMutationParams {
                 write_provenance: None,
                 actor: "codex".into(),
                 request_id: request.request_id.clone(),

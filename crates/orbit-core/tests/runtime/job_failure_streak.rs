@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::StreakErrorAgreement;
 use orbit_core::runtime::JobRuns;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::json;
 use tempfile::TempDir;

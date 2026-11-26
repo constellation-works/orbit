@@ -5,7 +5,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::{TaskCommitJournalRecord, TaskCommitJournalState};
+use crate::contract::{TaskCommitJournalRecord, TaskCommitJournalState};
 
 impl Store {
     /// A durable boundary must reopen the same file-backed decision journal.

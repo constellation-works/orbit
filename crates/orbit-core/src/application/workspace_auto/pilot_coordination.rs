@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     ChildDispatchPhase, DrainApprovalReport, JobRunState, PipelineState, ProviderFailureClass,

@@ -8,7 +8,7 @@ use orbit_types::workflow::handoff::HandoffDelivery;
 
 use super::super::lifecycle::invalid;
 use super::TaskCommitBoundary;
-use crate::contracts::{
+use crate::contract::{
     ClaimCommitEffects, ClaimWorkerUpdate, TaskCoordinationCommitOutcome,
     TaskCoordinationCommitParams,
 };

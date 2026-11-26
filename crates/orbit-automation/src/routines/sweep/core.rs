@@ -134,7 +134,7 @@ fn bypass_fire(
     store: &orbit_store::Store,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
-    pauses: &BTreeMap<String, orbit_store::contracts::RoutinePauseRecord>,
+    pauses: &BTreeMap<String, orbit_store::contract::RoutinePauseRecord>,
     options: SweepOptions,
     now_utc: DateTime<Utc>,
 ) -> Result<RoutineSweepReport, OrbitError> {
@@ -172,7 +172,7 @@ fn sweep_routine(
     store: &orbit_store::Store,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
-    pauses: &BTreeMap<String, orbit_store::contracts::RoutinePauseRecord>,
+    pauses: &BTreeMap<String, orbit_store::contract::RoutinePauseRecord>,
     options: SweepOptions,
     now_utc: DateTime<Utc>,
 ) -> Result<RoutineSweepReport, OrbitError> {

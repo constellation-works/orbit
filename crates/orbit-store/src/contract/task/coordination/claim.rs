@@ -405,34 +405,12 @@ pub struct ClaimFailure {
 }
 
 impl ClaimFailure {
-    /// Whether the executing drain stops running the leaf's crew for the rest
-    /// of its window: its class [says so](orbit_types::workflow::ClaimFailureClass::excludes_crew)
-    /// and it is neither a provider's content refusal, a busy owner, nor a
-    /// task-scoped delivery hold.
-    #[must_use]
-    pub fn excludes_crew(&self) -> bool {
-        self.class.excludes_crew()
-            && !self.provider_refusal
-            && !self.owner_busy
-            && !self.delivery_hold
-    }
-
     /// Whether a release for this failure counts against the task's release
     /// budget: its class is [budgeted](orbit_types::workflow::ClaimFailureClass::budgeted)
     /// and it is neither a provider usage limit nor a busy owner.
     #[must_use]
     pub fn budgeted(&self) -> bool {
         self.class.budgeted() && !self.provider_limit && !self.owner_busy
-    }
-
-    /// Whether a failed claim with this failure counts toward its pull
-    /// drain's failure breaker [ORB-15639]: every one but Orbit's refusal of
-    /// the implementer's handoff ([`orbit_types::workflow::is_contract_refusal`]),
-    /// which blocks the task for an operator to requeue but says nothing
-    /// about the executing host.
-    #[must_use]
-    pub fn trips_breaker(&self) -> bool {
-        !orbit_types::workflow::is_contract_refusal(&self.reason)
     }
 }
 

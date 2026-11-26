@@ -538,7 +538,7 @@ impl TaskCommitBoundary {
     pub fn coordination_rows(
         &self,
         kind: &str,
-    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskCoordinationRow>, OrbitError> {
         self.enter_ordinary(|| self.store.task_coordination_rows(&self.workspace_id, kind))
     }
 
@@ -548,7 +548,7 @@ impl TaskCommitBoundary {
     pub(super) fn lifecycle_rows_for_claim_task(
         &self,
         task_id: &str,
-    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskCoordinationRow>, OrbitError> {
         self.enter_ordinary(|| {
             self.store
                 .lifecycle_rows_for_claim_task(&self.workspace_id, task_id)
@@ -561,7 +561,7 @@ impl TaskCommitBoundary {
     pub(super) fn lifecycle_rows_for_claim_run(
         &self,
         run_id: &str,
-    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskCoordinationRow>, OrbitError> {
         self.enter_ordinary(|| {
             self.store
                 .lifecycle_rows_for_claim_run(&self.workspace_id, run_id)
@@ -574,7 +574,7 @@ impl TaskCommitBoundary {
     pub(super) fn lifecycle_rows_for_bound_run(
         &self,
         run_id: &str,
-    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskCoordinationRow>, OrbitError> {
         self.enter_ordinary(|| {
             self.store
                 .lifecycle_rows_for_bound_run(&self.workspace_id, run_id)
@@ -587,7 +587,7 @@ impl TaskCommitBoundary {
         &self,
         kind: &str,
         row_id: &str,
-    ) -> Result<Option<crate::contracts::TaskCoordinationRow>, OrbitError> {
+    ) -> Result<Option<crate::contract::TaskCoordinationRow>, OrbitError> {
         self.enter_ordinary(|| {
             self.store
                 .task_coordination_row(&self.workspace_id, kind, row_id)

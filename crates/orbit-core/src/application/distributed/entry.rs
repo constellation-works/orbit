@@ -2,7 +2,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
 };
@@ -83,7 +83,7 @@ pub struct DrainEntryAdmission {
     pub entry_point: DrainEntryPoint,
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
-    pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
+    pub occupancy: orbit_store::contract::DrainLeafOccupancy,
     /// Whether the owner's `review.timing` is `before_pr`. With it on, every claimed PR leaf runs
     /// the before-PR review its claim captures [ORB-13908], which is why it
     /// is reported on every decision rather than left for each surface to

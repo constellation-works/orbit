@@ -3,7 +3,7 @@
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::InvocationQuery;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::JobRun;
 
 use crate::OrbitRuntime;

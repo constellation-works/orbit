@@ -3,7 +3,7 @@ use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, Task
 use tempfile::TempDir;
 
 use super::*;
-use crate::contracts::TaskCreateParams;
+use crate::contract::TaskCreateParams;
 use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 pub(super) fn store(temp: &TempDir) -> TaskV2Store {

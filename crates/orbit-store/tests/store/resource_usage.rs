@@ -1,4 +1,4 @@
-use orbit_store::contracts::{ResourceHistoryKeep, ResourceMinutesTable};
+use orbit_store::contract::{ResourceHistoryKeep, ResourceMinutesTable};
 
 /// Retention must rank models in one pass, rather than scan a workspace's
 /// entire minute history again for every eligible delivery (ORB-24645).

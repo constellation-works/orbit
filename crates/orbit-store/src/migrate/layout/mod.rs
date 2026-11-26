@@ -27,7 +27,7 @@
 //! - **Forward-compatible open.** A marker newer than
 //!   [`SUPPORTED_LAYOUT_VERSION`] is decided from the companion
 //!   `state/layout.compat` record a newer binary leaves behind
-//!   ([`crate::contracts::CompatibilityRecord`], ORB-12434): newer by
+//!   ([`crate::contract::CompatibilityRecord`], ORB-12434): newer by
 //!   additive migrations only opens (nothing is applied and the marker is
 //!   never rewritten). The layout is not write-gated, so its additive
 //!   migrations must keep older writers safe, and a read-compatible or

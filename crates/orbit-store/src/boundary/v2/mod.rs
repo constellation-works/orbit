@@ -32,7 +32,7 @@ use orbit_types::task::{
 
 use crate::boundary::coordination::TaskCommitBoundary;
 use crate::boundary::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDocumentV2};
-use crate::contracts::{
+use crate::contract::{
     RegisteredTaskResolution, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams,
     TaskHistoryUpdateParams,
 };

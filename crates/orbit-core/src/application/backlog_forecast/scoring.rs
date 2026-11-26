@@ -53,7 +53,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::StoredBacklogForecast;
+use orbit_store::contract::StoredBacklogForecast;
 use orbit_types::task::{
     Task, TaskRelationType, TaskStatus, complexity_bucket, complexity_bucket_ord,
 };

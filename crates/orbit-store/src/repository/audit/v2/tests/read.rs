@@ -12,7 +12,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 
 use super::super::rendezvous::{clear_tail_snapshot_rendezvous, set_tail_snapshot_rendezvous};
 use crate::Store;
-use crate::contracts::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventTailPage};
+use crate::contract::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventTailPage};
 
 const WORKSPACE: &str = "ws-tail";
 

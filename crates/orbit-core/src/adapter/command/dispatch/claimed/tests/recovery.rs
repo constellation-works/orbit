@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use chrono::Utc;
 use orbit_common::process::ancestry::process_start_key;
 use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AdmissionTaskSummary,
     ClaimCandidateRef, ClaimEvidence, ClaimMutation, ExecutionClaim, ExecutionClaimPhase,
     ExecutionLocation, LocalPullMutation, PullDestination,

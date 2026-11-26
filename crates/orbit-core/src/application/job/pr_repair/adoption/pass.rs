@@ -5,7 +5,7 @@ use crate::application::job::orphan_adoption::AdoptionAuthority;
 use crate::application::job::resume::OUT_OF_RUN_AUTO_FIX_KEY;
 use crate::runtime::run_input::carried_task_ids;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery, TaskListFilter};
+use orbit_store::contract::{JobRunOrder, JobRunQuery, TaskListFilter};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{self, JobRun, JobRunState};
 use serde_json::{Value, json};

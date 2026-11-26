@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::StoredBacklogForecast;
+use orbit_store::contract::StoredBacklogForecast;
 use orbit_types::task::{TaskStatus, UNSET_BUCKET};
 use serde_json::{Value, json};
 

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
 use orbit_store::Store;
-use orbit_store::contracts::TaskReservationReleaseReason;
+use orbit_store::contract::TaskReservationReleaseReason;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 

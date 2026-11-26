@@ -33,7 +33,7 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{
     Task, TaskStatus, is_valid_orb_task_id, ordered_external_refs_for_show, task_base_json,
 };

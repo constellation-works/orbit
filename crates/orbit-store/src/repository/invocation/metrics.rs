@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, params};
 
-use crate::contracts::{InvocationSample, TaskInvocationMetrics, ToolInvocationMetrics};
+use crate::contract::{InvocationSample, TaskInvocationMetrics, ToolInvocationMetrics};
 
 /// Every invocation with a resolved model in one workspace partition, in
 /// storage order. Callers group into buckets and compute quantiles.

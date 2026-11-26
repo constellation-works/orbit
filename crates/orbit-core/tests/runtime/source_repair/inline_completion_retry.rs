@@ -23,7 +23,7 @@ pub(super) fn audit_started(f: &Fixture, run: &JobRun, step: &str) {
         kind,
     };
     f.runtime
-        .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+        .insert_v2_audit_event(&orbit_core::test_support::V2AuditEventInsertParams {
             workspace_id: f.runtime.workspace_id().unwrap(),
             event_id: event.envelope.event_id.clone(),
             source: "v2_envelope".into(),

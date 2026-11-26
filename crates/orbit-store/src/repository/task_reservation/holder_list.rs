@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::contracts::{TaskLockConflict, TaskLockHolder};
+use crate::contract::{TaskLockConflict, TaskLockHolder};
 
 /// A conflict in answer order: requested selector, then task locks,
 /// reservations and hard leases, then holder id.

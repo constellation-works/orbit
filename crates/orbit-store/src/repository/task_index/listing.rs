@@ -21,7 +21,7 @@ use super::change_stamps::read_task_change_stamps;
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
 use super::util::TERMINAL_STATUSES;
-use crate::contracts::{
+use crate::contract::{
     IndexedTaskRow, TaskChangeStamp, TaskIndexFilter, TaskIndexKey, TaskIndexSelection,
 };
 

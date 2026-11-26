@@ -305,19 +305,20 @@ impl AgentsFixture {
             .sqlite_store()
             .unwrap()
             .write(|tx| {
-                tx.v2_audit().insert(&orbit_core::V2AuditEventInsertParams {
-                    workspace_id: self.workspace.clone(),
-                    event_id: event_id.clone(),
-                    source: "fixture".into(),
-                    schema_version: 1,
-                    event_type: event_type.into(),
-                    ts,
-                    run_id: run_id.into(),
-                    agent_identity: "system".into(),
-                    parent_event_id: parent_event_id.clone(),
-                    workspace_path: None,
-                    payload_json: payload.to_string(),
-                })
+                tx.v2_audit()
+                    .insert(&orbit_core::test_support::V2AuditEventInsertParams {
+                        workspace_id: self.workspace.clone(),
+                        event_id: event_id.clone(),
+                        source: "fixture".into(),
+                        schema_version: 1,
+                        event_type: event_type.into(),
+                        ts,
+                        run_id: run_id.into(),
+                        agent_identity: "system".into(),
+                        parent_event_id: parent_event_id.clone(),
+                        workspace_path: None,
+                        payload_json: payload.to_string(),
+                    })
             })
             .unwrap();
     }

@@ -43,7 +43,7 @@ use orbit_types::telemetry::AgentExecutionIdentity;
 use serde::Serialize;
 
 use crate::Store;
-use crate::contracts::AgentExecutionBackfill;
+use crate::contract::AgentExecutionBackfill;
 use crate::repository::audit::v2::V2AuditRunEventRow;
 use crate::repository::invocation::AgentExecutionSlotRow;
 
