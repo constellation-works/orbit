@@ -13,6 +13,25 @@ pub(crate) use orbit_types::identity::is_automation_actor;
 
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 
+pub(crate) struct TaskAttributionInput<'a> {
+    pub(crate) default_actor_label: &'a str,
+    pub(crate) actor_override: Option<&'a str>,
+    pub(crate) agent: Option<&'a str>,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) runtime_model_identity: Option<&'a str>,
+    pub(crate) plan_changed: bool,
+    pub(crate) target_status: Option<TaskStatus>,
+    pub(crate) explicit_planned_by: Option<&'a Option<String>>,
+    pub(crate) explicit_implemented_by: Option<&'a Option<String>>,
+}
+
+pub(crate) struct TaskAttribution {
+    pub(crate) actor: String,
+    pub(crate) authored_role_label: String,
+    pub(crate) planned_by: Option<Option<String>>,
+    pub(crate) implemented_by: Option<Option<String>>,
+}
+
 /// Latest typed final-recovery outcome in vector order recorded by Orbit for `run_id`.
 pub(super) fn authoritative_recovery_outcome<'a>(
     history: &'a [TaskHistoryEntry],
@@ -60,25 +79,6 @@ pub(crate) fn crew_assigned_history(
         surface: None,
         caller: None,
     }
-}
-
-pub(crate) struct TaskAttributionInput<'a> {
-    pub(crate) default_actor_label: &'a str,
-    pub(crate) actor_override: Option<&'a str>,
-    pub(crate) agent: Option<&'a str>,
-    pub(crate) model: Option<&'a str>,
-    pub(crate) runtime_model_identity: Option<&'a str>,
-    pub(crate) plan_changed: bool,
-    pub(crate) target_status: Option<TaskStatus>,
-    pub(crate) explicit_planned_by: Option<&'a Option<String>>,
-    pub(crate) explicit_implemented_by: Option<&'a Option<String>>,
-}
-
-pub(crate) struct TaskAttribution {
-    pub(crate) actor: String,
-    pub(crate) authored_role_label: String,
-    pub(crate) planned_by: Option<Option<String>>,
-    pub(crate) implemented_by: Option<Option<String>>,
 }
 
 /// Assemble mutation and authored-role attribution for human and automation updates.

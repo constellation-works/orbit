@@ -231,17 +231,18 @@ impl OrbitRuntime {
             surface: None,
             caller: None,
         };
+        let append_comments = vec![TaskComment {
+            at: now,
+            by: SYSTEM_ACTOR_LABEL.to_string(),
+            message: comment.to_string(),
+            operation_id: None,
+        }];
         self.stores().task_records().update(
             &task.id,
             StoreTaskUpdateParams {
                 actor: SYSTEM_ACTOR_LABEL.to_string(),
-                append_comments: vec![TaskComment {
-                    at: now,
-                    by: SYSTEM_ACTOR_LABEL.to_string(),
-                    message: comment.to_string(),
-                    operation_id: None,
-                }],
                 append_history: vec![marker.clone(), decision.history_entry(SYSTEM_ACTOR_LABEL)],
+                append_comments,
                 expected_status: Some(vec![TaskStatus::Proposed]),
                 ..Default::default()
             },

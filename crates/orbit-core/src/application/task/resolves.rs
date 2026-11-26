@@ -246,6 +246,15 @@ impl OrbitRuntime {
     }
 }
 
+/// How far an unfinished target got.
+#[derive(PartialEq)]
+enum UnfinishedResolve {
+    /// Committed with the transition; no attempt has been recorded.
+    Pending,
+    /// An attempt failed and its reason is on the task.
+    Failed,
+}
+
 /// Landing closes every explicitly named local friction. Scan description and
 /// criteria only, not titles, comments, plans or summaries.
 fn task_friction_targets(task: &Task) -> BTreeSet<String> {
@@ -296,15 +305,6 @@ pub(crate) fn pull_request_delivery(note: &str) -> Option<(u64, &str)> {
         return None;
     }
     Some((pr.parse().ok()?, commit))
-}
-
-/// How far an unfinished target got.
-#[derive(PartialEq)]
-enum UnfinishedResolve {
-    /// Committed with the transition; no attempt has been recorded.
-    Pending,
-    /// An attempt failed and its reason is on the task.
-    Failed,
 }
 
 /// The commit a final recovery's completion note verified on its base, as

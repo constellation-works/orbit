@@ -34,38 +34,6 @@ use crate::runtime::tool_exec::CapabilityEnforcement;
 /// Contract label folded into every proposal idempotency key.
 const IDEMPOTENCY_CONTRACT: &str = "granted_mutation_proposal_v1";
 
-/// The idempotency key of one proposed call: the task plus the canonical
-/// tool and input. The rationale is excluded, so rewording it never makes
-/// the same change apply twice.
-pub(crate) fn mutation_proposal_idempotency_key(
-    task_id: &str,
-    tool: &str,
-    input: &Value,
-) -> String {
-    let mut value = json!({
-        "contract": IDEMPOTENCY_CONTRACT,
-        "task_id": task_id,
-        "tool": tool,
-        "input": input,
-    });
-    value.sort_all_objects();
-    sha256_hex(value.to_string().as_bytes())
-}
-
-/// The session a proposal is judged under, at admission and application: the
-/// agent capability alone. A grant lifts only a deny-list entry, so neither
-/// the writer's nor the host's authority may satisfy an inner field-level
-/// operator gate such as `expected_enabled`.
-fn agent_tool_context() -> ToolContext {
-    ToolContext {
-        session_context: ToolSessionContext {
-            effective_capabilities: BTreeSet::from([McpCapability::Agent]),
-            ..ToolSessionContext::default()
-        },
-        ..ToolContext::default()
-    }
-}
-
 /// A stored proposal with the digest of its bytes and its receipt, if any.
 struct StoredProposal {
     reviewed: ReviewedMutationProposal,
@@ -428,6 +396,38 @@ impl OrbitRuntime {
                 .collect::<Vec<_>>()
                 .join(", ")
         )))
+    }
+}
+
+/// The idempotency key of one proposed call: the task plus the canonical
+/// tool and input. The rationale is excluded, so rewording it never makes
+/// the same change apply twice.
+pub(crate) fn mutation_proposal_idempotency_key(
+    task_id: &str,
+    tool: &str,
+    input: &Value,
+) -> String {
+    let mut value = json!({
+        "contract": IDEMPOTENCY_CONTRACT,
+        "task_id": task_id,
+        "tool": tool,
+        "input": input,
+    });
+    value.sort_all_objects();
+    sha256_hex(value.to_string().as_bytes())
+}
+
+/// The session a proposal is judged under, at admission and application: the
+/// agent capability alone. A grant lifts only a deny-list entry, so neither
+/// the writer's nor the host's authority may satisfy an inner field-level
+/// operator gate such as `expected_enabled`.
+fn agent_tool_context() -> ToolContext {
+    ToolContext {
+        session_context: ToolSessionContext {
+            effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+            ..ToolSessionContext::default()
+        },
+        ..ToolContext::default()
     }
 }
 

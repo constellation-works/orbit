@@ -19,6 +19,52 @@ const DENIAL_MARKERS: &[&str] = &[
     "cannot",
 ];
 
+/// Words that, immediately before a tool mention, ask the implementer to
+/// call that tool to produce evidence: an invocation verb (`run`, `call`,
+/// `invoke`, `execute`, `use`) or a route/evidence preposition (`via`,
+/// `through`, `with`, `from`, `by`). A validation verb alone (`validate
+/// `tool``) does not count: it may only describe checking the tool's own
+/// behaviour, and silence is preferred over inventing a requirement.
+const INVOCATION_CUES: &[&str] = &[
+    "run",
+    "runs",
+    "running",
+    "call",
+    "calls",
+    "calling",
+    "called",
+    "invoke",
+    "invokes",
+    "invoking",
+    "invoked",
+    "execute",
+    "executes",
+    "executing",
+    "executed",
+    "use",
+    "uses",
+    "using",
+    "used",
+    "via",
+    "through",
+    "with",
+    "from",
+    "by",
+];
+
+/// Passive verbs that, after a tool mention, still ask for a call:
+/// `` `tool` is invoked to … ``.
+const INVOKED_VERBS: &[&str] = &[
+    "run", "running", "called", "calling", "invoked", "invoking", "executed", "used",
+];
+
+#[derive(Clone, Copy)]
+enum Quoting {
+    None,
+    Fence,
+    Double,
+}
+
 /// The one-based criterion and exact registered tool positively required by it.
 pub(crate) fn positive_validation_tools<'a>(
     task: &Task,
@@ -119,13 +165,6 @@ fn blank_quoted_regions(text: &str) -> String {
     blanked
 }
 
-#[derive(Clone, Copy)]
-enum Quoting {
-    None,
-    Fence,
-    Double,
-}
-
 fn blank(character: char) -> char {
     if character == '\n' { '\n' } else { ' ' }
 }
@@ -171,45 +210,6 @@ pub(crate) fn names_tool(sentence: &str, tool: &str) -> bool {
 fn is_tool_name_char(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
 }
-
-/// Words that, immediately before a tool mention, ask the implementer to
-/// call that tool to produce evidence: an invocation verb (`run`, `call`,
-/// `invoke`, `execute`, `use`) or a route/evidence preposition (`via`,
-/// `through`, `with`, `from`, `by`). A validation verb alone (`validate
-/// `tool``) does not count: it may only describe checking the tool's own
-/// behaviour, and silence is preferred over inventing a requirement.
-const INVOCATION_CUES: &[&str] = &[
-    "run",
-    "runs",
-    "running",
-    "call",
-    "calls",
-    "calling",
-    "called",
-    "invoke",
-    "invokes",
-    "invoking",
-    "invoked",
-    "execute",
-    "executes",
-    "executing",
-    "executed",
-    "use",
-    "uses",
-    "using",
-    "used",
-    "via",
-    "through",
-    "with",
-    "from",
-    "by",
-];
-
-/// Passive verbs that, after a tool mention, still ask for a call:
-/// `` `tool` is invoked to … ``.
-const INVOKED_VERBS: &[&str] = &[
-    "run", "running", "called", "calling", "invoked", "invoking", "executed", "used",
-];
 
 /// Whether `sentence` asks the implementer to call `tool`, rather than
 /// naming it as the subject whose behaviour, schema or documentation the

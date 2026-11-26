@@ -13,24 +13,8 @@ use orbit_common::fs::git::{
 use orbit_engine::DispatchError;
 use orbit_types::plugin::is_full_commit_id;
 
-/// The tree id of the commit `revision` in `workspace`: `Ok(Err(stderr))`
-/// when Git has no readable tree for it.
-pub(crate) fn tree_of(
-    workspace: &Path,
-    revision: &str,
-) -> Result<Result<String, String>, OrbitError> {
-    let spec = format!("{revision}^{{tree}}");
-    let output = run_git(
-        &orbit_common::Env::capture(),
-        workspace,
-        &["rev-parse", "--verify", &spec],
-    )?;
-    let tree = output.stdout.trim();
-    if !output.success || !is_commit_id(tree) {
-        return Ok(Err(output.stderr.trim().to_string()));
-    }
-    Ok(Ok(tree.to_string()))
-}
+/// Namespace of the per-call refs [`fetch_origin_branch`] fetches into.
+const PRIVATE_SOURCE_REF_PREFIX: &str = "refs/orbit/pilot-source/";
 
 /// Local-error wrapper so [`try_with_git_fetch_lock`] (which requires
 /// `E: From<io::Error>`) can carry lock-acquisition failures or a Git failure
@@ -54,6 +38,25 @@ impl std::fmt::Display for FetchLockError {
             FetchLockError::Git(message) => formatter.write_str(message),
         }
     }
+}
+
+/// The tree id of the commit `revision` in `workspace`: `Ok(Err(stderr))`
+/// when Git has no readable tree for it.
+pub(crate) fn tree_of(
+    workspace: &Path,
+    revision: &str,
+) -> Result<Result<String, String>, OrbitError> {
+    let spec = format!("{revision}^{{tree}}");
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        workspace,
+        &["rev-parse", "--verify", &spec],
+    )?;
+    let tree = output.stdout.trim();
+    if !output.success || !is_commit_id(tree) {
+        return Ok(Err(output.stderr.trim().to_string()));
+    }
+    Ok(Ok(tree.to_string()))
 }
 
 pub(super) fn is_git_work_tree(action: &str, workspace: &Path) -> Result<bool, DispatchError> {
@@ -145,9 +148,6 @@ pub(in crate::application::task::pilot) fn fetch_origin_branch(
         ),
     ))
 }
-
-/// Namespace of the per-call refs [`fetch_origin_branch`] fetches into.
-const PRIVATE_SOURCE_REF_PREFIX: &str = "refs/orbit/pilot-source/";
 
 /// A ref name no other fetch, in this process or another, uses at once.
 fn private_source_ref() -> String {

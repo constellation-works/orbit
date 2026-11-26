@@ -27,10 +27,6 @@ pub struct ProposedTaskInput {
     pub task_type: Option<TaskType>,
 }
 
-fn default_priority() -> TaskPriority {
-    TaskPriority::Medium
-}
-
 impl OrbitRuntime {
     /// Capture a human proposal after the surface has checked current access
     /// and the exact destination binding. Returns only the immutable task ID;
@@ -84,9 +80,9 @@ impl OrbitRuntime {
             TaskAddParams {
                 title: input.title,
                 description: input.description,
-                complexity: input.complexity,
                 acceptance_criteria: input.acceptance_criteria,
                 priority: input.priority,
+                complexity: input.complexity,
                 task_type: input.task_type,
                 status: Some(TaskStatus::Proposed),
                 ..Default::default()
@@ -109,4 +105,8 @@ impl OrbitRuntime {
             Err(error) => Err(error),
         }
     }
+}
+
+fn default_priority() -> TaskPriority {
+    TaskPriority::Medium
 }

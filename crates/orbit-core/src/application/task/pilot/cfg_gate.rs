@@ -15,6 +15,11 @@ use orbit_types::task::HostOs;
 use super::gate_source::{self, GateSource};
 use super::source::SourceSnapshot;
 
+/// How many source lines after the attribute may hold doc comments and
+/// further attributes before the gated item. Past that the citation is
+/// unverified.
+const ITEM_SCAN_LINES: usize = 40;
+
 /// Whether evidence cites a cfg gate this check can admit.
 pub(super) enum CfgGateDecision {
     /// Evidence cites no `#[cfg(...)]` attribute.
@@ -212,11 +217,6 @@ fn exact_attribute_os(line: &str) -> Option<HostOs> {
     let (os, consumed) = parse_cfg_attribute(line)?;
     if consumed != line.len() { None } else { os }
 }
-
-/// How many source lines after the attribute may hold doc comments and
-/// further attributes before the gated item. Past that the citation is
-/// unverified.
-const ITEM_SCAN_LINES: usize = 40;
 
 fn item_after_gate(lines: &[&str], cfg_index: usize) -> Option<String> {
     for line in lines.iter().skip(cfg_index + 1).take(ITEM_SCAN_LINES) {

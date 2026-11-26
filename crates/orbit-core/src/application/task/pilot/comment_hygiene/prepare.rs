@@ -30,23 +30,6 @@ use super::{
     MAX_BATCH_FILES, MAX_RANKED_CANDIDATES, MAX_REPORTED_EXCLUSIONS, OVERSIZED_LINE_THRESHOLD,
 };
 
-/// Whether `task` is a selector-free `comment-hygiene` chore awaiting
-/// deterministic batch preparation.
-pub(in crate::application::task::pilot) fn is_comment_hygiene_batch_task(task: &Task) -> bool {
-    task.task_type == TaskType::Chore
-        && task.context_files.is_empty()
-        && task.tags.iter().any(|tag| tag == COMMENT_HYGIENE_TAG)
-        && !task
-            .tags
-            .iter()
-            .any(|tag| tag == COMMENT_HYGIENE_ESCALATION_TAG)
-}
-
-/// Whether a prepared `comment_hygiene_batch` payload holds promotion.
-pub(in crate::application::task::pilot) fn comment_hygiene_batch_holds(batch: &Value) -> bool {
-    batch.get("status").and_then(Value::as_str) == Some("hold")
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CandidateBucket {
     ChangedSinceLastCheck,
@@ -113,6 +96,23 @@ struct OpenTaskExclusion {
 struct RepeatSkipHold {
     path: String,
     reasons: Vec<String>,
+}
+
+/// Whether `task` is a selector-free `comment-hygiene` chore awaiting
+/// deterministic batch preparation.
+pub(in crate::application::task::pilot) fn is_comment_hygiene_batch_task(task: &Task) -> bool {
+    task.task_type == TaskType::Chore
+        && task.context_files.is_empty()
+        && task.tags.iter().any(|tag| tag == COMMENT_HYGIENE_TAG)
+        && !task
+            .tags
+            .iter()
+            .any(|tag| tag == COMMENT_HYGIENE_ESCALATION_TAG)
+}
+
+/// Whether a prepared `comment_hygiene_batch` payload holds promotion.
+pub(in crate::application::task::pilot) fn comment_hygiene_batch_holds(batch: &Value) -> bool {
+    batch.get("status").and_then(Value::as_str) == Some("hold")
 }
 
 /// Deterministically prepare the oldest-first `comment-hygiene` batch for

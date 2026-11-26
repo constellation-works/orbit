@@ -7,6 +7,11 @@ use orbit_types::task::{RecordedFinalRecovery, TaskStatus};
 
 use super::revision::FinalRecoveryTaskRevision;
 
+/// Phrase every already-terminal refusal reason contains. The job adapter
+/// settles that run; a refusal for any other reason stays an escalation so
+/// the failure path can still preserve the run's work.
+pub(crate) const TERMINAL_REFUSAL_MARK: &str = "final recovery never reopens settled work";
+
 /// How far a verified `complete_no_diff` may take the task: the failed run's
 /// own completion authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,11 +59,6 @@ pub struct FinalRecoveryRequest {
     /// Requeue bound; [`FinalRecoveryRequeueBound::default`] is 2 per 24 h.
     pub requeue_bound: FinalRecoveryRequeueBound,
 }
-
-/// Phrase every already-terminal refusal reason contains. The job adapter
-/// settles that run; a refusal for any other reason stays an escalation so
-/// the failure path can still preserve the run's work.
-pub(crate) const TERMINAL_REFUSAL_MARK: &str = "final recovery never reopens settled work";
 
 /// What the applier did with a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]

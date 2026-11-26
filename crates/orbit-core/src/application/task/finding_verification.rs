@@ -56,32 +56,14 @@ const VERIFIABLE_STATUSES: [TaskStatus; 3] = [
     TaskStatus::Backlog,
 ];
 
-/// Whether `task` is a review-filed defect finding.
-pub fn is_review_finding(task: &Task) -> bool {
-    task.task_type == TaskType::Bug
-        && task
-            .tags
-            .iter()
-            .any(|tag| REVIEW_FINDING_TAGS.contains(&tag.trim()))
-}
+/// Longest rejection sentence a verdict comment quotes, in characters.
+const SUMMARY_DETAIL_CHARS: usize = 120;
 
-/// What a verdict judges: the finding as filed. A state trigger claims a
-/// finding at this fingerprint, and a verdict is bound to it. An edit to any
-/// of these fields releases the claim and invalidates confirmation; status,
-/// comments and attribution are not part of it.
-pub(crate) fn finding_fingerprint(task: &Task) -> String {
-    let mut tags = task.tags.clone();
-    tags.sort();
-    sha256_hex(
-        json!({
-            "id": task.id, "title": task.title, "description": task.description,
-            "acceptance_criteria": task.acceptance_criteria, "tags": tags,
-            "task_type": task.task_type, "context_files": task.context_files,
-        })
-        .to_string()
-        .as_bytes(),
-    )
-}
+/// Abbreviations whose period does not end a sentence, lowercase.
+const ABBREVIATIONS: [&str; 4] = ["e.g.", "i.e.", "cf.", "vs."];
+
+/// The `Superseded` reason of a task whose status admits no verdict from its route.
+pub(crate) const STATUS_NOT_VERIFIABLE: &str = "status_not_verifiable";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -219,9 +201,6 @@ pub struct FindingVerification {
     pub verified_at: DateTime<Utc>,
 }
 
-/// Longest rejection sentence a verdict comment quotes, in characters.
-const SUMMARY_DETAIL_CHARS: usize = 120;
-
 impl FindingVerification {
     /// The task comment: the verdict header, then one summary line. The full
     /// record stays in the `finding_verified` history note, so the comment
@@ -270,61 +249,6 @@ impl FindingVerification {
     }
 }
 
-/// A verified commit id shortened for a verdict comment; the record keeps the
-/// full id.
-fn short_verified_sha(sha: &str) -> &str {
-    sha.get(..12).unwrap_or(sha)
-}
-
-/// Abbreviations whose period does not end a sentence, lowercase.
-const ABBREVIATIONS: [&str; 4] = ["e.g.", "i.e.", "cf.", "vs."];
-
-/// The first sentence of a rejection's `detail`, read from its first line and
-/// capped at [`SUMMARY_DETAIL_CHARS`] characters.
-fn detail_first_sentence(detail: &str) -> String {
-    let line = detail.trim().lines().next().unwrap_or_default();
-    let sentence = &line[..sentence_end(line)];
-    if sentence.chars().count() <= SUMMARY_DETAIL_CHARS {
-        return sentence.to_string();
-    }
-    let capped: String = sentence.chars().take(SUMMARY_DETAIL_CHARS).collect();
-    capped + "…"
-}
-
-/// The byte offset just past the first sentence-ending mark of `line`: a `.`,
-/// `!` or `?` followed by whitespace or the end of the line. A period that
-/// closes one of [`ABBREVIATIONS`] does not end the sentence.
-fn sentence_end(line: &str) -> usize {
-    for (index, mark) in line.char_indices() {
-        if !matches!(mark, '.' | '!' | '?') {
-            continue;
-        }
-        let end = index + mark.len_utf8();
-        let breaks = line[end..].chars().next().is_none_or(char::is_whitespace);
-        if breaks && !(mark == '.' && closes_abbreviation(&line[..end])) {
-            return end;
-        }
-    }
-    line.len()
-}
-
-/// Whether `text`, which ends in a period, ends in one of [`ABBREVIATIONS`]
-/// as a whole word.
-fn closes_abbreviation(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    ABBREVIATIONS.iter().any(|abbreviation| {
-        lower
-            .strip_suffix(abbreviation)
-            .is_some_and(|before| !before.ends_with(char::is_alphanumeric))
-    })
-}
-
-/// The summary of a verdict that gives no rejection detail: its evidence count.
-fn evidence_summary(count: usize) -> String {
-    let noun = if count == 1 { "location" } else { "locations" };
-    format!("{count} evidence {noun}")
-}
-
 /// A review finding the task pilot or an implementer judged absent at
 /// `verified_sha`: the code does not do what the finding claims, or the
 /// claimed consequence cannot happen. Recorded as a REJECTED verdict with
@@ -358,68 +282,6 @@ pub(crate) struct AnalyzedFinding<'a> {
     pub(crate) history_boundary: Option<usize>,
 }
 
-/// The latest verdict `history` records, read only from the verification
-/// actor's own entries.
-pub(crate) fn latest_verification(history: &[TaskHistoryEntry]) -> Option<FindingVerification> {
-    // Only the newest verification entry counts: an unparseable note or an
-    // unsupported schema version there must not silently revive an older,
-    // superseded verdict.
-    let entry = history.iter().rev().find(|entry| {
-        entry.event == FINDING_VERIFIED_EVENT && entry.by == FINDING_VERIFICATION_ACTOR
-    })?;
-    let record: FindingVerification = serde_json::from_str(entry.note.as_deref()?).ok()?;
-    (record.schema_version == FINDING_VERIFICATION_SCHEMA_VERSION).then_some(record)
-}
-
-/// `relations` with every classified `regression_from` link rated at the
-/// CONFIRMED verdict's `severity`, source `verified`, so the verified value
-/// is the one shown and scored. An operator's rating stands. `None` when no
-/// link changes.
-fn verified_relations(
-    relations: &[TaskRelation],
-    severity: DefectSeverity,
-) -> Option<Vec<TaskRelation>> {
-    let mut changed = false;
-    let relations = relations
-        .iter()
-        .cloned()
-        .map(|mut relation| {
-            if relation.relation_type == TaskRelationType::RegressionFrom
-                && let Some(regression) = relation.regression.as_mut()
-                && regression.severity_source != SeveritySource::Operator
-                && (regression.severity, regression.severity_source)
-                    != (severity, SeveritySource::Verified)
-            {
-                regression.severity = severity;
-                regression.severity_source = SeveritySource::Verified;
-                changed = true;
-            }
-            relation
-        })
-        .collect();
-    changed.then_some(relations)
-}
-
-/// Whether a verdict from `source` may be written on a task in `status`: an
-/// implementer judges work it holds in progress, and every other route judges
-/// a finding not yet started. Neither reaches a task that already settled.
-fn verdict_admits_status(source: VerdictSource, status: TaskStatus) -> bool {
-    match source {
-        VerdictSource::Implementer => status == TaskStatus::InProgress,
-        VerdictSource::Verification | VerdictSource::TaskPilot | VerdictSource::VisualReview => {
-            VERIFIABLE_STATUSES.contains(&status)
-        }
-    }
-}
-
-/// The `Superseded` reason of a task whose status admits no verdict from its route.
-pub(crate) const STATUS_NOT_VERIFIABLE: &str = "status_not_verifiable";
-
-/// Whether `history` past `boundary` records a verdict another run wrote.
-pub(crate) fn verified_since(history: &[TaskHistoryEntry], boundary: usize) -> bool {
-    latest_verification(history.get(boundary..).unwrap_or_default()).is_some()
-}
-
 /// How a verdict write ended.
 pub(crate) enum VerdictWrite {
     /// Recorded; the task now has this status.
@@ -438,32 +300,6 @@ pub(crate) struct VerifierAssignment {
     pub(crate) tier: TaskComplexity,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) eligible_pool: Vec<orbit_types::workflow::ActivityCrewPoolMember>,
-}
-
-/// The tier a verdict's crew is recorded at: the task's complexity, with an
-/// unassessed task recorded as medium, the complexity review findings are
-/// filed with.
-fn verification_tier(task: &Task) -> TaskComplexity {
-    match task.complexity {
-        Some(TaskComplexity::Low) => TaskComplexity::Low,
-        Some(TaskComplexity::Hard) => TaskComplexity::Hard,
-        Some(TaskComplexity::XHard) => TaskComplexity::XHard,
-        Some(TaskComplexity::Medium | TaskComplexity::Unassessed) | None => TaskComplexity::Medium,
-    }
-}
-
-/// Whether `crew` is the one `label` names: by crew name, model, provider or
-/// the agent family of either.
-pub(crate) fn crew_named_by(crew: &Crew, label: &str) -> bool {
-    let label = label.trim().to_ascii_lowercase();
-    if label.is_empty() {
-        return false;
-    }
-    let provider = agent_family_from_cli(&crew.assignment.provider);
-    crew.name.eq_ignore_ascii_case(&label)
-        || crew.assignment.model.eq_ignore_ascii_case(&label)
-        || provider == label
-        || infer_agent_family_from_model(&label).is_some_and(|family| family == provider)
 }
 
 impl OrbitRuntime {
@@ -678,10 +514,10 @@ impl OrbitRuntime {
                 task_id,
                 TaskRecordUpdateParams {
                     actor: FINDING_VERIFICATION_ACTOR.to_string(),
+                    relations,
                     status: rejected.then_some(TaskStatus::Rejected),
                     status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
                     status_note: rejected.then(|| record.rejection_note()),
-                    relations,
                     append_history: vec![TaskHistoryEntry {
                         at: now,
                         by: FINDING_VERIFICATION_ACTOR.to_string(),
@@ -707,4 +543,168 @@ impl OrbitRuntime {
             Ok(VerdictWrite::Recorded(updated.status))
         })
     }
+}
+
+/// Whether `task` is a review-filed defect finding.
+pub fn is_review_finding(task: &Task) -> bool {
+    task.task_type == TaskType::Bug
+        && task
+            .tags
+            .iter()
+            .any(|tag| REVIEW_FINDING_TAGS.contains(&tag.trim()))
+}
+
+/// What a verdict judges: the finding as filed. A state trigger claims a
+/// finding at this fingerprint, and a verdict is bound to it. An edit to any
+/// of these fields releases the claim and invalidates confirmation; status,
+/// comments and attribution are not part of it.
+pub(crate) fn finding_fingerprint(task: &Task) -> String {
+    let mut tags = task.tags.clone();
+    tags.sort();
+    sha256_hex(
+        json!({
+            "id": task.id, "title": task.title, "description": task.description,
+            "acceptance_criteria": task.acceptance_criteria, "tags": tags,
+            "task_type": task.task_type, "context_files": task.context_files,
+        })
+        .to_string()
+        .as_bytes(),
+    )
+}
+
+/// A verified commit id shortened for a verdict comment; the record keeps the
+/// full id.
+fn short_verified_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+/// The first sentence of a rejection's `detail`, read from its first line and
+/// capped at [`SUMMARY_DETAIL_CHARS`] characters.
+fn detail_first_sentence(detail: &str) -> String {
+    let line = detail.trim().lines().next().unwrap_or_default();
+    let sentence = &line[..sentence_end(line)];
+    if sentence.chars().count() <= SUMMARY_DETAIL_CHARS {
+        return sentence.to_string();
+    }
+    let capped: String = sentence.chars().take(SUMMARY_DETAIL_CHARS).collect();
+    capped + "…"
+}
+
+/// The byte offset just past the first sentence-ending mark of `line`: a `.`,
+/// `!` or `?` followed by whitespace or the end of the line. A period that
+/// closes one of [`ABBREVIATIONS`] does not end the sentence.
+fn sentence_end(line: &str) -> usize {
+    for (index, mark) in line.char_indices() {
+        if !matches!(mark, '.' | '!' | '?') {
+            continue;
+        }
+        let end = index + mark.len_utf8();
+        let breaks = line[end..].chars().next().is_none_or(char::is_whitespace);
+        if breaks && !(mark == '.' && closes_abbreviation(&line[..end])) {
+            return end;
+        }
+    }
+    line.len()
+}
+
+/// Whether `text`, which ends in a period, ends in one of [`ABBREVIATIONS`]
+/// as a whole word.
+fn closes_abbreviation(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    ABBREVIATIONS.iter().any(|abbreviation| {
+        lower
+            .strip_suffix(abbreviation)
+            .is_some_and(|before| !before.ends_with(char::is_alphanumeric))
+    })
+}
+
+/// The summary of a verdict that gives no rejection detail: its evidence count.
+fn evidence_summary(count: usize) -> String {
+    let noun = if count == 1 { "location" } else { "locations" };
+    format!("{count} evidence {noun}")
+}
+
+/// The latest verdict `history` records, read only from the verification
+/// actor's own entries.
+pub(crate) fn latest_verification(history: &[TaskHistoryEntry]) -> Option<FindingVerification> {
+    // Only the newest verification entry counts: an unparseable note or an
+    // unsupported schema version there must not silently revive an older,
+    // superseded verdict.
+    let entry = history.iter().rev().find(|entry| {
+        entry.event == FINDING_VERIFIED_EVENT && entry.by == FINDING_VERIFICATION_ACTOR
+    })?;
+    let record: FindingVerification = serde_json::from_str(entry.note.as_deref()?).ok()?;
+    (record.schema_version == FINDING_VERIFICATION_SCHEMA_VERSION).then_some(record)
+}
+
+/// `relations` with every classified `regression_from` link rated at the
+/// CONFIRMED verdict's `severity`, source `verified`, so the verified value
+/// is the one shown and scored. An operator's rating stands. `None` when no
+/// link changes.
+fn verified_relations(
+    relations: &[TaskRelation],
+    severity: DefectSeverity,
+) -> Option<Vec<TaskRelation>> {
+    let mut changed = false;
+    let relations = relations
+        .iter()
+        .cloned()
+        .map(|mut relation| {
+            if relation.relation_type == TaskRelationType::RegressionFrom
+                && let Some(regression) = relation.regression.as_mut()
+                && regression.severity_source != SeveritySource::Operator
+                && (regression.severity, regression.severity_source)
+                    != (severity, SeveritySource::Verified)
+            {
+                regression.severity = severity;
+                regression.severity_source = SeveritySource::Verified;
+                changed = true;
+            }
+            relation
+        })
+        .collect();
+    changed.then_some(relations)
+}
+
+/// Whether a verdict from `source` may be written on a task in `status`: an
+/// implementer judges work it holds in progress, and every other route judges
+/// a finding not yet started. Neither reaches a task that already settled.
+fn verdict_admits_status(source: VerdictSource, status: TaskStatus) -> bool {
+    match source {
+        VerdictSource::Implementer => status == TaskStatus::InProgress,
+        VerdictSource::Verification | VerdictSource::TaskPilot | VerdictSource::VisualReview => {
+            VERIFIABLE_STATUSES.contains(&status)
+        }
+    }
+}
+
+/// Whether `history` past `boundary` records a verdict another run wrote.
+pub(crate) fn verified_since(history: &[TaskHistoryEntry], boundary: usize) -> bool {
+    latest_verification(history.get(boundary..).unwrap_or_default()).is_some()
+}
+
+/// The tier a verdict's crew is recorded at: the task's complexity, with an
+/// unassessed task recorded as medium, the complexity review findings are
+/// filed with.
+fn verification_tier(task: &Task) -> TaskComplexity {
+    match task.complexity {
+        Some(TaskComplexity::Low) => TaskComplexity::Low,
+        Some(TaskComplexity::Hard) => TaskComplexity::Hard,
+        Some(TaskComplexity::XHard) => TaskComplexity::XHard,
+        Some(TaskComplexity::Medium | TaskComplexity::Unassessed) | None => TaskComplexity::Medium,
+    }
+}
+
+/// Whether `crew` is the one `label` names: by crew name, model, provider or
+/// the agent family of either.
+pub(crate) fn crew_named_by(crew: &Crew, label: &str) -> bool {
+    let label = label.trim().to_ascii_lowercase();
+    if label.is_empty() {
+        return false;
+    }
+    let provider = agent_family_from_cli(&crew.assignment.provider);
+    crew.name.eq_ignore_ascii_case(&label)
+        || crew.assignment.model.eq_ignore_ascii_case(&label)
+        || provider == label
+        || infer_agent_family_from_model(&label).is_some_and(|family| family == provider)
 }

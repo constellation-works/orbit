@@ -33,6 +33,34 @@ pub(super) struct Candidate {
     pub(super) revoked: Option<RevokedHandoff>,
 }
 
+impl Candidate {
+    /// Every PR Orbit recorded for the task, newest first. A stopped or revoked
+    /// handoff's task has exactly one: the handoff's candidate PR.
+    pub(super) fn pr_numbers(&self) -> Vec<u64> {
+        if let Some(revoked) = &self.revoked {
+            return vec![revoked.pull_request];
+        }
+        if let Some(
+            BacklogDelivery::FailureHandoff(number) | BacklogDelivery::OwnerPublication(number),
+        ) = self.backlog_delivery
+        {
+            return vec![number];
+        }
+        let mut numbers = self
+            .task
+            .external_refs
+            .iter()
+            .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+            .filter_map(|reference| reference.id.parse::<u64>().ok())
+            .chain(self.follower_prs.keys().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        numbers.reverse();
+        numbers
+    }
+}
+
 /// A `handed_off` claim whose owner landing stopped or whose completion
 /// authority an operator revoked, with the PR that handoff delivered.
 #[derive(Debug, Clone)]
@@ -64,34 +92,6 @@ impl RevokedHandoff {
     }
 }
 
-impl Candidate {
-    /// Every PR Orbit recorded for the task, newest first. A stopped or revoked
-    /// handoff's task has exactly one: the handoff's candidate PR.
-    pub(super) fn pr_numbers(&self) -> Vec<u64> {
-        if let Some(revoked) = &self.revoked {
-            return vec![revoked.pull_request];
-        }
-        if let Some(
-            BacklogDelivery::FailureHandoff(number) | BacklogDelivery::OwnerPublication(number),
-        ) = self.backlog_delivery
-        {
-            return vec![number];
-        }
-        let mut numbers = self
-            .task
-            .external_refs
-            .iter()
-            .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
-            .filter_map(|reference| reference.id.parse::<u64>().ok())
-            .chain(self.follower_prs.keys().copied())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        numbers.reverse();
-        numbers
-    }
-}
-
 /// The merged pull request that delivered a candidate.
 pub(super) struct DeliveryLanding {
     pub(super) merged: MergedPullRequest,
@@ -109,58 +109,6 @@ impl DeliveryLanding {
             refreshed_from: None,
         }
     }
-}
-
-/// Why a stopped or revoked handoff's task did not settle: its candidate PR, as the
-/// forge returned it (`None` when it is not merged), is not merged, names
-/// another task, or merged into another branch.
-pub(super) fn revoked_handoff_unmerged(
-    branch_template: &ConventionTemplate,
-    revoked: &RevokedHandoff,
-    fetched: Option<&MergedPullRequest>,
-    task_id: &str,
-) -> String {
-    let number = revoked.pull_request;
-    if revoked.candidate.is_some() && fetched.is_none() {
-        return format!(
-            "{}; the handoff's pull request #{number} is not merged",
-            revoked.handoff_landing_refusal()
-        );
-    }
-    let prefix = if revoked.candidate.is_some() {
-        "its authorized owner landing stopped, and"
-    } else {
-        "its handed-off claim's completion authority was revoked, and"
-    };
-    match fetched {
-        None => format!(
-            "{prefix} the handoff's pull request #{number} is not merged; if it will not merge, \
-             recover the claim to blocked or backlog"
-        ),
-        Some(merged) if !names_delivery(branch_template, merged, task_id) => format!(
-            "{prefix} the handoff's pull request #{number} does not name it as its delivery"
-        ),
-        Some(merged) => format!(
-            "{prefix} the handoff's pull request #{number} merged into {}, not its landing \
-             branch {}",
-            merged.base_branch, revoked.landing_branch
-        ),
-    }
-}
-
-/// Whether `merged` is on the task's delivery branch, as `branch_template`
-/// names it, and names the task.
-pub(super) fn names_delivery(
-    branch_template: &ConventionTemplate,
-    merged: &MergedPullRequest,
-    task_id: &str,
-) -> bool {
-    names_task_delivery_pull_request(
-        branch_template,
-        &merged.pull.head_branch,
-        &merged.pull.body,
-        task_id,
-    )
 }
 
 /// Lazily-read claim ledger shared by one settlement pass: the outer
@@ -226,9 +174,9 @@ impl OrbitRuntime {
             }
         };
         let candidate = Candidate {
+            task,
             follower_prs,
             backlog_delivery: None,
-            task,
             revoked: handoff,
         };
         if candidate.pr_numbers().is_empty() {
@@ -365,9 +313,9 @@ impl OrbitRuntime {
             }
         };
         let candidate = Candidate {
+            task,
             follower_prs,
             backlog_delivery,
-            task,
             revoked,
         };
         if candidate.pr_numbers().is_empty() {
@@ -796,4 +744,56 @@ impl OrbitRuntime {
             .err()
             .map(|error| error.to_string())
     }
+}
+
+/// Why a stopped or revoked handoff's task did not settle: its candidate PR, as the
+/// forge returned it (`None` when it is not merged), is not merged, names
+/// another task, or merged into another branch.
+pub(super) fn revoked_handoff_unmerged(
+    branch_template: &ConventionTemplate,
+    revoked: &RevokedHandoff,
+    fetched: Option<&MergedPullRequest>,
+    task_id: &str,
+) -> String {
+    let number = revoked.pull_request;
+    if revoked.candidate.is_some() && fetched.is_none() {
+        return format!(
+            "{}; the handoff's pull request #{number} is not merged",
+            revoked.handoff_landing_refusal()
+        );
+    }
+    let prefix = if revoked.candidate.is_some() {
+        "its authorized owner landing stopped, and"
+    } else {
+        "its handed-off claim's completion authority was revoked, and"
+    };
+    match fetched {
+        None => format!(
+            "{prefix} the handoff's pull request #{number} is not merged; if it will not merge, \
+             recover the claim to blocked or backlog"
+        ),
+        Some(merged) if !names_delivery(branch_template, merged, task_id) => format!(
+            "{prefix} the handoff's pull request #{number} does not name it as its delivery"
+        ),
+        Some(merged) => format!(
+            "{prefix} the handoff's pull request #{number} merged into {}, not its landing \
+             branch {}",
+            merged.base_branch, revoked.landing_branch
+        ),
+    }
+}
+
+/// Whether `merged` is on the task's delivery branch, as `branch_template`
+/// names it, and names the task.
+pub(super) fn names_delivery(
+    branch_template: &ConventionTemplate,
+    merged: &MergedPullRequest,
+    task_id: &str,
+) -> bool {
+    names_task_delivery_pull_request(
+        branch_template,
+        &merged.pull.head_branch,
+        &merged.pull.body,
+        task_id,
+    )
 }

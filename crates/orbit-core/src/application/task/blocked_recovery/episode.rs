@@ -218,6 +218,16 @@ pub enum EpisodeDisposition {
     TooOld,
 }
 
+/// A write to a task after its block that Orbit's automation did not make,
+/// or cannot be shown to have made.
+pub(super) enum LaterTouch {
+    /// Someone outside Orbit's automation commented, changed a field or the
+    /// status, or attached an artifact.
+    Human { by: String },
+    /// The task changed with no recorded actor.
+    Unexplained { changed_at: DateTime<Utc> },
+}
+
 /// Classify `episode` from the task's last write (`updated_at`) and the
 /// attributed writes recorded for it: history, comments and artifacts.
 pub fn episode_disposition(
@@ -242,16 +252,6 @@ pub fn episode_disposition(
         return EpisodeDisposition::TooOld;
     }
     EpisodeDisposition::Eligible
-}
-
-/// A write to a task after its block that Orbit's automation did not make,
-/// or cannot be shown to have made.
-pub(super) enum LaterTouch {
-    /// Someone outside Orbit's automation commented, changed a field or the
-    /// status, or attached an artifact.
-    Human { by: String },
-    /// The task changed with no recorded actor.
-    Unexplained { changed_at: DateTime<Utc> },
 }
 
 /// Whether anyone but Orbit's automation touched the task after `since`:

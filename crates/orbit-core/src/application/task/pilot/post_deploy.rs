@@ -50,6 +50,24 @@ impl PostDeployFinding {
     }
 }
 
+impl OrbitRuntime {
+    /// The post-deploy requirements of the task's latest applied pilot
+    /// assessment, while the acceptance criteria it assessed are unchanged.
+    /// A newer assessment without the finding, or a re-scoped criterion,
+    /// leaves none.
+    pub(crate) fn pilot_post_deploy(
+        &self,
+        task: &Task,
+        comments: &[TaskComment],
+    ) -> Result<Vec<PostDeployRequirement>, OrbitError> {
+        let Some((_, receipt)) = super::pilot_receipts(comments).next() else {
+            return Ok(Vec::new());
+        };
+        let audit = self.task_pilot_audit(&task.id, receipt)?;
+        requirements_from_audit(task, &audit)
+    }
+}
+
 /// Current requirements from the latest pilot audit. Admission and handoff
 /// must use the same criteria digest when interpreting this finding.
 pub(super) fn requirements_from_audit(
@@ -143,22 +161,4 @@ pub(super) fn post_deploy(
         });
     }
     Ok(requirements)
-}
-
-impl OrbitRuntime {
-    /// The post-deploy requirements of the task's latest applied pilot
-    /// assessment, while the acceptance criteria it assessed are unchanged.
-    /// A newer assessment without the finding, or a re-scoped criterion,
-    /// leaves none.
-    pub(crate) fn pilot_post_deploy(
-        &self,
-        task: &Task,
-        comments: &[TaskComment],
-    ) -> Result<Vec<PostDeployRequirement>, OrbitError> {
-        let Some((_, receipt)) = super::pilot_receipts(comments).next() else {
-            return Ok(Vec::new());
-        };
-        let audit = self.task_pilot_audit(&task.id, receipt)?;
-        requirements_from_audit(task, &audit)
-    }
 }

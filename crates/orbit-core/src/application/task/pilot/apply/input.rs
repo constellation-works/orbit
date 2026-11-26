@@ -30,16 +30,6 @@ pub(super) enum Field<T> {
     Invalid(String),
 }
 
-impl<'de, T: DeserializeOwned> Deserialize<'de> for Field<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(deserializer)?;
-        Ok(match T::deserialize(value) {
-            Ok(value) => Self::Present(value),
-            Err(error) => Self::Invalid(error.to_string()),
-        })
-    }
-}
-
 impl<T> Field<T> {
     pub(super) fn get(&self) -> Option<&T> {
         match self {
@@ -77,29 +67,6 @@ impl Field<String> {
     }
 }
 
-/// A list that must hold only strings, read item by item so a non-string item
-/// is told apart from a value that is not a list.
-pub(super) type Strings = Vec<Field<String>>;
-
-fn strings(
-    items: &[Field<String>],
-    field: &str,
-    action: &str,
-) -> Result<Vec<String>, DispatchError> {
-    items
-        .iter()
-        .map(|item| {
-            item.get().cloned().ok_or_else(|| {
-                DispatchError::action_failed(action, format!("`{field}` must contain only strings"))
-            })
-        })
-        .collect()
-}
-
-fn not_an_array(field: &str, action: &str) -> DispatchError {
-    DispatchError::action_failed(action, format!("`{field}` must be an array"))
-}
-
 impl Field<Strings> {
     /// A required string list, refused as the shared `required_string_array`
     /// reader refuses it.
@@ -119,6 +86,20 @@ impl Field<Option<Strings>> {
         }
     }
 }
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Field<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        Ok(match T::deserialize(value) {
+            Ok(value) => Self::Present(value),
+            Err(error) => Self::Invalid(error.to_string()),
+        })
+    }
+}
+
+/// A list that must hold only strings, read item by item so a non-string item
+/// is told apart from a value that is not a list.
+pub(super) type Strings = Vec<Field<String>>;
 
 /// A JSON record read into `T` and kept verbatim. A non-object reads as a
 /// record whose every field is absent, as a lookup on it finds nothing.
@@ -157,145 +138,6 @@ pub(super) struct ApplyInput {
     promotion_authorized: Field<bool>,
     drain_promotion: Option<Value>,
     run_id: Field<String>,
-}
-
-/// The prepare step's output, as apply reads it.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct Prepared {
-    workspace_path: Field<String>,
-    mode: Field<String>,
-    partitions: Field<Vec<Record<PreparedPartition>>>,
-    tasks: Field<Vec<Record<PreparedTask>>>,
-    superseded_by_source: Field<Vec<Value>>,
-    superseded_during_preparation: Field<Vec<Value>>,
-    excluded: Excluded,
-    state_automation: Field<Value>,
-    source: Field<Value>,
-    source_age: Field<Value>,
-    task_ids: Field<Value>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct PreparedPartition {
-    pub(super) partition_index: Field<u64>,
-    pub(super) task_ids: Field<Strings>,
-}
-
-/// One task as prepare snapshotted it.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct PreparedTask {
-    pub(super) task_id: Field<String>,
-    context_files_before: Field<Strings>,
-    status: Field<TaskStatus>,
-    title: Field<String>,
-    tags: Field<Strings>,
-    complexity: Field<Option<TaskComplexity>>,
-    validation_tool_warnings: Field<Option<Strings>>,
-    material_fingerprint: Field<String>,
-    status_neutral_fingerprint: Field<String>,
-    material_components: Field<Option<Map<String, Value>>>,
-    history_len: Field<Option<usize>>,
-    context_creation_identity: Field<Option<String>>,
-    pilot_mode: Field<Option<String>>,
-    pilot_mode_reason: Field<Option<String>>,
-    prior_assessment_id: Field<Option<String>>,
-    recheck: Field<Option<Value>>,
-    comment_hygiene_batch: Field<Option<Value>>,
-}
-
-/// Prepare's exclusions: echoed verbatim in the report, and read for the
-/// tasks another live pilot already holds.
-#[derive(Default)]
-struct Excluded {
-    raw: Option<Value>,
-    entries: Vec<ExcludedTask>,
-}
-
-impl<'de> Deserialize<'de> for Excluded {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Value::deserialize(deserializer)?;
-        let entries = if raw.is_array() {
-            Vec::<Record<ExcludedTask>>::deserialize(&raw)
-                .map_err(D::Error::custom)?
-                .into_iter()
-                .map(|entry| entry.fields)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        Ok(Self {
-            raw: Some(raw),
-            entries,
-        })
-    }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct ExcludedTask {
-    pub(super) task_id: Field<String>,
-    pub(super) reason: Field<String>,
-    pub(super) prepared_by_run_ids: Field<Vec<Value>>,
-}
-
-/// One partition's pilot result.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct PartitionResult {
-    pub(super) partition_index: Field<u64>,
-    /// The `HEAD` and `HEAD^{tree}` the pilot observed in its inspection
-    /// checkout: the proof it read the pinned source, checked against the
-    /// prepared revision in [`super::partition`]. Absent reads as missing.
-    pub(super) observed_revision: Field<String>,
-    pub(super) observed_tree: Field<String>,
-    pub(super) task_ids: Field<Strings>,
-    /// Each assessment stays JSON for the validators that read it.
-    pub(super) tasks: Field<Vec<Record<AssessedTask>>>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct AssessedTask {
-    pub(super) task_id: Field<String>,
-}
-
-/// The apply input once its envelope is checked.
-pub(super) struct Envelope {
-    /// The prepared payload verbatim, for the claim, source and receipt
-    /// readers that take it as JSON.
-    pub(super) prepared: Value,
-    pub(super) mode: String,
-    pub(super) partitions: Vec<Record<PreparedPartition>>,
-    pub(super) tasks: Vec<Record<PreparedTask>>,
-    pub(super) results: Vec<Record<PartitionResult>>,
-    pub(super) prior_applied_count: u64,
-    /// Outcomes settled before this apply: the caller's, then those prepare
-    /// set aside.
-    pub(super) carried_task_outcomes: Vec<Value>,
-    /// Prepare's exclusions, read for the tasks another live pilot holds.
-    pub(super) excluded: Vec<ExcludedTask>,
-    pub(super) echo: PreparedEcho,
-    pub(super) authority: AuthorityInput,
-}
-
-/// Prepared fields the report repeats verbatim.
-pub(super) struct PreparedEcho {
-    pub(super) state_automation: Value,
-    pub(super) source: Value,
-    pub(super) source_age: Value,
-    pub(super) task_ids: Value,
-    pub(super) excluded: Value,
-}
-
-/// What the caller supplied to authorize promotion.
-pub(super) struct AuthorityInput {
-    pub(super) ci_sweep_filing: Option<CiSweepFilingEvidence>,
-    pub(super) promotion_authorized: Field<bool>,
-    pub(super) drain_promotion: Option<Value>,
-    pub(super) run_id: Option<String>,
 }
 
 impl ApplyInput {
@@ -401,39 +243,51 @@ impl ApplyInput {
     }
 }
 
-impl AuthorityInput {
-    /// Whether the caller authorized promotion; absent means no.
-    pub(super) fn promotion_authorized(&self, action: &str) -> Result<bool, DispatchError> {
-        match self.promotion_authorized {
-            Field::Absent => Ok(false),
-            Field::Present(authorized) => Ok(authorized),
-            Field::Invalid(_) => Err(DispatchError::action_failed(
-                action,
-                "promotion_authorized must be a boolean",
-            )),
-        }
-    }
+/// The prepare step's output, as apply reads it.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Prepared {
+    workspace_path: Field<String>,
+    mode: Field<String>,
+    partitions: Field<Vec<Record<PreparedPartition>>>,
+    tasks: Field<Vec<Record<PreparedTask>>>,
+    superseded_by_source: Field<Vec<Value>>,
+    superseded_during_preparation: Field<Vec<Value>>,
+    excluded: Excluded,
+    state_automation: Field<Value>,
+    source: Field<Value>,
+    source_age: Field<Value>,
+    task_ids: Field<Value>,
 }
 
-/// Each prepared task's snapshot by id, refused when any snapshot is
-/// malformed or two share an id.
-pub(super) fn snapshots(
-    action: &str,
-    tasks: &[Record<PreparedTask>],
-    source: Option<&SourceSnapshot>,
-) -> Result<BTreeMap<String, PreparedTaskSnapshot>, DispatchError> {
-    let source_revision = source.map(|source| source.source_revision.as_str());
-    let snapshots = tasks
-        .iter()
-        .map(|task| task.fields.snapshot(action, source_revision))
-        .collect::<Result<BTreeMap<_, _>, DispatchError>>()?;
-    if snapshots.len() != tasks.len() {
-        return Err(DispatchError::action_failed(
-            action,
-            "prepared.tasks contains duplicate task snapshots",
-        ));
-    }
-    Ok(snapshots)
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct PreparedPartition {
+    pub(super) partition_index: Field<u64>,
+    pub(super) task_ids: Field<Strings>,
+}
+
+/// One task as prepare snapshotted it.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct PreparedTask {
+    pub(super) task_id: Field<String>,
+    context_files_before: Field<Strings>,
+    status: Field<TaskStatus>,
+    title: Field<String>,
+    tags: Field<Strings>,
+    complexity: Field<Option<TaskComplexity>>,
+    validation_tool_warnings: Field<Option<Strings>>,
+    material_fingerprint: Field<String>,
+    status_neutral_fingerprint: Field<String>,
+    material_components: Field<Option<Map<String, Value>>>,
+    history_len: Field<Option<usize>>,
+    context_creation_identity: Field<Option<String>>,
+    pilot_mode: Field<Option<String>>,
+    pilot_mode_reason: Field<Option<String>>,
+    prior_assessment_id: Field<Option<String>>,
+    recheck: Field<Option<Value>>,
+    comment_hygiene_batch: Field<Option<Value>>,
 }
 
 impl PreparedTask {
@@ -500,7 +354,6 @@ impl PreparedTask {
             complexity,
             title,
             tags,
-            validation_tool_warnings,
             material: self
                 .material_fingerprint
                 .get()
@@ -510,6 +363,7 @@ impl PreparedTask {
             status_neutral_fingerprint: self.status_neutral_fingerprint.get().cloned(),
             material_components,
             history_len,
+            validation_tool_warnings,
             context_creation_identity,
             pilot_mode: self.pilot_mode(action)?,
             comment_hygiene_batch,
@@ -580,4 +434,150 @@ impl PreparedTask {
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map(Some)
     }
+}
+
+/// Prepare's exclusions: echoed verbatim in the report, and read for the
+/// tasks another live pilot already holds.
+#[derive(Default)]
+struct Excluded {
+    raw: Option<Value>,
+    entries: Vec<ExcludedTask>,
+}
+
+impl<'de> Deserialize<'de> for Excluded {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Value::deserialize(deserializer)?;
+        let entries = if raw.is_array() {
+            Vec::<Record<ExcludedTask>>::deserialize(&raw)
+                .map_err(D::Error::custom)?
+                .into_iter()
+                .map(|entry| entry.fields)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            raw: Some(raw),
+            entries,
+        })
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct ExcludedTask {
+    pub(super) task_id: Field<String>,
+    pub(super) reason: Field<String>,
+    pub(super) prepared_by_run_ids: Field<Vec<Value>>,
+}
+
+/// One partition's pilot result.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct PartitionResult {
+    pub(super) partition_index: Field<u64>,
+    /// The `HEAD` and `HEAD^{tree}` the pilot observed in its inspection
+    /// checkout: the proof it read the pinned source, checked against the
+    /// prepared revision in [`super::partition`]. Absent reads as missing.
+    pub(super) observed_revision: Field<String>,
+    pub(super) observed_tree: Field<String>,
+    pub(super) task_ids: Field<Strings>,
+    /// Each assessment stays JSON for the validators that read it.
+    pub(super) tasks: Field<Vec<Record<AssessedTask>>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct AssessedTask {
+    pub(super) task_id: Field<String>,
+}
+
+/// The apply input once its envelope is checked.
+pub(super) struct Envelope {
+    /// The prepared payload verbatim, for the claim, source and receipt
+    /// readers that take it as JSON.
+    pub(super) prepared: Value,
+    pub(super) mode: String,
+    pub(super) partitions: Vec<Record<PreparedPartition>>,
+    pub(super) tasks: Vec<Record<PreparedTask>>,
+    pub(super) results: Vec<Record<PartitionResult>>,
+    pub(super) prior_applied_count: u64,
+    /// Outcomes settled before this apply: the caller's, then those prepare
+    /// set aside.
+    pub(super) carried_task_outcomes: Vec<Value>,
+    /// Prepare's exclusions, read for the tasks another live pilot holds.
+    pub(super) excluded: Vec<ExcludedTask>,
+    pub(super) echo: PreparedEcho,
+    pub(super) authority: AuthorityInput,
+}
+
+/// Prepared fields the report repeats verbatim.
+pub(super) struct PreparedEcho {
+    pub(super) state_automation: Value,
+    pub(super) source: Value,
+    pub(super) source_age: Value,
+    pub(super) task_ids: Value,
+    pub(super) excluded: Value,
+}
+
+/// What the caller supplied to authorize promotion.
+pub(super) struct AuthorityInput {
+    pub(super) ci_sweep_filing: Option<CiSweepFilingEvidence>,
+    pub(super) promotion_authorized: Field<bool>,
+    pub(super) drain_promotion: Option<Value>,
+    pub(super) run_id: Option<String>,
+}
+
+impl AuthorityInput {
+    /// Whether the caller authorized promotion; absent means no.
+    pub(super) fn promotion_authorized(&self, action: &str) -> Result<bool, DispatchError> {
+        match self.promotion_authorized {
+            Field::Absent => Ok(false),
+            Field::Present(authorized) => Ok(authorized),
+            Field::Invalid(_) => Err(DispatchError::action_failed(
+                action,
+                "promotion_authorized must be a boolean",
+            )),
+        }
+    }
+}
+
+fn strings(
+    items: &[Field<String>],
+    field: &str,
+    action: &str,
+) -> Result<Vec<String>, DispatchError> {
+    items
+        .iter()
+        .map(|item| {
+            item.get().cloned().ok_or_else(|| {
+                DispatchError::action_failed(action, format!("`{field}` must contain only strings"))
+            })
+        })
+        .collect()
+}
+
+fn not_an_array(field: &str, action: &str) -> DispatchError {
+    DispatchError::action_failed(action, format!("`{field}` must be an array"))
+}
+
+/// Each prepared task's snapshot by id, refused when any snapshot is
+/// malformed or two share an id.
+pub(super) fn snapshots(
+    action: &str,
+    tasks: &[Record<PreparedTask>],
+    source: Option<&SourceSnapshot>,
+) -> Result<BTreeMap<String, PreparedTaskSnapshot>, DispatchError> {
+    let source_revision = source.map(|source| source.source_revision.as_str());
+    let snapshots = tasks
+        .iter()
+        .map(|task| task.fields.snapshot(action, source_revision))
+        .collect::<Result<BTreeMap<_, _>, DispatchError>>()?;
+    if snapshots.len() != tasks.len() {
+        return Err(DispatchError::action_failed(
+            action,
+            "prepared.tasks contains duplicate task snapshots",
+        ));
+    }
+    Ok(snapshots)
 }

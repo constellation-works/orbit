@@ -111,97 +111,10 @@ use super::legacy_decisions;
 /// run dispatched that pilot [ORB-19544].
 pub(crate) const UNRESOLVED_PILOT_EVENT: &str = "task_pilot_unresolved";
 
-/// The history entry recording that pilot run `run_id` left a task
-/// undecided. The note keeps the JSON text history views have always shown;
-/// readers take the run from the typed decision.
-pub(crate) fn unresolved_pilot_entry(run_id: &str, at: DateTime<Utc>) -> TaskHistoryEntry {
-    TaskHistoryEntry {
-        at,
-        by: SYSTEM_ACTOR_LABEL.to_string(),
-        event: UNRESOLVED_PILOT_EVENT.to_string(),
-        note: Some(json!({ "pilot_run_id": run_id }).to_string()),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: Some(TaskDecision::PilotUnresolved {
-            pilot_run_id: run_id.to_string(),
-        }),
-        surface: None,
-        caller: None,
-    }
-}
-
-/// The run an undecided-pilot record names: its typed decision, or the JSON
-/// note of a record written before the decision existed.
-pub(crate) fn unresolved_pilot_run_id(entry: &TaskHistoryEntry) -> Option<Cow<'_, str>> {
-    if entry.event != UNRESOLVED_PILOT_EVENT {
-        return None;
-    }
-    match &entry.decision {
-        Some(TaskDecision::PilotUnresolved { pilot_run_id }) => {
-            Some(Cow::Borrowed(pilot_run_id.as_str()))
-        }
-        Some(_) => None,
-        None => legacy_decisions::unresolved_pilot_note_run_id(entry).map(Cow::Owned),
-    }
-}
-
-/// Whether an explicit pilot selection may assess a task in `status`. Prepare
-/// and an operator surface's pre-submission check share the predicate.
-pub(crate) fn pilot_assessable_status(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::Proposed | TaskStatus::Backlog)
-}
-
 /// Actor that seals a task-pilot replay receipt on its audit comment.
 const PILOT_ACTOR: &str = "task-pilot";
 /// The tag a `user_facing_ui` finding adds: tasks whose change a user sees.
 const UI_TAG: &str = orbit_types::task::UI_TAG;
-
-/// Task-pilot audit comments that carry a receipt, newest first.
-///
-/// Double-ended so `applied_material` can walk oldest first. Operation ids
-/// are not proven unique on historical comments: the store refuses a second
-/// atomic apply of the same event type, and a legacy text receipt can still
-/// share an id with a later typed comment.
-fn pilot_receipts(
-    comments: &[TaskComment],
-) -> impl DoubleEndedIterator<Item = (&TaskComment, CommentReceipt<'_>)> + '_ {
-    comments.iter().rev().filter_map(|comment| {
-        if comment.by != PILOT_ACTOR {
-            return None;
-        }
-        comment.receipt().map(|receipt| (comment, receipt))
-    })
-}
-
-/// Operation id of the newest task-pilot receipt comment.
-pub(super) fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
-    pilot_receipts(comments)
-        .next()
-        .map(|(_, receipt)| receipt.operation_id)
-}
-
-/// Whether `value` is 64 ASCII hex digits.
-///
-/// That is the shape of a pilot operation id. The no-target assessment
-/// marker stores its fingerprint in the same shape and uses this check.
-fn is_operation_id(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-/// Superseded task outcome whose object is `{task_id, outcome, reason, status, detail}`.
-///
-/// `source_superseded` omits `status`, and a task held by another pilot names
-/// `run_id` instead. Those shapes stay at their call sites.
-fn superseded_outcome(task_id: &str, reason: &str, status: TaskStatus, detail: &str) -> Value {
-    json!({
-        "task_id": task_id,
-        "outcome": "superseded",
-        "reason": reason,
-        "status": status,
-        "detail": detail,
-    })
-}
 
 /// Field carrying the deterministic validation-tool feasibility findings, on
 /// both a prepared task snapshot and the assessment apply reports for it
@@ -257,6 +170,93 @@ pub(super) const CONTRACT_CONFLICTS: &str = "contract_conflicts";
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.
 pub(super) const PILOT_NORMALIZATIONS: &str = "pilot_normalizations";
+
+/// The history entry recording that pilot run `run_id` left a task
+/// undecided. The note keeps the JSON text history views have always shown;
+/// readers take the run from the typed decision.
+pub(crate) fn unresolved_pilot_entry(run_id: &str, at: DateTime<Utc>) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at,
+        by: SYSTEM_ACTOR_LABEL.to_string(),
+        event: UNRESOLVED_PILOT_EVENT.to_string(),
+        note: Some(json!({ "pilot_run_id": run_id }).to_string()),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(TaskDecision::PilotUnresolved {
+            pilot_run_id: run_id.to_string(),
+        }),
+        surface: None,
+        caller: None,
+    }
+}
+
+/// The run an undecided-pilot record names: its typed decision, or the JSON
+/// note of a record written before the decision existed.
+pub(crate) fn unresolved_pilot_run_id(entry: &TaskHistoryEntry) -> Option<Cow<'_, str>> {
+    if entry.event != UNRESOLVED_PILOT_EVENT {
+        return None;
+    }
+    match &entry.decision {
+        Some(TaskDecision::PilotUnresolved { pilot_run_id }) => {
+            Some(Cow::Borrowed(pilot_run_id.as_str()))
+        }
+        Some(_) => None,
+        None => legacy_decisions::unresolved_pilot_note_run_id(entry).map(Cow::Owned),
+    }
+}
+
+/// Whether an explicit pilot selection may assess a task in `status`. Prepare
+/// and an operator surface's pre-submission check share the predicate.
+pub(crate) fn pilot_assessable_status(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Proposed | TaskStatus::Backlog)
+}
+
+/// Task-pilot audit comments that carry a receipt, newest first.
+///
+/// Double-ended so `applied_material` can walk oldest first. Operation ids
+/// are not proven unique on historical comments: the store refuses a second
+/// atomic apply of the same event type, and a legacy text receipt can still
+/// share an id with a later typed comment.
+fn pilot_receipts(
+    comments: &[TaskComment],
+) -> impl DoubleEndedIterator<Item = (&TaskComment, CommentReceipt<'_>)> + '_ {
+    comments.iter().rev().filter_map(|comment| {
+        if comment.by != PILOT_ACTOR {
+            return None;
+        }
+        comment.receipt().map(|receipt| (comment, receipt))
+    })
+}
+
+/// Operation id of the newest task-pilot receipt comment.
+pub(super) fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
+    pilot_receipts(comments)
+        .next()
+        .map(|(_, receipt)| receipt.operation_id)
+}
+
+/// Whether `value` is 64 ASCII hex digits.
+///
+/// That is the shape of a pilot operation id. The no-target assessment
+/// marker stores its fingerprint in the same shape and uses this check.
+fn is_operation_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Superseded task outcome whose object is `{task_id, outcome, reason, status, detail}`.
+///
+/// `source_superseded` omits `status`, and a task held by another pilot names
+/// `run_id` instead. Those shapes stay at their call sites.
+fn superseded_outcome(task_id: &str, reason: &str, status: TaskStatus, detail: &str) -> Value {
+    json!({
+        "task_id": task_id,
+        "outcome": "superseded",
+        "reason": reason,
+        "status": status,
+        "detail": detail,
+    })
+}
 
 #[cfg(test)]
 mod tests;

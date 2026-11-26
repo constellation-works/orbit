@@ -19,13 +19,6 @@ use serde_json::{Value, json};
 /// other settlement.
 pub(super) type Settled<T> = Result<T, Value>;
 
-pub(super) fn refused<'a, E: ToString>(
-    task_id: &'a str,
-    outcome: &'static str,
-) -> impl FnOnce(E) -> Value + 'a {
-    move |error| task_outcome(task_id, outcome, Some(error.to_string()))
-}
-
 /// The selectors an assessment leaves the task with, and what the host kept
 /// or flagged on the way.
 pub(super) struct Scope {
@@ -48,6 +41,13 @@ pub(super) struct Assessed {
     pub(super) post_deploy: Vec<PostDeployRequirement>,
     pub(super) user_facing_ui: bool,
     pub(super) no_diff_expected: bool,
+}
+
+pub(super) fn refused<'a, E: ToString>(
+    task_id: &'a str,
+    outcome: &'static str,
+) -> impl FnOnce(E) -> Value + 'a {
+    move |error| task_outcome(task_id, outcome, Some(error.to_string()))
 }
 
 pub(super) fn settle_task(

@@ -66,28 +66,6 @@ const AUTO_MINTED_TAGS: [&str; 2] = ["ci-failure-sweep", "delivery-code-review"]
 const VERIFIED_NO_DIFF: &str = "verified_no_diff";
 const EVIDENCE_SUMMARY_CHARS: usize = 240;
 
-/// Whether Orbit automation filed the task, so a proven `verified_no_diff`
-/// may close it without a person.
-pub(crate) fn auto_minted(tags: &[String]) -> bool {
-    tags.iter().any(|tag| {
-        AUTO_MINTED_TAGS.contains(&tag.as_str()) || tag.starts_with(AUTO_TASK_TAG_PREFIX)
-    })
-}
-
-/// Whether the task is a finding Orbit or a review filed, whose
-/// `verified_no_diff` means the finding is already fixed.
-fn finding_filed(tags: &[String]) -> bool {
-    let kinds = tags
-        .iter()
-        .map(|tag| {
-            tag.strip_prefix(AUTO_TASK_TAG_PREFIX)
-                .unwrap_or(tag)
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    super::review_filed(&kinds) || kinds.iter().any(|kind| kind == "ci-failure-sweep")
-}
-
 /// A `verified_no_diff` assessment, reduced to what a hold reports and what
 /// the proof checks.
 pub(crate) struct VerifiedNoDiff {
@@ -454,8 +432,8 @@ impl OrbitRuntime {
                             self.update_task_as_system(
                                 task_id,
                                 TaskUpdateParams {
-                                    status: Some(TaskStatus::Archived),
                                     comment: Some(comment),
+                                    status: Some(TaskStatus::Archived),
                                     ..Default::default()
                                 },
                                 None,
@@ -468,6 +446,28 @@ impl OrbitRuntime {
             })?;
         Ok(closure)
     }
+}
+
+/// Whether Orbit automation filed the task, so a proven `verified_no_diff`
+/// may close it without a person.
+pub(crate) fn auto_minted(tags: &[String]) -> bool {
+    tags.iter().any(|tag| {
+        AUTO_MINTED_TAGS.contains(&tag.as_str()) || tag.starts_with(AUTO_TASK_TAG_PREFIX)
+    })
+}
+
+/// Whether the task is a finding Orbit or a review filed, whose
+/// `verified_no_diff` means the finding is already fixed.
+fn finding_filed(tags: &[String]) -> bool {
+    let kinds = tags
+        .iter()
+        .map(|tag| {
+            tag.strip_prefix(AUTO_TASK_TAG_PREFIX)
+                .unwrap_or(tag)
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    super::review_filed(&kinds) || kinds.iter().any(|kind| kind == "ci-failure-sweep")
 }
 
 fn collect_strings<'a>(value: &'a Value, texts: &mut Vec<&'a str>) {

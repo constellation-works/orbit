@@ -21,6 +21,20 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::runtime::base::path::declared_context::{DeclaredContextFiles, declared_context_files};
 
+/// Statuses the context repair sweep reads when the caller names none.
+///
+/// Done / Archived / Rejected tasks are intentionally skipped — they are
+/// historical records and re-saving them would mutate audit trails for tasks
+/// nobody is going to execute again.
+pub const CONTEXT_REPAIR_SWEEP_STATUSES: &[TaskStatus] = &[
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::Someday,
+    TaskStatus::InProgress,
+    TaskStatus::Blocked,
+    TaskStatus::Review,
+];
+
 /// What a history-backed restoration would add to one task, or did add.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextFileRestoration {
@@ -42,20 +56,6 @@ impl ContextFileRestoration {
         self.restored.is_empty() && self.unrestorable.is_empty()
     }
 }
-
-/// Statuses the context repair sweep reads when the caller names none.
-///
-/// Done / Archived / Rejected tasks are intentionally skipped — they are
-/// historical records and re-saving them would mutate audit trails for tasks
-/// nobody is going to execute again.
-pub const CONTEXT_REPAIR_SWEEP_STATUSES: &[TaskStatus] = &[
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::Someday,
-    TaskStatus::InProgress,
-    TaskStatus::Blocked,
-    TaskStatus::Review,
-];
 
 /// One task the context repair sweep reports.
 #[derive(Debug, Clone, PartialEq, Eq)]

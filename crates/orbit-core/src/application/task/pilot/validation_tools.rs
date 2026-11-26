@@ -83,6 +83,17 @@ const SIGN_OFF_AUTHORITIES: &[&str] = &["owner", "operator"];
 /// and governance refuses it to agent sessions.
 const OWNER_SIGN_OFF_FINDING: &str = "acceptance criterion requires an owner or operator sign-off to be recorded, which no implementing agent can record: `orbit.decision.submit` is operator-only and governance refuses it to agent sessions, so route this validation to an explicit operator handoff instead of expecting the implementing agent to record the decision";
 
+/// Connectors that open a clause about something other than the sentence's
+/// subject, such as `and that its log output contains no credentials`. Wording
+/// after one describes that other subject, not the call.
+const SUBJECT_SHIFT_CONNECTORS: &[&str] = &[
+    " and that ",
+    " and its ",
+    " and their ",
+    " and the ",
+    " whose ",
+];
+
 /// The execution lane a task's validation criteria have to be feasible in.
 ///
 /// Each source is optional because none of them may fail preparation: when a
@@ -324,16 +335,24 @@ impl ImplementationLane {
     }
 }
 
-/// Connectors that open a clause about something other than the sentence's
-/// subject, such as `and that its log output contains no credentials`. Wording
-/// after one describes that other subject, not the call.
-const SUBJECT_SHIFT_CONNECTORS: &[&str] = &[
-    " and that ",
-    " and its ",
-    " and their ",
-    " and the ",
-    " whose ",
-];
+/// Deduplicated, order-preserving, bounded findings for one task.
+#[derive(Default)]
+struct Findings {
+    seen: BTreeSet<String>,
+    ordered: Vec<String>,
+}
+
+impl Findings {
+    fn push(&mut self, finding: String) {
+        if !self.is_full() && self.seen.insert(finding.clone()) {
+            self.ordered.push(finding);
+        }
+    }
+
+    fn is_full(&self) -> bool {
+        self.ordered.len() >= MAX_FINDINGS_PER_TASK
+    }
+}
 
 /// Whether the clause of `sentence` that names `tool` states that the run
 /// needs no `credential`. Only that clause counts: credential wording in
@@ -580,25 +599,6 @@ pub(super) fn drop_subject_operator_warnings(
                 .as_str()
                 .is_none_or(|text| !subject_only.contains(text))
         });
-    }
-}
-
-/// Deduplicated, order-preserving, bounded findings for one task.
-#[derive(Default)]
-struct Findings {
-    seen: BTreeSet<String>,
-    ordered: Vec<String>,
-}
-
-impl Findings {
-    fn push(&mut self, finding: String) {
-        if !self.is_full() && self.seen.insert(finding.clone()) {
-            self.ordered.push(finding);
-        }
-    }
-
-    fn is_full(&self) -> bool {
-        self.ordered.len() >= MAX_FINDINGS_PER_TASK
     }
 }
 

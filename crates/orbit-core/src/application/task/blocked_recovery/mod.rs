@@ -48,9 +48,6 @@ mod recheck;
 pub(crate) mod steps;
 mod triage;
 
-#[cfg(test)]
-mod tests;
-
 pub(in crate::application::task) use readout::block_json;
 
 pub(crate) use episode::BlockSource;
@@ -72,18 +69,6 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskHistoryEntry};
-
-/// The run that blocked `task`: the one its current block episode names, else
-/// the one it last ran.
-pub(in crate::application::task) fn blocking_run_of(
-    task: &Task,
-    history: &[TaskHistoryEntry],
-) -> Option<String> {
-    readout::current_block(history)
-        .and_then(readout::blocking_run_id)
-        .map(str::to_string)
-        .or_else(|| task.job_run_id.clone())
-}
 
 /// The job the backstop dispatches, one run per block episode.
 pub const BLOCKED_TASK_RECOVERY_JOB: &str = "blocked_task_recovery_pipeline";
@@ -124,6 +109,18 @@ pub(crate) const BACKSTOP_LANE_CONTRACT: &str = "Blocked-task backstop: the fail
     task's work should continue, escalate naming `retained_candidate`, or requeue for a fresh \
     attempt. `resume_run` and `rerun_ci` are the mechanical steps to try before a human decides. `retained_candidate` is evidence only: never modify it.";
 
+/// The run that blocked `task`: the one its current block episode names, else
+/// the one it last ran.
+pub(in crate::application::task) fn blocking_run_of(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+) -> Option<String> {
+    readout::current_block(history)
+        .and_then(readout::blocking_run_id)
+        .map(str::to_string)
+        .or_else(|| task.job_run_id.clone())
+}
+
 /// The checkout a recovery run's agent inspects: a detached linked worktree of
 /// the base, private to the run and removed when its decision is applied.
 pub(crate) fn recovery_checkout_path(
@@ -141,3 +138,6 @@ pub(crate) fn recovery_checkout_path(
     }
     Ok(state_dir.join("recovery-checkouts").join(run_id))
 }
+
+#[cfg(test)]
+mod tests;

@@ -38,30 +38,6 @@ pub(crate) const FIRST_ROUND: &str = "pilots";
 pub(crate) const PILOT_CREW_FIELD: &str = "pilot_crew";
 pub(crate) const REPAIR_ROUND: &str = "repair_pilots";
 
-/// The `activity_crew_draws` key one partition's resolved pilot crew is
-/// frozen under.
-pub(crate) fn partition_draw_key(round: &str, partition_index: u64) -> String {
-    format!(
-        "{}#{round}:{partition_index}",
-        CrewPurpose::TaskPilot.config_key()
-    )
-}
-
-/// The round and partition index a pilot activity's input names, or `None`
-/// for an input without a partition.
-pub(crate) fn input_partition(input: &Value) -> Option<(&'static str, u64)> {
-    let index = input
-        .get("partition_index")
-        .and_then(Value::as_u64)
-        .or_else(|| input.pointer("/partition/partition_index")?.as_u64())?;
-    let round = if input.get("repair_attempt").and_then(Value::as_bool) == Some(true) {
-        REPAIR_ROUND
-    } else {
-        FIRST_ROUND
-    };
-    Some((round, index))
-}
-
 impl OrbitRuntime {
     /// The partition key a task filed at `complexity` takes when the
     /// task-pilot pool has `@auto` members: for each such crew, the
@@ -130,6 +106,30 @@ impl OrbitRuntime {
         };
         Some((partition_draw_key(round, index), draw))
     }
+}
+
+/// The `activity_crew_draws` key one partition's resolved pilot crew is
+/// frozen under.
+pub(crate) fn partition_draw_key(round: &str, partition_index: u64) -> String {
+    format!(
+        "{}#{round}:{partition_index}",
+        CrewPurpose::TaskPilot.config_key()
+    )
+}
+
+/// The round and partition index a pilot activity's input names, or `None`
+/// for an input without a partition.
+pub(crate) fn input_partition(input: &Value) -> Option<(&'static str, u64)> {
+    let index = input
+        .get("partition_index")
+        .and_then(Value::as_u64)
+        .or_else(|| input.pointer("/partition/partition_index")?.as_u64())?;
+    let round = if input.get("repair_attempt").and_then(Value::as_bool) == Some(true) {
+        REPAIR_ROUND
+    } else {
+        FIRST_ROUND
+    };
+    Some((round, index))
 }
 
 /// The signal a pilot resolves from: the filed tier alone.

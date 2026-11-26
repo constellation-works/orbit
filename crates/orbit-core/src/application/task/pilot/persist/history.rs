@@ -12,6 +12,9 @@ use crate::application::task::{TaskAutomationPort, legacy_decisions};
 
 use super::super::apply::admission::PreparedTaskSnapshot;
 
+pub(super) const MATERIAL_CHANGED_DETAIL: &str =
+    "task meaning or dependency evidence changed after preparation";
+
 /// Only applied no-target assessments carry this receipt. The status is kept
 /// separately because the shared material hash treats proposed and backlog
 /// as equally eligible under the default predicate.
@@ -102,9 +105,6 @@ pub(super) fn status_only_fingerprint(
     }
     Some(fresh.material)
 }
-
-pub(super) const MATERIAL_CHANGED_DETAIL: &str =
-    "task meaning or dependency evidence changed after preparation";
 
 /// Name the freshness components whose digests moved. An empty diff stays
 /// unnamed: eligibility can change the material hash without any configured

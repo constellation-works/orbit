@@ -39,6 +39,20 @@ pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 /// crew's task without the lifecycle gates; the crew name follows.
 pub(crate) const HUMAN_CREW_BYPASS_NOTE: &str = "human-crew bypass: task is assigned to human crew";
 
+/// Statuses a deliberate claim recovery may choose, before the lifecycle
+/// table narrows them to the task's current status. Recovery fences the
+/// claimed attempt, so it never leaves the task `in-progress` (no run would
+/// own it) and never returns it to `proposed`.
+const CLAIM_RECOVERY_STATUSES: [TaskStatus; 7] = [
+    TaskStatus::Blocked,
+    TaskStatus::Backlog,
+    TaskStatus::Review,
+    TaskStatus::Done,
+    TaskStatus::Archived,
+    TaskStatus::Rejected,
+    TaskStatus::Someday,
+];
+
 /// Refuse an ordinary surface's status change while a local run owns the
 /// task. Call under the task write lock, before recording any field edits.
 /// The run's submitted selection is authoritative even when admission has
@@ -214,20 +228,6 @@ pub(crate) fn ensure_status_change_allowed(
         _ => Ok(()),
     }
 }
-
-/// Statuses a deliberate claim recovery may choose, before the lifecycle
-/// table narrows them to the task's current status. Recovery fences the
-/// claimed attempt, so it never leaves the task `in-progress` (no run would
-/// own it) and never returns it to `proposed`.
-const CLAIM_RECOVERY_STATUSES: [TaskStatus; 7] = [
-    TaskStatus::Blocked,
-    TaskStatus::Backlog,
-    TaskStatus::Review,
-    TaskStatus::Done,
-    TaskStatus::Archived,
-    TaskStatus::Rejected,
-    TaskStatus::Someday,
-];
 
 /// The statuses a claim recovery may move `task` to: every recovery status
 /// the lifecycle table allows from the task's status, with `done` only when

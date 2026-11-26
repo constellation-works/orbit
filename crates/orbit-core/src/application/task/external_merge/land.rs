@@ -129,28 +129,6 @@ impl DeliveryMergeOutcome {
     }
 }
 
-pub(super) fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
-    OrbitError::PolicyDenied(format!(
-        "{TASK_LANDING_REFUSED}: task '{id}' did not land: {reason}"
-    ))
-}
-
-/// Refuse landing when `observed_base` does not match the `expected_base`
-/// established during candidate selection.
-pub(super) fn ensure_delivery_target_branch(
-    number: u64,
-    observed_base: Option<&str>,
-    expected_base: &str,
-) -> Result<(), String> {
-    if observed_base == Some(expected_base) {
-        return Ok(());
-    }
-    Err(format!(
-        "pull request #{number} targets {}, not its delivery target branch {expected_base}",
-        observed_base.unwrap_or("no branch")
-    ))
-}
-
 impl OrbitRuntime {
     /// The PRs Orbit recorded for `task` that are still open.
     pub(crate) fn open_recorded_pull_requests(&self, task: &Task) -> Result<Vec<u64>, OrbitError> {
@@ -461,6 +439,28 @@ impl OrbitRuntime {
 enum KnownMergeBlockers {
     Ready(PullRequestBlockers),
     Unavailable(String),
+}
+
+pub(super) fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
+    OrbitError::PolicyDenied(format!(
+        "{TASK_LANDING_REFUSED}: task '{id}' did not land: {reason}"
+    ))
+}
+
+/// Refuse landing when `observed_base` does not match the `expected_base`
+/// established during candidate selection.
+pub(super) fn ensure_delivery_target_branch(
+    number: u64,
+    observed_base: Option<&str>,
+    expected_base: &str,
+) -> Result<(), String> {
+    if observed_base == Some(expected_base) {
+        return Ok(());
+    }
+    Err(format!(
+        "pull request #{number} targets {}, not its delivery target branch {expected_base}",
+        observed_base.unwrap_or("no branch")
+    ))
 }
 
 /// Read what holds `number` back, waiting out GitHub's `UNKNOWN` mergeability

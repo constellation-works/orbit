@@ -39,26 +39,6 @@ impl ScheduleHold {
     }
 }
 
-/// The hold on `task` at `now`: a `backlog` task whose `not_before` is still
-/// ahead and that no operator override names. History is read only for a
-/// task that is actually scheduled ahead.
-pub(crate) fn schedule_hold_in(
-    task: &Task,
-    now: DateTime<Utc>,
-    history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
-) -> Result<Option<ScheduleHold>, OrbitError> {
-    if task.status != TaskStatus::Backlog {
-        return Ok(None);
-    }
-    let Some(not_before) = task.scheduled_after(now) else {
-        return Ok(None);
-    };
-    if schedule_overridden(&history()?, not_before) {
-        return Ok(None);
-    }
-    Ok(Some(ScheduleHold { not_before }))
-}
-
 impl OrbitRuntime {
     /// The scheduled hold on `task` now; see [`schedule_hold_in`].
     pub(crate) fn schedule_hold(&self, task: &Task) -> Result<Option<ScheduleHold>, OrbitError> {
@@ -97,4 +77,24 @@ impl OrbitRuntime {
         )?;
         Ok(())
     }
+}
+
+/// The hold on `task` at `now`: a `backlog` task whose `not_before` is still
+/// ahead and that no operator override names. History is read only for a
+/// task that is actually scheduled ahead.
+pub(crate) fn schedule_hold_in(
+    task: &Task,
+    now: DateTime<Utc>,
+    history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+) -> Result<Option<ScheduleHold>, OrbitError> {
+    if task.status != TaskStatus::Backlog {
+        return Ok(None);
+    }
+    let Some(not_before) = task.scheduled_after(now) else {
+        return Ok(None);
+    };
+    if schedule_overridden(&history()?, not_before) {
+        return Ok(None);
+    }
+    Ok(Some(ScheduleHold { not_before }))
 }

@@ -33,14 +33,6 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-fn candidate_status_limit() -> usize {
-    #[cfg(test)]
-    if let Some(limit) = CANDIDATE_STATUS_LIMIT_OVERRIDE.with(|limit| limit.get()) {
-        return limit;
-    }
-    CANDIDATE_STATUS_LIMIT
-}
-
 /// The failed run's own worktree, where its unfinished candidate stays after
 /// the run ends. The backstop reads it; it never writes or copies it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +198,14 @@ impl OrbitRuntime {
 struct CandidatePathListing {
     paths: Vec<String>,
     truncated: bool,
+}
+
+fn candidate_status_limit() -> usize {
+    #[cfg(test)]
+    if let Some(limit) = CANDIDATE_STATUS_LIMIT_OVERRIDE.with(|limit| limit.get()) {
+        return limit;
+    }
+    CANDIDATE_STATUS_LIMIT
 }
 
 /// Paths `git status` reports in a worktree — staged, unstaged or untracked —

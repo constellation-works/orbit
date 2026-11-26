@@ -15,137 +15,6 @@ use crate::application::task::lifecycle::task_status_transition_allowed;
 
 use super::validation::invalid;
 
-fn action(result: Result<(), OrbitError>) -> DesktopAction {
-    match result {
-        Ok(()) => DesktopAction {
-            enabled: true,
-            reason: None,
-        },
-        Err(e) => DesktopAction {
-            enabled: false,
-            reason: Some(redact_all(&e.to_string()).chars().take(2048).collect()),
-        },
-    }
-}
-fn clip(value: &mut String, max: usize, field: &str, truncated: &mut Vec<String>) {
-    let safe = redact_all(value);
-    if safe != *value {
-        truncated.push(field.into());
-    }
-    *value = safe;
-    if value.len() > max {
-        let boundary = orbit_common::text::floor_char_boundary(value, max);
-        value.truncate(boundary);
-        truncated.push(field.into());
-    }
-}
-// An opaque reference must either retain its exact identity or be omitted.
-fn retain_reference(value: &str, max: usize, field: &str, truncated: &mut Vec<String>) -> bool {
-    if value.len() > max || redact_all(value) != value {
-        truncated.push(field.into());
-        false
-    } else {
-        true
-    }
-}
-
-fn truncate_task(task: &mut Task, truncated: &mut Vec<String>) {
-    clip(&mut task.title, 512, "task.title", truncated);
-    clip(&mut task.description, 32768, "task.description", truncated);
-    clip(&mut task.plan, 16384, "task.plan", truncated);
-    clip(
-        &mut task.execution_summary,
-        16384,
-        "task.execution_summary",
-        truncated,
-    );
-    if task.acceptance_criteria.len() > 100 {
-        task.acceptance_criteria.truncate(100);
-        truncated.push("task.acceptance_criteria".into());
-    }
-    for (index, criterion) in task.acceptance_criteria.iter_mut().enumerate() {
-        clip(
-            criterion,
-            2048,
-            &format!("task.acceptance_criteria[{index}]"),
-            truncated,
-        );
-    }
-    for (name, value, max) in [
-        ("task.crew", &mut task.crew, 128),
-        ("task.orchestrator", &mut task.orchestrator, 128),
-        ("task.orchestrator_model", &mut task.orchestrator_model, 128),
-        ("task.pr_status", &mut task.pr_status, 128),
-        ("task.created_by", &mut task.created_by, 512),
-        ("task.created_by_model", &mut task.created_by_model, 128),
-        ("task.planned_by", &mut task.planned_by, 512),
-        ("task.implemented_by", &mut task.implemented_by, 512),
-    ] {
-        if let Some(value) = value {
-            clip(value, max, name, truncated);
-        }
-    }
-    if task
-        .job_run_id
-        .as_ref()
-        .is_some_and(|id| !retain_reference(id, 512, "task.job_run_id", truncated))
-    {
-        task.job_run_id = None;
-    }
-    if let Some(location) = &mut task.job_run_machine {
-        if !retain_reference(
-            &location.machine_id,
-            512,
-            "task.job_run_machine.machine_id",
-            truncated,
-        ) {
-            task.job_run_machine = None;
-        } else if let Some(name) = &mut location.machine_name {
-            clip(name, 128, "task.job_run_machine.machine_name", truncated);
-        }
-    }
-    for (name, values) in [
-        ("task.context_files", &mut task.context_files),
-        ("task.required_tools", &mut task.required_tools),
-    ] {
-        if values.len() > 100 {
-            values.truncate(100);
-            truncated.push(name.into());
-        }
-        values.retain(|value| retain_reference(value, 1024, name, truncated));
-    }
-    if task.tags.len() > 100 {
-        task.tags.truncate(100);
-        truncated.push("task.tags".into());
-    }
-    for (index, value) in task.tags.iter_mut().enumerate() {
-        clip(value, 1024, &format!("task.tags[{index}]"), truncated);
-    }
-    if task.external_refs.len() > 100 {
-        task.external_refs.truncate(100);
-        truncated.push("task.external_refs".into());
-    }
-    task.external_refs.retain(|reference| {
-        retain_reference(
-            &reference.system,
-            128,
-            "task.external_refs.system",
-            truncated,
-        ) && retain_reference(&reference.id, 1024, "task.external_refs.id", truncated)
-            && reference
-                .url
-                .as_ref()
-                .is_none_or(|url| retain_reference(url, 2048, "task.external_refs.url", truncated))
-    });
-    if task.relations.len() > 100 {
-        task.relations.truncate(100);
-        truncated.push("task.relations".into());
-    }
-    task.relations.retain(|relation| {
-        retain_reference(&relation.target, 512, "task.relations.target", truncated)
-    });
-}
-
 impl OrbitRuntime {
     pub fn desktop_task_snapshot(
         &self,
@@ -469,4 +338,135 @@ impl OrbitRuntime {
         }
         Ok(snapshot)
     }
+}
+
+fn action(result: Result<(), OrbitError>) -> DesktopAction {
+    match result {
+        Ok(()) => DesktopAction {
+            enabled: true,
+            reason: None,
+        },
+        Err(e) => DesktopAction {
+            enabled: false,
+            reason: Some(redact_all(&e.to_string()).chars().take(2048).collect()),
+        },
+    }
+}
+fn clip(value: &mut String, max: usize, field: &str, truncated: &mut Vec<String>) {
+    let safe = redact_all(value);
+    if safe != *value {
+        truncated.push(field.into());
+    }
+    *value = safe;
+    if value.len() > max {
+        let boundary = orbit_common::text::floor_char_boundary(value, max);
+        value.truncate(boundary);
+        truncated.push(field.into());
+    }
+}
+// An opaque reference must either retain its exact identity or be omitted.
+fn retain_reference(value: &str, max: usize, field: &str, truncated: &mut Vec<String>) -> bool {
+    if value.len() > max || redact_all(value) != value {
+        truncated.push(field.into());
+        false
+    } else {
+        true
+    }
+}
+
+fn truncate_task(task: &mut Task, truncated: &mut Vec<String>) {
+    clip(&mut task.title, 512, "task.title", truncated);
+    clip(&mut task.description, 32768, "task.description", truncated);
+    clip(&mut task.plan, 16384, "task.plan", truncated);
+    clip(
+        &mut task.execution_summary,
+        16384,
+        "task.execution_summary",
+        truncated,
+    );
+    if task.acceptance_criteria.len() > 100 {
+        task.acceptance_criteria.truncate(100);
+        truncated.push("task.acceptance_criteria".into());
+    }
+    for (index, criterion) in task.acceptance_criteria.iter_mut().enumerate() {
+        clip(
+            criterion,
+            2048,
+            &format!("task.acceptance_criteria[{index}]"),
+            truncated,
+        );
+    }
+    for (name, value, max) in [
+        ("task.crew", &mut task.crew, 128),
+        ("task.orchestrator", &mut task.orchestrator, 128),
+        ("task.orchestrator_model", &mut task.orchestrator_model, 128),
+        ("task.pr_status", &mut task.pr_status, 128),
+        ("task.created_by", &mut task.created_by, 512),
+        ("task.created_by_model", &mut task.created_by_model, 128),
+        ("task.planned_by", &mut task.planned_by, 512),
+        ("task.implemented_by", &mut task.implemented_by, 512),
+    ] {
+        if let Some(value) = value {
+            clip(value, max, name, truncated);
+        }
+    }
+    if task
+        .job_run_id
+        .as_ref()
+        .is_some_and(|id| !retain_reference(id, 512, "task.job_run_id", truncated))
+    {
+        task.job_run_id = None;
+    }
+    if let Some(location) = &mut task.job_run_machine {
+        if !retain_reference(
+            &location.machine_id,
+            512,
+            "task.job_run_machine.machine_id",
+            truncated,
+        ) {
+            task.job_run_machine = None;
+        } else if let Some(name) = &mut location.machine_name {
+            clip(name, 128, "task.job_run_machine.machine_name", truncated);
+        }
+    }
+    for (name, values) in [
+        ("task.context_files", &mut task.context_files),
+        ("task.required_tools", &mut task.required_tools),
+    ] {
+        if values.len() > 100 {
+            values.truncate(100);
+            truncated.push(name.into());
+        }
+        values.retain(|value| retain_reference(value, 1024, name, truncated));
+    }
+    if task.tags.len() > 100 {
+        task.tags.truncate(100);
+        truncated.push("task.tags".into());
+    }
+    for (index, value) in task.tags.iter_mut().enumerate() {
+        clip(value, 1024, &format!("task.tags[{index}]"), truncated);
+    }
+    if task.external_refs.len() > 100 {
+        task.external_refs.truncate(100);
+        truncated.push("task.external_refs".into());
+    }
+    task.external_refs.retain(|reference| {
+        retain_reference(
+            &reference.system,
+            128,
+            "task.external_refs.system",
+            truncated,
+        ) && retain_reference(&reference.id, 1024, "task.external_refs.id", truncated)
+            && reference
+                .url
+                .as_ref()
+                .is_none_or(|url| retain_reference(url, 2048, "task.external_refs.url", truncated))
+    });
+    if task.relations.len() > 100 {
+        task.relations.truncate(100);
+        truncated.push("task.relations".into());
+    }
+    task.relations.retain(|relation| {
+        retain_reference(&relation.target, 512, "task.relations.target", truncated)
+    });
 }

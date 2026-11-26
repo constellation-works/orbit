@@ -277,8 +277,8 @@ fn seeded_scope_is_retained_when_pilot_widens_selectors() {
             description: "Seeded description".to_string(),
             acceptance_criteria: vec!["Seeded is done.".to_string()],
             plan: "Seeded plan".to_string(),
-            status: Some(TaskStatus::Backlog),
             context_files: vec!["file:SEED.md".to_string()],
+            status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
         .expect("add seeded task");
@@ -402,11 +402,11 @@ fn a_finding_changed_after_the_pilot_write_is_not_rejected() {
                 title: "README is parsed twice".into(),
                 description: "The review claims README.md is parsed twice.".into(),
                 acceptance_criteria: vec!["README.md is parsed once.".into()],
-                plan: "Inspect the cited source.".into(),
-                status: Some(TaskStatus::Proposed),
-                task_type: Some(orbit_types::task::TaskType::Bug),
                 tags: vec!["code-review".into()],
+                plan: "Inspect the cited source.".into(),
                 context_files: vec!["file:README.md".into()],
+                task_type: Some(orbit_types::task::TaskType::Bug),
+                status: Some(TaskStatus::Proposed),
                 ..Default::default()
             })
             .expect("add finding");

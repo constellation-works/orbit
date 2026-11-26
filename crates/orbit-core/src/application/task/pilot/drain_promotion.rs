@@ -47,81 +47,6 @@ use super::promotion::{
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
 
-/// Why a `proposed` task does not qualify for drain approval, before any
-/// pilot runs: a `no-auto-approve` tag excludes it outright; otherwise its
-/// first blocking readiness gap ([`readiness_gaps`]) withholds it.
-pub(crate) fn approval_disqualification(
-    tags: &[String],
-    context_files: &[String],
-    complexity: Option<TaskComplexity>,
-) -> Option<&'static str> {
-    if auto_approval_opted_out(tags) {
-        return Some(auto_approval_hold_classification(tags));
-    }
-    approval_readiness_gap(tags, context_files, complexity)
-}
-
-fn approval_readiness_gap(
-    tags: &[String],
-    context_files: &[String],
-    complexity: Option<TaskComplexity>,
-) -> Option<&'static str> {
-    readiness_gaps(ReadinessStage::Proposed, tags, context_files, complexity)
-        .into_iter()
-        .find(ReadinessGap::is_blocking)
-        .map(|gap| gap.code.as_str())
-}
-
-/// The approve-transition note; task history names the approving drain.
-pub(crate) fn approval_note(run_id: &str) -> String {
-    format!("approved by auto drain {run_id} after task-pilot verification")
-}
-
-/// Approve `task_id` as drain `drain_run_id`, recording the approving drain
-/// (and the reused pilot receipt's `operation_id`) as a typed decision on the
-/// `proposal_approved` event. The note text history views show is unchanged.
-fn approve_as_drain(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-    drain_run_id: &str,
-    operation_id: Option<&str>,
-) -> Result<(), OrbitError> {
-    let note = match operation_id {
-        Some(operation_id) => format!("{} (operation {operation_id})", approval_note(drain_run_id)),
-        None => approval_note(drain_run_id),
-    };
-    runtime.approve_task_with_decision(
-        task_id,
-        Some(note),
-        Some(TaskDecision::DrainApproved {
-            drain_run_id: drain_run_id.to_string(),
-            operation_id: operation_id.map(str::to_string),
-        }),
-    )?;
-    Ok(())
-}
-
-/// Whether a `proposal_approved` history entry records drain `run_id`'s
-/// approval: its typed decision, or the note of an entry written before
-/// drain approvals carried one.
-pub(crate) fn approved_by_drain(entry: &TaskHistoryEntry, run_id: &str) -> bool {
-    match &entry.decision {
-        Some(TaskDecision::DrainApproved { drain_run_id, .. }) => drain_run_id == run_id,
-        Some(_) => false,
-        None => legacy_decisions::drain_approval_note_names(entry, run_id),
-    }
-}
-
-/// The pilot classification a drain hold recorded on a `task_pilot_applied`
-/// history entry: its typed decision only, never its note, which carries the
-/// pilot agent's rationale.
-pub(crate) fn held_classification(entry: &TaskHistoryEntry) -> Option<&str> {
-    match &entry.decision {
-        Some(TaskDecision::DrainApprovalHeld { classification }) => Some(classification),
-        _ => None,
-    }
-}
-
 /// A verified drain authority record.
 pub(super) struct DrainAuthority {
     pub(super) run_id: String,
@@ -236,6 +161,111 @@ struct PromotionHold {
 pub(super) enum PromotionPolicy {
     Drain,
     ResidentHeld,
+}
+
+/// What the drain's approve step did with a promoted task.
+pub(super) enum Approval {
+    Approved,
+    /// The task already left `proposed` (a replayed apply, or an operator who
+    /// got there first), so it is not approved twice.
+    NotProposed,
+    /// Approval was withheld after the pilot wrote its assessment.
+    Held {
+        classification: &'static str,
+        evidence: Value,
+    },
+}
+
+/// What a drain pass should do with an explicit or routine pilot receipt.
+///
+/// `NotReusable` leaves the ordinary candidate path alone: a drain child's
+/// own assessment, a run with no recorded trigger, and a history note with
+/// no receipt are not this identity.
+pub(crate) enum ExplicitAssessmentReuse {
+    /// Fresh certified assessment. Approve it without another provider call.
+    Promote { operation_id: String },
+    /// Certified assessment that must stay proposed. Do not pilot it again.
+    Hold {
+        reason: &'static str,
+        detail: Option<String>,
+    },
+    /// No host-owned explicit or routine assessment to consume.
+    NotReusable,
+}
+
+/// Why a `proposed` task does not qualify for drain approval, before any
+/// pilot runs: a `no-auto-approve` tag excludes it outright; otherwise its
+/// first blocking readiness gap ([`readiness_gaps`]) withholds it.
+pub(crate) fn approval_disqualification(
+    tags: &[String],
+    context_files: &[String],
+    complexity: Option<TaskComplexity>,
+) -> Option<&'static str> {
+    if auto_approval_opted_out(tags) {
+        return Some(auto_approval_hold_classification(tags));
+    }
+    approval_readiness_gap(tags, context_files, complexity)
+}
+
+fn approval_readiness_gap(
+    tags: &[String],
+    context_files: &[String],
+    complexity: Option<TaskComplexity>,
+) -> Option<&'static str> {
+    readiness_gaps(ReadinessStage::Proposed, tags, context_files, complexity)
+        .into_iter()
+        .find(ReadinessGap::is_blocking)
+        .map(|gap| gap.code.as_str())
+}
+
+/// The approve-transition note; task history names the approving drain.
+pub(crate) fn approval_note(run_id: &str) -> String {
+    format!("approved by auto drain {run_id} after task-pilot verification")
+}
+
+/// Approve `task_id` as drain `drain_run_id`, recording the approving drain
+/// (and the reused pilot receipt's `operation_id`) as a typed decision on the
+/// `proposal_approved` event. The note text history views show is unchanged.
+fn approve_as_drain(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    drain_run_id: &str,
+    operation_id: Option<&str>,
+) -> Result<(), OrbitError> {
+    let note = match operation_id {
+        Some(operation_id) => format!("{} (operation {operation_id})", approval_note(drain_run_id)),
+        None => approval_note(drain_run_id),
+    };
+    runtime.approve_task_with_decision(
+        task_id,
+        Some(note),
+        Some(TaskDecision::DrainApproved {
+            drain_run_id: drain_run_id.to_string(),
+            operation_id: operation_id.map(str::to_string),
+        }),
+    )?;
+    Ok(())
+}
+
+/// Whether a `proposal_approved` history entry records drain `run_id`'s
+/// approval: its typed decision, or the note of an entry written before
+/// drain approvals carried one.
+pub(crate) fn approved_by_drain(entry: &TaskHistoryEntry, run_id: &str) -> bool {
+    match &entry.decision {
+        Some(TaskDecision::DrainApproved { drain_run_id, .. }) => drain_run_id == run_id,
+        Some(_) => false,
+        None => legacy_decisions::drain_approval_note_names(entry, run_id),
+    }
+}
+
+/// The pilot classification a drain hold recorded on a `task_pilot_applied`
+/// history entry: its typed decision only, never its note, which carries the
+/// pilot agent's rationale.
+pub(crate) fn held_classification(entry: &TaskHistoryEntry) -> Option<&str> {
+    match &entry.decision {
+        Some(TaskDecision::DrainApprovalHeld { classification }) => Some(classification),
+        _ => None,
+    }
 }
 
 /// Classify one task in the priority order fresh apply and certified reuse
@@ -414,19 +444,6 @@ pub(super) fn drain_admission_hold_decision(
     }
 }
 
-/// What the drain's approve step did with a promoted task.
-pub(super) enum Approval {
-    Approved,
-    /// The task already left `proposed` (a replayed apply, or an operator who
-    /// got there first), so it is not approved twice.
-    NotProposed,
-    /// Approval was withheld after the pilot wrote its assessment.
-    Held {
-        classification: &'static str,
-        evidence: Value,
-    },
-}
-
 /// Whether a dependency read through its registered owner counts as done,
 /// including the shared archived-after-done rule.
 fn dependency_is_done(runtime: &OrbitRuntime, target: &Task) -> bool {
@@ -561,23 +578,6 @@ pub(super) fn approve(
     Err(OrbitError::Execution(
         "drain approval lock discovery did not settle".to_string(),
     ))
-}
-
-/// What a drain pass should do with an explicit or routine pilot receipt.
-///
-/// `NotReusable` leaves the ordinary candidate path alone: a drain child's
-/// own assessment, a run with no recorded trigger, and a history note with
-/// no receipt are not this identity.
-pub(crate) enum ExplicitAssessmentReuse {
-    /// Fresh certified assessment. Approve it without another provider call.
-    Promote { operation_id: String },
-    /// Certified assessment that must stay proposed. Do not pilot it again.
-    Hold {
-        reason: &'static str,
-        detail: Option<String>,
-    },
-    /// No host-owned explicit or routine assessment to consume.
-    NotReusable,
 }
 
 /// Whether `pilot_run_id` is a child another run dispatched.

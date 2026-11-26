@@ -39,18 +39,6 @@ pub struct TerminalTaskDates {
     pub undated: Vec<TaskTerminalTransition>,
 }
 
-/// The latest entry into `status` (creation in `status` included) in `history`.
-pub(crate) fn latest_status_entry_at(
-    history: &[TaskHistoryEntry],
-    status: TaskStatus,
-) -> Option<DateTime<Utc>> {
-    history
-        .iter()
-        .rev()
-        .find(|entry| entry.to_status == Some(status))
-        .map(|entry| entry.at)
-}
-
 /// What one clean history read answered for a task: the latest entry into
 /// `status`, or `None` when its readable history records none.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,4 +205,16 @@ impl OrbitRuntime {
         dates.dated.sort_by_key(|row| row.terminal_at);
         Ok(dates)
     }
+}
+
+/// The latest entry into `status` (creation in `status` included) in `history`.
+pub(crate) fn latest_status_entry_at(
+    history: &[TaskHistoryEntry],
+    status: TaskStatus,
+) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(status))
+        .map(|entry| entry.at)
 }
