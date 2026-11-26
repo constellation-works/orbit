@@ -2,7 +2,7 @@
 title: Orbit Core — Decisions
 owner: claude
 created_date: 2026-07-04
-updated_date: 2026-11-24
+updated_date: 2026-11-26
 status: Accepted
 feature: orbit-core
 doc_role: decisions
@@ -12,7 +12,7 @@ tags: [orbit-core, orbit-cmd, architecture, north-star]
 paths: ["crates/orbit-core/**", "crates/orbit-cmd/**"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10026, ORB-10545, ORB-12772]
-last_validated: 2026-11-24
+last_validated: 2026-11-26
 ---
 
 # Orbit Core — Decisions
@@ -450,6 +450,76 @@ the Store unit (with the Store edge serving both callers) without breaking
 the stable entry point. Until then the deviation stands and unrelated changes
 do not trigger a relocation.
 
+## Parameter-count deviation under STD-02@10 §R51
+
+**Recorded:** 2026-11-26 · [ORB-28956]
+
+### Context
+
+[STD-02@10 §R51](../../standards/STD-02-rust-architecture-and-errors/STD-02.md)
+requires that functions take at most seven parameters (receiver counted), forbids
+`#[allow]` or `#[expect]` of `clippy::too_many_arguments`, and requires new and
+changed functions to meet the rule while existing offenders run as a count that
+may only fall and is recorded as a deviation.
+
+At base `b072d5ec82f065bd747c90b28105df6660adff08` (matching `cf6bca4cee`),
+`cargo clippy --workspace --all-targets --locked` with
+`too-many-arguments-threshold = 7` and `--force-warn clippy::too_many_arguments`
+reports 95 offending functions (86 production-path, 9 test-path). The workspace
+holds 103 single-item attributes naming `clippy::too_many_arguments` (8 sit on
+functions that already take seven or fewer parameters); `desktop/` has none.
+
+### Deviation
+
+The 103 pre-existing outer attributes naming `clippy::too_many_arguments` remain
+in place while per-crate cleanup tasks remove them in dependency order, recorded
+under STD-02@10's
+[Deviations](../../standards/STD-02-rust-architecture-and-errors/STD-02.md#deviations)
+provision. Baseline counts recorded in
+[`scripts/too-many-arguments-baseline.json`](../../../scripts/too-many-arguments-baseline.json)
+(attributes / offending functions):
+
+| Crate | Attributes | Offending functions | Cleanup task |
+| --- | ---: | ---: | --- |
+| `orbit-engine` | 36 | 35 | [ORB-28978] |
+| `orbit-core` | 26 | 25 | [ORB-28980] |
+| `orbit-store` | 12 | 11 | [ORB-28977] |
+| `orbit-runtime` | 10 | 8 | [ORB-28979] |
+| `orbit-cli` | 10 | 8 | [ORB-28981] |
+| `orbit-web` | 4 | 4 | [ORB-28982] |
+| `orbit-exec` | 2 | 2 | [ORB-28975] |
+| `orbit-search` | 1 | 0 | [ORB-28976] |
+| `orbit-config` | 1 | 1 | [ORB-28974] |
+| `orbit-common` | 1 | 1 | [ORB-28973] |
+| Total | 103 | 95 | — |
+
+### Decision
+
+1. Pin `too-many-arguments-threshold = 7` in [`clippy.toml`](../../../clippy.toml)
+   so the required `-D warnings` Clippy gate rejects any unannotated function
+   with eight or more parameters.
+2. Enforce the non-rising ratchet via
+   [`scripts/check-too-many-arguments.py`](../../../scripts/check-too-many-arguments.py)
+   against `scripts/too-many-arguments-baseline.json` (run in
+   [`scripts/ci-guardrails.sh`](../../../scripts/ci-guardrails.sh) alongside its
+   self-test [`scripts/test-check-too-many-arguments.py`](../../../scripts/test-check-too-many-arguments.py)).
+   The guard rejects any count rise, any below-baseline count until the
+   baseline is lowered with `--write-baseline`, any inner `#![allow]`/`#![expect]`
+   attribute, and any manifest lint setting that allows the lint.
+3. Because a changed function that retains an existing attribute does not move
+   the crate count, enforcing STD-02@10 §R51 on changed functions remains a
+   review rule until the crate's cleanup task drops its count to zero.
+4. Per-crate cleanup proceeds in dependency order: [ORB-28973] (`orbit-common`,
+   blocked by ORB-28956); [ORB-28974] (`orbit-config`), [ORB-28975]
+   (`orbit-exec`), [ORB-28976] (`orbit-search`) and [ORB-28977] (`orbit-store`),
+   each blocked by ORB-28973; [ORB-28978] (`orbit-engine`, blocked by ORB-28977
+   and ORB-28975); [ORB-28979] (`orbit-runtime`, blocked by ORB-28978, ORB-28974
+   and ORB-28976); [ORB-28980] (`orbit-core`, blocked by ORB-28979); [ORB-28981]
+   (`orbit-cli`, blocked by ORB-28980); and [ORB-28982] (`orbit-web` tests,
+   blocked by ORB-28956). Each task lowers
+   `scripts/too-many-arguments-baseline.json` via `--write-baseline` in the same
+   change.
+
 ## Task References
 
 - [ORB-00289] — trimmed six admin and maintenance tools from the agent MCP surface.
@@ -471,5 +541,16 @@ do not trigger a relocation.
 - [ORB-27886] — recorded Orbit's standing and deviations against STD-02@5 §R2, §R6, §R18 and §R39–R44 ([Standing against STD-02@5 (R2, R6, R18, R39–R44)](#standing-against-std-025-r2-r6-r18-r39r44)).
 - [ORB-28199] — recorded Orbit's current CLI boundary deviation against STD-02@8 §R7.
 - [ORB-28227] — recorded the policy YAML decoder deviation against STD-02@8 §R47 ([Policy YAML decoder deviation under STD-02@8 §R47](#policy-yaml-decoder-deviation-under-std-028-r47)).
+- [ORB-28956] — set `too-many-arguments-threshold = 7` in `clippy.toml`, added the per-crate attribute ratchet guard and baseline, and recorded the STD-02@10 §R51 deviation ([Parameter-count deviation under STD-02@10 §R51](#parameter-count-deviation-under-std-0210-r51)).
+- [ORB-28973] — trim parameter lists in `orbit-common` (STD-02 §R51 cleanup).
+- [ORB-28974] — trim parameter lists in `orbit-config` (STD-02 §R51 cleanup).
+- [ORB-28975] — trim parameter lists in `orbit-exec` (STD-02 §R51 cleanup).
+- [ORB-28976] — drop the stale parameter allow in `orbit-search` (STD-02 §R51 cleanup).
+- [ORB-28977] — trim parameter lists in `orbit-store` (STD-02 §R51 cleanup).
+- [ORB-28978] — trim parameter lists in `orbit-engine` (STD-02 §R51 cleanup).
+- [ORB-28979] — trim parameter lists in `orbit-runtime` (STD-02 §R51 cleanup).
+- [ORB-28980] — trim parameter lists in `orbit-core` (STD-02 §R51 cleanup).
+- [ORB-28981] — trim parameter lists in `orbit-cli` (STD-02 §R51 cleanup).
+- [ORB-28982] — trim parameter lists in `orbit-web` tests (STD-02 §R51 cleanup).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

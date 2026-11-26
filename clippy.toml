@@ -36,6 +36,9 @@ await-holding-invalid-types = [
 # the lint; the main workspace enables it once its remaining bindings are renamed.
 allowed-idents-below-min-chars = []
 
+# STD-02 §R51: functions take at most seven parameters (receiver counted).
+too-many-arguments-threshold = 7
+
 # Declaration order inside a module, read by clippy::arbitrary_source_item_ordering.
 # That lint is allowed by default; enabling it is a separate change. Groups run
 # module declarations, then imports, then everything else. Items inside the last
