@@ -841,8 +841,10 @@ pub(super) fn serve_fixture() {
     } else {
         orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
     }
+    // `ORBIT_HTTP_HOST` picks the loopback family the child listens on.
+    let host = std::env::var("ORBIT_HTTP_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let args = orbit_web::ServeArgs {
-        host: "127.0.0.1".parse().unwrap(),
+        host: host.parse().expect("ORBIT_HTTP_HOST is an IP address"),
         port: std::env::var("ORBIT_HTTP_PORT").unwrap().parse().unwrap(),
         no_open: true,
         global: true,
