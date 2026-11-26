@@ -29,11 +29,13 @@ fn process_join(
     GenerationGuard::for_process(
         &orbit_common::Env::capture(),
         root,
-        identity,
-        role,
-        None,
-        access,
-        false,
+        ParticipantRequest {
+            identity,
+            role,
+            handover: None,
+            access,
+            in_activity: false,
+        },
         || Ok(10),
     )
 }

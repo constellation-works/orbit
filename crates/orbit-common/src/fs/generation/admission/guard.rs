@@ -60,6 +60,29 @@ pub struct Participant<'a> {
     pub in_activity: bool,
 }
 
+/// A process's requested participation for [`GenerationGuard::for_process`]:
+/// everything the join needs besides the environment, the authority root,
+/// and the store-schema probe.
+pub struct ParticipantRequest<'a> {
+    /// The state compatibility it was compiled with.
+    pub identity: &'a CompatibilityIdentity,
+    /// Invocation role used to decide whether the participant can be waited out.
+    pub role: ParticipantRole,
+    /// The resume capability it hands over with when a candidate is renamed
+    /// over its executable, if it can (see [`ParticipantRecord::handover`]).
+    pub handover: Option<&'a str>,
+    /// Access mode requested against the pinned generation.
+    pub access: Access,
+    /// Whether it runs inside an Orbit-managed activity: an agent's nested
+    /// `orbit`, which may be a newer binary than the drain that started the
+    /// step. It never records a pending switch nor waits behind one, since
+    /// that drain yields only at the step boundary, which waits on this
+    /// process. It is refused at once, under
+    /// [`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER),
+    /// which the step settles as transient.
+    pub in_activity: bool,
+}
+
 /// The process-wide participation, for safe-point yield checks.
 struct Participation {
     root: PathBuf,
@@ -260,23 +283,25 @@ impl GenerationGuard {
     ///
     /// A process joins each root once. While an earlier join of this process
     /// for the same root, identity, role and handover is live, and its access
-    /// covers `access` (a writer's covers a reader's), this returns another
-    /// guard on that join: no admission, no second record. A pending switch
-    /// for another identity still refuses it, as it would a new join.
-    #[allow(clippy::too_many_arguments)]
+    /// covers `request.access` (a writer's covers a reader's), this returns
+    /// another guard on that join: no admission, no second record. A pending
+    /// switch for another identity still refuses it, as it would a new join.
     pub fn for_process<F>(
         env: &crate::Env,
         root: &Path,
-        identity: &CompatibilityIdentity,
-        role: ParticipantRole,
-        handover: Option<&str>,
-        access: Access,
-        in_activity: bool,
+        request: ParticipantRequest<'_>,
         store_schema: F,
     ) -> Result<Self, OrbitError>
     where
         F: FnOnce() -> Result<u32, OrbitError>,
     {
+        let ParticipantRequest {
+            identity,
+            role,
+            handover,
+            access,
+            in_activity,
+        } = request;
         let participant = Participant {
             digest: process_digest(env, Some(root), access != Access::ReadOnly)?,
             identity,

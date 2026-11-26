@@ -148,8 +148,8 @@ use std::time::Duration;
 /// participants to yield, in seconds.
 pub use crate::env_vars::ORBIT_UPGRADE_QUIESCE_SECS as QUIESCE_TIMEOUT_ENV;
 pub use admission::{
-    GenerationGuard, Participant, pending_switch_for_this_process, process_handover,
-    process_participation, quiesce_bound,
+    GenerationGuard, Participant, ParticipantRequest, pending_switch_for_this_process,
+    process_handover, process_participation, quiesce_bound,
 };
 pub use clock_hold::{
     ClockGenerationHold, clock_generation_hold, finish_clock_generation_hold,

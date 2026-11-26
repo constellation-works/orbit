@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_common::fs::generation::{
-    Access, GenerationGuard, ParticipantRole, process_handover, process_participation,
+    Access, GenerationGuard, ParticipantRequest, ParticipantRole, process_handover,
+    process_participation,
 };
 use orbit_common::{Env, OrbitError};
 use orbit_config::{ConfigRoots, ResolvedConfig};
@@ -327,11 +328,13 @@ pub fn pin_executable_generation_as(
     GenerationGuard::for_process(
         &env,
         root,
-        &compiled_compatibility(),
-        role,
-        handover,
-        access,
-        crate::runtime::run_input::managed_run_context_from_env(&env),
+        ParticipantRequest {
+            identity: &compiled_compatibility(),
+            role,
+            handover,
+            access,
+            in_activity: crate::runtime::run_input::managed_run_context_from_env(&env),
+        },
         || super::open_store_read_only(&root.join("orbit.db"))?.schema_version(),
     )
 }

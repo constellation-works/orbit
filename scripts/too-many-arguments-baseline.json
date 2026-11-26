@@ -1,7 +1,7 @@
 {
   "crates": {
     "orbit-cli": 10,
-    "orbit-common": 1,
+    "orbit-common": 0,
     "orbit-config": 1,
     "orbit-core": 26,
     "orbit-engine": 36,
