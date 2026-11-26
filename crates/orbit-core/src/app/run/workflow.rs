@@ -22,7 +22,34 @@ use std::collections::BTreeSet;
 use std::str::FromStr;
 
 const DEFAULT_RUN_LIST_LIMIT: usize = 25;
+
 const MAX_RUN_LIST_LIMIT: usize = 200;
+
+/// Query counts for one list-page projection. Reconciliation reads that happen
+/// inside `list_job_runs` are excluded: they are not this enrichment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RunListProjectionReads {
+    pub pipeline_state_queries: usize,
+    pub recovery_event_queries: usize,
+    pub recovery_presence_queries: usize,
+    pub per_run_recovery_fetch_limit: usize,
+    pub per_run_recovery_projection_limit: usize,
+}
+
+impl<'a> Command<'a, Value> {
+    pub(crate) fn workflow(
+        session: &'a orbit_types::tool::ToolSessionContext,
+        verb: WorkflowVerb,
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+        trigger: JobRunTrigger,
+    ) -> Self {
+        Self::new(Operation::of(verb, &input), move |core| {
+            dispatch(core.runtime(), session, verb, input, agent, model, trigger)
+        })
+    }
+}
 
 /// Run a workflow operation. `trigger` is the provenance of a run this call
 /// submits.
@@ -237,17 +264,6 @@ fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     Ok(json!({ "items": items }))
 }
 
-/// Query counts for one list-page projection. Reconciliation reads that happen
-/// inside `list_job_runs` are excluded: they are not this enrichment.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RunListProjectionReads {
-    pub pipeline_state_queries: usize,
-    pub recovery_event_queries: usize,
-    pub recovery_presence_queries: usize,
-    pub per_run_recovery_fetch_limit: usize,
-    pub per_run_recovery_projection_limit: usize,
-}
-
 fn project_workflow_run_list(
     runtime: &OrbitRuntime,
     runs: &[JobRun],
@@ -356,19 +372,4 @@ fn run_json_enriched(
             recovery,
         },
     )
-}
-
-impl<'a> Command<'a, Value> {
-    pub(crate) fn workflow(
-        session: &'a orbit_types::tool::ToolSessionContext,
-        verb: WorkflowVerb,
-        input: Value,
-        agent: Option<String>,
-        model: Option<String>,
-        trigger: JobRunTrigger,
-    ) -> Self {
-        Self::new(Operation::of(verb, &input), move |core| {
-            dispatch(core.runtime(), session, verb, input, agent, model, trigger)
-        })
-    }
 }

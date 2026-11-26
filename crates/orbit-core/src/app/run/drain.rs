@@ -18,6 +18,14 @@ use orbit_store::contract::{
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
+impl<'a> Command<'a, Value> {
+    pub(crate) fn drain(session: &'a ToolSessionContext, verb: DrainVerb, input: Value) -> Self {
+        Self::new(Operation::of(verb, &input), move |core| {
+            dispatch(core.runtime(), session, verb, input)
+        })
+    }
+}
+
 /// Run a drain operation. Compatibility precedes validation, including for
 /// in-process host callers that did not enter through the generic tool.
 fn dispatch(
@@ -265,12 +273,4 @@ fn optional_u32(input: &Value, key: &str) -> Result<Option<u32>, OrbitError> {
 
 fn invalid_version_field(key: &str) -> OrbitError {
     OrbitError::InvalidInput(format!("`{key}` must be a non-negative integer version"))
-}
-
-impl<'a> Command<'a, Value> {
-    pub(crate) fn drain(session: &'a ToolSessionContext, verb: DrainVerb, input: Value) -> Self {
-        Self::new(Operation::of(verb, &input), move |core| {
-            dispatch(core.runtime(), session, verb, input)
-        })
-    }
 }

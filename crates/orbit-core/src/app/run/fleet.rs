@@ -2,6 +2,13 @@
 
 use crate::{Core, OrbitRuntime};
 
+/// Upper bound on the scoped threads one fleet request fans out to.
+/// Each workspace read is independent (its own runtime and store), so the
+/// aggregate waits for the slowest workspace instead of the sum; the bound
+/// keeps a host with many registered workspaces from spawning a thread per
+/// workspace per poll. Matches the fleet drains/tasks aggregates.
+const MAX_FLEET_READERS: usize = 8;
+
 pub(super) fn read<T: Send>(
     first: &Core,
     others: &[&Core],
@@ -12,13 +19,6 @@ pub(super) fn read<T: Send>(
         .collect::<Vec<_>>();
     fan_out(cores.len(), |index| query(cores[index].runtime()))
 }
-
-/// Upper bound on the scoped threads one fleet request fans out to.
-/// Each workspace read is independent (its own runtime and store), so the
-/// aggregate waits for the slowest workspace instead of the sum; the bound
-/// keeps a host with many registered workspaces from spawning a thread per
-/// workspace per poll. Matches the fleet drains/tasks aggregates.
-const MAX_FLEET_READERS: usize = 8;
 
 /// Run `work(index)` for every index in `0..count` on up to
 /// [`MAX_FLEET_READERS`] scoped threads, returning the results in
