@@ -63,6 +63,9 @@ model = "claude-opus-4-8"
 env = ["ANTHROPIC_API_KEY=ANTHROPIC_UNSET_SOURCE"]
 "#;
 
+/// Synthetic values for the crew `env` fixture; none is a real credential.
+const FIXTURE_CREDITS_KEY: &str = "fixture-credits-api-key";
+
 /// Final `result` document of a turn that ended with the envelope in
 /// `structured_output`, as `claude -p --json-schema` writes it.
 fn envelope_turn() -> String {
@@ -259,9 +262,6 @@ fn exit_zero_prose_only_wakeup_result_fails_the_completion_guard() {
         serde_json::Value::Bool(false)
     );
 }
-
-/// Synthetic values for the crew `env` fixture; none is a real credential.
-const FIXTURE_CREDITS_KEY: &str = "fixture-credits-api-key";
 
 /// macOS `OrbitRuntime` still refuses provider `claude` when neither worker
 /// credential reached the child. The guard keys on the provider, so this is
