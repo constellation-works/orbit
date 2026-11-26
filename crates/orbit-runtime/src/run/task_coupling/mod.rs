@@ -1,10 +1,10 @@
 //! The tasks coupled to a run: releasing a run's reservations, classifying
 //! stale ones, the resume lineage a coupled task records, and provider holds.
 
-use orbit_types::task::TaskHistoryEntry;
-
 pub mod provider_hold;
 mod reservation_cleanup;
+
+use orbit_types::task::TaskHistoryEntry;
 
 pub use reservation_cleanup::StaleTaskReservation;
 
