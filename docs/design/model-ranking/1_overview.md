@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: "Per-model ranking of implementer models, built through R3: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with 95% tie bands ordered by score. Cost breaks exact score ties. CI and recovery measures are not yet scored."
 tags: [model-ranking, agent-scorecards]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents/**"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
 related_artifacts: [ORB-23297, ORB-23066, ORB-23277, ORB-21789]
 ---

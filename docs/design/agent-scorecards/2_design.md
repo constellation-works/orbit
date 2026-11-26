@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Implemented Agents dashboard view under Analytics; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot/**", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents/**", "crates/orbit-core/src/application/codebase/pilot/**", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -840,7 +840,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | D | Implementers role | Landed [ORB-16954]; original cost/tier panel removed by [ORB-17736] | `crates/orbit-core/src/application/agents/roles/implementers/` |
 | E | Reviewers role, false rejects, provisional banner and outcome panel | Landed [ORB-16955] | `crates/orbit-core/src/application/agents/roles/reviewers.rs`, `crates/orbit-web/assets/dashboard/js/agents-reviewers.js` |
 | F | Pilots role, pilot evidence and calibration panel | Landed [ORB-16956] | `crates/orbit-core/src/application/agents/roles/pilots.rs`, `crates/orbit-core/src/application/codebase/pilot/**`, `crates/orbit-web/assets/dashboard/js/agents-pilots.js` |
-| G | CLI and MCP scorecards | Landed [ORB-16957]; orchestrator aliases later removed by [ORB-23582] | `crates/orbit-cli/src/command/agents.rs`, `crates/orbit-tools/src/builtin/orbit/agents.rs` |
+| G | CLI and MCP scorecards | Landed [ORB-16957]; orchestrator aliases later removed by [ORB-23582] | `crates/orbit-cli/src/command/agents/`, `crates/orbit-tools/src/builtin/orbit/agents.rs` |
 
 ```
 A ── B ── C ─┬─ D
