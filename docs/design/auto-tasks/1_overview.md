@@ -397,12 +397,12 @@ re-init does not overwrite a workspace-authored definition of the same name.
 - `auto-task-yield-review` — disabled-by-default monthly review [ORB-18135] of whether
   this workspace's enabled auto-task definitions pay for themselves. For
   each enabled definition over the last 30 days it reports minted chores
-  by final status and no-op successes, cost per run from run evidence
-  (reported as `unknown`, never zero, when missing), the tasks those
+  by final status, delivered chores and no-op successes, cost per run from
+  run evidence (reported as `unknown`, never zero, when missing), the tasks those
   chores filed through `spawned_from` and their outcomes, filed tasks that
   later regressed through `regression_from`, and duplicate or invalid
-  rejections, deriving landed tasks per run and cost per landed task. Each
-  run attaches `auto-task-yield.json` diffed against the previous run,
+  rejections, deriving landed output per run and cost per landed output
+  (counting filed-task landings and delivered chores). Each run attaches `auto-task-yield.json` diffed against the previous run,
   carries the same table in its execution summary, and files at most 3
   `proposed` retuning tasks (a cadence change, a merge of overlapping
   definitions, a template fix, or disabling the definition), each naming

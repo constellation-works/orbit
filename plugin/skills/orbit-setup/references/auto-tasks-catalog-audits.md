@@ -117,11 +117,11 @@
   ranking's below-support counts and files nothing.
 - **`auto-task-yield-review`** (`medium`) — monthly. Reports whether each
   enabled auto-task definition in this workspace pays for itself over the
-  last 30 days: minted chores by final status and no-op successes, cost
-  per run from run evidence (unknown, never zero, when missing), tasks
+  last 30 days: minted chores by final status, delivered chores and no-op
+  successes, cost per run from run evidence (unknown, never zero, when missing), tasks
   filed through `spawned_from` and their outcomes, filed tasks that later
-  regressed, duplicate or invalid rejections, landed tasks per run and
-  cost per landed task.
+  regressed, duplicate or invalid rejections, landed output per run and
+  cost per landed output (counting filed-task landings and delivered chores).
 
   Each run attaches `auto-task-yield.json` diffed
   against the previous run and files at most 3 `proposed` retuning tasks
