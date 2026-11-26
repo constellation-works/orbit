@@ -15,13 +15,6 @@ use super::{
     TASK_ENVELOPE_BATCH, TOOL_NAME_MIGRATION_MARKER, TOOL_NAMES_MIGRATION_ACTOR, ToolNameRewrite,
 };
 
-fn task_needs_tool_name_migration(required: &[String], granted: &[String]) -> bool {
-    required
-        .iter()
-        .chain(granted)
-        .any(|name| is_tool_family_operation(name))
-}
-
 impl OrbitRuntime {
     /// Rewrite the pre-family tool names in this checkout's auto-task
     /// definitions under the cursor lock, and record each rewrite.
@@ -159,4 +152,11 @@ impl OrbitRuntime {
             },
         );
     }
+}
+
+fn task_needs_tool_name_migration(required: &[String], granted: &[String]) -> bool {
+    required
+        .iter()
+        .chain(granted)
+        .any(|name| is_tool_family_operation(name))
 }

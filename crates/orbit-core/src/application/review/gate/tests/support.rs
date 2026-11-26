@@ -31,6 +31,67 @@ pub(super) struct Fixture {
     pub(super) repo: PathBuf,
 }
 
+/// Fixture with a task bundle, its admitted run, and a checked-out
+/// candidate. `task_id` is the bundle's first task.
+pub(super) struct Gated {
+    pub(super) fixture: Fixture,
+    pub(super) task_id: String,
+    pub(super) bundle: Vec<String>,
+    pub(super) run_id: String,
+}
+
+impl Gated {
+    /// Rewrite the workspace config and reopen the runtime over it, as an
+    /// operator editing `config.toml` mid-run does: runs already submitted
+    /// keep the admission they captured.
+    pub(super) fn reconfigure(&mut self, config_toml: &str) {
+        let workspace = self.fixture.repo.join(".orbit");
+        fs::write(workspace.join("config.toml"), config_toml).expect("rewrite config");
+        self.fixture.runtime =
+            OrbitRuntime::from_roots(&self.fixture.runtime.global_root(), &workspace)
+                .expect("reopen runtime");
+    }
+
+    /// A fresh delivery run of the same bundle, as re-admission dispatches.
+    pub(super) fn fresh_run(&self) -> String {
+        let run = admitted_run(&self.fixture.runtime, "task_pr_pipeline", &self.bundle);
+        self.start(&run.run_id, Utc::now());
+        run.run_id
+    }
+
+    /// Record `run_id` as running since `started_at`.
+    pub(super) fn start(&self, run_id: &str, started_at: chrono::DateTime<Utc>) {
+        RuntimeHost::mark_job_run_running(
+            &self.fixture.runtime,
+            run_id,
+            started_at,
+            std::process::id(),
+        )
+        .expect("mark run running");
+    }
+
+    pub(super) fn admit(&self) -> Result<Value, orbit_engine::DispatchError> {
+        self.admit_in(&self.run_id)
+    }
+
+    pub(super) fn admit_in(&self, run_id: &str) -> Result<Value, orbit_engine::DispatchError> {
+        review_gate_admit(
+            &self.fixture.runtime,
+            "review_gate_admit",
+            &json!({
+                "job_run_id": run_id,
+                "completed_task_ids": self.bundle,
+                "workspace_path": self.fixture.repo,
+                "base": "main",
+                "base_sync": "local",
+                "mode": "pr",
+                "skipped_no_diff_expected": false,
+                "allowed_crews": [],
+            }),
+        )
+    }
+}
+
 /// A workspace runtime with the given config over a git checkout whose
 /// `main` branch has one commit.
 fn fixture(config_toml: &str) -> Fixture {
@@ -115,10 +176,10 @@ fn bind_tasks(runtime: &OrbitRuntime, task_ids: &[String], run_id: &str) {
             .update_task(
                 task_id,
                 TaskUpdateParams {
-                    job_run_id: Some(Some(run_id.to_string())),
                     execution_summary: Some(
                         "Outcome: success\n\nChanges:\n- Updated src.txt.".to_string(),
                     ),
+                    job_run_id: Some(Some(run_id.to_string())),
                     ..TaskUpdateParams::default()
                 },
             )
@@ -138,15 +199,6 @@ fn implement_candidate(repo: &Path, task_id: &str) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
-/// Fixture with a task bundle, its admitted run, and a checked-out
-/// candidate. `task_id` is the bundle's first task.
-pub(super) struct Gated {
-    pub(super) fixture: Fixture,
-    pub(super) task_id: String,
-    pub(super) bundle: Vec<String>,
-    pub(super) run_id: String,
-}
-
 pub(super) fn gated_fixture(config: &str) -> Gated {
     gated_bundle_fixture(config, 1)
 }
@@ -164,57 +216,5 @@ pub(super) fn gated_bundle_fixture(config: &str, tasks: usize) -> Gated {
         task_id: bundle[0].clone(),
         bundle,
         run_id: run.run_id,
-    }
-}
-
-impl Gated {
-    /// Rewrite the workspace config and reopen the runtime over it, as an
-    /// operator editing `config.toml` mid-run does: runs already submitted
-    /// keep the admission they captured.
-    pub(super) fn reconfigure(&mut self, config_toml: &str) {
-        let workspace = self.fixture.repo.join(".orbit");
-        fs::write(workspace.join("config.toml"), config_toml).expect("rewrite config");
-        self.fixture.runtime =
-            OrbitRuntime::from_roots(&self.fixture.runtime.global_root(), &workspace)
-                .expect("reopen runtime");
-    }
-
-    /// A fresh delivery run of the same bundle, as re-admission dispatches.
-    pub(super) fn fresh_run(&self) -> String {
-        let run = admitted_run(&self.fixture.runtime, "task_pr_pipeline", &self.bundle);
-        self.start(&run.run_id, Utc::now());
-        run.run_id
-    }
-
-    /// Record `run_id` as running since `started_at`.
-    pub(super) fn start(&self, run_id: &str, started_at: chrono::DateTime<Utc>) {
-        RuntimeHost::mark_job_run_running(
-            &self.fixture.runtime,
-            run_id,
-            started_at,
-            std::process::id(),
-        )
-        .expect("mark run running");
-    }
-
-    pub(super) fn admit(&self) -> Result<Value, orbit_engine::DispatchError> {
-        self.admit_in(&self.run_id)
-    }
-
-    pub(super) fn admit_in(&self, run_id: &str) -> Result<Value, orbit_engine::DispatchError> {
-        review_gate_admit(
-            &self.fixture.runtime,
-            "review_gate_admit",
-            &json!({
-                "job_run_id": run_id,
-                "completed_task_ids": self.bundle,
-                "workspace_path": self.fixture.repo,
-                "base": "main",
-                "base_sync": "local",
-                "mode": "pr",
-                "skipped_no_diff_expected": false,
-                "allowed_crews": [],
-            }),
-        )
     }
 }

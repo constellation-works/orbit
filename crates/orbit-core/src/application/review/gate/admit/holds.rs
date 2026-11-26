@@ -15,6 +15,13 @@ use crate::application::task::light_delivery::{
 /// reviewed [ORB-16855].
 pub(super) const SKIP_REVIEW_REASON: &str = "skip_review_light_delivery";
 
+/// The head a completion step rebased onto a new base and left unpublished
+/// for re-review, as that step recorded it for this run.
+pub(super) struct CompletionRebase {
+    pub(super) head_sha: String,
+    pub(super) base_sha: String,
+}
+
 /// Judge the checked-out candidate on its pinned base for `skip-review`,
 /// record the decision in each task's history, and say whether review is
 /// skipped. A run none of whose tasks carry the tag judges nothing.
@@ -86,13 +93,6 @@ pub(super) fn awaiting_external_evidence(
         }
     }
     Ok(false)
-}
-
-/// The head a completion step rebased onto a new base and left unpublished
-/// for re-review, as that step recorded it for this run.
-pub(super) struct CompletionRebase {
-    pub(super) head_sha: String,
-    pub(super) base_sha: String,
 }
 
 /// Whether the completion step `step_id` asked for a re-review. Read from the

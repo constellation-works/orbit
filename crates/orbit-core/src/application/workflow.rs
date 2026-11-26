@@ -4,11 +4,6 @@ use crate::OrbitError;
 
 pub use orbit_types::workflow::{CompletionPolicy, ShipMode, resolved_ship_mode};
 
-pub struct Workflow {
-    pub alias: &'static str,
-    pub job_id: &'static str,
-}
-
 pub const WORKFLOWS: &[Workflow] = &[
     Workflow {
         alias: "auto",
@@ -24,12 +19,9 @@ pub const WORKFLOWS: &[Workflow] = &[
     },
 ];
 
-pub fn find_workflow(name: &str) -> Option<&'static Workflow> {
-    WORKFLOWS.iter().find(|w| w.alias == name)
-}
-
 /// Canonical alias of the gated ship workflow (`task_auto_pipeline`).
 pub const SHIP_WORKFLOW_ALIAS: &str = "ship";
+
 pub const AUTO_WORKFLOW_ALIAS: &str = "auto";
 
 /// Longest drain window a caller may request, in seconds (24h). The window is
@@ -37,6 +29,15 @@ pub const AUTO_WORKFLOW_ALIAS: &str = "auto";
 /// typo hold the drain job's single active-run slot indefinitely. The drain's
 /// own window check and every submission surface read this one value.
 pub(crate) const MAX_DRAIN_WINDOW_SECONDS: u64 = 86_400;
+
+pub struct Workflow {
+    pub alias: &'static str,
+    pub job_id: &'static str,
+}
+
+pub fn find_workflow(name: &str) -> Option<&'static Workflow> {
+    WORKFLOWS.iter().find(|w| w.alias == name)
+}
 
 /// Validate the submission limit before a drain run or owner probe exists.
 /// Omitted and zero windows remain the CLI's single-pass shorthand; bounded

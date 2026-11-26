@@ -204,6 +204,25 @@ pub enum RoutineField {
     OrbitDefault,
 }
 
+/// One field of the shared fire projection ([`project_fire`]).
+#[derive(Debug, Clone, Copy)]
+pub enum FireField {
+    Slot,
+    Attempt,
+    State,
+    /// Coarse outcome: true on success, false on failure, null otherwise.
+    Ok,
+    RunId,
+    Detail,
+    /// When the attempt was recorded.
+    StartedAt,
+    /// Last update of a terminal attempt; null while it is in flight.
+    FinishedAt,
+    /// Wall-clock duration of a terminal attempt.
+    DurationMs,
+    UpdatedAt,
+}
+
 /// `{state, tripped, error_class, last_run_id, tripped_at, trips,
 /// next_trial_at, trial_started_at, trial_reason, bypass_requested_at,
 /// trial_phase, trial_expected_at}`:
@@ -226,25 +245,6 @@ pub fn breaker_json(status: &RoutineStatus) -> Value {
         "trial_phase": status.breaker_trial_phase.as_str(),
         "trial_expected_at": status.breaker_trial_expected_at,
     })
-}
-
-/// One field of the shared fire projection ([`project_fire`]).
-#[derive(Debug, Clone, Copy)]
-pub enum FireField {
-    Slot,
-    Attempt,
-    State,
-    /// Coarse outcome: true on success, false on failure, null otherwise.
-    Ok,
-    RunId,
-    Detail,
-    /// When the attempt was recorded.
-    StartedAt,
-    /// Last update of a terminal attempt; null while it is in flight.
-    FinishedAt,
-    /// Wall-clock duration of a terminal attempt.
-    DurationMs,
-    UpdatedAt,
 }
 
 /// One fire attempt as the `(key, field)` columns a surface renders, in order.

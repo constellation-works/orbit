@@ -16,6 +16,25 @@ use crate::runtime::plugin::paths::{plugin_install_path, plugin_state_dir};
 
 use super::PluginPermissionChange;
 
+/// Host layout both manifests are rendered against.
+///
+/// `plugin_root` is the path the upgrade will install, used for both sides,
+/// so a version-directory rename is not itself a new root. `sections` is the
+/// global `[plugins.<ns>]` map only: the recorded `fs` grant is host-wide, and
+/// a workspace override must not hide a default another workspace would open.
+pub(super) struct FsCompareLayout {
+    workspace: String,
+    plugin_root: PathBuf,
+    plugin_state: PathBuf,
+    sections: BTreeMap<String, serde_json::Value>,
+}
+
+struct ResolvedFsRoots {
+    read: Vec<PathBuf>,
+    write: Vec<PathBuf>,
+    write_files: Vec<PathBuf>,
+}
+
 pub(super) fn permission_diff(
     previous: &LoadedPlugin,
     requested: &LoadedPlugin,
@@ -74,19 +93,6 @@ pub(super) fn permission_diff(
     Ok(changes)
 }
 
-/// Host layout both manifests are rendered against.
-///
-/// `plugin_root` is the path the upgrade will install, used for both sides,
-/// so a version-directory rename is not itself a new root. `sections` is the
-/// global `[plugins.<ns>]` map only: the recorded `fs` grant is host-wide, and
-/// a workspace override must not hide a default another workspace would open.
-pub(super) struct FsCompareLayout {
-    workspace: String,
-    plugin_root: PathBuf,
-    plugin_state: PathBuf,
-    sections: BTreeMap<String, serde_json::Value>,
-}
-
 pub(super) fn fs_compare_layout(
     runtime: &OrbitRuntime,
     global_root: &Path,
@@ -123,12 +129,6 @@ pub(super) fn fs_request_references_config(manifest: &PluginManifest) -> bool {
                 .iter()
                 .any(|reference| reference.starts_with("config."))
         })
-}
-
-struct ResolvedFsRoots {
-    read: Vec<PathBuf>,
-    write: Vec<PathBuf>,
-    write_files: Vec<PathBuf>,
 }
 
 /// Render one manifest's fs lists the way [`orbit_tools::plugin::render_fs_roots`]

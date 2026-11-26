@@ -18,9 +18,12 @@ use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use crate::OrbitRuntime;
 use crate::application::job::DrainAdmissionWindow;
 
-type Span = (DateTime<Utc>, DateTime<Utc>);
-
 const WAITING_STATUSES: [TaskStatus; 2] = [TaskStatus::Backlog, TaskStatus::Proposed];
+
+/// Days the doctor row and the perf figure cover.
+pub const IDLE_WITH_WORK_DAYS: u32 = 7;
+
+type Span = (DateTime<Utc>, DateTime<Utc>);
 
 /// One UTC day of [`IdleWithWork`].
 #[derive(Debug, Clone, PartialEq)]
@@ -236,6 +239,3 @@ fn subtract(span: Span, holes: &[Span]) -> Vec<Span> {
     }
     out
 }
-
-/// Days the doctor row and the perf figure cover.
-pub const IDLE_WITH_WORK_DAYS: u32 = 7;

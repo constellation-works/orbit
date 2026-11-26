@@ -25,6 +25,10 @@ use orbit_tools::plugin::LoadedPlugin;
 
 use crate::application::skill::skill_link_roots;
 
+/// Kernel `ELOOP` bound. A longer chain, including a cycle, has no physical
+/// target this process can prove, so the link is not owned.
+const MAX_OWNERSHIP_SYMLINK_FOLLOWS: usize = 40;
+
 /// What linking did for one skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSkillLink {
@@ -268,10 +272,6 @@ fn links_under(root: &Path) -> Vec<(PathBuf, PathBuf)> {
     }
     links
 }
-
-/// Kernel `ELOOP` bound. A longer chain, including a cycle, has no physical
-/// target this process can prove, so the link is not owned.
-const MAX_OWNERSHIP_SYMLINK_FOLLOWS: usize = 40;
 
 /// Whether `target` lies inside `boundary` after physical resolution.
 ///

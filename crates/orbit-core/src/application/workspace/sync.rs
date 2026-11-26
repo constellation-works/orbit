@@ -372,11 +372,14 @@ fn reconcile_managed_artifacts(
             renamed_tools
                 .into_iter()
                 .filter(|rewrite| !reported_names.contains(&rewrite.name))
-                .map(|rewrite| ManagedAssetAction {
-                    detail: Some(rewrite.describe()),
-                    name: rewrite.name,
-                    path: rewrite.path,
-                    outcome: ManagedAssetOutcome::Migrated,
+                .map(|rewrite| {
+                    let detail = Some(rewrite.describe());
+                    ManagedAssetAction {
+                        name: rewrite.name,
+                        path: rewrite.path,
+                        outcome: ManagedAssetOutcome::Migrated,
+                        detail,
+                    }
                 }),
         );
         auto_tasks.actions = kept;

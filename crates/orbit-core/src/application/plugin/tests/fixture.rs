@@ -10,58 +10,6 @@ use crate::OrbitRuntime;
 
 const ISOLATED_CHILD_ENV: &str = "ORBIT_TEST_PLUGIN_FIXTURE_CHILD";
 
-/// Run a mutable plugin test in an exact child of the test binary. The parent
-/// never changes its environment or opens a fixture runtime.
-pub(super) fn enter_isolated_child(module: &str, test: &str) -> bool {
-    let module = module
-        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
-        .unwrap_or(module);
-    let exact_test = format!("{module}::{test}");
-    if std::env::var(ISOLATED_CHILD_ENV).ok().as_deref() == Some(&exact_test) {
-        return true;
-    }
-
-    let home = tempfile::tempdir().expect("isolated plugin fixture home");
-    let mut child = Command::new(std::env::current_exe().expect("test executable"));
-    clear_child_authority(&mut child);
-    let output = child
-        .args(["--exact", &exact_test, "--nocapture", "--test-threads=1"])
-        .env(ISOLATED_CHILD_ENV, &exact_test)
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .expect("run isolated plugin fixture");
-    assert_child_passed(&output, &exact_test);
-    false
-}
-
-/// Clear the authority inherited by any re-executed plugin test before its
-/// deliberate fixture variables are set. The worker requirement, plugin
-/// broker socket, and managed scratch path are separate from the shared list.
-pub(super) fn clear_child_authority(child: &mut Command) {
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        child.env_remove(name);
-    });
-    child.env_remove("ORBIT_WORKER_CONTEXT_REQUIRED");
-    child.env_remove("ORBIT_PLUGIN_BROKER");
-    child.env_remove("ORBIT_SCRATCH_DIR");
-}
-
-pub(super) fn assert_child_passed(output: &Output, exact_test: &str) {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "isolated plugin test `{exact_test}` failed:\n{stdout}\n{stderr}"
-    );
-    assert!(
-        stdout.contains(&format!("test {exact_test} ... ok"))
-            && stdout.contains("test result: ok. 1 passed;"),
-        "isolated plugin child must execute exactly `{exact_test}`:\n{stdout}\n{stderr}"
-    );
-}
-
 pub(super) struct PluginFixture {
     // Keep HOME inside the disposable child while add/enable/sync tests run.
     _home_env: orbit_common::test_env::ScopedEnv,
@@ -167,6 +115,58 @@ impl<'a> PluginSpecFixture<'a> {
             secrets: None,
         }
     }
+}
+
+/// Run a mutable plugin test in an exact child of the test binary. The parent
+/// never changes its environment or opens a fixture runtime.
+pub(super) fn enter_isolated_child(module: &str, test: &str) -> bool {
+    let module = module
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module);
+    let exact_test = format!("{module}::{test}");
+    if std::env::var(ISOLATED_CHILD_ENV).ok().as_deref() == Some(&exact_test) {
+        return true;
+    }
+
+    let home = tempfile::tempdir().expect("isolated plugin fixture home");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    clear_child_authority(&mut child);
+    let output = child
+        .args(["--exact", &exact_test, "--nocapture", "--test-threads=1"])
+        .env(ISOLATED_CHILD_ENV, &exact_test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("run isolated plugin fixture");
+    assert_child_passed(&output, &exact_test);
+    false
+}
+
+/// Clear the authority inherited by any re-executed plugin test before its
+/// deliberate fixture variables are set. The worker requirement, plugin
+/// broker socket, and managed scratch path are separate from the shared list.
+pub(super) fn clear_child_authority(child: &mut Command) {
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    child.env_remove("ORBIT_WORKER_CONTEXT_REQUIRED");
+    child.env_remove("ORBIT_PLUGIN_BROKER");
+    child.env_remove("ORBIT_SCRATCH_DIR");
+}
+
+pub(super) fn assert_child_passed(output: &Output, exact_test: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "isolated plugin test `{exact_test}` failed:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        stdout.contains(&format!("test {exact_test} ... ok"))
+            && stdout.contains("test result: ok. 1 passed;"),
+        "isolated plugin child must execute exactly `{exact_test}`:\n{stdout}\n{stderr}"
+    );
 }
 
 /// Write a plugin whose backend echoes its input back, so a test can prove the

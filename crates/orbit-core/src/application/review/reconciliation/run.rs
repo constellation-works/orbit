@@ -36,6 +36,12 @@ struct Admitted {
     record: ReviewReconciliation,
 }
 
+struct Decision {
+    outcome: ReconciliationOutcome,
+    /// What the follow-up task must address; empty files none.
+    follow_up: Vec<String>,
+}
+
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::InvalidInput(message.into())
 }
@@ -453,12 +459,6 @@ fn reviewer_report(input: &Value, reconciliation_id: &str) -> Result<ReviewRepor
         ));
     }
     Ok(report)
-}
-
-struct Decision {
-    outcome: ReconciliationOutcome,
-    /// What the follow-up task must address; empty files none.
-    follow_up: Vec<String>,
 }
 
 fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decision {

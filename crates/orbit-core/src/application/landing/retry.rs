@@ -40,20 +40,6 @@ use super::{LANDING_JOB, LandingDispatch};
 use crate::OrbitRuntime;
 use crate::application::operator_input;
 
-/// Trim the operator fields and check the reason and replay key. The
-/// normalized request is what the receipt stores and replays against, so the
-/// same input always compares equal whichever surface sent it.
-fn normalized_retry_request(
-    request: &LandingRetryRequest,
-) -> Result<LandingRetryRequest, OrbitError> {
-    let mut normalized = request.clone();
-    normalized.expected_candidate_commit = request.expected_candidate_commit.trim().to_string();
-    normalized.expected_base_commit = request.expected_base_commit.trim().to_string();
-    normalized.reason = operator_input::reason(&request.reason, "retrying a handoff")?;
-    normalized.request_key = operator_input::replay_key(&request.request_key)?;
-    Ok(normalized)
-}
-
 impl OrbitRuntime {
     /// Retry a stopped, terminal-job dispatched, or uncertain landing under
     /// trusted operator authority. The store proves exact terminal owner-job
@@ -216,4 +202,18 @@ impl OrbitRuntime {
         )?;
         Ok(())
     }
+}
+
+/// Trim the operator fields and check the reason and replay key. The
+/// normalized request is what the receipt stores and replays against, so the
+/// same input always compares equal whichever surface sent it.
+fn normalized_retry_request(
+    request: &LandingRetryRequest,
+) -> Result<LandingRetryRequest, OrbitError> {
+    let mut normalized = request.clone();
+    normalized.expected_candidate_commit = request.expected_candidate_commit.trim().to_string();
+    normalized.expected_base_commit = request.expected_base_commit.trim().to_string();
+    normalized.reason = operator_input::reason(&request.reason, "retrying a handoff")?;
+    normalized.request_key = operator_input::replay_key(&request.request_key)?;
+    Ok(normalized)
 }

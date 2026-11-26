@@ -34,6 +34,9 @@ use crate::application::task::light_delivery::{
 /// Certificates considered per landing; one candidate tree rarely has more.
 const CERTIFICATES_PER_LANDING: usize = 5;
 
+/// The assurance a light-delivery exclusion carries.
+const LIGHT_DELIVERY_ASSURANCE: &str = "light_delivery";
+
 pub(crate) fn exclusions(
     runtime: &OrbitRuntime,
     source: &Source<'_>,
@@ -182,9 +185,6 @@ fn light_delivery_exclusion(
     }
     Ok(None)
 }
-
-/// The assurance a light-delivery exclusion carries.
-const LIGHT_DELIVERY_ASSURANCE: &str = "light_delivery";
 
 fn landing_facts(
     runtime: &OrbitRuntime,

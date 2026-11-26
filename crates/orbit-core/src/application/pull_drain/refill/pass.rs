@@ -25,57 +25,6 @@ pub(super) struct Pass<'a, 'd> {
     pub(super) now: DateTime<Utc>,
 }
 
-pub(super) fn deterministic_failure(action: &str, message: String) -> DispatchError {
-    DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message,
-    }
-}
-
-pub(crate) fn pull_refill(
-    runtime: &OrbitRuntime,
-    action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    let snapshot = runtime.admission_policy_snapshot();
-    let runtime = &snapshot;
-    let refill = RefillInput::parse(action, input)?;
-    // One clock reading for the whole pass: the breaker it checks before each
-    // request is the one it records.
-    let now = chrono::Utc::now();
-
-    let transport = runtime.drain_owner_transport().cloned().ok_or_else(|| {
-        deterministic_failure(
-            action,
-            format!(
-                "no route to owner '{}': this runtime was composed without a federated owner \
-                 transport, and a pull drain never falls back to its own store",
-                refill.destination.owner_machine_id
-            ),
-        )
-    })?;
-    let peer = runtime.follower_pull_peer(transport.clone());
-    let launcher = runtime.bound_leaf_launcher();
-    let claimed_review = |run_id: &str| runtime.claimed_review_carry(run_id);
-    let drain = PullDrain {
-        jobs: runtime.stores().jobs(),
-        peer: peer.as_ref(),
-        launcher: launcher.as_ref(),
-        refused_delivery: RefusedDelivery::WhenDue,
-        claimed_review: &claimed_review,
-    };
-    Pass {
-        runtime,
-        action,
-        input,
-        refill: &refill,
-        drain: &drain,
-        transport: &transport,
-        now,
-    }
-    .run()
-}
-
 impl Pass<'_, '_> {
     /// One pass, phase by phase: refuse on skew, honour a cancellation, open
     /// the window, gate admission, request, settle and report.
@@ -147,4 +96,55 @@ impl Pass<'_, '_> {
         }
         Ok(true)
     }
+}
+
+pub(super) fn deterministic_failure(action: &str, message: String) -> DispatchError {
+    DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message,
+    }
+}
+
+pub(crate) fn pull_refill(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Value, DispatchError> {
+    let snapshot = runtime.admission_policy_snapshot();
+    let runtime = &snapshot;
+    let refill = RefillInput::parse(action, input)?;
+    // One clock reading for the whole pass: the breaker it checks before each
+    // request is the one it records.
+    let now = chrono::Utc::now();
+
+    let transport = runtime.drain_owner_transport().cloned().ok_or_else(|| {
+        deterministic_failure(
+            action,
+            format!(
+                "no route to owner '{}': this runtime was composed without a federated owner \
+                 transport, and a pull drain never falls back to its own store",
+                refill.destination.owner_machine_id
+            ),
+        )
+    })?;
+    let peer = runtime.follower_pull_peer(transport.clone());
+    let launcher = runtime.bound_leaf_launcher();
+    let claimed_review = |run_id: &str| runtime.claimed_review_carry(run_id);
+    let drain = PullDrain {
+        jobs: runtime.stores().jobs(),
+        peer: peer.as_ref(),
+        launcher: launcher.as_ref(),
+        refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &claimed_review,
+    };
+    Pass {
+        runtime,
+        action,
+        input,
+        refill: &refill,
+        drain: &drain,
+        transport: &transport,
+        now,
+    }
+    .run()
 }

@@ -13,25 +13,6 @@ use serde::Serialize;
 
 use crate::OrbitRuntime;
 
-/// The observer's offline acknowledgements, independent of pull admission.
-pub(super) fn acknowledged_hosts(runtime: &OrbitRuntime) -> Vec<AcknowledgedHost> {
-    match orbit_registry::hosts::load_host_registry(&runtime.global_root()) {
-        Ok(registry) => {
-            let now = Utc::now();
-            registry
-                .hosts()
-                .entries()
-                .iter()
-                .filter_map(|host| host.acknowledged_offline(now))
-                .collect()
-        }
-        Err(error) => {
-            tracing::warn!("readiness cannot read host acknowledgements: {error}");
-            Vec::new()
-        }
-    }
-}
-
 /// Read once per readiness response. Historical claims and host reachability
 /// cannot establish the capability of a currently pulling drain.
 pub(super) struct FollowerEvidence {
@@ -191,6 +172,25 @@ impl FollowerEvidence {
             status,
             executors,
             detail,
+        }
+    }
+}
+
+/// The observer's offline acknowledgements, independent of pull admission.
+pub(super) fn acknowledged_hosts(runtime: &OrbitRuntime) -> Vec<AcknowledgedHost> {
+    match orbit_registry::hosts::load_host_registry(&runtime.global_root()) {
+        Ok(registry) => {
+            let now = Utc::now();
+            registry
+                .hosts()
+                .entries()
+                .iter()
+                .filter_map(|host| host.acknowledged_offline(now))
+                .collect()
+        }
+        Err(error) => {
+            tracing::warn!("readiness cannot read host acknowledgements: {error}");
+            Vec::new()
         }
     }
 }

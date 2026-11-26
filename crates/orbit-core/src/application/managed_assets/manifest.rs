@@ -12,6 +12,20 @@ use super::{
     ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
 };
 
+/// Where one managed path resolves beneath its catalog directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfinedAssetPath {
+    /// Every intermediate component is a real directory and the final one a
+    /// regular file.
+    File(PathBuf),
+    /// A component does not exist; every component before it is a real
+    /// directory, so creating the rest stays inside the catalog.
+    Missing,
+    /// The first component that is a symlink (dangling or not) or is not the
+    /// expected directory or regular-file type.
+    Unsafe(PathBuf),
+}
+
 /// Persist one managed-asset manifest. Callers compare against the previous
 /// manifest first so a steady-state bootstrap performs no write at all.
 ///
@@ -177,20 +191,6 @@ pub(super) fn validate_managed_asset_name(
         )));
     }
     Ok(())
-}
-
-/// Where one managed path resolves beneath its catalog directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ConfinedAssetPath {
-    /// Every intermediate component is a real directory and the final one a
-    /// regular file.
-    File(PathBuf),
-    /// A component does not exist; every component before it is a real
-    /// directory, so creating the rest stays inside the catalog.
-    Missing,
-    /// The first component that is a symlink (dangling or not) or is not the
-    /// expected directory or regular-file type.
-    Unsafe(PathBuf),
 }
 
 /// Resolve `relative` beneath `dir` without following links, so reading,

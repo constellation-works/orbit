@@ -5,14 +5,6 @@ use orbit_common::OrbitError;
 use crate::OrbitRuntime;
 use crate::skill_catalog::{LoadedSkill, SkillCatalogDoctorStatus};
 
-/// The client skill-discovery directories under `base_root`.
-pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
-    [".agents", ".claude"]
-        .into_iter()
-        .map(|dir| base_root.join(dir).join("skills"))
-        .collect()
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillDoctorStatus {
     Ok,
@@ -58,6 +50,14 @@ impl OrbitRuntime {
         }
         Ok(results)
     }
+}
+
+/// The client skill-discovery directories under `base_root`.
+pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
+    [".agents", ".claude"]
+        .into_iter()
+        .map(|dir| base_root.join(dir).join("skills"))
+        .collect()
 }
 
 /// Report dangling/orphaned client skill symlinks under the agent

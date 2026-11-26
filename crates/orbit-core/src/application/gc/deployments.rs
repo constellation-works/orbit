@@ -80,10 +80,12 @@ mod filesystem {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         };
+        let deployments = optional_directory(&result.root, &root, c"deployments")?;
+        let bin = optional_directory(&result.root, &root, c"bin")?;
         let directories = Directories {
-            deployments: optional_directory(&result.root, &root, c"deployments")?,
-            bin: optional_directory(&result.root, &root, c"bin")?,
             root,
+            deployments,
+            bin,
         };
         let mut candidates = Vec::new();
         let mut rollback_digests = Vec::new();
@@ -163,11 +165,12 @@ mod filesystem {
             if !matches!(file_type(bin, &name)?, Some(libc::S_IFREG)) {
                 continue;
             }
+            let entries = vec![(name.clone(), walk(bin, &name, false)?)];
             candidates.push(Candidate {
                 class: DeploymentGcClass::BinaryBackup,
                 parent: Parent::Bin,
-                entries: vec![(name.clone(), walk(bin, &name, false)?)],
                 name,
+                entries,
                 pinned: rollback.then_some("rollback_target"),
             });
         }
@@ -196,11 +199,12 @@ mod filesystem {
             } else {
                 None
             };
+            let entries = vec![(name.clone(), walk(deployments, &name, false)?)];
             candidates.push(Candidate {
                 class: DeploymentGcClass::Deployment,
                 parent: Parent::Deployments,
-                entries: vec![(name.clone(), walk(deployments, &name, false)?)],
                 name,
+                entries,
                 pinned,
             });
         }
@@ -259,8 +263,8 @@ mod filesystem {
             candidates.push(Candidate {
                 class: DeploymentGcClass::StoreBackup,
                 parent: Parent::Root,
-                entries,
                 name,
+                entries,
                 pinned: None,
             });
         }
@@ -402,6 +406,20 @@ use crate::{OrbitError, OrbitRuntime};
 /// The retention applied when the caller does not choose one.
 pub const DEFAULT_DEPLOYMENT_KEEP: usize = 2;
 
+/// Name markers that identify a copy of a replaced executable. The installed
+/// executable, its `.previous` rollback copy and other tools never carry one.
+const BACKUP_MARKERS: [&str; 5] = [".bak", ".before-", ".pre-", ".stale", "-stale-"];
+
+/// The executable `orbit update` installs and backs up to `.previous`.
+const INSTALLED_NAME: &str = "orbit";
+
+const ROLLBACK_SUFFIX: &str = ".previous";
+const STORE_BACKUP_PREFIX: &str = "orbit.db.bak";
+const CANDIDATE_MANIFEST_KIND: &str = "orbit-local-candidate";
+
+/// Candidate manifests are a few hundred bytes; anything larger is not one.
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+
 /// Which kind of leftover an entry is. Retention counts each kind separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -463,13 +481,6 @@ pub struct DeploymentGcResult {
     pub entries: Vec<DeploymentGcEntry>,
 }
 
-fn display_path<S: serde::Serializer>(
-    path: &std::path::Path,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&path.to_string_lossy())
-}
-
 impl OrbitRuntime {
     /// Preview or remove deployment directories, executable backups and
     /// store backups beyond the newest `keep` of each class. The rollback
@@ -514,17 +525,12 @@ impl OrbitRuntime {
     }
 }
 
-/// Name markers that identify a copy of a replaced executable. The installed
-/// executable, its `.previous` rollback copy and other tools never carry one.
-const BACKUP_MARKERS: [&str; 5] = [".bak", ".before-", ".pre-", ".stale", "-stale-"];
-
-/// The executable `orbit update` installs and backs up to `.previous`.
-const INSTALLED_NAME: &str = "orbit";
-const ROLLBACK_SUFFIX: &str = ".previous";
-const STORE_BACKUP_PREFIX: &str = "orbit.db.bak";
-const CANDIDATE_MANIFEST_KIND: &str = "orbit-local-candidate";
-/// Candidate manifests are a few hundred bytes; anything larger is not one.
-const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+fn display_path<S: serde::Serializer>(
+    path: &std::path::Path,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.to_string_lossy())
+}
 
 fn is_binary_backup(name: &str) -> bool {
     BACKUP_MARKERS.iter().any(|marker| name.contains(marker))

@@ -150,57 +150,6 @@ impl ResidentControl {
     }
 }
 
-/// Fold the control entries in a history. An unreadable entry is an error:
-/// a record only core writes must not silently resume firing.
-pub(crate) fn resident_control_from_history(
-    history: &[TaskHistoryEntry],
-) -> Result<ResidentControl, String> {
-    let mut control = ResidentControl::default();
-    for entry in history
-        .iter()
-        .filter(|entry| entry.event == RESIDENT_CONTROL_EVENT)
-    {
-        let note: ResidentControlEntry =
-            serde_json::from_str(entry.note.as_deref().unwrap_or_default())
-                .map_err(|error| format!("the resident control record is unreadable: {error}"))?;
-        control.state = note.state;
-        if note.action.wakes() {
-            if note.status_request {
-                control.last_status_request_wake = Some((note.clone(), entry.at));
-            }
-            control.last_wake = Some((note.clone(), entry.at));
-        }
-        control.last = Some((note, entry.at));
-    }
-    Ok(control)
-}
-
-/// The state `action` leaves from `from`, or why it does not apply.
-fn transition(
-    action: ResidentControlAction,
-    from: ResidentControlState,
-) -> Result<ResidentControlState, String> {
-    use ResidentControlAction as A;
-    use ResidentControlState as S;
-    let to = match (action, from) {
-        (_, S::Ended) => return Err("the mandate has ended".into()),
-        (A::Pause, S::Active) => S::Paused,
-        (A::Resume, S::Paused) => S::Active,
-        (A::Stop, _) => S::Ended,
-        (A::Wake, S::Active) => S::Active,
-        (A::Takeover, S::Active | S::Paused) => S::TakenOver,
-        (A::Release, S::TakenOver) => S::Active,
-        (action, from) => {
-            return Err(format!(
-                "`{}` does not apply to a {} mandate",
-                action.as_str(),
-                from.as_str()
-            ));
-        }
-    };
-    Ok(to)
-}
-
 /// Who a manager-channel write is from, as the tool layer knows it.
 #[derive(Debug, Clone, Default)]
 pub struct ResidentChannelCaller {
@@ -240,10 +189,6 @@ pub struct ResidentRelayParams {
     pub request_id: Option<String>,
     /// The resident decision this direction reverses.
     pub reverses: Option<String>,
-}
-
-fn invalid(message: impl Into<String>) -> OrbitError {
-    OrbitError::InvalidInput(message.into())
 }
 
 impl OrbitRuntime {
@@ -725,4 +670,59 @@ impl OrbitRuntime {
             "answer": record,
         }))
     }
+}
+
+/// Fold the control entries in a history. An unreadable entry is an error:
+/// a record only core writes must not silently resume firing.
+pub(crate) fn resident_control_from_history(
+    history: &[TaskHistoryEntry],
+) -> Result<ResidentControl, String> {
+    let mut control = ResidentControl::default();
+    for entry in history
+        .iter()
+        .filter(|entry| entry.event == RESIDENT_CONTROL_EVENT)
+    {
+        let note: ResidentControlEntry =
+            serde_json::from_str(entry.note.as_deref().unwrap_or_default())
+                .map_err(|error| format!("the resident control record is unreadable: {error}"))?;
+        control.state = note.state;
+        if note.action.wakes() {
+            if note.status_request {
+                control.last_status_request_wake = Some((note.clone(), entry.at));
+            }
+            control.last_wake = Some((note.clone(), entry.at));
+        }
+        control.last = Some((note, entry.at));
+    }
+    Ok(control)
+}
+
+/// The state `action` leaves from `from`, or why it does not apply.
+fn transition(
+    action: ResidentControlAction,
+    from: ResidentControlState,
+) -> Result<ResidentControlState, String> {
+    use ResidentControlAction as A;
+    use ResidentControlState as S;
+    let to = match (action, from) {
+        (_, S::Ended) => return Err("the mandate has ended".into()),
+        (A::Pause, S::Active) => S::Paused,
+        (A::Resume, S::Paused) => S::Active,
+        (A::Stop, _) => S::Ended,
+        (A::Wake, S::Active) => S::Active,
+        (A::Takeover, S::Active | S::Paused) => S::TakenOver,
+        (A::Release, S::TakenOver) => S::Active,
+        (action, from) => {
+            return Err(format!(
+                "`{}` does not apply to a {} mandate",
+                action.as_str(),
+                from.as_str()
+            ));
+        }
+    };
+    Ok(to)
+}
+
+fn invalid(message: impl Into<String>) -> OrbitError {
+    OrbitError::InvalidInput(message.into())
 }

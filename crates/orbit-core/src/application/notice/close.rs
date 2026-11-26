@@ -237,6 +237,12 @@ impl OrbitRuntime {
     }
 }
 
+impl TaskNoticePort for OrbitRuntime {
+    fn close_linked_notices_for_done_transition(&self, task_id: &str) {
+        self.materialize_notice_closures_for_done_task(task_id);
+    }
+}
+
 /// Close `row` at `expected_revision` inside one IMMEDIATE transaction,
 /// preserving any corroboration `reports` committed since the snapshot read.
 /// Returns the stored closed row, or `None` when the notice is already closed
@@ -300,12 +306,6 @@ fn closing_record_with_stored_reports(
     serde_json::to_string(&closing).map_err(|error| {
         OrbitError::Store(format!("closing notice document is unreadable: {error}"))
     })
-}
-
-impl TaskNoticePort for OrbitRuntime {
-    fn close_linked_notices_for_done_transition(&self, task_id: &str) {
-        self.materialize_notice_closures_for_done_task(task_id);
-    }
 }
 
 /// When a row's linked task became done, for its effective state.

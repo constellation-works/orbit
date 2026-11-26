@@ -33,6 +33,26 @@ pub struct PluginEnableOptions {
     pub force: bool,
 }
 
+/// What a plugin contributes to the workspace once it is enabled.
+#[derive(Debug, Clone, Default)]
+pub(in crate::application::plugin) struct PluginContributions {
+    pub(in crate::application::plugin) seeded: Vec<PluginSeedOutcome>,
+    pub(in crate::application::plugin) skills: Vec<PluginSkillLink>,
+    pub(in crate::application::plugin) warnings: Vec<String>,
+}
+
+/// Everything `orbit plugin enable` did, beyond flipping the record.
+#[derive(Debug, Clone)]
+pub struct PluginEnableResult {
+    pub summary: PluginSummary,
+    /// Routines and auto-tasks written (or deliberately preserved).
+    pub seeded: Vec<PluginSeedOutcome>,
+    /// Skill links maintained in the provider discovery roots.
+    pub skills: Vec<PluginSkillLink>,
+    /// Non-fatal problems an operator has to know about.
+    pub warnings: Vec<String>,
+}
+
 /// Record the operator's grants, seed the plugin's schedules and link its
 /// skills, then put its tools on the surface at the next runtime build.
 ///
@@ -182,14 +202,6 @@ pub(in crate::application::plugin) fn resolve_consented_programs(
     (resolved, warnings)
 }
 
-/// What a plugin contributes to the workspace once it is enabled.
-#[derive(Debug, Clone, Default)]
-pub(in crate::application::plugin) struct PluginContributions {
-    pub(in crate::application::plugin) seeded: Vec<PluginSeedOutcome>,
-    pub(in crate::application::plugin) skills: Vec<PluginSkillLink>,
-    pub(in crate::application::plugin) warnings: Vec<String>,
-}
-
 /// Seed the plugin's schedules and link its skills.
 ///
 /// Applied at the moment the operator enables the plugin rather than at the
@@ -225,18 +237,6 @@ pub(in crate::application::plugin) fn apply_enabled_contributions(
         skills,
         warnings,
     })
-}
-
-/// Everything `orbit plugin enable` did, beyond flipping the record.
-#[derive(Debug, Clone)]
-pub struct PluginEnableResult {
-    pub summary: PluginSummary,
-    /// Routines and auto-tasks written (or deliberately preserved).
-    pub seeded: Vec<PluginSeedOutcome>,
-    /// Skill links maintained in the provider discovery roots.
-    pub skills: Vec<PluginSkillLink>,
-    /// Non-fatal problems an operator has to know about.
-    pub warnings: Vec<String>,
 }
 
 pub(in crate::application::plugin) fn unrequested_grant_warnings(

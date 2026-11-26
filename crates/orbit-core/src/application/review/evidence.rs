@@ -26,6 +26,56 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
 use crate::application::task::TaskRecords;
 
+/// A required `cargo test` record whose deferrals a host requirement can cover.
+pub(super) enum RecordedCargoScope<'a> {
+    /// One package and one `--test` target, with at most one positional filter.
+    Integration { package: &'a str, target: &'a str },
+    /// One package and no target selector, with at most one positional filter.
+    Package { package: &'a str },
+}
+
+/// [ORB-14450] Whether evidence checked on the task's last settled candidate
+/// counts for `head`, a candidate on `base` with another tree.
+pub(super) enum EvidenceCarry {
+    /// Nothing to carry: no evidence on an earlier tree, or the same tree.
+    None,
+    /// The patch is unchanged, so that evidence counts for `head`.
+    Carried(ReviewEvidenceCarried),
+    /// The evidence does not count for `head` and is requested again.
+    Rerequested {
+        from_tree: String,
+        to_tree: String,
+        reason: ReviewEvidenceRerequestReason,
+    },
+}
+
+impl EvidenceCarry {
+    pub(super) fn carried(&self) -> Option<&ReviewEvidenceCarried> {
+        match self {
+            Self::Carried(carried) => Some(carried),
+            Self::None | Self::Rerequested { .. } => None,
+        }
+    }
+
+    /// The admission output's `evidence_carry`.
+    pub(super) fn to_json(&self) -> Value {
+        match self {
+            Self::None => Value::Null,
+            Self::Carried(carried) => json!({"outcome": "carried", "carried": carried}),
+            Self::Rerequested {
+                from_tree,
+                to_tree,
+                reason,
+            } => json!({
+                "outcome": "rerequested",
+                "from_tree": from_tree,
+                "to_tree": to_tree,
+                "reason": reason,
+            }),
+        }
+    }
+}
+
 /// Only named, unavailable external checks may hold a review. Failed checks,
 /// open defects, malformed roles and dropped obligations remain escalations.
 pub(super) fn evidence_only(
@@ -174,14 +224,6 @@ pub(super) fn deferred_test(notice: &str) -> Option<&str> {
     .trim_start();
     let test = rest.split_once(": ").map_or(rest, |(test, _)| test).trim();
     (!test.is_empty() && !test.contains(char::is_whitespace)).then_some(test)
-}
-
-/// A required `cargo test` record whose deferrals a host requirement can cover.
-pub(super) enum RecordedCargoScope<'a> {
-    /// One package and one `--test` target, with at most one positional filter.
-    Integration { package: &'a str, target: &'a str },
-    /// One package and no target selector, with at most one positional filter.
-    Package { package: &'a str },
 }
 
 /// The package, and the integration target when the record names one, of a
@@ -376,48 +418,6 @@ pub(super) fn satisfied_external_evidence(
         satisfied.insert(path.clone(), evidence);
     }
     Ok(satisfied)
-}
-
-/// [ORB-14450] Whether evidence checked on the task's last settled candidate
-/// counts for `head`, a candidate on `base` with another tree.
-pub(super) enum EvidenceCarry {
-    /// Nothing to carry: no evidence on an earlier tree, or the same tree.
-    None,
-    /// The patch is unchanged, so that evidence counts for `head`.
-    Carried(ReviewEvidenceCarried),
-    /// The evidence does not count for `head` and is requested again.
-    Rerequested {
-        from_tree: String,
-        to_tree: String,
-        reason: ReviewEvidenceRerequestReason,
-    },
-}
-
-impl EvidenceCarry {
-    pub(super) fn carried(&self) -> Option<&ReviewEvidenceCarried> {
-        match self {
-            Self::Carried(carried) => Some(carried),
-            Self::None | Self::Rerequested { .. } => None,
-        }
-    }
-
-    /// The admission output's `evidence_carry`.
-    pub(super) fn to_json(&self) -> Value {
-        match self {
-            Self::None => Value::Null,
-            Self::Carried(carried) => json!({"outcome": "carried", "carried": carried}),
-            Self::Rerequested {
-                from_tree,
-                to_tree,
-                reason,
-            } => json!({
-                "outcome": "rerequested",
-                "from_tree": from_tree,
-                "to_tree": to_tree,
-                "reason": reason,
-            }),
-        }
-    }
 }
 
 /// Compare `head`'s patch over `base` with the patch of the task's last
@@ -626,12 +626,12 @@ pub(crate) fn resume_evidence_hold(
             TaskRecordUpdateParams {
                 actor: "system".into(),
                 status: Some(TaskStatus::Backlog),
-                expected_status: Some(vec![TaskStatus::InProgress]),
                 status_event: Some(REVIEW_EVIDENCE_RECEIVED_EVENT.into()),
                 status_note: Some(ReviewGateHistoryNote::evidence_received_text(
                     &hold.run_id,
                     next,
                 )),
+                expected_status: Some(vec![TaskStatus::InProgress]),
                 ..Default::default()
             },
         )?;
@@ -675,13 +675,13 @@ pub(crate) fn route_evidence_findings(
                     TaskRecordUpdateParams {
                         actor: "system".into(),
                         status: Some(TaskStatus::Backlog),
-                        expected_status: Some(vec![TaskStatus::InProgress]),
                         status_event: Some(REVIEW_EVIDENCE_FINDINGS_EVENT.into()),
                         status_note: Some(ReviewGateHistoryNote::evidence_findings_text(
                             &hold.run_id,
                             &hold.candidate.commit,
                             results,
                         )),
+                        expected_status: Some(vec![TaskStatus::InProgress]),
                         ..Default::default()
                     },
                 )?;

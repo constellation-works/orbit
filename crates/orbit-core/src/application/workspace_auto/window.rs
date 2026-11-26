@@ -8,68 +8,6 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 
-/// Open or re-read a drain window [ORB-10819].
-///
-/// Two call shapes, one action. Called with `for_seconds` and no `deadline` it
-/// *stamps*: the deadline is `now + for_seconds`, returned as RFC3339. Called
-/// with that `deadline` echoed back it *answers*: whether the window has since
-/// expired. The stamp therefore lives in the stamping step's own pipeline
-/// output, which the run state already persists — no new durable artifact, and
-/// re-reading the window is a pure function of a value the run carries.
-///
-/// An answer reads the drain's own run state too: an operator stop closes the
-/// window early, and an operator extension (`orbit run extend`, ORB-15383)
-/// replaces the echoed deadline when it is later. The answer reports the
-/// deadline in force, so the run's own step outputs show the extension.
-///
-/// A zero or absent window is expired on the first answer. `break_when` is
-/// evaluated after a loop body runs, so that yields exactly one iteration:
-/// the one-tick behavior every pre-window caller of `orbit run auto` has.
-///
-/// The deadline gates *starting* work. Nothing here cancels anything, which is
-/// what makes "the window does not affect tasks already in progress" true by
-/// construction: an in-flight child is held by `invoke_and_wait`, not by the
-/// window.
-pub(crate) fn drain_window(
-    runtime: &OrbitRuntime,
-    action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    let now = Utc::now();
-    let request = decode_drain_window_request(action, input)?;
-    let state = read_drain_state(runtime, request.run_id());
-    let deadline = match request {
-        DrainWindowRequest::Echoed { deadline, .. } => state
-            .as_ref()
-            .map_or(deadline, |state| state.effective_drain_deadline(deadline)),
-        DrainWindowRequest::Open { seconds, .. } => now
-            .checked_add_signed(seconds_to_delta(action, seconds)?)
-            .ok_or_else(|| {
-                DispatchError::action_failed(
-                    action,
-                    format!("`for_seconds` {seconds} overflows the drain deadline"),
-                )
-            })?,
-    };
-
-    let remaining_seconds = (deadline - now).num_milliseconds() as f64 / 1000.0;
-    let window_expired = remaining_seconds <= 0.0;
-    let closed = state.is_some_and(|state| state.admissions_stopped());
-    let expired = window_expired || closed;
-    Ok(json!({
-        "deadline": deadline.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "expired": expired,
-        "remaining_seconds": if closed { 0.0 } else { remaining_seconds.max(0.0) },
-        "expired_reason": if closed {
-            "admissions_stopped"
-        } else if window_expired {
-            "window"
-        } else {
-            "open"
-        },
-    }))
-}
-
 /// Decoded drain-window input. Callers past `decode_drain_window_request`
 /// see only this value: an echoed stamp, or a duration still to be stamped.
 ///
@@ -92,28 +30,6 @@ impl DrainWindowRequest {
             Self::Echoed { run_id, .. } | Self::Open { run_id, .. } => run_id.as_deref(),
         }
     }
-}
-
-/// The activity's `deadline`, `for_seconds` and `run_id`, read once.
-///
-/// A non-object has no fields. That is the same silent zero window `.get`
-/// produced, so serde's type error falls back to the defaults instead of
-/// becoming a new failure.
-fn decode_drain_window_request(
-    action: &str,
-    input: &Value,
-) -> Result<DrainWindowRequest, DispatchError> {
-    let fields = match DrainWindowFields::deserialize(input) {
-        Ok(fields) => fields,
-        Err(_) if !input.is_object() => DrainWindowFields::default(),
-        Err(error) => {
-            return Err(DispatchError::action_failed(
-                action,
-                format!("drain window input could not be read: {error}"),
-            ));
-        }
-    };
-    fields.into_request(action)
 }
 
 /// Wire fields before deadline-versus-duration precedence. Unknown keys,
@@ -284,6 +200,90 @@ impl<'de> Deserialize<'de> for CoercedDrainRunId {
                 .map(str::to_string),
         ))
     }
+}
+
+/// Open or re-read a drain window [ORB-10819].
+///
+/// Two call shapes, one action. Called with `for_seconds` and no `deadline` it
+/// *stamps*: the deadline is `now + for_seconds`, returned as RFC3339. Called
+/// with that `deadline` echoed back it *answers*: whether the window has since
+/// expired. The stamp therefore lives in the stamping step's own pipeline
+/// output, which the run state already persists — no new durable artifact, and
+/// re-reading the window is a pure function of a value the run carries.
+///
+/// An answer reads the drain's own run state too: an operator stop closes the
+/// window early, and an operator extension (`orbit run extend`, ORB-15383)
+/// replaces the echoed deadline when it is later. The answer reports the
+/// deadline in force, so the run's own step outputs show the extension.
+///
+/// A zero or absent window is expired on the first answer. `break_when` is
+/// evaluated after a loop body runs, so that yields exactly one iteration:
+/// the one-tick behavior every pre-window caller of `orbit run auto` has.
+///
+/// The deadline gates *starting* work. Nothing here cancels anything, which is
+/// what makes "the window does not affect tasks already in progress" true by
+/// construction: an in-flight child is held by `invoke_and_wait`, not by the
+/// window.
+pub(crate) fn drain_window(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Value, DispatchError> {
+    let now = Utc::now();
+    let request = decode_drain_window_request(action, input)?;
+    let state = read_drain_state(runtime, request.run_id());
+    let deadline = match request {
+        DrainWindowRequest::Echoed { deadline, .. } => state
+            .as_ref()
+            .map_or(deadline, |state| state.effective_drain_deadline(deadline)),
+        DrainWindowRequest::Open { seconds, .. } => now
+            .checked_add_signed(seconds_to_delta(action, seconds)?)
+            .ok_or_else(|| {
+                DispatchError::action_failed(
+                    action,
+                    format!("`for_seconds` {seconds} overflows the drain deadline"),
+                )
+            })?,
+    };
+
+    let remaining_seconds = (deadline - now).num_milliseconds() as f64 / 1000.0;
+    let window_expired = remaining_seconds <= 0.0;
+    let closed = state.is_some_and(|state| state.admissions_stopped());
+    let expired = window_expired || closed;
+    Ok(json!({
+        "deadline": deadline.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "expired": expired,
+        "remaining_seconds": if closed { 0.0 } else { remaining_seconds.max(0.0) },
+        "expired_reason": if closed {
+            "admissions_stopped"
+        } else if window_expired {
+            "window"
+        } else {
+            "open"
+        },
+    }))
+}
+
+/// The activity's `deadline`, `for_seconds` and `run_id`, read once.
+///
+/// A non-object has no fields. That is the same silent zero window `.get`
+/// produced, so serde's type error falls back to the defaults instead of
+/// becoming a new failure.
+fn decode_drain_window_request(
+    action: &str,
+    input: &Value,
+) -> Result<DrainWindowRequest, DispatchError> {
+    let fields = match DrainWindowFields::deserialize(input) {
+        Ok(fields) => fields,
+        Err(_) if !input.is_object() => DrainWindowFields::default(),
+        Err(error) => {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("drain window input could not be read: {error}"),
+            ));
+        }
+    };
+    fields.into_request(action)
 }
 
 fn read_drain_state(runtime: &OrbitRuntime, run_id: Option<&str>) -> Option<PipelineState> {

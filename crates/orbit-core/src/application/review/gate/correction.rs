@@ -29,6 +29,14 @@ use super::context::GateContext;
 use super::judgement::Judgement;
 use super::settle::validation_scope;
 
+/// The open attempt's report, judged as settlement would read it, and the
+/// scope settlement would judge it over.
+struct OpenAttemptJudgement {
+    judgement: Judgement,
+    scope: Vec<String>,
+    task_count: usize,
+}
+
 /// The escalation reason settlement would record for the open attempt's
 /// report, when the reviewer can still correct it; `None` when the report
 /// would settle on its merits, when there is no open attempt to judge, or
@@ -88,14 +96,6 @@ pub(crate) fn review_report_evidence_hold(
             .collect::<Vec<_>>()
             .join(", "),
     ))
-}
-
-/// The open attempt's report, judged as settlement would read it, and the
-/// scope settlement would judge it over.
-struct OpenAttemptJudgement {
-    judgement: Judgement,
-    scope: Vec<String>,
-    task_count: usize,
 }
 
 /// `None` when there is no open, unreleased attempt with its manifest to

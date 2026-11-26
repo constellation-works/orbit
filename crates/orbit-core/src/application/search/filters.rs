@@ -6,14 +6,6 @@ use orbit_types::task::TaskStatus;
 
 use super::types::GlobalSearchParams;
 
-pub(super) fn task_has_all_tags(task: &orbit_types::task::Task, tag_filter: &[String]) -> bool {
-    tag_filter.iter().all(|needle| {
-        task.tags
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(needle))
-    })
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SearchStatusFilters {
     pub(super) task: Option<Vec<TaskStatus>>,
@@ -85,6 +77,14 @@ impl SearchStatusFilters {
         self.friction = Some(status);
         Ok(())
     }
+}
+
+pub(super) fn task_has_all_tags(task: &orbit_types::task::Task, tag_filter: &[String]) -> bool {
+    tag_filter.iter().all(|needle| {
+        task.tags
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(needle))
+    })
 }
 
 fn status_token_error(message: String, value: &str) -> OrbitError {

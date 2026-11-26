@@ -60,27 +60,6 @@ pub struct NoticePostRawFields {
     pub blank_means_absent: bool,
 }
 
-fn blank_optional(
-    value: Option<String>,
-    field: &str,
-    blank_means_absent: bool,
-) -> Result<Option<String>, OrbitError> {
-    match value {
-        None => Ok(None),
-        Some(value) if value.trim().is_empty() => {
-            if blank_means_absent {
-                Ok(None)
-            } else {
-                Err(refuse(
-                    NoticeRefusalCode::InvalidField,
-                    format!("`{field}` must not be empty"),
-                ))
-            }
-        }
-        Some(value) => Ok(Some(value)),
-    }
-}
-
 impl NoticePostRequest {
     /// Parse the raw fields every post surface collects into a request.
     /// Unknown `kind`/`scope`, a bad `expires_at` and (when
@@ -136,44 +115,6 @@ impl NoticePostRequest {
             expires_at,
         })
     }
-}
-
-pub(super) fn limit(name: &str, value: u32) -> OrbitError {
-    refuse(
-        NoticeRefusalCode::LimitExceeded,
-        format!("limit `{name}` ({value}) reached"),
-    )
-}
-
-fn has_control(value: &str, allow_layout: bool) -> bool {
-    value
-        .chars()
-        .any(|ch| ch.is_control() && !(allow_layout && (ch == '\n' || ch == '\t')))
-}
-
-/// `task:<linked id>`, else `<kind>:` plus the slugged title; lowercase and
-/// at most 120 characters.
-pub(crate) fn derive_dedupe_key(kind: NoticeKind, title: &str, linked: Option<&str>) -> String {
-    let mut key = match linked {
-        Some(task) => format!("task:{}", task.to_ascii_lowercase()),
-        None => {
-            let mut slug = String::new();
-            for ch in title.to_lowercase().chars() {
-                if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
-                    slug.push(ch);
-                } else if !slug.ends_with('-') {
-                    slug.push('-');
-                }
-            }
-            format!("{}:{}", kind.as_str(), slug.trim_matches('-'))
-        }
-    };
-    key.retain(dedupe_key_char);
-    key.chars().take(DERIVED_DEDUPE_KEY_CHARS).collect()
-}
-
-fn dedupe_key_char(ch: char) -> bool {
-    ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | ':' | '/' | '-')
 }
 
 /// The content a post sets, validated against the poster and the limits.
@@ -424,8 +365,8 @@ impl OrbitRuntime {
             scope,
             dedupe_key,
             status_line,
-            close_on_linked_done,
             linked_task,
+            close_on_linked_done,
             evidence,
             hosts,
             fingerprint_request,
@@ -522,4 +463,63 @@ impl ValidatedPost {
             (None, None) => Ok(None),
         }
     }
+}
+
+fn blank_optional(
+    value: Option<String>,
+    field: &str,
+    blank_means_absent: bool,
+) -> Result<Option<String>, OrbitError> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => {
+            if blank_means_absent {
+                Ok(None)
+            } else {
+                Err(refuse(
+                    NoticeRefusalCode::InvalidField,
+                    format!("`{field}` must not be empty"),
+                ))
+            }
+        }
+        Some(value) => Ok(Some(value)),
+    }
+}
+
+pub(super) fn limit(name: &str, value: u32) -> OrbitError {
+    refuse(
+        NoticeRefusalCode::LimitExceeded,
+        format!("limit `{name}` ({value}) reached"),
+    )
+}
+
+fn has_control(value: &str, allow_layout: bool) -> bool {
+    value
+        .chars()
+        .any(|ch| ch.is_control() && !(allow_layout && (ch == '\n' || ch == '\t')))
+}
+
+/// `task:<linked id>`, else `<kind>:` plus the slugged title; lowercase and
+/// at most 120 characters.
+pub(crate) fn derive_dedupe_key(kind: NoticeKind, title: &str, linked: Option<&str>) -> String {
+    let mut key = match linked {
+        Some(task) => format!("task:{}", task.to_ascii_lowercase()),
+        None => {
+            let mut slug = String::new();
+            for ch in title.to_lowercase().chars() {
+                if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+                    slug.push(ch);
+                } else if !slug.ends_with('-') {
+                    slug.push('-');
+                }
+            }
+            format!("{}:{}", kind.as_str(), slug.trim_matches('-'))
+        }
+    };
+    key.retain(dedupe_key_char);
+    key.chars().take(DERIVED_DEDUPE_KEY_CHARS).collect()
+}
+
+fn dedupe_key_char(ch: char) -> bool {
+    ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | ':' | '/' | '-')
 }

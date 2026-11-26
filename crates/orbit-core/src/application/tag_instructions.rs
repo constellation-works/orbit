@@ -257,6 +257,35 @@ impl OrbitRuntime {
     }
 }
 
+/// A revision looked up at most once, and only when a workspace file needs
+/// it, so a task with only default instructions never touches Git.
+pub(crate) struct LazyRevision<'a> {
+    resolve: Box<dyn FnMut() -> Result<String, String> + 'a>,
+    value: Option<Result<String, String>>,
+}
+
+impl<'a> LazyRevision<'a> {
+    pub(crate) fn new(resolve: impl FnMut() -> Result<String, String> + 'a) -> Self {
+        Self {
+            resolve: Box::new(resolve),
+            value: None,
+        }
+    }
+
+    pub(crate) fn get(&mut self) -> Result<String, String> {
+        if self.value.is_none() {
+            self.value = Some((self.resolve)());
+        }
+        self.value
+            .clone()
+            .unwrap_or_else(|| Err("no revision".to_string()))
+    }
+
+    fn resolved(&self) -> Option<String> {
+        self.value.clone().and_then(Result::ok)
+    }
+}
+
 /// `selected` with live experiment arms applied after it: a suppressing arm
 /// removes Orbit's shipped defaults, and each arm's instruction follows every
 /// tag instruction. The total still fits the per-prompt cap.
@@ -290,33 +319,4 @@ fn with_experiment_instructions(
         ));
     }
     Ok(selected)
-}
-
-/// A revision looked up at most once, and only when a workspace file needs
-/// it, so a task with only default instructions never touches Git.
-pub(crate) struct LazyRevision<'a> {
-    resolve: Box<dyn FnMut() -> Result<String, String> + 'a>,
-    value: Option<Result<String, String>>,
-}
-
-impl<'a> LazyRevision<'a> {
-    pub(crate) fn new(resolve: impl FnMut() -> Result<String, String> + 'a) -> Self {
-        Self {
-            resolve: Box::new(resolve),
-            value: None,
-        }
-    }
-
-    pub(crate) fn get(&mut self) -> Result<String, String> {
-        if self.value.is_none() {
-            self.value = Some((self.resolve)());
-        }
-        self.value
-            .clone()
-            .unwrap_or_else(|| Err("no revision".to_string()))
-    }
-
-    fn resolved(&self) -> Option<String> {
-        self.value.clone().and_then(Result::ok)
-    }
 }

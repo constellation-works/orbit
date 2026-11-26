@@ -28,6 +28,14 @@ pub(super) struct BranchPartition {
     pub(super) excluded_branch_failures: Vec<Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct CiCompilerObservation {
+    run_id: String,
+    run_url: String,
+    checkout: String,
+    failure_key: String,
+}
+
 /// An owner lookup that fails is deferred, so `deferred` gains one entry per
 /// such failure.
 pub(super) fn partition_branch_failures(
@@ -102,14 +110,6 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
 fn task_branch_owner(branch_template: &ConventionTemplate, failure: &Value) -> Option<String> {
     let branch = failure["head_branch"].as_str()?;
     branch_template.branch_task_id(branch, DEFAULT_BRANCH_PREFIX, &is_valid_orb_task_id)
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct CiCompilerObservation {
-    run_id: String,
-    run_url: String,
-    checkout: String,
-    failure_key: String,
 }
 
 /// Retain a typed receipt with each comment, backfilling either half a legacy

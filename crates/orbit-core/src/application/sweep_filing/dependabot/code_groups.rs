@@ -228,17 +228,17 @@ pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> Task
     TaskAddParams {
         title: group_title(&rule, request.group),
         description: group_description(request, single_evidence.as_ref()),
-        creation_decision: single_evidence.map(TaskDecision::CodeScanningAlert),
         acceptance_criteria: group_acceptance_criteria(&rule, request.group),
-        tags,
-        context_files,
         relations: covering_relations(request.covered_siblings),
+        tags,
         required_tools: Vec::new(),
+        context_files,
         priority: priority_for_rank(highest_severity_rank(alerts)),
         complexity: TaskComplexity::Unassessed,
         task_type: Some(TaskType::Bug),
         status: Some(TaskStatus::Backlog),
         system_created: true,
+        creation_decision: single_evidence.map(TaskDecision::CodeScanningAlert),
         ..TaskAddParams::default()
     }
 }

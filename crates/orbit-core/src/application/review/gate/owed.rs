@@ -63,118 +63,6 @@ use crate::OrbitRuntime;
 use super::context::GateContext;
 use super::judgement::Judgement;
 
-/// What the run's captured host-evidence rules owe for `commits` and the
-/// run's task tags on this host. Only a claimed leaf owes evidence: a local
-/// run's host is the owner.
-pub(super) fn owed_evidence<'a>(
-    runtime: &OrbitRuntime,
-    context: &GateContext,
-    commits: impl IntoIterator<Item = &'a CommitIdentity>,
-) -> Result<Vec<ReviewEvidenceRequirement>, OrbitError> {
-    let rules = match &context.admission {
-        Some(admission) if context.claimed && !admission.host_evidence.is_empty() => {
-            &admission.host_evidence
-        }
-        _ => return Ok(Vec::new()),
-    };
-    let mut changed = Vec::new();
-    for commit in commits {
-        changed.extend(committed_paths(
-            runtime.env(),
-            &context.workspace_path,
-            &commit.commit,
-        )?);
-    }
-    let tags: Vec<String> = context
-        .tasks
-        .iter()
-        .flat_map(|task| task.tags.iter().cloned())
-        .collect();
-    Ok(owed_requirements(
-        rules,
-        &changed,
-        &tags,
-        EvidenceHostOs::of_host(runtime.host_os()),
-    ))
-}
-
-/// Whether this review's host leaves Linux CodeQL to the owner and the pull
-/// request's hosted CI: a claimed before-landing review on a host of a
-/// known OS other than Linux.
-pub(super) fn defers_linux_codeql(runtime: &OrbitRuntime, context: &GateContext) -> bool {
-    context.claimed
-        && context
-            .admission
-            .as_ref()
-            .is_some_and(|admission| admission.gates_landing())
-        && runtime.host_os().is_some_and(|os| os != HostOs::Linux)
-}
-
-/// Split `owed` into what holds the review and what the owner owes instead:
-/// with `defers`, every Linux CodeQL requirement whose rule names the pull
-/// request's hosted check that runs it is the owner's.
-pub(super) fn split_owner_owed(
-    owed: Vec<ReviewEvidenceRequirement>,
-    defers: bool,
-) -> (
-    Vec<ReviewEvidenceRequirement>,
-    Vec<ReviewEvidenceRequirement>,
-) {
-    if !defers {
-        return (owed, Vec::new());
-    }
-    owed.into_iter()
-        .partition(|required| !(linux_codeql(required) && required.hosted_check.is_some()))
-}
-
-/// A CodeQL requirement that runs on Linux, or on no named OS.
-fn linux_codeql(required: &ReviewEvidenceRequirement) -> bool {
-    required.kind == ReviewEvidenceKind::CodeQl
-        && required.os.is_none_or(|os| os == EvidenceHostOs::Linux)
-}
-
-/// The held review `candidate` settles without a reviewer: the task's hold
-/// names only checks its certificate recorded as owed, every one of them has
-/// arrived for the held tree, and `candidate` is that tree on the held base
-/// under the same task meaning. `None` sends the candidate to a reviewer.
-pub(super) fn owed_hold_received(
-    runtime: &OrbitRuntime,
-    context: &GateContext,
-    candidate: &CandidateIdentity,
-) -> Result<Option<(ReviewEvidenceHold, ReviewCertificate)>, OrbitError> {
-    let [task_id] = context.task_ids.as_slice() else {
-        return Ok(None);
-    };
-    let Some(hold) = super::super::evidence::evidence_hold(runtime, task_id)? else {
-        return Ok(None);
-    };
-    let Some(certificate) = runtime
-        .get_task_artifact(task_id, REVIEW_GATE_ARTIFACT)?
-        .and_then(|artifact| serde_json::from_slice::<ReviewCertificate>(&artifact.content).ok())
-    else {
-        return Ok(None);
-    };
-    let owed = |required: &ReviewEvidenceRequirement| {
-        certificate.owed_evidence.iter().any(|owed| {
-            owed.kind == required.kind
-                && owed.command == required.command
-                && owed.artifact == required.artifact
-        })
-    };
-    let received = certificate.attempt_id == hold.attempt_id
-        && certificate.final_candidate == hold.candidate
-        && certificate.task_meaning_digest == hold.task_meaning_digest
-        && hold.task_meaning_digest == context.task_digests.1
-        && !hold.requirements.is_empty()
-        && hold.requirements.iter().all(owed)
-        && certificate.repair_commits.is_empty()
-        && candidate.head.tree == hold.candidate.tree
-        && candidate.base.tree == certificate.base.tree
-        && super::super::evidence::evidence_only(&certificate, &hold.requirements)
-        && super::super::evidence::evidence_ready(runtime, task_id, &hold)?;
-    Ok(received.then_some((hold, certificate)))
-}
-
 /// Words that mark a changed test source, or its path, as touching the
 /// sandbox: a sandbox test, its fixture or its support code.
 const SANDBOX_MARKERS: [&str; 3] = ["sandbox", "bwrap", "bubblewrap"];
@@ -722,6 +610,118 @@ impl Judgement {
         self.host_decided = true;
         self.owner_owed = owner_owed.to_vec();
     }
+}
+
+/// What the run's captured host-evidence rules owe for `commits` and the
+/// run's task tags on this host. Only a claimed leaf owes evidence: a local
+/// run's host is the owner.
+pub(super) fn owed_evidence<'a>(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    commits: impl IntoIterator<Item = &'a CommitIdentity>,
+) -> Result<Vec<ReviewEvidenceRequirement>, OrbitError> {
+    let rules = match &context.admission {
+        Some(admission) if context.claimed && !admission.host_evidence.is_empty() => {
+            &admission.host_evidence
+        }
+        _ => return Ok(Vec::new()),
+    };
+    let mut changed = Vec::new();
+    for commit in commits {
+        changed.extend(committed_paths(
+            runtime.env(),
+            &context.workspace_path,
+            &commit.commit,
+        )?);
+    }
+    let tags: Vec<String> = context
+        .tasks
+        .iter()
+        .flat_map(|task| task.tags.iter().cloned())
+        .collect();
+    Ok(owed_requirements(
+        rules,
+        &changed,
+        &tags,
+        EvidenceHostOs::of_host(runtime.host_os()),
+    ))
+}
+
+/// Whether this review's host leaves Linux CodeQL to the owner and the pull
+/// request's hosted CI: a claimed before-landing review on a host of a
+/// known OS other than Linux.
+pub(super) fn defers_linux_codeql(runtime: &OrbitRuntime, context: &GateContext) -> bool {
+    context.claimed
+        && context
+            .admission
+            .as_ref()
+            .is_some_and(|admission| admission.gates_landing())
+        && runtime.host_os().is_some_and(|os| os != HostOs::Linux)
+}
+
+/// Split `owed` into what holds the review and what the owner owes instead:
+/// with `defers`, every Linux CodeQL requirement whose rule names the pull
+/// request's hosted check that runs it is the owner's.
+pub(super) fn split_owner_owed(
+    owed: Vec<ReviewEvidenceRequirement>,
+    defers: bool,
+) -> (
+    Vec<ReviewEvidenceRequirement>,
+    Vec<ReviewEvidenceRequirement>,
+) {
+    if !defers {
+        return (owed, Vec::new());
+    }
+    owed.into_iter()
+        .partition(|required| !(linux_codeql(required) && required.hosted_check.is_some()))
+}
+
+/// A CodeQL requirement that runs on Linux, or on no named OS.
+fn linux_codeql(required: &ReviewEvidenceRequirement) -> bool {
+    required.kind == ReviewEvidenceKind::CodeQl
+        && required.os.is_none_or(|os| os == EvidenceHostOs::Linux)
+}
+
+/// The held review `candidate` settles without a reviewer: the task's hold
+/// names only checks its certificate recorded as owed, every one of them has
+/// arrived for the held tree, and `candidate` is that tree on the held base
+/// under the same task meaning. `None` sends the candidate to a reviewer.
+pub(super) fn owed_hold_received(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    candidate: &CandidateIdentity,
+) -> Result<Option<(ReviewEvidenceHold, ReviewCertificate)>, OrbitError> {
+    let [task_id] = context.task_ids.as_slice() else {
+        return Ok(None);
+    };
+    let Some(hold) = super::super::evidence::evidence_hold(runtime, task_id)? else {
+        return Ok(None);
+    };
+    let Some(certificate) = runtime
+        .get_task_artifact(task_id, REVIEW_GATE_ARTIFACT)?
+        .and_then(|artifact| serde_json::from_slice::<ReviewCertificate>(&artifact.content).ok())
+    else {
+        return Ok(None);
+    };
+    let owed = |required: &ReviewEvidenceRequirement| {
+        certificate.owed_evidence.iter().any(|owed| {
+            owed.kind == required.kind
+                && owed.command == required.command
+                && owed.artifact == required.artifact
+        })
+    };
+    let received = certificate.attempt_id == hold.attempt_id
+        && certificate.final_candidate == hold.candidate
+        && certificate.task_meaning_digest == hold.task_meaning_digest
+        && hold.task_meaning_digest == context.task_digests.1
+        && !hold.requirements.is_empty()
+        && hold.requirements.iter().all(owed)
+        && certificate.repair_commits.is_empty()
+        && candidate.head.tree == hold.candidate.tree
+        && candidate.base.tree == certificate.base.tree
+        && super::super::evidence::evidence_only(&certificate, &hold.requirements)
+        && super::super::evidence::evidence_ready(runtime, task_id, &hold)?;
+    Ok(received.then_some((hold, certificate)))
 }
 
 /// The program a command runs: its first word.

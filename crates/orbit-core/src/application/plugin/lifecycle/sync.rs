@@ -24,6 +24,20 @@ use super::workspace::{
     write_workspace_toggle,
 };
 
+/// What `orbit plugin sync` found for one pinned plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSyncOutcome {
+    pub name: String,
+    pub status: PluginStatus,
+    /// What sync did, or what the operator has to do.
+    pub message: String,
+}
+
+enum SyncEnable {
+    Enabled(Box<PluginEnableResult>),
+    NeedsGrant(Vec<String>),
+}
+
 /// How an installed build differs from its pin: a different commit, or an
 /// artifact digest the install does not record. Offline: compares the row
 /// with the pin and nothing else.
@@ -69,15 +83,6 @@ pub(crate) fn build_pin_drift(pin: &PluginPin, installed: &InstalledPlugin) -> O
             )
         }),
     }
-}
-
-/// What `orbit plugin sync` found for one pinned plugin.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginSyncOutcome {
-    pub name: String,
-    pub status: PluginStatus,
-    /// What sync did, or what the operator has to do.
-    pub message: String,
 }
 
 /// Read `.orbit/plugins.yaml` and converge the current workspace on it.
@@ -541,11 +546,6 @@ fn reopen_workspace_toggle(
             )
         }
     }
-}
-
-enum SyncEnable {
-    Enabled(Box<PluginEnableResult>),
-    NeedsGrant(Vec<String>),
 }
 
 fn enable_for_sync(

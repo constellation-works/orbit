@@ -24,12 +24,38 @@ use orbit_engine::activity_job::{
 
 use crate::OrbitRuntime;
 
+/// Linked `.yaml`/`.yml` file below a catalog root.
+const LINKED_FILE: &str = "symbolic link below the catalog root; activity health reads only regular files inside the catalog, so it was not inspected";
+
+/// Linked directory below a catalog root.
+const LINKED_DIR: &str = "linked directory below the catalog root; activity health does not follow it, so activities beneath it were not inspected";
+
+/// FIFO, socket, device, or other special `.yaml`/`.yml` entry.
+const NOT_REGULAR: &str =
+    "not a regular file; activity health does not read special files, so it was not inspected";
+
 /// One catalog-invalid activity file, ready to become an [`super::artifact::ArtifactFinding`].
 #[derive(Debug, Clone)]
 pub(crate) struct ActivityCatalogFault {
     pub name: String,
     pub path: PathBuf,
     pub detail: String,
+}
+
+#[derive(Debug)]
+enum ActivityInspection {
+    Healthy(String),
+    RetiredSkipped,
+    Fault(ActivityCatalogFault),
+}
+
+/// One activity catalog entry beneath a configured catalog root.
+#[derive(Debug)]
+enum CatalogEntry {
+    /// A regular YAML file reached without crossing a link below `root`.
+    File { root: PathBuf, path: PathBuf },
+    /// An unsafe or unreadable entry reported instead of followed or read.
+    Refused { path: PathBuf, reason: String },
 }
 
 /// Inspect every production catalog directory with the same load + tool
@@ -48,11 +74,9 @@ pub(crate) fn collect_activity_catalog_faults(
         let (root, path) = match entry {
             CatalogEntry::File { root, path } => (root, path),
             CatalogEntry::Refused { path, reason } => {
-                faults.push(ActivityCatalogFault {
-                    name: file_stem_name(&path),
-                    detail: format!("`{}` — {reason}", path.display()),
-                    path,
-                });
+                let name = file_stem_name(&path);
+                let detail = format!("`{}` — {reason}", path.display());
+                faults.push(ActivityCatalogFault { name, path, detail });
                 continue;
             }
         };
@@ -88,13 +112,6 @@ pub(crate) fn collect_activity_catalog_faults(
         }
     }
     (scanned, faults)
-}
-
-#[derive(Debug)]
-enum ActivityInspection {
-    Healthy(String),
-    RetiredSkipped,
-    Fault(ActivityCatalogFault),
 }
 
 fn inspect_activity_file(path: &Path, raw: &str, registered_tools: &[&str]) -> ActivityInspection {
@@ -137,23 +154,6 @@ fn inspect_activity_file(path: &Path, raw: &str, registered_tools: &[&str]) -> A
 fn spec_backend_value(raw: &str) -> Option<String> {
     let document = parse_mapping(raw)?;
     mapping_scalar(mapping_get(&document, "spec")?, "backend")
-}
-
-/// Linked `.yaml`/`.yml` file below a catalog root.
-const LINKED_FILE: &str = "symbolic link below the catalog root; activity health reads only regular files inside the catalog, so it was not inspected";
-/// Linked directory below a catalog root.
-const LINKED_DIR: &str = "linked directory below the catalog root; activity health does not follow it, so activities beneath it were not inspected";
-/// FIFO, socket, device, or other special `.yaml`/`.yml` entry.
-const NOT_REGULAR: &str =
-    "not a regular file; activity health does not read special files, so it was not inspected";
-
-/// One activity catalog entry beneath a configured catalog root.
-#[derive(Debug)]
-enum CatalogEntry {
-    /// A regular YAML file reached without crossing a link below `root`.
-    File { root: PathBuf, path: PathBuf },
-    /// An unsafe or unreadable entry reported instead of followed or read.
-    Refused { path: PathBuf, reason: String },
 }
 
 /// Enumerate every production catalog root. Configured roots are resolved as

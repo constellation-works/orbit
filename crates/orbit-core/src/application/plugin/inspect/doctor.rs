@@ -44,10 +44,10 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         read_pin_file(&runtime.shared_root())
             .err()
             .map(|error| PluginDoctorResult {
-                intentional: false,
                 plugin: "pin file".to_string(),
                 status: PluginStatus::Inactive,
                 message: error.to_string(),
+                intentional: false,
             });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
@@ -60,12 +60,12 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     // rather than one unreadable-store row per plugin or a false "not set".
     let unset_secrets = if plugin_trees_masked(&runtime.global_root()) {
         vec![PluginDoctorResult {
-            intentional: true,
             plugin: "plugin state".to_string(),
             status: PluginStatus::Inactive,
             message: "plugin state and secrets are not visible from an agent sandbox; run \
                       `orbit plugin doctor` on the host to check them"
                 .to_string(),
+            intentional: true,
         }]
     } else {
         super::super::secrets::unset_secret_rows(runtime, &summaries)?
@@ -84,7 +84,6 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
             &plugin_namespace_dir(&runtime.global_root(), &summary.name),
         ) {
             dangling.push(PluginDoctorResult {
-                intentional: false,
                 plugin: summary.name.clone(),
                 status: summary.status,
                 message: format!(
@@ -94,6 +93,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
                     target.display(),
                     summary.name
                 ),
+                intentional: false,
             });
         }
     }
@@ -136,11 +136,11 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
                 ),
                 });
             PluginDoctorResult {
-                intentional: summary.status == PluginStatus::Disabled
-                    && summary.disabled_by == Some(PluginDisabledLayer::Workspace),
                 plugin: summary.name,
                 status: summary.status,
                 message,
+                intentional: summary.status == PluginStatus::Disabled
+                    && summary.disabled_by == Some(PluginDisabledLayer::Workspace),
             }
         })
         .collect();
@@ -181,7 +181,6 @@ fn ungranted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult
             summary.programs.iter().filter_map(|program| {
                 let problem = program.problem.as_deref()?;
                 Some(PluginDoctorResult {
-                    intentional: false,
                     plugin: summary.name.clone(),
                     status: summary.status,
                     message: format!(
@@ -191,6 +190,7 @@ fn ungranted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult
                          record it",
                         summary.name, program.name, summary.name,
                     ),
+                    intentional: false,
                 })
             })
         })
@@ -210,7 +210,6 @@ fn drifted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult> 
                 let current = program.resolves_to.as_ref()?;
                 let recorded = program.path.as_ref()?;
                 Some(PluginDoctorResult {
-                    intentional: false,
                     plugin: summary.name.clone(),
                     status: summary.status,
                     message: format!(
@@ -223,6 +222,7 @@ fn drifted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult> 
                         recorded.display(),
                         summary.name,
                     ),
+                    intentional: false,
                 })
             })
         })
@@ -240,10 +240,10 @@ fn host_api_deprecation_rows(runtime: &OrbitRuntime) -> Vec<PluginDoctorResult> 
             let plugin = entry.loaded.as_deref()?;
             let message = host_api_deprecation(plugin)?;
             Some(PluginDoctorResult {
-                intentional: false,
                 plugin: entry.name.clone(),
                 status: entry.status,
                 message,
+                intentional: false,
             })
         })
         .collect()
@@ -291,7 +291,6 @@ fn scoped_out_fs_root_rows(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorRes
         let backend = plugin_backend(&runtime.global_root(), &installed, plugin, &config.plugins);
         for root in backend.spec().dropped_fs_roots(Some(&workspace_root)) {
             rows.push(PluginDoctorResult {
-                intentional: false,
                 plugin: entry.name.clone(),
                 status: entry.status,
                 message: format!(
@@ -301,6 +300,7 @@ fn scoped_out_fs_root_rows(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorRes
                      grant the whole request",
                     entry.name, root.declared, root.field, entry.name,
                 ),
+                intentional: false,
             });
         }
     }
@@ -366,13 +366,13 @@ fn archive_digest_drift_rows(
             ),
         };
         rows.push(PluginDoctorResult {
-            intentional: false,
             plugin: name.clone(),
             status: status_of
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(PluginStatus::Missing),
             message,
+            intentional: false,
         });
     }
     Ok(rows)
@@ -605,7 +605,6 @@ fn stale_seeded_definition_rows(
                 .collect::<Vec<_>>()
                 .join(", ");
             Some(PluginDoctorResult {
-                intentional: false,
                 plugin: name.to_string(),
                 status: summary.status,
                 message: format!(
@@ -614,6 +613,7 @@ fn stale_seeded_definition_rows(
                      review customised files and run `orbit plugin enable {name} --force`",
                     summary.version
                 ),
+                intentional: false,
             })
         })
         .collect())

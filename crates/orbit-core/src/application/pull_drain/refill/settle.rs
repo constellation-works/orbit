@@ -159,9 +159,9 @@ impl Pass<'_, '_> {
             BreakerGate::HalfOpen => ledger.admitted == 0 && probe_waits_on == 0,
         };
         BreakerOutcome {
-            consecutive_failures: streak.map_or(0, |streak| streak.failures()),
             breaker,
             gate: state,
+            consecutive_failures: streak.map_or(0, |streak| streak.failures()),
             probe_waits_on,
         }
     }
@@ -393,17 +393,6 @@ impl Pass<'_, '_> {
     }
 }
 
-/// The refusal a drain latched degraded reports when the pass named none.
-fn degraded_refusal(health: &DrainAdmissionPass) -> Option<String> {
-    health.degraded.then(|| {
-        format!(
-            "pass_failures: drain degraded after {} consecutive failed passes; fix the cause \
-             run `orbit run auto --stop`, and start a new drain once this one ends; settlement retries continue",
-            health.consecutive_pass_failures
-        )
-    })
-}
-
 impl Settled {
     /// What the engine reads of a finished pass.
     fn answer(
@@ -440,4 +429,15 @@ impl Settled {
             "sleep_seconds": sleep_seconds,
         })
     }
+}
+
+/// The refusal a drain latched degraded reports when the pass named none.
+fn degraded_refusal(health: &DrainAdmissionPass) -> Option<String> {
+    health.degraded.then(|| {
+        format!(
+            "pass_failures: drain degraded after {} consecutive failed passes; fix the cause \
+             run `orbit run auto --stop`, and start a new drain once this one ends; settlement retries continue",
+            health.consecutive_pass_failures
+        )
+    })
 }

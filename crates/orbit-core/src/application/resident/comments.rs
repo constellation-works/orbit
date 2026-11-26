@@ -18,145 +18,7 @@ use super::{
 use crate::OrbitRuntime;
 use crate::application::task::TaskUpdateParams;
 
-fn invalid(message: impl Into<String>) -> OrbitError {
-    OrbitError::InvalidInput(message.into())
-}
-
-/// Refuse sensitive records before any writer can sanitize their verbatim text.
-pub(crate) fn ensure_resident_comment_redaction_safe(message: &str) -> Result<(), OrbitError> {
-    if !ResidentComment::is_resident_comment(message) {
-        return Ok(());
-    }
-    let record: Value = serde_json::from_str(message)
-        .map_err(|error| invalid(format!("resident_record_invalid: {error}")))?;
-    // Preserve the serialized-text check, and also inspect decoded strings:
-    // JSON escaping and a closing quote must not hide a home path or secret.
-    if redact_all(message) != message || resident_record_requires_redaction(&record) {
-        return Err(invalid(
-            "resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim",
-        ));
-    }
-    Ok(())
-}
-
-fn resident_record_requires_redaction(value: &Value) -> bool {
-    match value {
-        Value::String(text) => redact_all(text) != *text || redact_home_dir(text) != *text,
-        Value::Array(items) => items.iter().any(resident_record_requires_redaction),
-        Value::Object(fields) => fields.values().any(resident_record_requires_redaction),
-        _ => false,
-    }
-}
-
 const MAX_CHECKPOINT_REFUSAL_CHARS: usize = 500;
-
-fn sanitize_refusal_message(raw: &str) -> String {
-    let normalized = raw.replace(['\r', '\n'], " ");
-    let redacted = redact_home_dir(&redact_all(&normalized));
-    let trimmed = redacted.trim();
-    if trimmed.chars().count() <= MAX_CHECKPOINT_REFUSAL_CHARS {
-        trimmed.to_string()
-    } else {
-        let head: String = trimmed.chars().take(MAX_CHECKPOINT_REFUSAL_CHARS).collect();
-        format!("{head}…")
-    }
-}
-
-/// Extract the offending field name from a checkpoint validation message when
-/// one is named.
-pub(crate) fn extract_checkpoint_refusal_field(message: &str) -> Option<String> {
-    let mut rest = message;
-    while let Some(start) = rest.find('`') {
-        let after_start = &rest[start + 1..];
-        let Some(end) = after_start.find('`') else {
-            break;
-        };
-        let token = after_start[..end].trim();
-        if !token.is_empty() && token != "resident_record_invalid" {
-            return Some(token.to_string());
-        }
-        rest = &after_start[end + 1..];
-    }
-    if message.contains("action keys must be unique") {
-        return Some("actions".to_string());
-    }
-    if message.contains("decision ids must be unique") {
-        return Some("decisions".to_string());
-    }
-    if message.contains("checkpoint requires a resident.checkpoint record") {
-        return Some("kind".to_string());
-    }
-    if message.contains("record exceeds 64 KiB") {
-        return Some("record".to_string());
-    }
-    None
-}
-
-/// Classify a checkpoint validation or redaction refusal message into a
-/// structured [`ResidentCheckpointRefusal`], returning `None` for non-validation
-/// refusals such as `resident_cycle_stale` or `resident_checkpoint_exists`.
-pub(crate) fn checkpoint_refusal_from_error_text(
-    cycle: &str,
-    raw_error: &str,
-) -> Option<ResidentCheckpointRefusal> {
-    let trimmed = raw_error.trim();
-    let stripped = trimmed
-        .strip_prefix("invalid input: ")
-        .or_else(|| trimmed.strip_prefix("policy denied: "))
-        .unwrap_or(trimmed);
-    if stripped.starts_with("resident_cycle_stale:")
-        || stripped.starts_with("resident_checkpoint_exists:")
-        || stripped == "the resident mandate has ended"
-        || stripped == "resident records belong on a resident mandate's assignment task"
-        || stripped.starts_with("the mandate is not usable:")
-    {
-        return None;
-    }
-    let code = if stripped.starts_with("resident_record_invalid:") {
-        "resident_record_invalid"
-    } else if stripped.starts_with("resident records must be supplied without sensitive text") {
-        "resident_record_redaction_refused"
-    } else {
-        "resident_checkpoint_invalid"
-    };
-    let message = sanitize_refusal_message(stripped);
-    let field = extract_checkpoint_refusal_field(&message);
-    Some(ResidentCheckpointRefusal {
-        cycle: cycle.to_string(),
-        code: code.to_string(),
-        field,
-        message,
-    })
-}
-
-/// Render a persisted checkpoint refusal into the `error` string carried by a
-/// synthesized `incomplete` checkpoint.
-pub(crate) fn format_checkpoint_refusal_error(refusal: &ResidentCheckpointRefusal) -> String {
-    let prefix = format!("{}:", refusal.code);
-    let mut formatted = if refusal.message.starts_with(&prefix) {
-        format!("checkpoint validation refused: {}", refusal.message)
-    } else {
-        format!(
-            "checkpoint validation refused ({}): {}",
-            refusal.code, refusal.message
-        )
-    };
-    if let Some(field) = refusal.field.as_deref()
-        && !formatted.contains(field)
-    {
-        formatted.push_str(&format!(" (field: {field})"));
-    }
-    formatted
-}
-
-/// Whether a comment string carries a `resident.checkpoint` JSON payload.
-pub(crate) fn is_checkpoint_comment_json(message: &str) -> bool {
-    serde_json::from_str::<Value>(message)
-        .ok()
-        .is_some_and(|value| {
-            value.get("kind").and_then(Value::as_str) == Some("resident.checkpoint")
-        })
-}
 
 impl OrbitRuntime {
     pub(super) fn ensure_resident_comment_assignment(&self, task: &Task) -> Result<(), OrbitError> {
@@ -467,4 +329,142 @@ impl OrbitRuntime {
                 Ok(())
             });
     }
+}
+
+fn invalid(message: impl Into<String>) -> OrbitError {
+    OrbitError::InvalidInput(message.into())
+}
+
+/// Refuse sensitive records before any writer can sanitize their verbatim text.
+pub(crate) fn ensure_resident_comment_redaction_safe(message: &str) -> Result<(), OrbitError> {
+    if !ResidentComment::is_resident_comment(message) {
+        return Ok(());
+    }
+    let record: Value = serde_json::from_str(message)
+        .map_err(|error| invalid(format!("resident_record_invalid: {error}")))?;
+    // Preserve the serialized-text check, and also inspect decoded strings:
+    // JSON escaping and a closing quote must not hide a home path or secret.
+    if redact_all(message) != message || resident_record_requires_redaction(&record) {
+        return Err(invalid(
+            "resident records must be supplied without sensitive text requiring redaction; their quotes are preserved verbatim",
+        ));
+    }
+    Ok(())
+}
+
+fn resident_record_requires_redaction(value: &Value) -> bool {
+    match value {
+        Value::String(text) => redact_all(text) != *text || redact_home_dir(text) != *text,
+        Value::Array(items) => items.iter().any(resident_record_requires_redaction),
+        Value::Object(fields) => fields.values().any(resident_record_requires_redaction),
+        _ => false,
+    }
+}
+
+fn sanitize_refusal_message(raw: &str) -> String {
+    let normalized = raw.replace(['\r', '\n'], " ");
+    let redacted = redact_home_dir(&redact_all(&normalized));
+    let trimmed = redacted.trim();
+    if trimmed.chars().count() <= MAX_CHECKPOINT_REFUSAL_CHARS {
+        trimmed.to_string()
+    } else {
+        let head: String = trimmed.chars().take(MAX_CHECKPOINT_REFUSAL_CHARS).collect();
+        format!("{head}…")
+    }
+}
+
+/// Extract the offending field name from a checkpoint validation message when
+/// one is named.
+pub(crate) fn extract_checkpoint_refusal_field(message: &str) -> Option<String> {
+    let mut rest = message;
+    while let Some(start) = rest.find('`') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find('`') else {
+            break;
+        };
+        let token = after_start[..end].trim();
+        if !token.is_empty() && token != "resident_record_invalid" {
+            return Some(token.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    if message.contains("action keys must be unique") {
+        return Some("actions".to_string());
+    }
+    if message.contains("decision ids must be unique") {
+        return Some("decisions".to_string());
+    }
+    if message.contains("checkpoint requires a resident.checkpoint record") {
+        return Some("kind".to_string());
+    }
+    if message.contains("record exceeds 64 KiB") {
+        return Some("record".to_string());
+    }
+    None
+}
+
+/// Classify a checkpoint validation or redaction refusal message into a
+/// structured [`ResidentCheckpointRefusal`], returning `None` for non-validation
+/// refusals such as `resident_cycle_stale` or `resident_checkpoint_exists`.
+pub(crate) fn checkpoint_refusal_from_error_text(
+    cycle: &str,
+    raw_error: &str,
+) -> Option<ResidentCheckpointRefusal> {
+    let trimmed = raw_error.trim();
+    let stripped = trimmed
+        .strip_prefix("invalid input: ")
+        .or_else(|| trimmed.strip_prefix("policy denied: "))
+        .unwrap_or(trimmed);
+    if stripped.starts_with("resident_cycle_stale:")
+        || stripped.starts_with("resident_checkpoint_exists:")
+        || stripped == "the resident mandate has ended"
+        || stripped == "resident records belong on a resident mandate's assignment task"
+        || stripped.starts_with("the mandate is not usable:")
+    {
+        return None;
+    }
+    let code = if stripped.starts_with("resident_record_invalid:") {
+        "resident_record_invalid"
+    } else if stripped.starts_with("resident records must be supplied without sensitive text") {
+        "resident_record_redaction_refused"
+    } else {
+        "resident_checkpoint_invalid"
+    };
+    let message = sanitize_refusal_message(stripped);
+    let field = extract_checkpoint_refusal_field(&message);
+    Some(ResidentCheckpointRefusal {
+        cycle: cycle.to_string(),
+        code: code.to_string(),
+        field,
+        message,
+    })
+}
+
+/// Render a persisted checkpoint refusal into the `error` string carried by a
+/// synthesized `incomplete` checkpoint.
+pub(crate) fn format_checkpoint_refusal_error(refusal: &ResidentCheckpointRefusal) -> String {
+    let prefix = format!("{}:", refusal.code);
+    let mut formatted = if refusal.message.starts_with(&prefix) {
+        format!("checkpoint validation refused: {}", refusal.message)
+    } else {
+        format!(
+            "checkpoint validation refused ({}): {}",
+            refusal.code, refusal.message
+        )
+    };
+    if let Some(field) = refusal.field.as_deref()
+        && !formatted.contains(field)
+    {
+        formatted.push_str(&format!(" (field: {field})"));
+    }
+    formatted
+}
+
+/// Whether a comment string carries a `resident.checkpoint` JSON payload.
+pub(crate) fn is_checkpoint_comment_json(message: &str) -> bool {
+    serde_json::from_str::<Value>(message)
+        .ok()
+        .is_some_and(|value| {
+            value.get("kind").and_then(Value::as_str) == Some("resident.checkpoint")
+        })
 }

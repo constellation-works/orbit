@@ -16,24 +16,6 @@ use orbit_types::workspace::Workspace;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Registered workspaces with their runtimes, ready for routine discovery
-/// and dispatch, plus the workspaces that failed to open (reported loudly —
-/// registry hygiene must not silently shrink the source set).
-#[derive(Default)]
-pub struct DiscoveredWorkspaces {
-    /// Active, openable owner checkouts with their runtimes.
-    pub entries: Vec<(Workspace, OrbitRuntime)>,
-    /// Registered workspaces that could not be opened.
-    pub errors: Vec<RoutineLoadError>,
-    /// Active replica checkouts. The sweep delivers the pull settlements
-    /// their follower drains recorded and fires only their
-    /// [replica-local](runs_in_replica) routines; no other routine, auto-task
-    /// or task recovery runs in them.
-    pub replicas: Vec<(Workspace, OrbitRuntime)>,
-    /// Registered workspaces not opened because this tick exhausted its budget.
-    pub skipped_workspaces: Vec<String>,
-}
-
 /// Worktree GC, the replica-local job that reclaims this host's run worktrees
 /// [ORB-14173].
 ///
@@ -56,26 +38,22 @@ const REPLICA_LOCAL_STORE_GC_JOB: &str = "store_gc_pipeline";
 const REPLICA_LOCAL_ROUTINE_JOBS: &[&str] =
     &[REPLICA_LOCAL_ROUTINE_JOB, REPLICA_LOCAL_STORE_GC_JOB];
 
-/// Whether a replica checkout may schedule `definition` on this host's clock:
-/// a cron routine targeting worktree GC or store GC. Delivery, state and
-/// condition triggers observe owner coordination state, so they are
-/// owner-only even for those jobs. Listing, toggling and the sweep all ask
-/// this one rule.
-pub fn runs_in_replica(definition: &RoutineDefinition) -> bool {
-    REPLICA_LOCAL_ROUTINE_JOBS.contains(&definition.target.job_name())
-        && definition.trigger.is_cron()
-}
-
-/// Why a replica checkout does not schedule `definition`, naming the owner
-/// whose checkout does.
-pub fn replica_owner_only_reason(definition: &RoutineDefinition, owner_machine: &str) -> String {
-    format!(
-        "replica checkout schedules only host-local worktree GC (job:{REPLICA_LOCAL_ROUTINE_JOB}) \
-         and store GC (job:{REPLICA_LOCAL_STORE_GC_JOB}) on a cron trigger; '{}' -> {} is owner \
-         work: enable it in the owner checkout on machine '{owner_machine}'",
-        definition.name,
-        definition.target.as_ref_string(),
-    )
+/// Registered workspaces with their runtimes, ready for routine discovery
+/// and dispatch, plus the workspaces that failed to open (reported loudly —
+/// registry hygiene must not silently shrink the source set).
+#[derive(Default)]
+pub struct DiscoveredWorkspaces {
+    /// Active, openable owner checkouts with their runtimes.
+    pub entries: Vec<(Workspace, OrbitRuntime)>,
+    /// Registered workspaces that could not be opened.
+    pub errors: Vec<RoutineLoadError>,
+    /// Active replica checkouts. The sweep delivers the pull settlements
+    /// their follower drains recorded and fires only their
+    /// [replica-local](runs_in_replica) routines; no other routine, auto-task
+    /// or task recovery runs in them.
+    pub replicas: Vec<(Workspace, OrbitRuntime)>,
+    /// Registered workspaces not opened because this tick exhausted its budget.
+    pub skipped_workspaces: Vec<String>,
 }
 
 /// A routine a replica checkout defines that only its owner may schedule.
@@ -98,6 +76,116 @@ pub struct HostRoutines {
     pub collection: RoutineCollection,
     /// Replica definitions that only the owner may schedule.
     pub owner_only: Vec<OwnerOnlyRoutine>,
+}
+
+impl DiscoveredWorkspaces {
+    /// One selected checkout as the whole discovery scope, placed by its own
+    /// role: a replica checkout contributes only its replica-local routines.
+    pub(crate) fn single_checkout(workspace: Workspace, runtime: OrbitRuntime) -> Self {
+        let checkout = vec![(workspace, runtime)];
+        if checkout[0].1.role().is_replica() {
+            Self {
+                replicas: checkout,
+                ..Self::default()
+            }
+        } else {
+            Self {
+                entries: checkout,
+                ..Self::default()
+            }
+        }
+    }
+}
+
+/// Registry-neutral source of workspace runtimes for routine status and sweep.
+/// Implementations may consult a catalog, but Core only observes the prepared
+/// workspaces and fail-closed discovery errors.
+pub trait RoutineWorkspaceProvider {
+    fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError>;
+
+    /// Discover within a tick budget, finishing the current open before
+    /// skipping remaining checkouts. Providers without iterative discovery
+    /// still yield at the next scheduler boundary.
+    fn discover_workspaces_until(
+        &self,
+        global_root: &Path,
+        _deadline: std::time::Instant,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        self.discover_workspaces(global_root)
+    }
+
+    /// Discover active local peer checkouts that declare any name in
+    /// `routine_names`, when `discover_workspaces` was scoped to a subset of
+    /// the host's workspaces. Providers that already discover the full host
+    /// leave the default empty result. A `deadline` bounds the scan: peers not
+    /// reached by then are left undiscovered, and the caller decides what an
+    /// incomplete scan means.
+    fn discover_name_collision_peers(
+        &self,
+        _global_root: &Path,
+        _discovered: &DiscoveredWorkspaces,
+        _routine_names: &BTreeSet<String>,
+        _deadline: Option<std::time::Instant>,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        Ok(DiscoveredWorkspaces::default())
+    }
+}
+
+/// One discovered workspace's plugin surface, keyed by its routines
+/// directory so a seeded file is judged by the workspace it lives in.
+struct WorkspacePluginState {
+    workspace: String,
+    routines_dir: PathBuf,
+    active: BTreeSet<String>,
+    /// Host-enabled plugins this workspace's toggle switched off.
+    switched_off: BTreeSet<String>,
+}
+
+impl crate::application::plugin::PluginActivity for WorkspacePluginState {
+    fn is_active(&self, namespace: &str) -> bool {
+        self.active.contains(namespace)
+    }
+
+    fn is_disabled_in_workspace(&self, namespace: &str) -> bool {
+        self.switched_off.contains(namespace)
+    }
+}
+
+/// The host-wide view, for a path outside every discovered source: a plugin
+/// counts as active when any workspace has it on, and no workspace toggle
+/// applies.
+struct HostPluginActivity<'a>(&'a [WorkspacePluginState]);
+
+impl crate::application::plugin::PluginActivity for HostPluginActivity<'_> {
+    fn is_active(&self, namespace: &str) -> bool {
+        self.0.iter().any(|state| state.active.contains(namespace))
+    }
+
+    fn is_disabled_in_workspace(&self, _namespace: &str) -> bool {
+        false
+    }
+}
+
+/// Whether a replica checkout may schedule `definition` on this host's clock:
+/// a cron routine targeting worktree GC or store GC. Delivery, state and
+/// condition triggers observe owner coordination state, so they are
+/// owner-only even for those jobs. Listing, toggling and the sweep all ask
+/// this one rule.
+pub fn runs_in_replica(definition: &RoutineDefinition) -> bool {
+    REPLICA_LOCAL_ROUTINE_JOBS.contains(&definition.target.job_name())
+        && definition.trigger.is_cron()
+}
+
+/// Why a replica checkout does not schedule `definition`, naming the owner
+/// whose checkout does.
+pub fn replica_owner_only_reason(definition: &RoutineDefinition, owner_machine: &str) -> String {
+    format!(
+        "replica checkout schedules only host-local worktree GC (job:{REPLICA_LOCAL_ROUTINE_JOB}) \
+         and store GC (job:{REPLICA_LOCAL_STORE_GC_JOB}) on a cron trigger; '{}' -> {} is owner \
+         work: enable it in the owner checkout on machine '{owner_machine}'",
+        definition.name,
+        definition.target.as_ref_string(),
+    )
 }
 
 /// Collect routines from owner and replica checkouts together, so name
@@ -244,59 +332,6 @@ pub fn declares_any_routine_name(orbit_dir: &Path, names: &BTreeSet<String>) -> 
             .any(|name| names.contains(name))
 }
 
-impl DiscoveredWorkspaces {
-    /// One selected checkout as the whole discovery scope, placed by its own
-    /// role: a replica checkout contributes only its replica-local routines.
-    pub(crate) fn single_checkout(workspace: Workspace, runtime: OrbitRuntime) -> Self {
-        let checkout = vec![(workspace, runtime)];
-        if checkout[0].1.role().is_replica() {
-            Self {
-                replicas: checkout,
-                ..Self::default()
-            }
-        } else {
-            Self {
-                entries: checkout,
-                ..Self::default()
-            }
-        }
-    }
-}
-
-/// Registry-neutral source of workspace runtimes for routine status and sweep.
-/// Implementations may consult a catalog, but Core only observes the prepared
-/// workspaces and fail-closed discovery errors.
-pub trait RoutineWorkspaceProvider {
-    fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError>;
-
-    /// Discover within a tick budget, finishing the current open before
-    /// skipping remaining checkouts. Providers without iterative discovery
-    /// still yield at the next scheduler boundary.
-    fn discover_workspaces_until(
-        &self,
-        global_root: &Path,
-        _deadline: std::time::Instant,
-    ) -> Result<DiscoveredWorkspaces, OrbitError> {
-        self.discover_workspaces(global_root)
-    }
-
-    /// Discover active local peer checkouts that declare any name in
-    /// `routine_names`, when `discover_workspaces` was scoped to a subset of
-    /// the host's workspaces. Providers that already discover the full host
-    /// leave the default empty result. A `deadline` bounds the scan: peers not
-    /// reached by then are left undiscovered, and the caller decides what an
-    /// incomplete scan means.
-    fn discover_name_collision_peers(
-        &self,
-        _global_root: &Path,
-        _discovered: &DiscoveredWorkspaces,
-        _routine_names: &BTreeSet<String>,
-        _deadline: Option<std::time::Instant>,
-    ) -> Result<DiscoveredWorkspaces, OrbitError> {
-        Ok(DiscoveredWorkspaces::default())
-    }
-}
-
 fn collect_routines(workspaces: &[&(Workspace, OrbitRuntime)]) -> RoutineCollection {
     let job_names_by_root = preload_job_execution_names(workspaces);
     let sources = workspaces
@@ -328,16 +363,6 @@ fn discovered_routines_dir(orbit_dir: &Path) -> PathBuf {
         .join(ROUTINES_DIR)
 }
 
-/// One discovered workspace's plugin surface, keyed by its routines
-/// directory so a seeded file is judged by the workspace it lives in.
-struct WorkspacePluginState {
-    workspace: String,
-    routines_dir: PathBuf,
-    active: BTreeSet<String>,
-    /// Host-enabled plugins this workspace's toggle switched off.
-    switched_off: BTreeSet<String>,
-}
-
 /// Plugin installs are host-local, but each workspace narrows them with its
 /// own `[plugin_enablement]` toggles, so the active set is per workspace.
 fn workspace_plugin_states(workspaces: &[&(Workspace, OrbitRuntime)]) -> Vec<WorkspacePluginState> {
@@ -361,31 +386,6 @@ fn workspace_plugin_states(workspaces: &[&(Workspace, OrbitRuntime)]) -> Vec<Wor
             }
         })
         .collect()
-}
-
-impl crate::application::plugin::PluginActivity for WorkspacePluginState {
-    fn is_active(&self, namespace: &str) -> bool {
-        self.active.contains(namespace)
-    }
-
-    fn is_disabled_in_workspace(&self, namespace: &str) -> bool {
-        self.switched_off.contains(namespace)
-    }
-}
-
-/// The host-wide view, for a path outside every discovered source: a plugin
-/// counts as active when any workspace has it on, and no workspace toggle
-/// applies.
-struct HostPluginActivity<'a>(&'a [WorkspacePluginState]);
-
-impl crate::application::plugin::PluginActivity for HostPluginActivity<'_> {
-    fn is_active(&self, namespace: &str) -> bool {
-        self.0.iter().any(|state| state.active.contains(namespace))
-    }
-
-    fn is_disabled_in_workspace(&self, _namespace: &str) -> bool {
-        false
-    }
 }
 
 /// Skip a definition a plugin seeded while that plugin is disabled, removed,

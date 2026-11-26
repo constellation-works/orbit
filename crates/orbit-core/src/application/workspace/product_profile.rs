@@ -133,6 +133,14 @@ impl ProductProfile {
     }
 }
 
+struct StagingCleanup<'a>(&'a Path);
+
+impl Drop for StagingCleanup<'_> {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.0);
+    }
+}
+
 /// Install `identity` at `marker` without ever exposing a short write.
 ///
 /// Bytes land in a sibling staging file and are fsynced before `hard_link`
@@ -192,12 +200,4 @@ fn staging_path(marker: &Path) -> io::Result<PathBuf> {
     staging_name.push(file_name);
     staging_name.push(format!(".{nanos}.{counter}.tmp"));
     Ok(marker.with_file_name(staging_name))
-}
-
-struct StagingCleanup<'a>(&'a Path);
-
-impl Drop for StagingCleanup<'_> {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(self.0);
-    }
 }

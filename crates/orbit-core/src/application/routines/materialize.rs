@@ -27,6 +27,62 @@ use crate::application::managed_assets::{
 };
 use crate::application::seeding_policy::seeded_defaults;
 
+/// Why a retired shipped default left the catalog while Orbit still ships it.
+const LEFT_OUT_DETAIL: &str = "`seeding.routines` leaves out this shipped default";
+
+/// A routine catalog path judged without following links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogEntry {
+    Missing,
+    /// A real directory or regular file, as the path requires.
+    Present,
+    /// A symbolic link (dangling or not) or an entry of the wrong type.
+    Unsafe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogEntryKind {
+    Directory,
+    File,
+}
+
+/// Next manifest entries. The asset digest is not always `provenance.rendered_digest`.
+#[derive(Default)]
+struct NextRoutineCatalog {
+    assets: BTreeMap<String, String>,
+    provenance: BTreeMap<String, RoutineAssetProvenance>,
+}
+
+impl NextRoutineCatalog {
+    /// `binding` is the local binding or the workspace's requested binding.
+    fn record_rendered(
+        &mut self,
+        name: &str,
+        template_digest: String,
+        rendered_digest: String,
+        binding: RoutineMaterializationBinding,
+    ) {
+        let name = name.to_string();
+        self.assets.insert(name.clone(), rendered_digest.clone());
+        self.provenance.insert(
+            name,
+            RoutineAssetProvenance {
+                template_digest,
+                rendered_digest,
+                binding,
+            },
+        );
+    }
+
+    /// Carry an asset digest forward, copying provenance when it is `Some`.
+    fn carry(&mut self, name: &str, digest: &str, provenance: Option<&RoutineAssetProvenance>) {
+        self.assets.insert(name.to_string(), digest.to_string());
+        if let Some(provenance) = provenance {
+            self.provenance.insert(name.to_string(), provenance.clone());
+        }
+    }
+}
+
 /// Seed every entry in [`DEFAULT_ROUTINE_FILES`] under `routines_dir`,
 /// resolving the routine-name placeholder. Mirrors the activity /
 /// job seeding convention: when `overwrite` is false (plain re-init),
@@ -546,9 +602,6 @@ pub(crate) fn reconcile_default_routines_for_policy(
     Ok(result)
 }
 
-/// Why a retired shipped default left the catalog while Orbit still ships it.
-const LEFT_OUT_DETAIL: &str = "`seeding.routines` leaves out this shipped default";
-
 /// Reconcile every top-level definition in `routines_dir` that targets a
 /// retired job or trigger, or matches a retired template, and that the manifest
 /// does not track. A copy of a template a
@@ -658,22 +711,6 @@ fn top_level_routine_files(routines_dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// A routine catalog path judged without following links.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CatalogEntry {
-    Missing,
-    /// A real directory or regular file, as the path requires.
-    Present,
-    /// A symbolic link (dangling or not) or an entry of the wrong type.
-    Unsafe,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CatalogEntryKind {
-    Directory,
-    File,
-}
-
 fn inspect_catalog_entry(path: &Path, kind: CatalogEntryKind) -> Result<CatalogEntry, OrbitError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -744,43 +781,6 @@ fn unconfined_detail(path: &Path) -> String {
         "routine catalog path '{}' is a symbolic link or not the expected regular file or directory; Orbit did not read, create, overwrite, or retire anything through it. Replace it with a regular entry inside the workspace, then rerun `orbit workspace sync`",
         path.display()
     )
-}
-
-/// Next manifest entries. The asset digest is not always `provenance.rendered_digest`.
-#[derive(Default)]
-struct NextRoutineCatalog {
-    assets: BTreeMap<String, String>,
-    provenance: BTreeMap<String, RoutineAssetProvenance>,
-}
-
-impl NextRoutineCatalog {
-    /// `binding` is the local binding or the workspace's requested binding.
-    fn record_rendered(
-        &mut self,
-        name: &str,
-        template_digest: String,
-        rendered_digest: String,
-        binding: RoutineMaterializationBinding,
-    ) {
-        let name = name.to_string();
-        self.assets.insert(name.clone(), rendered_digest.clone());
-        self.provenance.insert(
-            name,
-            RoutineAssetProvenance {
-                template_digest,
-                rendered_digest,
-                binding,
-            },
-        );
-    }
-
-    /// Carry an asset digest forward, copying provenance when it is `Some`.
-    fn carry(&mut self, name: &str, digest: &str, provenance: Option<&RoutineAssetProvenance>) {
-        self.assets.insert(name.to_string(), digest.to_string());
-        if let Some(provenance) = provenance {
-            self.provenance.insert(name.to_string(), provenance.clone());
-        }
-    }
 }
 
 /// `detail` is `Some` only when recreating a file from its recorded binding.

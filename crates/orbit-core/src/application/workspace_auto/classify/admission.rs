@@ -36,6 +36,56 @@ use super::pool::{
 };
 use super::waiting::{admit_through_section, waiting_excluded, waiting_reason};
 
+/// What decided a local pass's outcome, for its drain's pass counters.
+struct LocalPass<'a> {
+    admitted: bool,
+    admissions_stopped: bool,
+    host_shutdown_holding: bool,
+    throttle: Option<&'a orbit_types::workflow::ResourceThrottle>,
+    /// Admissible candidates not already claimed remained.
+    pending: bool,
+    /// Every slot under the live ceiling was occupied.
+    ceiling_full: bool,
+    /// `enforce` gap fit kept a candidate out.
+    gap_fit_held: bool,
+    waiting_reasons: BTreeSet<String>,
+}
+
+impl LocalPass<'_> {
+    /// The pass's one outcome, in [`DrainPassOutcome`]'s precedence.
+    fn observe(self) -> DrainPassObservation {
+        let mut observation = DrainPassObservation {
+            waiting_reasons: self.waiting_reasons,
+            ..DrainPassObservation::default()
+        };
+        observation.outcome = if self.admitted {
+            DrainPassOutcome::Admitted
+        } else if self.admissions_stopped || self.host_shutdown_holding {
+            observation.held_reason = Some(
+                if self.admissions_stopped {
+                    "admissions_stopped"
+                } else {
+                    HOST_SHUTDOWN_SCHEDULED
+                }
+                .to_string(),
+            );
+            DrainPassOutcome::Held
+        } else if let Some(throttle) = self.throttle {
+            observation.throttled = throttle.kinds();
+            DrainPassOutcome::Throttle
+        } else if !self.pending {
+            DrainPassOutcome::NoCandidate
+        } else if self.ceiling_full {
+            DrainPassOutcome::CeilingFull
+        } else if self.gap_fit_held {
+            DrainPassOutcome::GapFitHeld
+        } else {
+            DrainPassOutcome::Deferred
+        };
+        observation
+    }
+}
+
 /// The admissible work for one drain iteration [ORB-10819].
 ///
 /// This answers "what may start right now", not "what is the one action for
@@ -533,54 +583,4 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         // [ORB-14624] Light slots a CPU-only throttle still admits into.
         "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
     }))
-}
-
-/// What decided a local pass's outcome, for its drain's pass counters.
-struct LocalPass<'a> {
-    admitted: bool,
-    admissions_stopped: bool,
-    host_shutdown_holding: bool,
-    throttle: Option<&'a orbit_types::workflow::ResourceThrottle>,
-    /// Admissible candidates not already claimed remained.
-    pending: bool,
-    /// Every slot under the live ceiling was occupied.
-    ceiling_full: bool,
-    /// `enforce` gap fit kept a candidate out.
-    gap_fit_held: bool,
-    waiting_reasons: BTreeSet<String>,
-}
-
-impl LocalPass<'_> {
-    /// The pass's one outcome, in [`DrainPassOutcome`]'s precedence.
-    fn observe(self) -> DrainPassObservation {
-        let mut observation = DrainPassObservation {
-            waiting_reasons: self.waiting_reasons,
-            ..DrainPassObservation::default()
-        };
-        observation.outcome = if self.admitted {
-            DrainPassOutcome::Admitted
-        } else if self.admissions_stopped || self.host_shutdown_holding {
-            observation.held_reason = Some(
-                if self.admissions_stopped {
-                    "admissions_stopped"
-                } else {
-                    HOST_SHUTDOWN_SCHEDULED
-                }
-                .to_string(),
-            );
-            DrainPassOutcome::Held
-        } else if let Some(throttle) = self.throttle {
-            observation.throttled = throttle.kinds();
-            DrainPassOutcome::Throttle
-        } else if !self.pending {
-            DrainPassOutcome::NoCandidate
-        } else if self.ceiling_full {
-            DrainPassOutcome::CeilingFull
-        } else if self.gap_fit_held {
-            DrainPassOutcome::GapFitHeld
-        } else {
-            DrainPassOutcome::Deferred
-        };
-        observation
-    }
 }

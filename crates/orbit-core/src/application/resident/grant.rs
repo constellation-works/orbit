@@ -46,6 +46,11 @@ use crate::runtime::workspace::catalog::WorkspaceScope;
 /// The `raised_by` mechanism of a resident grant request.
 const RESIDENT_GRANT_MECHANISM: &str = "resident_grant";
 
+/// The note and provenance a dashboard widening's grant answer records.
+const RESIDENT_DASHBOARD_GRANT_NOTE: &str = "Granted from the dashboard Residents view";
+
+const RESIDENT_DASHBOARD_PROVENANCE: &str = "dashboard";
+
 /// What the tool layer knows about a grant caller. Whether it may widen
 /// directly is decided here, never from input.
 #[derive(Debug, Clone, Default)]
@@ -203,153 +208,6 @@ impl ResidentDashboardGrant {
             effective_authority: None,
         }
     }
-}
-
-/// The note and provenance a dashboard widening's grant answer records.
-const RESIDENT_DASHBOARD_GRANT_NOTE: &str = "Granted from the dashboard Residents view";
-const RESIDENT_DASHBOARD_PROVENANCE: &str = "dashboard";
-
-fn non_blank(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn resident_rights_input(
-    input: &OperationInput,
-    field: &str,
-) -> Result<Vec<ResidentRight>, OrbitError> {
-    input
-        .optional_string_list(field)?
-        .unwrap_or_default()
-        .iter()
-        .map(|name| {
-            ResidentRight::parse(name).ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "unknown right `{name}` in `{field}`; rights are {}",
-                    ResidentRight::NAMES
-                ))
-            })
-        })
-        .collect()
-}
-
-/// `orbit.resident.grant`'s parsed input as one grant call's change.
-pub(crate) fn resident_grant_params_from_input(
-    input: &OperationInput,
-) -> Result<ResidentGrantParams, OrbitError> {
-    let deadline = input
-        .optional_string("deadline")?
-        .map(|value| {
-            DateTime::parse_from_rfc3339(&value)
-                .map(|at| at.with_timezone(&Utc))
-                .map_err(|_| {
-                    OrbitError::InvalidInput("`deadline` must be an RFC 3339 timestamp".into())
-                })
-        })
-        .transpose()?;
-    Ok(ResidentGrantParams {
-        task_id: input.required_string("task_id")?,
-        add: resident_rights_input(input, "add")?,
-        workspaces: input
-            .optional_string_list("workspaces")?
-            .unwrap_or_default(),
-        remove: resident_rights_input(input, "remove")?,
-        drop_workspaces: input
-            .optional_string_list("drop_workspaces")?
-            .unwrap_or_default(),
-        deadline,
-        quote: input.optional_raw_string("quote")?,
-    })
-}
-
-/// One half of a dashboard form, read as `orbit.resident.grant` reads its
-/// input: only the non-empty lists and the given deadline and quote.
-fn dashboard_grant_half(
-    task_id: &str,
-    lists: [(&str, &[String]); 2],
-    deadline: Option<&str>,
-    quote: Option<&str>,
-) -> Result<ResidentGrantParams, OrbitError> {
-    let mut input = serde_json::Map::new();
-    input.insert("task_id".into(), serde_json::json!(task_id));
-    for (key, list) in lists {
-        if !list.is_empty() {
-            input.insert(key.into(), serde_json::json!(list));
-        }
-    }
-    if let Some(deadline) = deadline {
-        input.insert("deadline".into(), serde_json::json!(deadline));
-    }
-    if let Some(quote) = quote {
-        input.insert("quote".into(), serde_json::json!(quote));
-    }
-    let input = ResidentVerb::Grant
-        .spec()
-        .parse_input(serde_json::Value::Object(input))?;
-    resident_grant_params_from_input(&input)
-}
-
-/// The dashboard's caller: operator capability without the native
-/// terminal. A widening carries a relaying session so core raises the
-/// request the operator then answers.
-fn dashboard_grant_caller(relaying: bool) -> ResidentGrantCaller {
-    let mut session = ToolSessionContext::default();
-    session
-        .effective_capabilities
-        .extend([McpCapability::Agent, McpCapability::Operator]);
-    if relaying {
-        session.origin_session_id = Some(format!("dashboard:{}", audit_execution_id("resident")));
-    }
-    ResidentGrantCaller {
-        session,
-        ..Default::default()
-    }
-}
-
-fn invalid(message: impl Into<String>) -> OrbitError {
-    OrbitError::InvalidInput(message.into())
-}
-
-fn names(rights: &[ResidentRight]) -> String {
-    rights
-        .iter()
-        .map(|right| right.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn dedup_workspaces(workspaces: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for workspace in workspaces {
-        let workspace = workspace.trim();
-        if !workspace.is_empty() && !out.iter().any(|seen| seen == workspace) {
-            out.push(workspace.to_string());
-        }
-    }
-    out
-}
-
-fn read_authority(
-    history: &[orbit_types::task::TaskHistoryEntry],
-) -> Result<ResidentAuthority, OrbitError> {
-    ResidentAuthority::from_history(history).map_err(|error| {
-        OrbitError::Execution(format!(
-            "the mandate's authority record is unreadable, so it cannot change: {error}"
-        ))
-    })
-}
-
-fn grant_mandate_ended(
-    status: TaskStatus,
-    history: &[TaskHistoryEntry],
-) -> Result<bool, OrbitError> {
-    Ok(resident_mandate_ended(status)
-        || resident_control_from_history(history)
-            .map_err(OrbitError::Execution)?
-            .state
-            == ResidentControlState::Ended)
 }
 
 impl OrbitRuntime {
@@ -569,12 +427,13 @@ impl OrbitRuntime {
         let task = self.get_task(params.task_id.trim())?;
         let history = self.get_task_history(&task.id)?;
         let view = self.resident_view(task, &history)?;
+        let effective_authority = Some(view.effective());
         Ok(ResidentDashboardGrant {
             outcome,
             narrowing_error,
             request: Some(request),
-            effective_authority: Some(view.effective()),
             authority: view.authority.ok(),
+            effective_authority,
         })
     }
 
@@ -922,4 +781,147 @@ impl OrbitRuntime {
         self.append_resident_authority_change(task_id, &authority, entry, None)?;
         Ok(())
     }
+}
+
+fn non_blank(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resident_rights_input(
+    input: &OperationInput,
+    field: &str,
+) -> Result<Vec<ResidentRight>, OrbitError> {
+    input
+        .optional_string_list(field)?
+        .unwrap_or_default()
+        .iter()
+        .map(|name| {
+            ResidentRight::parse(name).ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "unknown right `{name}` in `{field}`; rights are {}",
+                    ResidentRight::NAMES
+                ))
+            })
+        })
+        .collect()
+}
+
+/// `orbit.resident.grant`'s parsed input as one grant call's change.
+pub(crate) fn resident_grant_params_from_input(
+    input: &OperationInput,
+) -> Result<ResidentGrantParams, OrbitError> {
+    let deadline = input
+        .optional_string("deadline")?
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .map(|at| at.with_timezone(&Utc))
+                .map_err(|_| {
+                    OrbitError::InvalidInput("`deadline` must be an RFC 3339 timestamp".into())
+                })
+        })
+        .transpose()?;
+    Ok(ResidentGrantParams {
+        task_id: input.required_string("task_id")?,
+        add: resident_rights_input(input, "add")?,
+        workspaces: input
+            .optional_string_list("workspaces")?
+            .unwrap_or_default(),
+        remove: resident_rights_input(input, "remove")?,
+        drop_workspaces: input
+            .optional_string_list("drop_workspaces")?
+            .unwrap_or_default(),
+        deadline,
+        quote: input.optional_raw_string("quote")?,
+    })
+}
+
+/// One half of a dashboard form, read as `orbit.resident.grant` reads its
+/// input: only the non-empty lists and the given deadline and quote.
+fn dashboard_grant_half(
+    task_id: &str,
+    lists: [(&str, &[String]); 2],
+    deadline: Option<&str>,
+    quote: Option<&str>,
+) -> Result<ResidentGrantParams, OrbitError> {
+    let mut input = serde_json::Map::new();
+    input.insert("task_id".into(), serde_json::json!(task_id));
+    for (key, list) in lists {
+        if !list.is_empty() {
+            input.insert(key.into(), serde_json::json!(list));
+        }
+    }
+    if let Some(deadline) = deadline {
+        input.insert("deadline".into(), serde_json::json!(deadline));
+    }
+    if let Some(quote) = quote {
+        input.insert("quote".into(), serde_json::json!(quote));
+    }
+    let input = ResidentVerb::Grant
+        .spec()
+        .parse_input(serde_json::Value::Object(input))?;
+    resident_grant_params_from_input(&input)
+}
+
+/// The dashboard's caller: operator capability without the native
+/// terminal. A widening carries a relaying session so core raises the
+/// request the operator then answers.
+fn dashboard_grant_caller(relaying: bool) -> ResidentGrantCaller {
+    let mut session = ToolSessionContext::default();
+    session
+        .effective_capabilities
+        .extend([McpCapability::Agent, McpCapability::Operator]);
+    if relaying {
+        session.origin_session_id = Some(format!("dashboard:{}", audit_execution_id("resident")));
+    }
+    ResidentGrantCaller {
+        session,
+        ..Default::default()
+    }
+}
+
+fn invalid(message: impl Into<String>) -> OrbitError {
+    OrbitError::InvalidInput(message.into())
+}
+
+fn names(rights: &[ResidentRight]) -> String {
+    rights
+        .iter()
+        .map(|right| right.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn dedup_workspaces(workspaces: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for workspace in workspaces {
+        let workspace = workspace.trim();
+        if !workspace.is_empty() && !out.iter().any(|seen| seen == workspace) {
+            out.push(workspace.to_string());
+        }
+    }
+    out
+}
+
+fn read_authority(
+    history: &[orbit_types::task::TaskHistoryEntry],
+) -> Result<ResidentAuthority, OrbitError> {
+    ResidentAuthority::from_history(history).map_err(|error| {
+        OrbitError::Execution(format!(
+            "the mandate's authority record is unreadable, so it cannot change: {error}"
+        ))
+    })
+}
+
+fn grant_mandate_ended(
+    status: TaskStatus,
+    history: &[TaskHistoryEntry],
+) -> Result<bool, OrbitError> {
+    Ok(resident_mandate_ended(status)
+        || resident_control_from_history(history)
+            .map_err(OrbitError::Execution)?
+            .state
+            == ResidentControlState::Ended)
 }

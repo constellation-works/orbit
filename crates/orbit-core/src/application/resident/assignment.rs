@@ -33,29 +33,6 @@ const RESIDENT_HANDOFF_OUTCOME: &str = "handoff";
 /// requires one.
 const RESIDENT_ASSIGNMENT_PLAN: &str = "Run bounded resident cycles against this mandate until its exit criteria hold, its deadline passes or an operator stops it.";
 
-/// The latest checkpoint if it asked for a handoff that has not reached
-/// `review`. A move to `review` after it settled it, so an operator who reopens
-/// a handed-off assignment resumes its cycles instead of being handed off again.
-fn unsettled_resident_handoff(
-    task_id: &str,
-    comments: &[TaskComment],
-    history: &[TaskHistoryEntry],
-) -> Option<ResidentCheckpoint> {
-    let (at, checkpoint) =
-        comments.iter().rev().find_map(|comment| {
-            match ResidentComment::parse(&comment.message).ok()? {
-                ResidentComment::Checkpoint(checkpoint) if checkpoint.mandate == task_id => {
-                    Some((comment.at, *checkpoint))
-                }
-                _ => None,
-            }
-        })?;
-    let settled = history
-        .iter()
-        .any(|entry| entry.to_status == Some(TaskStatus::Review) && entry.at >= at);
-    (checkpoint.outcome == RESIDENT_HANDOFF_OUTCOME && !settled).then_some(checkpoint)
-}
-
 impl OrbitRuntime {
     /// Apply the effects of a stored mandate and report its workspace's
     /// cycle-routine status. Attachment remains successful when activation
@@ -101,8 +78,8 @@ impl OrbitRuntime {
         self.update_task_as_system(
             &task.id,
             TaskUpdateParams {
-                status: Some(TaskStatus::InProgress),
                 plan: needs_plan.then(|| RESIDENT_ASSIGNMENT_PLAN.to_string()),
+                status: Some(TaskStatus::InProgress),
                 ..Default::default()
             },
             None,
@@ -132,8 +109,8 @@ impl OrbitRuntime {
             self.update_task_as_system(
                 task_id,
                 TaskUpdateParams {
-                    status: Some(TaskStatus::Review),
                     execution_summary: summary,
+                    status: Some(TaskStatus::Review),
                     ..Default::default()
                 },
                 None,
@@ -167,4 +144,27 @@ impl OrbitRuntime {
         self.move_resident_assignment_to_review(task_id, summary)
             .map(Some)
     }
+}
+
+/// The latest checkpoint if it asked for a handoff that has not reached
+/// `review`. A move to `review` after it settled it, so an operator who reopens
+/// a handed-off assignment resumes its cycles instead of being handed off again.
+fn unsettled_resident_handoff(
+    task_id: &str,
+    comments: &[TaskComment],
+    history: &[TaskHistoryEntry],
+) -> Option<ResidentCheckpoint> {
+    let (at, checkpoint) =
+        comments.iter().rev().find_map(|comment| {
+            match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(checkpoint) if checkpoint.mandate == task_id => {
+                    Some((comment.at, *checkpoint))
+                }
+                _ => None,
+            }
+        })?;
+    let settled = history
+        .iter()
+        .any(|entry| entry.to_status == Some(TaskStatus::Review) && entry.at >= at);
+    (checkpoint.outcome == RESIDENT_HANDOFF_OUTCOME && !settled).then_some(checkpoint)
 }

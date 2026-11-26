@@ -3,6 +3,41 @@ use super::*;
 use super::super::edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
 use super::super::guarded_edit::guarded_routine_edit;
 
+/// The two operator actions on a tripped routine's circuit breaker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineBreakerAction {
+    /// Close the breaker now.
+    Reset,
+    /// Let one fire through on the next scheduler tick.
+    Bypass,
+}
+
+impl RoutineBreakerAction {
+    /// The stable lowercase name surfaces report: `reset` or `bypass`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::Bypass => "bypass",
+        }
+    }
+}
+
+/// What a breaker control did on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineBreakerOutcome {
+    /// The breaker was tripped and the action was recorded.
+    Changed,
+    /// The breaker was not tripped on this host; nothing was recorded.
+    NotTripped,
+}
+
+impl RoutineBreakerOutcome {
+    /// `true` when the control changed the breaker.
+    pub fn changed(self) -> bool {
+        self == Self::Changed
+    }
+}
+
 /// Select routine `name` from `report` for a definition edit.
 ///
 /// The one selection every edit surface runs (toggle, trigger edit and the
@@ -234,41 +269,6 @@ fn bypass_routine_breaker(
 ) -> Result<bool, OrbitError> {
     let store = super::super::open_routine_store(opener, global_root)?;
     orbit_automation::routines::breaker::request_breaker_bypass(&store, name, actor)
-}
-
-/// The two operator actions on a tripped routine's circuit breaker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoutineBreakerAction {
-    /// Close the breaker now.
-    Reset,
-    /// Let one fire through on the next scheduler tick.
-    Bypass,
-}
-
-impl RoutineBreakerAction {
-    /// The stable lowercase name surfaces report: `reset` or `bypass`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Reset => "reset",
-            Self::Bypass => "bypass",
-        }
-    }
-}
-
-/// What a breaker control did on this host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoutineBreakerOutcome {
-    /// The breaker was tripped and the action was recorded.
-    Changed,
-    /// The breaker was not tripped on this host; nothing was recorded.
-    NotTripped,
-}
-
-impl RoutineBreakerOutcome {
-    /// `true` when the control changed the breaker.
-    pub fn changed(self) -> bool {
-        self == Self::Changed
-    }
 }
 
 /// Select routine `name` from `report` and reset or bypass its circuit

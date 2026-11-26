@@ -67,6 +67,9 @@ pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
 
 pub(crate) use view::{ResidentView, resident_mandate_from_artifact};
 
+/// The job every workspace's seeded resident cycle routine targets.
+pub(crate) const RESIDENT_CYCLE_ROUTINE_TARGET: &str = "job:resident_cycle_pipeline";
+
 /// Where a mandate stands, as `orbit resident show` reports it.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -87,8 +90,16 @@ pub enum ResidentMandateState {
     Invalid,
 }
 
-/// The job every workspace's seeded resident cycle routine targets.
-pub(crate) const RESIDENT_CYCLE_ROUTINE_TARGET: &str = "job:resident_cycle_pipeline";
+/// The rights and workspaces a cycle could act on now: the authority's
+/// rights, scoped to workspaces both the authority and the mandate cover.
+/// Empty (observe-only) when either record is unavailable.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct ResidentEffectiveAuthority {
+    /// Rights held, in contract order.
+    pub rights: Vec<ResidentRight>,
+    /// Workspaces in scope.
+    pub workspaces: Vec<String>,
+}
 
 /// Why a mandate cannot fire while its workspace cycle routine is disabled.
 pub(crate) fn resident_cycle_routine_disabled_reason(routine_name: &str) -> String {
@@ -103,15 +114,4 @@ pub(crate) fn resident_mandate_ended(status: TaskStatus) -> bool {
         status,
         TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
     )
-}
-
-/// The rights and workspaces a cycle could act on now: the authority's
-/// rights, scoped to workspaces both the authority and the mandate cover.
-/// Empty (observe-only) when either record is unavailable.
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
-pub struct ResidentEffectiveAuthority {
-    /// Rights held, in contract order.
-    pub rights: Vec<ResidentRight>,
-    /// Workspaces in scope.
-    pub workspaces: Vec<String>,
 }

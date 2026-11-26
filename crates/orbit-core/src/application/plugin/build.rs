@@ -29,6 +29,13 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, read_pin_file};
 use crate::runtime::plugin::sandbox_mask::plugin_trees_masked;
 
+/// A build that ran and whose outputs wait to be copied into staging.
+pub(super) struct PreparedBuild {
+    plan: PluginBuildPlan,
+    result: PluginBuildResult,
+    log: PathBuf,
+}
+
 /// Environment names whose presence means no operator is at this command
 /// line (§3.8): a managed-run envelope, or a plugin backend child.
 fn first_unattended_env(env: &Env) -> Option<&'static str> {
@@ -48,13 +55,6 @@ fn first_unattended_env(env: &Env) -> Option<&'static str> {
     ]
     .into_iter()
     .find_map(|(name, value)| value.is_some_and(|value| !value.is_empty()).then_some(name))
-}
-
-/// A build that ran and whose outputs wait to be copied into staging.
-pub(super) struct PreparedBuild {
-    plan: PluginBuildPlan,
-    result: PluginBuildResult,
-    log: PathBuf,
 }
 
 /// Decide what `spec.build` means for this install, and run the build when
