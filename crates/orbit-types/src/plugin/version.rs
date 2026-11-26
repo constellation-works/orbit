@@ -107,46 +107,6 @@ impl FromStr for Version {
     }
 }
 
-fn valid_identifiers(value: &str, reject_numeric_leading_zeroes: bool) -> bool {
-    !value.is_empty()
-        && value.split('.').all(|identifier| {
-            !identifier.is_empty()
-                && identifier
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                && (!reject_numeric_leading_zeroes
-                    || !identifier.bytes().all(|byte| byte.is_ascii_digit())
-                    || identifier.len() == 1
-                    || !identifier.starts_with('0'))
-        })
-}
-
-fn compare_prerelease(left: &str, right: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-
-    match (left.is_empty(), right.is_empty()) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => left
-            .split('.')
-            .zip(right.split('.'))
-            .map(|(left, right)| {
-                match (
-                    left.bytes().all(|byte| byte.is_ascii_digit()),
-                    right.bytes().all(|byte| byte.is_ascii_digit()),
-                ) {
-                    (true, true) => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
-                    (true, false) => Ordering::Less,
-                    (false, true) => Ordering::Greater,
-                    (false, false) => left.cmp(right),
-                }
-            })
-            .find(|ordering| *ordering != Ordering::Equal)
-            .unwrap_or_else(|| left.split('.').count().cmp(&right.split('.').count())),
-    }
-}
-
 impl TryFrom<String> for Version {
     type Error = VersionError;
 
@@ -300,6 +260,52 @@ impl SemverRange {
     }
 }
 
+impl Display for SemverRange {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.source)
+    }
+}
+
+fn valid_identifiers(value: &str, reject_numeric_leading_zeroes: bool) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && (!reject_numeric_leading_zeroes
+                    || !identifier.bytes().all(|byte| byte.is_ascii_digit())
+                    || identifier.len() == 1
+                    || !identifier.starts_with('0'))
+        })
+}
+
+fn compare_prerelease(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => left
+            .split('.')
+            .zip(right.split('.'))
+            .map(|(left, right)| {
+                match (
+                    left.bytes().all(|byte| byte.is_ascii_digit()),
+                    right.bytes().all(|byte| byte.is_ascii_digit()),
+                ) {
+                    (true, true) => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
+                    (false, false) => left.cmp(right),
+                }
+            })
+            .find(|ordering| *ordering != Ordering::Equal)
+            .unwrap_or_else(|| left.split('.').count().cmp(&right.split('.').count())),
+    }
+}
+
 fn parse_x_range(token: &str) -> Result<Option<Vec<Comparator>>, VersionError> {
     let parts = token.split('.').collect::<Vec<_>>();
     let wildcard = |part: &str| part.eq_ignore_ascii_case("x") || part == "*";
@@ -338,11 +344,5 @@ fn parse_x_range(token: &str) -> Result<Option<Vec<Comparator>>, VersionError> {
             Ok(Some(vec![Comparator::Tilde(Version::new(major, minor, 0))]))
         }
         _ => Err(invalid()),
-    }
-}
-
-impl Display for SemverRange {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.source)
     }
 }

@@ -16,21 +16,6 @@ pub const PROVIDER_UNAVAILABLE_ERROR_CODE: &str = "provider_unavailable";
 /// The bracketed marker form of [`PROVIDER_UNAVAILABLE_ERROR_CODE`].
 pub const PROVIDER_UNAVAILABLE_MARKER: &str = "[provider_unavailable]";
 
-/// Whether a step failure says its provider could not be used on this host.
-///
-/// A [provider capacity](PROVIDER_CAPACITY_ERROR_CODE) failure and a
-/// [usage limit](PROVIDER_LIMIT_ERROR_CODE) are kinds of unavailability, so
-/// this is true for them too.
-#[must_use]
-pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(PROVIDER_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(PROVIDER_UNAVAILABLE_MARKER)
-        })
-        || is_provider_capacity_exhausted(error_code, message)
-        || is_provider_limit(error_code, message)
-}
-
 /// Token a provider failure diagnostic carries when the provider itself said
 /// the account hit a usage limit — a session, weekly, spend or credit cap —
 /// as opposed to the agent failing the work [ORB-14695].
@@ -45,15 +30,6 @@ pub const PROVIDER_LIMIT_ERROR_CODE: &str = "provider_limit";
 /// The bracketed marker form of [`PROVIDER_LIMIT_ERROR_CODE`].
 pub const PROVIDER_LIMIT_MARKER: &str = "[provider_limit]";
 
-/// Whether a step failure says its provider's account hit a usage limit.
-#[must_use]
-pub fn is_provider_limit(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(PROVIDER_LIMIT_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(PROVIDER_LIMIT_MARKER)
-        })
-}
-
 /// Token a provider failure diagnostic carries when the provider itself said
 /// the selected model has no capacity — Codex's `Selected model is at
 /// capacity` — as opposed to the agent failing the work [ORB-14149].
@@ -66,15 +42,6 @@ pub const PROVIDER_CAPACITY_ERROR_CODE: &str = "provider_capacity";
 
 /// The bracketed marker form of [`PROVIDER_CAPACITY_ERROR_CODE`].
 pub const PROVIDER_CAPACITY_MARKER: &str = "[provider_capacity]";
-
-/// Whether a step failure says its provider's selected model was at capacity.
-#[must_use]
-pub fn is_provider_capacity_exhausted(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(PROVIDER_CAPACITY_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(PROVIDER_CAPACITY_MARKER)
-        })
-}
 
 /// Token a provider failure diagnostic carries when the provider's own
 /// content policy refused the turn — Codex's cybersecurity content filter, a
@@ -92,24 +59,6 @@ pub const PROVIDER_REFUSAL_ERROR_CODE: &str = "provider_refusal";
 /// The bracketed marker form of [`PROVIDER_REFUSAL_ERROR_CODE`].
 pub const PROVIDER_REFUSAL_MARKER: &str = "[provider_refusal]";
 
-/// Whether a step failure says its provider's content policy refused the turn.
-#[must_use]
-pub fn is_provider_refusal(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(PROVIDER_REFUSAL_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(PROVIDER_REFUSAL_MARKER)
-        })
-}
-
-/// Whether a step failure is the provider's rather than the work's: it was
-/// [unavailable](is_provider_unavailable) (capacity and usage limits
-/// included) or
-/// [refused](is_provider_refusal) the turn.
-#[must_use]
-pub fn is_provider_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
-    is_provider_unavailable(error_code, message) || is_provider_refusal(error_code, message)
-}
-
 /// Token a required-validation failure carries when a command could not find
 /// a tool in the validation environment — exit 127, `command not found`, or a
 /// guardrail's "is required" — as opposed to the candidate failing its checks
@@ -123,17 +72,6 @@ pub const VALIDATION_ENVIRONMENT_ERROR_CODE: &str = "validation_environment";
 
 /// The bracketed marker form of [`VALIDATION_ENVIRONMENT_ERROR_CODE`].
 pub const VALIDATION_ENVIRONMENT_MARKER: &str = "[validation_environment]";
-
-/// Whether a step failure says required validation lacked a tool, or could
-/// not run where the step ran ([`is_validation_route_unavailable`]).
-#[must_use]
-pub fn is_validation_environment_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(VALIDATION_ENVIRONMENT_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(VALIDATION_ENVIRONMENT_MARKER)
-        })
-        || is_validation_route_unavailable(error_code, message)
-}
 
 /// Token a step failure carries when a required check cannot run in the
 /// lane that tried it and was not handed to the route that can run it: an
@@ -150,15 +88,6 @@ pub const VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "validation_route_unav
 
 /// The bracketed marker form of [`VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE`].
 pub const VALIDATION_ROUTE_UNAVAILABLE_MARKER: &str = "[validation_route_unavailable]";
-
-/// Whether a step failure says a required check could not run in its lane.
-#[must_use]
-pub fn is_validation_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(VALIDATION_ROUTE_UNAVAILABLE_MARKER)
-        })
-}
 
 /// Token a step failure carries when a claimed leaf could not reach its
 /// task's owner from where the step ran — the worker's owner route is masked
@@ -203,13 +132,40 @@ const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str = "error.code=owner_signoff_
 /// and cancellation is never a hold.
 pub const FOOTPRINT_UNAVAILABLE_ERROR_CODE: &str = "footprint_unavailable";
 
-/// Whether a step failure is the wait-expired deferred-footprint refusal.
-/// Only the typed `error_code` decides; `message` is never read, so the
-/// run-stopped refusal that shares its prefix stays a failure.
-#[must_use]
-pub fn is_footprint_unavailable(error_code: Option<&str>, _message: Option<&str>) -> bool {
-    error_code == Some(FOOTPRINT_UNAVAILABLE_ERROR_CODE)
-}
+/// Leads the failure Orbit raises when it refuses an implementer's handoff
+/// before delivery: a malformed `unfiled_findings`, or a
+/// `deferred_sandbox_validation` the delivery contract does not sanction
+/// (a command outside the owner's gate list, say). The candidate never
+/// reached delivery, so the task is blocked for an operator to requeue, but
+/// the refusal says nothing about the executing host: a pull drain's failure
+/// breaker does not count it [ORB-15639].
+pub const CONTRACT_REFUSAL_MARKER: &str = "implementer output rejected before delivery";
+
+/// Token a step failure carries when its outcome was inconclusive for a
+/// reason that may not recur [ORB-14257]: claimed required validation stamps
+/// it on a command that still could not reach the network after its reruns.
+pub const TRANSIENT_FAILURE_ERROR_CODE: &str = "transient_failure";
+
+/// The bracketed marker form of [`TRANSIENT_FAILURE_ERROR_CODE`].
+pub const TRANSIENT_FAILURE_MARKER: &str = "[transient_failure]";
+
+/// Token a step failure carries when the provider process produced no output
+/// and used no CPU for its configured stall window. The outcome is transient:
+/// the usual retry and recovery path still runs.
+pub const STALLED_ERROR_CODE: &str = "stalled";
+
+/// The bracketed marker form of [`STALLED_ERROR_CODE`].
+pub const STALLED_MARKER: &str = "[stalled]";
+
+/// Marker an owner call carries when the owner was reached but could not
+/// serve it only because its own task store or database stayed locked past
+/// its deadline (`lock_busy`), including an owner whose `orbit` exited at
+/// startup reporting a locked store before it answered. The owner decided
+/// nothing, and neither the executing host nor its crew is at fault, so a
+/// claimed leaf it ends releases its claim as `transient` with
+/// `owner_busy` set: its pull drain backs its claims off for a bounded time
+/// instead of excluding the crew or suppressing the host for its window.
+pub const OWNER_BUSY_MARKER: &str = "[owner_busy]";
 
 /// The typed code a step failure carries beside its message.
 ///
@@ -310,87 +266,6 @@ impl<'de> Deserialize<'de> for StepFailureCode {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer).map(Self::from)
     }
-}
-
-/// Whether a step failure says a claimed worker could not reach its owner.
-///
-/// A present typed code decides alone. The bracketed-marker check is the
-/// documented legacy fallback for a record with no code field, written
-/// before the typed code existed; it lives only here.
-#[must_use]
-pub fn is_owner_route_unavailable(
-    error_code: Option<&StepFailureCode>,
-    message: Option<&str>,
-) -> bool {
-    match error_code {
-        Some(code) => code.is_owner_route_unavailable(),
-        None => message.is_some_and(|message| {
-            failure_classification_text(message).contains(OWNER_ROUTE_UNAVAILABLE_MARKER)
-        }),
-    }
-}
-
-/// Whether a step stopped because recorded owner approval is still missing.
-///
-/// An `error_code` equal to [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`] decides.
-/// The diagnostic fragment is the fallback for a handoff that received only
-/// the step message: that message writes `error.code=owner_signoff_required;`
-/// and is not itself a typed code. This is not an owner-route failure.
-#[must_use]
-pub fn is_owner_signoff_required(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(OWNER_SIGNOFF_REQUIRED_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN)
-        })
-}
-
-/// Leads the failure Orbit raises when it refuses an implementer's handoff
-/// before delivery: a malformed `unfiled_findings`, or a
-/// `deferred_sandbox_validation` the delivery contract does not sanction
-/// (a command outside the owner's gate list, say). The candidate never
-/// reached delivery, so the task is blocked for an operator to requeue, but
-/// the refusal says nothing about the executing host: a pull drain's failure
-/// breaker does not count it [ORB-15639].
-pub const CONTRACT_REFUSAL_MARKER: &str = "implementer output rejected before delivery";
-
-/// Whether a failure is Orbit's refusal of an implementer's handoff
-/// ([`CONTRACT_REFUSAL_MARKER`]).
-#[must_use]
-pub fn is_contract_refusal(message: &str) -> bool {
-    failure_classification_text(message).contains(CONTRACT_REFUSAL_MARKER)
-}
-
-/// Token a step failure carries when its outcome was inconclusive for a
-/// reason that may not recur [ORB-14257]: claimed required validation stamps
-/// it on a command that still could not reach the network after its reruns.
-pub const TRANSIENT_FAILURE_ERROR_CODE: &str = "transient_failure";
-
-/// The bracketed marker form of [`TRANSIENT_FAILURE_ERROR_CODE`].
-pub const TRANSIENT_FAILURE_MARKER: &str = "[transient_failure]";
-
-/// Token a step failure carries when the provider process produced no output
-/// and used no CPU for its configured stall window. The outcome is transient:
-/// the usual retry and recovery path still runs.
-pub const STALLED_ERROR_CODE: &str = "stalled";
-
-/// The bracketed marker form of [`STALLED_ERROR_CODE`].
-pub const STALLED_MARKER: &str = "[stalled]";
-
-/// Marker an owner call carries when the owner was reached but could not
-/// serve it only because its own task store or database stayed locked past
-/// its deadline (`lock_busy`), including an owner whose `orbit` exited at
-/// startup reporting a locked store before it answered. The owner decided
-/// nothing, and neither the executing host nor its crew is at fault, so a
-/// claimed leaf it ends releases its claim as `transient` with
-/// `owner_busy` set: its pull drain backs its claims off for a bounded time
-/// instead of excluding the crew or suppressing the host for its window.
-pub const OWNER_BUSY_MARKER: &str = "[owner_busy]";
-
-/// Whether a step failure says its owner call lost to the owner's own
-/// lock-wait deadline ([`OWNER_BUSY_MARKER`]).
-#[must_use]
-pub fn is_owner_busy(message: Option<&str>) -> bool {
-    message.is_some_and(|message| failure_classification_text(message).contains(OWNER_BUSY_MARKER))
 }
 
 /// Why a claimed leaf ended without its typed handoff, as its settlement
@@ -559,4 +434,129 @@ impl ClaimFailureClass {
             None
         }
     }
+}
+
+/// Whether a step failure says its provider could not be used on this host.
+///
+/// A [provider capacity](PROVIDER_CAPACITY_ERROR_CODE) failure and a
+/// [usage limit](PROVIDER_LIMIT_ERROR_CODE) are kinds of unavailability, so
+/// this is true for them too.
+#[must_use]
+pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_UNAVAILABLE_MARKER)
+        })
+        || is_provider_capacity_exhausted(error_code, message)
+        || is_provider_limit(error_code, message)
+}
+
+/// Whether a step failure says its provider's account hit a usage limit.
+#[must_use]
+pub fn is_provider_limit(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_LIMIT_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_LIMIT_MARKER)
+        })
+}
+
+/// Whether a step failure says its provider's selected model was at capacity.
+#[must_use]
+pub fn is_provider_capacity_exhausted(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_CAPACITY_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_CAPACITY_MARKER)
+        })
+}
+
+/// Whether a step failure says its provider's content policy refused the turn.
+#[must_use]
+pub fn is_provider_refusal(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_REFUSAL_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_REFUSAL_MARKER)
+        })
+}
+
+/// Whether a step failure is the provider's rather than the work's: it was
+/// [unavailable](is_provider_unavailable) (capacity and usage limits
+/// included) or
+/// [refused](is_provider_refusal) the turn.
+#[must_use]
+pub fn is_provider_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
+    is_provider_unavailable(error_code, message) || is_provider_refusal(error_code, message)
+}
+
+/// Whether a step failure says required validation lacked a tool, or could
+/// not run where the step ran ([`is_validation_route_unavailable`]).
+#[must_use]
+pub fn is_validation_environment_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(VALIDATION_ENVIRONMENT_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(VALIDATION_ENVIRONMENT_MARKER)
+        })
+        || is_validation_route_unavailable(error_code, message)
+}
+
+/// Whether a step failure says a required check could not run in its lane.
+#[must_use]
+pub fn is_validation_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(VALIDATION_ROUTE_UNAVAILABLE_MARKER)
+        })
+}
+
+/// Whether a step failure is the wait-expired deferred-footprint refusal.
+/// Only the typed `error_code` decides; `message` is never read, so the
+/// run-stopped refusal that shares its prefix stays a failure.
+#[must_use]
+pub fn is_footprint_unavailable(error_code: Option<&str>, _message: Option<&str>) -> bool {
+    error_code == Some(FOOTPRINT_UNAVAILABLE_ERROR_CODE)
+}
+
+/// Whether a step failure says a claimed worker could not reach its owner.
+///
+/// A present typed code decides alone. The bracketed-marker check is the
+/// documented legacy fallback for a record with no code field, written
+/// before the typed code existed; it lives only here.
+#[must_use]
+pub fn is_owner_route_unavailable(
+    error_code: Option<&StepFailureCode>,
+    message: Option<&str>,
+) -> bool {
+    match error_code {
+        Some(code) => code.is_owner_route_unavailable(),
+        None => message.is_some_and(|message| {
+            failure_classification_text(message).contains(OWNER_ROUTE_UNAVAILABLE_MARKER)
+        }),
+    }
+}
+
+/// Whether a step stopped because recorded owner approval is still missing.
+///
+/// An `error_code` equal to [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`] decides.
+/// The diagnostic fragment is the fallback for a handoff that received only
+/// the step message: that message writes `error.code=owner_signoff_required;`
+/// and is not itself a typed code. This is not an owner-route failure.
+#[must_use]
+pub fn is_owner_signoff_required(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(OWNER_SIGNOFF_REQUIRED_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN)
+        })
+}
+
+/// Whether a failure is Orbit's refusal of an implementer's handoff
+/// ([`CONTRACT_REFUSAL_MARKER`]).
+#[must_use]
+pub fn is_contract_refusal(message: &str) -> bool {
+    failure_classification_text(message).contains(CONTRACT_REFUSAL_MARKER)
+}
+
+/// Whether a step failure says its owner call lost to the owner's own
+/// lock-wait deadline ([`OWNER_BUSY_MARKER`]).
+#[must_use]
+pub fn is_owner_busy(message: Option<&str>) -> bool {
+    message.is_some_and(|message| failure_classification_text(message).contains(OWNER_BUSY_MARKER))
 }

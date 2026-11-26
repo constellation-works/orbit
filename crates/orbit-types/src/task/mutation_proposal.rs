@@ -21,27 +21,6 @@ pub const MUTATION_PROPOSAL_ARTIFACT_DIR: &str = "mutation-proposals";
 /// through the idempotency key.
 pub const MUTATION_RECEIPT_ARTIFACT_DIR: &str = "mutation-receipts";
 
-/// Whether a canonical artifact path is a mutation proposal. ASCII case
-/// folding protects owners on case-insensitive filesystems.
-pub fn is_mutation_proposal_artifact(path: &str) -> bool {
-    in_artifact_dir(path, MUTATION_PROPOSAL_ARTIFACT_DIR)
-}
-
-/// Whether a canonical artifact path is a reserved application receipt.
-pub fn is_mutation_receipt_artifact(path: &str) -> bool {
-    in_artifact_dir(path, MUTATION_RECEIPT_ARTIFACT_DIR)
-}
-
-/// The receipt artifact for one idempotency key.
-pub fn mutation_receipt_artifact_path(idempotency_key: &str) -> String {
-    format!("{MUTATION_RECEIPT_ARTIFACT_DIR}/{idempotency_key}.json")
-}
-
-fn in_artifact_dir(path: &str, dir: &str) -> bool {
-    path.split_once('/')
-        .is_some_and(|(head, _)| head.eq_ignore_ascii_case(dir))
-}
-
 /// One proposed call of a mutating granted tool, as stored on the task.
 ///
 /// The writer supplies `tool`, `input` and `rationale`; admission derives
@@ -133,4 +112,25 @@ pub struct MutationReceipt {
     pub review_attempt_id: String,
     pub run_id: String,
     pub recorded_at: DateTime<Utc>,
+}
+
+/// Whether a canonical artifact path is a mutation proposal. ASCII case
+/// folding protects owners on case-insensitive filesystems.
+pub fn is_mutation_proposal_artifact(path: &str) -> bool {
+    in_artifact_dir(path, MUTATION_PROPOSAL_ARTIFACT_DIR)
+}
+
+/// Whether a canonical artifact path is a reserved application receipt.
+pub fn is_mutation_receipt_artifact(path: &str) -> bool {
+    in_artifact_dir(path, MUTATION_RECEIPT_ARTIFACT_DIR)
+}
+
+/// The receipt artifact for one idempotency key.
+pub fn mutation_receipt_artifact_path(idempotency_key: &str) -> String {
+    format!("{MUTATION_RECEIPT_ARTIFACT_DIR}/{idempotency_key}.json")
+}
+
+fn in_artifact_dir(path: &str, dir: &str) -> bool {
+    path.split_once('/')
+        .is_some_and(|(head, _)| head.eq_ignore_ascii_case(dir))
 }

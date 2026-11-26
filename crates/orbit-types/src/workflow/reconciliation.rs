@@ -47,20 +47,6 @@ impl ReconciliationAdmission {
     }
 }
 
-/// Whether `input` carries the reserved reconciliation admission key at all.
-pub fn run_input_declares_review_reconciliation(input: &Value) -> bool {
-    input
-        .as_object()
-        .is_some_and(|object| object.contains_key(REVIEW_RECONCILIATION_ADMISSION_KEY))
-}
-
-/// Remove the reserved admission key, returning whether one was present.
-pub fn strip_review_reconciliation_admission(input: &mut Value) -> bool {
-    input
-        .as_object_mut()
-        .is_some_and(|object| object.remove(REVIEW_RECONCILIATION_ADMISSION_KEY).is_some())
-}
-
 /// The stopped foreign execution whose delivery is reconciled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -441,4 +427,18 @@ impl ReviewReconciliation {
     pub fn current_attempt(&self) -> Option<&ReconciliationAttempt> {
         self.attempts.last()
     }
+}
+
+/// Whether `input` carries the reserved reconciliation admission key at all.
+pub fn run_input_declares_review_reconciliation(input: &Value) -> bool {
+    input
+        .as_object()
+        .is_some_and(|object| object.contains_key(REVIEW_RECONCILIATION_ADMISSION_KEY))
+}
+
+/// Remove the reserved admission key, returning whether one was present.
+pub fn strip_review_reconciliation_admission(input: &mut Value) -> bool {
+    input
+        .as_object_mut()
+        .is_some_and(|object| object.remove(REVIEW_RECONCILIATION_ADMISSION_KEY).is_some())
 }

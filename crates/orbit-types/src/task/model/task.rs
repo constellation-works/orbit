@@ -1,6 +1,28 @@
 use super::*;
 use crate::task::TaskEnvelopeV2;
 
+/// Prefix of system identity tags assigned to CI failure tracking tasks.
+pub const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+
+/// Tag prefix a task uses to select the job that delivers it when shipped.
+///
+/// `delivery:<job>` names a catalog job that declares `spec.task_delivery`
+/// for the ship mode; the gate dispatches it instead of
+/// `task_<mode>_pipeline`. A task without the tag ships as before.
+pub const DELIVERY_JOB_TAG_PREFIX: &str = "delivery:";
+
+/// The former `workflow.admission_affinity` default, fixed when the key was
+/// removed [ORB-22808]: work only the requesting executor can run leads its
+/// band, ahead of higher-priority work other executors can run.
+pub const ADMISSION_AFFINITY: AdmissionAffinityReach = AdmissionAffinityReach::Band;
+
+/// One candidate's standing against the live executor census, as the
+/// requesting executor sees it [ORB-17304]. The default is the standing every
+/// candidate shares when no census applies, so it never reorders.
+/// Neutral usage pressure, in milli-units (1000 = pressure 1.0), as an
+/// admission ordering key [ORB-17773].
+pub const NEUTRAL_PRESSURE_MILLI: u64 = 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
     pub id: OrbitId,
@@ -175,7 +197,6 @@ impl Task {
     ) -> Self {
         let status = envelope.status;
         Self {
-            job_run_machine: envelope.job_run_machine,
             id: envelope.id,
             title: envelope.title,
             description,
@@ -200,6 +221,7 @@ impl Task {
             external_refs: envelope.external_refs,
             relations: envelope.relations,
             job_run_id: envelope.job_run_id,
+            job_run_machine: envelope.job_run_machine,
             crew: envelope.crew,
             crew_source: envelope.crew_source,
             orchestrator: envelope.orchestrator,
@@ -256,6 +278,137 @@ impl Task {
             .map(|relation| relation.target.clone())
             .collect()
     }
+}
+
+/// Prefix knowledge derived from one bounded status-index snapshot.
+///
+/// This is intentionally an owned, short-lived value rather than a global
+/// cache: task stores may change between snapshots, and the snapshot's caller
+/// already defines the correct freshness boundary.
+#[derive(Debug)]
+pub struct TaskReferenceIndex {
+    known_prefixes: BTreeSet<String>,
+}
+
+impl TaskReferenceIndex {
+    /// Build prefix knowledge with one scan of a status-index snapshot.
+    pub fn from_status_index(status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> Self {
+        Self {
+            known_prefixes: status_by_id
+                .keys()
+                .filter_map(|id| task_id_prefix(id).map(ToOwned::to_owned))
+                .collect(),
+        }
+    }
+
+    /// Whether a missing valid task target belongs to a prefix this snapshot
+    /// cannot verify. The source task's prefix is local even when its task ID
+    /// is absent from the projection.
+    pub fn is_not_verifiable_here(
+        &self,
+        task: &Task,
+        target: &str,
+        status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    ) -> bool {
+        foreign_prefix_to_verify(task, target, status_by_id)
+            .is_some_and(|target_prefix| !self.known_prefixes.contains(target_prefix))
+    }
+}
+
+/// A [`TaskReferenceIndex`] built on the first target that needs it. Building
+/// one scans every id in the status snapshot, which for a listing is the
+/// whole registry, while most tasks only name targets the snapshot holds or
+/// that share their own prefix. A per-task projection that resolves several
+/// reference fields shares one, so it scans at most once and usually never.
+pub(crate) struct LazyTaskReferenceIndex<'a> {
+    status_by_id: &'a BTreeMap<OrbitId, TaskStatus>,
+    index: std::cell::OnceCell<TaskReferenceIndex>,
+}
+
+impl<'a> LazyTaskReferenceIndex<'a> {
+    pub(crate) fn new(status_by_id: &'a BTreeMap<OrbitId, TaskStatus>) -> Self {
+        Self {
+            status_by_id,
+            index: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// [`TaskReferenceIndex::is_not_verifiable_here`] against this snapshot.
+    fn is_not_verifiable_here(&self, task: &Task, target: &str) -> bool {
+        foreign_prefix_to_verify(task, target, self.status_by_id).is_some_and(|target_prefix| {
+            !self
+                .index
+                .get_or_init(|| TaskReferenceIndex::from_status_index(self.status_by_id))
+                .known_prefixes
+                .contains(target_prefix)
+        })
+    }
+}
+
+/// Result of one dependency walk from the updated task.
+struct DependencyWalk {
+    /// Cycle witness from the updated task back to itself, when one exists.
+    cycle: Option<Vec<OrbitId>>,
+}
+
+/// How far work only the requesting executor can run reaches in automatic
+/// dispatch order [ORB-17304]; owner admission fixes it at `band` [ORB-22808].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionAffinityReach {
+    /// Exclusive work leads its band, ahead of higher-priority work other
+    /// executors can run. Critical and corrective work still leads.
+    #[default]
+    Band,
+    /// Exclusive work leads only among tasks of its own priority.
+    Priority,
+    /// No affinity: the canonical band, priority, expiry, age and ID order.
+    Off,
+}
+
+impl AdmissionAffinityReach {
+    /// Every accepted spelling, in declaration order.
+    pub const CHOICES: [&'static str; 3] = ["band", "priority", "off"];
+
+    /// The reach a setting spells, or `None` for any other value.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "band" => Some(Self::Band),
+            "priority" => Some(Self::Priority),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DispatchAffinity {
+    /// The requester is the only live executor that can run the task.
+    pub exclusive: bool,
+    /// How many live executors can run the task; fewer sorts first. A task
+    /// the requester itself cannot run carries `usize::MAX`, so it sorts
+    /// after every task the requester can.
+    pub eligible: usize,
+    /// The highest weekly usage pressure, in milli-units, the requester
+    /// reported for a member of the task's crew pool [ORB-17773]; higher
+    /// sorts first, below every affinity key and above age. The default
+    /// `0` is shared by every candidate of a pressure-free order, so it
+    /// never reorders.
+    pub pressure_milli: u64,
+}
+
+/// Persisted execution location. Absence on older records means unknown.
+///
+/// A machine's display name is metadata; only the stable machine id identifies
+/// execution. Permanent read alias [ORB-12725, ORB-18313]: `host_id` stays
+/// readable for run records written before v0.24; only `machine_name` is
+/// written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionLocation {
+    pub machine_id: String,
+    #[serde(default, alias = "host_id")]
+    pub machine_name: Option<String>,
 }
 
 pub fn normalize_task_dependencies(
@@ -324,22 +477,12 @@ pub fn task_matches_tags(task: &Task, required_tags: &[String]) -> bool {
         .all(|tag| available.contains(tag.as_str()))
 }
 
-/// Prefix of system identity tags assigned to CI failure tracking tasks.
-pub const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
-
 /// Whether a tag is a system identity tag that tracks automated system provenance.
 pub fn is_system_identity_tag(tag: &str) -> bool {
     tag.trim()
         .to_ascii_lowercase()
         .starts_with(CI_FAILURE_KEY_TAG_PREFIX)
 }
-
-/// Tag prefix a task uses to select the job that delivers it when shipped.
-///
-/// `delivery:<job>` names a catalog job that declares `spec.task_delivery`
-/// for the ship mode; the gate dispatches it instead of
-/// `task_<mode>_pipeline`. A task without the tag ships as before.
-pub const DELIVERY_JOB_TAG_PREFIX: &str = "delivery:";
 
 /// The job named by a `delivery:<job>` tag among `tags`.
 ///
@@ -451,41 +594,6 @@ fn project_task_relations_by(
         .collect()
 }
 
-/// Prefix knowledge derived from one bounded status-index snapshot.
-///
-/// This is intentionally an owned, short-lived value rather than a global
-/// cache: task stores may change between snapshots, and the snapshot's caller
-/// already defines the correct freshness boundary.
-#[derive(Debug)]
-pub struct TaskReferenceIndex {
-    known_prefixes: BTreeSet<String>,
-}
-
-impl TaskReferenceIndex {
-    /// Build prefix knowledge with one scan of a status-index snapshot.
-    pub fn from_status_index(status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> Self {
-        Self {
-            known_prefixes: status_by_id
-                .keys()
-                .filter_map(|id| task_id_prefix(id).map(ToOwned::to_owned))
-                .collect(),
-        }
-    }
-
-    /// Whether a missing valid task target belongs to a prefix this snapshot
-    /// cannot verify. The source task's prefix is local even when its task ID
-    /// is absent from the projection.
-    pub fn is_not_verifiable_here(
-        &self,
-        task: &Task,
-        target: &str,
-        status_by_id: &BTreeMap<OrbitId, TaskStatus>,
-    ) -> bool {
-        foreign_prefix_to_verify(task, target, status_by_id)
-            .is_some_and(|target_prefix| !self.known_prefixes.contains(target_prefix))
-    }
-}
-
 /// The prefix of a missing, valid `target` outside `task`'s own prefix: the
 /// only case [`TaskReferenceIndex::is_not_verifiable_here`] needs the
 /// snapshot's prefix set for. `None` decides the target is verifiable here.
@@ -499,36 +607,6 @@ fn foreign_prefix_to_verify<'a>(
     }
     let target_prefix = task_id_prefix(target)?;
     (task_id_prefix(&task.id) != Some(target_prefix)).then_some(target_prefix)
-}
-
-/// A [`TaskReferenceIndex`] built on the first target that needs it. Building
-/// one scans every id in the status snapshot, which for a listing is the
-/// whole registry, while most tasks only name targets the snapshot holds or
-/// that share their own prefix. A per-task projection that resolves several
-/// reference fields shares one, so it scans at most once and usually never.
-pub(crate) struct LazyTaskReferenceIndex<'a> {
-    status_by_id: &'a BTreeMap<OrbitId, TaskStatus>,
-    index: std::cell::OnceCell<TaskReferenceIndex>,
-}
-
-impl<'a> LazyTaskReferenceIndex<'a> {
-    pub(crate) fn new(status_by_id: &'a BTreeMap<OrbitId, TaskStatus>) -> Self {
-        Self {
-            status_by_id,
-            index: std::cell::OnceCell::new(),
-        }
-    }
-
-    /// [`TaskReferenceIndex::is_not_verifiable_here`] against this snapshot.
-    fn is_not_verifiable_here(&self, task: &Task, target: &str) -> bool {
-        foreign_prefix_to_verify(task, target, self.status_by_id).is_some_and(|target_prefix| {
-            !self
-                .index
-                .get_or_init(|| TaskReferenceIndex::from_status_index(self.status_by_id))
-                .known_prefixes
-                .contains(target_prefix)
-        })
-    }
 }
 
 /// Check readiness using prefix knowledge derived from one status projection.
@@ -703,12 +781,6 @@ where
     }
 }
 
-/// Result of one dependency walk from the updated task.
-struct DependencyWalk {
-    /// Cycle witness from the updated task back to itself, when one exists.
-    cycle: Option<Vec<OrbitId>>,
-}
-
 /// Depth-first search for a path from `dependencies` back to `current_task_id`.
 ///
 /// Iterative so long chains cannot exhaust the stack. A node is expanded at
@@ -771,65 +843,6 @@ pub fn automatic_dispatch_cmp_with_expiry(
         (right, right_expiring, DispatchAffinity::default()),
         AdmissionAffinityReach::Off,
     )
-}
-
-/// How far work only the requesting executor can run reaches in automatic
-/// dispatch order [ORB-17304]; owner admission fixes it at `band` [ORB-22808].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AdmissionAffinityReach {
-    /// Exclusive work leads its band, ahead of higher-priority work other
-    /// executors can run. Critical and corrective work still leads.
-    #[default]
-    Band,
-    /// Exclusive work leads only among tasks of its own priority.
-    Priority,
-    /// No affinity: the canonical band, priority, expiry, age and ID order.
-    Off,
-}
-
-/// The former `workflow.admission_affinity` default, fixed when the key was
-/// removed [ORB-22808]: work only the requesting executor can run leads its
-/// band, ahead of higher-priority work other executors can run.
-pub const ADMISSION_AFFINITY: AdmissionAffinityReach = AdmissionAffinityReach::Band;
-
-impl AdmissionAffinityReach {
-    /// Every accepted spelling, in declaration order.
-    pub const CHOICES: [&'static str; 3] = ["band", "priority", "off"];
-
-    /// The reach a setting spells, or `None` for any other value.
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "band" => Some(Self::Band),
-            "priority" => Some(Self::Priority),
-            "off" => Some(Self::Off),
-            _ => None,
-        }
-    }
-}
-
-/// One candidate's standing against the live executor census, as the
-/// requesting executor sees it [ORB-17304]. The default is the standing every
-/// candidate shares when no census applies, so it never reorders.
-/// Neutral usage pressure, in milli-units (1000 = pressure 1.0), as an
-/// admission ordering key [ORB-17773].
-pub const NEUTRAL_PRESSURE_MILLI: u64 = 1000;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DispatchAffinity {
-    /// The requester is the only live executor that can run the task.
-    pub exclusive: bool,
-    /// How many live executors can run the task; fewer sorts first. A task
-    /// the requester itself cannot run carries `usize::MAX`, so it sorts
-    /// after every task the requester can.
-    pub eligible: usize,
-    /// The highest weekly usage pressure, in milli-units, the requester
-    /// reported for a member of the task's crew pool [ORB-17773]; higher
-    /// sorts first, below every affinity key and above age. The default
-    /// `0` is shared by every candidate of a pressure-free order, so it
-    /// never reorders.
-    pub pressure_milli: u64,
 }
 
 /// Automatic dispatch order for one requesting executor against the live
@@ -909,17 +922,4 @@ pub fn automatic_dispatch_cmp_with_affinity(
         )
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
-}
-
-/// Persisted execution location. Absence on older records means unknown.
-///
-/// A machine's display name is metadata; only the stable machine id identifies
-/// execution. Permanent read alias [ORB-12725, ORB-18313]: `host_id` stays
-/// readable for run records written before v0.24; only `machine_name` is
-/// written.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecutionLocation {
-    pub machine_id: String,
-    #[serde(default, alias = "host_id")]
-    pub machine_name: Option<String>,
 }

@@ -10,6 +10,14 @@ use super::{BatchAttempt, CoverageClass, SourceRevision};
 /// accepted under it keep reading, but settlement refuses new version-1 bytes.
 pub const COVERAGE_EVIDENCE_SCHEMA_VERSION: u32 = 2;
 
+/// Task artifact carrying an action's [`CoverageEvidence`]. The artifact Store
+/// refuses bytes that do not parse as that schema, so the submitter sees the
+/// parse error while it can still fix and re-put the file.
+pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
+
+/// Reserved Store-authored artifact; callers cannot supply its contents.
+pub const EVIDENCE_AUTHORITY_ARTIFACT: &str = "automation-evidence-authority.json";
+
 /// Worker-submitted structured evidence, attached through orbit.task.artifact.put.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +121,32 @@ pub struct ClaimedSubmission {
     pub machine_id: String,
 }
 
+/// Small diagnostic receipt; accepted bytes are downloaded separately.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoverageReceiptSummary {
+    pub batch_id: String,
+    pub action_id: String,
+    pub input_digest: String,
+    pub evidence_digest: String,
+    pub evidence_reference: String,
+    pub submitted_by: String,
+    pub accepted_at: DateTime<Utc>,
+}
+
+impl From<AcceptedCoverage> for CoverageReceiptSummary {
+    fn from(receipt: AcceptedCoverage) -> Self {
+        Self {
+            batch_id: receipt.batch_id,
+            action_id: receipt.action_id,
+            input_digest: receipt.input_digest,
+            evidence_digest: receipt.evidence_digest,
+            evidence_reference: receipt.evidence_reference,
+            submitted_by: receipt.submitted_by,
+            accepted_at: receipt.accepted_at,
+        }
+    }
+}
+
 /// Shape supplied with a frozen batch. Workers fill each delivery's
 /// examination, the checks and findings, and attest completion.
 pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
@@ -152,39 +186,5 @@ pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
             .collect(),
         checks: vec![],
         findings: vec![],
-    }
-}
-
-/// Task artifact carrying an action's [`CoverageEvidence`]. The artifact Store
-/// refuses bytes that do not parse as that schema, so the submitter sees the
-/// parse error while it can still fix and re-put the file.
-pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
-
-/// Reserved Store-authored artifact; callers cannot supply its contents.
-pub const EVIDENCE_AUTHORITY_ARTIFACT: &str = "automation-evidence-authority.json";
-
-/// Small diagnostic receipt; accepted bytes are downloaded separately.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CoverageReceiptSummary {
-    pub batch_id: String,
-    pub action_id: String,
-    pub input_digest: String,
-    pub evidence_digest: String,
-    pub evidence_reference: String,
-    pub submitted_by: String,
-    pub accepted_at: DateTime<Utc>,
-}
-
-impl From<AcceptedCoverage> for CoverageReceiptSummary {
-    fn from(receipt: AcceptedCoverage) -> Self {
-        Self {
-            batch_id: receipt.batch_id,
-            action_id: receipt.action_id,
-            input_digest: receipt.input_digest,
-            evidence_digest: receipt.evidence_digest,
-            evidence_reference: receipt.evidence_reference,
-            submitted_by: receipt.submitted_by,
-            accepted_at: receipt.accepted_at,
-        }
     }
 }

@@ -6,6 +6,10 @@ use crate::workflow::{JobScheduleState, ShipMode};
 use super::AUTO_TASK_REF_PREFIX;
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 
+/// Step keys only an `auto-task:` step admits.
+pub const AUTO_TASK_WAIT_KEYS: [&str; 4] =
+    ["wait_until", "expire_when", "reuse_when", "require_result"];
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "snake_case")]
@@ -91,18 +95,6 @@ pub struct JobV2 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expire_when: Option<String>,
     pub steps: Vec<JobV2Step>,
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
-}
-
-fn default_job_schema_version() -> u32 {
-    super::ASSET_SCHEMA_VERSION
-}
-
-fn is_default_job_schema_version(version: &u32) -> bool {
-    *version == super::ASSET_SCHEMA_VERSION
 }
 
 /// A job's `spec.steering_gate` declaration
@@ -402,10 +394,6 @@ impl JobV2Step {
     }
 }
 
-/// Step keys only an `auto-task:` step admits.
-pub const AUTO_TASK_WAIT_KEYS: [&str; 4] =
-    ["wait_until", "expire_when", "reuse_when", "require_result"];
-
 /// One-of body for a v2 step. Picked by exactly one of the `target`, `spec`,
 /// `parallel`, `fan_out`, or `loop` body keys.
 ///
@@ -584,54 +572,6 @@ impl<'de> Deserialize<'de> for JobV2Step {
     }
 }
 
-/// Admit an `auto-task:` step's shape. Its keys are a closed set, so a key
-/// this binary does not know is refused rather than dropped; the per-step
-/// activity knobs do not apply to a step that binds a task.
-fn admit_auto_task_step<E: serde::de::Error>(
-    id: &str,
-    target: &str,
-    rest: &serde_json::Map<String, Value>,
-    has_retry: bool,
-    has_recovery_activity: bool,
-) -> Result<(), E> {
-    let name = target.strip_prefix(AUTO_TASK_REF_PREFIX).unwrap_or(target);
-    if !crate::workflow::is_valid_auto_task_name(name) {
-        return Err(E::custom(format!(
-            "step `{id}`: target `{target}` does not name an auto-task; a name is lowercase \
-             letters, digits, `-` and `_`, starting with a letter or digit"
-        )));
-    }
-    // `timeout_seconds: 0` is what a serialized ref carries for "no timeout",
-    // so a step re-reads its own serialization.
-    let refused = rest
-        .iter()
-        .filter(|(key, value)| {
-            *key != "target" && !(*key == "timeout_seconds" && value.as_u64() == Some(0))
-        })
-        .map(|(key, _)| key.as_str())
-        .chain(has_retry.then_some("retry"))
-        .chain(has_recovery_activity.then_some("recovery_activity"))
-        .min();
-    match refused {
-        Some(key) => Err(E::custom(format!(
-            "step `{id}`: an `auto-task:` step does not admit `{key}`; it admits id, stage, \
-             when, target, wait_until, expire_when, reuse_when and require_result"
-        ))),
-        None => Ok(()),
-    }
-}
-
-fn deserialize_optional_string<E: serde::de::Error>(
-    field: &str,
-    value: Option<Value>,
-) -> Result<Option<String>, E> {
-    match value {
-        None => Ok(None),
-        Some(value) => serde_json::from_value::<Option<String>>(value)
-            .map_err(|error| E::custom(format!("`{field}`: {error}"))),
-    }
-}
-
 /// Flat target step: inlines an `ActivityV2Spec` directly on the step. This
 /// is the shape the executor operates on — [`TargetRef`] is rewritten to
 /// `TargetStep` by `resolve_job_target_refs` before
@@ -791,6 +731,66 @@ impl<'de> Deserialize<'de> for PipelineRef {
         Err(serde::de::Error::custom(
             "PipelineRef must be either a string or a block with `from:`",
         ))
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+fn default_job_schema_version() -> u32 {
+    super::ASSET_SCHEMA_VERSION
+}
+
+fn is_default_job_schema_version(version: &u32) -> bool {
+    *version == super::ASSET_SCHEMA_VERSION
+}
+
+/// Admit an `auto-task:` step's shape. Its keys are a closed set, so a key
+/// this binary does not know is refused rather than dropped; the per-step
+/// activity knobs do not apply to a step that binds a task.
+fn admit_auto_task_step<E: serde::de::Error>(
+    id: &str,
+    target: &str,
+    rest: &serde_json::Map<String, Value>,
+    has_retry: bool,
+    has_recovery_activity: bool,
+) -> Result<(), E> {
+    let name = target.strip_prefix(AUTO_TASK_REF_PREFIX).unwrap_or(target);
+    if !crate::workflow::is_valid_auto_task_name(name) {
+        return Err(E::custom(format!(
+            "step `{id}`: target `{target}` does not name an auto-task; a name is lowercase \
+             letters, digits, `-` and `_`, starting with a letter or digit"
+        )));
+    }
+    // `timeout_seconds: 0` is what a serialized ref carries for "no timeout",
+    // so a step re-reads its own serialization.
+    let refused = rest
+        .iter()
+        .filter(|(key, value)| {
+            *key != "target" && !(*key == "timeout_seconds" && value.as_u64() == Some(0))
+        })
+        .map(|(key, _)| key.as_str())
+        .chain(has_retry.then_some("retry"))
+        .chain(has_recovery_activity.then_some("recovery_activity"))
+        .min();
+    match refused {
+        Some(key) => Err(E::custom(format!(
+            "step `{id}`: an `auto-task:` step does not admit `{key}`; it admits id, stage, \
+             when, target, wait_until, expire_when, reuse_when and require_result"
+        ))),
+        None => Ok(()),
+    }
+}
+
+fn deserialize_optional_string<E: serde::de::Error>(
+    field: &str,
+    value: Option<Value>,
+) -> Result<Option<String>, E> {
+    match value {
+        None => Ok(None),
+        Some(value) => serde_json::from_value::<Option<String>>(value)
+            .map_err(|error| E::custom(format!("`{field}`: {error}"))),
     }
 }
 

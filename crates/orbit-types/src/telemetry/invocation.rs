@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Smallest prompt, in tokens, of a model request whose usage an invocation
+/// trace keeps in [`InvocationTrace::long_prompt_requests`]. It is the lowest
+/// threshold of any prompt-size price tier, so a request below it can never
+/// reach one. The price table refuses a tier below it.
+pub const LONG_PROMPT_CAPTURE_FLOOR_TOKENS: u64 = 100_000;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenUsage {
     #[serde(default)]
@@ -22,12 +28,6 @@ pub struct TokenUsage {
     #[serde(default)]
     pub output: u64,
 }
-
-/// Smallest prompt, in tokens, of a model request whose usage an invocation
-/// trace keeps in [`InvocationTrace::long_prompt_requests`]. It is the lowest
-/// threshold of any prompt-size price tier, so a request below it can never
-/// reach one. The price table refuses a tier below it.
-pub const LONG_PROMPT_CAPTURE_FLOOR_TOKENS: u64 = 100_000;
 
 impl TokenUsage {
     /// Whether this one request's prompt may reach

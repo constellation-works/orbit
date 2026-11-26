@@ -110,14 +110,6 @@ pub struct ProviderLimitObservation {
     pub detail: String,
 }
 
-fn gating_default() -> bool {
-    true
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 impl ProviderLimitObservation {
     /// `detail` cut to [`PROVIDER_LIMIT_DETAIL_MAX_BYTES`] on a character
     /// boundary.
@@ -130,4 +122,12 @@ impl ProviderLimitObservation {
         }
         detail[..cut].to_string()
     }
+}
+
+fn gating_default() -> bool {
+    true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

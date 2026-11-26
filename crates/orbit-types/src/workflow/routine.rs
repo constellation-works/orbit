@@ -26,6 +26,10 @@ pub const ROUTINE_ACTIVITY_TARGET_PREFIX: &str = "activity:";
 /// the scheduler gains no execution surface of its own.
 pub const ROUTINE_SCRIPT_TARGET_PREFIX: &str = "script:";
 
+/// Maximum supported timeout or retry backoff. A week is long enough for
+/// unattended maintenance while keeping routine policy mistakes bounded.
+const MAX_DURATION_MINUTES: u64 = 7 * 24 * 60;
+
 /// A parsed, validated routine definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -246,22 +250,6 @@ pub enum OverlapPolicy {
     Allow,
 }
 
-const fn default_true() -> bool {
-    true
-}
-
-const fn default_timeout_minutes() -> u64 {
-    60
-}
-
-const fn default_backoff_minutes() -> u64 {
-    2
-}
-
-/// Maximum supported timeout or retry backoff. A week is long enough for
-/// unattended maintenance while keeping routine policy mistakes bounded.
-const MAX_DURATION_MINUTES: u64 = 7 * 24 * 60;
-
 impl RoutineDefinition {
     /// Semantic checks beyond serde shape: name charset, non-empty cron,
     /// positive timeout. Full cron parsing happens in the scheduler
@@ -337,6 +325,18 @@ impl RoutineDefinition {
     pub fn has_legacy_host_pin(&self) -> bool {
         self.legacy_hosts.is_some()
     }
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_timeout_minutes() -> u64 {
+    60
+}
+
+const fn default_backoff_minutes() -> u64 {
+    2
 }
 
 fn is_valid_routine_name(name: &str) -> bool {

@@ -74,6 +74,69 @@ impl Cluster {
     }
 }
 
+#[derive(Default)]
+struct RunLinks {
+    owners: BTreeSet<usize>,
+    citers: BTreeSet<usize>,
+}
+
+struct CascadeNode {
+    incident: FailureIncident,
+    citations: IncidentCitations,
+}
+
+// Citation precedence is root message first, then raw events newest-first,
+// then token order. Samples and propagation messages are already present in
+// the exhaustive events list built by incident_from, so cannot add a citation.
+type CitationRank = (Reverse<DateTime<Utc>>, Reverse<i64>, usize);
+
+struct IncidentCitations {
+    root: Vec<String>,
+    events: BTreeMap<String, CitationRank>,
+}
+
+impl IncidentCitations {
+    fn new(incident: &FailureIncident, known: &BTreeMap<String, RunLinks>) -> Self {
+        // The root and samples repeat raw messages; tokenize each distinct
+        // message once for this incident, and discard the message cache after
+        // retaining only known-run edges and their precedence.
+        let mut messages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut consider = |message: Option<&str>| {
+            message
+                .map(|message| {
+                    messages
+                        .entry(message.to_string())
+                        .or_insert_with(|| {
+                            message
+                                .split_whitespace()
+                                .filter_map(|token| {
+                                    let token = token
+                                        .trim_matches(['"', '\'', '`', '(', ')', ',', ':', ';']);
+                                    known.contains_key(token).then(|| token.to_string())
+                                })
+                                .collect()
+                        })
+                        .clone()
+                })
+                .unwrap_or_default()
+        };
+        let root = consider(incident.message.as_deref());
+        let mut events = BTreeMap::new();
+        for event in &incident.events {
+            for (position, run) in consider(event.message.as_deref()).into_iter().enumerate() {
+                let rank = (Reverse(event.ts), Reverse(event.id), position);
+                events
+                    .entry(run)
+                    .and_modify(|earliest: &mut CitationRank| {
+                        *earliest = (*earliest).min(rank);
+                    })
+                    .or_insert(rank);
+            }
+        }
+        Self { root, events }
+    }
+}
+
 fn push_unique(target: &mut Vec<String>, value: Option<&str>) {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return;
@@ -363,69 +426,6 @@ fn collapse_cited_run_cascades(incidents: Vec<FailureIncident>) -> Vec<FailureIn
             node.incident
         })
         .collect()
-}
-
-#[derive(Default)]
-struct RunLinks {
-    owners: BTreeSet<usize>,
-    citers: BTreeSet<usize>,
-}
-
-struct CascadeNode {
-    incident: FailureIncident,
-    citations: IncidentCitations,
-}
-
-// Citation precedence is root message first, then raw events newest-first,
-// then token order. Samples and propagation messages are already present in
-// the exhaustive events list built by incident_from, so cannot add a citation.
-type CitationRank = (Reverse<DateTime<Utc>>, Reverse<i64>, usize);
-
-struct IncidentCitations {
-    root: Vec<String>,
-    events: BTreeMap<String, CitationRank>,
-}
-
-impl IncidentCitations {
-    fn new(incident: &FailureIncident, known: &BTreeMap<String, RunLinks>) -> Self {
-        // The root and samples repeat raw messages; tokenize each distinct
-        // message once for this incident, and discard the message cache after
-        // retaining only known-run edges and their precedence.
-        let mut messages: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut consider = |message: Option<&str>| {
-            message
-                .map(|message| {
-                    messages
-                        .entry(message.to_string())
-                        .or_insert_with(|| {
-                            message
-                                .split_whitespace()
-                                .filter_map(|token| {
-                                    let token = token
-                                        .trim_matches(['"', '\'', '`', '(', ')', ',', ':', ';']);
-                                    known.contains_key(token).then(|| token.to_string())
-                                })
-                                .collect()
-                        })
-                        .clone()
-                })
-                .unwrap_or_default()
-        };
-        let root = consider(incident.message.as_deref());
-        let mut events = BTreeMap::new();
-        for event in &incident.events {
-            for (position, run) in consider(event.message.as_deref()).into_iter().enumerate() {
-                let rank = (Reverse(event.ts), Reverse(event.id), position);
-                events
-                    .entry(run)
-                    .and_modify(|earliest: &mut CitationRank| {
-                        *earliest = (*earliest).min(rank);
-                    })
-                    .or_insert(rank);
-            }
-        }
-        Self { root, events }
-    }
 }
 
 fn refresh_candidate(

@@ -65,43 +65,6 @@ impl RecordedReviewFixValidationFailure {
     }
 }
 
-/// Failure timestamps for the task-facts boundary's nearest-earlier-review policy.
-///
-/// Typed history takes precedence over its paired display comment. Legacy
-/// comments carry no required provenance, so this projection deliberately keeps
-/// only the timestamp needed for scoring, rather than inventing missing fields.
-#[must_use]
-pub fn review_fix_validation_failure_times(
-    history: &[TaskHistoryEntry],
-    comments: &[TaskComment],
-) -> Vec<DateTime<Utc>> {
-    let recorded: BTreeSet<_> = history
-        .iter()
-        .filter_map(|entry| {
-            RecordedReviewFixValidationFailure::from_entry(entry)
-                .map(|_| (entry.at, entry.by.as_str()))
-        })
-        .collect();
-    let mut failures: Vec<_> = recorded.iter().map(|(at, _)| *at).collect();
-    failures.extend(
-        comments
-            .iter()
-            .filter(|comment| !recorded.contains(&(comment.at, comment.by.as_str())))
-            .filter(|comment| legacy_review_fix_validation_failure(comment))
-            .map(|comment| comment.at),
-    );
-    failures.sort();
-    failures
-}
-
-/// Sole compatibility decoder of the historical escalation prose.
-fn legacy_review_fix_validation_failure(comment: &TaskComment) -> bool {
-    comment.message.contains("## Review gate escalation")
-        && comment.message.contains("Verdict: `reject`")
-        // A settlement can quote escalation prose; settlement always wins.
-        && task::recorded_review_settlements(&[], std::slice::from_ref(comment)).is_empty()
-}
-
 /// The review-gate history events whose notes [`ReviewGateHistoryNote`] owns.
 ///
 /// History rows keep `event` as a string on disk; this closed set names the
@@ -266,6 +229,43 @@ impl ReviewGateHistoryNote {
             .as_deref()
             .or(self.candidate_tree.as_deref())
     }
+}
+
+/// Failure timestamps for the task-facts boundary's nearest-earlier-review policy.
+///
+/// Typed history takes precedence over its paired display comment. Legacy
+/// comments carry no required provenance, so this projection deliberately keeps
+/// only the timestamp needed for scoring, rather than inventing missing fields.
+#[must_use]
+pub fn review_fix_validation_failure_times(
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+) -> Vec<DateTime<Utc>> {
+    let recorded: BTreeSet<_> = history
+        .iter()
+        .filter_map(|entry| {
+            RecordedReviewFixValidationFailure::from_entry(entry)
+                .map(|_| (entry.at, entry.by.as_str()))
+        })
+        .collect();
+    let mut failures: Vec<_> = recorded.iter().map(|(at, _)| *at).collect();
+    failures.extend(
+        comments
+            .iter()
+            .filter(|comment| !recorded.contains(&(comment.at, comment.by.as_str())))
+            .filter(|comment| legacy_review_fix_validation_failure(comment))
+            .map(|comment| comment.at),
+    );
+    failures.sort();
+    failures
+}
+
+/// Sole compatibility decoder of the historical escalation prose.
+fn legacy_review_fix_validation_failure(comment: &TaskComment) -> bool {
+    comment.message.contains("## Review gate escalation")
+        && comment.message.contains("Verdict: `reject`")
+        // A settlement can quote escalation prose; settlement always wins.
+        && task::recorded_review_settlements(&[], std::slice::from_ref(comment)).is_empty()
 }
 
 fn is_bare_key(key: &str) -> bool {

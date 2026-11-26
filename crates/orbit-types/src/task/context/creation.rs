@@ -106,13 +106,6 @@ impl ContextCreationGrant {
     }
 }
 
-/// Order-insensitive digest of a task's `context_files`.
-pub fn context_files_sha256(context_files: &[String]) -> String {
-    let set = context_files.iter().collect::<BTreeSet<_>>();
-    let encoded = serde_json::to_string(&set).unwrap_or_default();
-    lower_hex(Sha256::digest(encoded.as_bytes()))
-}
-
 /// The creation authorization a task's history grants its current scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextCreationState {
@@ -234,4 +227,11 @@ impl ContextCreationState {
             _ => Ok(Some(next)),
         }
     }
+}
+
+/// Order-insensitive digest of a task's `context_files`.
+pub fn context_files_sha256(context_files: &[String]) -> String {
+    let set = context_files.iter().collect::<BTreeSet<_>>();
+    let encoded = serde_json::to_string(&set).unwrap_or_default();
+    lower_hex(Sha256::digest(encoded.as_bytes()))
 }

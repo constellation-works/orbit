@@ -154,22 +154,6 @@ pub struct ConditionTrigger {
     pub group_settle_seconds: Option<u64>,
 }
 
-const fn default_fires_per_hour() -> u32 {
-    DEFAULT_CONDITION_FIRES_PER_HOUR
-}
-
-const fn default_fires_per_day() -> u32 {
-    DEFAULT_CONDITION_FIRES_PER_DAY
-}
-
-const fn default_max_matches() -> u32 {
-    DEFAULT_CONDITION_MAX_MATCHES
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 impl ConditionTrigger {
     /// Shape checks beyond serde, independent of the expression language.
     /// `clause` is where the block sits in its file (`trigger.condition` or
@@ -349,4 +333,20 @@ impl ScheduleGuard {
         }
         Ok(())
     }
+}
+
+const fn default_fires_per_hour() -> u32 {
+    DEFAULT_CONDITION_FIRES_PER_HOUR
+}
+
+const fn default_fires_per_day() -> u32 {
+    DEFAULT_CONDITION_FIRES_PER_DAY
+}
+
+const fn default_max_matches() -> u32 {
+    DEFAULT_CONDITION_MAX_MATCHES
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

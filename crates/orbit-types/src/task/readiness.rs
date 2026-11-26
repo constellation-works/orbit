@@ -32,6 +32,15 @@ use serde_json::{Value, json};
 
 use super::{NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskStatus};
 
+/// The tag an operator adds to waive a backlog task's readiness gaps, so
+/// automatic drain selection admits it like ordinary ready work.
+pub const READINESS_WAIVED_TAG: &str = "readiness-waived";
+
+const CONTEXT_FILES_FIX: &str =
+    "add context files, run the task pilot, or tag no-diff-expected if no diff is expected";
+
+const COMPLEXITY_FIX: &str = "set --complexity, or let the task pilot assess it";
+
 /// The lifecycle stage readiness is judged against. Only `proposed` and
 /// `backlog` tasks wait on preparation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,9 +137,48 @@ impl ReadinessGap {
     }
 }
 
-/// The tag an operator adds to waive a backlog task's readiness gaps, so
-/// automatic drain selection admits it like ordinary ready work.
-pub const READINESS_WAIVED_TAG: &str = "readiness-waived";
+/// A `proposed` or `backlog` task's readiness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskReadiness {
+    pub stage: ReadinessStage,
+    pub gaps: Vec<ReadinessGap>,
+}
+
+impl TaskReadiness {
+    /// Ready means no blocking gap; advisory gaps do not hold a task.
+    pub fn ready(&self) -> bool {
+        !self.gaps.iter().any(ReadinessGap::is_blocking)
+    }
+
+    /// The codes of the gaps an operator can still waive: unwaived gaps the
+    /// stage lets [`READINESS_WAIVED_TAG`] waive.
+    pub fn waivable(&self) -> Vec<ReadinessGapCode> {
+        self.gaps
+            .iter()
+            .filter(|gap| !gap.waived && is_waivable(self.stage, gap.code))
+            .map(|gap| gap.code)
+            .collect()
+    }
+
+    /// `{ready, gaps: [{code, severity, message, fix, waived?}]}`, plus
+    /// `waivable: [code]` while an operator can still waive a gap.
+    pub fn to_json(&self) -> Value {
+        let mut value = json!({
+            "ready": self.ready(),
+            "gaps": self.gaps.iter().map(ReadinessGap::to_json).collect::<Vec<_>>(),
+        });
+        let waivable = self.waivable();
+        if !waivable.is_empty() {
+            value["waivable"] = json!(
+                waivable
+                    .iter()
+                    .map(|code| code.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+        value
+    }
+}
 
 /// Whether `tags` carry the operator's readiness waiver.
 pub fn waives_readiness(tags: &[String]) -> bool {
@@ -142,9 +190,6 @@ pub fn waives_readiness(tags: &[String]) -> bool {
 pub fn is_waivable(stage: ReadinessStage, _code: ReadinessGapCode) -> bool {
     stage == ReadinessStage::Backlog
 }
-
-const CONTEXT_FILES_FIX: &str =
-    "add context files, run the task pilot, or tag no-diff-expected if no diff is expected";
 
 /// Whether a task declares no footprint: no `context_files`, and no
 /// [`NO_DIFF_EXPECTED_TAG`] saying it edits nothing. Such a task holds no
@@ -161,7 +206,6 @@ pub fn declares_no_footprint(tags: &[String], context_files: &[String]) -> bool 
 pub fn footprint_rule_applies(tags: &[String], context_files: &[String]) -> bool {
     declares_no_footprint(tags, context_files) && !waives_readiness(tags)
 }
-const COMPLEXITY_FIX: &str = "set --complexity, or let the task pilot assess it";
 
 /// The gaps of a task at `stage`, in the order drain approval reports them:
 /// missing context files, then unassessed complexity.
@@ -236,49 +280,6 @@ pub fn readiness_gaps(
         });
     }
     gaps
-}
-
-/// A `proposed` or `backlog` task's readiness.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskReadiness {
-    pub stage: ReadinessStage,
-    pub gaps: Vec<ReadinessGap>,
-}
-
-impl TaskReadiness {
-    /// Ready means no blocking gap; advisory gaps do not hold a task.
-    pub fn ready(&self) -> bool {
-        !self.gaps.iter().any(ReadinessGap::is_blocking)
-    }
-
-    /// The codes of the gaps an operator can still waive: unwaived gaps the
-    /// stage lets [`READINESS_WAIVED_TAG`] waive.
-    pub fn waivable(&self) -> Vec<ReadinessGapCode> {
-        self.gaps
-            .iter()
-            .filter(|gap| !gap.waived && is_waivable(self.stage, gap.code))
-            .map(|gap| gap.code)
-            .collect()
-    }
-
-    /// `{ready, gaps: [{code, severity, message, fix, waived?}]}`, plus
-    /// `waivable: [code]` while an operator can still waive a gap.
-    pub fn to_json(&self) -> Value {
-        let mut value = json!({
-            "ready": self.ready(),
-            "gaps": self.gaps.iter().map(ReadinessGap::to_json).collect::<Vec<_>>(),
-        });
-        let waivable = self.waivable();
-        if !waivable.is_empty() {
-            value["waivable"] = json!(
-                waivable
-                    .iter()
-                    .map(|code| code.as_str())
-                    .collect::<Vec<_>>()
-            );
-        }
-        value
-    }
 }
 
 /// The task's readiness, or `None` for a status other than `proposed` or

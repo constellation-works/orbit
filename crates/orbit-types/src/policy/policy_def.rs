@@ -236,6 +236,13 @@ impl PolicyDef {
     }
 }
 
+enum GlobSeg {
+    /// A full-segment `**`.
+    Any,
+    /// A literal segment or one `*` / `?` pattern, never containing `**`.
+    Fixed(String),
+}
+
 fn extend_unique(target: &mut Vec<String>, extra: &[String]) {
     for value in extra {
         if !target.iter().any(|existing| existing == value) {
@@ -458,13 +465,6 @@ fn glob_patterns_inside_subtree(glob: &str, prefix: &str) -> Option<Vec<String>>
         push_unique(&mut patterns, prefix.to_string());
     }
     Some(patterns)
-}
-
-enum GlobSeg {
-    /// A full-segment `**`.
-    Any,
-    /// A literal segment or one `*` / `?` pattern, never containing `**`.
-    Fixed(String),
 }
 
 fn parse_glob_segments(glob: &str) -> Option<Vec<GlobSeg>> {

@@ -1,6 +1,16 @@
 use super::*;
 use crate::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
 
+/// Largest task artifact payload Orbit will carry inline through a tool call.
+///
+/// One limit governs both directions: `orbit.task.artifact.put` refuses to
+/// read a larger source, and `orbit.task.artifact.get` refuses to return a
+/// larger stored payload. The dashboard's streaming download route has no such
+/// bound, so an oversize artifact is still reachable — just not inline.
+pub const MAX_TASK_ARTIFACT_CONTENT_BYTES: u64 = 1_048_576;
+
+pub const GITHUB_PR_EXTERNAL_REF_SYSTEM: &str = "github-pr";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskComment {
     pub at: DateTime<Utc>,
@@ -72,17 +82,6 @@ impl TaskWriteProvenance {
                 .map(ToOwned::to_owned),
         }
     }
-}
-
-/// Whether `actor` names a human/operator writer rather than Orbit automation,
-/// a precedent/model decision actor, or an application credential.
-pub fn is_human_attributed_task_actor(actor: &str) -> bool {
-    let actor = actor.trim();
-    !actor.is_empty()
-        && !crate::identity::is_automation_actor(actor)
-        && actor != crate::task::PRECEDENT_ACTOR
-        && actor != "application"
-        && !actor.starts_with("application:")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,10 +189,11 @@ impl TaskArtifact {
 
     pub fn from_bytes(path: impl Into<String>, content: impl Into<Vec<u8>>) -> Self {
         let path = path.into();
+        let media_type = media_type_for_artifact_path(&path).to_string();
         Self {
-            media_type: media_type_for_artifact_path(&path).to_string(),
             path,
             content: content.into(),
+            media_type,
             created_by: None,
         }
     }
@@ -215,6 +215,252 @@ impl TaskArtifact {
     pub fn text_content(&self) -> Option<&str> {
         std::str::from_utf8(&self.content).ok()
     }
+}
+
+/// How a stored artifact may be handed to a viewer.
+///
+/// This is a *rendering* decision, not an access decision: every artifact
+/// remains downloadable byte-for-byte. `Opaque` only means "do not let a
+/// renderer interpret these bytes", which is what keeps active content such as
+/// SVG and HTML from executing in the dashboard or in an MCP client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactPresentation {
+    /// UTF-8 text safe to show inline.
+    Text,
+    /// Raster image safe to show inline; carries no active content.
+    Image,
+    /// Anything else — offered as a download, never interpreted.
+    Opaque,
+}
+
+impl ArtifactPresentation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Opaque => "opaque",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedTaskDependency {
+    pub id: OrbitId,
+    pub status: String,
+}
+
+/// Read projection of a typed relation. Persisted relations remain only the
+/// relation type and target; verification is derived from the local status
+/// projection so a foreign target can become locally verifiable later.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ResolvedTaskRelation {
+    /// Canonical typed edge kind.
+    #[serde(rename = "type")]
+    pub relation_type: TaskRelationType,
+    /// Referenced task or artifact ID.
+    pub target: OrbitId,
+    /// Nature and escape of a classified `regression_from` link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regression: Option<RegressionClassification>,
+    /// Local verification limitation, present only for a foreign task prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<String>,
+}
+
+impl ResolvedTaskDependency {
+    pub fn label(&self) -> String {
+        format!("{} [{}]", self.id, self.status)
+    }
+}
+
+/// Why a `blocked_by` edge can never close on its own.
+///
+/// Distinct from "unmet": an unmet dependency may simply be unfinished, and
+/// waiting is the correct response. A dead end will still be unmet after any
+/// amount of waiting.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyDeadEnd {
+    /// The dependency ID resolves to no task in this workspace.
+    Missing,
+    /// Soft-deleted without having completed. Restorable via
+    /// `orbit task restore`, not by waiting. A task archived after it reached
+    /// `done` satisfies the edge instead (see
+    /// `archived_task_completed_before_archive`).
+    Archived,
+    /// Declined. Re-openable to backlog/in-progress, not by waiting.
+    Rejected,
+}
+
+impl DependencyDeadEnd {
+    /// Operator-facing explanation of why the edge is a dead end, phrased so
+    /// the remedy is obvious from the failure message alone.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            DependencyDeadEnd::Missing => {
+                "no such task in this workspace (dangling dependency; drop the blocked_by edge or restore the task)"
+            }
+            DependencyDeadEnd::Archived => {
+                "archived (soft-deleted; restore it or drop the blocked_by edge)"
+            }
+            DependencyDeadEnd::Rejected => {
+                "rejected (re-open it to backlog or drop the blocked_by edge)"
+            }
+        }
+    }
+}
+
+/// A dependency edge that dispatch must refuse rather than wait on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnsatisfiableTaskDependency {
+    /// The task that declares the edge.
+    pub task_id: OrbitId,
+    /// The `blocked_by` target that can never satisfy it.
+    pub dependency_id: OrbitId,
+    /// The dependency's current status, or `missing` when it does not resolve.
+    pub status: String,
+    pub reason: DependencyDeadEnd,
+}
+
+impl UnsatisfiableTaskDependency {
+    pub fn label(&self) -> String {
+        format!(
+            "{} blocked_by {} [{}]: {}",
+            self.task_id,
+            self.dependency_id,
+            self.status,
+            self.reason.explanation()
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExternalRef {
+    pub system: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+// An external reference names its target by key (`system` + `id`); the `url`
+// is display metadata a later writer may complete. Key-only and
+// with-URL forms of the same pull request compare equal so a handoff that
+// records its link still satisfies a key-only membership check.
+impl PartialEq for ExternalRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.system == other.system && self.id == other.id
+    }
+}
+
+impl Eq for ExternalRef {}
+
+impl ExternalRef {
+    pub fn try_new(system: String, id: String, url: Option<String>) -> Result<Self, TaskError> {
+        let system = Self::validate_system(&system)?;
+
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(TaskError::Invalid(
+                "external ref id must not be empty".to_string(),
+            ));
+        }
+
+        let url = url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                Url::parse(&value).map_err(|error| {
+                    TaskError::Invalid(format!(
+                        "external ref url '{value}' must be a valid URL: {error}"
+                    ))
+                })?;
+                Ok::<String, TaskError>(value)
+            })
+            .transpose()?;
+
+        Ok(Self {
+            system,
+            id: id.to_string(),
+            url,
+        })
+    }
+
+    pub fn is_valid_system(system: &str) -> bool {
+        // ^[a-z][a-z0-9-]*$
+        let mut chars = system.trim().chars();
+        chars.next().is_some_and(|first| first.is_ascii_lowercase())
+            && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    }
+
+    pub fn validate_system(system: &str) -> Result<String, TaskError> {
+        let system = system.trim();
+        if !Self::is_valid_system(system) {
+            return Err(TaskError::Invalid(format!(
+                "external ref system '{system}' must match ^[a-z][a-z0-9-]*$"
+            )));
+        }
+        Ok(system.to_string())
+    }
+
+    pub fn parse_key(raw: &str) -> Result<Self, TaskError> {
+        let (system, id) = raw.split_once(':').ok_or_else(|| {
+            TaskError::Invalid(
+                "external ref must use <system>:<id> form, for example jira:ENG-1234".to_string(),
+            )
+        })?;
+        Self::try_new(system.to_string(), id.to_string(), None)
+    }
+
+    pub fn github_pr(id: impl Into<String>) -> Result<Self, TaskError> {
+        Self::try_new(GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(), id.into(), None)
+    }
+
+    /// A `github-pr` ref carrying the pull request's page when the provider
+    /// reported one. Only an https URL is kept: anything else would be dropped
+    /// by the dashboard anyway, and an unusable URL must not fail the delivery
+    /// step that records the number.
+    pub fn github_pr_with_url(id: impl Into<String>, url: Option<&str>) -> Result<Self, TaskError> {
+        let mut external_ref = Self::github_pr(id)?;
+        external_ref.url = url
+            .map(str::trim)
+            .filter(|value| Url::parse(value).is_ok_and(|parsed| parsed.scheme() == "https"))
+            .map(ToOwned::to_owned);
+        Ok(external_ref)
+    }
+
+    pub fn has_key(&self, system: &str, id: &str) -> bool {
+        self.system == system && self.id == id
+    }
+}
+
+impl<'de> Deserialize<'de> for ExternalRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawExternalRef {
+            system: String,
+            id: String,
+            #[serde(default)]
+            url: Option<String>,
+        }
+
+        let raw = RawExternalRef::deserialize(deserializer)?;
+        ExternalRef::try_new(raw.system, raw.id, raw.url).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Whether `actor` names a human/operator writer rather than Orbit automation,
+/// a precedent/model decision actor, or an application credential.
+pub fn is_human_attributed_task_actor(actor: &str) -> bool {
+    let actor = actor.trim();
+    !actor.is_empty()
+        && !crate::identity::is_automation_actor(actor)
+        && actor != crate::task::PRECEDENT_ACTOR
+        && actor != "application"
+        && !actor.starts_with("application:")
 }
 
 fn default_task_artifact_media_type() -> String {
@@ -241,40 +487,6 @@ pub fn media_type_for_artifact_path(path: &str) -> &'static str {
         Some("webp") => "image/webp",
         Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
-    }
-}
-
-/// Largest task artifact payload Orbit will carry inline through a tool call.
-///
-/// One limit governs both directions: `orbit.task.artifact.put` refuses to
-/// read a larger source, and `orbit.task.artifact.get` refuses to return a
-/// larger stored payload. The dashboard's streaming download route has no such
-/// bound, so an oversize artifact is still reachable — just not inline.
-pub const MAX_TASK_ARTIFACT_CONTENT_BYTES: u64 = 1_048_576;
-
-/// How a stored artifact may be handed to a viewer.
-///
-/// This is a *rendering* decision, not an access decision: every artifact
-/// remains downloadable byte-for-byte. `Opaque` only means "do not let a
-/// renderer interpret these bytes", which is what keeps active content such as
-/// SVG and HTML from executing in the dashboard or in an MCP client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArtifactPresentation {
-    /// UTF-8 text safe to show inline.
-    Text,
-    /// Raster image safe to show inline; carries no active content.
-    Image,
-    /// Anything else — offered as a download, never interpreted.
-    Opaque,
-}
-
-impl ArtifactPresentation {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Image => "image",
-            Self::Opaque => "opaque",
-        }
     }
 }
 
@@ -395,119 +607,6 @@ pub fn artifact_presentation(media_type: &str, content: &[u8]) -> ArtifactPresen
     ArtifactPresentation::Opaque
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ResolvedTaskDependency {
-    pub id: OrbitId,
-    pub status: String,
-}
-
-/// Read projection of a typed relation. Persisted relations remain only the
-/// relation type and target; verification is derived from the local status
-/// projection so a foreign target can become locally verifiable later.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ResolvedTaskRelation {
-    /// Canonical typed edge kind.
-    #[serde(rename = "type")]
-    pub relation_type: TaskRelationType,
-    /// Referenced task or artifact ID.
-    pub target: OrbitId,
-    /// Nature and escape of a classified `regression_from` link.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regression: Option<RegressionClassification>,
-    /// Local verification limitation, present only for a foreign task prefix.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verification: Option<String>,
-}
-
-impl ResolvedTaskDependency {
-    pub fn label(&self) -> String {
-        format!("{} [{}]", self.id, self.status)
-    }
-}
-
-/// Why a `blocked_by` edge can never close on its own.
-///
-/// Distinct from "unmet": an unmet dependency may simply be unfinished, and
-/// waiting is the correct response. A dead end will still be unmet after any
-/// amount of waiting.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DependencyDeadEnd {
-    /// The dependency ID resolves to no task in this workspace.
-    Missing,
-    /// Soft-deleted without having completed. Restorable via
-    /// `orbit task restore`, not by waiting. A task archived after it reached
-    /// `done` satisfies the edge instead (see
-    /// `archived_task_completed_before_archive`).
-    Archived,
-    /// Declined. Re-openable to backlog/in-progress, not by waiting.
-    Rejected,
-}
-
-impl DependencyDeadEnd {
-    /// Operator-facing explanation of why the edge is a dead end, phrased so
-    /// the remedy is obvious from the failure message alone.
-    pub fn explanation(self) -> &'static str {
-        match self {
-            DependencyDeadEnd::Missing => {
-                "no such task in this workspace (dangling dependency; drop the blocked_by edge or restore the task)"
-            }
-            DependencyDeadEnd::Archived => {
-                "archived (soft-deleted; restore it or drop the blocked_by edge)"
-            }
-            DependencyDeadEnd::Rejected => {
-                "rejected (re-open it to backlog or drop the blocked_by edge)"
-            }
-        }
-    }
-}
-
-/// A dependency edge that dispatch must refuse rather than wait on.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UnsatisfiableTaskDependency {
-    /// The task that declares the edge.
-    pub task_id: OrbitId,
-    /// The `blocked_by` target that can never satisfy it.
-    pub dependency_id: OrbitId,
-    /// The dependency's current status, or `missing` when it does not resolve.
-    pub status: String,
-    pub reason: DependencyDeadEnd,
-}
-
-impl UnsatisfiableTaskDependency {
-    pub fn label(&self) -> String {
-        format!(
-            "{} blocked_by {} [{}]: {}",
-            self.task_id,
-            self.dependency_id,
-            self.status,
-            self.reason.explanation()
-        )
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ExternalRef {
-    pub system: String,
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-}
-
-// An external reference names its target by key (`system` + `id`); the `url`
-// is display metadata a later writer may complete. Key-only and
-// with-URL forms of the same pull request compare equal so a handoff that
-// records its link still satisfies a key-only membership check.
-impl PartialEq for ExternalRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.system == other.system && self.id == other.id
-    }
-}
-
-impl Eq for ExternalRef {}
-
-pub const GITHUB_PR_EXTERNAL_REF_SYSTEM: &str = "github-pr";
-
 /// Whether a pull request is shaped like one Orbit published for `task_id`:
 /// its head branch is one `branch_template` names for the task under the
 /// default `orbit` prefix (`orbit/<TASK-ID>-…` by default), and its body
@@ -530,85 +629,6 @@ pub fn names_task_delivery_pull_request(
     })
 }
 
-impl ExternalRef {
-    pub fn try_new(system: String, id: String, url: Option<String>) -> Result<Self, TaskError> {
-        let system = Self::validate_system(&system)?;
-
-        let id = id.trim();
-        if id.is_empty() {
-            return Err(TaskError::Invalid(
-                "external ref id must not be empty".to_string(),
-            ));
-        }
-
-        let url = url
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                Url::parse(&value).map_err(|error| {
-                    TaskError::Invalid(format!(
-                        "external ref url '{value}' must be a valid URL: {error}"
-                    ))
-                })?;
-                Ok::<String, TaskError>(value)
-            })
-            .transpose()?;
-
-        Ok(Self {
-            system,
-            id: id.to_string(),
-            url,
-        })
-    }
-
-    pub fn is_valid_system(system: &str) -> bool {
-        // ^[a-z][a-z0-9-]*$
-        let mut chars = system.trim().chars();
-        chars.next().is_some_and(|first| first.is_ascii_lowercase())
-            && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
-    }
-
-    pub fn validate_system(system: &str) -> Result<String, TaskError> {
-        let system = system.trim();
-        if !Self::is_valid_system(system) {
-            return Err(TaskError::Invalid(format!(
-                "external ref system '{system}' must match ^[a-z][a-z0-9-]*$"
-            )));
-        }
-        Ok(system.to_string())
-    }
-
-    pub fn parse_key(raw: &str) -> Result<Self, TaskError> {
-        let (system, id) = raw.split_once(':').ok_or_else(|| {
-            TaskError::Invalid(
-                "external ref must use <system>:<id> form, for example jira:ENG-1234".to_string(),
-            )
-        })?;
-        Self::try_new(system.to_string(), id.to_string(), None)
-    }
-
-    pub fn github_pr(id: impl Into<String>) -> Result<Self, TaskError> {
-        Self::try_new(GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(), id.into(), None)
-    }
-
-    /// A `github-pr` ref carrying the pull request's page when the provider
-    /// reported one. Only an https URL is kept: anything else would be dropped
-    /// by the dashboard anyway, and an unusable URL must not fail the delivery
-    /// step that records the number.
-    pub fn github_pr_with_url(id: impl Into<String>, url: Option<&str>) -> Result<Self, TaskError> {
-        let mut external_ref = Self::github_pr(id)?;
-        external_ref.url = url
-            .map(str::trim)
-            .filter(|value| Url::parse(value).is_ok_and(|parsed| parsed.scheme() == "https"))
-            .map(ToOwned::to_owned);
-        Ok(external_ref)
-    }
-
-    pub fn has_key(&self, system: &str, id: &str) -> bool {
-        self.system == system && self.id == id
-    }
-}
-
 /// Add `external_ref` unless a ref with its key is already recorded. A
 /// recorded ref without a URL takes the new one's, so a later writer that
 /// knows the link completes an earlier key-only ref.
@@ -623,24 +643,5 @@ pub fn push_external_ref_if_missing(refs: &mut Vec<ExternalRef>, external_ref: E
             }
         }
         None => refs.push(external_ref),
-    }
-}
-
-impl<'de> Deserialize<'de> for ExternalRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawExternalRef {
-            system: String,
-            id: String,
-            #[serde(default)]
-            url: Option<String>,
-        }
-
-        let raw = RawExternalRef::deserialize(deserializer)?;
-        ExternalRef::try_new(raw.system, raw.id, raw.url).map_err(serde::de::Error::custom)
     }
 }

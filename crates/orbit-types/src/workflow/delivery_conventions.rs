@@ -24,6 +24,84 @@ pub const PR_SECTIONS_ARTIFACT: &str = "pr-sections.json";
 /// published without filled content.
 pub const PR_SECTION_GAP_EVENT: &str = "pr_section_gap";
 
+/// History event explaining a reused pull request's draft recovery decision.
+pub const PR_DRAFT_RECOVERY_EVENT: &str = "pr_draft_recovery";
+
+/// `pr.body_template` value that selects the repository's own GitHub pull
+/// request template.
+pub const REPO_PR_BODY_TEMPLATE: &str = "repo";
+
+/// Where `pr.body_template = "repo"` looks for the repository's pull request
+/// template, in order: GitHub's `.github/`, root and `docs/` locations. Names
+/// match case-insensitively.
+pub const REPO_PR_TEMPLATE_LOCATIONS: &[(&str, &str)] = &[
+    (".github", "pull_request_template.md"),
+    ("", "pull_request_template.md"),
+    ("docs", "pull_request_template.md"),
+];
+
+/// Task artifact prefix a delivery publishes as the pull request's
+/// screenshots: `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`.
+pub const SCREENSHOT_ARTIFACT_PREFIX: &str = "screenshots/";
+
+/// The pull request body heading Orbit renders the screenshots under.
+pub const SCREENSHOTS_SECTION: &str = "Screenshots";
+
+/// Task tag that turns the screenshot section on under
+/// [`ScreenshotSection::Auto`].
+pub const UI_TASK_TAG: &str = "ui";
+
+/// Namespace of the permanent per-task refs holding published screenshots on
+/// `origin`. Outside `refs/heads`, so they are never listed or merged as a
+/// branch, and nothing deletes them, so a merged pull request keeps its images.
+pub const EVIDENCE_REF_PREFIX: &str = "refs/orbit/evidence/";
+
+/// The branch prefix a delivery uses when its workflow supplies none.
+pub const DEFAULT_BRANCH_PREFIX: &str = "orbit";
+
+/// Built-in single-task branch shape: `<prefix>/<task>-<hash8>`.
+pub const DEFAULT_BRANCH_TEMPLATE: &str = "{{prefix}}/{{task_id}}-{{hash}}";
+
+/// Characters a commit subject may use, ` (#PR)` included; longer summaries
+/// are cut at a word boundary, never with an ellipsis.
+pub const COMMIT_SUBJECT_BUDGET: usize = 72;
+
+/// Hex digits of the run hash in a branch name.
+pub const BRANCH_HASH_LEN: usize = 8;
+
+const TEXT_PLACEHOLDERS: &str = "task_id, title, type, description, acceptance_criteria, \
+                                 execution_summary, validation, freshness, task_url, ext.<system>";
+const BRANCH_PLACEHOLDERS: &str = "prefix, task_id, hash, ext.<system>";
+
+/// The former `pr.close_on_terminal` default, fixed when the key was removed
+/// [ORB-22808]: a task's open Orbit-authored pull requests close when the
+/// task reaches done, rejected or archived.
+pub const PR_CLOSE_ON_TERMINAL: bool = true;
+/// The former `pr.screenshot_section` default, fixed when the key was removed
+/// [ORB-22808]: single-task bodies carry the Screenshots table for tasks
+/// tagged `ui`.
+pub const PR_SCREENSHOT_SECTION: ScreenshotSection = ScreenshotSection::Auto;
+/// The former `pr.freshness_section` default, fixed when the key was removed
+/// [ORB-22808]: generated bodies carry the Branch Freshness section.
+pub const PR_FRESHNESS_SECTION: bool = true;
+/// The former `pr.signature` default, fixed when the key was removed
+/// [ORB-22808]: generated bodies end with the authoring model's signature.
+pub const PR_SIGNATURE: bool = true;
+/// The former `pr.orchestration_trailer` default, fixed when the key was
+/// removed [ORB-22808]: generated bodies carry the `Orchestrated-By:` line.
+pub const PR_ORCHESTRATION_TRAILER: bool = true;
+/// The former `pr.draft` default, fixed when the key was removed
+/// [ORB-22808]: a pull request opens ready for review, and as a draft only
+/// for a required-section gap under [`MissingSectionPolicy::Draft`].
+pub const PR_DRAFT: bool = false;
+/// The former `commit.orchestrated_by_trailer` default, fixed when the key
+/// was removed [ORB-22808]: commit messages carry `Orchestrated-By:`.
+pub const COMMIT_ORCHESTRATED_BY_TRAILER: bool = true;
+/// The former `commit.regression_trailers` default, fixed when the key was
+/// removed [ORB-22808]: commit messages carry the `Fixes`, `Regression-From`
+/// and `Regression` trailers for `regression_from` relations.
+pub const COMMIT_REGRESSION_TRAILERS: bool = true;
+
 /// The decision recorded on [`PR_SECTION_GAP_EVENT`]: which required
 /// sections a delivery had no content for, what the configured policy did,
 /// and, when this delivery created the pull request with that body, the
@@ -74,9 +152,6 @@ impl PrSectionGap {
     }
 }
 
-/// History event explaining a reused pull request's draft recovery decision.
-pub const PR_DRAFT_RECOVERY_EVENT: &str = "pr_draft_recovery";
-
 /// Why a reused draft was kept, or which recovery mutation was reached.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -103,48 +178,6 @@ pub struct PrDraftRecovery {
     /// Digest of the body authorized by the recovery reservation.
     pub body_sha256: Option<String>,
 }
-
-/// `pr.body_template` value that selects the repository's own GitHub pull
-/// request template.
-pub const REPO_PR_BODY_TEMPLATE: &str = "repo";
-
-/// Where `pr.body_template = "repo"` looks for the repository's pull request
-/// template, in order: GitHub's `.github/`, root and `docs/` locations. Names
-/// match case-insensitively.
-pub const REPO_PR_TEMPLATE_LOCATIONS: &[(&str, &str)] = &[
-    (".github", "pull_request_template.md"),
-    ("", "pull_request_template.md"),
-    ("docs", "pull_request_template.md"),
-];
-
-/// Task artifact prefix a delivery publishes as the pull request's
-/// screenshots: `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`.
-pub const SCREENSHOT_ARTIFACT_PREFIX: &str = "screenshots/";
-
-/// The pull request body heading Orbit renders the screenshots under.
-pub const SCREENSHOTS_SECTION: &str = "Screenshots";
-
-/// Task tag that turns the screenshot section on under
-/// [`ScreenshotSection::Auto`].
-pub const UI_TASK_TAG: &str = "ui";
-
-/// Namespace of the permanent per-task refs holding published screenshots on
-/// `origin`. Outside `refs/heads`, so they are never listed or merged as a
-/// branch, and nothing deletes them, so a merged pull request keeps its images.
-pub const EVIDENCE_REF_PREFIX: &str = "refs/orbit/evidence/";
-
-/// The branch prefix a delivery uses when its workflow supplies none.
-pub const DEFAULT_BRANCH_PREFIX: &str = "orbit";
-
-/// Built-in single-task branch shape: `<prefix>/<task>-<hash8>`.
-pub const DEFAULT_BRANCH_TEMPLATE: &str = "{{prefix}}/{{task_id}}-{{hash}}";
-
-/// Characters a commit subject may use, ` (#PR)` included; longer summaries
-/// are cut at a word boundary, never with an ellipsis.
-pub const COMMIT_SUBJECT_BUDGET: usize = 72;
-
-/// Hex digits of the run hash in a branch name.
-pub const BRANCH_HASH_LEN: usize = 8;
 
 /// One `{{ name }}` a template may reference.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -243,10 +276,6 @@ pub enum TemplateSurface {
     Text,
     Branch,
 }
-
-const TEXT_PLACEHOLDERS: &str = "task_id, title, type, description, acceptance_criteria, \
-                                 execution_summary, validation, freshness, task_url, ext.<system>";
-const BRANCH_PLACEHOLDERS: &str = "prefix, task_id, hash, ext.<system>";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Segment {
@@ -417,81 +446,6 @@ enum TaskMatch<'a> {
     Capture(&'a dyn Fn(&str) -> bool),
 }
 
-fn is_id_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '-' || c == '_'
-}
-
-/// Match the complete rendered shape, returning the task id matched. Every
-/// occurrence of a repeated task placeholder must carry the same id. Fixed
-/// literals and the hash length establish the task boundary even when the
-/// template puts digits or the hash immediately after the task id. An external
-/// ref may contain `/`; later segments still bound where it ends.
-fn match_owner(
-    segments: &[Segment],
-    text: &str,
-    prefix: &str,
-    task: &TaskMatch<'_>,
-) -> Option<String> {
-    fn go(
-        segments: &[Segment],
-        text: &str,
-        prefix: &str,
-        task: &TaskMatch<'_>,
-        captured: Option<&str>,
-    ) -> Option<String> {
-        let Some((first, rest)) = segments.split_first() else {
-            return captured.filter(|_| text.is_empty()).map(ToOwned::to_owned);
-        };
-        match first {
-            Segment::Literal(literal) => go(
-                rest,
-                text.strip_prefix(literal.as_str())?,
-                prefix,
-                task,
-                captured,
-            ),
-            Segment::Placeholder(Placeholder::Prefix) => {
-                go(rest, text.strip_prefix(prefix)?, prefix, task, captured)
-            }
-            Segment::Placeholder(Placeholder::Hash) => {
-                let hash = text.get(..BRANCH_HASH_LEN)?;
-                hash.chars()
-                    .all(|c| c.is_ascii_hexdigit())
-                    .then(|| go(rest, &text[BRANCH_HASH_LEN..], prefix, task, captured))?
-            }
-            // A repeated task placeholder renders the same id every time, so
-            // a later occurrence must repeat the id the first one bound.
-            // Capture would otherwise keep the last candidate, naming a task
-            // the exact matcher refuses.
-            Segment::Placeholder(Placeholder::TaskId) => match (task, captured) {
-                (_, Some(bound)) => {
-                    let tail = text.strip_prefix(bound)?;
-                    go(rest, tail, prefix, task, Some(bound))
-                }
-                (TaskMatch::Exact(id), None) => {
-                    let tail = text.strip_prefix(id)?;
-                    go(rest, tail, prefix, task, Some(id))
-                }
-                (TaskMatch::Capture(accept), None) => {
-                    let run = text.find(|c: char| !is_id_char(c)).unwrap_or(text.len());
-                    (1..=run).find_map(|end| {
-                        let (candidate, tail) = text.split_at(end);
-                        accept(candidate).then(|| go(rest, tail, prefix, task, Some(candidate)))?
-                    })
-                }
-            },
-            // Branch templates reach this arm only for `ext.<system>`. The id
-            // is rendered verbatim and may contain `/`. The first completing
-            // split wins, and a slash-free remainder is searched exactly as
-            // far as `find('/')` used to search.
-            Segment::Placeholder(_) => (0..=text.len())
-                .filter(|end| text.is_char_boundary(*end))
-                .find_map(|end| go(rest, &text[end..], prefix, task, captured)),
-        }
-    }
-    go(segments, text, prefix, task, None)
-}
-
 /// What a delivery does when a required pull request section has no filled
 /// content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -523,35 +477,6 @@ impl MissingSectionPolicy {
         }
     }
 }
-
-/// The former `pr.close_on_terminal` default, fixed when the key was removed
-/// [ORB-22808]: a task's open Orbit-authored pull requests close when the
-/// task reaches done, rejected or archived.
-pub const PR_CLOSE_ON_TERMINAL: bool = true;
-/// The former `pr.screenshot_section` default, fixed when the key was removed
-/// [ORB-22808]: single-task bodies carry the Screenshots table for tasks
-/// tagged `ui`.
-pub const PR_SCREENSHOT_SECTION: ScreenshotSection = ScreenshotSection::Auto;
-/// The former `pr.freshness_section` default, fixed when the key was removed
-/// [ORB-22808]: generated bodies carry the Branch Freshness section.
-pub const PR_FRESHNESS_SECTION: bool = true;
-/// The former `pr.signature` default, fixed when the key was removed
-/// [ORB-22808]: generated bodies end with the authoring model's signature.
-pub const PR_SIGNATURE: bool = true;
-/// The former `pr.orchestration_trailer` default, fixed when the key was
-/// removed [ORB-22808]: generated bodies carry the `Orchestrated-By:` line.
-pub const PR_ORCHESTRATION_TRAILER: bool = true;
-/// The former `pr.draft` default, fixed when the key was removed
-/// [ORB-22808]: a pull request opens ready for review, and as a draft only
-/// for a required-section gap under [`MissingSectionPolicy::Draft`].
-pub const PR_DRAFT: bool = false;
-/// The former `commit.orchestrated_by_trailer` default, fixed when the key
-/// was removed [ORB-22808]: commit messages carry `Orchestrated-By:`.
-pub const COMMIT_ORCHESTRATED_BY_TRAILER: bool = true;
-/// The former `commit.regression_trailers` default, fixed when the key was
-/// removed [ORB-22808]: commit messages carry the `Fixes`, `Regression-From`
-/// and `Regression` trailers for `regression_from` relations.
-pub const COMMIT_REGRESSION_TRAILERS: bool = true;
 
 /// When a single-task pull request body carries the screenshot section
 /// ([`PR_SCREENSHOT_SECTION`] for configured deliveries).
@@ -759,6 +684,81 @@ impl DeliveryConventions {
             .iter()
             .any(|required| same_section_name(required, name))
     }
+}
+
+fn is_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// Match the complete rendered shape, returning the task id matched. Every
+/// occurrence of a repeated task placeholder must carry the same id. Fixed
+/// literals and the hash length establish the task boundary even when the
+/// template puts digits or the hash immediately after the task id. An external
+/// ref may contain `/`; later segments still bound where it ends.
+fn match_owner(
+    segments: &[Segment],
+    text: &str,
+    prefix: &str,
+    task: &TaskMatch<'_>,
+) -> Option<String> {
+    fn go(
+        segments: &[Segment],
+        text: &str,
+        prefix: &str,
+        task: &TaskMatch<'_>,
+        captured: Option<&str>,
+    ) -> Option<String> {
+        let Some((first, rest)) = segments.split_first() else {
+            return captured.filter(|_| text.is_empty()).map(ToOwned::to_owned);
+        };
+        match first {
+            Segment::Literal(literal) => go(
+                rest,
+                text.strip_prefix(literal.as_str())?,
+                prefix,
+                task,
+                captured,
+            ),
+            Segment::Placeholder(Placeholder::Prefix) => {
+                go(rest, text.strip_prefix(prefix)?, prefix, task, captured)
+            }
+            Segment::Placeholder(Placeholder::Hash) => {
+                let hash = text.get(..BRANCH_HASH_LEN)?;
+                hash.chars()
+                    .all(|c| c.is_ascii_hexdigit())
+                    .then(|| go(rest, &text[BRANCH_HASH_LEN..], prefix, task, captured))?
+            }
+            // A repeated task placeholder renders the same id every time, so
+            // a later occurrence must repeat the id the first one bound.
+            // Capture would otherwise keep the last candidate, naming a task
+            // the exact matcher refuses.
+            Segment::Placeholder(Placeholder::TaskId) => match (task, captured) {
+                (_, Some(bound)) => {
+                    let tail = text.strip_prefix(bound)?;
+                    go(rest, tail, prefix, task, Some(bound))
+                }
+                (TaskMatch::Exact(id), None) => {
+                    let tail = text.strip_prefix(id)?;
+                    go(rest, tail, prefix, task, Some(id))
+                }
+                (TaskMatch::Capture(accept), None) => {
+                    let run = text.find(|c: char| !is_id_char(c)).unwrap_or(text.len());
+                    (1..=run).find_map(|end| {
+                        let (candidate, tail) = text.split_at(end);
+                        accept(candidate).then(|| go(rest, tail, prefix, task, Some(candidate)))?
+                    })
+                }
+            },
+            // Branch templates reach this arm only for `ext.<system>`. The id
+            // is rendered verbatim and may contain `/`. The first completing
+            // split wins, and a slash-free remainder is searched exactly as
+            // far as `find('/')` used to search.
+            Segment::Placeholder(_) => (0..=text.len())
+                .filter(|end| text.is_char_boundary(*end))
+                .find_map(|end| go(rest, &text[end..], prefix, task, captured)),
+        }
+    }
+    go(segments, text, prefix, task, None)
 }
 
 /// Heading names compare trimmed and case-insensitively.

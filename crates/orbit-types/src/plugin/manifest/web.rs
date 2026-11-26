@@ -2,6 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The only source form v1 accepts.
+pub const PANEL_SOURCE_TOOL_PREFIX: &str = "tool:";
+
+/// Default server-side panel cache window. It matches the dashboard refresh
+/// cadence, so overlapping tabs share a single audited backend execution.
+pub const DEFAULT_PANEL_REFRESH_MS: u64 = 30_000;
+
+/// Bounds keep a manifest from accidentally turning a visible dashboard tab
+/// into a tight backend loop or a day-long stale view.
+pub const MIN_PANEL_REFRESH_MS: u64 = 1_000;
+pub const MAX_PANEL_REFRESH_MS: u64 = 3_600_000;
+
+/// The schemes a `spec.web.links[].url` may use (§4.7).
+pub const LINK_URL_SCHEMES: &[&str] = &["http://", "https://"];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginWebSection {
@@ -40,21 +55,6 @@ impl PluginWebPanel {
             .filter(|verb| !verb.is_empty())
     }
 }
-
-/// The only source form v1 accepts.
-pub const PANEL_SOURCE_TOOL_PREFIX: &str = "tool:";
-
-/// Default server-side panel cache window. It matches the dashboard refresh
-/// cadence, so overlapping tabs share a single audited backend execution.
-pub const DEFAULT_PANEL_REFRESH_MS: u64 = 30_000;
-
-/// Bounds keep a manifest from accidentally turning a visible dashboard tab
-/// into a tight backend loop or a day-long stale view.
-pub const MIN_PANEL_REFRESH_MS: u64 = 1_000;
-pub const MAX_PANEL_REFRESH_MS: u64 = 3_600_000;
-
-/// The schemes a `spec.web.links[].url` may use (§4.7).
-pub const LINK_URL_SCHEMES: &[&str] = &["http://", "https://"];
 
 /// How the dashboard draws a panel's JSON (§4.7).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

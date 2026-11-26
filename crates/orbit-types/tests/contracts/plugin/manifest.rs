@@ -5,6 +5,29 @@ use orbit_types::plugin::{
     PluginWebSection,
 };
 
+const BUILD_MANIFEST: &str = r#"
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: graph
+  version: 0.4.1
+spec:
+  backend:
+    type: exec
+    command: bin/orbit-graph
+  tools:
+    - name: query
+      execution_kind: read_only
+  build:
+    programs: [cargo]
+    fetch: [cargo, fetch, --locked]
+    command: [cargo, build, --release, --offline, --locked, --target-dir, "{{build_dir}}/target"]
+    outputs:
+      - from: target/release/orbit-graph
+        to: bin/orbit-graph
+    timeout_ms: 1200000
+"#;
+
 fn minimal() -> PluginManifest {
     PluginManifest {
         schema_version: 2,
@@ -155,29 +178,6 @@ fn a_link_url_must_be_http_or_https() {
         .validate_structure()
         .expect("the scheme check is case-insensitive");
 }
-
-const BUILD_MANIFEST: &str = r#"
-schemaVersion: 2
-kind: Plugin
-metadata:
-  name: graph
-  version: 0.4.1
-spec:
-  backend:
-    type: exec
-    command: bin/orbit-graph
-  tools:
-    - name: query
-      execution_kind: read_only
-  build:
-    programs: [cargo]
-    fetch: [cargo, fetch, --locked]
-    command: [cargo, build, --release, --offline, --locked, --target-dir, "{{build_dir}}/target"]
-    outputs:
-      - from: target/release/orbit-graph
-        to: bin/orbit-graph
-    timeout_ms: 1200000
-"#;
 
 /// The design's own example parses and validates, and a key the schema does
 /// not know is refused rather than ignored: a typo'd `comand` must not leave

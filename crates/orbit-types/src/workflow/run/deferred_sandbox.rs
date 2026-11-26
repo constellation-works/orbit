@@ -119,11 +119,6 @@ impl DeferredSandboxValidation {
     }
 }
 
-fn names_gate(command: &str, gates: &[String]) -> bool {
-    let command = command.trim();
-    !command.is_empty() && gates.iter().any(|gate| gate.trim() == command)
-}
-
 /// A probe Orbit runs for a deferral: its canonical spelling, recorded as
 /// [`NamespaceProbe::command`], and the argv that spawns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,30 +269,6 @@ pub struct DeferralHandoff {
     /// The file the gate wrote through `ORBIT_VALIDATION_SUMMARY`.
     pub summary: String,
     handed: Map<String, Value>,
-}
-
-/// The implementer's `deferred_sandbox_validation` handoff. `Ok(None)` when
-/// it is absent or `null`; `Err` says why it names no summary.
-pub fn deferral_handoff(output: &Value) -> Result<Option<DeferralHandoff>, String> {
-    let Some(value) = output
-        .get("deferred_sandbox_validation")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(None);
-    };
-    let mut handed = value.as_object().cloned().unwrap_or_default();
-    match handed.remove("summary") {
-        Some(Value::String(summary)) if !summary.trim().is_empty() => Ok(Some(DeferralHandoff {
-            summary: summary.trim().to_string(),
-            handed,
-        })),
-        _ => Err(
-            "names no gate summary: hand off `{\"summary\": \"<path>\"}`, the checkout-relative \
-             file the gate wrote through `ORBIT_VALIDATION_SUMMARY`, and Orbit derives the \
-             record from it"
-                .to_string(),
-        ),
-    }
 }
 
 /// What a gate reports about its own run in its validation summary. The
@@ -506,5 +477,34 @@ impl PendingDeferral {
             }
         }
         Ok(record)
+    }
+}
+
+fn names_gate(command: &str, gates: &[String]) -> bool {
+    let command = command.trim();
+    !command.is_empty() && gates.iter().any(|gate| gate.trim() == command)
+}
+
+/// The implementer's `deferred_sandbox_validation` handoff. `Ok(None)` when
+/// it is absent or `null`; `Err` says why it names no summary.
+pub fn deferral_handoff(output: &Value) -> Result<Option<DeferralHandoff>, String> {
+    let Some(value) = output
+        .get("deferred_sandbox_validation")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let mut handed = value.as_object().cloned().unwrap_or_default();
+    match handed.remove("summary") {
+        Some(Value::String(summary)) if !summary.trim().is_empty() => Ok(Some(DeferralHandoff {
+            summary: summary.trim().to_string(),
+            handed,
+        })),
+        _ => Err(
+            "names no gate summary: hand off `{\"summary\": \"<path>\"}`, the checkout-relative \
+             file the gate wrote through `ORBIT_VALIDATION_SUMMARY`, and Orbit derives the \
+             record from it"
+                .to_string(),
+        ),
     }
 }

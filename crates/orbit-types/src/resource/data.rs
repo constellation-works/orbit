@@ -71,50 +71,6 @@ impl ResourceMetadata {
     }
 }
 
-pub fn validate_resource_name(name: &str) -> Result<(), ResourceError> {
-    if name.is_empty() {
-        return invalid_resource_name(name, "must not be empty");
-    }
-
-    if name.trim() != name {
-        return invalid_resource_name(name, "must not have leading or trailing whitespace");
-    }
-
-    if name.starts_with('.') {
-        return invalid_resource_name(name, "must not start with `.`");
-    }
-
-    if name.contains("..") {
-        return invalid_resource_name(name, "must not contain `..`");
-    }
-
-    if name
-        .chars()
-        .any(|ch| matches!(ch, '/' | '\\' | ':' | '\0') || ch.is_control())
-    {
-        return invalid_resource_name(
-            name,
-            "must not contain separators, drive prefixes, or control characters",
-        );
-    }
-
-    if std::path::Path::new(name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        != Some(name)
-    {
-        return invalid_resource_name(name, "must be a single file stem");
-    }
-
-    Ok(())
-}
-
-fn invalid_resource_name(name: &str, reason: &str) -> Result<(), ResourceError> {
-    Err(ResourceError::Invalid(format!(
-        "invalid resource name {name:?}: {reason}"
-    )))
-}
-
 /// Header-only parse for routing `orbit apply` to the right store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceHeader {
@@ -216,9 +172,53 @@ pub struct ExecutorResourceSpec {
     pub updated_at: Option<UtcTimestamp>,
 }
 
+pub type PolicyResource = ResourceEnvelope<PolicyResourceSpec>;
+pub type ExecutorResource = ResourceEnvelope<ExecutorResourceSpec>;
+
+pub fn validate_resource_name(name: &str) -> Result<(), ResourceError> {
+    if name.is_empty() {
+        return invalid_resource_name(name, "must not be empty");
+    }
+
+    if name.trim() != name {
+        return invalid_resource_name(name, "must not have leading or trailing whitespace");
+    }
+
+    if name.starts_with('.') {
+        return invalid_resource_name(name, "must not start with `.`");
+    }
+
+    if name.contains("..") {
+        return invalid_resource_name(name, "must not contain `..`");
+    }
+
+    if name
+        .chars()
+        .any(|ch| matches!(ch, '/' | '\\' | ':' | '\0') || ch.is_control())
+    {
+        return invalid_resource_name(
+            name,
+            "must not contain separators, drive prefixes, or control characters",
+        );
+    }
+
+    if std::path::Path::new(name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        != Some(name)
+    {
+        return invalid_resource_name(name, "must be a single file stem");
+    }
+
+    Ok(())
+}
+
+fn invalid_resource_name(name: &str, reason: &str) -> Result<(), ResourceError> {
+    Err(ResourceError::Invalid(format!(
+        "invalid resource name {name:?}: {reason}"
+    )))
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
-
-pub type PolicyResource = ResourceEnvelope<PolicyResourceSpec>;
-pub type ExecutorResource = ResourceEnvelope<ExecutorResourceSpec>;

@@ -44,6 +44,10 @@ pub const RESERVED_CLI_COMMANDS: &[&str] = &[
     "help",
 ];
 
+/// The rule a plugin name segment meets, phrased for a diagnostic.
+pub const SEGMENT_RULE: &str =
+    "start with a lowercase letter, then use lowercase letters, digits or '-'";
+
 // `_` is deliberately not allowed: the MCP surface flattens the canonical
 // `<namespace>.<verb>` name to `<namespace>_<verb>` (§4.6), and an
 // underscore in either half would let two different plugins produce the
@@ -68,10 +72,6 @@ pub fn is_valid_namespace(name: &str) -> bool {
 pub fn is_valid_verb(verb: &str) -> bool {
     is_valid_segment(verb)
 }
-
-/// The rule a plugin name segment meets, phrased for a diagnostic.
-pub const SEGMENT_RULE: &str =
-    "start with a lowercase letter, then use lowercase letters, digits or '-'";
 
 /// Why `name` is refused as a plugin namespace, phrased for a config
 /// diagnostic. `orbit` passes the segment rule and is refused only as the

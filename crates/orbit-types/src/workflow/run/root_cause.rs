@@ -53,13 +53,6 @@ pub const CHILD_TIMEOUT_ERROR_CODE: &str = "child_timeout";
 /// the sender evidence is recorded, later evidence does not rewrite the state.
 pub const OPERATOR_STOPPED_ERROR_CODE: &str = "operator_stopped";
 
-/// Whether `state` and `error_code` record a host-manager stop: `held` under
-/// [`OPERATOR_STOPPED_ERROR_CODE`].
-#[must_use]
-pub fn is_operator_stopped(state: JobRunState, error_code: Option<&str>) -> bool {
-    state == JobRunState::Held && error_code == Some(OPERATOR_STOPPED_ERROR_CODE)
-}
-
 /// The leaf failure a cascaded parent failure echoes.
 ///
 /// Every field is always serialized, null when unknown, so readers can rely
@@ -215,4 +208,11 @@ impl HeldFailure {
             message.trim()
         )
     }
+}
+
+/// Whether `state` and `error_code` record a host-manager stop: `held` under
+/// [`OPERATOR_STOPPED_ERROR_CODE`].
+#[must_use]
+pub fn is_operator_stopped(state: JobRunState, error_code: Option<&str>) -> bool {
+    state == JobRunState::Held && error_code == Some(OPERATOR_STOPPED_ERROR_CODE)
 }

@@ -182,27 +182,6 @@ impl HostEvidenceRule {
     }
 }
 
-/// The requirements `rules` owe for a candidate that changed `changed`, for
-/// tasks carrying `task_tags`, on a host running `host`, in rule order. A
-/// rule is owed when a changed path matches its globs or a task tag matches
-/// one it lists.
-pub fn owed_requirements(
-    rules: &[HostEvidenceRule],
-    changed: &[String],
-    task_tags: &[String],
-    host: Option<EvidenceHostOs>,
-) -> Vec<ReviewEvidenceRequirement> {
-    rules
-        .iter()
-        .filter(|rule| {
-            HostEvidenceRule::admits_kind(rule.kind)
-                && rule.owed_on(host)
-                && (rule.matches_any(changed) || rule.matches_any_tag(task_tags))
-        })
-        .map(HostEvidenceRule::requirement)
-        .collect()
-}
-
 /// [ORB-14450] Evidence on an earlier candidate tree counted for this one:
 /// the candidate was rebased onto a new base with its patch unchanged
 /// (`git patch-id --stable` of the whole base..head diff).
@@ -344,6 +323,27 @@ impl ReviewEvidenceFindings {
         }
         text
     }
+}
+
+/// The requirements `rules` owe for a candidate that changed `changed`, for
+/// tasks carrying `task_tags`, on a host running `host`, in rule order. A
+/// rule is owed when a changed path matches its globs or a task tag matches
+/// one it lists.
+pub fn owed_requirements(
+    rules: &[HostEvidenceRule],
+    changed: &[String],
+    task_tags: &[String],
+    host: Option<EvidenceHostOs>,
+) -> Vec<ReviewEvidenceRequirement> {
+    rules
+        .iter()
+        .filter(|rule| {
+            HostEvidenceRule::admits_kind(rule.kind)
+                && rule.owed_on(host)
+                && (rule.matches_any(changed) || rule.matches_any_tag(task_tags))
+        })
+        .map(HostEvidenceRule::requirement)
+        .collect()
 }
 
 fn location_text(file: Option<&str>, line: Option<u64>) -> String {

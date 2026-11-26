@@ -97,10 +97,6 @@ pub enum ReviewerInvocationEvent {
     TimedOut { runtime_seconds: u64 },
 }
 
-fn is_zero(value: &u64) -> bool {
-    *value == 0
-}
-
 impl ReviewAttempt {
     /// Charge counted against the review budget at `now`.
     ///
@@ -137,11 +133,6 @@ impl ReviewAttempt {
             (None, ReviewAttemptState::Settled { .. }) => None,
         }
     }
-}
-
-/// Whole seconds from `start` to `end`; a clock behind `start` counts as zero.
-pub fn seconds_between(start: DateTime<Utc>, end: DateTime<Utc>) -> u64 {
-    u64::try_from(end.signed_duration_since(start).num_seconds()).unwrap_or(0)
 }
 
 /// An operator decision starting a fresh budget while retaining attempt history.
@@ -350,4 +341,13 @@ pub enum ReviewReservation {
         /// The candidate's reviewer runtime.
         consumed: ReviewConsumption,
     },
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Whole seconds from `start` to `end`; a clock behind `start` counts as zero.
+pub fn seconds_between(start: DateTime<Utc>, end: DateTime<Utc>) -> u64 {
+    u64::try_from(end.signed_duration_since(start).num_seconds()).unwrap_or(0)
 }

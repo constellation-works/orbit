@@ -240,51 +240,6 @@ impl CommitRole {
     }
 }
 
-/// The one Orbit identity scheme: `orbit[<model>] <<role>@orbit.invalid>`,
-/// or `orbit <<role>@orbit.invalid>` when no model is known. Returns
-/// `(name, email)`.
-pub fn orbit_identity(role: CommitRole, model: Option<&str>) -> (String, String) {
-    let email = format!("{}@orbit.invalid", role.as_str());
-    let model = model
-        .map(|model| model.rsplit(" / ").next().unwrap_or(model))
-        .map(single_line)
-        .filter(|model| !model.is_empty());
-    let name = match model {
-        Some(model) => format!("orbit[{}]", model.replace(['<', '>'], "")),
-        None => "orbit".to_string(),
-    };
-    (name, email)
-}
-
-/// Recognize the four current role addresses at `orbit.invalid` and the
-/// historical `orbit.local` scheme: family addresses were implementers,
-/// `<family>-reviewer` reviewers, `orbit-recovery` recoveries and `orbit` Orbit.
-/// Other addresses, including other `orbit.invalid` local parts, return `None`
-/// so their original identity is preserved.
-pub fn orbit_role_for_email(email: &str) -> Option<CommitRole> {
-    let email = email.trim().to_ascii_lowercase();
-    let (local, domain) = email.rsplit_once('@')?;
-    match domain {
-        "orbit.invalid" => match local {
-            "implementer" => Some(CommitRole::Implementer),
-            "reviewer" => Some(CommitRole::Reviewer),
-            "recovery" => Some(CommitRole::Recovery),
-            "orbit" => Some(CommitRole::Orbit),
-            _ => None,
-        },
-        "orbit.local" => Some(if local == "orbit" {
-            CommitRole::Orbit
-        } else if local == "orbit-recovery" {
-            CommitRole::Recovery
-        } else if local.ends_with("-reviewer") {
-            CommitRole::Reviewer
-        } else {
-            CommitRole::Implementer
-        }),
-        _ => None,
-    }
-}
-
 /// A commit message in parts. [`Self::render`] orders and deduplicates the
 /// trailers, so producers push them in any order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -385,6 +340,116 @@ pub struct ComposedSubject {
     pub summary_cut: bool,
 }
 
+/// One way a message breaks the standard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitMessageViolation {
+    /// The subject is empty.
+    EmptySubject,
+    /// The subject is longer than [`COMMIT_SUBJECT_BUDGET`] characters.
+    SubjectTooLong(usize),
+    /// The subject was shortened with an ellipsis.
+    SubjectEllipsis,
+    /// The subject does not start with `<type>: ` of a known type.
+    SubjectType,
+    /// A subject bracket holds several ids (`[A, B]`).
+    SharedMarker(String),
+    /// The subject is not followed by a blank line.
+    NoBlankAfterSubject,
+    /// The message has no final trailer paragraph.
+    MissingTrailerBlock,
+    /// A final-paragraph line is not a registered `Key: value` trailer.
+    UnregisteredTrailer(String),
+    /// Trailers are out of registry order.
+    TrailerOrder(String),
+    /// Registered trailers appear in a paragraph before the final one.
+    TrailersMidBody(String),
+}
+
+impl fmt::Display for CommitMessageViolation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptySubject => formatter.write_str("the subject is empty"),
+            Self::SubjectTooLong(chars) => write!(
+                formatter,
+                "the subject is {chars} characters, over {COMMIT_SUBJECT_BUDGET}"
+            ),
+            Self::SubjectEllipsis => formatter.write_str("the subject is cut with an ellipsis"),
+            Self::SubjectType => formatter.write_str(
+                "the subject does not start with `feat:`, `fix:`, `refactor:`, `chore:` or `docs:`",
+            ),
+            Self::SharedMarker(marker) => write!(
+                formatter,
+                "subject marker {marker} holds several ids; give each its own brackets"
+            ),
+            Self::NoBlankAfterSubject => {
+                formatter.write_str("the subject is not followed by a blank line")
+            }
+            Self::MissingTrailerBlock => {
+                formatter.write_str("the message has no final trailer paragraph")
+            }
+            Self::UnregisteredTrailer(line) => {
+                write!(formatter, "trailer line '{line}' has no registered key")
+            }
+            Self::TrailerOrder(line) => {
+                write!(formatter, "trailer '{line}' is out of registry order")
+            }
+            Self::TrailersMidBody(line) => {
+                write!(
+                    formatter,
+                    "trailer '{line}' sits outside the final paragraph"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for CommitMessageViolation {}
+
+/// The one Orbit identity scheme: `orbit[<model>] <<role>@orbit.invalid>`,
+/// or `orbit <<role>@orbit.invalid>` when no model is known. Returns
+/// `(name, email)`.
+pub fn orbit_identity(role: CommitRole, model: Option<&str>) -> (String, String) {
+    let email = format!("{}@orbit.invalid", role.as_str());
+    let model = model
+        .map(|model| model.rsplit(" / ").next().unwrap_or(model))
+        .map(single_line)
+        .filter(|model| !model.is_empty());
+    let name = match model {
+        Some(model) => format!("orbit[{}]", model.replace(['<', '>'], "")),
+        None => "orbit".to_string(),
+    };
+    (name, email)
+}
+
+/// Recognize the four current role addresses at `orbit.invalid` and the
+/// historical `orbit.local` scheme: family addresses were implementers,
+/// `<family>-reviewer` reviewers, `orbit-recovery` recoveries and `orbit` Orbit.
+/// Other addresses, including other `orbit.invalid` local parts, return `None`
+/// so their original identity is preserved.
+pub fn orbit_role_for_email(email: &str) -> Option<CommitRole> {
+    let email = email.trim().to_ascii_lowercase();
+    let (local, domain) = email.rsplit_once('@')?;
+    match domain {
+        "orbit.invalid" => match local {
+            "implementer" => Some(CommitRole::Implementer),
+            "reviewer" => Some(CommitRole::Reviewer),
+            "recovery" => Some(CommitRole::Recovery),
+            "orbit" => Some(CommitRole::Orbit),
+            _ => None,
+        },
+        "orbit.local" => Some(if local == "orbit" {
+            CommitRole::Orbit
+        } else if local == "orbit-recovery" {
+            CommitRole::Recovery
+        } else if local.ends_with("-reviewer") {
+            CommitRole::Reviewer
+        } else {
+            CommitRole::Implementer
+        }),
+        _ => None,
+    }
+}
+
 /// Compose `<type>: <summary> [ID]… (#PR)` within [`COMMIT_SUBJECT_BUDGET`]
 /// characters. The summary is cut at a word boundary (trailing punctuation
 /// dropped, no ellipsis); a single word longer than the room is cut at a
@@ -477,71 +542,6 @@ pub fn shorten_at_word(text: &str, room: usize) -> (String, bool) {
         .to_string();
     (if trimmed.is_empty() { kept } else { trimmed }, true)
 }
-
-/// One way a message breaks the standard.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommitMessageViolation {
-    /// The subject is empty.
-    EmptySubject,
-    /// The subject is longer than [`COMMIT_SUBJECT_BUDGET`] characters.
-    SubjectTooLong(usize),
-    /// The subject was shortened with an ellipsis.
-    SubjectEllipsis,
-    /// The subject does not start with `<type>: ` of a known type.
-    SubjectType,
-    /// A subject bracket holds several ids (`[A, B]`).
-    SharedMarker(String),
-    /// The subject is not followed by a blank line.
-    NoBlankAfterSubject,
-    /// The message has no final trailer paragraph.
-    MissingTrailerBlock,
-    /// A final-paragraph line is not a registered `Key: value` trailer.
-    UnregisteredTrailer(String),
-    /// Trailers are out of registry order.
-    TrailerOrder(String),
-    /// Registered trailers appear in a paragraph before the final one.
-    TrailersMidBody(String),
-}
-
-impl fmt::Display for CommitMessageViolation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptySubject => formatter.write_str("the subject is empty"),
-            Self::SubjectTooLong(chars) => write!(
-                formatter,
-                "the subject is {chars} characters, over {COMMIT_SUBJECT_BUDGET}"
-            ),
-            Self::SubjectEllipsis => formatter.write_str("the subject is cut with an ellipsis"),
-            Self::SubjectType => formatter.write_str(
-                "the subject does not start with `feat:`, `fix:`, `refactor:`, `chore:` or `docs:`",
-            ),
-            Self::SharedMarker(marker) => write!(
-                formatter,
-                "subject marker {marker} holds several ids; give each its own brackets"
-            ),
-            Self::NoBlankAfterSubject => {
-                formatter.write_str("the subject is not followed by a blank line")
-            }
-            Self::MissingTrailerBlock => {
-                formatter.write_str("the message has no final trailer paragraph")
-            }
-            Self::UnregisteredTrailer(line) => {
-                write!(formatter, "trailer line '{line}' has no registered key")
-            }
-            Self::TrailerOrder(line) => {
-                write!(formatter, "trailer '{line}' is out of registry order")
-            }
-            Self::TrailersMidBody(line) => {
-                write!(
-                    formatter,
-                    "trailer '{line}' sits outside the final paragraph"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for CommitMessageViolation {}
 
 /// Check `subject` alone: budget, no ellipsis, a known type and one id per
 /// bracket.

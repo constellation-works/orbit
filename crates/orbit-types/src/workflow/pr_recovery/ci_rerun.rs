@@ -11,6 +11,30 @@ pub const CI_RERUN_RESERVED_EVENT: &str = "ci_check_rerun_reserved";
 /// A failed required job whose command evidence could not be read.
 pub const CI_UNREADABLE_LOG_CLASSIFICATION: &str = "unreadable_log";
 
+/// Longest `ci_check_rerun_reserved` note, in characters.
+const CI_RERUN_RESERVED_NOTE_MAX_CHARS: usize = 200;
+
+/// A durable hold before another infrastructure retry is admitted.
+pub const CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT: &str = "ci_infrastructure_retry_backoff";
+
+/// A failed-jobs retry that was sent: the durable `ci_check_rerun` receipt.
+pub const CI_CHECK_RERUN_EVENT: &str = "ci_check_rerun";
+
+/// Evidence that a failure may be inherited from the base: the durable
+/// `ci_base_suspect` history note.
+pub const CI_BASE_SUSPECT_EVENT: &str = "ci_base_suspect";
+
+/// Normalized prefix of a failure log that is only a `ci-await` timeout.
+/// The adapter still authenticates that log line; it is not a `concluded `
+/// signature, and it stays on the one shared rerun.
+const CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX: &str = "ci-await: timed out";
+
+/// Signature prefix of a root whose evidence is the provider's failed-step
+/// name, not its log: the job stopped in a step the workspace declares as a
+/// dependency handoff (`workflow.ci_infrastructure_retry.handoff_steps`).
+/// It is a logged-transient root for the infrastructure budget.
+pub const CI_HANDOFF_STEP_SIGNATURE_PREFIX: &str = "handoff step: ";
+
 /// The independently classified root of a workflow-wide failed-jobs retry.
 /// `classification` is `transient`, `flaky`, `unattributed`, `unreadable_log`,
 /// or `no_edit_repair`. Unreadable logs use the shared one-rerun budget.
@@ -44,9 +68,6 @@ pub struct CiRerunPlan {
     /// Source blobs, policy, checks, run and complete listing used for admission.
     pub authentication: Value,
 }
-
-/// Longest `ci_check_rerun_reserved` note, in characters.
-const CI_RERUN_RESERVED_NOTE_MAX_CHARS: usize = 200;
 
 impl CiRerunPlan {
     /// The one-line note people read on the `ci_check_rerun_reserved`
@@ -113,9 +134,6 @@ impl CiRerunPlan {
         }
     }
 }
-
-/// A durable hold before another infrastructure retry is admitted.
-pub const CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT: &str = "ci_infrastructure_retry_backoff";
 
 /// A backoff field observed in a legacy note. Unreadable values include
 /// explicit `null`; neither they nor missing fields acquire invented defaults.
@@ -217,23 +235,6 @@ impl CiInfrastructureRetryBackoffRecord {
         serde_json::to_string(self)
     }
 }
-
-fn ci_retry_backoff_field<T>(
-    note: &Value,
-    key: &str,
-    parse: fn(&Value) -> Option<T>,
-) -> CiInfrastructureRetryBackoffField<T> {
-    match note.as_object().and_then(|object| object.get(key)) {
-        None => CiInfrastructureRetryBackoffField::Missing,
-        Some(value) => match parse(value) {
-            Some(parsed) => CiInfrastructureRetryBackoffField::Known(parsed),
-            None => CiInfrastructureRetryBackoffField::Unreadable(value.clone()),
-        },
-    }
-}
-
-/// A failed-jobs retry that was sent: the durable `ci_check_rerun` receipt.
-pub const CI_CHECK_RERUN_EVENT: &str = "ci_check_rerun";
 
 /// The provider event a sent retry reran. Receipts written before the event
 /// was recorded omit it ([`CiCheckRerunRecord::event`] is `None`).
@@ -396,14 +397,6 @@ impl CiCheckRerunRecord {
     }
 }
 
-fn json_text(value: &Value) -> Option<String> {
-    value.as_str().map(str::to_string)
-}
-
-/// Evidence that a failure may be inherited from the base: the durable
-/// `ci_base_suspect` history note.
-pub const CI_BASE_SUSPECT_EVENT: &str = "ci_base_suspect";
-
 /// One legacy field of a [`CiBaseSuspectRecord`], keeping a key that was
 /// absent, an explicit `null`, a readable value and an unreadable value
 /// apart. The producer shape writes every key, so `Missing` and `Null`
@@ -440,21 +433,6 @@ impl<T: Serialize> Serialize for CiBaseSuspectLegacy<T> {
             Self::Known(value) => value.serialize(serializer),
             Self::Unreadable(value) => value.serialize(serializer),
         }
-    }
-}
-
-fn ci_base_suspect_legacy_field<T>(
-    note: &Value,
-    key: &str,
-    parse: fn(&Value) -> Option<T>,
-) -> CiBaseSuspectLegacy<T> {
-    match note.as_object().and_then(|object| object.get(key)) {
-        None => CiBaseSuspectLegacy::Missing,
-        Some(Value::Null) => CiBaseSuspectLegacy::Null,
-        Some(value) => match parse(value) {
-            Some(parsed) => CiBaseSuspectLegacy::Known(parsed),
-            None => CiBaseSuspectLegacy::Unreadable(value.clone()),
-        },
     }
 }
 
@@ -596,74 +574,6 @@ impl Default for CiInfrastructureRetryPolicy {
     }
 }
 
-/// Normalized prefix of a failure log that is only a `ci-await` timeout.
-/// The adapter still authenticates that log line; it is not a `concluded `
-/// signature, and it stays on the one shared rerun.
-const CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX: &str = "ci-await: timed out";
-
-/// A logged transient set can use the infrastructure budget. A candidate or
-/// flaky sibling, a conclusion-only stop, or a pure `ci-await` timeout cannot
-/// expand its authorization.
-pub fn ci_rerun_is_infrastructure(plan: &CiRerunPlan) -> bool {
-    !plan.roots.is_empty()
-        && plan.roots.iter().all(|root| {
-            root.classification == "transient" && !signature_keeps_single_rerun(&root.signature)
-        })
-}
-
-/// A provider conclusion, or a log whose only signal is a `ci-await` timeout.
-fn signature_keeps_single_rerun(signature: &str) -> bool {
-    signature.starts_with("concluded ") || signature.starts_with(CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX)
-}
-
-/// Signature prefix of a root whose evidence is the provider's failed-step
-/// name, not its log: the job stopped in a step the workspace declares as a
-/// dependency handoff (`workflow.ci_infrastructure_retry.handoff_steps`).
-/// It is a logged-transient root for the infrastructure budget.
-pub const CI_HANDOFF_STEP_SIGNATURE_PREFIX: &str = "handoff step: ";
-
-/// The rerun-root signature of a job that failed in handoff step `step`.
-pub fn ci_handoff_step_signature(step: &str) -> String {
-    format!("{CI_HANDOFF_STEP_SIGNATURE_PREFIX}{step}")
-}
-
-/// Whether failed step `step` is a declared dependency handoff. Each pattern
-/// matches the whole step name, case-sensitively; `*` matches any run of
-/// characters. No pattern matches an empty step name.
-pub fn ci_handoff_step_matches(patterns: &[String], step: &str) -> bool {
-    !step.trim().is_empty()
-        && patterns
-            .iter()
-            .any(|pattern| wildcard_matches(pattern.as_bytes(), step.as_bytes()))
-}
-
-/// Whole-string match where `*` matches any (possibly empty) byte run.
-fn wildcard_matches(pattern: &[u8], text: &[u8]) -> bool {
-    let (mut p, mut t) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while t < text.len() {
-        match pattern.get(p) {
-            Some(b'*') => {
-                star = Some((p, t));
-                p += 1;
-            }
-            Some(byte) if *byte == text[t] => {
-                p += 1;
-                t += 1;
-            }
-            _ => match star {
-                Some((star_p, star_t)) => {
-                    p = star_p + 1;
-                    t = star_t + 1;
-                    star = Some((star_p, star_t + 1));
-                }
-                None => return false,
-            },
-        }
-    }
-    pattern[p..].iter().all(|byte| *byte == b'*')
-}
-
 /// Why CI retry admission was refused. Consumers match the variant;
 /// `Display` preserves the historical wording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -723,6 +633,96 @@ pub enum CiRerunAdmission {
     },
     Observe(Box<CiRerunPlan>),
     Refused(CiRerunRefusal),
+}
+
+fn ci_retry_backoff_field<T>(
+    note: &Value,
+    key: &str,
+    parse: fn(&Value) -> Option<T>,
+) -> CiInfrastructureRetryBackoffField<T> {
+    match note.as_object().and_then(|object| object.get(key)) {
+        None => CiInfrastructureRetryBackoffField::Missing,
+        Some(value) => match parse(value) {
+            Some(parsed) => CiInfrastructureRetryBackoffField::Known(parsed),
+            None => CiInfrastructureRetryBackoffField::Unreadable(value.clone()),
+        },
+    }
+}
+
+fn json_text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
+
+fn ci_base_suspect_legacy_field<T>(
+    note: &Value,
+    key: &str,
+    parse: fn(&Value) -> Option<T>,
+) -> CiBaseSuspectLegacy<T> {
+    match note.as_object().and_then(|object| object.get(key)) {
+        None => CiBaseSuspectLegacy::Missing,
+        Some(Value::Null) => CiBaseSuspectLegacy::Null,
+        Some(value) => match parse(value) {
+            Some(parsed) => CiBaseSuspectLegacy::Known(parsed),
+            None => CiBaseSuspectLegacy::Unreadable(value.clone()),
+        },
+    }
+}
+
+/// A logged transient set can use the infrastructure budget. A candidate or
+/// flaky sibling, a conclusion-only stop, or a pure `ci-await` timeout cannot
+/// expand its authorization.
+pub fn ci_rerun_is_infrastructure(plan: &CiRerunPlan) -> bool {
+    !plan.roots.is_empty()
+        && plan.roots.iter().all(|root| {
+            root.classification == "transient" && !signature_keeps_single_rerun(&root.signature)
+        })
+}
+
+/// A provider conclusion, or a log whose only signal is a `ci-await` timeout.
+fn signature_keeps_single_rerun(signature: &str) -> bool {
+    signature.starts_with("concluded ") || signature.starts_with(CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX)
+}
+
+/// The rerun-root signature of a job that failed in handoff step `step`.
+pub fn ci_handoff_step_signature(step: &str) -> String {
+    format!("{CI_HANDOFF_STEP_SIGNATURE_PREFIX}{step}")
+}
+
+/// Whether failed step `step` is a declared dependency handoff. Each pattern
+/// matches the whole step name, case-sensitively; `*` matches any run of
+/// characters. No pattern matches an empty step name.
+pub fn ci_handoff_step_matches(patterns: &[String], step: &str) -> bool {
+    !step.trim().is_empty()
+        && patterns
+            .iter()
+            .any(|pattern| wildcard_matches(pattern.as_bytes(), step.as_bytes()))
+}
+
+/// Whole-string match where `*` matches any (possibly empty) byte run.
+fn wildcard_matches(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(byte) if *byte == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    p = star_p + 1;
+                    t = star_t + 1;
+                    star = Some((star_p, star_t + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|byte| *byte == b'*')
 }
 
 /// Decide under the owning task/claim lock; unknown sends consume a reservation.

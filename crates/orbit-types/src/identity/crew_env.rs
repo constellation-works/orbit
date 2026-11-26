@@ -110,6 +110,30 @@ impl CrewEnvVar {
     }
 }
 
+impl fmt::Display for CrewEnvVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_mapped() {
+            write!(f, "{}={}", self.name, self.source)
+        } else {
+            f.write_str(&self.name)
+        }
+    }
+}
+
+impl TryFrom<String> for CrewEnvVar {
+    type Error = IdentityError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value)
+    }
+}
+
+impl From<CrewEnvVar> for String {
+    fn from(value: CrewEnvVar) -> Self {
+        value.to_string()
+    }
+}
+
 fn check_variable_name(entry: &str, side: &str) -> Result<(), IdentityError> {
     if !is_env_var_name(side) {
         return Err(IdentityError::Invalid(format!(
@@ -136,28 +160,4 @@ pub fn is_env_var_name(value: &str) -> bool {
         .next()
         .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
         && chars.all(|next| next.is_ascii_alphanumeric() || next == '_')
-}
-
-impl fmt::Display for CrewEnvVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_mapped() {
-            write!(f, "{}={}", self.name, self.source)
-        } else {
-            f.write_str(&self.name)
-        }
-    }
-}
-
-impl TryFrom<String> for CrewEnvVar {
-    type Error = IdentityError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(&value)
-    }
-}
-
-impl From<CrewEnvVar> for String {
-    fn from(value: CrewEnvVar) -> Self {
-        value.to_string()
-    }
 }

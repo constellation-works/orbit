@@ -11,6 +11,9 @@ use super::publication::WorkspacePublicationBinding;
 /// Current on-disk schema version for `~/.orbit/workspaces.json`.
 pub const WORKSPACE_REGISTRY_SCHEMA_VERSION: u32 = 1;
 
+/// The base branch a workspace record carries when none was registered.
+pub const DEFAULT_BASE_BRANCH: &str = "main";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceStatus {
@@ -62,17 +65,6 @@ pub struct Workspace {
     pub status: WorkspaceStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// The base branch a workspace record carries when none was registered.
-pub const DEFAULT_BASE_BRANCH: &str = "main";
-
-fn default_base_branch() -> String {
-    DEFAULT_BASE_BRANCH.to_string()
-}
-
-fn default_status() -> WorkspaceStatus {
-    WorkspaceStatus::Active
 }
 
 /// This machine's role for a local checkout of a logical workspace.
@@ -208,6 +200,10 @@ impl WorkspacePaths {
         let resources_dir = orbit_dir.join("resources");
         let state_dir = orbit_dir.join("state");
         Self {
+            repo_root,
+            orbit_dir,
+            local_dir,
+            global_dir,
             resources_dir: resources_dir.clone(),
             state_dir: state_dir.clone(),
             activities_dir: resources_dir.join("activities"),
@@ -220,10 +216,14 @@ impl WorkspacePaths {
             job_runs_dir: state_dir.join("job-runs"),
             logs_dir: state_dir.join("logs"),
             worktrees_dir: state_dir.join("worktrees"),
-            repo_root,
-            orbit_dir,
-            local_dir,
-            global_dir,
         }
     }
+}
+
+fn default_base_branch() -> String {
+    DEFAULT_BASE_BRANCH.to_string()
+}
+
+fn default_status() -> WorkspaceStatus {
+    WorkspaceStatus::Active
 }

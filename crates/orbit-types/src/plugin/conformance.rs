@@ -17,6 +17,10 @@ use super::namespace::is_valid_verb;
 pub const TEST_FILE_SCHEMA_VERSION: u32 = 1;
 pub const TEST_FILE_KIND: &str = "PluginTest";
 
+/// The `version` every golden-supplied secret is delivered at, so a golden
+/// that echoes it is reproducible.
+pub const FIXTURE_SECRET_VERSION: &str = "fixture";
+
 /// One `spec.tests[]` file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,10 +52,6 @@ pub struct PluginTestCase {
     pub expect: PluginTestExpectation,
 }
 
-/// The `version` every golden-supplied secret is delivered at, so a golden
-/// that echoes it is reproducible.
-pub const FIXTURE_SECRET_VERSION: &str = "fixture";
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum PluginTestExpectation {
@@ -73,11 +73,6 @@ pub struct PluginTestErrorExpectation {
         deserialize_with = "present_json"
     )]
     pub detail: Option<Value>,
-}
-
-/// Keep an explicitly expected JSON null distinct from an omitted detail.
-fn present_json<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
-    Value::deserialize(deserializer).map(Some)
 }
 
 impl PluginTestFile {
@@ -145,4 +140,9 @@ impl PluginTestFile {
         }
         Ok(())
     }
+}
+
+/// Keep an explicitly expected JSON null distinct from an omitted detail.
+fn present_json<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }

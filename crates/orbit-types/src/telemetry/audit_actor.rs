@@ -49,6 +49,34 @@ use crate::identity::{agent_from_model, all_agent_families, provider_for_agent_f
 /// `muse` and `muse-*` labels resolve to the `muse` family (vendor `meta`).
 pub const ACTOR_ALIAS_MAP_VERSION: u32 = 3;
 
+/// The label Orbit records when no attribution at all was resolved.
+const UNKNOWN_LABEL: &str = "unknown";
+
+/// Labels that are recorded on the `role` column but do not name a caller.
+///
+/// Editing this table is an alias-map change: bump [`ACTOR_ALIAS_MAP_VERSION`].
+const NON_AGENT_ALIASES: &[(&str, ActorKind)] = &[
+    // `role: "admin"` is hardcoded on ID-allocation events and on every direct
+    // CLI command's audit row; it is Orbit acting, not a distinct caller.
+    ("admin", ActorKind::System),
+    ("system", ActorKind::System),
+    ("hook", ActorKind::Hook),
+    ("human", ActorKind::Human),
+    // Attribution was attempted and produced nothing usable. `unverified` is
+    // the MCP trust boundary's marker and must keep its own identity.
+    ("unknown", ActorKind::Unattributed),
+    ("unverified", ActorKind::Unattributed),
+    // The generic fallback `audit_role_label` emits when identity resolution
+    // yields neither a family nor a model.
+    ("agent", ActorKind::Unattributed),
+];
+
+/// Model shorthands Orbit itself emits that the model-string family rules do
+/// not already cover.
+///
+/// Editing this table is an alias-map change: bump [`ACTOR_ALIAS_MAP_VERSION`].
+const MODEL_SHORTHAND_ALIASES: &[(&str, &str)] = &[("haiku", "claude")];
+
 /// What kind of thing performed an audited invocation.
 ///
 /// This is the dimension that makes "real agents only" expressible without
@@ -154,34 +182,6 @@ impl CanonicalActor {
         self.kind == ActorKind::Agent
     }
 }
-
-/// The label Orbit records when no attribution at all was resolved.
-const UNKNOWN_LABEL: &str = "unknown";
-
-/// Labels that are recorded on the `role` column but do not name a caller.
-///
-/// Editing this table is an alias-map change: bump [`ACTOR_ALIAS_MAP_VERSION`].
-const NON_AGENT_ALIASES: &[(&str, ActorKind)] = &[
-    // `role: "admin"` is hardcoded on ID-allocation events and on every direct
-    // CLI command's audit row; it is Orbit acting, not a distinct caller.
-    ("admin", ActorKind::System),
-    ("system", ActorKind::System),
-    ("hook", ActorKind::Hook),
-    ("human", ActorKind::Human),
-    // Attribution was attempted and produced nothing usable. `unverified` is
-    // the MCP trust boundary's marker and must keep its own identity.
-    ("unknown", ActorKind::Unattributed),
-    ("unverified", ActorKind::Unattributed),
-    // The generic fallback `audit_role_label` emits when identity resolution
-    // yields neither a family nor a model.
-    ("agent", ActorKind::Unattributed),
-];
-
-/// Model shorthands Orbit itself emits that the model-string family rules do
-/// not already cover.
-///
-/// Editing this table is an alias-map change: bump [`ACTOR_ALIAS_MAP_VERSION`].
-const MODEL_SHORTHAND_ALIASES: &[(&str, &str)] = &[("haiku", "claude")];
 
 /// Resolve a recorded `audit_events.role` label into its canonical actor.
 ///

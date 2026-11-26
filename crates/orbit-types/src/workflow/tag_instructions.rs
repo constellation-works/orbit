@@ -70,26 +70,6 @@ impl TagInstructionRole {
     }
 }
 
-/// The matching form of a tag: trimmed and lowercased, so `UI` selects what
-/// `ui` maps. `None` for a blank tag.
-pub fn normalize_instruction_tag(tag: &str) -> Option<String> {
-    let tag = tag.trim();
-    (!tag.is_empty()).then(|| tag.to_lowercase())
-}
-
-/// A task's tags in application order: normalized, deduplicated and sorted,
-/// so the same tags apply in the same order whatever order the task lists
-/// them in.
-pub fn instruction_tags(tags: &[String]) -> Vec<String> {
-    let mut tags = tags
-        .iter()
-        .filter_map(|tag| normalize_instruction_tag(tag))
-        .collect::<Vec<_>>();
-    tags.sort();
-    tags.dedup();
-    tags
-}
-
 /// Where a tag instruction's text came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -264,6 +244,26 @@ impl CapturedTagInstructions {
                 .cloned())
         })
     }
+}
+
+/// The matching form of a tag: trimmed and lowercased, so `UI` selects what
+/// `ui` maps. `None` for a blank tag.
+pub fn normalize_instruction_tag(tag: &str) -> Option<String> {
+    let tag = tag.trim();
+    (!tag.is_empty()).then(|| tag.to_lowercase())
+}
+
+/// A task's tags in application order: normalized, deduplicated and sorted,
+/// so the same tags apply in the same order whatever order the task lists
+/// them in.
+pub fn instruction_tags(tags: &[String]) -> Vec<String> {
+    let mut tags = tags
+        .iter()
+        .filter_map(|tag| normalize_instruction_tag(tag))
+        .collect::<Vec<_>>();
+    tags.sort();
+    tags.dedup();
+    tags
 }
 
 /// The instructions an activity in `role` receives for a task carrying

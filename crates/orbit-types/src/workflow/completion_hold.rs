@@ -65,18 +65,6 @@ impl CompletionHoldRule {
     }
 }
 
-/// The rank of an assessed complexity on the `low < medium < hard < xhard`
-/// scale; `None` for `unassessed`.
-pub fn completion_hold_complexity_rank(complexity: TaskComplexity) -> Option<u8> {
-    match complexity {
-        TaskComplexity::Low => Some(0),
-        TaskComplexity::Medium => Some(1),
-        TaskComplexity::Hard => Some(2),
-        TaskComplexity::XHard => Some(3),
-        TaskComplexity::Unassessed => None,
-    }
-}
-
 /// Which field of a rule matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -145,6 +133,18 @@ impl CompletionHold {
 impl fmt::Display for CompletionHold {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.summary())
+    }
+}
+
+/// The rank of an assessed complexity on the `low < medium < hard < xhard`
+/// scale; `None` for `unassessed`.
+pub fn completion_hold_complexity_rank(complexity: TaskComplexity) -> Option<u8> {
+    match complexity {
+        TaskComplexity::Low => Some(0),
+        TaskComplexity::Medium => Some(1),
+        TaskComplexity::Hard => Some(2),
+        TaskComplexity::XHard => Some(3),
+        TaskComplexity::Unassessed => None,
     }
 }
 

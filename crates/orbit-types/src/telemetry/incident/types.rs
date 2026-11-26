@@ -12,6 +12,41 @@ use std::collections::BTreeMap;
 /// separate failure later in the same run.
 pub const CASCADE_WINDOW_SECS: i64 = 60;
 
+/// Default cap on raw failure rows scanned for one aggregation.
+pub const DEFAULT_SCAN_LIMIT: usize = 20_000;
+
+/// Operator-facing label for failed audit rows with no tool identity: job-run /
+/// activity lifecycle events, not a synthetic tool named `unknown`.
+pub const JOB_RUN_LIFECYCLE_LABEL: &str = "job-run lifecycle";
+
+/// The audit surface a run records when it stopped without failing because
+/// its work was deferred [ORB-15517]. Its rows classify as
+/// [`FailureClass::Deferred`].
+pub const RUN_DEFERRED_SURFACE: &str = "pipeline.run.deferred";
+
+/// Lifecycle audit surfaces that are emitted only when an abnormal path
+/// occurs. Unlike callable tools and direct CLI commands, they cannot have a
+/// healthy-call denominator. `Start` is the legacy no-tool job-start record;
+/// the remaining surfaces carry their identity in `tool_name`.
+pub const FAILURE_ONLY_DIAGNOSTIC_SURFACES: &[&str] = &[
+    "Start",
+    "pipeline.run.terminal_conflict",
+    "pipeline.worker.exit",
+    "pipeline.worker.startup",
+    RUN_DEFERRED_SURFACE,
+];
+
+/// Prefix of the audit `error_message` that `orbit doctor` records when it ran
+/// every check and reported findings (it then exits nonzero so unattended
+/// callers can alert). The classifier reads it to tell that completed run from
+/// a doctor that crashed before finishing, which records an `OrbitError`
+/// message instead.
+pub const DOCTOR_FINDINGS_MESSAGE_PREFIX: &str = "doctor reported findings: ";
+
+/// Operator-facing label for abnormal-path lifecycle records, whether they
+/// use one of [`FAILURE_ONLY_DIAGNOSTIC_SURFACES`] or have no tool identity.
+pub const LIFECYCLE_DIAGNOSTIC_LABEL: &str = "lifecycle diagnostics";
+
 /// How an audit failure should be read by an operator.
 ///
 /// The five classes are kept separate at every layer: an incident never
@@ -203,41 +238,6 @@ pub struct FailureIncidentQuery {
     /// Cap on raw rows scanned. `0` applies [`DEFAULT_SCAN_LIMIT`].
     pub max_events: usize,
 }
-
-/// Default cap on raw failure rows scanned for one aggregation.
-pub const DEFAULT_SCAN_LIMIT: usize = 20_000;
-
-/// Operator-facing label for failed audit rows with no tool identity: job-run /
-/// activity lifecycle events, not a synthetic tool named `unknown`.
-pub const JOB_RUN_LIFECYCLE_LABEL: &str = "job-run lifecycle";
-
-/// The audit surface a run records when it stopped without failing because
-/// its work was deferred [ORB-15517]. Its rows classify as
-/// [`FailureClass::Deferred`].
-pub const RUN_DEFERRED_SURFACE: &str = "pipeline.run.deferred";
-
-/// Lifecycle audit surfaces that are emitted only when an abnormal path
-/// occurs. Unlike callable tools and direct CLI commands, they cannot have a
-/// healthy-call denominator. `Start` is the legacy no-tool job-start record;
-/// the remaining surfaces carry their identity in `tool_name`.
-pub const FAILURE_ONLY_DIAGNOSTIC_SURFACES: &[&str] = &[
-    "Start",
-    "pipeline.run.terminal_conflict",
-    "pipeline.worker.exit",
-    "pipeline.worker.startup",
-    RUN_DEFERRED_SURFACE,
-];
-
-/// Prefix of the audit `error_message` that `orbit doctor` records when it ran
-/// every check and reported findings (it then exits nonzero so unattended
-/// callers can alert). The classifier reads it to tell that completed run from
-/// a doctor that crashed before finishing, which records an `OrbitError`
-/// message instead.
-pub const DOCTOR_FINDINGS_MESSAGE_PREFIX: &str = "doctor reported findings: ";
-
-/// Operator-facing label for abnormal-path lifecycle records, whether they
-/// use one of [`FAILURE_ONLY_DIAGNOSTIC_SURFACES`] or have no tool identity.
-pub const LIFECYCLE_DIAGNOSTIC_LABEL: &str = "lifecycle diagnostics";
 
 /// Result of one aggregation: the incidents plus the raw denominators they
 /// were derived from, so no surface has to re-derive (or guess) them.

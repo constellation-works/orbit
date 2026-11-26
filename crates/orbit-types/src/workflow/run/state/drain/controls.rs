@@ -57,10 +57,6 @@ impl RunCancellationProvenance {
     }
 }
 
-fn skip_legacy_provenance(value: &Option<RunCancellationProvenance>) -> bool {
-    value.as_ref().is_none_or(|provenance| provenance.legacy)
-}
-
 impl<'de> Deserialize<'de> for TaskCancellationPolicy {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -79,27 +75,6 @@ impl<'de> Deserialize<'de> for TaskCancellationPolicy {
             provenance,
         })
     }
-}
-
-/// Decode the pre-provenance policy shape at its storage boundary.
-fn decode_legacy_cancellation_note(note: &str) -> Option<RunCancellationProvenance> {
-    let rest = note.trim().strip_prefix("run cancelled by ")?;
-    let (actor, reason) = rest
-        .split_once(": ")
-        .map_or((rest, None), |(actor, reason)| (actor, Some(reason)));
-    let actor = actor.trim();
-    if actor.is_empty() {
-        return None;
-    }
-    Some(RunCancellationProvenance {
-        actor: actor.to_owned(),
-        source: None,
-        reason: reason
-            .map(str::trim)
-            .filter(|reason| !reason.is_empty())
-            .map(str::to_owned),
-        legacy: true,
-    })
 }
 
 /// A live operator adjustment to a bounded drain's worker ceiling [ORB-11253].
@@ -230,4 +205,29 @@ pub struct DrainCapacity {
     pub inherited_leaf_runs: u64,
     /// Effective ceiling, including an operator's live resize.
     pub max_active_leaf_runs: u64,
+}
+
+fn skip_legacy_provenance(value: &Option<RunCancellationProvenance>) -> bool {
+    value.as_ref().is_none_or(|provenance| provenance.legacy)
+}
+
+/// Decode the pre-provenance policy shape at its storage boundary.
+fn decode_legacy_cancellation_note(note: &str) -> Option<RunCancellationProvenance> {
+    let rest = note.trim().strip_prefix("run cancelled by ")?;
+    let (actor, reason) = rest
+        .split_once(": ")
+        .map_or((rest, None), |(actor, reason)| (actor, Some(reason)));
+    let actor = actor.trim();
+    if actor.is_empty() {
+        return None;
+    }
+    Some(RunCancellationProvenance {
+        actor: actor.to_owned(),
+        source: None,
+        reason: reason
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+            .map(str::to_owned),
+        legacy: true,
+    })
 }

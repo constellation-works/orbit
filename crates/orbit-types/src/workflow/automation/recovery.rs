@@ -71,6 +71,15 @@ use super::{BatchState, DeliveryTrigger, SourceRevision};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Actor recorded on a recovery the evaluator applied without an operator.
+pub const SYSTEM_ACTOR: &str = "system:automation";
+
+/// Minutes a deferred reason may persist before the evaluator escalates it
+/// to a warning and one friction record.
+///
+/// The former `automation.stall_window_minutes` default, fixed when the key was removed [ORB-22808].
+pub const DEFAULT_STALL_WINDOW_MINUTES: u32 = 60;
+
 /// What an operator explicitly authorizes for one stalled consumer. Settings
 /// and action operations are opt-in; history replay previews until it carries
 /// an explicit reason.
@@ -412,15 +421,6 @@ impl RecoveryRecord {
         }
     }
 }
-
-/// Actor recorded on a recovery the evaluator applied without an operator.
-pub const SYSTEM_ACTOR: &str = "system:automation";
-
-/// Minutes a deferred reason may persist before the evaluator escalates it
-/// to a warning and one friction record.
-///
-/// The former `automation.stall_window_minutes` default, fixed when the key was removed [ORB-22808].
-pub const DEFAULT_STALL_WINDOW_MINUTES: u32 = 60;
 
 /// One deterministic orphan-to-canonical commit correspondence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use super::request::DecisionAnswer;
 use crate::task::TaskStatus;
 
+/// First-line prefix of an operator pilot-admission comment. The verdict
+/// spelling follows the space. [`PilotAdmissionVerdict::from_header`] and
+/// [`PilotAdmissionOperatorRecord::comment`] are the only readers and writer.
+const PILOT_ADMISSION_COMMENT_PREFIX: &str = "task-pilot-admission: ";
+
 /// What the final-recovery applier did with a decision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -60,11 +65,6 @@ pub enum PilotAdmissionVerdict {
     /// The operator changed the acceptance criteria the finding assessed.
     Rescope,
 }
-
-/// First-line prefix of an operator pilot-admission comment. The verdict
-/// spelling follows the space. [`PilotAdmissionVerdict::from_header`] and
-/// [`PilotAdmissionOperatorRecord::comment`] are the only readers and writer.
-const PILOT_ADMISSION_COMMENT_PREFIX: &str = "task-pilot-admission: ";
 
 /// Why a dashboard pilot-admission record was refused before any task was read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

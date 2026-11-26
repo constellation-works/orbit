@@ -25,51 +25,16 @@ pub const TASK_ARTIFACTS_DIR_NAME: &str = "artifacts";
 pub const TASK_ARTIFACT_MANIFEST_FILE_NAME: &str = "manifest.yaml";
 pub const TASK_ARTIFACT_FILES_DIR_NAME: &str = "files";
 
-pub fn is_valid_orb_task_id(id: &str) -> bool {
-    let Some((prefix, suffix)) = id.split_once('-') else {
-        return false;
-    };
-    is_valid_task_id_prefix(prefix)
-        && !suffix.is_empty()
-        && suffix.chars().all(|character| character.is_ascii_digit())
-}
-
-/// Validate a stored task-id prefix. `ORB` remains valid for migrated machines;
-/// other artifact namespaces cannot be interpreted as tasks.
-pub fn is_valid_task_id_prefix(prefix: &str) -> bool {
-    (2..=5).contains(&prefix.len())
-        && prefix.bytes().all(|byte| byte.is_ascii_uppercase())
-        && !matches!(prefix, "ADR" | "L" | "F")
-}
-
-pub fn task_id_prefix(id: &str) -> Option<&str> {
-    is_valid_orb_task_id(id).then(|| id.split_once('-').map(|(prefix, _)| prefix))?
-}
-
-pub fn parse_task_number(id: &str) -> Option<u32> {
-    is_valid_orb_task_id(id)
-        .then(|| id.split_once('-').map(|(_, suffix)| suffix))?
-        .and_then(|suffix| suffix.parse().ok())
-}
-
-pub fn validate_orb_task_id(id: &str) -> Result<(), TaskError> {
-    if is_valid_orb_task_id(id) {
-        return Ok(());
-    }
-    Err(TaskError::Invalid(format!(
-        "task id '{id}' must match <2-5 uppercase-letter prefix>-<digits>"
-    )))
-}
-
-pub fn format_task_id(prefix: &str, value: u32) -> Result<String, TaskError> {
-    if !is_valid_task_id_prefix(prefix) {
-        return Err(TaskError::Invalid(format!(
-            "task id prefix '{prefix}' must be 2-5 uppercase ASCII letters and must not use a reserved artifact namespace"
-        )));
-    }
-    // Minted ids are zero-padded to at least five digits. Parsers accept wider ids.
-    Ok(format!("{prefix}-{value:05}"))
-}
+/// The relation types whose edges form a reachability family, and can
+/// therefore close a cycle.
+///
+/// A caller that pre-filters stored edges before handing them to
+/// [`validate_task_relations_for_source`] — rather than passing the whole
+/// graph — must filter on this list. Anything it omits is metadata the cycle
+/// check never walks, so dropping it cannot change the verdict. This list
+/// must agree with `cyclic_relation_family` to avoid admitting a cycle.
+pub const CYCLIC_RELATION_TYPES: &[TaskRelationType] =
+    &[TaskRelationType::BlockedBy, TaskRelationType::ChildOf];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -207,135 +172,6 @@ pub struct TaskRelationEdge {
     #[serde(rename = "type")]
     pub relation_type: TaskRelationType,
     pub target: OrbitId,
-}
-
-/// The relation types whose edges form a reachability family, and can
-/// therefore close a cycle.
-///
-/// A caller that pre-filters stored edges before handing them to
-/// [`validate_task_relations_for_source`] — rather than passing the whole
-/// graph — must filter on this list. Anything it omits is metadata the cycle
-/// check never walks, so dropping it cannot change the verdict. This list
-/// must agree with `cyclic_relation_family` to avoid admitting a cycle.
-pub const CYCLIC_RELATION_TYPES: &[TaskRelationType] =
-    &[TaskRelationType::BlockedBy, TaskRelationType::ChildOf];
-
-pub fn validate_task_relations_for_source(
-    source_id: &str,
-    relations: &[TaskRelation],
-    existing_edges: &[TaskRelationEdge],
-) -> Result<(), TaskError> {
-    // Existing edges are assumed acyclic; this check only rejects new edges that close a cycle.
-    validate_orb_task_id(source_id)?;
-    let mut seen = BTreeSet::new();
-    for edge in existing_edges {
-        validate_orb_task_id(&edge.source)?;
-        validate_orb_task_id(&edge.target)?;
-        if edge.source == edge.target {
-            return Err(TaskError::Invalid(format!(
-                "task relation from '{}' must not target itself",
-                edge.source
-            )));
-        }
-    }
-    for relation in relations {
-        validate_target_for(relation.relation_type, &relation.target)?;
-        if relation.regression.is_some()
-            && relation.relation_type != TaskRelationType::RegressionFrom
-        {
-            return Err(TaskError::Invalid(format!(
-                "task relation {:?} -> '{}' must not carry a `regression` classification; only regression_from accepts one",
-                relation.relation_type, relation.target
-            )));
-        }
-        if let Some(regression) = &relation.regression {
-            regression.validate_sites().map_err(TaskError::Invalid)?;
-        }
-        if relation.target == source_id {
-            return Err(TaskError::Invalid(format!(
-                "task relation from '{source_id}' must not target itself"
-            )));
-        }
-        let key = (relation.relation_type, relation.target.as_str());
-        if !seen.insert(key) {
-            return Err(TaskError::Invalid(format!(
-                "duplicate task relation {:?} -> '{}'",
-                relation.relation_type, relation.target
-            )));
-        }
-    }
-
-    for relation in relations {
-        if let Some(family) = cyclic_relation_family(relation.relation_type) {
-            let mut graph = relation_graph_for_family(family, existing_edges);
-            for candidate in relations {
-                if cyclic_relation_family(candidate.relation_type) == Some(family) {
-                    graph
-                        .entry(source_id.to_string())
-                        .or_default()
-                        .insert(candidate.target.clone());
-                }
-            }
-            if reaches(&graph, &relation.target, source_id) {
-                return Err(TaskError::Invalid(format!(
-                    "task relation {:?} from '{}' to '{}' would create a cycle",
-                    relation.relation_type, source_id, relation.target
-                )));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_target_for(relation_type: TaskRelationType, target: &str) -> Result<(), TaskError> {
-    match relation_type {
-        TaskRelationType::CoveredBy => {
-            if is_valid_orb_task_id(target) {
-                return Ok(());
-            }
-            let reference = ExternalRef::parse_key(target)?;
-            if reference.system == "github-pr"
-                && (reference.id.parse::<u64>().is_ok_and(|number| number > 0)
-                    || url::Url::parse(&reference.id).is_ok_and(|url| {
-                        let parts = url.path().trim_matches('/').split('/').collect::<Vec<_>>();
-                        url.scheme() == "https"
-                            && url.host_str() == Some("github.com")
-                            && url.username().is_empty()
-                            && url.password().is_none()
-                            && url.query().is_none()
-                            && url.fragment().is_none()
-                            && parts.len() == 4
-                            && !parts[0].is_empty()
-                            && !parts[1].is_empty()
-                            && parts[2] == "pull"
-                            && parts[3].parse::<u64>().is_ok_and(|n| n > 0)
-                    }))
-            {
-                return Ok(());
-            }
-            Err(TaskError::Invalid(
-                "covered_by target must be a task id or github-pr:<number or GitHub PR URL>".into(),
-            ))
-        }
-        TaskRelationType::Produces | TaskRelationType::Resolves => {
-            if is_valid_orb_task_id(target)
-                || is_valid_friction_id(target)
-                || is_valid_adr_id(target)
-            {
-                return Ok(());
-            }
-            Err(TaskError::Invalid(format!(
-                "relation target '{target}' must be an ORB-/F-/ADR- id"
-            )))
-        }
-        TaskRelationType::BlockedBy
-        | TaskRelationType::ChildOf
-        | TaskRelationType::SpawnedFrom
-        | TaskRelationType::RegressionFrom
-        | TaskRelationType::Supersedes
-        | TaskRelationType::RelatedTo => validate_orb_task_id(target),
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -576,6 +412,176 @@ impl TaskArtifactMetadata for crate::task::TaskArtifact {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelationCycleFamily {
+    Blocking,
+    Hierarchy,
+}
+
+pub fn is_valid_orb_task_id(id: &str) -> bool {
+    let Some((prefix, suffix)) = id.split_once('-') else {
+        return false;
+    };
+    is_valid_task_id_prefix(prefix)
+        && !suffix.is_empty()
+        && suffix.chars().all(|character| character.is_ascii_digit())
+}
+
+/// Validate a stored task-id prefix. `ORB` remains valid for migrated machines;
+/// other artifact namespaces cannot be interpreted as tasks.
+pub fn is_valid_task_id_prefix(prefix: &str) -> bool {
+    (2..=5).contains(&prefix.len())
+        && prefix.bytes().all(|byte| byte.is_ascii_uppercase())
+        && !matches!(prefix, "ADR" | "L" | "F")
+}
+
+pub fn task_id_prefix(id: &str) -> Option<&str> {
+    is_valid_orb_task_id(id).then(|| id.split_once('-').map(|(prefix, _)| prefix))?
+}
+
+pub fn parse_task_number(id: &str) -> Option<u32> {
+    is_valid_orb_task_id(id)
+        .then(|| id.split_once('-').map(|(_, suffix)| suffix))?
+        .and_then(|suffix| suffix.parse().ok())
+}
+
+pub fn validate_orb_task_id(id: &str) -> Result<(), TaskError> {
+    if is_valid_orb_task_id(id) {
+        return Ok(());
+    }
+    Err(TaskError::Invalid(format!(
+        "task id '{id}' must match <2-5 uppercase-letter prefix>-<digits>"
+    )))
+}
+
+pub fn format_task_id(prefix: &str, value: u32) -> Result<String, TaskError> {
+    if !is_valid_task_id_prefix(prefix) {
+        return Err(TaskError::Invalid(format!(
+            "task id prefix '{prefix}' must be 2-5 uppercase ASCII letters and must not use a reserved artifact namespace"
+        )));
+    }
+    // Minted ids are zero-padded to at least five digits. Parsers accept wider ids.
+    Ok(format!("{prefix}-{value:05}"))
+}
+
+pub fn validate_task_relations_for_source(
+    source_id: &str,
+    relations: &[TaskRelation],
+    existing_edges: &[TaskRelationEdge],
+) -> Result<(), TaskError> {
+    // Existing edges are assumed acyclic; this check only rejects new edges that close a cycle.
+    validate_orb_task_id(source_id)?;
+    let mut seen = BTreeSet::new();
+    for edge in existing_edges {
+        validate_orb_task_id(&edge.source)?;
+        validate_orb_task_id(&edge.target)?;
+        if edge.source == edge.target {
+            return Err(TaskError::Invalid(format!(
+                "task relation from '{}' must not target itself",
+                edge.source
+            )));
+        }
+    }
+    for relation in relations {
+        validate_target_for(relation.relation_type, &relation.target)?;
+        if relation.regression.is_some()
+            && relation.relation_type != TaskRelationType::RegressionFrom
+        {
+            return Err(TaskError::Invalid(format!(
+                "task relation {:?} -> '{}' must not carry a `regression` classification; only regression_from accepts one",
+                relation.relation_type, relation.target
+            )));
+        }
+        if let Some(regression) = &relation.regression {
+            regression.validate_sites().map_err(TaskError::Invalid)?;
+        }
+        if relation.target == source_id {
+            return Err(TaskError::Invalid(format!(
+                "task relation from '{source_id}' must not target itself"
+            )));
+        }
+        let key = (relation.relation_type, relation.target.as_str());
+        if !seen.insert(key) {
+            return Err(TaskError::Invalid(format!(
+                "duplicate task relation {:?} -> '{}'",
+                relation.relation_type, relation.target
+            )));
+        }
+    }
+
+    for relation in relations {
+        if let Some(family) = cyclic_relation_family(relation.relation_type) {
+            let mut graph = relation_graph_for_family(family, existing_edges);
+            for candidate in relations {
+                if cyclic_relation_family(candidate.relation_type) == Some(family) {
+                    graph
+                        .entry(source_id.to_string())
+                        .or_default()
+                        .insert(candidate.target.clone());
+                }
+            }
+            if reaches(&graph, &relation.target, source_id) {
+                return Err(TaskError::Invalid(format!(
+                    "task relation {:?} from '{}' to '{}' would create a cycle",
+                    relation.relation_type, source_id, relation.target
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_target_for(relation_type: TaskRelationType, target: &str) -> Result<(), TaskError> {
+    match relation_type {
+        TaskRelationType::CoveredBy => {
+            if is_valid_orb_task_id(target) {
+                return Ok(());
+            }
+            let reference = ExternalRef::parse_key(target)?;
+            if reference.system == "github-pr"
+                && (reference.id.parse::<u64>().is_ok_and(|number| number > 0)
+                    || url::Url::parse(&reference.id).is_ok_and(|url| {
+                        let parts = url.path().trim_matches('/').split('/').collect::<Vec<_>>();
+                        url.scheme() == "https"
+                            && url.host_str() == Some("github.com")
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.query().is_none()
+                            && url.fragment().is_none()
+                            && parts.len() == 4
+                            && !parts[0].is_empty()
+                            && !parts[1].is_empty()
+                            && parts[2] == "pull"
+                            && parts[3].parse::<u64>().is_ok_and(|n| n > 0)
+                    }))
+            {
+                return Ok(());
+            }
+            Err(TaskError::Invalid(
+                "covered_by target must be a task id or github-pr:<number or GitHub PR URL>".into(),
+            ))
+        }
+        TaskRelationType::Produces | TaskRelationType::Resolves => {
+            if is_valid_orb_task_id(target)
+                || is_valid_friction_id(target)
+                || is_valid_adr_id(target)
+            {
+                return Ok(());
+            }
+            Err(TaskError::Invalid(format!(
+                "relation target '{target}' must be an ORB-/F-/ADR- id"
+            )))
+        }
+        TaskRelationType::BlockedBy
+        | TaskRelationType::ChildOf
+        | TaskRelationType::SpawnedFrom
+        | TaskRelationType::RegressionFrom
+        | TaskRelationType::Supersedes
+        | TaskRelationType::RelatedTo => validate_orb_task_id(target),
+    }
+}
+
 /// Serialize task artifact metadata for task discovery and projection surfaces (`task.show`).
 ///
 /// Emits bounded metadata only (`path`, `media_type`, `size`, `created_by`); payload content
@@ -705,12 +711,6 @@ fn validate_schema_version(schema_version: u32, label: &str) -> Result<(), TaskE
     Err(TaskError::Invalid(format!(
         "{label} schema_version must be {TASK_ARTIFACT_SCHEMA_VERSION}, got {schema_version}"
     )))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelationCycleFamily {
-    Blocking,
-    Hierarchy,
 }
 
 fn cyclic_relation_family(relation_type: TaskRelationType) -> Option<RelationCycleFamily> {

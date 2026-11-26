@@ -4,6 +4,8 @@ use orbit_types::plugin::{PluginPin, PluginPinFile};
 const ARCHIVE_URL: &str = "https://example.com/orbit-graph-0.4.1.tar.gz";
 const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
 fn archive_pin(digest: Option<&str>) -> PluginPinFile {
     let mut file = PluginPinFile::default();
     file.plugins.push(PluginPin {
@@ -71,8 +73,6 @@ fn a_malformed_or_misplaced_digest_is_refused() {
         "only a fetched archive is digest-verified"
     );
 }
-
-const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn built_pin(source: &str, artifact_digest: &str) -> PluginPinFile {
     let mut file = PluginPinFile::default();

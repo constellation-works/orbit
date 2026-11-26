@@ -134,33 +134,6 @@ pub enum ReviewHistoryError {
     },
 }
 
-fn missing_record_ids(missing: &[(String, String)]) -> String {
-    missing
-        .iter()
-        .map(|(command, id)| format!("`{command}` -> `\"id\": \"{id}\"`"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn backticked(commands: &[String]) -> String {
-    commands
-        .iter()
-        .map(|command| format!("`{command}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn retire_hint(id: &str, outcome: ValidationOutcome) -> String {
-    if outcome == ValidationOutcome::Failed {
-        "; a failed record cannot be retired, so rerun it".to_string()
-    } else {
-        format!(
-            ", or list it in `retired_validation` as \
-             {{\"id\": \"{id}\", \"reason\": \"<why it no longer applies>\"}}"
-        )
-    }
-}
-
 /// A review admission snapshot in a run input that this build cannot use.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ReviewAdmissionError {
@@ -265,4 +238,31 @@ pub enum ResidentMandateError {
 pub enum ResidentCommentError {
     #[error("resident_record_invalid: {0}")]
     Invalid(String),
+}
+
+fn missing_record_ids(missing: &[(String, String)]) -> String {
+    missing
+        .iter()
+        .map(|(command, id)| format!("`{command}` -> `\"id\": \"{id}\"`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn backticked(commands: &[String]) -> String {
+    commands
+        .iter()
+        .map(|command| format!("`{command}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn retire_hint(id: &str, outcome: ValidationOutcome) -> String {
+    if outcome == ValidationOutcome::Failed {
+        "; a failed record cannot be retired, so rerun it".to_string()
+    } else {
+        format!(
+            ", or list it in `retired_validation` as \
+             {{\"id\": \"{id}\", \"reason\": \"<why it no longer applies>\"}}"
+        )
+    }
 }

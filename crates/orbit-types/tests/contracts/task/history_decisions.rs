@@ -17,6 +17,52 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+/// One record's history shapes, read through its `from_entry`.
+struct Shapes<T> {
+    event: &'static str,
+    kind: &'static str,
+    record: T,
+    note: String,
+    decision: TaskDecision,
+    read: fn(&TaskHistoryEntry) -> Option<T>,
+}
+
+impl<T: PartialEq + std::fmt::Debug> Shapes<T> {
+    fn check(self) {
+        let kind = self.kind;
+        let typed = entry(self.event, self.note.clone(), Some(self.decision.clone()));
+        assert_eq!((self.read)(&typed).as_ref(), Some(&self.record), "{kind}");
+
+        // The persisted shape: the decision under its `kind`, beside the
+        // unchanged note, read back whole.
+        let stored = serde_json::to_value(&typed).unwrap();
+        assert_eq!(stored["decision"]["kind"], kind, "{stored}");
+        assert_eq!(stored["note"], Value::String(self.note.clone()), "{kind}");
+        let restored: TaskHistoryEntry = serde_json::from_value(stored).unwrap();
+        assert_eq!(restored, typed, "{kind}");
+
+        let legacy = entry(self.event, self.note.clone(), None);
+        assert_eq!(
+            (self.read)(&legacy).as_ref(),
+            Some(&self.record),
+            "{kind}: an entry written before typed decisions is read from its note"
+        );
+
+        let other = entry(
+            self.event,
+            self.note,
+            Some(TaskDecision::DrainApprovalHeld {
+                classification: "other".into(),
+            }),
+        );
+        assert_eq!(
+            (self.read)(&other),
+            None,
+            "{kind}: a decision of another kind is not read through the note"
+        );
+    }
+}
+
 fn entry(event: &str, note: String, decision: Option<TaskDecision>) -> TaskHistoryEntry {
     TaskHistoryEntry {
         at: Utc::now(),
@@ -86,94 +132,56 @@ fn flaky() -> FlakyValidation {
     record
 }
 
-/// One record's history shapes, read through its `from_entry`.
-struct Shapes<T> {
-    event: &'static str,
-    kind: &'static str,
-    record: T,
-    note: String,
-    decision: TaskDecision,
-    read: fn(&TaskHistoryEntry) -> Option<T>,
-}
-
-impl<T: PartialEq + std::fmt::Debug> Shapes<T> {
-    fn check(self) {
-        let kind = self.kind;
-        let typed = entry(self.event, self.note.clone(), Some(self.decision.clone()));
-        assert_eq!((self.read)(&typed).as_ref(), Some(&self.record), "{kind}");
-
-        // The persisted shape: the decision under its `kind`, beside the
-        // unchanged note, read back whole.
-        let stored = serde_json::to_value(&typed).unwrap();
-        assert_eq!(stored["decision"]["kind"], kind, "{stored}");
-        assert_eq!(stored["note"], Value::String(self.note.clone()), "{kind}");
-        let restored: TaskHistoryEntry = serde_json::from_value(stored).unwrap();
-        assert_eq!(restored, typed, "{kind}");
-
-        let legacy = entry(self.event, self.note.clone(), None);
-        assert_eq!(
-            (self.read)(&legacy).as_ref(),
-            Some(&self.record),
-            "{kind}: an entry written before typed decisions is read from its note"
-        );
-
-        let other = entry(
-            self.event,
-            self.note,
-            Some(TaskDecision::DrainApprovalHeld {
-                classification: "other".into(),
-            }),
-        );
-        assert_eq!(
-            (self.read)(&other),
-            None,
-            "{kind}: a decision of another kind is not read through the note"
-        );
-    }
-}
-
 #[test]
 fn each_history_record_is_read_from_its_decision_or_a_legacy_note() {
     let record = held();
+    let note = record.text();
+    let decision = TaskDecision::CandidateHeld(record.clone());
     Shapes {
         event: CANDIDATE_HELD_EVENT,
         kind: "candidate_held",
-        note: record.text(),
-        decision: TaskDecision::CandidateHeld(record.clone()),
         record,
+        note,
+        decision,
         read: HeldCandidate::from_entry,
     }
     .check();
 
     let record = widening();
+    let note = serde_json::to_string(&record).unwrap();
+    let decision = TaskDecision::ContextFilesWidened(record.clone());
     Shapes {
         event: CONTEXT_FILES_WIDENED_EVENT,
         kind: "context_files_widened",
-        note: serde_json::to_string(&record).unwrap(),
-        decision: TaskDecision::ContextFilesWidened(record.clone()),
         record,
+        note,
+        decision,
         read: ContextFilesWidening::from_entry,
     }
     .check();
 
     let record = known_red();
+    let note = record.text("Required validation fails only with tests the base fails too.");
+    let decision = TaskDecision::KnownRedValidation(record.clone());
     Shapes {
         event: KNOWN_RED_VALIDATION_EVENT,
         kind: "known_red_validation",
-        note: record.text("Required validation fails only with tests the base fails too."),
-        decision: TaskDecision::KnownRedValidation(record.clone()),
         record,
+        note,
+        decision,
         read: KnownRedValidation::from_entry,
     }
     .check();
 
     let record = flaky();
+    let note = record.text();
+    let decision = TaskDecision::FlakyValidation(record.clone());
     Shapes {
         event: FLAKY_VALIDATION_EVENT,
         kind: "flaky_validation",
-        note: record.text(),
-        decision: TaskDecision::FlakyValidation(record.clone()),
         record,
+        note,
+        decision,
         read: FlakyValidation::from_entry,
     }
     .check();

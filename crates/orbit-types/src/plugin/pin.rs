@@ -12,43 +12,6 @@ pub const PIN_FILE_SCHEMA_VERSION: u32 = 1;
 /// Suffixes Orbit recognises as a plugin archive.
 pub const PLUGIN_ARCHIVE_EXTENSIONS: &[&str] = &[".tar.gz", ".tgz", ".tar", ".zip"];
 
-/// The URL when `source` names an archive Orbit fetches over the network.
-///
-/// This predicate lives beside the pin file because the pin is the only place
-/// such an archive's digest can be declared, and it is what decides which
-/// entries [`PluginPinFile::validate`] requires a `digest` on.
-pub fn remote_archive_source(source: &str) -> Option<&str> {
-    if !source.starts_with("https://") {
-        return None;
-    }
-    let path = source.split(['?', '#']).next().unwrap_or(source);
-    let lowered = path.to_ascii_lowercase();
-    PLUGIN_ARCHIVE_EXTENSIONS
-        .iter()
-        .any(|extension| lowered.ends_with(extension))
-        .then_some(source)
-}
-
-/// Normalize a `sha256:<hex>` pin to its lowercase hex digest.
-///
-/// The prefix is required rather than optional so the pin file always says
-/// which algorithm it names, leaving room to add another without guessing
-/// from a digest's length.
-pub fn parse_archive_digest(value: &str) -> Result<String, ArchiveDigestError> {
-    let Some(hex) = value.trim().strip_prefix("sha256:") else {
-        return Err(ArchiveDigestError::UnsupportedAlgorithm {
-            value: value.to_string(),
-        });
-    };
-    let normalized = hex.trim().to_ascii_lowercase();
-    if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(ArchiveDigestError::Malformed {
-            value: value.to_string(),
-        });
-    }
-    Ok(normalized)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginPinFile {
@@ -95,10 +58,6 @@ pub struct PluginPin {
     pub enabled: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 impl PluginPinFile {
     pub fn validate(&self) -> Result<(), PluginPinError> {
         if self.schema_version != PIN_FILE_SCHEMA_VERSION {
@@ -129,6 +88,47 @@ impl PluginPinFile {
         }
         Ok(())
     }
+}
+
+/// The URL when `source` names an archive Orbit fetches over the network.
+///
+/// This predicate lives beside the pin file because the pin is the only place
+/// such an archive's digest can be declared, and it is what decides which
+/// entries [`PluginPinFile::validate`] requires a `digest` on.
+pub fn remote_archive_source(source: &str) -> Option<&str> {
+    if !source.starts_with("https://") {
+        return None;
+    }
+    let path = source.split(['?', '#']).next().unwrap_or(source);
+    let lowered = path.to_ascii_lowercase();
+    PLUGIN_ARCHIVE_EXTENSIONS
+        .iter()
+        .any(|extension| lowered.ends_with(extension))
+        .then_some(source)
+}
+
+/// Normalize a `sha256:<hex>` pin to its lowercase hex digest.
+///
+/// The prefix is required rather than optional so the pin file always says
+/// which algorithm it names, leaving room to add another without guessing
+/// from a digest's length.
+pub fn parse_archive_digest(value: &str) -> Result<String, ArchiveDigestError> {
+    let Some(hex) = value.trim().strip_prefix("sha256:") else {
+        return Err(ArchiveDigestError::UnsupportedAlgorithm {
+            value: value.to_string(),
+        });
+    };
+    let normalized = hex.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ArchiveDigestError::Malformed {
+            value: value.to_string(),
+        });
+    }
+    Ok(normalized)
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A fetched archive is pinned by digest or it is not installed: Orbit has no

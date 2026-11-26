@@ -3,6 +3,11 @@ use std::cmp::Ordering;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// The dedupe-key prefix reserved for resident mandates: `resident:<mandate
+/// task id, lowercase>:`. Only that mandate's cycles and its control record
+/// write keys under it.
+pub const RESIDENT_NOTICE_KEY_PREFIX: &str = "resident:";
+
 /// Where a notice applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -291,27 +296,6 @@ impl PartialOrd for NoticeListOrderKey<'_> {
     }
 }
 
-/// The dedupe-key prefix reserved for resident mandates: `resident:<mandate
-/// task id, lowercase>:`. Only that mandate's cycles and its control record
-/// write keys under it.
-pub const RESIDENT_NOTICE_KEY_PREFIX: &str = "resident:";
-
-/// The dedupe key of a resident mandate's one live status line.
-pub fn resident_status_notice_key(mandate_task_id: &str) -> String {
-    format!(
-        "{RESIDENT_NOTICE_KEY_PREFIX}{}:status",
-        mandate_task_id.to_ascii_lowercase()
-    )
-}
-
-/// The reserved key prefix of one resident mandate's notices.
-pub fn resident_notice_key_prefix(mandate_task_id: &str) -> String {
-    format!(
-        "{RESIDENT_NOTICE_KEY_PREFIX}{}:",
-        mandate_task_id.to_ascii_lowercase()
-    )
-}
-
 impl Notice {
     /// Whether this is a resident mandate's status line: the one info
     /// notice each cycle replaces. Status lines are shown with their
@@ -369,4 +353,20 @@ impl Notice {
             EffectiveStatus::Open
         };
     }
+}
+
+/// The dedupe key of a resident mandate's one live status line.
+pub fn resident_status_notice_key(mandate_task_id: &str) -> String {
+    format!(
+        "{RESIDENT_NOTICE_KEY_PREFIX}{}:status",
+        mandate_task_id.to_ascii_lowercase()
+    )
+}
+
+/// The reserved key prefix of one resident mandate's notices.
+pub fn resident_notice_key_prefix(mandate_task_id: &str) -> String {
+    format!(
+        "{RESIDENT_NOTICE_KEY_PREFIX}{}:",
+        mandate_task_id.to_ascii_lowercase()
+    )
 }

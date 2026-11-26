@@ -7,6 +7,20 @@ use serde_json::Value;
 
 use crate::workflow::RetiredBackendError;
 
+/// Migration text shared by every surface that still accepts the retired
+/// `backend` key, so an operator reads the same instruction from an asset, a
+/// crew table, or `config.toml`.
+pub const RETIRED_BACKEND_MIGRATION: &str = "agent execution runs through the CLI agent path only; remove the `backend` \
+     setting (the value `cli` is still accepted and ignored)";
+
+/// Provider ids retired by ORB-18096. They are refused for new configuration
+/// and dispatch, but keep deserializing so persisted history still reads.
+pub const RETIRED_PROVIDER_IDS: [&str; 3] = ["cursor", "pi", "opencode"];
+
+/// Remedy text shared by every surface that refuses a retired provider.
+pub const RETIRED_PROVIDER_MIGRATION: &str =
+    "pick a supported provider (claude, codex, gemini, grok, copilot, antigravity, muse)";
+
 /// v2 activity definition. Corresponds to the v2 YAML asset shape:
 /// ```yaml
 /// schemaVersion: 2
@@ -284,39 +298,6 @@ pub struct ResponseCorrectionPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetiredAgentBackend;
 
-/// Migration text shared by every surface that still accepts the retired
-/// `backend` key, so an operator reads the same instruction from an asset, a
-/// crew table, or `config.toml`.
-pub const RETIRED_BACKEND_MIGRATION: &str = "agent execution runs through the CLI agent path only; remove the `backend` \
-     setting (the value `cli` is still accepted and ignored)";
-
-/// Provider ids retired by ORB-18096. They are refused for new configuration
-/// and dispatch, but keep deserializing so persisted history still reads.
-pub const RETIRED_PROVIDER_IDS: [&str; 3] = ["cursor", "pi", "opencode"];
-
-/// Remedy text shared by every surface that refuses a retired provider.
-pub const RETIRED_PROVIDER_MIGRATION: &str =
-    "pick a supported provider (claude, codex, gemini, grok, copilot, antigravity, muse)";
-
-/// The retired provider id `raw` names (trimmed, case-insensitive), if any.
-pub fn retired_provider_id(raw: &str) -> Option<&'static str> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    RETIRED_PROVIDER_IDS
-        .into_iter()
-        .find(|id| *id == normalized)
-}
-
-/// Validate one retired `backend` value. `Ok(())` for `cli`; the migration
-/// error for anything else, including the removed `http` and `auto`.
-pub fn check_retired_backend_value(raw: &str) -> Result<(), RetiredBackendError> {
-    match raw.trim() {
-        "cli" => Ok(()),
-        other => Err(RetiredBackendError {
-            value: other.to_string(),
-        }),
-    }
-}
-
 impl<'de> Deserialize<'de> for RetiredAgentBackend {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -551,13 +532,6 @@ impl Provider {
     }
 }
 
-/// Whether an activity input asks for native pinned-source inspection: it
-/// carries the `inspection_revision` and `partition_index` fields of the
-/// task-pilot contract, which finding verification shares.
-pub fn requires_native_inspection(input: &Value) -> bool {
-    input.get("inspection_revision").is_some() && input.get("partition_index").is_some()
-}
-
 impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -687,9 +661,9 @@ impl AgentLoopSpec {
     ) -> Self {
         Self {
             instruction: instruction.into(),
+            max_iterations: 1,
             provider,
             wall_clock_timeout_seconds,
-            max_iterations: 1,
             ..Self::default()
         }
     }
@@ -745,6 +719,32 @@ impl FleetNoticeGuidance {
     pub const fn posts(self) -> bool {
         matches!(self, Self::Post)
     }
+}
+
+/// The retired provider id `raw` names (trimmed, case-insensitive), if any.
+pub fn retired_provider_id(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    RETIRED_PROVIDER_IDS
+        .into_iter()
+        .find(|id| *id == normalized)
+}
+
+/// Validate one retired `backend` value. `Ok(())` for `cli`; the migration
+/// error for anything else, including the removed `http` and `auto`.
+pub fn check_retired_backend_value(raw: &str) -> Result<(), RetiredBackendError> {
+    match raw.trim() {
+        "cli" => Ok(()),
+        other => Err(RetiredBackendError {
+            value: other.to_string(),
+        }),
+    }
+}
+
+/// Whether an activity input asks for native pinned-source inspection: it
+/// carries the `inspection_revision` and `partition_index` fields of the
+/// task-pilot contract, which finding verification shares.
+pub fn requires_native_inspection(input: &Value) -> bool {
+    input.get("inspection_revision").is_some() && input.get("partition_index").is_some()
 }
 
 const fn default_max_iterations() -> u32 {

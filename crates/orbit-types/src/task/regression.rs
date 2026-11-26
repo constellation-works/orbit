@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 
 use super::severity::{DefectSeverity, SeveritySource};
 
+/// Most defect sites one `regression_from` link may name.
+pub const MAX_REGRESSION_SITES: usize = 8;
+
+/// History event recording which context files an agent prompt marked as
+/// regression-prone. Nothing records it since prompt marks were removed
+/// [ORB-22806]; the name and [`RegressionRiskMarks`] stay so history written
+/// before then still loads.
+pub const REGRESSION_RISK_MARKED_EVENT: &str = "regression_risk_marked";
+
 /// What kind of regression a `regression_from` link records.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -76,9 +85,6 @@ impl RegressionEscape {
         }
     }
 }
-
-/// Most defect sites one `regression_from` link may name.
-pub const MAX_REGRESSION_SITES: usize = 8;
 
 /// The optional `regression` payload of a `regression_from` relation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,12 +179,6 @@ impl RegressionClassification {
         Ok(())
     }
 }
-
-/// History event recording which context files an agent prompt marked as
-/// regression-prone. Nothing records it since prompt marks were removed
-/// [ORB-22806]; the name and [`RegressionRiskMarks`] stay so history written
-/// before then still loads.
-pub const REGRESSION_RISK_MARKED_EVENT: &str = "regression_risk_marked";
 
 /// The decision of one [`REGRESSION_RISK_MARKED_EVENT`] history entry: the
 /// paths one run's prompt for one activity marked. Kept only so earlier

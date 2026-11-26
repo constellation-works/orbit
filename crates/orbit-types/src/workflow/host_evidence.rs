@@ -14,6 +14,65 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Text a sandbox wrapper or a sandbox test prints when this host cannot
+/// apply the sandbox at all.
+const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
+    SEATBELT_APPLY_REFUSAL,
+    "sandbox-exec cannot apply a profile",
+    BUBBLEWRAP_NAMESPACE_REFUSALS[0],
+    BUBBLEWRAP_NAMESPACE_REFUSALS[1],
+];
+
+/// What `sandbox-exec` prints when an enclosing Seatbelt sandbox refuses to
+/// apply another profile, as inside an agent lane on macOS. It exits
+/// [`SEATBELT_APPLY_REFUSAL_EXIT`].
+pub const SEATBELT_APPLY_REFUSAL: &str = "sandbox_apply: Operation not permitted";
+
+/// The exit status `sandbox-exec` reports with [`SEATBELT_APPLY_REFUSAL`].
+pub const SEATBELT_APPLY_REFUSAL_EXIT: i32 = 71;
+
+/// What Bubblewrap prints when an enclosing sandbox refuses the nested user
+/// namespace it needs, as inside an agent lane on Linux. The wording differs
+/// by release: 0.11.1 prints `No permissions to create a new namespace`, and
+/// 0.9.0 prints `No permissions to create new namespace`. Match a probe or a
+/// notice with [`is_bubblewrap_namespace_refusal`], never with this constant
+/// alone.
+pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create a new namespace";
+
+/// Every known spelling of [`BUBBLEWRAP_NAMESPACE_REFUSAL`].
+pub const BUBBLEWRAP_NAMESPACE_REFUSALS: &[&str] = &[
+    BUBBLEWRAP_NAMESPACE_REFUSAL,
+    "No permissions to create new namespace",
+];
+
+/// The line prefix a test prints when it returns without exercising its
+/// sandbox-confined path because this host cannot apply the sandbox
+/// [ORB-14334]. A reviewer records each such line in the validation
+/// record's `deferred`.
+pub const HOST_TEST_DEFERRED_PREFIX: &str = "DEFERRED:";
+
+/// The deferral a Bubblewrap-gated test prints, followed by the test's name
+/// and the refusal: `DEFERRED: bubblewrap unavailable: <test>: <detail>`.
+pub const BUBBLEWRAP_DEFERRAL_PREFIX: &str = "DEFERRED: bubblewrap unavailable:";
+
+/// The skip a Seatbelt-gated test prints when `sandbox-exec` refuses to apply
+/// a profile, followed by the test's name and the refusal:
+/// `SKIP: sandbox-exec cannot apply a profile: <test>: <detail>` [ORB-15409].
+pub const SEATBELT_DEFERRAL_PREFIX: &str = "SKIP: sandbox-exec cannot apply a profile:";
+
+/// The deferral a test prints when the sandbox refuses to exec `ps`, which it
+/// needs to read a process start time, followed by the test's name and the
+/// refusal: `DEFERRED: ps denied: <test>: <detail>`. A macOS agent lane's
+/// Seatbelt sandbox refuses the setuid `ps`; only a claimed leaf on macOS may
+/// defer it [ORB-15587].
+pub const PS_DENIED_DEFERRAL_PREFIX: &str = "DEFERRED: ps denied:";
+
+/// What a sandbox's refusal to exec `ps` reports: `EPERM`.
+pub const PS_EXEC_REFUSAL: &str = "Operation not permitted";
+
+/// Line prefixes a test prints when it returns without exercising its path.
+const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:", "skipping "];
+
 /// The host operating system a host-run check must execute on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -317,40 +376,36 @@ impl HostSandboxCommand {
     }
 }
 
+/// One `host_sandbox_test` requirement as the executing host judged it, kept
+/// on the review certificate. A passed record names its result and log
+/// artifacts, which a claimed leaf's handoff pins for the owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostEvidenceRecord {
+    pub name: String,
+    /// The requirement's command, as the reviewer named it.
+    pub command: String,
+    /// The command line the host ran, absent when it was refused first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_command: Option<String>,
+    pub os: EvidenceHostOs,
+    /// The tree the command ran on.
+    pub tree: String,
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<HostEvidenceReason>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    /// The result artifact, present only when the run passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
+    /// The log artifact, present whenever a log was attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_artifact: Option<String>,
+}
+
 fn plain_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | ':' | '@' | '+' | '=' | '-')
 }
-
-/// Text a sandbox wrapper or a sandbox test prints when this host cannot
-/// apply the sandbox at all.
-const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
-    SEATBELT_APPLY_REFUSAL,
-    "sandbox-exec cannot apply a profile",
-    BUBBLEWRAP_NAMESPACE_REFUSALS[0],
-    BUBBLEWRAP_NAMESPACE_REFUSALS[1],
-];
-
-/// What `sandbox-exec` prints when an enclosing Seatbelt sandbox refuses to
-/// apply another profile, as inside an agent lane on macOS. It exits
-/// [`SEATBELT_APPLY_REFUSAL_EXIT`].
-pub const SEATBELT_APPLY_REFUSAL: &str = "sandbox_apply: Operation not permitted";
-
-/// The exit status `sandbox-exec` reports with [`SEATBELT_APPLY_REFUSAL`].
-pub const SEATBELT_APPLY_REFUSAL_EXIT: i32 = 71;
-
-/// What Bubblewrap prints when an enclosing sandbox refuses the nested user
-/// namespace it needs, as inside an agent lane on Linux. The wording differs
-/// by release: 0.11.1 prints `No permissions to create a new namespace`, and
-/// 0.9.0 prints `No permissions to create new namespace`. Match a probe or a
-/// notice with [`is_bubblewrap_namespace_refusal`], never with this constant
-/// alone.
-pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create a new namespace";
-
-/// Every known spelling of [`BUBBLEWRAP_NAMESPACE_REFUSAL`].
-pub const BUBBLEWRAP_NAMESPACE_REFUSALS: &[&str] = &[
-    BUBBLEWRAP_NAMESPACE_REFUSAL,
-    "No permissions to create new namespace",
-];
 
 /// Whether `output` carries Bubblewrap's nested-namespace refusal in any
 /// known spelling.
@@ -359,34 +414,6 @@ pub fn is_bubblewrap_namespace_refusal(output: &str) -> bool {
         .iter()
         .any(|refusal| output.contains(refusal))
 }
-
-/// The line prefix a test prints when it returns without exercising its
-/// sandbox-confined path because this host cannot apply the sandbox
-/// [ORB-14334]. A reviewer records each such line in the validation
-/// record's `deferred`.
-pub const HOST_TEST_DEFERRED_PREFIX: &str = "DEFERRED:";
-
-/// The deferral a Bubblewrap-gated test prints, followed by the test's name
-/// and the refusal: `DEFERRED: bubblewrap unavailable: <test>: <detail>`.
-pub const BUBBLEWRAP_DEFERRAL_PREFIX: &str = "DEFERRED: bubblewrap unavailable:";
-
-/// The skip a Seatbelt-gated test prints when `sandbox-exec` refuses to apply
-/// a profile, followed by the test's name and the refusal:
-/// `SKIP: sandbox-exec cannot apply a profile: <test>: <detail>` [ORB-15409].
-pub const SEATBELT_DEFERRAL_PREFIX: &str = "SKIP: sandbox-exec cannot apply a profile:";
-
-/// The deferral a test prints when the sandbox refuses to exec `ps`, which it
-/// needs to read a process start time, followed by the test's name and the
-/// refusal: `DEFERRED: ps denied: <test>: <detail>`. A macOS agent lane's
-/// Seatbelt sandbox refuses the setuid `ps`; only a claimed leaf on macOS may
-/// defer it [ORB-15587].
-pub const PS_DENIED_DEFERRAL_PREFIX: &str = "DEFERRED: ps denied:";
-
-/// What a sandbox's refusal to exec `ps` reports: `EPERM`.
-pub const PS_EXEC_REFUSAL: &str = "Operation not permitted";
-
-/// Line prefixes a test prints when it returns without exercising its path.
-const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:", "skipping "];
 
 /// Judge one host run from its full output. Returns the number of tests the
 /// libtest summaries report passed, or why the run is not passing evidence.
@@ -447,31 +474,4 @@ pub fn judge_host_test_output(
         ));
     }
     Ok(passed)
-}
-
-/// One `host_sandbox_test` requirement as the executing host judged it, kept
-/// on the review certificate. A passed record names its result and log
-/// artifacts, which a claimed leaf's handoff pins for the owner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostEvidenceRecord {
-    pub name: String,
-    /// The requirement's command, as the reviewer named it.
-    pub command: String,
-    /// The command line the host ran, absent when it was refused first.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_command: Option<String>,
-    pub os: EvidenceHostOs,
-    /// The tree the command ran on.
-    pub tree: String,
-    pub passed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<HostEvidenceReason>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub detail: String,
-    /// The result artifact, present only when the run passed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifact: Option<String>,
-    /// The log artifact, present whenever a log was attached.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub log_artifact: Option<String>,
 }

@@ -73,78 +73,6 @@ impl Display for ActorIdentity {
     }
 }
 
-/// Infer Orbit's agent family from a model identifier.
-pub fn agent_from_model(model: &str) -> Option<&'static str> {
-    let model = model.trim().to_ascii_lowercase();
-    if model.is_empty() {
-        return None;
-    }
-
-    if model.starts_with("ollama:") {
-        return Some("ollama");
-    }
-    if model == "muse" {
-        return Some("muse");
-    }
-
-    agent_family::agent_family_from_model_prefix(&model).map(AgentFamily::as_str)
-}
-
-/// Map an Orbit agent family onto the provider that serves it.
-pub fn provider_for_agent_family(family: &str) -> Option<&'static str> {
-    match family {
-        "claude" => Some("anthropic"),
-        "codex" => Some("openai"),
-        "gemini" => Some("google"),
-        "ollama" => Some("ollama"),
-        "grok" => Some("xai"),
-        "muse" => Some("meta"),
-        _ => None,
-    }
-}
-
-/// Normalize legacy attribution labels to the model-only convention when a
-/// concrete model is available.
-pub fn normalize_attribution_label(label: &str, model_hint: Option<&str>) -> String {
-    let trimmed = label.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    if let Some((family, model)) = trimmed.rsplit_once(" / ") {
-        let family = family.trim();
-        let model = model.trim();
-        let is_known_family = family.eq_ignore_ascii_case("agent")
-            || all_agent_families()
-                .iter()
-                .any(|known| family.eq_ignore_ascii_case(known));
-        if is_known_family && !model.is_empty() {
-            return model.to_string();
-        }
-    }
-
-    if let Some(model_hint) = model_hint.map(str::trim).filter(|value| !value.is_empty()) {
-        let family = agent_family_from_cli(trimmed);
-        let is_known_family = all_agent_families()
-            .iter()
-            .any(|known| family == *known && trimmed.eq_ignore_ascii_case(known));
-        if trimmed.eq_ignore_ascii_case("agent") || is_known_family {
-            return model_hint.to_string();
-        }
-    }
-
-    trimmed.to_string()
-}
-
-pub fn normalize_optional_attribution_label(
-    label: Option<&str>,
-    model_hint: Option<&str>,
-) -> Option<String> {
-    label
-        .map(|value| normalize_attribution_label(value, model_hint))
-        .filter(|value| !value.is_empty())
-}
-
 /// Custom serialization: emits the flat display label when that label reads
 /// back as the same variant, and the tagged map form otherwise.
 ///
@@ -183,15 +111,6 @@ impl Serialize for ActorIdentity {
             }
         }
     }
-}
-
-/// Whether an agent model survives being written as a bare label string.
-///
-/// `visit_str` claims `"system"` and `"human"` for their own variants and
-/// keeps only the right-hand side of the legacy `"<family> / <model>"` form,
-/// so a model matching any of those must be written as a tagged map instead.
-fn agent_label_round_trips(model: &str) -> bool {
-    model != "system" && model != "human" && !model.contains(" / ")
 }
 
 /// Payload of the tagged `{"agent": {...}}` form.
@@ -275,6 +194,87 @@ impl<'de> Deserialize<'de> for ActorIdentity {
 
         deserializer.deserialize_any(ActorVisitor)
     }
+}
+
+/// Infer Orbit's agent family from a model identifier.
+pub fn agent_from_model(model: &str) -> Option<&'static str> {
+    let model = model.trim().to_ascii_lowercase();
+    if model.is_empty() {
+        return None;
+    }
+
+    if model.starts_with("ollama:") {
+        return Some("ollama");
+    }
+    if model == "muse" {
+        return Some("muse");
+    }
+
+    agent_family::agent_family_from_model_prefix(&model).map(AgentFamily::as_str)
+}
+
+/// Map an Orbit agent family onto the provider that serves it.
+pub fn provider_for_agent_family(family: &str) -> Option<&'static str> {
+    match family {
+        "claude" => Some("anthropic"),
+        "codex" => Some("openai"),
+        "gemini" => Some("google"),
+        "ollama" => Some("ollama"),
+        "grok" => Some("xai"),
+        "muse" => Some("meta"),
+        _ => None,
+    }
+}
+
+/// Normalize legacy attribution labels to the model-only convention when a
+/// concrete model is available.
+pub fn normalize_attribution_label(label: &str, model_hint: Option<&str>) -> String {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Some((family, model)) = trimmed.rsplit_once(" / ") {
+        let family = family.trim();
+        let model = model.trim();
+        let is_known_family = family.eq_ignore_ascii_case("agent")
+            || all_agent_families()
+                .iter()
+                .any(|known| family.eq_ignore_ascii_case(known));
+        if is_known_family && !model.is_empty() {
+            return model.to_string();
+        }
+    }
+
+    if let Some(model_hint) = model_hint.map(str::trim).filter(|value| !value.is_empty()) {
+        let family = agent_family_from_cli(trimmed);
+        let is_known_family = all_agent_families()
+            .iter()
+            .any(|known| family == *known && trimmed.eq_ignore_ascii_case(known));
+        if trimmed.eq_ignore_ascii_case("agent") || is_known_family {
+            return model_hint.to_string();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+pub fn normalize_optional_attribution_label(
+    label: Option<&str>,
+    model_hint: Option<&str>,
+) -> Option<String> {
+    label
+        .map(|value| normalize_attribution_label(value, model_hint))
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether an agent model survives being written as a bare label string.
+///
+/// `visit_str` claims `"system"` and `"human"` for their own variants and
+/// keeps only the right-hand side of the legacy `"<family> / <model>"` form,
+/// so a model matching any of those must be written as a tagged map instead.
+fn agent_label_round_trips(model: &str) -> bool {
+    model != "system" && model != "human" && !model.contains(" / ")
 }
 
 /// Whether a persisted writer label belongs to Orbit automation rather than

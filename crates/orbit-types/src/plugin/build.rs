@@ -137,6 +137,69 @@ impl PluginBuildSpec {
     }
 }
 
+/// What a host recorded about the build that produced an installed plugin
+/// (§3.6). Kept on the `plugins` row and mirrored into a host-owned witness
+/// file, which the loader checks the row back against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginBuildRecord {
+    /// The `git+` source as given, with any URL credentials removed.
+    pub source: String,
+    /// The verified commit object id.
+    pub commit: String,
+    /// The fetch argv exactly as run, when the manifest declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<Vec<String>>,
+    /// The build argv exactly as run.
+    pub command: Vec<String>,
+    /// Each declared program and the canonical path it resolved to.
+    #[serde(default)]
+    pub programs: Vec<PluginBuildProgram>,
+    /// The toolchain roots shown at consent and readable to the build.
+    #[serde(default)]
+    pub toolchain_roots: Vec<String>,
+    /// [`PLUGIN_BUILD_PROFILE_LINUX`] or [`PLUGIN_BUILD_PROFILE_MACOS`].
+    pub profile: String,
+    /// The Landlock ABI the Linux `fetch` phase confined TCP with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landlock_abi: Option<i64>,
+    /// Each installed output.
+    pub outputs: Vec<PluginBuildOutputRecord>,
+    /// `sha256:<hex>` over the outputs ([`artifact_digest_preimage`]).
+    pub artifact_digest: String,
+    pub consent: PluginBuildConsent,
+    /// The capped build log this host kept.
+    pub log: String,
+}
+
+/// One `spec.build.programs` entry as resolved at consent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginBuildProgram {
+    pub name: String,
+    pub path: String,
+}
+
+/// One installed build output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginBuildOutputRecord {
+    /// Relative to the plugin root.
+    pub to: String,
+    /// Permission bits as installed (special bits already cleared).
+    pub mode: u32,
+    /// Hex SHA-256 of the file.
+    pub sha256: String,
+}
+
+/// Who consented to a build, and how.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginBuildConsent {
+    /// RFC 3339 time of the consenting command.
+    pub at: String,
+    pub os_user: String,
+    pub orbit_version: String,
+    /// The literal consent: [`PLUGIN_BUILD_CONSENT_FLAG`].
+    pub flag: String,
+}
+
 fn validate_program(program: &str, field: &str) -> Result<(), PluginManifestError> {
     if program.trim().is_empty()
         || program != program.trim()
@@ -276,69 +339,6 @@ pub fn git_commit_source(source: &str) -> Option<(&str, String)> {
     let (url, reference) = source.strip_prefix("git+")?.split_once('#')?;
     (!url.trim().is_empty() && is_full_commit_id(reference))
         .then(|| (url, reference.to_ascii_lowercase()))
-}
-
-/// What a host recorded about the build that produced an installed plugin
-/// (§3.6). Kept on the `plugins` row and mirrored into a host-owned witness
-/// file, which the loader checks the row back against.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginBuildRecord {
-    /// The `git+` source as given, with any URL credentials removed.
-    pub source: String,
-    /// The verified commit object id.
-    pub commit: String,
-    /// The fetch argv exactly as run, when the manifest declared one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fetch: Option<Vec<String>>,
-    /// The build argv exactly as run.
-    pub command: Vec<String>,
-    /// Each declared program and the canonical path it resolved to.
-    #[serde(default)]
-    pub programs: Vec<PluginBuildProgram>,
-    /// The toolchain roots shown at consent and readable to the build.
-    #[serde(default)]
-    pub toolchain_roots: Vec<String>,
-    /// [`PLUGIN_BUILD_PROFILE_LINUX`] or [`PLUGIN_BUILD_PROFILE_MACOS`].
-    pub profile: String,
-    /// The Landlock ABI the Linux `fetch` phase confined TCP with.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub landlock_abi: Option<i64>,
-    /// Each installed output.
-    pub outputs: Vec<PluginBuildOutputRecord>,
-    /// `sha256:<hex>` over the outputs ([`artifact_digest_preimage`]).
-    pub artifact_digest: String,
-    pub consent: PluginBuildConsent,
-    /// The capped build log this host kept.
-    pub log: String,
-}
-
-/// One `spec.build.programs` entry as resolved at consent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginBuildProgram {
-    pub name: String,
-    pub path: String,
-}
-
-/// One installed build output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginBuildOutputRecord {
-    /// Relative to the plugin root.
-    pub to: String,
-    /// Permission bits as installed (special bits already cleared).
-    pub mode: u32,
-    /// Hex SHA-256 of the file.
-    pub sha256: String,
-}
-
-/// Who consented to a build, and how.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginBuildConsent {
-    /// RFC 3339 time of the consenting command.
-    pub at: String,
-    pub os_user: String,
-    pub orbit_version: String,
-    /// The literal consent: [`PLUGIN_BUILD_CONSENT_FLAG`].
-    pub flag: String,
 }
 
 /// The bytes the artifact digest hashes (§3.6): the domain line, then one

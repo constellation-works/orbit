@@ -124,9 +124,9 @@ impl ToolSessionContext {
     ) -> Self {
         Self {
             application: None,
-            workspace: None,
             worker_invocation: None,
             worker_host_call: false,
+            workspace: None,
             workspace_id,
             caller_machine_id: machine_id.clone(),
             caller_machine_name: machine_name.clone(),
@@ -427,6 +427,29 @@ pub enum McpToolDefinitionError {
     MisdeclaredIdRoute(String),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredTool {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub enabled: bool,
+    pub builtin: bool,
+    #[serde(default)]
+    pub parameters: Vec<ToolParam>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecutionResult {
+    pub success: bool,
+    /// Whether the process supervisor terminated the child after its deadline.
+    pub timed_out: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    pub output: Option<Value>,
+}
+
 /// Convert a canonical Orbit tool name to its MCP-advertised form.
 pub fn mcp_advertised_tool_name(canonical_name: &str) -> String {
     canonical_name.replace('.', "_")
@@ -474,27 +497,4 @@ pub fn validate_mcp_tool_definitions(
         }
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StoredTool {
-    pub name: String,
-    pub path: String,
-    pub description: String,
-    pub enabled: bool,
-    pub builtin: bool,
-    #[serde(default)]
-    pub parameters: Vec<ToolParam>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ExecutionResult {
-    pub success: bool,
-    /// Whether the process supervisor terminated the child after its deadline.
-    pub timed_out: bool,
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: Option<i32>,
-    pub duration_ms: u64,
-    pub output: Option<Value>,
 }

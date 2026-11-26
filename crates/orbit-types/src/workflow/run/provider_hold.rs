@@ -50,6 +50,11 @@ const PROVIDER_TOKEN: &str = "provider=";
 /// the provider's default login's.
 const ACCOUNT_TOKEN: &str = "account=";
 
+/// The tokens a usage-limit failure carries after its provider.
+const LIMIT_MODEL_TOKEN: &str = "model=";
+const LIMIT_WINDOW_TOKEN: &str = "window=";
+const LIMIT_RESETS_AT_TOKEN: &str = "resets_at=";
+
 /// Which provider failure ended the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,88 +109,6 @@ impl ProviderFailureClass {
         }
     }
 }
-
-/// `[marker] provider=<provider> <detail>`: the step failure text of a
-/// provider failure, naming the provider the hold excludes.
-#[must_use]
-pub fn provider_failure_text(class: ProviderFailureClass, provider: &str, detail: &str) -> String {
-    format!(
-        "{} {PROVIDER_TOKEN}{provider} {}",
-        class.marker(),
-        detail.trim()
-    )
-}
-
-/// The provider a step failure names after its provider marker, if it does.
-#[must_use]
-pub fn failed_provider(message: &str) -> Option<&str> {
-    let class = ProviderFailureClass::of(None, Some(message))?;
-    let (_, rest) = message.split_once(class.marker())?;
-    let name = rest.trim_start().strip_prefix(PROVIDER_TOKEN)?;
-    let name = name.split(|c: char| c.is_whitespace() || c == ':').next()?;
-    (!name.is_empty()).then_some(name)
-}
-
-/// The crew account a step failure names right after its provider, if it
-/// names one; `None` for the provider's default login.
-#[must_use]
-pub fn failed_account(message: &str) -> Option<&str> {
-    let class = ProviderFailureClass::of(None, Some(message))?;
-    let (_, rest) = message.split_once(class.marker())?;
-    let mut tokens = rest.split_whitespace();
-    tokens.next()?.strip_prefix(PROVIDER_TOKEN)?;
-    let name = tokens.next()?.strip_prefix(ACCOUNT_TOKEN)?;
-    let name = name.split(':').next()?;
-    (!name.is_empty()).then_some(name)
-}
-
-/// `message` naming `account` after its provider token, so the hold and
-/// exclusion it places stay on that crew account. A message that is not a
-/// provider failure naming its provider, or already names an account, is
-/// returned as it is.
-#[must_use]
-pub fn with_failed_account(message: &str, account: &str) -> String {
-    let account = account.trim();
-    if account.is_empty()
-        || account.contains(char::is_whitespace)
-        || failed_account(message).is_some()
-        || failed_provider(message).is_none()
-    {
-        return message.to_string();
-    }
-    let Some(class) = ProviderFailureClass::of(None, Some(message)) else {
-        return message.to_string();
-    };
-    let Some(marker_at) = message.find(class.marker()) else {
-        return message.to_string();
-    };
-    let after_marker = marker_at + class.marker().len();
-    let rest = &message[after_marker..];
-    let token_start = after_marker + (rest.len() - rest.trim_start().len());
-    let token_end = message[token_start..]
-        .find(char::is_whitespace)
-        .map_or(message.len(), |end| token_start + end);
-    format!(
-        "{} {ACCOUNT_TOKEN}{account}{}",
-        &message[..token_end],
-        &message[token_end..]
-    )
-}
-
-/// `claude` for a provider's default login, `claude/opus-credits` for a crew
-/// that is its own account: how every surface names a provider account.
-#[must_use]
-pub fn provider_account_label(provider: &str, account: Option<&str>) -> String {
-    match account {
-        Some(account) => format!("{provider}/{account}"),
-        None => provider.to_string(),
-    }
-}
-
-/// The tokens a usage-limit failure carries after its provider.
-const LIMIT_MODEL_TOKEN: &str = "model=";
-const LIMIT_WINDOW_TOKEN: &str = "window=";
-const LIMIT_RESETS_AT_TOKEN: &str = "resets_at=";
 
 /// What a provider said about the usage limit it hit [ORB-14695]: the model
 /// the limit is scoped to, the limit's window, and when it resets. Each is
@@ -466,4 +389,81 @@ pub struct ProviderCrewOutage {
     pub observed_at: DateTime<Utc>,
     /// The run whose failure recorded the outage.
     pub run_id: String,
+}
+
+/// `[marker] provider=<provider> <detail>`: the step failure text of a
+/// provider failure, naming the provider the hold excludes.
+#[must_use]
+pub fn provider_failure_text(class: ProviderFailureClass, provider: &str, detail: &str) -> String {
+    format!(
+        "{} {PROVIDER_TOKEN}{provider} {}",
+        class.marker(),
+        detail.trim()
+    )
+}
+
+/// The provider a step failure names after its provider marker, if it does.
+#[must_use]
+pub fn failed_provider(message: &str) -> Option<&str> {
+    let class = ProviderFailureClass::of(None, Some(message))?;
+    let (_, rest) = message.split_once(class.marker())?;
+    let name = rest.trim_start().strip_prefix(PROVIDER_TOKEN)?;
+    let name = name.split(|c: char| c.is_whitespace() || c == ':').next()?;
+    (!name.is_empty()).then_some(name)
+}
+
+/// The crew account a step failure names right after its provider, if it
+/// names one; `None` for the provider's default login.
+#[must_use]
+pub fn failed_account(message: &str) -> Option<&str> {
+    let class = ProviderFailureClass::of(None, Some(message))?;
+    let (_, rest) = message.split_once(class.marker())?;
+    let mut tokens = rest.split_whitespace();
+    tokens.next()?.strip_prefix(PROVIDER_TOKEN)?;
+    let name = tokens.next()?.strip_prefix(ACCOUNT_TOKEN)?;
+    let name = name.split(':').next()?;
+    (!name.is_empty()).then_some(name)
+}
+
+/// `message` naming `account` after its provider token, so the hold and
+/// exclusion it places stay on that crew account. A message that is not a
+/// provider failure naming its provider, or already names an account, is
+/// returned as it is.
+#[must_use]
+pub fn with_failed_account(message: &str, account: &str) -> String {
+    let account = account.trim();
+    if account.is_empty()
+        || account.contains(char::is_whitespace)
+        || failed_account(message).is_some()
+        || failed_provider(message).is_none()
+    {
+        return message.to_string();
+    }
+    let Some(class) = ProviderFailureClass::of(None, Some(message)) else {
+        return message.to_string();
+    };
+    let Some(marker_at) = message.find(class.marker()) else {
+        return message.to_string();
+    };
+    let after_marker = marker_at + class.marker().len();
+    let rest = &message[after_marker..];
+    let token_start = after_marker + (rest.len() - rest.trim_start().len());
+    let token_end = message[token_start..]
+        .find(char::is_whitespace)
+        .map_or(message.len(), |end| token_start + end);
+    format!(
+        "{} {ACCOUNT_TOKEN}{account}{}",
+        &message[..token_end],
+        &message[token_end..]
+    )
+}
+
+/// `claude` for a provider's default login, `claude/opus-credits` for a crew
+/// that is its own account: how every surface names a provider account.
+#[must_use]
+pub fn provider_account_label(provider: &str, account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("{provider}/{account}"),
+        None => provider.to_string(),
+    }
 }
