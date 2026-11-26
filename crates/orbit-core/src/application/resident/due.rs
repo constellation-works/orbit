@@ -29,13 +29,13 @@ use orbit_types::record::{EffectiveStatus, Notice, NoticeKind, NoticeScope};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 use orbit_types::workflow::{
     RESIDENT_CYCLE_GRANTED_EVENT, RESIDENT_WAKE_SETTLED_EVENT, ResidentCheckpoint, ResidentComment,
-    ResidentCycleGrant, ResidentLiveCycle, ResidentMandate, ResidentWakeSettled,
-    resident_authority_revision,
+    ResidentCycleChange, ResidentCycleGrant, ResidentLiveCycle, ResidentMandate,
+    ResidentWakeSettled, resident_authority_revision,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::cycle::{CYCLE_CHANGED, live_cycle_from_history};
+use super::cycle::live_cycle_from_history;
 use super::wake::{
     ResidentTaskWakeItem, ResidentWakeItemKey, ResidentWakeObservation, settled_decisions,
 };
@@ -117,12 +117,9 @@ impl ResidentDue {
 pub(crate) fn started_cycles(history: &[TaskHistoryEntry]) -> Vec<StartedCycle> {
     history
         .iter()
-        .filter(|entry| entry.event == CYCLE_CHANGED)
-        .filter_map(|entry| {
-            serde_json::from_str::<Option<ResidentLiveCycle>>(entry.note.as_deref()?)
-                .ok()
-                .flatten()
-                .map(|live| StartedCycle { live, at: entry.at })
+        .filter_map(|entry| match ResidentCycleChange::from_entry(entry)? {
+            Ok(ResidentCycleChange::Started(live)) => Some(StartedCycle { live, at: entry.at }),
+            Ok(ResidentCycleChange::Cleared) | Err(_) => None,
         })
         .collect()
 }

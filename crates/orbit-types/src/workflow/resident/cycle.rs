@@ -1,5 +1,7 @@
 //! The deterministic observer's durable live-cycle fence.
 
+use crate::task::TaskHistoryEntry;
+
 /// A live cycle published by the deterministic observer after taking its lease.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -8,6 +10,42 @@ pub struct ResidentLiveCycle {
     pub run_id: String,
     /// The cycle lease's expiry; an expired writer is never live.
     pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// History event recording a change to the live resident cycle.
+pub const RESIDENT_CYCLE_CHANGED_EVENT: &str = "resident_cycle_changed";
+
+/// One change to a mandate's live cycle, as its [`RESIDENT_CYCLE_CHANGED_EVENT`]
+/// history rows record it: a start stores the lease object and a clear stores
+/// the literal JSON `null`. [`Self::from_entry`] and [`Self::to_note`] are the
+/// only encode and decode of those rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResidentCycleChange {
+    /// A cycle took the live lease.
+    Started(ResidentLiveCycle),
+    /// The live cycle was released.
+    Cleared,
+}
+
+impl ResidentCycleChange {
+    /// The history note this change is stored as.
+    pub fn to_note(&self) -> Result<String, serde_json::Error> {
+        match self {
+            Self::Started(live) => serde_json::to_string(live),
+            Self::Cleared => Ok("null".into()),
+        }
+    }
+
+    /// The change `entry` records: `None` for any other event, and
+    /// `Some(Err(_))` for a cycle change whose note is unreadable.
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Result<Self, serde_json::Error>> {
+        (entry.event == RESIDENT_CYCLE_CHANGED_EVENT).then(|| {
+            serde_json::from_str::<Option<ResidentLiveCycle>>(
+                entry.note.as_deref().unwrap_or_default(),
+            )
+            .map(|live| live.map_or(Self::Cleared, Self::Started))
+        })
+    }
 }
 
 /// History event recording the authority one cycle was granted.

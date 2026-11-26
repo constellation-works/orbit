@@ -1,4 +1,154 @@
 use super::*;
+use orbit_types::workflow::{RESIDENT_CYCLE_CHANGED_EVENT, ResidentLiveCycle};
+
+/// Seeds one cycle-change row at `at` with its note taken verbatim, as an
+/// earlier build or a damaged row wrote it.
+fn seed_cycle_change(fx: &Fixture, mandate: &str, at: DateTime<Utc>, note: &str) {
+    fx.runtime
+        .stores()
+        .task_history()
+        .update_task_history(
+            mandate,
+            orbit_store::contracts::TaskHistoryUpdateParams {
+                actor: "fixture".into(),
+                append_history: vec![TaskHistoryEntry {
+                    at,
+                    by: "system".into(),
+                    event: RESIDENT_CYCLE_CHANGED_EVENT.into(),
+                    note: Some(note.into()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                    surface: None,
+                    caller: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// The note of the newest cycle-change row.
+fn latest_cycle_note(fx: &Fixture, mandate: &str) -> String {
+    fx.runtime
+        .get_task_history(mandate)
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|entry| entry.event == RESIDENT_CYCLE_CHANGED_EVENT)
+        .and_then(|entry| entry.note.clone())
+        .unwrap()
+}
+
+#[test]
+fn live_cycle_history_keeps_its_encoding_and_reads_fail_closed_or_tolerant() {
+    if !crate::dispatch_admission::isolated(
+        "resident_cycle::checkpoint_history::live_cycle_history_keeps_its_encoding_and_reads_fail_closed_or_tolerant",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let (_watched, mandate) = fx.watched_mandate("Typed live cycle history");
+    let now = Utc::now();
+    let lease = |cycle: &str| ResidentLiveCycle {
+        cycle: cycle.into(),
+        run_id: format!("run-{cycle}"),
+        expires_at: now + Duration::hours(1),
+    };
+
+    // The previous start object, 84 hours ago: the earliest readable start.
+    let old = lease("cycle-old");
+    seed_cycle_change(
+        &fx,
+        &mandate,
+        now - Duration::hours(84),
+        &serde_json::to_string(&old).unwrap(),
+    );
+
+    // The previous start is the live cycle: a stale expectation is refused and
+    // the matching one clears it, leaving the clear as JSON `null`.
+    let stale = fx
+        .runtime
+        .set_resident_live_cycle(&mandate, None, None)
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains("resident_cycle_stale"), "{stale}");
+    fx.runtime
+        .set_resident_live_cycle(&mandate, Some("cycle-old"), None)
+        .unwrap();
+    assert_eq!(latest_cycle_note(&fx, &mandate), "null");
+
+    // A publication stores the lease object as its note; a reused id is refused
+    // across the clear.
+    let fresh = lease("cycle-fresh");
+    fx.runtime
+        .set_resident_live_cycle(&mandate, None, Some(&fresh))
+        .unwrap();
+    assert_eq!(
+        latest_cycle_note(&fx, &mandate),
+        serde_json::to_string(&fresh).unwrap()
+    );
+    fx.runtime
+        .set_resident_live_cycle(&mandate, Some("cycle-fresh"), None)
+        .unwrap();
+    let reused = fx
+        .runtime
+        .set_resident_live_cycle(&mandate, None, Some(&old))
+        .unwrap_err()
+        .to_string();
+    assert!(reused.contains("cannot be reused"), "{reused}");
+
+    // A malformed latest change fails closed: neither the current-live read
+    // nor a publication may proceed past it.
+    seed_cycle_change(&fx, &mandate, now - Duration::hours(23), "{\"cycle\":");
+    for next in [None, Some(&lease("cycle-blocked"))] {
+        let unreadable = fx
+            .runtime
+            .set_resident_live_cycle(&mandate, None, next)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            unreadable.contains("resident cycle state is unreadable"),
+            "{unreadable}"
+        );
+    }
+
+    // Behind a valid clear the malformed row is skipped: the reuse scan still
+    // refuses the old id and admits a fresh one.
+    seed_cycle_change(&fx, &mandate, now - Duration::hours(22), "null");
+    let reused = fx
+        .runtime
+        .set_resident_live_cycle(&mandate, None, Some(&old))
+        .unwrap_err()
+        .to_string();
+    assert!(reused.contains("cannot be reused"), "{reused}");
+    let next = lease("cycle-next");
+    fx.runtime
+        .set_resident_live_cycle(&mandate, None, Some(&next))
+        .unwrap();
+    assert_eq!(
+        latest_cycle_note(&fx, &mandate),
+        serde_json::to_string(&next).unwrap()
+    );
+
+    // Activation is the earliest readable start, so the mandate has been active
+    // for 84 hours (4 whole days), not since the latest start.
+    fx.runtime
+        .set_resident_live_cycle(&mandate, Some("cycle-next"), None)
+        .unwrap();
+    let report = fx
+        .runtime
+        .resident_metrics(Some(&mandate), None, None)
+        .unwrap();
+    let entry = report["mandates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == mandate.as_str())
+        .unwrap_or_else(|| panic!("mandate missing from report: {report}"));
+    assert_eq!(entry["active_days"], 4.0, "{report}");
+}
 
 #[test]
 fn checkpoint_notes_refuse_non_delta_length_without_losing_legacy_history() {
