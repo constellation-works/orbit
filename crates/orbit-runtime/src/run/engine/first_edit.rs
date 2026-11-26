@@ -21,7 +21,7 @@ use orbit_common::OrbitError;
 use orbit_store::contract::InvocationQuery;
 
 use crate::RuntimeKernel;
-use crate::cost::IMPLEMENT_INVOCATION_IDS;
+use crate::run::cost::IMPLEMENT_INVOCATION_IDS;
 
 /// Rows fetched per page. A limit of 0 is the store's silent cap of 100, so
 /// every page asks for an explicit size.

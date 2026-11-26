@@ -215,7 +215,7 @@ fn worker_friction_add(
     let model = claimed_friction_model(runtime, binding);
     let (mut params, substitutions) = crate::app::friction::add_params(&parsed, Some(model))?;
     params.during_task = Some(binding.task_id.clone());
-    let taxonomy = crate::runtime::friction::store_for(runtime)?
+    let taxonomy = crate::runtime::stored::friction::store_for(runtime)?
         .tags()?
         .into_iter()
         .collect();

@@ -1,7 +1,7 @@
 //! Real runtime persistence of flaky signatures and task history.
 
 use orbit_core::OrbitRuntime;
-use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
+use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::RuntimeHost;
 use orbit_store::contract::FrictionListFilter;
 use orbit_types::task::TaskDecision;

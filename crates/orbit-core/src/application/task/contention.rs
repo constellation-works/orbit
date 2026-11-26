@@ -18,7 +18,7 @@ use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_types::task::TaskStatus;
 
 use crate::OrbitRuntime;
-use crate::runtime::task::locks::lock_context_files_for_task;
+use crate::runtime::stored::locks::lock_context_files_for_task;
 
 /// One pending task reduced to the fields the analysis reads.
 pub(crate) struct LockSurface {

@@ -20,7 +20,7 @@ use crate::application::admission::unknown_footprint::{
     FootprintGuard, FootprintWait, whole_tree_holder,
 };
 use crate::application::job::PublishedResume;
-use crate::runtime::task::locks::UnlockedContextPaths;
+use crate::runtime::stored::locks::UnlockedContextPaths;
 
 /// Light budget, gate and free slots before a caller reserves any for repair.
 ///

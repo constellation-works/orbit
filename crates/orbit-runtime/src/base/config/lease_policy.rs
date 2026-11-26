@@ -77,7 +77,7 @@ impl LeasePolicy {
         self.enabled
     }
 
-    pub(super) fn ensure_enabled(&self) -> Result<(), OrbitError> {
+    pub(crate) fn ensure_enabled(&self) -> Result<(), OrbitError> {
         if self.enabled {
             return Ok(());
         }
@@ -86,14 +86,14 @@ impl LeasePolicy {
         ))
     }
 
-    pub(super) fn hard_allowed(&self, class: LeasePrincipalClass) -> bool {
+    pub(crate) fn hard_allowed(&self, class: LeasePrincipalClass) -> bool {
         match class {
             LeasePrincipalClass::Human => self.hard_allowed_human,
             LeasePrincipalClass::Agent => self.hard_allowed_agent,
         }
     }
 
-    pub(super) fn max_priority(&self, class: LeasePrincipalClass) -> LeasePriority {
+    pub(crate) fn max_priority(&self, class: LeasePrincipalClass) -> LeasePriority {
         match class {
             LeasePrincipalClass::Human => self.max_priority_human,
             LeasePrincipalClass::Agent => self.max_priority_agent,
@@ -150,7 +150,7 @@ pub fn lease_principal_class(env: &orbit_common::Env) -> LeasePrincipalClass {
     }
 }
 
-pub(super) fn parse_mode(raw: &str, field: &str) -> Result<LeaseMode, OrbitError> {
+pub(crate) fn parse_mode(raw: &str, field: &str) -> Result<LeaseMode, OrbitError> {
     serde_json::from_value(json!(raw.trim())).map_err(|_| {
         OrbitError::InvalidInput(format!(
             "`{field}` must be `advisory` or `hard`; got `{raw}`"
@@ -158,7 +158,7 @@ pub(super) fn parse_mode(raw: &str, field: &str) -> Result<LeaseMode, OrbitError
     })
 }
 
-pub(super) fn parse_priority(raw: &str, field: &str) -> Result<LeasePriority, OrbitError> {
+pub(crate) fn parse_priority(raw: &str, field: &str) -> Result<LeasePriority, OrbitError> {
     serde_json::from_value(json!(raw.trim())).map_err(|_| {
         OrbitError::InvalidInput(format!(
             "`{field}` must be `low`, `normal` or `high`; got `{raw}`"
@@ -166,7 +166,7 @@ pub(super) fn parse_priority(raw: &str, field: &str) -> Result<LeasePriority, Or
     })
 }
 
-pub(super) fn priority_rank(priority: LeasePriority) -> u8 {
+pub(crate) fn priority_rank(priority: LeasePriority) -> u8 {
     match priority {
         LeasePriority::Low => 0,
         LeasePriority::Normal => 1,
@@ -174,7 +174,7 @@ pub(super) fn priority_rank(priority: LeasePriority) -> u8 {
     }
 }
 
-pub(super) fn lower_priority(left: LeasePriority, right: LeasePriority) -> LeasePriority {
+pub(crate) fn lower_priority(left: LeasePriority, right: LeasePriority) -> LeasePriority {
     if priority_rank(left) <= priority_rank(right) {
         left
     } else {

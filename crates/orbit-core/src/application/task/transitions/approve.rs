@@ -307,7 +307,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(), OrbitError> {
-        let Ok(frictions) = crate::runtime::friction::store_for(self) else {
+        let Ok(frictions) = crate::runtime::stored::friction::store_for(self) else {
             return Ok(());
         };
         let workspace_id = self.workspace_id()?;

@@ -25,7 +25,7 @@ impl OrbitRuntime {
         let status = status_filters
             .friction
             .or((!params.all && !listing).then_some(orbit_types::record::FrictionStatus::Open));
-        let store = crate::runtime::friction::store_for(self)?;
+        let store = crate::runtime::stored::friction::store_for(self)?;
         let mut filter = FrictionListFilter {
             statuses: status.into_iter().collect(),
             q: query.map(str::to_string),

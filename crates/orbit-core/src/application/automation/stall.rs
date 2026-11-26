@@ -144,7 +144,7 @@ fn file(
     at: DateTime<Utc>,
     status: FrictionStatus,
 ) -> Result<Option<String>, OrbitError> {
-    let frictions = crate::runtime::friction::store_for(runtime)?;
+    let frictions = crate::runtime::stored::friction::store_for(runtime)?;
 
     let existing = frictions.list(&FrictionListFilter {
         q: Some(key.clone()),

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_engine::activity_job::{CatalogDirectory, CatalogDirectoryList};
 
-use super::RuntimeKernel;
+use crate::RuntimeKernel;
 use crate::host::exec::assets::DEFAULT_ACTIVITY_FILES;
 
 impl RuntimeKernel {

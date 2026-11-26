@@ -5,8 +5,8 @@ use orbit_types::workflow::{ActivityV2Spec, JobRunState, JobV2, JobV2StepBody, P
 use serde_json::Value;
 
 use crate::application::task::SYSTEM_ACTOR_LABEL;
+use crate::runtime::run::task_coupling::FINAL_RECOVERY_REQUEUED_EVENT;
 use crate::runtime::run_input::carried_task_ids;
-use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
 
 /// The run a system block attributes itself to, when resume may undo it:
 /// workflow failure or interruption, a final-recovery escalation, or the

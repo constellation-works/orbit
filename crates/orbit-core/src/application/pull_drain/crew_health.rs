@@ -138,7 +138,7 @@ pub(crate) fn record_pool_crew_health(
             if quota_limited.contains(&crew) || allowlist_restricted.contains(&crew) {
                 continue;
             }
-            let frictions = crate::runtime::friction::store_for(runtime)?;
+            let frictions = crate::runtime::stored::friction::store_for(runtime)?;
             let key = dedupe_key(&crew, &streak.reason);
             let accepted = frictions.tags()?;
             let tags = ["automation", "other"]

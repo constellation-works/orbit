@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use super::loader::DiscoveredWorkspaces;
-use crate::runtime::task::locks::lease;
+use crate::runtime::stored::locks::lease;
 
 pub(super) fn sweep_owner_lease_lifetimes(
     discovered: &DiscoveredWorkspaces,

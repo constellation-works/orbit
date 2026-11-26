@@ -1,5 +1,5 @@
 use super::{Command, Operation};
-use crate::runtime::task::locks::lease;
+use crate::runtime::stored::locks::lease;
 use orbit_common::governance::authorization::{AuthorizationDenial, DASHBOARD_LEASE_WRITE};
 use serde_json::Value;
 

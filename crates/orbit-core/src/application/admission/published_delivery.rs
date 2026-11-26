@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::contracts::PublishedDelivery;
 use crate::application::job::JobRunListParams;
-use crate::runtime::task::locks::{
+use crate::runtime::stored::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, parse_task_ids,
     reserve_deferred_footprint, reserve_with_index, runs_holding_file_reservations,
 };

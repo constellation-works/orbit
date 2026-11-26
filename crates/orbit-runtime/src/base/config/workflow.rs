@@ -183,13 +183,13 @@ impl RuntimeKernel {
 
     /// `workflow.unlocked_context_paths` as admitted: the declared context
     /// a task's lock surface leaves out.
-    pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {
+    pub fn unlocked_context_paths(&self) -> &crate::base::config::unlocked::UnlockedContextPaths {
         self.base().settings().unlocked_context_paths()
     }
 
     /// The lease policy this runtime opened with: whether path leases are
     /// accepted and the per-class guards a request is held to.
-    pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
+    pub(crate) fn lease_policy(&self) -> &crate::base::config::lease_policy::LeasePolicy {
         self.base().settings().lease_policy()
     }
 

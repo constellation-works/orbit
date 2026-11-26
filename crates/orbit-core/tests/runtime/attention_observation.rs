@@ -180,7 +180,7 @@ fn friction_attention_does_not_recover_a_pending_task_commit() {
     let workspace_id = runtime.workspace_id().unwrap();
 
     use orbit_store::contract::FrictionAddParams;
-    let store = orbit_core::runtime::friction::store_for(&runtime).unwrap();
+    let store = orbit_core::runtime::stored::friction::store_for(&runtime).unwrap();
     let open = store
         .add(FrictionAddParams {
             model: "test".into(),

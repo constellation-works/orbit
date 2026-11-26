@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::super::unknown_footprint::FootprintWait;
 use super::shared_base_repair::SharedBaseRepairWait;
 use crate::application::job::PublishedResume;
-use crate::runtime::task::locks::TaskLockOverlap;
+use crate::runtime::stored::locks::TaskLockOverlap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct BacklogTaskExclusion {

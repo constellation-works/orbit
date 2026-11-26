@@ -5,7 +5,7 @@ use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::task::locks::parse_task_ids;
+use crate::runtime::stored::locks::parse_task_ids;
 
 /// Translate the gate's `{task_ids, mode}` into the resolved delivery route.
 /// The decision is the application's

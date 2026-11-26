@@ -24,7 +24,7 @@ use crate::OrbitRuntime;
 use crate::application::admission::auto_admission::PERF_LANE_SELECTOR;
 use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
-use crate::runtime::task::locks::lock_context_files_for_task;
+use crate::runtime::stored::locks::lock_context_files_for_task;
 
 /// The claims currently protecting tasks and their frozen surfaces.
 fn live_execution_claims(

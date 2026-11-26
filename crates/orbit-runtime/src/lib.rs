@@ -29,13 +29,15 @@
 //! sub-module wires together stores, policy, tools, plugins, and event bus into a
 //! complete [`RuntimeKernel`], while the four layers hold the runtime's
 //! mechanisms: `base` (configuration, paths, actor, binding, event log,
-//! authorization policy data, managed-run env parsing), `stored` (stores,
-//! persistence, the task access chosen for the process's role, audit,
-//! workspace catalog and claims, recovery authority), `host`
-//! (PR forge, host signals, resource probes and forecasts, admission policy,
-//! plugins, command/tool/script/Git-sandbox execution, embedded assets) and
-//! `run` (worker coordination, engine helpers, step-recovery decisions, run
-//! inputs, upgrade handover).
+//! authorization policy data, managed-run env parsing, lease policy, declared
+//! context selectors), `stored` (stores, persistence, the task access chosen
+//! for the process's role, audit, workspace catalog and claims, recovery
+//! authority, reservations and locks, friction), `host` (PR forge, host
+//! signals, resource probes and forecasts, admission policy, application
+//! consent, plugins, command/tool/script/Git-sandbox execution, embedded
+//! assets, the activity catalog) and `run` (worker coordination, engine
+//! helpers, step-recovery decisions, run inputs, upgrade handover, cost, the
+//! tasks coupled to a run).
 
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Legacy runtime command surfaces still need a focused documentation pass.
@@ -47,23 +49,13 @@
     deny(clippy::disallowed_methods)
 )]
 
-mod activity_catalog;
-/// Host-local application authority audit hooks.
-pub mod application_authority {
-    pub use crate::application_consent::{finish_application_dispatch, take_application_audit};
-}
-mod application_consent;
 mod application_port;
 pub mod base;
 pub mod builder;
-pub mod cost;
-pub mod friction;
 pub mod host;
-pub mod mutation;
 mod orbit_runtime;
 pub mod run;
 pub mod stored;
-pub mod task;
 
 /// Compatibility re-exports for actor identity, admitted settings and stores.
 pub mod context {
@@ -73,8 +65,6 @@ pub mod context {
     pub use crate::base::config::OrbitRuntimeSettings;
     pub use crate::stored::stores::OrbitStores;
 }
-
-pub use task::{InfraBlockedTask, StaleTaskReservation};
 
 #[cfg(feature = "test-support")]
 pub use host::resource::with_host_load_sampling_wait;

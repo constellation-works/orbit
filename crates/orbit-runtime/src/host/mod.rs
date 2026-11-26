@@ -4,6 +4,7 @@
 
 mod accessors;
 pub mod admission;
+pub mod application_consent;
 mod authorization;
 pub(crate) mod context;
 pub mod exec;

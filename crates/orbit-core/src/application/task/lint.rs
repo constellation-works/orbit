@@ -13,7 +13,7 @@ use crate::application::task::DeclaredContextFiles;
 use super::paths::{
     context_workspace_root, is_path_under_workspace, normalize_path_token, task_path_exists,
 };
-use crate::runtime::task::declared_context_files;
+use crate::runtime::base::path::declared_context::declared_context_files;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskLintReport {

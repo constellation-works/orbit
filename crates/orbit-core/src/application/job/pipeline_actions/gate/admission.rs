@@ -14,7 +14,7 @@ use crate::application::job::PipelineWaitStatus;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
-use crate::runtime::task::locks::parse_task_ids;
+use crate::runtime::stored::locks::parse_task_ids;
 
 /// Re-check live workflow admission for `admission_task_ids` immediately before
 /// child dispatch, and return the synthetic child result when the bundle must

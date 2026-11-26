@@ -5,7 +5,7 @@
 use super::tool_support::{create_context_task, invalid_input_message};
 use orbit_common::test_env::ScopedEnv;
 use orbit_core::runtime::OrbitRuntime;
-use orbit_core::runtime::task::locks::lease::{self, LeasePolicy, install_test_lease_policy};
+use orbit_core::runtime::stored::locks::lease::{self, LeasePolicy, install_test_lease_policy};
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 use std::path::PathBuf;

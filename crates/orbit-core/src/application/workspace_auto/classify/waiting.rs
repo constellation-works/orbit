@@ -9,7 +9,7 @@ use crate::application::admission::auto_admission::AdmissionSelection;
 use crate::application::admission::backlog_exclusion::{BacklogSnapshot, BacklogTaskExclusion};
 use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::pass_error::PassError;
-use crate::runtime::task::locks::lock_context_files_for_task;
+use crate::runtime::stored::locks::lock_context_files_for_task;
 
 /// How many excluded tasks one pass records; the total is recorded beside the
 /// list so a truncated one still reads as truncated.

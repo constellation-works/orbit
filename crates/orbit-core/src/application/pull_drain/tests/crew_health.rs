@@ -60,7 +60,7 @@ fn open_pool_crew_frictions(
     runtime: &crate::OrbitRuntime,
     crew: &str,
 ) -> Vec<orbit_store::contract::StoredFrictionRecord> {
-    let frictions = crate::runtime::friction::store_for(runtime).expect("friction store");
+    let frictions = crate::runtime::stored::friction::store_for(runtime).expect("friction store");
     frictions
         .list(&FrictionListFilter {
             statuses: vec![FrictionStatus::Open],
@@ -146,7 +146,7 @@ fn same_crew_same_cause_across_drains_keeps_one_open_friction() {
     );
 
     let first_id = after_first[0].record.id.clone();
-    let frictions = crate::runtime::friction::store_for(&runtime).expect("friction store");
+    let frictions = crate::runtime::stored::friction::store_for(&runtime).expect("friction store");
     frictions
         .resolve(&first_id, Utc::now())
         .expect("resolve first friction");

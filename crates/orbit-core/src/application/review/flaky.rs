@@ -21,7 +21,7 @@ pub(crate) fn record_frictions(
             "invalid flaky validation evidence".into(),
         ));
     }
-    let store = crate::runtime::friction::store_for(runtime)?;
+    let store = crate::runtime::stored::friction::store_for(runtime)?;
     for failure in &record.failures {
         let key = format!(
             "flaky-test:{}",

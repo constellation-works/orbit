@@ -23,7 +23,7 @@ pub(super) fn add(
     if let Some(task_id) = params.during_task.as_deref() {
         runtime.ensure_friction_task_exists(task_id)?;
     }
-    let stored = crate::runtime::friction::store_for(runtime)?.add(params)?;
+    let stored = crate::runtime::stored::friction::store_for(runtime)?.add(params)?;
     record_to_json_with_tag_normalizations(stored, substitutions)
 }
 

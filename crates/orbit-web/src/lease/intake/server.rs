@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use orbit_auth::scope::{HardLeasePermission, LeasePriorityCeiling, PrincipalClass};
 use orbit_common::security::redaction::{redact_all, redact_all_json};
-use orbit_core::runtime::task::locks::lease::{
+use orbit_core::runtime::stored::locks::lease::{
     self, LeasePrincipalClass, LeasePriority, LeaseTokenGrant,
 };
 use orbit_core::{OrbitError, OrbitRuntime};

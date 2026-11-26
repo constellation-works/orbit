@@ -20,12 +20,12 @@ use super::admission::{
 };
 use super::holder::PathHolders;
 use super::input::{LEASE_ID_PREFIX, parse_selectors, required_non_empty};
-use super::policy::{
-    lease_principal_class, lower_priority, parse_mode, parse_priority, priority_rank,
-};
 use super::queue;
 use super::response::{PLACEHOLDER_TIMESTAMP, ResponseBudget, lease_json};
 use crate::RuntimeKernel;
+use crate::base::config::lease_policy::{
+    lease_principal_class, lower_priority, parse_mode, parse_priority, priority_rank,
+};
 
 const REQUEST_TOOL: &str = "orbit.lease.request";
 

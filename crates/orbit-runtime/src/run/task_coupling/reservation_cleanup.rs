@@ -16,7 +16,7 @@ use serde_json::json;
 
 use crate::RuntimeKernel;
 
-use super::locks::{
+use crate::stored::locks::{
     emit_expired_reservation_events, emit_task_lock_release_event, workspace_orbit_dir,
     workspace_task_reservation_id,
 };

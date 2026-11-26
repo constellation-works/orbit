@@ -5,8 +5,8 @@ mod command;
 mod index;
 pub mod lease;
 mod projection;
-mod unlocked;
 
+pub use crate::base::config::unlocked::UnlockedContextPaths;
 pub use audit::{emit_expired_reservation_events, emit_task_lock_release_event};
 pub use command::{
     EmptyTaskSurfacePolicy, ReservationOutcome, list, parse_task_ids, release, reserve,
@@ -18,5 +18,3 @@ pub use index::{
     lock_holder_index, merge_task_lock_conflicts, requested_task_files_indexed,
     task_lock_conflicts_indexed, task_lock_overlaps,
 };
-pub(crate) use lease::LeasePolicy;
-pub use unlocked::UnlockedContextPaths;
