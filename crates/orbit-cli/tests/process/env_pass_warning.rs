@@ -225,6 +225,92 @@ impl Fixture {
     }
 }
 
+#[cfg(unix)]
+impl Fixture {
+    fn clock_env(&self, contents: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = self.home.join(".orbit/clock.env");
+        fs::write(&path, contents).expect("write clock.env");
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod clock.env");
+    }
+
+    fn tick_with(&self, set: &[(&str, &str)], dry_run: bool) -> (Value, String) {
+        if !dry_run {
+            self.submitted.set(true);
+        }
+        let mut command = self.command(set);
+        command.args(["clock", "tick", "--json"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command.output().expect("clock tick");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "clock tick failed: {stdout}{stderr}"
+        );
+        assert!(
+            [SECRET, AMBIENT_SECRET]
+                .iter()
+                .all(|secret| { !stdout.contains(secret) && !stderr.contains(secret) }),
+            "clock tick printed a clock.env value: {stdout}{stderr}"
+        );
+        (serde_json::from_str(&stdout).expect("tick JSON"), stderr)
+    }
+
+    fn tick(&self) -> (Value, String) {
+        self.tick_with(&[], false)
+    }
+
+    fn clock_probe(&self) {
+        use std::os::unix::fs::PermissionsExt;
+
+        // This fixed executor checks its actual environment after both detached
+        // worker and provider dispatch. It emits only boolean results.
+        let provider = self.home.join("codex");
+        fs::write(&provider, format!(
+            "#!/bin/sh\ncat >/dev/null\n\
+             file=false; ambient=false; empty=false; filtered=false\n\
+             [ \"${{{UNSET}-}}\" = '{SECRET}' ] && file=true\n\
+             [ \"${{{SET}-}}\" = '{AMBIENT_SECRET}' ] && ambient=true\n\
+             [ \"${{{EMPTY}-}}\" = '{SECRET}' ] && empty=true\n\
+             [ \"${{{NOT_PASSED}+present}}\" != present ] && filtered=true\n\
+             printf '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{\"file\":%s,\"ambient\":%s,\"empty\":%s,\"filtered\":%s}},\"error\":null}}\\n' \"$file\" \"$ambient\" \"$empty\" \"$filtered\"\n"
+        )).expect("write credential probe");
+        fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+        let root = self.home.join(".orbit");
+        fs::write(
+            root.join("resources/executors/codex.yaml"),
+            serde_json::json!({
+                "schemaVersion": 2, "kind": "Executor", "metadata": {"name": "codex"},
+                "spec": {"executor_type": "direct_agent", "command": provider,
+                    "args": [], "sandbox": "off", "env": {}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join(format!("resources/jobs/{JOB}.yaml")),
+            serde_json::json!({
+                "schemaVersion": 2, "kind": "Job", "metadata": {"name": JOB},
+                "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                    "id": "probe", "spec": {"type": "agent_loop", "provider": "codex",
+                        "backend": "cli", "description": "Probe the child environment",
+                        "instruction": "Return the fixed fixture response",
+                        "wall_clock_timeout_seconds": 10}
+                }]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(self.repo.join(".orbit/routines/clock-env-fixture.yaml"), format!(
+            "schemaVersion: 1\nname: clock-env-fixture\nenabled: true\ntrigger: {{ cron: '* * * * *' }}\ntarget: job:{JOB}\n"
+        )).unwrap();
+    }
+}
+
 fn warning_lines(stderr: &str) -> Vec<&str> {
     stderr
         .lines()
@@ -543,92 +629,6 @@ fn doctor_does_not_warn_for_unset_template_defaults_after_fresh_init() {
             .contains(MACOS_TEMPLATE_VAR),
         "the macOS-only template name is absent on Linux: {row}"
     );
-}
-
-#[cfg(unix)]
-impl Fixture {
-    fn clock_env(&self, contents: &str, mode: u32) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let path = self.home.join(".orbit/clock.env");
-        fs::write(&path, contents).expect("write clock.env");
-        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod clock.env");
-    }
-
-    fn tick_with(&self, set: &[(&str, &str)], dry_run: bool) -> (Value, String) {
-        if !dry_run {
-            self.submitted.set(true);
-        }
-        let mut command = self.command(set);
-        command.args(["clock", "tick", "--json"]);
-        if dry_run {
-            command.arg("--dry-run");
-        }
-        let output = command.output().expect("clock tick");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        assert!(
-            output.status.success(),
-            "clock tick failed: {stdout}{stderr}"
-        );
-        assert!(
-            [SECRET, AMBIENT_SECRET]
-                .iter()
-                .all(|secret| { !stdout.contains(secret) && !stderr.contains(secret) }),
-            "clock tick printed a clock.env value: {stdout}{stderr}"
-        );
-        (serde_json::from_str(&stdout).expect("tick JSON"), stderr)
-    }
-
-    fn tick(&self) -> (Value, String) {
-        self.tick_with(&[], false)
-    }
-
-    fn clock_probe(&self) {
-        use std::os::unix::fs::PermissionsExt;
-
-        // This fixed executor checks its actual environment after both detached
-        // worker and provider dispatch. It emits only boolean results.
-        let provider = self.home.join("codex");
-        fs::write(&provider, format!(
-            "#!/bin/sh\ncat >/dev/null\n\
-             file=false; ambient=false; empty=false; filtered=false\n\
-             [ \"${{{UNSET}-}}\" = '{SECRET}' ] && file=true\n\
-             [ \"${{{SET}-}}\" = '{AMBIENT_SECRET}' ] && ambient=true\n\
-             [ \"${{{EMPTY}-}}\" = '{SECRET}' ] && empty=true\n\
-             [ \"${{{NOT_PASSED}+present}}\" != present ] && filtered=true\n\
-             printf '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{\"file\":%s,\"ambient\":%s,\"empty\":%s,\"filtered\":%s}},\"error\":null}}\\n' \"$file\" \"$ambient\" \"$empty\" \"$filtered\"\n"
-        )).expect("write credential probe");
-        fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
-        let root = self.home.join(".orbit");
-        fs::write(
-            root.join("resources/executors/codex.yaml"),
-            serde_json::json!({
-                "schemaVersion": 2, "kind": "Executor", "metadata": {"name": "codex"},
-                "spec": {"executor_type": "direct_agent", "command": provider,
-                    "args": [], "sandbox": "off", "env": {}}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        fs::write(
-            root.join(format!("resources/jobs/{JOB}.yaml")),
-            serde_json::json!({
-                "schemaVersion": 2, "kind": "Job", "metadata": {"name": JOB},
-                "spec": {"state": "enabled", "kind": "workflow", "steps": [{
-                    "id": "probe", "spec": {"type": "agent_loop", "provider": "codex",
-                        "backend": "cli", "description": "Probe the child environment",
-                        "instruction": "Return the fixed fixture response",
-                        "wall_clock_timeout_seconds": 10}
-                }]}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        fs::write(self.repo.join(".orbit/routines/clock-env-fixture.yaml"), format!(
-            "schemaVersion: 1\nname: clock-env-fixture\nenabled: true\ntrigger: {{ cron: '* * * * *' }}\ntarget: job:{JOB}\n"
-        )).unwrap();
-    }
 }
 
 #[cfg(unix)]

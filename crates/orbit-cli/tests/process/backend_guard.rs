@@ -202,18 +202,6 @@ mod platform {
         }
     }
 
-    pub(super) fn publish_readiness(workspace: &Path) -> io::Result<ReadyLease> {
-        let identity = identity(std::process::id() as libc::pid_t)?.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "backend process identity unavailable",
-            )
-        })?;
-        let marker = serde_json::to_vec(&identity)?;
-        std::fs::write(workspace.join("markers/listen.ready"), marker)?;
-        Ok(ReadyLease)
-    }
-
     // XNU's proc_info_private.h: PROC_PIDUNIQIDENTIFIERINFO and its stable
     // 56-byte API layout. libc exposes proc_pidinfo but not this flavor.
     // https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.121.3/bsd/sys/proc_info_private.h
@@ -226,6 +214,45 @@ mod platform {
         id_version: i32,
         original_parent_id_version: i32,
         reserved: [u64; 2],
+    }
+
+    pub(super) struct ProcessHandle(BackendIdentity);
+
+    impl ProcessHandle {
+        pub(super) fn open(expected: BackendIdentity) -> io::Result<Option<Self>> {
+            Ok((identity(expected.pid)? == Some(expected)).then_some(Self(expected)))
+        }
+
+        pub(super) fn is_live(&self) -> io::Result<bool> {
+            Ok(identity(self.0.pid)? == Some(self.0))
+        }
+
+        pub(super) fn kill(&self) -> io::Result<()> {
+            let mut token = [0; 8];
+            token[5] = self.0.pid as u32;
+            token[7] = self.0.exec_version;
+            // Safety: the token has audit_token_t's layout. The kernel compares
+            // pidversion and signals that referenced process atomically, so a
+            // reused PID or exec between probe and signal is refused with ESRCH.
+            let rc = unsafe { proc_signal_with_audittoken(&token, libc::SIGKILL) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::from_raw_os_error(rc))
+            }
+        }
+    }
+
+    pub(super) fn publish_readiness(workspace: &Path) -> io::Result<ReadyLease> {
+        let identity = identity(std::process::id() as libc::pid_t)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "backend process identity unavailable",
+            )
+        })?;
+        let marker = serde_json::to_vec(&identity)?;
+        std::fs::write(workspace.join("markers/listen.ready"), marker)?;
+        Ok(ReadyLease)
     }
 
     unsafe extern "C" {
@@ -259,33 +286,6 @@ mod platform {
                 io::ErrorKind::InvalidData,
                 "short process identity",
             ))
-        }
-    }
-
-    pub(super) struct ProcessHandle(BackendIdentity);
-
-    impl ProcessHandle {
-        pub(super) fn open(expected: BackendIdentity) -> io::Result<Option<Self>> {
-            Ok((identity(expected.pid)? == Some(expected)).then_some(Self(expected)))
-        }
-
-        pub(super) fn is_live(&self) -> io::Result<bool> {
-            Ok(identity(self.0.pid)? == Some(self.0))
-        }
-
-        pub(super) fn kill(&self) -> io::Result<()> {
-            let mut token = [0; 8];
-            token[5] = self.0.pid as u32;
-            token[7] = self.0.exec_version;
-            // Safety: the token has audit_token_t's layout. The kernel compares
-            // pidversion and signals that referenced process atomically, so a
-            // reused PID or exec between probe and signal is refused with ESRCH.
-            let rc = unsafe { proc_signal_with_audittoken(&token, libc::SIGKILL) };
-            if rc == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::from_raw_os_error(rc))
-            }
         }
     }
 

@@ -45,6 +45,10 @@ const MACOS_RUNTIME_LITERALS: &[&str] = &[
 pub(super) const DEV_WRITE_ALLOW: &str =
     "(allow file-write-data (literal \"/dev/null\") (literal \"/dev/tty\"))\n";
 
+#[cfg(target_os = "macos")]
+const FETCH_UNSUPPORTED: &str = "macOS runs no network `fetch` phase for a plugin build, because a fetch descendant could \
+     outlive the phase with its network";
+
 /// The start of a deny-default profile: what any process needs to start
 /// and run, and no file content or network.
 pub(super) fn deny_default_preamble() -> String {
@@ -159,10 +163,6 @@ pub(super) fn probe(fetch: bool) -> Result<super::BuildSandboxProbe, String> {
         landlock_abi: None,
     })
 }
-
-#[cfg(target_os = "macos")]
-const FETCH_UNSUPPORTED: &str = "macOS runs no network `fetch` phase for a plugin build, because a fetch descendant could \
-     outlive the phase with its network";
 
 /// The `sandbox-exec` command for one offline phase. The profile is passed
 /// inline: a file in the shared temp root could be rewritten by another

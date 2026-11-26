@@ -21,6 +21,13 @@ const PROBE_OUTPUT_LIMIT: usize = 256 * 1024;
 /// compiler so a plan names the wrapper the probe selected.
 static SETTLED: OnceLock<BwrapProbeOutcome> = OnceLock::new();
 
+/// One probe attempt classified for the process-level memo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum BwrapProbeMemo {
+    Settled(BwrapProbeOutcome),
+    Unsettled(BwrapProbeOutcome),
+}
+
 /// The wrapper a plan names: the binary the settled probe selected, or the
 /// host's before any probe has settled. Never consults `PATH`.
 pub fn bwrap_program_for_audit() -> &'static str {
@@ -122,13 +129,6 @@ fn drop_to_probe_user(command: &mut Command, uid: u32, gid: u32) {
             Ok(())
         });
     }
-}
-
-/// One probe attempt classified for the process-level memo.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum BwrapProbeMemo {
-    Settled(BwrapProbeOutcome),
-    Unsettled(BwrapProbeOutcome),
 }
 
 /// Apply the memo policy to one probe attempt. Settled outcomes are stored in

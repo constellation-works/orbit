@@ -19,6 +19,15 @@ mod filesystem {
     use super::super::tmp::filesystem::{names, open_directory, walk};
     use crate::OrbitError;
 
+    /// A whole-machine `lsof` is slow but finite. Past this the probe fails
+    /// closed and every stale entry is kept.
+    #[cfg(target_os = "macos")]
+    const LSOF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// Retained `lsof -F n` output, one line per open file on the host.
+    #[cfg(target_os = "macos")]
+    const LSOF_OUTPUT_LIMIT: usize = 128 * 1024 * 1024;
+
     /// An entry old enough to remove, pending the in-use checks.
     struct Stale {
         name: CString,
@@ -171,14 +180,6 @@ mod filesystem {
         }
         Ok(held)
     }
-
-    /// A whole-machine `lsof` is slow but finite. Past this the probe fails
-    /// closed and every stale entry is kept.
-    #[cfg(target_os = "macos")]
-    const LSOF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-    /// Retained `lsof -F n` output, one line per open file on the host.
-    #[cfg(target_os = "macos")]
-    const LSOF_OUTPUT_LIMIT: usize = 128 * 1024 * 1024;
 
     #[cfg(target_os = "macos")]
     fn find_holders(prefixes: &[&Path]) -> Result<BTreeSet<usize>, String> {

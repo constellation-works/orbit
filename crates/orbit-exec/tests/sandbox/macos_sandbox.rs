@@ -28,6 +28,16 @@ use wait_timeout::ChildExt;
 
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
+/// Kills and reaps the sandboxed child however the test leaves.
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn sandbox_exec_build_budget_self_test_passes_under_worker_profile() {
     if !macos_sandbox_test_guard(
@@ -773,14 +783,4 @@ fn wait_with_deadline(child: Child, deadline: Duration) -> (String, String) {
         "sandboxed shell failed with {status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     (stdout, stderr)
-}
-
-/// Kills and reaps the sandboxed child however the test leaves.
-struct ChildGuard(Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }

@@ -31,6 +31,8 @@ mod macos {
 
     use super::{scratch_in, script_sandbox_available};
 
+    const NESTED_CHILD_ENV: &str = "ORBIT_TEST_SCRIPT_NESTED_CHILD";
+
     fn spec<'a>(
         cwd: &'a Path,
         scratch: &'a Path,
@@ -334,8 +336,6 @@ mod macos {
         );
         assert!(!marker.exists(), "a refused run must not start the script");
     }
-
-    const NESTED_CHILD_ENV: &str = "ORBIT_TEST_SCRIPT_NESTED_CHILD";
 
     /// A script step started inside another Seatbelt sandbox (a worker's)
     /// refuses with the nested-sandbox reason and runs nothing, instead of

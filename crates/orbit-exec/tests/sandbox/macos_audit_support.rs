@@ -5,6 +5,12 @@ use orbit_types::policy::ResolvedFsProfile;
 
 use orbit_exec::compile_macos_sandbox_profile;
 
+/// Provider used by profile tests that are not about the per-provider
+/// credential carve-out. Codex keeps every default credential deny, so a test
+/// asserting the shared clauses sees them unmodified.
+#[cfg(target_os = "macos")]
+pub(super) const NEUTRAL_PROVIDER: &str = "codex";
+
 pub(super) fn profile(name: &str, read: &[&str], modify: &[&str]) -> ResolvedFsProfile {
     ResolvedFsProfile {
         name: name.to_string(),
@@ -26,12 +32,6 @@ pub(super) struct EnvOverrides<'a> {
     pub(super) xdg_state_home: Option<&'a str>,
     pub(super) cargo_home: Option<&'a str>,
 }
-
-/// Provider used by profile tests that are not about the per-provider
-/// credential carve-out. Codex keeps every default credential deny, so a test
-/// asserting the shared clauses sees them unmodified.
-#[cfg(target_os = "macos")]
-pub(super) const NEUTRAL_PROVIDER: &str = "codex";
 
 pub(super) fn compile_with_env(
     resolved: &ResolvedFsProfile,
