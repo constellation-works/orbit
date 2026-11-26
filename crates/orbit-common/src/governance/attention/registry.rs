@@ -1,15 +1,15 @@
+/// The environment variable a shell reads its attention wait grant from.
+/// A flag would put the token in the process list.
+pub use crate::env_vars::ORBIT_ATTENTION_WAIT_TOKEN as ATTENTION_WAIT_TOKEN_ENV;
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry,
 };
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 /// The MCP client name the federated aggregator initializes its hops with.
 /// A destination honours `candidate_read` only from a session that names it.
 pub const ATTENTION_AGGREGATOR_CLIENT: &str = "orbit-federated-mux";
-/// The environment variable a shell reads its attention wait grant from.
-/// A flag would put the token in the process list.
-pub use crate::env_vars::ORBIT_ATTENTION_WAIT_TOKEN as ATTENTION_WAIT_TOKEN_ENV;
-use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 operation_registry! {
     noun: ATTENTION;
     /// Attention operations.

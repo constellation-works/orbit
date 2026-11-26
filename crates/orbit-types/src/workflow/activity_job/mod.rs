@@ -1,28 +1,5 @@
 //! Activity/job runtime types.
 
-/// `activity:<name>` prefix for the `target:` field on a TargetRef.
-pub const ACTIVITY_REF_PREFIX: &str = "activity:";
-
-/// `script:<name>` prefix for the `target:` field on a TargetRef.
-pub const SCRIPT_REF_PREFIX: &str = script::SCRIPT_REF_PREFIX;
-
-/// `auto-task:<name>` prefix for the `target:` field on a TargetRef: a step
-/// that binds an auto-task and waits for its accepted completion
-/// (`docs/design/activity-job/specs/auto-task-step.md`). Such steps can be
-/// defined and explained; no binary runs them yet.
-pub const AUTO_TASK_REF_PREFIX: &str = "auto-task:";
-
-/// The `schemaVersion` every activity and every job without the auto-task
-/// step extension declares.
-pub const ASSET_SCHEMA_VERSION: u32 = 2;
-
-/// The `schemaVersion` a job using the auto-task step extension must declare,
-/// and no activity may: a binary that predates the extension refuses the
-/// whole file as an unsupported version instead of dropping the fields it
-/// does not know ([ORB-20237]). A job keeps the version its file declares,
-/// whether or not any of the extension's fields remain.
-pub const AUTO_TASK_JOB_SCHEMA_VERSION: u32 = 3;
-
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
@@ -35,9 +12,6 @@ pub mod script;
 pub mod tool_allowlist;
 pub mod trusted_host;
 mod worktree_failure;
-pub use worktree_failure::{legacy_worktree_failure, worktree_failure_message};
-
-pub use provider_sandbox::CODEX_PROVIDER_SANDBOX_MODES;
 
 pub use activity_roles::JobActivityRoles;
 pub use activity_v2::{
@@ -62,6 +36,7 @@ pub use job_v2::{
     JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, SteeringGateSpec,
     TargetRef, TargetStep,
 };
+pub use provider_sandbox::CODEX_PROVIDER_SANDBOX_MODES;
 pub use response_correction::{
     MUTATING_TOOLS, ResponseCorrectionActivityError, is_response_correction_mutating_tool,
     validate_response_correction_activity,
@@ -95,3 +70,27 @@ pub use trusted_host::{
     TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError, TrustedHostAdmission,
     run_input_declares_trusted_host, strip_trusted_host_admission, validate_trusted_host_activity,
 };
+pub use worktree_failure::{legacy_worktree_failure, worktree_failure_message};
+
+/// `activity:<name>` prefix for the `target:` field on a TargetRef.
+pub const ACTIVITY_REF_PREFIX: &str = "activity:";
+
+/// `script:<name>` prefix for the `target:` field on a TargetRef.
+pub const SCRIPT_REF_PREFIX: &str = script::SCRIPT_REF_PREFIX;
+
+/// `auto-task:<name>` prefix for the `target:` field on a TargetRef: a step
+/// that binds an auto-task and waits for its accepted completion
+/// (`docs/design/activity-job/specs/auto-task-step.md`). Such steps can be
+/// defined and explained; no binary runs them yet.
+pub const AUTO_TASK_REF_PREFIX: &str = "auto-task:";
+
+/// The `schemaVersion` every activity and every job without the auto-task
+/// step extension declares.
+pub const ASSET_SCHEMA_VERSION: u32 = 2;
+
+/// The `schemaVersion` a job using the auto-task step extension must declare,
+/// and no activity may: a binary that predates the extension refuses the
+/// whole file as an unsupported version instead of dropping the fields it
+/// does not know ([ORB-20237]). A job keeps the version its file declares,
+/// whether or not any of the extension's fields remain.
+pub const AUTO_TASK_JOB_SCHEMA_VERSION: u32 = 3;

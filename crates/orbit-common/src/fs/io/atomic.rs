@@ -7,6 +7,15 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{create_new_private_file, create_private_dir_all};
+/// Set to `1` to make durability syncs no-ops in a debug build's test run.
+///
+/// `.cargo/config.toml` sets it for every process Cargo launches, so test
+/// binaries and the `orbit` children they spawn inherit it. On macOS each
+/// sync is an `F_FULLFSYNC` that flushes the whole drive's write cache, and
+/// concurrent suites queue behind each other's flushes. A test process loses
+/// nothing by skipping them: only a power loss or kernel crash can observe a
+/// missing sync. Release builds ignore the variable.
+pub use crate::env_vars::ORBIT_TEST_RELAXED_DURABILITY as RELAXED_DURABILITY_ENV;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -415,16 +424,6 @@ pub fn sync_parent_dir(parent_dir: &File) -> io::Result<()> {
 // ---------------------------------------------------------------------------
 // Durability syncs
 // ---------------------------------------------------------------------------
-
-/// Set to `1` to make durability syncs no-ops in a debug build's test run.
-///
-/// `.cargo/config.toml` sets it for every process Cargo launches, so test
-/// binaries and the `orbit` children they spawn inherit it. On macOS each
-/// sync is an `F_FULLFSYNC` that flushes the whole drive's write cache, and
-/// concurrent suites queue behind each other's flushes. A test process loses
-/// nothing by skipping them: only a power loss or kernel crash can observe a
-/// missing sync. Release builds ignore the variable.
-pub use crate::env_vars::ORBIT_TEST_RELAXED_DURABILITY as RELAXED_DURABILITY_ENV;
 
 static RELAXED_DURABILITY: OnceLock<bool> = OnceLock::new();
 

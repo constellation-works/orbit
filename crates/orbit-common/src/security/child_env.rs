@@ -31,41 +31,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_types::identity::{CrewEnvSource, CrewEnvVar};
 
 use super::operator_env::read_secret_file;
-
-/// Runtime context every supported provider CLI needs in order to start.
-///
-/// Kept explicit so the effective floor of a child environment is reviewable
-/// instead of being whatever the dispatching process happened to inherit.
-/// Every entry is non-credential process context — login identity, filesystem
-/// locations, locale, terminal shape. Provider credentials and service
-/// endpoints are never baseline; an operator opts into those by name through
-/// `[execution.env].pass`.
-pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
-    env_vars::HOME,
-    env_vars::LANG,
-    env_vars::LC_ALL,
-    env_vars::LOGNAME,
-    env_vars::PATH,
-    env_vars::SHELL,
-    env_vars::TERM,
-    env_vars::TMPDIR,
-    env_vars::TZ,
-    env_vars::USER,
-];
-
-/// Managed envelope names that a nested Codex MCP server needs for workspace
-/// binding, attribution, and activity policy. These are names only;
-/// Codex copies their values from the managed child environment.
-pub use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as MCP_MANAGED_CONTEXT_ENV;
-/// Registry locator forwarded to a nested MCP server.
-pub use crate::env_vars::ORBIT_REGISTRY_ROOT as MCP_MANAGED_REGISTRY_ROOT_ENV;
-/// Job-run identity forwarded to a nested MCP server.
-pub use crate::env_vars::ORBIT_RUN_ID as MCP_MANAGED_RUN_ID_ENV;
-/// Source-inspection identity forwarded to a nested MCP server.
-pub use crate::env_vars::ORBIT_SESSION_ID as MCP_MANAGED_SESSION_ID_ENV;
-/// Logical workspace selector forwarded to a nested MCP server.
-pub use crate::env_vars::ORBIT_WORKSPACE as MCP_MANAGED_WORKSPACE_ENV;
-
 /// The managed activity's wall-clock deadline, in milliseconds since the Unix
 /// epoch. The CLI runner stamps it from the provider's own supervision bound,
 /// so a nested `proc.spawn` can run as long as the activity has left, under the
@@ -87,7 +52,10 @@ pub use crate::env_vars::ORBIT_ACTIVITY_TOOL_POLICY as ACTIVITY_TOOL_POLICY_ENV;
 /// A deny-mode activity's disallow list, comma-separated. Always stamped in
 /// deny mode, even when empty, so its absence can fail back to the allowlist.
 pub use crate::env_vars::ORBIT_ACTIVITY_TOOLS_DENY as ACTIVITY_TOOLS_DENY_ENV;
-
+/// Managed envelope names that a nested Codex MCP server needs for workspace
+/// binding, attribution, and activity policy. These are names only;
+/// Codex copies their values from the managed child environment.
+pub use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as MCP_MANAGED_CONTEXT_ENV;
 /// Where a sandboxed agent's run plugin broker listens. A nested
 /// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
 /// bridge among them) only through it, so Codex must forward it. The value
@@ -95,6 +63,35 @@ pub use crate::env_vars::ORBIT_ACTIVITY_TOOLS_DENY as ACTIVITY_TOOLS_DENY_ENV;
 /// connection by the kernel's peer identity against the run it was started
 /// for, so a forwarded or forged path cannot borrow another run's authority.
 pub use crate::env_vars::ORBIT_PLUGIN_BROKER as PLUGIN_BROKER_ENV;
+/// Registry locator forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_REGISTRY_ROOT as MCP_MANAGED_REGISTRY_ROOT_ENV;
+/// Job-run identity forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_RUN_ID as MCP_MANAGED_RUN_ID_ENV;
+/// Source-inspection identity forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_SESSION_ID as MCP_MANAGED_SESSION_ID_ENV;
+/// Logical workspace selector forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_WORKSPACE as MCP_MANAGED_WORKSPACE_ENV;
+
+/// Runtime context every supported provider CLI needs in order to start.
+///
+/// Kept explicit so the effective floor of a child environment is reviewable
+/// instead of being whatever the dispatching process happened to inherit.
+/// Every entry is non-credential process context — login identity, filesystem
+/// locations, locale, terminal shape. Provider credentials and service
+/// endpoints are never baseline; an operator opts into those by name through
+/// `[execution.env].pass`.
+pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
+    env_vars::HOME,
+    env_vars::LANG,
+    env_vars::LC_ALL,
+    env_vars::LOGNAME,
+    env_vars::PATH,
+    env_vars::SHELL,
+    env_vars::TERM,
+    env_vars::TMPDIR,
+    env_vars::TZ,
+    env_vars::USER,
+];
 
 /// Exact managed binding, identity, activity policy and broker locator names
 /// Codex must forward.

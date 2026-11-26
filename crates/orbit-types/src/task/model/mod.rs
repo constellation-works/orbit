@@ -20,6 +20,11 @@
 //! | Archived     | Soft-deleted. Terminal. |
 //! | Rejected     | Declined. Can return to backlog or in-progress. |
 
+mod crew_source;
+mod status;
+mod support;
+mod task;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -35,16 +40,9 @@ use crate::task::artifacts::{
 };
 use crate::task::{RegressionClassification, TaskDecision, TaskError};
 
-mod crew_source;
-mod status;
-mod support;
-mod task;
-
-pub use status::*;
-
-pub use support::*;
-
 pub use crew_source::{CrewSource, RedrawReason};
+pub use status::*;
+pub use support::*;
 pub use task::*;
 pub(crate) use task::{
     LazyTaskReferenceIndex, project_task_relations_lazily, resolve_task_dependencies_lazily,

@@ -218,8 +218,7 @@ fn retired_auto_ship_loads_with_a_warning_and_refuses_edits() {
 
 #[test]
 fn weekly_evolution_pass_warning_distinguishes_baseline_and_decline_override() {
-    let (_config, logs) =
-        load_workspace("[resident.evolution]\nmin_occurrences = 5\n");
+    let (_config, logs) = load_workspace("[resident.evolution]\nmin_occurrences = 5\n");
     assert!(
         warned_deprecated(&logs, "resident.evolution.min_occurrences"),
         "the retired pass key warns: {logs}"

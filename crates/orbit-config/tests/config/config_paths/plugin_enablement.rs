@@ -195,11 +195,9 @@ fn reserved_orbit_toggle_is_refused_by_reason() {
     let workspace = tempdir().expect("workspace tempdir");
     write_config(workspace.path(), "[plugin_enablement]\norbit = true\n");
 
-    let error = load_workspace_plugin_enablement(&ConfigRoots::new(
-        global.path(),
-        workspace.path(),
-    ))
-    .expect_err("a toggle under the reserved orbit key is refused");
+    let error =
+        load_workspace_plugin_enablement(&ConfigRoots::new(global.path(), workspace.path()))
+            .expect_err("a toggle under the reserved orbit key is refused");
     let message = error.to_string();
     assert!(
         message.contains("reserved"),

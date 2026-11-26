@@ -11,6 +11,62 @@
 //! that forgets it, which is why its record carries the whole inventory of
 //! what disappeared.
 
+/// Why a recovery cannot run. Each variant names one deterministic refusal so
+/// operators and tests share the vocabulary.
+pub mod refusal {
+    /// This host holds no persisted state for the definition.
+    pub const UNKNOWN_CONSUMER: &str = "unknown_consumer";
+    /// The consumer is a state-member consumer, not a delivery consumer.
+    pub const MEMBER_CONSUMER: &str = "member_consumer";
+    /// An admitted or claimed action is still executing.
+    pub const ACTIVE_EXECUTION: &str = "active_execution";
+    /// The configured branch differs from the branch the debt was observed on.
+    pub const BRANCH_CHANGED: &str = "branch_changed";
+    /// The source repository identity differs from the recorded one.
+    pub const REPOSITORY_CHANGED: &str = "repository_changed";
+    /// The resolved owner machine differs from the recorded one.
+    pub const OWNER_CHANGED: &str = "owner_changed";
+    /// The examination contract differs; QA and review never share coverage.
+    pub const COVERAGE_CHANGED: &str = "coverage_changed";
+    /// Nothing proves which examination contract the retained debt was for.
+    pub const COVERAGE_UNVERIFIABLE: &str = "coverage_unverifiable";
+    /// Adoption was requested but the configured identity already matches.
+    pub const SETTINGS_UNCHANGED: &str = "settings_unchanged";
+    /// A reissue was requested with no settled unevidenced action to reissue.
+    pub const NO_SETTLED_ACTION: &str = "no_settled_action";
+    /// The action already produced accepted coverage evidence.
+    pub const ACTION_EVIDENCED: &str = "action_evidenced";
+    /// A reissue would never admit while the recorded identity is stale.
+    pub const DEFINITION_CHANGED: &str = "definition_changed";
+    /// A durable recovery requires a non-empty operator explanation and actor.
+    pub const MISSING_AUTHORIZATION: &str = "missing_authorization";
+    /// History replay cannot be combined with configuration/action recovery.
+    pub const RECOVERY_MODE_CONFLICT: &str = "recovery_mode_conflict";
+    /// The observed revision is already ancestral to the configured head.
+    pub const HISTORY_NOT_DIVERGED: &str = "history_not_diverged";
+    /// A persisted orphan revision is no longer available from Git.
+    pub const HISTORY_OBJECT_MISSING: &str = "history_object_missing";
+    /// Content/topology proof found zero or multiple canonical counterparts.
+    pub const HISTORY_MAPPING_AMBIGUOUS: &str = "history_mapping_ambiguous";
+    /// Covered, baseline, or frozen batch boundaries do not reach the head.
+    pub const HISTORY_BOUNDARY_UNREACHABLE: &str = "history_boundary_unreachable";
+    /// The rebase exceeds the bounded first-parent proof window.
+    pub const HISTORY_TRAVERSAL_LIMIT: &str = "history_traversal_limit";
+    /// Inserted commits lack an unambiguous provider-owned delivery identity.
+    pub const PROVIDER_PROOF_UNAVAILABLE: &str = "provider_proof_unavailable";
+    /// Persisted logical identity differs from the canonical evidence.
+    pub const HISTORY_CONTRACT_DRIFT: &str = "history_contract_drift";
+    /// Reconciliation would remove an unpaid logical delivery.
+    pub const HISTORY_DEBT_LOST: &str = "history_debt_lost";
+    /// The configured branch moved after the preview facts were captured.
+    pub const HISTORY_HEAD_CHANGED: &str = "history_head_changed";
+    /// A reset was requested while an action is executing, without `--force`.
+    pub const ACTION_EXECUTING: &str = "action_executing";
+    /// The consumer is stalled for an operator, so the evaluator adopts no
+    /// edited definition over it on its own.
+    pub const CONSUMER_STALLED: &str = "consumer_stalled";
+}
+
 use super::{BatchState, DeliveryTrigger, SourceRevision};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -437,60 +493,4 @@ impl RecoveryPreview {
     pub const REISSUED_ACTION: &'static str = "reissued_action";
     /// Label recorded when an orphaned observation was replayed.
     pub const REPLAYED_HISTORY: &'static str = "replayed_history";
-}
-
-/// Why a recovery cannot run. Each variant names one deterministic refusal so
-/// operators and tests share the vocabulary.
-pub mod refusal {
-    /// This host holds no persisted state for the definition.
-    pub const UNKNOWN_CONSUMER: &str = "unknown_consumer";
-    /// The consumer is a state-member consumer, not a delivery consumer.
-    pub const MEMBER_CONSUMER: &str = "member_consumer";
-    /// An admitted or claimed action is still executing.
-    pub const ACTIVE_EXECUTION: &str = "active_execution";
-    /// The configured branch differs from the branch the debt was observed on.
-    pub const BRANCH_CHANGED: &str = "branch_changed";
-    /// The source repository identity differs from the recorded one.
-    pub const REPOSITORY_CHANGED: &str = "repository_changed";
-    /// The resolved owner machine differs from the recorded one.
-    pub const OWNER_CHANGED: &str = "owner_changed";
-    /// The examination contract differs; QA and review never share coverage.
-    pub const COVERAGE_CHANGED: &str = "coverage_changed";
-    /// Nothing proves which examination contract the retained debt was for.
-    pub const COVERAGE_UNVERIFIABLE: &str = "coverage_unverifiable";
-    /// Adoption was requested but the configured identity already matches.
-    pub const SETTINGS_UNCHANGED: &str = "settings_unchanged";
-    /// A reissue was requested with no settled unevidenced action to reissue.
-    pub const NO_SETTLED_ACTION: &str = "no_settled_action";
-    /// The action already produced accepted coverage evidence.
-    pub const ACTION_EVIDENCED: &str = "action_evidenced";
-    /// A reissue would never admit while the recorded identity is stale.
-    pub const DEFINITION_CHANGED: &str = "definition_changed";
-    /// A durable recovery requires a non-empty operator explanation and actor.
-    pub const MISSING_AUTHORIZATION: &str = "missing_authorization";
-    /// History replay cannot be combined with configuration/action recovery.
-    pub const RECOVERY_MODE_CONFLICT: &str = "recovery_mode_conflict";
-    /// The observed revision is already ancestral to the configured head.
-    pub const HISTORY_NOT_DIVERGED: &str = "history_not_diverged";
-    /// A persisted orphan revision is no longer available from Git.
-    pub const HISTORY_OBJECT_MISSING: &str = "history_object_missing";
-    /// Content/topology proof found zero or multiple canonical counterparts.
-    pub const HISTORY_MAPPING_AMBIGUOUS: &str = "history_mapping_ambiguous";
-    /// Covered, baseline, or frozen batch boundaries do not reach the head.
-    pub const HISTORY_BOUNDARY_UNREACHABLE: &str = "history_boundary_unreachable";
-    /// The rebase exceeds the bounded first-parent proof window.
-    pub const HISTORY_TRAVERSAL_LIMIT: &str = "history_traversal_limit";
-    /// Inserted commits lack an unambiguous provider-owned delivery identity.
-    pub const PROVIDER_PROOF_UNAVAILABLE: &str = "provider_proof_unavailable";
-    /// Persisted logical identity differs from the canonical evidence.
-    pub const HISTORY_CONTRACT_DRIFT: &str = "history_contract_drift";
-    /// Reconciliation would remove an unpaid logical delivery.
-    pub const HISTORY_DEBT_LOST: &str = "history_debt_lost";
-    /// The configured branch moved after the preview facts were captured.
-    pub const HISTORY_HEAD_CHANGED: &str = "history_head_changed";
-    /// A reset was requested while an action is executing, without `--force`.
-    pub const ACTION_EXECUTING: &str = "action_executing";
-    /// The consumer is stalled for an operator, so the evaluator adopts no
-    /// edited definition over it on its own.
-    pub const CONSUMER_STALLED: &str = "consumer_stalled";
 }

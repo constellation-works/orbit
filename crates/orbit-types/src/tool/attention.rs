@@ -1,4 +1,18 @@
 //! Public records of the read-only operator attention feed.
+mod empty_as_null {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+        if value.is_empty() {
+            serializer.serialize_none()
+        } else {
+            serializer.serialize_str(value)
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+    }
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -158,19 +172,6 @@ impl AttentionWorkspace {
     /// The `{id: null, name: null}` workspace of a host-level item.
     pub fn none() -> Self {
         Self::local("", "")
-    }
-}
-mod empty_as_null {
-    use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
-        if value.is_empty() {
-            serializer.serialize_none()
-        } else {
-            serializer.serialize_str(value)
-        }
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
-        Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
     }
 }
 /// Reachability of one host in a federated response.

@@ -34,16 +34,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitError;
-
-/// An image younger than this is hashed every time and never cached.
-const SETTLE: Duration = Duration::from_secs(2);
-/// Distinct images remembered (installed binary, staged candidate, checkout
-/// builds); the oldest entries fall off.
-const MAX_ENTRIES: usize = 8;
-/// The record is small JSON; anything larger is not ours.
-const MAX_CACHE_BYTES: u64 = 16 * 1024;
-const VERSION: u32 = 1;
-
 /// Set to an absolute directory to share image digests between the processes
 /// of a debug build's test run.
 ///
@@ -54,6 +44,15 @@ const VERSION: u32 = 1;
 /// settle rule as the root's own. The root's cache is still read and written
 /// exactly as if the image had been hashed. Release builds ignore the variable.
 pub use crate::env_vars::ORBIT_TEST_SHARED_IMAGE_DIGESTS as SHARED_TEST_DIGESTS_ENV;
+
+/// An image younger than this is hashed every time and never cached.
+const SETTLE: Duration = Duration::from_secs(2);
+/// Distinct images remembered (installed binary, staged candidate, checkout
+/// builds); the oldest entries fall off.
+const MAX_ENTRIES: usize = 8;
+/// The record is small JSON; anything larger is not ours.
+const MAX_CACHE_BYTES: u64 = 16 * 1024;
+const VERSION: u32 = 1;
 
 /// The kernel's identity for one version of one file's bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
