@@ -53,6 +53,22 @@ impl TrustedHostAdmission {
     }
 }
 
+/// Refusal to load an asset that claims trusted-host execution it may not have.
+///
+/// The refusal names the offending activity. An activity's `metadata.name`
+/// identifies a workspace asset file, not secret material, and the operator
+/// reading this error is the person who has to find and edit that file — a
+/// refusal that will not say which asset it refused is not actionable.
+/// Redaction in this workspace covers credentials and user-identifying paths
+/// (`orbit_common::security::redaction`), and the sibling
+/// `AssetLoadError::ToolAllowlist` names the same value on the same grounds.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("activity `{activity}` declares removed `trustedHostExecution: true`; use a task workflow")]
+pub struct TrustedHostActivityError {
+    /// Name of the offending activity asset.
+    pub activity: String,
+}
+
 /// Whether `input` carries the reserved admission key at all, well-formed or not.
 ///
 /// Submission guards ask this rather than [`TrustedHostAdmission::from_run_input`]:
@@ -72,22 +88,6 @@ pub fn strip_trusted_host_admission(input: &mut Value) -> bool {
     input
         .as_object_mut()
         .is_some_and(|object| object.remove(TRUSTED_HOST_ADMISSION_KEY).is_some())
-}
-
-/// Refusal to load an asset that claims trusted-host execution it may not have.
-///
-/// The refusal names the offending activity. An activity's `metadata.name`
-/// identifies a workspace asset file, not secret material, and the operator
-/// reading this error is the person who has to find and edit that file — a
-/// refusal that will not say which asset it refused is not actionable.
-/// Redaction in this workspace covers credentials and user-identifying paths
-/// (`orbit_common::security::redaction`), and the sibling
-/// `AssetLoadError::ToolAllowlist` names the same value on the same grounds.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("activity `{activity}` declares removed `trustedHostExecution: true`; use a task workflow")]
-pub struct TrustedHostActivityError {
-    /// Name of the offending activity asset.
-    pub activity: String,
 }
 
 /// Reject the removed `trustedHostExecution` mode on every activity.

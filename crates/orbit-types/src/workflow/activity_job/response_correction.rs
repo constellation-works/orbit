@@ -77,16 +77,6 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.workflow:ship",
 ];
 
-/// Whether `tool` covers a built-in Orbit mutation a `response_correction`
-/// activity must never be granted, however the grant was composed. A family
-/// covers each of its mutating actions.
-pub fn is_response_correction_mutating_tool(tool: &str) -> bool {
-    let tool = [tool.to_string()];
-    MUTATING_TOOLS
-        .iter()
-        .any(|mutating| tool_allowed(mutating, &tool))
-}
-
 /// Why an activity may not declare `response_correction`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ResponseCorrectionActivityError {
@@ -108,6 +98,16 @@ pub enum ResponseCorrectionActivityError {
         /// The granted tool.
         tool: &'static str,
     },
+}
+
+/// Whether `tool` covers a built-in Orbit mutation a `response_correction`
+/// activity must never be granted, however the grant was composed. A family
+/// covers each of its mutating actions.
+pub fn is_response_correction_mutating_tool(tool: &str) -> bool {
+    let tool = [tool.to_string()];
+    MUTATING_TOOLS
+        .iter()
+        .any(|mutating| tool_allowed(mutating, &tool))
 }
 
 /// Refuse `response_correction` unless the activity is read-only and no

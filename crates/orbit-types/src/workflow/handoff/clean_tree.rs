@@ -5,6 +5,9 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+/// The implementer output field that carries an [`AlreadyResolved`].
+pub const ALREADY_RESOLVED_FIELD: &str = "already_resolved";
+
 /// Existing no-diff delivery contract shared with the local verifier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,9 +98,6 @@ pub struct AlreadyResolved {
     /// `cargo test -p <crate> --lib [<filter>]` selectors.
     pub selectors: Vec<String>,
 }
-
-/// The implementer output field that carries an [`AlreadyResolved`].
-pub const ALREADY_RESOLVED_FIELD: &str = "already_resolved";
 
 impl AlreadyResolved {
     /// Maximum host test executions one already-resolved declaration may request.

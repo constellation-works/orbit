@@ -7,6 +7,14 @@ use serde_json::Value;
 /// Persisted before the authenticated expected-head update, including lost replies.
 pub const PR_BASE_UPDATE_RESERVED_EVENT: &str = "pr_base_update_reserved";
 
+/// Leads every refusal of a request past the cumulative update budget, so a
+/// caller can tell a spent budget from unreadable or invalid evidence.
+pub const PR_BASE_UPDATE_BUDGET_SPENT: &str = "the cumulative base update budget is spent";
+
+/// The cumulative base updates one handoff's inherited-failure recovery may
+/// reserve for its pull request, each onto a different base commit.
+const MAX_INHERITED_HANDOFF_BASE_UPDATES: usize = 3;
+
 /// Exact provider/Git identity and original absolute recovery deadline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrBaseUpdateReservation {
@@ -98,14 +106,6 @@ pub fn pr_base_update_reservations(
         })
         .collect()
 }
-
-/// Leads every refusal of a request past the cumulative update budget, so a
-/// caller can tell a spent budget from unreadable or invalid evidence.
-pub const PR_BASE_UPDATE_BUDGET_SPENT: &str = "the cumulative base update budget is spent";
-
-/// The cumulative base updates one handoff's inherited-failure recovery may
-/// reserve for its pull request, each onto a different base commit.
-const MAX_INHERITED_HANDOFF_BASE_UPDATES: usize = 3;
 
 /// One update per repository/PR, or at most three for one handoff's
 /// inherited-failure recovery, each onto a new base commit. Auto-fix stays

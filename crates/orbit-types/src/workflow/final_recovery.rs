@@ -29,6 +29,13 @@ pub const FINAL_RECOVERY_CREWS_CONFIG_KEY: &str = "workflow.purpose_crews.final_
 /// as a task comment, so an unbounded rationale is refused rather than stored.
 pub const MAX_DECISION_TEXT_CHARS: usize = 8_000;
 
+/// Longest `fault_evidence` kept; a longer one is cut at a character
+/// boundary and marked.
+pub const MAX_FAULT_EVIDENCE_CHARS: usize = 500;
+
+/// The key a decision object carries [`FaultAttribution::judged_by`] under.
+pub const FAULT_JUDGED_BY_FIELD: &str = "fault_judged_by";
+
 /// One final-recovery decision, tagged by `decision`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
@@ -379,10 +386,6 @@ impl FinalRecoveryDecision {
     }
 }
 
-fn is_commit_id(value: &str) -> bool {
-    (7..=64).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
-}
-
 /// Whose fault a final recovery found the run's failure to be. Model ranking
 /// charges only [`RecoveryFault::Implementer`]; a decision recorded before
 /// faults existed reads as [`RecoveryFault::Unknown`].
@@ -439,10 +442,6 @@ impl std::fmt::Display for RecoveryFault {
     }
 }
 
-/// Longest `fault_evidence` kept; a longer one is cut at a character
-/// boundary and marked.
-pub const MAX_FAULT_EVIDENCE_CHARS: usize = 500;
-
 /// A final-recovery decision's fault and the one line of evidence, citing a
 /// run, check or file, it rests on. Stored beside the decision; an older
 /// record without it reads as `unknown` with no evidence.
@@ -459,9 +458,6 @@ pub struct FaultAttribution {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judged_by: Option<String>,
 }
-
-/// The key a decision object carries [`FaultAttribution::judged_by`] under.
-pub const FAULT_JUDGED_BY_FIELD: &str = "fault_judged_by";
 
 impl FaultAttribution {
     /// `fault` with `evidence` folded onto one bounded line.
@@ -518,6 +514,10 @@ impl FaultAttribution {
                 .map(str::to_string),
         )
     }
+}
+
+fn is_commit_id(value: &str) -> bool {
+    (7..=64).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// `output` without its fault fields, and those fields alone.

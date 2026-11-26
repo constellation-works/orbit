@@ -17,6 +17,17 @@ pub const RESIDENT_CHECKPOINT_NOTES_MAX_CHARS: usize = 600;
 /// The outcome core writes for a heartbeat skip; agents may not submit it.
 const HEARTBEAT_SKIP_OUTCOME: &str = "unchanged";
 
+const ESCALATION_CLASSES: &[&str] = &[
+    "product_scope",
+    "architecture",
+    "security",
+    "material_cost",
+    "irreversible",
+    "authority",
+    "cross_mandate_conflict",
+    "human_reserved",
+];
+
 type RecordResult = Result<(), ResidentCommentError>;
 
 /// The three reserved task-comment shapes. Unknown fields are refused even
@@ -171,50 +182,6 @@ pub struct ResidentAnswerSource {
 pub struct ResidentAnswerRelay {
     pub crew: String,
     pub model: String,
-}
-
-const ESCALATION_CLASSES: &[&str] = &[
-    "product_scope",
-    "architecture",
-    "security",
-    "material_cost",
-    "irreversible",
-    "authority",
-    "cross_mandate_conflict",
-    "human_reserved",
-];
-
-fn invalid(reason: impl Into<String>) -> ResidentCommentError {
-    ResidentCommentError::Invalid(reason.into())
-}
-
-fn nonempty(value: &str, field: &str) -> RecordResult {
-    if value.trim().is_empty() {
-        return Err(invalid(format!("`{field}` must not be empty")));
-    }
-    Ok(())
-}
-
-fn member(value: &str, allowed: &[&str], field: &str) -> RecordResult {
-    if !allowed.contains(&value) {
-        return Err(invalid(format!("unsupported `{field}`: {value}")));
-    }
-    Ok(())
-}
-
-fn task_id(value: &str, field: &str) -> RecordResult {
-    if !is_valid_orb_task_id(value) {
-        return Err(invalid(format!("`{field}` must be an assignment task id")));
-    }
-    Ok(())
-}
-
-fn one_line(value: &str, field: &str) -> RecordResult {
-    nonempty(value, field)?;
-    if value.contains(['\n', '\r']) {
-        return Err(invalid(format!("`{field}` must be one line")));
-    }
-    Ok(())
 }
 
 impl ResidentComment {
@@ -469,4 +436,37 @@ impl ResidentCostEvent {
         }
         Ok(())
     }
+}
+
+fn invalid(reason: impl Into<String>) -> ResidentCommentError {
+    ResidentCommentError::Invalid(reason.into())
+}
+
+fn nonempty(value: &str, field: &str) -> RecordResult {
+    if value.trim().is_empty() {
+        return Err(invalid(format!("`{field}` must not be empty")));
+    }
+    Ok(())
+}
+
+fn member(value: &str, allowed: &[&str], field: &str) -> RecordResult {
+    if !allowed.contains(&value) {
+        return Err(invalid(format!("unsupported `{field}`: {value}")));
+    }
+    Ok(())
+}
+
+fn task_id(value: &str, field: &str) -> RecordResult {
+    if !is_valid_orb_task_id(value) {
+        return Err(invalid(format!("`{field}` must be an assignment task id")));
+    }
+    Ok(())
+}
+
+fn one_line(value: &str, field: &str) -> RecordResult {
+    nonempty(value, field)?;
+    if value.contains(['\n', '\r']) {
+        return Err(invalid(format!("`{field}` must be one line")));
+    }
+    Ok(())
 }

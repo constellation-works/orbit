@@ -3,6 +3,40 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// [ORB-16890] Times a task returns to the backlog because its handed-off
+/// candidate fails its own required check at landing, after its one
+/// automatic repair leaf, before the next such stop blocks it.
+pub const LANDING_REPAIR_BUDGET: usize = 2;
+
+/// History event of a landing stop that ended the claim and returned the
+/// task to the backlog, keeping its candidate for the next run's repair.
+pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
+
+/// Status event recorded when Orbit settles a task to `done` from its
+/// delivery pull request merged outside Orbit. Like the delivery pipeline's
+/// own completion, the settlement is not an edge of the status table: the
+/// forge's merge, not a caller's claim, is its evidence. The owner's claim
+/// journal records it too, when it settles a revoked handoff's claim in the
+/// same commit.
+pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+
+/// History event of an owner landing that waits for its base branch to
+/// recover from a failure inherited from it, before the landing deadline.
+pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
+
+/// History event of the review watch that follows an owner-local delivery
+/// left in review with an open pull request (a dashboard ship, `orbit run
+/// ship` or a drain leaf, none of which hands off for landing). Its note is
+/// the JSON outcome, a [`RecordedLandingChecksObservation`](super::RecordedLandingChecksObservation): `state`
+/// (`passed`, `failed`, `conflicting`, `blocked` or `pending`), `pr_number`,
+/// `head_sha`, and for `failed` the landing's `classification` of the failed
+/// checks with its `detail`.
+pub const LANDING_CHECKS_OBSERVED_EVENT: &str = "landing_checks_observed";
+
+/// History event of the landing stop that found the task's landing repair
+/// budget spent and blocked it. Requeues before it no longer count.
+pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LandingStartState {
@@ -179,51 +213,6 @@ impl LandingStopEvidence {
     }
 }
 
-/// [ORB-16890] Times a task returns to the backlog because its handed-off
-/// candidate fails its own required check at landing, after its one
-/// automatic repair leaf, before the next such stop blocks it.
-pub const LANDING_REPAIR_BUDGET: usize = 2;
-
-/// History event of a landing stop that ended the claim and returned the
-/// task to the backlog, keeping its candidate for the next run's repair.
-pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
-
-/// Status event recorded when Orbit settles a task to `done` from its
-/// delivery pull request merged outside Orbit. Like the delivery pipeline's
-/// own completion, the settlement is not an edge of the status table: the
-/// forge's merge, not a caller's claim, is its evidence. The owner's claim
-/// journal records it too, when it settles a revoked handoff's claim in the
-/// same commit.
-pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
-
-/// History event of an owner landing that waits for its base branch to
-/// recover from a failure inherited from it, before the landing deadline.
-pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
-
-/// History event of the review watch that follows an owner-local delivery
-/// left in review with an open pull request (a dashboard ship, `orbit run
-/// ship` or a drain leaf, none of which hands off for landing). Its note is
-/// the JSON outcome, a [`RecordedLandingChecksObservation`](super::RecordedLandingChecksObservation): `state`
-/// (`passed`, `failed`, `conflicting`, `blocked` or `pending`), `pr_number`,
-/// `head_sha`, and for `failed` the landing's `classification` of the failed
-/// checks with its `detail`.
-pub const LANDING_CHECKS_OBSERVED_EVENT: &str = "landing_checks_observed";
-
-/// History event of the landing stop that found the task's landing repair
-/// budget spent and blocked it. Requeues before it no longer count.
-pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";
-
-/// The landing repair requeues that count against a task's budget, from its
-/// history event names in order: those after its last exhaustion, which an
-/// operator answered by unblocking the task.
-pub fn landing_repairs_spent<'a>(events: impl IntoIterator<Item = &'a str>) -> usize {
-    events.into_iter().fold(0, |spent, event| match event {
-        LANDING_REPAIR_REQUEUED_EVENT => spent + 1,
-        LANDING_REPAIR_EXHAUSTED_EVENT => 0,
-        _ => spent,
-    })
-}
-
 /// An operator's compare-and-reserve request for the same immutable handoff.
 /// No pipeline input or replacement authority is accepted by this operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,4 +234,15 @@ pub struct LandingRetryReceipt {
     pub actor: String,
     pub attempt: u32,
     pub created_at: DateTime<Utc>,
+}
+
+/// The landing repair requeues that count against a task's budget, from its
+/// history event names in order: those after its last exhaustion, which an
+/// operator answered by unblocking the task.
+pub fn landing_repairs_spent<'a>(events: impl IntoIterator<Item = &'a str>) -> usize {
+    events.into_iter().fold(0, |spent, event| match event {
+        LANDING_REPAIR_REQUEUED_EVENT => spent + 1,
+        LANDING_REPAIR_EXHAUSTED_EVENT => 0,
+        _ => spent,
+    })
 }

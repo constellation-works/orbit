@@ -37,16 +37,6 @@ pub const FORGE_UNAVAILABLE_MARKER: &str = "[forge_unavailable]";
 /// resuming that run by hand re-admits the task.
 pub const FORGE_UNAVAILABLE_EXPIRED_EVENT: &str = "forge_unavailable_expired";
 
-/// Whether a step failure says the forge refused its push past the budget.
-/// The code decides; the marker classifies records written without one.
-#[must_use]
-pub fn is_forge_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(FORGE_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(FORGE_UNAVAILABLE_MARKER)
-        })
-}
-
 /// Which push the forge refused, and for how long.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForgeUnavailableHold {
@@ -95,4 +85,14 @@ impl ForgeUnavailableHold {
             .ok()
             .filter(|hold| !hold.target_ref.trim().is_empty() && !hold.head_sha.trim().is_empty())
     }
+}
+
+/// Whether a step failure says the forge refused its push past the budget.
+/// The code decides; the marker classifies records written without one.
+#[must_use]
+pub fn is_forge_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(FORGE_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(FORGE_UNAVAILABLE_MARKER)
+        })
 }

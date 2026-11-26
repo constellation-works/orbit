@@ -23,6 +23,15 @@ pub const SCHEDULE_OVERRIDDEN_EVENT: &str = "schedule_overridden";
 /// the sentence (a pull follower reading the owner's hold) can classify it.
 pub const SCHEDULED_HOLD_PREFIX: &str = "scheduled: not before ";
 
+impl Task {
+    /// The task's `not_before` while it is still in the future at `now`.
+    /// Status is not consulted: callers apply the hold to `backlog` only.
+    #[must_use]
+    pub fn scheduled_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.not_before.filter(|not_before| *not_before > now)
+    }
+}
+
 /// The canonical spelling of a scheduled time: RFC 3339 in UTC, retaining any
 /// fractional seconds.
 #[must_use]
@@ -78,15 +87,6 @@ pub fn schedule_overridden(history: &[TaskHistoryEntry], not_before: DateTime<Ut
                 .as_deref()
                 .is_some_and(|note| note.starts_with(&lead))
     })
-}
-
-impl Task {
-    /// The task's `not_before` while it is still in the future at `now`.
-    /// Status is not consulted: callers apply the hold to `backlog` only.
-    #[must_use]
-    pub fn scheduled_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        self.not_before.filter(|not_before| *not_before > now)
-    }
 }
 
 /// The first recorded entry into active work, independent of the scheduled time.

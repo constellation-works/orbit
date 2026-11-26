@@ -7,6 +7,47 @@
 const GATE: &str = "make ci-test-affected";
 const BASE: &str = "e867385d9feda42090fdeb6fd83b8fa0c4d4eb4d";
 
+/// An owner run on Linux, where every deferral but ps-denied is checked.
+const OWNER_LINUX: DeferralLane = DeferralLane {
+    claimed: false,
+    os: Some(EvidenceHostOs::Linux),
+};
+
+/// A claimed leaf on macOS, the only lane that may defer ps-denied tests.
+const CLAIMED_MACOS: DeferralLane = DeferralLane {
+    claimed: true,
+    os: Some(EvidenceHostOs::Macos),
+};
+
+/// Bubblewrap 0.9.0's refusal, verbatim from a claimed leaf on an Ubuntu
+/// follower whose lane refuses nested user namespaces. Written out rather
+/// than built from the constant, so the constant is held to the real text.
+const BWRAP_0_9_REFUSAL: &str = "bwrap: No permissions to create new namespace, likely because \
+     the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> \
+     or <file:///usr/share/doc/bubblewrap/README.Debian.gz>.";
+
+/// Bubblewrap 0.11.1's refusal on dk-server-2, as captured by the
+/// after-landing review of #4412 (ORB-15688). 0.11 spells it with "a", 0.9
+/// without, and both must justify a deferral.
+const BWRAP_0_11_REFUSAL: &str = "bwrap: No permissions to create a new namespace, likely because \
+     the kernel does not allow non-privileged user namespaces.";
+
+/// What a broad `make ci-test-affected` on a macOS claimed leaf prints when
+/// it selects orbit-common and orbit-cli: the lines `macos_sandbox_test_guard`
+/// and `report_ps_denied` write for real tests, as a lane that refuses
+/// nested Seatbelt profiles and the setuid `ps` reports them [ORB-15692].
+const CAPTURED_MAC_NOTICES: [&str; 3] = [
+    "SKIP: sandbox-exec cannot apply a profile: each_plugin_backend_sees_only_its_own_state: \
+     permissive profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not \
+     permitted",
+    "DEFERRED: ps denied: \
+     process::tests::identity::darwin::libproc_start_time_renders_exactly_as_ps_lstart: the \
+     sandbox denied running `ps`: Operation not permitted (os error 1)",
+    "SKIP: sandbox-exec cannot apply a profile: \
+     a_set_secret_reaches_its_exec_backend_on_stdin_only: permissive profile exited with \
+     Some(71): sandbox-exec: sandbox_apply: Operation not permitted",
+];
+
 fn bwrap_notice() -> String {
     format!("{BUBBLEWRAP_DEFERRAL_PREFIX} spawn_under_linux_bwrap: {BUBBLEWRAP_NAMESPACE_REFUSAL}")
 }
@@ -25,18 +66,6 @@ fn ps_notice() -> String {
          sandbox denied running `ps`: Operation not permitted (os error 1)"
     )
 }
-
-/// An owner run on Linux, where every deferral but ps-denied is checked.
-const OWNER_LINUX: DeferralLane = DeferralLane {
-    claimed: false,
-    os: Some(EvidenceHostOs::Linux),
-};
-
-/// A claimed leaf on macOS, the only lane that may defer ps-denied tests.
-const CLAIMED_MACOS: DeferralLane = DeferralLane {
-    claimed: true,
-    os: Some(EvidenceHostOs::Macos),
-};
 
 /// The summary a passing gate wrote when its only gap is `notices`.
 fn summary(notices: &[String]) -> Value {
@@ -160,13 +189,6 @@ fn a_bubblewrap_deferral_is_derived_from_the_summary_and_orbits_probe() {
     );
 }
 
-/// Bubblewrap 0.9.0's refusal, verbatim from a claimed leaf on an Ubuntu
-/// follower whose lane refuses nested user namespaces. Written out rather
-/// than built from the constant, so the constant is held to the real text.
-const BWRAP_0_9_REFUSAL: &str = "bwrap: No permissions to create new namespace, likely because \
-     the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> \
-     or <file:///usr/share/doc/bubblewrap/README.Debian.gz>.";
-
 #[test]
 fn bubblewraps_own_refusal_text_justifies_a_deferral() {
     let notices = [format!(
@@ -184,12 +206,6 @@ fn bubblewraps_own_refusal_text_justifies_a_deferral() {
     assert_eq!(record.probe.output, BWRAP_0_9_REFUSAL);
     assert_eq!(record.notices, notices.to_vec());
 }
-
-/// Bubblewrap 0.11.1's refusal on dk-server-2, as captured by the
-/// after-landing review of #4412 (ORB-15688). 0.11 spells it with "a", 0.9
-/// without, and both must justify a deferral.
-const BWRAP_0_11_REFUSAL: &str = "bwrap: No permissions to create a new namespace, likely because \
-     the kernel does not allow non-privileged user namespaces.";
 
 #[test]
 fn every_released_bubblewrap_refusal_spelling_justifies_a_deferral() {
@@ -259,22 +275,6 @@ fn the_summary_names_the_probe_of_each_sandbox_its_notices_defer() {
         "one probe per sandbox, in a fixed order whatever the notices' order"
     );
 }
-
-/// What a broad `make ci-test-affected` on a macOS claimed leaf prints when
-/// it selects orbit-common and orbit-cli: the lines `macos_sandbox_test_guard`
-/// and `report_ps_denied` write for real tests, as a lane that refuses
-/// nested Seatbelt profiles and the setuid `ps` reports them [ORB-15692].
-const CAPTURED_MAC_NOTICES: [&str; 3] = [
-    "SKIP: sandbox-exec cannot apply a profile: each_plugin_backend_sees_only_its_own_state: \
-     permissive profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not \
-     permitted",
-    "DEFERRED: ps denied: \
-     process::tests::identity::darwin::libproc_start_time_renders_exactly_as_ps_lstart: the \
-     sandbox denied running `ps`: Operation not permitted (os error 1)",
-    "SKIP: sandbox-exec cannot apply a profile: \
-     a_set_secret_reaches_its_exec_backend_on_stdin_only: permissive profile exited with \
-     Some(71): sandbox-exec: sandbox_apply: Operation not permitted",
-];
 
 /// The Seatbelt apply probe as a lane that refuses nested profiles answers.
 fn refused_seatbelt_probe() -> NamespaceProbe {

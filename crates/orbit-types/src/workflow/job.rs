@@ -68,11 +68,6 @@ pub const TASK_PILOT_ACTIVITY: &str = "task_pilot";
 /// The drain jobs: the owner's workspace auto drain and a replica's pull drain.
 pub const DRAIN_JOBS: &[&str] = &[WORKSPACE_AUTO_PIPELINE_JOB, WORKSPACE_PULL_PIPELINE_JOB];
 
-/// Whether `job` is one of the drain jobs ([`DRAIN_JOBS`]).
-pub fn is_drain_job(job: &str) -> bool {
-    DRAIN_JOBS.contains(&job)
-}
-
 /// Leaf definitions that only a claim may run; each claimed leaf is a whole
 /// delivery.
 pub const CLAIMED_DELIVERY_LEAF_JOBS: &[&str] = &[
@@ -91,28 +86,6 @@ pub const DELIVERY_LEAF_JOBS: &[&str] = &[
 /// Id prefix shared by claimed delivery leaves. Callers that historically
 /// matched claimed leaves by prefix keep doing so through this constant.
 pub const CLAIMED_DELIVERY_LEAF_PREFIX: &str = "task_claimed_";
-
-/// Whether `job` is one of the owner's delivery leaves (PR or local).
-pub fn is_owner_delivery_leaf_job(job: &str) -> bool {
-    job == TASK_PR_PIPELINE_JOB || job == TASK_LOCAL_PIPELINE_JOB
-}
-
-/// Whether `job` is exactly one of the claimed delivery leaves.
-pub fn is_claimed_delivery_leaf_job(job: &str) -> bool {
-    CLAIMED_DELIVERY_LEAF_JOBS.contains(&job)
-}
-
-/// Whether `job` is exactly one of the four shipped delivery leaves.
-pub fn is_delivery_leaf_job(job: &str) -> bool {
-    DELIVERY_LEAF_JOBS.contains(&job)
-}
-
-/// Whether `job` is an owner delivery leaf or carries the claimed-leaf id
-/// prefix ([`CLAIMED_DELIVERY_LEAF_PREFIX`]). Unlike [`is_delivery_leaf_job`]
-/// this admits any `task_claimed_*` id, which the source-repair paths rely on.
-pub fn is_delivery_leaf_job_by_claimed_prefix(job: &str) -> bool {
-    is_owner_delivery_leaf_job(job) || job.starts_with(CLAIMED_DELIVERY_LEAF_PREFIX)
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
@@ -659,4 +632,31 @@ impl JobRun {
             .or(self.started_at)
             .unwrap_or(self.created_at)
     }
+}
+
+/// Whether `job` is one of the drain jobs ([`DRAIN_JOBS`]).
+pub fn is_drain_job(job: &str) -> bool {
+    DRAIN_JOBS.contains(&job)
+}
+
+/// Whether `job` is one of the owner's delivery leaves (PR or local).
+pub fn is_owner_delivery_leaf_job(job: &str) -> bool {
+    job == TASK_PR_PIPELINE_JOB || job == TASK_LOCAL_PIPELINE_JOB
+}
+
+/// Whether `job` is exactly one of the claimed delivery leaves.
+pub fn is_claimed_delivery_leaf_job(job: &str) -> bool {
+    CLAIMED_DELIVERY_LEAF_JOBS.contains(&job)
+}
+
+/// Whether `job` is exactly one of the four shipped delivery leaves.
+pub fn is_delivery_leaf_job(job: &str) -> bool {
+    DELIVERY_LEAF_JOBS.contains(&job)
+}
+
+/// Whether `job` is an owner delivery leaf or carries the claimed-leaf id
+/// prefix ([`CLAIMED_DELIVERY_LEAF_PREFIX`]). Unlike [`is_delivery_leaf_job`]
+/// this admits any `task_claimed_*` id, which the source-repair paths rely on.
+pub fn is_delivery_leaf_job_by_claimed_prefix(job: &str) -> bool {
+    is_owner_delivery_leaf_job(job) || job.starts_with(CLAIMED_DELIVERY_LEAF_PREFIX)
 }

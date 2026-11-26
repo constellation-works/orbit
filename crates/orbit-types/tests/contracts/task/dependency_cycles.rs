@@ -1,5 +1,7 @@
 use orbit_types::task::{TaskError, validate_task_dependencies_with};
 
+const LONG_CHAIN: usize = 200_000;
+
 fn chain_lookup(
     len: usize,
     closes_cycle: bool,
@@ -18,8 +20,6 @@ fn chain_lookup(
         }))
     }
 }
-
-const LONG_CHAIN: usize = 200_000;
 
 #[test]
 fn cycle_at_end_of_long_chain_reports_full_witness() {

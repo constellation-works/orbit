@@ -3,6 +3,18 @@ use sha2::{Digest, Sha256};
 
 use crate::identity::lower_hex;
 
+/// The most output files any grant may allow one step.
+pub const SCRIPT_OUTPUT_HARD_MAX_FILES: u32 = 64;
+/// The largest one output file any grant may allow.
+pub const SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// The most bytes one step's whole output set may hold, whatever the
+/// per-file caps multiply to.
+pub const SCRIPT_OUTPUT_HARD_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+/// The longest output file name.
+pub const SCRIPT_OUTPUT_MAX_NAME_BYTES: usize = 128;
+/// Domain separator for an output set's identity.
+pub const SCRIPT_OUTPUT_SET_DOMAIN: &str = "orbit.script.outputs.v1";
+
 /// Caps on the files a script may return from its `out/` directory.
 ///
 /// Setting either cap declares that the script returns files: after a
@@ -26,17 +38,47 @@ impl ScriptFileOutputs {
     }
 }
 
-/// The most output files any grant may allow one step.
-pub const SCRIPT_OUTPUT_HARD_MAX_FILES: u32 = 64;
-/// The largest one output file any grant may allow.
-pub const SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
-/// The most bytes one step's whole output set may hold, whatever the
-/// per-file caps multiply to.
-pub const SCRIPT_OUTPUT_HARD_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
-/// The longest output file name.
-pub const SCRIPT_OUTPUT_MAX_NAME_BYTES: usize = 128;
-/// Domain separator for an output set's identity.
-pub const SCRIPT_OUTPUT_SET_DOMAIN: &str = "orbit.script.outputs.v1";
+/// One file of a script step's output set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptOutputFile {
+    /// The file's name in `out/`, a safe top-level name.
+    pub name: String,
+    pub bytes: u64,
+    pub media_type: String,
+    /// SHA-256 of the exact bytes, lowercase hex.
+    pub sha256: String,
+    /// Where the durable copy lives on the producing host. A reference,
+    /// not authority: readers check it against the producer record.
+    pub path: String,
+}
+
+/// The durable descriptor of one script step's output set: which
+/// workspace, run and step produced which files. Written by the host into
+/// the producer record beside the files and carried by the run's pipeline
+/// state; a descriptor is honoured only while the producer record and the
+/// file bytes still match it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptOutputSet {
+    pub workspace_id: String,
+    pub run_id: String,
+    pub step_id: String,
+    /// [`script_output_set_id`] of the fields above and the files.
+    pub set_id: String,
+    pub files: Vec<ScriptOutputFile>,
+}
+
+impl ScriptOutputSet {
+    /// The total bytes of the set.
+    pub fn total_bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.bytes).sum()
+    }
+
+    /// Whether `set_id` is the identity of the other fields.
+    pub fn identity_matches(&self) -> bool {
+        self.set_id
+            == script_output_set_id(&self.workspace_id, &self.run_id, &self.step_id, &self.files)
+    }
+}
 
 /// The aggregate byte bound of one output set under per-file caps: their
 /// product, never above [`SCRIPT_OUTPUT_HARD_MAX_TOTAL_BYTES`].
@@ -81,48 +123,6 @@ pub fn script_output_media_type(name: &str) -> &'static str {
         "tar" => "application/x-tar",
         "zip" => "application/zip",
         _ => "application/octet-stream",
-    }
-}
-
-/// One file of a script step's output set.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ScriptOutputFile {
-    /// The file's name in `out/`, a safe top-level name.
-    pub name: String,
-    pub bytes: u64,
-    pub media_type: String,
-    /// SHA-256 of the exact bytes, lowercase hex.
-    pub sha256: String,
-    /// Where the durable copy lives on the producing host. A reference,
-    /// not authority: readers check it against the producer record.
-    pub path: String,
-}
-
-/// The durable descriptor of one script step's output set: which
-/// workspace, run and step produced which files. Written by the host into
-/// the producer record beside the files and carried by the run's pipeline
-/// state; a descriptor is honoured only while the producer record and the
-/// file bytes still match it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ScriptOutputSet {
-    pub workspace_id: String,
-    pub run_id: String,
-    pub step_id: String,
-    /// [`script_output_set_id`] of the fields above and the files.
-    pub set_id: String,
-    pub files: Vec<ScriptOutputFile>,
-}
-
-impl ScriptOutputSet {
-    /// The total bytes of the set.
-    pub fn total_bytes(&self) -> u64 {
-        self.files.iter().map(|file| file.bytes).sum()
-    }
-
-    /// Whether `set_id` is the identity of the other fields.
-    pub fn identity_matches(&self) -> bool {
-        self.set_id
-            == script_output_set_id(&self.workspace_id, &self.run_id, &self.step_id, &self.files)
     }
 }
 

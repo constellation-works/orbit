@@ -2,6 +2,26 @@
 
 use crate::task::TaskHistoryEntry;
 
+/// History event recording a change to the live resident cycle.
+pub const RESIDENT_CYCLE_CHANGED_EVENT: &str = "resident_cycle_changed";
+
+/// History event recording the authority one cycle was granted.
+pub const RESIDENT_CYCLE_GRANTED_EVENT: &str = "resident_cycle_granted";
+/// History event recording that a cycle's conversation reference expired or
+/// could not be resumed, so the cycle fell back to `continuity: rebuilt`.
+pub const RESIDENT_CONTINUITY_REBUILT_EVENT: &str = "resident_continuity_rebuilt";
+/// History event recording one mutating tool call a cycle made.
+pub const RESIDENT_ACTION_EVENT: &str = "resident_action";
+/// The job a resident cycle runs as.
+pub const RESIDENT_CYCLE_JOB: &str = "resident_cycle_pipeline";
+/// Maximum checkpoint history entries in a cycle's brief: the latest in full,
+/// followed by summaries of earlier checkpoints, newest first.
+pub const RESIDENT_BRIEF_CHECKPOINTS: usize = 5;
+
+/// History event finalize appends with the state of the tasks a finished
+/// cycle acted on ([`ResidentWakeSettled`]).
+pub const RESIDENT_WAKE_SETTLED_EVENT: &str = "resident_wake_settled";
+
 /// A live cycle published by the deterministic observer after taking its lease.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -11,9 +31,6 @@ pub struct ResidentLiveCycle {
     /// The cycle lease's expiry; an expired writer is never live.
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
-
-/// History event recording a change to the live resident cycle.
-pub const RESIDENT_CYCLE_CHANGED_EVENT: &str = "resident_cycle_changed";
 
 /// One change to a mandate's live cycle, as its [`RESIDENT_CYCLE_CHANGED_EVENT`]
 /// history rows record it: a start stores the lease object and a clear stores
@@ -47,19 +64,6 @@ impl ResidentCycleChange {
         })
     }
 }
-
-/// History event recording the authority one cycle was granted.
-pub const RESIDENT_CYCLE_GRANTED_EVENT: &str = "resident_cycle_granted";
-/// History event recording that a cycle's conversation reference expired or
-/// could not be resumed, so the cycle fell back to `continuity: rebuilt`.
-pub const RESIDENT_CONTINUITY_REBUILT_EVENT: &str = "resident_continuity_rebuilt";
-/// History event recording one mutating tool call a cycle made.
-pub const RESIDENT_ACTION_EVENT: &str = "resident_action";
-/// The job a resident cycle runs as.
-pub const RESIDENT_CYCLE_JOB: &str = "resident_cycle_pipeline";
-/// Maximum checkpoint history entries in a cycle's brief: the latest in full,
-/// followed by summaries of earlier checkpoints, newest first.
-pub const RESIDENT_BRIEF_CHECKPOINTS: usize = 5;
 
 /// What the observer granted one cycle: the effective authority, narrowed to
 /// observe-only while a maintenance notice is open in scope or the mandate's
@@ -96,10 +100,6 @@ pub struct ResidentCycleGrant {
 /// `assignment`, `watch`, `comments`, `task:<id>` for a task a cycle acted
 /// on, `notice:<id>` for an open incident or maintenance notice) per state.
 pub type ResidentWakeItems = std::collections::BTreeMap<String, String>;
-
-/// History event finalize appends with the state of the tasks a finished
-/// cycle acted on ([`ResidentWakeSettled`]).
-pub const RESIDENT_WAKE_SETTLED_EVENT: &str = "resident_wake_settled";
 
 /// The wake items of the tasks one finished cycle acted on, as finalize saw
 /// them: they replace the observed items in the next due check's baseline,

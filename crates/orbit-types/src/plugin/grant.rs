@@ -308,6 +308,100 @@ impl<'a> IntoIterator for &'a PluginGrantSet {
     }
 }
 
+/// What one grant means for this manifest: whether the manifest asks for it,
+/// and the concrete request behind the ask.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginGrantRequest {
+    pub grant: PluginGrant,
+    /// The request as the manifest states it (`read=…, write=…`), empty when
+    /// the manifest does not ask for this grant.
+    pub requested: Option<String>,
+}
+
+impl PluginManifest {
+    /// Sorted manifest verbs requesting consent for agent-session mutation.
+    pub fn agent_callable_tool_verbs(&self) -> Vec<String> {
+        let mut verbs: Vec<_> = self
+            .spec
+            .tools
+            .iter()
+            .filter(|tool| tool.agent_callable)
+            .map(|tool| tool.name.clone())
+            .collect();
+        verbs.sort();
+        verbs
+    }
+
+    /// Every grant with the manifest's request beside it, in canonical order.
+    pub fn grant_requests(&self) -> Vec<PluginGrantRequest> {
+        let permissions = &self.spec.permissions;
+        PluginGrant::ALL
+            .into_iter()
+            .map(|grant| {
+                let requested = match grant {
+                    PluginGrant::Fs => {
+                        let mut parts = Vec::new();
+                        if !permissions.fs.read.is_empty() {
+                            parts.push(format!("read={}", permissions.fs.read.join(",")));
+                        }
+                        if !permissions.fs.write.is_empty() {
+                            parts.push(format!("write={}", permissions.fs.write.join(",")));
+                        }
+                        if !permissions.fs.write_files.is_empty() {
+                            parts.push(format!(
+                                "write_files={}",
+                                permissions.fs.write_files.join(",")
+                            ));
+                        }
+                        (!parts.is_empty()).then(|| parts.join(" "))
+                    }
+                    PluginGrant::Network => match permissions.network {
+                        PluginNetworkPermission::None => None,
+                        PluginNetworkPermission::Loopback => Some("loopback".to_string()),
+                        PluginNetworkPermission::Any => Some("any".to_string()),
+                    },
+                    PluginGrant::EnvPass => {
+                        (!permissions.env_pass.is_empty()).then(|| permissions.env_pass.join(","))
+                    }
+                    PluginGrant::OrbitTools => (!permissions.orbit_tools.is_empty())
+                        .then(|| permissions.orbit_tools.join(",")),
+                    PluginGrant::Unsandboxed => (self.spec.backend.sandbox == PluginSandbox::None)
+                        .then(|| "backend.sandbox: none".to_string()),
+                    PluginGrant::AgentTools => {
+                        let verbs = self.agent_callable_tool_verbs();
+                        (!verbs.is_empty()).then(|| verbs.join(","))
+                    }
+                };
+                PluginGrantRequest { grant, requested }
+            })
+            .collect()
+    }
+
+    /// The grants this manifest cannot run without.
+    pub fn required_grants(&self) -> Vec<PluginGrant> {
+        self.grant_requests()
+            .into_iter()
+            .filter(|request| request.requested.is_some())
+            .map(|request| request.grant)
+            .collect()
+    }
+
+    /// Required grants the operator has not recorded, in canonical order.
+    ///
+    /// `granted` is the row's persisted strings, which carry a scope for a
+    /// path-scoped grant (`fs=/srv/data`), so this compares parsed
+    /// capabilities rather than spellings. A row this build cannot parse is
+    /// read as granting nothing here; the loader refuses it separately with a
+    /// diagnostic that names the grant it could not read.
+    pub fn missing_grants(&self, granted: &[String]) -> Vec<PluginGrant> {
+        let granted = parse_stored_grants(granted).unwrap_or_default();
+        self.required_grants()
+            .into_iter()
+            .filter(|grant| !granted.contains(*grant))
+            .collect()
+    }
+}
+
 /// Whether a root that was *not* attached to its grant with `=` can be read as
 /// a path rather than a mistyped grant name.
 ///
@@ -434,98 +528,4 @@ pub fn resolve_grant_selection(
         _ => return parse_grants(names),
     };
     PluginGrantSet::from_entries(selected.into_iter().map(PluginGrantEntry::plain).collect())
-}
-
-/// What one grant means for this manifest: whether the manifest asks for it,
-/// and the concrete request behind the ask.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginGrantRequest {
-    pub grant: PluginGrant,
-    /// The request as the manifest states it (`read=…, write=…`), empty when
-    /// the manifest does not ask for this grant.
-    pub requested: Option<String>,
-}
-
-impl PluginManifest {
-    /// Sorted manifest verbs requesting consent for agent-session mutation.
-    pub fn agent_callable_tool_verbs(&self) -> Vec<String> {
-        let mut verbs: Vec<_> = self
-            .spec
-            .tools
-            .iter()
-            .filter(|tool| tool.agent_callable)
-            .map(|tool| tool.name.clone())
-            .collect();
-        verbs.sort();
-        verbs
-    }
-
-    /// Every grant with the manifest's request beside it, in canonical order.
-    pub fn grant_requests(&self) -> Vec<PluginGrantRequest> {
-        let permissions = &self.spec.permissions;
-        PluginGrant::ALL
-            .into_iter()
-            .map(|grant| {
-                let requested = match grant {
-                    PluginGrant::Fs => {
-                        let mut parts = Vec::new();
-                        if !permissions.fs.read.is_empty() {
-                            parts.push(format!("read={}", permissions.fs.read.join(",")));
-                        }
-                        if !permissions.fs.write.is_empty() {
-                            parts.push(format!("write={}", permissions.fs.write.join(",")));
-                        }
-                        if !permissions.fs.write_files.is_empty() {
-                            parts.push(format!(
-                                "write_files={}",
-                                permissions.fs.write_files.join(",")
-                            ));
-                        }
-                        (!parts.is_empty()).then(|| parts.join(" "))
-                    }
-                    PluginGrant::Network => match permissions.network {
-                        PluginNetworkPermission::None => None,
-                        PluginNetworkPermission::Loopback => Some("loopback".to_string()),
-                        PluginNetworkPermission::Any => Some("any".to_string()),
-                    },
-                    PluginGrant::EnvPass => {
-                        (!permissions.env_pass.is_empty()).then(|| permissions.env_pass.join(","))
-                    }
-                    PluginGrant::OrbitTools => (!permissions.orbit_tools.is_empty())
-                        .then(|| permissions.orbit_tools.join(",")),
-                    PluginGrant::Unsandboxed => (self.spec.backend.sandbox == PluginSandbox::None)
-                        .then(|| "backend.sandbox: none".to_string()),
-                    PluginGrant::AgentTools => {
-                        let verbs = self.agent_callable_tool_verbs();
-                        (!verbs.is_empty()).then(|| verbs.join(","))
-                    }
-                };
-                PluginGrantRequest { grant, requested }
-            })
-            .collect()
-    }
-
-    /// The grants this manifest cannot run without.
-    pub fn required_grants(&self) -> Vec<PluginGrant> {
-        self.grant_requests()
-            .into_iter()
-            .filter(|request| request.requested.is_some())
-            .map(|request| request.grant)
-            .collect()
-    }
-
-    /// Required grants the operator has not recorded, in canonical order.
-    ///
-    /// `granted` is the row's persisted strings, which carry a scope for a
-    /// path-scoped grant (`fs=/srv/data`), so this compares parsed
-    /// capabilities rather than spellings. A row this build cannot parse is
-    /// read as granting nothing here; the loader refuses it separately with a
-    /// diagnostic that names the grant it could not read.
-    pub fn missing_grants(&self, granted: &[String]) -> Vec<PluginGrant> {
-        let granted = parse_stored_grants(granted).unwrap_or_default();
-        self.required_grants()
-            .into_iter()
-            .filter(|grant| !granted.contains(*grant))
-            .collect()
-    }
 }

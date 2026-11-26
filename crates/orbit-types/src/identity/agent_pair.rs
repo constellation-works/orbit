@@ -18,6 +18,10 @@ use serde::{Deserialize, Serialize};
 use super::agent_family;
 use super::{AgentFamily, CrewEnvVar, IdentityError, ProviderModelError};
 
+/// Separates a crew reference's crew name from the reasoning effort it runs at:
+/// `opus@medium`. Crew names may not contain it.
+pub const CREW_EFFORT_SEPARATOR: char = '@';
+
 /// A resolved (orchestrator, helper) duo for a given agent family.
 ///
 /// - `orchestrator` owns plan, review, and integration responsibilities.
@@ -144,31 +148,6 @@ impl ReasoningEffort {
     }
 }
 
-/// Reject Gemini CLI model ids that `agy` does not accept.
-///
-/// Verified against Antigravity CLI 1.1.27 (`agy models`): Gemini slugs carry
-/// an effort suffix (`gemini-3.8-flash-high`). Bare ids such as
-/// `gemini-3.8-flash` fail at the CLI rather than falling back. Orbit fails
-/// the same way with migration text instead of rewriting the id. [ORB-11299]
-pub fn validate_antigravity_model(model: Option<&str>) -> Result<(), ProviderModelError> {
-    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
-        return Ok(());
-    };
-    if is_legacy_gemini_cli_model_id(model) {
-        return Err(ProviderModelError::LegacyGeminiModel {
-            model: model.to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn is_legacy_gemini_cli_model_id(model: &str) -> bool {
-    let Some(rest) = model.strip_prefix("gemini-") else {
-        return false;
-    };
-    !(rest.ends_with("-low") || rest.ends_with("-medium") || rest.ends_with("-high"))
-}
-
 impl fmt::Display for ReasoningEffort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -246,18 +225,6 @@ impl Crew {
     }
 }
 
-fn crew_enabled_default() -> bool {
-    true
-}
-
-fn is_enabled(enabled: &bool) -> bool {
-    *enabled
-}
-
-/// Separates a crew reference's crew name from the reasoning effort it runs at:
-/// `opus@medium`. Crew names may not contain it.
-pub const CREW_EFFORT_SEPARATOR: char = '@';
-
 impl Crew {
     /// The `[crews.<name>]` table this crew comes from: its own name, or the
     /// part before `@` for a `<crew>@<effort>` reference.
@@ -265,6 +232,39 @@ impl Crew {
     pub fn base_name(&self) -> &str {
         crew_reference_base(&self.name)
     }
+}
+
+/// Reject Gemini CLI model ids that `agy` does not accept.
+///
+/// Verified against Antigravity CLI 1.1.27 (`agy models`): Gemini slugs carry
+/// an effort suffix (`gemini-3.8-flash-high`). Bare ids such as
+/// `gemini-3.8-flash` fail at the CLI rather than falling back. Orbit fails
+/// the same way with migration text instead of rewriting the id. [ORB-11299]
+pub fn validate_antigravity_model(model: Option<&str>) -> Result<(), ProviderModelError> {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return Ok(());
+    };
+    if is_legacy_gemini_cli_model_id(model) {
+        return Err(ProviderModelError::LegacyGeminiModel {
+            model: model.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn is_legacy_gemini_cli_model_id(model: &str) -> bool {
+    let Some(rest) = model.strip_prefix("gemini-") else {
+        return false;
+    };
+    !(rest.ends_with("-low") || rest.ends_with("-medium") || rest.ends_with("-high"))
+}
+
+fn crew_enabled_default() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 /// The crew-table name a reference points at: `opus@medium` → `opus`.

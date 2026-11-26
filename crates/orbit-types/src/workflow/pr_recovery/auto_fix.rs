@@ -28,6 +28,25 @@ pub const PR_AUTO_FIX_PUSHED_EVENT: &str = "pr_auto_fix_pushed";
 /// candidate, so the watcher reruns the failed checks once on the same head.
 pub const PR_AUTO_FIX_NO_EDIT_RERUN_EVENT: &str = "pr_auto_fix_no_edit_rerun";
 
+/// History event recording a failed head held for an inherited base failure.
+pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
+
+/// History event recording the failed checks an admitted check repair was
+/// handed, with their normalized signatures, on the exact head [ORB-25510].
+pub const PR_AUTO_FIX_HEAD_FAILURE_EVENT: &str = "pr_auto_fix_head_failure";
+
+/// Leads the completion failure that hands an admitted check repair to the
+/// step's repair activity. Only the watcher writes it, after admission.
+pub const PR_AUTO_FIX_CHECK_REPAIR_MARKER: &str = "pr_auto_fix_check_repair";
+
+/// The configuration key auto-fix repairs draw their crew from: the auto-fix
+/// purpose pool, which falls back to the low complexity pool while unset,
+/// through the ordinary activity-crew draw.
+pub const PR_AUTO_FIX_CREWS_KEY: &str = "workflow.purpose_crews.auto_fix";
+
+/// History event recording one bounded wait for a throttled log read.
+pub const PR_AUTO_FIX_READ_DEFERRED_EVENT: &str = "pr_auto_fix_read_deferred";
+
 /// One no-edit check repair, as recorded in task history. The repair attempt
 /// that produced it already spent one auto-fix attempt for the head; the
 /// rerun it triggers additionally reserves the head's shared CI rerun budget.
@@ -38,19 +57,6 @@ pub struct PrAutoFixNoEditRerun {
     pub run_id: String,
     pub attempt: u32,
 }
-
-/// Every no-edit repair recorded for `pr_number`, oldest first.
-pub fn pr_auto_fix_no_edit_reruns(
-    history: &[TaskHistoryEntry],
-    pr_number: &str,
-) -> Vec<PrAutoFixNoEditRerun> {
-    ledger_notes(history, PR_AUTO_FIX_NO_EDIT_RERUN_EVENT)
-        .filter(|record: &PrAutoFixNoEditRerun| record.pr_number == pr_number)
-        .collect()
-}
-
-/// History event recording a failed head held for an inherited base failure.
-pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
 
 /// A failed head whose repair is held until the base proves it fixed.
 ///
@@ -178,10 +184,6 @@ impl PrAutoFixBaseRed {
     }
 }
 
-/// History event recording the failed checks an admitted check repair was
-/// handed, with their normalized signatures, on the exact head [ORB-25510].
-pub const PR_AUTO_FIX_HEAD_FAILURE_EVENT: &str = "pr_auto_fix_head_failure";
-
 /// One required check that failed on a pull request head, as an admitted
 /// check repair read it from the job log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,15 +246,6 @@ impl PrAutoFixHeadFailure {
         }
     }
 }
-
-/// Leads the completion failure that hands an admitted check repair to the
-/// step's repair activity. Only the watcher writes it, after admission.
-pub const PR_AUTO_FIX_CHECK_REPAIR_MARKER: &str = "pr_auto_fix_check_repair";
-
-/// The configuration key auto-fix repairs draw their crew from: the auto-fix
-/// purpose pool, which falls back to the low complexity pool while unset,
-/// through the ordinary activity-crew draw.
-pub const PR_AUTO_FIX_CREWS_KEY: &str = "workflow.purpose_crews.auto_fix";
 
 /// What blocks the pull request's merge, or the before-landing review that
 /// advanced its published head.
@@ -326,95 +319,6 @@ pub struct PrAutoFixClaim<'a> {
     pub blocker: PrAutoFixBlocker,
     pub run_id: &'a str,
 }
-
-/// Every attempt recorded for `pr_number`, oldest first. An entry whose note
-/// does not parse is not an attempt.
-pub fn pr_auto_fix_attempts(
-    history: &[TaskHistoryEntry],
-    pr_number: &str,
-) -> Vec<PrAutoFixAttempt> {
-    ledger_notes(history, PR_AUTO_FIX_ADMITTED_EVENT)
-        .filter(|attempt: &PrAutoFixAttempt| attempt.pr_number == pr_number)
-        .collect()
-}
-
-/// Every repaired head published for `pr_number`, oldest first.
-pub fn pr_auto_fix_pushes(history: &[TaskHistoryEntry], pr_number: &str) -> Vec<PrAutoFixPush> {
-    ledger_notes(history, PR_AUTO_FIX_PUSHED_EVENT)
-        .filter(|push: &PrAutoFixPush| push.pr_number == pr_number)
-        .collect()
-}
-
-fn ledger_notes<'a, T: serde::de::DeserializeOwned + 'a>(
-    history: &'a [TaskHistoryEntry],
-    event: &'a str,
-) -> impl Iterator<Item = T> + 'a {
-    history
-        .iter()
-        .filter(move |entry| entry.event == event)
-        .filter_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
-}
-
-/// Decide `claim` against the attempts already recorded for its pull request.
-///
-/// A head and blocker are repaired at most once: a later poll, restart or
-/// run that meets them again is a duplicate. The one exception is the run
-/// that holds a conflict repair on that head, whose post-recovery retry
-/// re-enters the watcher before anything is published. Otherwise a new
-/// attempt is admitted while the budget lasts.
-pub fn decide_pr_auto_fix(
-    attempts: &[PrAutoFixAttempt],
-    claim: &PrAutoFixClaim<'_>,
-    budget: u32,
-    crew: &str,
-    crew_source: &str,
-) -> PrAutoFixDecision {
-    decide_pr_auto_fix_settled(attempts, claim, budget, crew, crew_source, &|_| false)
-}
-
-/// [`decide_pr_auto_fix`], where an attempt of another run that `settled`
-/// reports as ended no longer makes its head and blocker a duplicate.
-///
-/// A repair that published no new head, or whose head still fails, ends with
-/// its run; the pull request's unspent budget stays usable on that unchanged
-/// head by a later run. An attempt of a run that may still be live keeps
-/// refusing, so two runs never repair one head at once.
-pub fn decide_pr_auto_fix_settled(
-    attempts: &[PrAutoFixAttempt],
-    claim: &PrAutoFixClaim<'_>,
-    budget: u32,
-    crew: &str,
-    crew_source: &str,
-    settled: &dyn Fn(&PrAutoFixAttempt) -> bool,
-) -> PrAutoFixDecision {
-    if let Some(previous) = attempts.iter().rev().find(|attempt| {
-        attempt.head_sha == claim.head_sha
-            && attempt.blocker == claim.blocker
-            && (attempt.run_id == claim.run_id || !settled(attempt))
-    }) {
-        if claim.blocker == PrAutoFixBlocker::Conflict && previous.run_id == claim.run_id {
-            return PrAutoFixDecision::Continue(previous.clone());
-        }
-        return PrAutoFixDecision::Duplicate(previous.clone());
-    }
-    let spent = u32::try_from(attempts.len()).unwrap_or(u32::MAX);
-    if spent >= budget {
-        return PrAutoFixDecision::Exhausted(attempts.to_vec());
-    }
-    PrAutoFixDecision::Admit(PrAutoFixAttempt {
-        pr_number: claim.pr_number.to_string(),
-        head_sha: claim.head_sha.to_string(),
-        blocker: claim.blocker,
-        attempt: spent + 1,
-        budget,
-        run_id: claim.run_id.to_string(),
-        crew: crew.to_string(),
-        crew_source: crew_source.to_string(),
-    })
-}
-
-/// History event recording one bounded wait for a throttled log read.
-pub const PR_AUTO_FIX_READ_DEFERRED_EVENT: &str = "pr_auto_fix_read_deferred";
 
 /// Where a throttled read's not-before came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -523,6 +427,102 @@ impl PrAutoFixReadDeferral {
     fn from_legacy_note(note: &str) -> Option<Self> {
         serde_json::from_str(note).ok()
     }
+}
+
+/// Every no-edit repair recorded for `pr_number`, oldest first.
+pub fn pr_auto_fix_no_edit_reruns(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Vec<PrAutoFixNoEditRerun> {
+    ledger_notes(history, PR_AUTO_FIX_NO_EDIT_RERUN_EVENT)
+        .filter(|record: &PrAutoFixNoEditRerun| record.pr_number == pr_number)
+        .collect()
+}
+
+/// Every attempt recorded for `pr_number`, oldest first. An entry whose note
+/// does not parse is not an attempt.
+pub fn pr_auto_fix_attempts(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Vec<PrAutoFixAttempt> {
+    ledger_notes(history, PR_AUTO_FIX_ADMITTED_EVENT)
+        .filter(|attempt: &PrAutoFixAttempt| attempt.pr_number == pr_number)
+        .collect()
+}
+
+/// Every repaired head published for `pr_number`, oldest first.
+pub fn pr_auto_fix_pushes(history: &[TaskHistoryEntry], pr_number: &str) -> Vec<PrAutoFixPush> {
+    ledger_notes(history, PR_AUTO_FIX_PUSHED_EVENT)
+        .filter(|push: &PrAutoFixPush| push.pr_number == pr_number)
+        .collect()
+}
+
+fn ledger_notes<'a, T: serde::de::DeserializeOwned + 'a>(
+    history: &'a [TaskHistoryEntry],
+    event: &'a str,
+) -> impl Iterator<Item = T> + 'a {
+    history
+        .iter()
+        .filter(move |entry| entry.event == event)
+        .filter_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
+}
+
+/// Decide `claim` against the attempts already recorded for its pull request.
+///
+/// A head and blocker are repaired at most once: a later poll, restart or
+/// run that meets them again is a duplicate. The one exception is the run
+/// that holds a conflict repair on that head, whose post-recovery retry
+/// re-enters the watcher before anything is published. Otherwise a new
+/// attempt is admitted while the budget lasts.
+pub fn decide_pr_auto_fix(
+    attempts: &[PrAutoFixAttempt],
+    claim: &PrAutoFixClaim<'_>,
+    budget: u32,
+    crew: &str,
+    crew_source: &str,
+) -> PrAutoFixDecision {
+    decide_pr_auto_fix_settled(attempts, claim, budget, crew, crew_source, &|_| false)
+}
+
+/// [`decide_pr_auto_fix`], where an attempt of another run that `settled`
+/// reports as ended no longer makes its head and blocker a duplicate.
+///
+/// A repair that published no new head, or whose head still fails, ends with
+/// its run; the pull request's unspent budget stays usable on that unchanged
+/// head by a later run. An attempt of a run that may still be live keeps
+/// refusing, so two runs never repair one head at once.
+pub fn decide_pr_auto_fix_settled(
+    attempts: &[PrAutoFixAttempt],
+    claim: &PrAutoFixClaim<'_>,
+    budget: u32,
+    crew: &str,
+    crew_source: &str,
+    settled: &dyn Fn(&PrAutoFixAttempt) -> bool,
+) -> PrAutoFixDecision {
+    if let Some(previous) = attempts.iter().rev().find(|attempt| {
+        attempt.head_sha == claim.head_sha
+            && attempt.blocker == claim.blocker
+            && (attempt.run_id == claim.run_id || !settled(attempt))
+    }) {
+        if claim.blocker == PrAutoFixBlocker::Conflict && previous.run_id == claim.run_id {
+            return PrAutoFixDecision::Continue(previous.clone());
+        }
+        return PrAutoFixDecision::Duplicate(previous.clone());
+    }
+    let spent = u32::try_from(attempts.len()).unwrap_or(u32::MAX);
+    if spent >= budget {
+        return PrAutoFixDecision::Exhausted(attempts.to_vec());
+    }
+    PrAutoFixDecision::Admit(PrAutoFixAttempt {
+        pr_number: claim.pr_number.to_string(),
+        head_sha: claim.head_sha.to_string(),
+        blocker: claim.blocker,
+        attempt: spent + 1,
+        budget,
+        run_id: claim.run_id.to_string(),
+        crew: crew.to_string(),
+        crew_source: crew_source.to_string(),
+    })
 }
 
 fn short_sha(sha: &str) -> &str {

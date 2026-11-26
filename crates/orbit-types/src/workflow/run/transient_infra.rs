@@ -155,6 +155,31 @@ impl TransientInfrastructure {
     }
 }
 
+/// The note of a [`TRANSIENT_INFRA_BLOCKED_EVENT`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransientInfraBlock {
+    pub schema_version: u32,
+    /// The run whose step failed.
+    pub run_id: String,
+    pub failed_step_id: String,
+    pub class: TransientInfrastructure,
+}
+
+/// The note of a [`TRANSIENT_INFRA_REQUEUED_EVENT`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransientInfraRequeue {
+    pub schema_version: u32,
+    /// The run whose block was requeued.
+    pub run_id: String,
+    pub class: TransientInfrastructure,
+    /// The pull request the requeued candidate is published on, if any; the
+    /// bound counts requeues per publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<String>,
+}
+
 /// Whether deterministic delivery action `action` failed only because GitHub
 /// rate-limited the automation account's read [ORB-25864].
 ///
@@ -218,29 +243,4 @@ fn strip_tag_instructions_wrapper(message: &str) -> &str {
         .strip_prefix("load tag instructions for `")
         .and_then(|rest| rest.split_once("): "))
         .map_or(message, |(_, typed)| typed)
-}
-
-/// The note of a [`TRANSIENT_INFRA_BLOCKED_EVENT`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TransientInfraBlock {
-    pub schema_version: u32,
-    /// The run whose step failed.
-    pub run_id: String,
-    pub failed_step_id: String,
-    pub class: TransientInfrastructure,
-}
-
-/// The note of a [`TRANSIENT_INFRA_REQUEUED_EVENT`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TransientInfraRequeue {
-    pub schema_version: u32,
-    /// The run whose block was requeued.
-    pub run_id: String,
-    pub class: TransientInfrastructure,
-    /// The pull request the requeued candidate is published on, if any; the
-    /// bound counts requeues per publication.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_request: Option<String>,
 }

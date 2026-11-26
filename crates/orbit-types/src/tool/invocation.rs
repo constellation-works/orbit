@@ -5,6 +5,47 @@ use serde::{Deserialize, Serialize};
 use super::WorkerBindingError;
 use crate::task::ExecutionLocation;
 
+/// Owner task tools an agent in a claimed leaf is never granted
+/// (distributed-drain design §3, "Claimed-mode implementation").
+///
+/// A claimed leaf's task belongs to another machine. Its injected envelope is
+/// the task and the claim is the authority; `orbit.task.show` may re-read that
+/// task through the claim-scoped owner broker. The agent returns its execution
+/// summary in its output for `claim_handoff` to carry instead of writing owner
+/// task state. Denying task updates makes that the only write path, rather
+/// than relying on the prompt alone.
+pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
+
+/// The tools an agent activity's handoff contract works through: reading its
+/// task, recording its execution summary and attaching its artifacts. An
+/// experiment arm may add tools or remove optional ones, never these.
+pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
+    "orbit.task.show",
+    "orbit.task.update",
+    "orbit.task.artifact:put",
+];
+
+/// The coordination tools a claimed worker on another machine than its owner
+/// reaches that owner with through its run's coordinator, the step runner's
+/// broker [ORB-14260]. The agent sandbox masks the SSH credentials the owner
+/// route needs, so these calls cross the broker instead, each scoped by the
+/// broker's own records to the claimed task or its workspace for search/list.
+/// The list is closed; any other coordination tool from such a worker's sandbox
+/// is refused. Entries are operation names: a family tool is an owner tool
+/// for exactly the actions whose operations are listed.
+pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
+    "orbit.task.show",
+    "orbit.search",
+    "orbit.task.list",
+    "orbit.task.add",
+    "orbit.friction.add",
+    "orbit.task.artifact.get",
+    "orbit.task.artifact.put",
+    "orbit.notice.post",
+    "orbit.notice.show",
+    "orbit.notice.close",
+];
+
 /// Transportable attempt identity. Receiving adapters must accept this only from
 /// their runtime/session channel, never deserialize it from tool arguments or
 /// infer it from editable job inputs. SSH establishes access; the owner still
@@ -97,47 +138,6 @@ impl WorkerInvocation {
         Ok(culprits)
     }
 }
-
-/// Owner task tools an agent in a claimed leaf is never granted
-/// (distributed-drain design §3, "Claimed-mode implementation").
-///
-/// A claimed leaf's task belongs to another machine. Its injected envelope is
-/// the task and the claim is the authority; `orbit.task.show` may re-read that
-/// task through the claim-scoped owner broker. The agent returns its execution
-/// summary in its output for `claim_handoff` to carry instead of writing owner
-/// task state. Denying task updates makes that the only write path, rather
-/// than relying on the prompt alone.
-pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
-
-/// The tools an agent activity's handoff contract works through: reading its
-/// task, recording its execution summary and attaching its artifacts. An
-/// experiment arm may add tools or remove optional ones, never these.
-pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
-    "orbit.task.show",
-    "orbit.task.update",
-    "orbit.task.artifact:put",
-];
-
-/// The coordination tools a claimed worker on another machine than its owner
-/// reaches that owner with through its run's coordinator, the step runner's
-/// broker [ORB-14260]. The agent sandbox masks the SSH credentials the owner
-/// route needs, so these calls cross the broker instead, each scoped by the
-/// broker's own records to the claimed task or its workspace for search/list.
-/// The list is closed; any other coordination tool from such a worker's sandbox
-/// is refused. Entries are operation names: a family tool is an owner tool
-/// for exactly the actions whose operations are listed.
-pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
-    "orbit.task.show",
-    "orbit.search",
-    "orbit.task.list",
-    "orbit.task.add",
-    "orbit.friction.add",
-    "orbit.task.artifact.get",
-    "orbit.task.artifact.put",
-    "orbit.notice.post",
-    "orbit.notice.show",
-    "orbit.notice.close",
-];
 
 /// Whether `tool` reaches only [`CLAIMED_OWNER_TOOLS`]: an operation or a
 /// `family:action` policy name on the list, or a family whose every action

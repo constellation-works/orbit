@@ -123,10 +123,6 @@ pub struct DesktopTaskWriteResult {
     pub replayed: bool,
 }
 
-fn default_priority() -> TaskPriority {
-    TaskPriority::Medium
-}
-
 /// Registered artifact information exposed without its private blob location.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopArtifactMetadata {
@@ -136,4 +132,8 @@ pub struct DesktopArtifactMetadata {
     pub sha256: String,
     pub created_by: String,
     pub created_at: String,
+}
+
+fn default_priority() -> TaskPriority {
+    TaskPriority::Medium
 }

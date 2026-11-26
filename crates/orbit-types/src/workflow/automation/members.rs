@@ -11,6 +11,10 @@ pub const DEFAULT_BATCH_SIZE: usize = 5;
 /// Upper bound on members in one attempt; also the largest observation page.
 pub const MAX_BATCH_SIZE: usize = 50;
 
+/// Most distinct members one consumer's working state retains, and most
+/// failed records it keeps; the store refuses a checkpoint above either.
+pub const MEMBER_CAPACITY: usize = 1000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StateTriggerKind {
@@ -483,14 +487,6 @@ impl StateMember {
     }
 }
 
-/// Trimmed non-empty `task.crew`, or `None` when unset. Matches the identity
-/// `resolve_crew_for_run_input` requires to be unanimous across a bundle.
-pub fn bundle_crew(crew: Option<&str>) -> Option<String> {
-    crew.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 /// One claim over a batch of due members [ORB-12746]. `member` is the first
 /// member and `members` the whole batch; a record persisted before batching
 /// carries `member` alone, which [`MemberAttempt::members`] reads as a batch
@@ -598,10 +594,6 @@ pub struct MemberState {
     pub scan_after: Option<String>,
 }
 
-/// Most distinct members one consumer's working state retains, and most
-/// failed records it keeps; the store refuses a checkpoint above either.
-pub const MEMBER_CAPACITY: usize = 1000;
-
 impl MemberState {
     /// Distinct keys the pending, assessed and withheld working state holds:
     /// a member pending beside its withheld reason or superseded assessment
@@ -671,4 +663,12 @@ pub struct BatchMember {
     /// `settled`, `max_wait` or `grant` for a member about to be admitted;
     /// `admitted` for one already in flight.
     pub reason: String,
+}
+
+/// Trimmed non-empty `task.crew`, or `None` when unset. Matches the identity
+/// `resolve_crew_for_run_input` requires to be unanimous across a bundle.
+pub fn bundle_crew(crew: Option<&str>) -> Option<String> {
+    crew.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }

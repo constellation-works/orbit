@@ -61,6 +61,57 @@ pub const UPGRADE_PENDING_REQUEUED_EVENT: &str = "upgrade_pending_requeued";
 /// cut on a char boundary so a real blocker is not dropped for size.
 const MAX_EVIDENCE_BYTES: usize = 4 * 1024;
 
+/// `error.code` values a declared-failed envelope may carry that already
+/// name an Orbit outcome, so they are never re-read as a blocker kind.
+/// This is the exclusion list the step boundary applies before
+/// [`agent_blocker_from_declared_failure`]: the typed step codes
+/// (`owner_route_unavailable`, `owner_signoff_required`,
+/// `footprint_unavailable`), the provider classes (`provider_unavailable`,
+/// `provider_limit`, `provider_capacity`, `provider_refusal`), the
+/// validation-environment pair, the baseline-red and forge holds,
+/// `transient_failure` and `stalled`, the image-input codes, the held-run
+/// codes, the synthesized CLI terminal codes, `task_blocked_by_agent` and
+/// `upgrade_pending` (both already hold under their own classification),
+/// `worktree_mismatch` (the envelope's own mismatch failure), and
+/// `implementation_incomplete` (its bounded continuation path).
+const RESERVED_DECLARED_FAILURE_CODES: &[&str] = &[
+    "implementation_incomplete",
+    TASK_BLOCKED_BY_AGENT_ERROR_CODE,
+    UPGRADE_PENDING_ERROR_CODE,
+    super::state::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+    super::state::OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
+    super::state::FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+    super::MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE,
+    super::state::PROVIDER_UNAVAILABLE_ERROR_CODE,
+    super::state::PROVIDER_LIMIT_ERROR_CODE,
+    super::state::PROVIDER_CAPACITY_ERROR_CODE,
+    super::state::PROVIDER_REFUSAL_ERROR_CODE,
+    super::state::VALIDATION_ENVIRONMENT_ERROR_CODE,
+    super::state::VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE,
+    super::state::TRANSIENT_FAILURE_ERROR_CODE,
+    super::state::STALLED_ERROR_CODE,
+    super::baseline::BASELINE_RED_ERROR_CODE,
+    super::forge_hold::FORGE_UNAVAILABLE_ERROR_CODE,
+    crate::workflow::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,
+    crate::workflow::IMAGE_NOT_SEEN_ERROR_CODE,
+    super::root_cause::REVIEW_DECISION_PENDING_ERROR_CODE,
+    super::root_cause::CHILD_TIMEOUT_ERROR_CODE,
+    super::root_cause::OPERATOR_STOPPED_ERROR_CODE,
+    "AGENT_TIMEOUT",
+    "AGENT_INVOCATION_FAILED",
+    "AGENT_TERMINAL_ENDING",
+    "worktree_mismatch",
+];
+
+/// Words that make a declared-failed `error.code` name a task-level stop.
+/// The code is split on `_ . : -` (as [`AgentBlockerClass::of_kind`] does)
+/// and must contain one of them as a whole word, so `validation_blocker`,
+/// `task_blocked`, `contract_contradiction` and `live_fixture_unavailable`
+/// hold while an ordinary failure code such as `red` or `example_failure`
+/// stays a failure.
+pub const DECLARED_BLOCKER_CODE_WORDS: &[&str] =
+    &["blocker", "blocked", "contradiction", "unavailable"];
+
 /// A well-formed implementer blocker.
 ///
 /// The failure handoff records it on the history entry it writes, as
@@ -148,6 +199,27 @@ impl AgentBlocker {
     }
 }
 
+impl TaskHistoryEntry {
+    /// The kind of the agent blocker this entry records.
+    ///
+    /// An entry written since [`TaskDecision::AgentBlocked`] carries the
+    /// blocker typed. A [`TASK_BLOCKED_BY_AGENT_EVENT`] entry written before
+    /// it (or by an older binary or replica) names the kind only in its note,
+    /// `[task_blocked_by_agent] kind=<kind> …`, which new entries keep
+    /// writing byte for byte; the legacy note reader reads that.
+    #[must_use]
+    pub fn agent_blocker_kind(&self) -> Option<&str> {
+        match &self.decision {
+            Some(TaskDecision::AgentBlocked { blocker }) => Some(&blocker.kind),
+            Some(_) => None,
+            None if self.event == TASK_BLOCKED_BY_AGENT_EVENT => {
+                task_blocked_by_agent_kind(self.note.as_deref()?)
+            }
+            None => None,
+        }
+    }
+}
+
 /// Whether a step failure says an Orbit upgrade refused its agent mid-step.
 #[must_use]
 pub fn is_upgrade_pending(error_code: Option<&str>, message: Option<&str>) -> bool {
@@ -189,63 +261,12 @@ pub fn agent_blocker_from_output(output: &Value) -> Option<AgentBlocker> {
     })
 }
 
-/// `error.code` values a declared-failed envelope may carry that already
-/// name an Orbit outcome, so they are never re-read as a blocker kind.
-/// This is the exclusion list the step boundary applies before
-/// [`agent_blocker_from_declared_failure`]: the typed step codes
-/// (`owner_route_unavailable`, `owner_signoff_required`,
-/// `footprint_unavailable`), the provider classes (`provider_unavailable`,
-/// `provider_limit`, `provider_capacity`, `provider_refusal`), the
-/// validation-environment pair, the baseline-red and forge holds,
-/// `transient_failure` and `stalled`, the image-input codes, the held-run
-/// codes, the synthesized CLI terminal codes, `task_blocked_by_agent` and
-/// `upgrade_pending` (both already hold under their own classification),
-/// `worktree_mismatch` (the envelope's own mismatch failure), and
-/// `implementation_incomplete` (its bounded continuation path).
-const RESERVED_DECLARED_FAILURE_CODES: &[&str] = &[
-    "implementation_incomplete",
-    TASK_BLOCKED_BY_AGENT_ERROR_CODE,
-    UPGRADE_PENDING_ERROR_CODE,
-    super::state::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
-    super::state::OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
-    super::state::FOOTPRINT_UNAVAILABLE_ERROR_CODE,
-    super::MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE,
-    super::state::PROVIDER_UNAVAILABLE_ERROR_CODE,
-    super::state::PROVIDER_LIMIT_ERROR_CODE,
-    super::state::PROVIDER_CAPACITY_ERROR_CODE,
-    super::state::PROVIDER_REFUSAL_ERROR_CODE,
-    super::state::VALIDATION_ENVIRONMENT_ERROR_CODE,
-    super::state::VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE,
-    super::state::TRANSIENT_FAILURE_ERROR_CODE,
-    super::state::STALLED_ERROR_CODE,
-    super::baseline::BASELINE_RED_ERROR_CODE,
-    super::forge_hold::FORGE_UNAVAILABLE_ERROR_CODE,
-    crate::workflow::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,
-    crate::workflow::IMAGE_NOT_SEEN_ERROR_CODE,
-    super::root_cause::REVIEW_DECISION_PENDING_ERROR_CODE,
-    super::root_cause::CHILD_TIMEOUT_ERROR_CODE,
-    super::root_cause::OPERATOR_STOPPED_ERROR_CODE,
-    "AGENT_TIMEOUT",
-    "AGENT_INVOCATION_FAILED",
-    "AGENT_TERMINAL_ENDING",
-    "worktree_mismatch",
-];
-
 /// Whether `code` is reserved for an existing Orbit outcome and so keeps
 /// that outcome when a declared-failed envelope carries it.
 #[must_use]
 pub fn is_reserved_declared_failure_code(code: &str) -> bool {
     RESERVED_DECLARED_FAILURE_CODES.contains(&code)
 }
-
-/// Words that make a declared-failed `error.code` name a task-level stop.
-/// The code is split on `_ . : -` (as [`AgentBlockerClass::of_kind`] does)
-/// and must contain one of them as a whole word, so `validation_blocker`,
-/// `task_blocked`, `contract_contradiction` and `live_fixture_unavailable`
-/// hold while an ordinary failure code such as `red` or `example_failure`
-/// stays a failure.
-pub const DECLARED_BLOCKER_CODE_WORDS: &[&str] =
-    &["blocker", "blocked", "contradiction", "unavailable"];
 
 /// Whether `code`, split on `_ . : -`, contains a
 /// [`DECLARED_BLOCKER_CODE_WORDS`] word.
@@ -303,27 +324,6 @@ pub fn task_blocked_by_agent_kind(message: &str) -> Option<&str> {
 #[must_use]
 pub fn upgrade_pending_kind(message: &str) -> Option<&str> {
     kind_after(message, UPGRADE_PENDING_MARKER)
-}
-
-impl TaskHistoryEntry {
-    /// The kind of the agent blocker this entry records.
-    ///
-    /// An entry written since [`TaskDecision::AgentBlocked`] carries the
-    /// blocker typed. A [`TASK_BLOCKED_BY_AGENT_EVENT`] entry written before
-    /// it (or by an older binary or replica) names the kind only in its note,
-    /// `[task_blocked_by_agent] kind=<kind> …`, which new entries keep
-    /// writing byte for byte; the legacy note reader reads that.
-    #[must_use]
-    pub fn agent_blocker_kind(&self) -> Option<&str> {
-        match &self.decision {
-            Some(TaskDecision::AgentBlocked { blocker }) => Some(&blocker.kind),
-            Some(_) => None,
-            None if self.event == TASK_BLOCKED_BY_AGENT_EVENT => {
-                task_blocked_by_agent_kind(self.note.as_deref()?)
-            }
-            None => None,
-        }
-    }
 }
 
 fn kind_after<'a>(message: &'a str, marker: &str) -> Option<&'a str> {

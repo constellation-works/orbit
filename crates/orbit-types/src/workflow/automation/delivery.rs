@@ -6,6 +6,13 @@ use std::collections::BTreeMap;
 
 use super::DeliveryAssociation;
 
+/// No task in this workspace records the landing: a PR merged outside Orbit,
+/// or a direct landing whose run named no task.
+pub const UNATTRIBUTED_NO_LANDING_TASK: &str = "no_landing_task";
+
+/// This checkout cannot read the task records that would attribute the landing.
+pub const UNATTRIBUTED_TASKS_UNREADABLE: &str = "task_records_unreadable";
+
 /// Examination contract stored on a delivery trigger, frozen batch, and
 /// coverage evidence.
 ///
@@ -53,10 +60,6 @@ pub struct DeliveryTrigger {
     pub max_items: usize,
     #[serde(default)]
     pub retries: u32,
-}
-
-fn default_batch_size() -> usize {
-    50
 }
 
 impl DeliveryTrigger {
@@ -109,13 +112,6 @@ pub struct Delivery {
     pub landed_at: DateTime<Utc>,
 }
 
-/// No task in this workspace records the landing: a PR merged outside Orbit,
-/// or a direct landing whose run named no task.
-pub const UNATTRIBUTED_NO_LANDING_TASK: &str = "no_landing_task";
-
-/// This checkout cannot read the task records that would attribute the landing.
-pub const UNATTRIBUTED_TASKS_UNREADABLE: &str = "task_records_unreadable";
-
 /// Bounded, pinned source observation. Unresolved commits remain obligations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourcePage {
@@ -163,4 +159,8 @@ pub struct ExcludedDelivery {
     pub delivery: Delivery,
     pub exclusion: DeliveryExclusion,
     pub decided_at: DateTime<Utc>,
+}
+
+fn default_batch_size() -> usize {
+    50
 }

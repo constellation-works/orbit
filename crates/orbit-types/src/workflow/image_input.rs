@@ -214,6 +214,14 @@ impl ExecutorImageInput {
     }
 }
 
+/// The wire shape of an [`IMAGE_INPUT_FIELD`] request.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageInputRequest {
+    #[serde(default)]
+    images: Vec<String>,
+}
+
 /// The image paths an activity input asks to stage, when it asks for image
 /// input at all ([`IMAGE_INPUT_FIELD`] present and not null). `Ok(Some(vec![]))`
 /// asks for the canary alone: an object without `images`, or with an empty
@@ -248,14 +256,6 @@ pub fn requested_images(input: &Value) -> Result<Option<Vec<String>>, WorkflowEr
         )));
     }
     Ok(Some(request.images))
-}
-
-/// The wire shape of an [`IMAGE_INPUT_FIELD`] request.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ImageInputRequest {
-    #[serde(default)]
-    images: Vec<String>,
 }
 
 /// Whether a step failure says its result did not return the canary.

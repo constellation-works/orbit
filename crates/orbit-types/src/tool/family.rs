@@ -24,43 +24,6 @@ pub const TOOL_MODE_FIELD: &str = "mode";
 /// The separator between a family and an action in a policy entry.
 pub const TOOL_ACTION_SEPARATOR: char = ':';
 
-/// One agent-facing tool that groups operations behind an `action` field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolFamily {
-    /// Canonical tool name, such as `orbit.decision`.
-    pub name: &'static str,
-    /// The actions, in advertised order.
-    pub actions: &'static [ToolFamilyAction],
-}
-
-/// One action of a [`ToolFamily`] and the operation that serves it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolFamilyAction {
-    /// The `action` value, such as `raise`.
-    pub action: &'static str,
-    /// The internal operation name, such as `orbit.decision.raise`.
-    pub operation: &'static str,
-    /// Whether the operation takes its own `action` input, which the family
-    /// carries as [`TOOL_MODE_FIELD`].
-    pub takes_mode: bool,
-}
-
-const fn action(action: &'static str, operation: &'static str) -> ToolFamilyAction {
-    ToolFamilyAction {
-        action,
-        operation,
-        takes_mode: false,
-    }
-}
-
-const fn action_with_mode(action: &'static str, operation: &'static str) -> ToolFamilyAction {
-    ToolFamilyAction {
-        action,
-        operation,
-        takes_mode: true,
-    }
-}
-
 /// Every tool family, by canonical name.
 pub const TOOL_FAMILIES: &[ToolFamily] = &[
     ToolFamily {
@@ -135,6 +98,27 @@ pub const TOOL_FAMILIES: &[ToolFamily] = &[
     },
 ];
 
+/// One agent-facing tool that groups operations behind an `action` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolFamily {
+    /// Canonical tool name, such as `orbit.decision`.
+    pub name: &'static str,
+    /// The actions, in advertised order.
+    pub actions: &'static [ToolFamilyAction],
+}
+
+/// One action of a [`ToolFamily`] and the operation that serves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolFamilyAction {
+    /// The `action` value, such as `raise`.
+    pub action: &'static str,
+    /// The internal operation name, such as `orbit.decision.raise`.
+    pub operation: &'static str,
+    /// Whether the operation takes its own `action` input, which the family
+    /// carries as [`TOOL_MODE_FIELD`].
+    pub takes_mode: bool,
+}
+
 impl ToolFamily {
     /// The action named `action`, if this family has it.
     pub fn action(&self, action: &str) -> Option<&'static ToolFamilyAction> {
@@ -153,6 +137,22 @@ impl ToolFamily {
     /// The policy entry naming one action, such as `orbit.decision:raise`.
     pub fn qualified_action(&self, action: &str) -> String {
         format!("{}{TOOL_ACTION_SEPARATOR}{action}", self.name)
+    }
+}
+
+const fn action(action: &'static str, operation: &'static str) -> ToolFamilyAction {
+    ToolFamilyAction {
+        action,
+        operation,
+        takes_mode: false,
+    }
+}
+
+const fn action_with_mode(action: &'static str, operation: &'static str) -> ToolFamilyAction {
+    ToolFamilyAction {
+        action,
+        operation,
+        takes_mode: true,
     }
 }
 

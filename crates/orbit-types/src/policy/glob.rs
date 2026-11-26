@@ -27,6 +27,104 @@ use regex::{Regex, RegexBuilder};
 
 use super::PolicyError;
 
+/// Longest normalized rule, in bytes, that [`validate_glob_rule`] accepts
+/// without compiling it.
+///
+/// Every character outside the glob operators is escaped, so a translated rule
+/// is always valid regex syntax; the only way [`compile_glob_regex`] can fail
+/// is the compiled-size limit, and 512 bytes of the costliest operator
+/// (`?`, a Unicode class) stay far below it.
+const UNCOMPILED_VALIDATION_MAX_BYTES: usize = 512;
+
+/// Which directories a glob rule can name a not-yet-existing path into.
+///
+/// [`match_glob`] answers "does this rule match this path", which is the only
+/// question a request-time check needs. A caller compiling an inode-based
+/// kernel ruleset needs the other direction: a rule that matches nothing today
+/// may still name a path tomorrow, and the ruleset is fixed before that
+/// happens. Asking per directory is what lets such a caller decide which
+/// directories it may hand out wholesale.
+///
+/// # Bounded and unbounded reach
+/// A rule's own segments normally bound the directories it can name into:
+/// `secrets/**` and `.env` can only produce a path beneath the workspace root,
+/// `config/*.key` beneath `config`. A directory-crossing `**` removes that
+/// bound — `**/.env` names `.env` in every directory, including directories
+/// that do not exist yet — which callers with a per-directory cost need to
+/// distinguish. See [`GlobReach::is_bounded`].
+#[derive(Debug)]
+pub struct GlobReach {
+    segments: Vec<ReachSegment>,
+    bounded: bool,
+    /// `.` names the workspace root itself and nothing beneath it.
+    root_only: bool,
+}
+
+#[derive(Debug)]
+enum ReachSegment {
+    /// A trailing `**`: everything below this point, at any depth.
+    Subtree,
+    /// One path segment, matched with the segment-local operators (`*`, `?`).
+    Name(Regex),
+}
+
+impl GlobReach {
+    /// Compile `rule` — a pattern already stripped of any `!` prefix and
+    /// normalized to forward slashes — for per-directory reach questions.
+    pub fn compile(rule: &str) -> Result<Self, regex::Error> {
+        let raw: Vec<&str> = rule.split('/').filter(|part| !part.is_empty()).collect();
+        let bounded = raw
+            .iter()
+            .enumerate()
+            .all(|(index, part)| !part.contains("**") || (*part == "**" && index + 1 == raw.len()));
+
+        let mut segments = Vec::with_capacity(raw.len());
+        for part in &raw {
+            if *part == "**" {
+                segments.push(ReachSegment::Subtree);
+            } else {
+                segments.push(ReachSegment::Name(compile_filesystem_regex(&format!(
+                    "^{}$",
+                    translate_glob_body(part)
+                ))?));
+            }
+        }
+
+        Ok(Self {
+            segments,
+            bounded,
+            root_only: rule == ".",
+        })
+    }
+
+    /// Whether the rule's reach is bounded by its own segments.
+    ///
+    /// False when a `**` crosses directory boundaries, which lets the rule name
+    /// a path beneath a directory the rule text never mentions. A caller that
+    /// pays a cost per reached directory cannot enumerate that set.
+    pub fn is_bounded(&self) -> bool {
+        self.bounded
+    }
+
+    /// Whether the rule can name a path *strictly beneath* the directory
+    /// `dir`, expressed workspace-relative (`""` or `"."` for the root).
+    ///
+    /// This asks about names, not about what exists: `secrets/**` names a path
+    /// beneath the root whether or not `secrets` has ever been created. A rule
+    /// that matches `dir` itself and nothing below it does not reach beneath
+    /// it.
+    pub fn names_beneath(&self, dir: &str) -> bool {
+        if self.root_only {
+            return false;
+        }
+        let dir: Vec<&str> = dir
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect();
+        names_beneath(&self.segments, &dir)
+    }
+}
+
 /// Normalize a workspace-relative path for glob matching.
 ///
 /// Trims whitespace, replaces backslashes with forward slashes, strips a
@@ -140,15 +238,6 @@ pub fn compile_glob_regex(rule: &str) -> Result<Regex, regex::Error> {
     compile_filesystem_regex(&format!("^{body}$"))
 }
 
-/// Longest normalized rule, in bytes, that [`validate_glob_rule`] accepts
-/// without compiling it.
-///
-/// Every character outside the glob operators is escaped, so a translated rule
-/// is always valid regex syntax; the only way [`compile_glob_regex`] can fail
-/// is the compiled-size limit, and 512 bytes of the costliest operator
-/// (`?`, a Unicode class) stay far below it.
-const UNCOMPILED_VALIDATION_MAX_BYTES: usize = 512;
-
 /// Whether `rule` (already normalized, `!` prefix removed) is a glob
 /// [`compile_glob_regex`] accepts.
 ///
@@ -212,95 +301,6 @@ fn compile_filesystem_regex(pattern: &str) -> Result<Regex, regex::Error> {
 
 fn filesystem_globs_are_case_insensitive() -> bool {
     cfg!(any(target_os = "macos", windows))
-}
-
-/// Which directories a glob rule can name a not-yet-existing path into.
-///
-/// [`match_glob`] answers "does this rule match this path", which is the only
-/// question a request-time check needs. A caller compiling an inode-based
-/// kernel ruleset needs the other direction: a rule that matches nothing today
-/// may still name a path tomorrow, and the ruleset is fixed before that
-/// happens. Asking per directory is what lets such a caller decide which
-/// directories it may hand out wholesale.
-///
-/// # Bounded and unbounded reach
-/// A rule's own segments normally bound the directories it can name into:
-/// `secrets/**` and `.env` can only produce a path beneath the workspace root,
-/// `config/*.key` beneath `config`. A directory-crossing `**` removes that
-/// bound — `**/.env` names `.env` in every directory, including directories
-/// that do not exist yet — which callers with a per-directory cost need to
-/// distinguish. See [`GlobReach::is_bounded`].
-#[derive(Debug)]
-pub struct GlobReach {
-    segments: Vec<ReachSegment>,
-    bounded: bool,
-    /// `.` names the workspace root itself and nothing beneath it.
-    root_only: bool,
-}
-
-#[derive(Debug)]
-enum ReachSegment {
-    /// A trailing `**`: everything below this point, at any depth.
-    Subtree,
-    /// One path segment, matched with the segment-local operators (`*`, `?`).
-    Name(Regex),
-}
-
-impl GlobReach {
-    /// Compile `rule` — a pattern already stripped of any `!` prefix and
-    /// normalized to forward slashes — for per-directory reach questions.
-    pub fn compile(rule: &str) -> Result<Self, regex::Error> {
-        let raw: Vec<&str> = rule.split('/').filter(|part| !part.is_empty()).collect();
-        let bounded = raw
-            .iter()
-            .enumerate()
-            .all(|(index, part)| !part.contains("**") || (*part == "**" && index + 1 == raw.len()));
-
-        let mut segments = Vec::with_capacity(raw.len());
-        for part in &raw {
-            if *part == "**" {
-                segments.push(ReachSegment::Subtree);
-            } else {
-                segments.push(ReachSegment::Name(compile_filesystem_regex(&format!(
-                    "^{}$",
-                    translate_glob_body(part)
-                ))?));
-            }
-        }
-
-        Ok(Self {
-            segments,
-            bounded,
-            root_only: rule == ".",
-        })
-    }
-
-    /// Whether the rule's reach is bounded by its own segments.
-    ///
-    /// False when a `**` crosses directory boundaries, which lets the rule name
-    /// a path beneath a directory the rule text never mentions. A caller that
-    /// pays a cost per reached directory cannot enumerate that set.
-    pub fn is_bounded(&self) -> bool {
-        self.bounded
-    }
-
-    /// Whether the rule can name a path *strictly beneath* the directory
-    /// `dir`, expressed workspace-relative (`""` or `"."` for the root).
-    ///
-    /// This asks about names, not about what exists: `secrets/**` names a path
-    /// beneath the root whether or not `secrets` has ever been created. A rule
-    /// that matches `dir` itself and nothing below it does not reach beneath
-    /// it.
-    pub fn names_beneath(&self, dir: &str) -> bool {
-        if self.root_only {
-            return false;
-        }
-        let dir: Vec<&str> = dir
-            .split('/')
-            .filter(|part| !part.is_empty() && *part != ".")
-            .collect();
-        names_beneath(&self.segments, &dir)
-    }
 }
 
 fn names_beneath(pattern: &[ReachSegment], dir: &[&str]) -> bool {

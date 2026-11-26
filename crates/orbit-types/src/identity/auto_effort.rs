@@ -14,20 +14,6 @@ use crate::task::TaskComplexity;
 /// The effort-slot value that asks for a per-draw effort: `opus@auto`.
 pub const AUTO_EFFORT: &str = "auto";
 
-/// The crew a `<crew>@auto` reference names, or `None` for any other
-/// reference.
-#[must_use]
-pub fn auto_effort_base(reference: &str) -> Option<&str> {
-    let (base, effort) = reference.trim().split_once(CREW_EFFORT_SEPARATOR)?;
-    (effort.trim() == AUTO_EFFORT).then(|| base.trim())
-}
-
-/// The `<crew>@auto` reference for `base`.
-#[must_use]
-pub fn auto_effort_reference(base: &str) -> String {
-    format!("{}{CREW_EFFORT_SEPARATOR}{AUTO_EFFORT}", base.trim())
-}
-
 /// What a draw knew about its subject when it chose an effort. Each field is
 /// absent when that role has no such signal at admission.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,4 +76,18 @@ pub struct AutoEffortChoice {
     #[serde(default)]
     pub explored: bool,
     pub signal: AutoEffortSignal,
+}
+
+/// The crew a `<crew>@auto` reference names, or `None` for any other
+/// reference.
+#[must_use]
+pub fn auto_effort_base(reference: &str) -> Option<&str> {
+    let (base, effort) = reference.trim().split_once(CREW_EFFORT_SEPARATOR)?;
+    (effort.trim() == AUTO_EFFORT).then(|| base.trim())
+}
+
+/// The `<crew>@auto` reference for `base`.
+#[must_use]
+pub fn auto_effort_reference(base: &str) -> String {
+    format!("{}{CREW_EFFORT_SEPARATOR}{AUTO_EFFORT}", base.trim())
 }

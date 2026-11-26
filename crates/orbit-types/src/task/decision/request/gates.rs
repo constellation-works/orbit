@@ -4,6 +4,21 @@ use serde::{Deserialize, Serialize};
 
 use super::options::DecisionAnswer;
 
+/// Answer id that writes the grant a script grant request asks for.
+pub const SCRIPT_GRANT_GRANT: &str = "grant";
+/// Answer id that refuses a script grant request.
+pub const SCRIPT_GRANT_REJECT: &str = "reject";
+
+/// Answer id that applies a resident grant request.
+pub const RESIDENT_AUTHORITY_GRANT: &str = "grant";
+/// Answer id that refuses a resident grant request.
+pub const RESIDENT_AUTHORITY_REJECT: &str = "reject";
+
+/// Answer id that confirms a model answer.
+pub const MODEL_ANSWER_CONFIRM: &str = "confirm";
+/// Answer id that vetoes a model answer.
+pub const MODEL_ANSWER_VETO: &str = "veto";
+
 /// The gate a [`DecisionRequest`](super::model::DecisionRequest) waits on.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -125,18 +140,3 @@ impl DecisionGate {
         ]
     }
 }
-
-/// Answer id that writes the grant a script grant request asks for.
-pub const SCRIPT_GRANT_GRANT: &str = "grant";
-/// Answer id that refuses a script grant request.
-pub const SCRIPT_GRANT_REJECT: &str = "reject";
-
-/// Answer id that applies a resident grant request.
-pub const RESIDENT_AUTHORITY_GRANT: &str = "grant";
-/// Answer id that refuses a resident grant request.
-pub const RESIDENT_AUTHORITY_REJECT: &str = "reject";
-
-/// Answer id that confirms a model answer.
-pub const MODEL_ANSWER_CONFIRM: &str = "confirm";
-/// Answer id that vetoes a model answer.
-pub const MODEL_ANSWER_VETO: &str = "veto";

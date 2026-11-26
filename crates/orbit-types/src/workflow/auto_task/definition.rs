@@ -32,22 +32,11 @@ pub const MAX_AUTO_TASK_INTERVAL_MINUTES: u64 = 365 * 24 * 60;
 /// both key off `auto-task:<name>`.
 pub const AUTO_TASK_TAG_PREFIX: &str = "auto-task:";
 
-/// The provenance tag for a definition: `auto-task:<name>`.
-pub fn auto_task_tag(name: &str) -> String {
-    format!("{AUTO_TASK_TAG_PREFIX}{name}")
-}
-
 /// Auto-task templates whose brief builds or runs the product [ORB-15766].
 /// Their tasks carry `no-diff-expected` because they commit nothing, but the
 /// work compiles and runs the software, so it is not CPU-light and its
 /// build-like load is not a defect.
 const BUILDS_BY_DESIGN_AUTO_TASKS: [&str; 2] = ["qa-sweep", "qa-full-sweep"];
-
-/// Whether the auto-task template `name` builds or runs the product by design.
-/// This list is the declaration; no template name is matched by pattern.
-pub fn auto_task_builds_by_design(name: &str) -> bool {
-    BUILDS_BY_DESIGN_AUTO_TASKS.contains(&name)
-}
 
 /// The shipped review and QA auto-tasks whose templates file confirmed
 /// findings with a `regression_from` relation to the task that introduced them.
@@ -57,20 +46,6 @@ const REGRESSION_FINDING_AUTO_TASKS: [&str; 4] = [
     "qa-sweep",
     "qa-full-sweep",
 ];
-
-/// Whether a task's durable tags identify a review or QA task that files
-/// regression findings. Scheduler-minted tasks carry an `auto-task:<name>`
-/// provenance tag. Coordinator-filed area tasks instead carry
-/// `no-diff-expected` together with `full-code-review` or `qa-full-sweep`.
-pub fn files_regression_findings(tags: &[String]) -> bool {
-    REGRESSION_FINDING_AUTO_TASKS
-        .iter()
-        .any(|name| tags.contains(&auto_task_tag(name)))
-        || (tags.iter().any(|tag| tag == "no-diff-expected")
-            && tags
-                .iter()
-                .any(|tag| matches!(tag.as_str(), "full-code-review" | "qa-full-sweep")))
-}
 
 /// Artifact path a completed sweep writes its cursor to, and the scheduler's
 /// `skip_if_unchanged` precondition reads back. The cursor is this structured
@@ -445,26 +420,6 @@ impl std::fmt::Display for DedupePolicy {
     }
 }
 
-const fn default_true() -> bool {
-    true
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-const fn default_task_type() -> TaskType {
-    TaskType::Chore
-}
-
-const fn default_priority() -> TaskPriority {
-    TaskPriority::Medium
-}
-
-const fn default_status() -> TaskStatus {
-    TaskStatus::Backlog
-}
-
 impl AutoTaskDefinition {
     /// Semantic checks beyond serde shape: name charset, non-empty schedule,
     /// non-empty template title. Cron parsing itself happens in the scheduler
@@ -528,6 +483,51 @@ impl AutoTaskDefinition {
         }
         Ok(())
     }
+}
+
+/// The provenance tag for a definition: `auto-task:<name>`.
+pub fn auto_task_tag(name: &str) -> String {
+    format!("{AUTO_TASK_TAG_PREFIX}{name}")
+}
+
+/// Whether the auto-task template `name` builds or runs the product by design.
+/// This list is the declaration; no template name is matched by pattern.
+pub fn auto_task_builds_by_design(name: &str) -> bool {
+    BUILDS_BY_DESIGN_AUTO_TASKS.contains(&name)
+}
+
+/// Whether a task's durable tags identify a review or QA task that files
+/// regression findings. Scheduler-minted tasks carry an `auto-task:<name>`
+/// provenance tag. Coordinator-filed area tasks instead carry
+/// `no-diff-expected` together with `full-code-review` or `qa-full-sweep`.
+pub fn files_regression_findings(tags: &[String]) -> bool {
+    REGRESSION_FINDING_AUTO_TASKS
+        .iter()
+        .any(|name| tags.contains(&auto_task_tag(name)))
+        || (tags.iter().any(|tag| tag == "no-diff-expected")
+            && tags
+                .iter()
+                .any(|tag| matches!(tag.as_str(), "full-code-review" | "qa-full-sweep")))
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+const fn default_task_type() -> TaskType {
+    TaskType::Chore
+}
+
+const fn default_priority() -> TaskPriority {
+    TaskPriority::Medium
+}
+
+const fn default_status() -> TaskStatus {
+    TaskStatus::Backlog
 }
 
 /// Definition names share the routine name charset: lowercase alphanumeric

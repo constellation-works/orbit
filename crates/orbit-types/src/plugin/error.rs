@@ -40,14 +40,6 @@ pub enum PluginGrantError {
     RecordedDrift { listed: String, loaded: String },
 }
 
-fn valid_grants() -> String {
-    PluginGrant::ALL
-        .iter()
-        .map(|grant| grant.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// A pinned archive digest that is not a `sha256:` digest.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ArchiveDigestError {
@@ -100,4 +92,12 @@ pub enum PluginPinError {
         index: usize,
         reason: ArchiveDigestError,
     },
+}
+
+fn valid_grants() -> String {
+    PluginGrant::ALL
+        .iter()
+        .map(|grant| grant.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }

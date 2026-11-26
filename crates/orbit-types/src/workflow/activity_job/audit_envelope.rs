@@ -19,6 +19,75 @@ pub const V2_DENIAL_EVENT_TYPES: &[&str] = &[
     V2_EVENT_TYPE_STEP_DENIED,
 ];
 
+/// Payload `body_kind` and the `event_type` column the writer stores for it.
+///
+/// Both come from one [`V2AuditEventKind`]. A kind page can reject every other
+/// entry here without reading `payload_json`. A `body_kind` absent from this
+/// table, or a row whose `event_type` is not one of these columns, still has
+/// to be matched from the payload.
+pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
+    (
+        "provider_invocation_observed",
+        "provider.invocation.observed",
+    ),
+    ("run_started", "run.started"),
+    ("run_finished", "run.finished"),
+    ("run_cancelled", "run.cancelled"),
+    ("step_started", "step.started"),
+    ("step_finished", "step.finished"),
+    ("step_skipped", "step.skipped"),
+    ("step_retry", "step.retry"),
+    ("step_recovery_attempted", "step.recovery_attempted"),
+    ("step_post_recovery_attempt", "step.post_recovery_attempt"),
+    ("step_contract_correction", "step.contract_correction"),
+    ("final_recovery_attempted", "job.final_recovery_attempted"),
+    ("step_denied", V2_EVENT_TYPE_STEP_DENIED),
+    ("step_join", "step.join"),
+    ("fanout_dispatched", "fanout.dispatched"),
+    ("worker_state", "worker.state"),
+    ("fanin_joined", "fanin.joined"),
+    ("loop_iteration_start", "loop.iteration.start"),
+    ("loop_iteration_end", "loop.iteration.end"),
+    ("loop_did_not_converge", "loop.did_not_converge"),
+    ("activity_started", "activity.started"),
+    ("activity_finished", "activity.finished"),
+    ("fs_call_request", "fs.call.request"),
+    ("fs_call_result", "fs.call.result"),
+    ("fs_call_denied", V2_EVENT_TYPE_FS_CALL_DENIED),
+    ("tool_denied", V2_EVENT_TYPE_TOOL_DENIED),
+    (
+        "tool_allowlist_harness_delegated",
+        "tool_allowlist.harness_delegated",
+    ),
+    (
+        "trusted_host_execution_admitted",
+        "trusted_host.execution_admitted",
+    ),
+    (
+        "tag_instructions_applied",
+        "activity.tag_instructions_applied",
+    ),
+    ("agent_corpus_applied", "activity.agent_corpus_applied"),
+    ("explore_brief_applied", "activity.explore_brief_applied"),
+    ("notices_delivered", "activity.notices_delivered"),
+    ("image_canary_checked", "activity.image_canary_checked"),
+    (
+        "experiment_overlay_applied",
+        "activity.experiment_overlay_applied",
+    ),
+    ("cli_invocation_started", "cli.invocation.started"),
+    ("cli_invocation_process", "cli.invocation.process"),
+    ("cli_invocation_activity", "cli.invocation.activity"),
+    (
+        "cli_invocation_stopped_descendant",
+        "cli.invocation.stopped_descendant",
+    ),
+    ("cli_invocation_finished", "cli.invocation.finished"),
+    ("cli_invocation_build_budget", "cli.invocation.build_budget"),
+    ("script_execution", V2_EVENT_TYPE_SCRIPT_EXECUTION),
+    ("telemetry_persist_failed", "telemetry.persist_failed"),
+];
+
 /// Common envelope fields wrapping every v2 audit event (§7).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct V2AuditEnvelope {
@@ -568,83 +637,6 @@ impl V2AuditEventKind {
     }
 }
 
-/// Payload `body_kind` and the `event_type` column the writer stores for it.
-///
-/// Both come from one [`V2AuditEventKind`]. A kind page can reject every other
-/// entry here without reading `payload_json`. A `body_kind` absent from this
-/// table, or a row whose `event_type` is not one of these columns, still has
-/// to be matched from the payload.
-pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
-    (
-        "provider_invocation_observed",
-        "provider.invocation.observed",
-    ),
-    ("run_started", "run.started"),
-    ("run_finished", "run.finished"),
-    ("run_cancelled", "run.cancelled"),
-    ("step_started", "step.started"),
-    ("step_finished", "step.finished"),
-    ("step_skipped", "step.skipped"),
-    ("step_retry", "step.retry"),
-    ("step_recovery_attempted", "step.recovery_attempted"),
-    ("step_post_recovery_attempt", "step.post_recovery_attempt"),
-    ("step_contract_correction", "step.contract_correction"),
-    ("final_recovery_attempted", "job.final_recovery_attempted"),
-    ("step_denied", V2_EVENT_TYPE_STEP_DENIED),
-    ("step_join", "step.join"),
-    ("fanout_dispatched", "fanout.dispatched"),
-    ("worker_state", "worker.state"),
-    ("fanin_joined", "fanin.joined"),
-    ("loop_iteration_start", "loop.iteration.start"),
-    ("loop_iteration_end", "loop.iteration.end"),
-    ("loop_did_not_converge", "loop.did_not_converge"),
-    ("activity_started", "activity.started"),
-    ("activity_finished", "activity.finished"),
-    ("fs_call_request", "fs.call.request"),
-    ("fs_call_result", "fs.call.result"),
-    ("fs_call_denied", V2_EVENT_TYPE_FS_CALL_DENIED),
-    ("tool_denied", V2_EVENT_TYPE_TOOL_DENIED),
-    (
-        "tool_allowlist_harness_delegated",
-        "tool_allowlist.harness_delegated",
-    ),
-    (
-        "trusted_host_execution_admitted",
-        "trusted_host.execution_admitted",
-    ),
-    (
-        "tag_instructions_applied",
-        "activity.tag_instructions_applied",
-    ),
-    ("agent_corpus_applied", "activity.agent_corpus_applied"),
-    ("explore_brief_applied", "activity.explore_brief_applied"),
-    ("notices_delivered", "activity.notices_delivered"),
-    ("image_canary_checked", "activity.image_canary_checked"),
-    (
-        "experiment_overlay_applied",
-        "activity.experiment_overlay_applied",
-    ),
-    ("cli_invocation_started", "cli.invocation.started"),
-    ("cli_invocation_process", "cli.invocation.process"),
-    ("cli_invocation_activity", "cli.invocation.activity"),
-    (
-        "cli_invocation_stopped_descendant",
-        "cli.invocation.stopped_descendant",
-    ),
-    ("cli_invocation_finished", "cli.invocation.finished"),
-    ("cli_invocation_build_budget", "cli.invocation.build_budget"),
-    ("script_execution", V2_EVENT_TYPE_SCRIPT_EXECUTION),
-    ("telemetry_persist_failed", "telemetry.persist_failed"),
-];
-
-/// Column `event_type` stored for `body_kind`, when this crate writes that kind.
-pub fn event_type_for_body_kind(body_kind: &str) -> Option<&'static str> {
-    V2_AUDIT_BODY_KIND_EVENT_TYPES
-        .iter()
-        .find(|(kind, _)| *kind == body_kind)
-        .map(|(_, event_type)| *event_type)
-}
-
 /// How the executor read a recovery invocation's durable decision file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StepRecoveryDecisionRecord {
@@ -665,4 +657,12 @@ pub struct StepRecoveryDecisionRecord {
 pub struct BranchOutcome {
     pub branch_id: String,
     pub outcome: String,
+}
+
+/// Column `event_type` stored for `body_kind`, when this crate writes that kind.
+pub fn event_type_for_body_kind(body_kind: &str) -> Option<&'static str> {
+    V2_AUDIT_BODY_KIND_EVENT_TYPES
+        .iter()
+        .find(|(kind, _)| *kind == body_kind)
+        .map(|(_, event_type)| *event_type)
 }

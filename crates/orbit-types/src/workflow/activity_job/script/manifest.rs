@@ -11,6 +11,13 @@ pub const SCRIPT_REF_PREFIX: &str = "script:";
 /// The only `schemaVersion` a script manifest may declare.
 pub const SCRIPT_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
+/// Domain separator for a directory input's tree digest.
+pub const SCRIPT_INPUT_TREE_DOMAIN: &str = "orbit.script.input-tree.v1";
+
+/// The most entries one directory input may hold; a larger tree refuses the
+/// step rather than be hashed without bound.
+pub const SCRIPT_INPUT_MAX_TREE_ENTRIES: usize = 100_000;
+
 /// A script manifest's `spec:` body.
 ///
 /// ```yaml
@@ -81,13 +88,6 @@ pub struct ScriptFileInput {
     #[serde(rename = "as")]
     pub as_: String,
 }
-
-/// Domain separator for a directory input's tree digest.
-pub const SCRIPT_INPUT_TREE_DOMAIN: &str = "orbit.script.input-tree.v1";
-
-/// The most entries one directory input may hold; a larger tree refuses the
-/// step rather than be hashed without bound.
-pub const SCRIPT_INPUT_MAX_TREE_ENTRIES: usize = 100_000;
 
 /// What one declared input was when the attempt admitted it: recorded on the
 /// `script.execution` entry beside the output files.

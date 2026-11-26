@@ -12,6 +12,11 @@ pub const GRANTED_TOOLS_FIELD: &str = "granted_tools";
 /// History event written for every change to a task's `granted_tools`.
 pub const GRANTED_TOOLS_CHANGED_EVENT: &str = "granted_tools_changed";
 
+/// History event written when Orbit rewrites a task's stored pre-family tool
+/// names (`required_tools`, `granted_tools`) to family actions [ORB-23552]. It
+/// is a migration of the same tools, not an operator grant or edit.
+pub const TOOL_NAMES_MIGRATED_EVENT: &str = "tool_names_migrated";
+
 /// The note a [`GRANTED_TOOLS_CHANGED_EVENT`] records: the tool sets before
 /// and after the change and the task's run/claim state when it was made.
 /// The writer's identity is the history entry's `by`.
@@ -23,11 +28,6 @@ pub fn granted_tools_change_note(before: &[String], after: &[String], state: &st
         tool_set(after)
     )
 }
-
-/// History event written when Orbit rewrites a task's stored pre-family tool
-/// names (`required_tools`, `granted_tools`) to family actions [ORB-23552]. It
-/// is a migration of the same tools, not an operator grant or edit.
-pub const TOOL_NAMES_MIGRATED_EVENT: &str = "tool_names_migrated";
 
 /// The note a [`TOOL_NAMES_MIGRATED_EVENT`] records: each rewritten field with
 /// its tool set before and after.

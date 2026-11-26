@@ -187,6 +187,17 @@ impl AuditEvent {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AuditStats {
+    pub total: i64,
+    pub success_count: i64,
+    pub failure_count: i64,
+    pub denied_count: i64,
+    pub avg_duration_ms: f64,
+    pub p95_duration_ms: i64,
+    pub max_duration_ms: i64,
+}
+
 /// The audit fields every JSON projection shares, under their wire names. Each
 /// surface appends only the keys it alone carries, so the shared keys keep one
 /// order and one encoding across the CLI and the dashboard API.
@@ -231,15 +242,4 @@ pub fn audit_event_base_json(event: &AuditEvent) -> Value {
         "step_index": event.step_index,
         "session_model": event.session_model,
     })
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AuditStats {
-    pub total: i64,
-    pub success_count: i64,
-    pub failure_count: i64,
-    pub denied_count: i64,
-    pub avg_duration_ms: f64,
-    pub p95_duration_ms: i64,
-    pub max_duration_ms: i64,
 }

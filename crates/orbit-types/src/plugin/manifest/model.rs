@@ -15,6 +15,9 @@ pub const PLUGIN_DIR_NAME: &str = ".orbit-plugin";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub const MANIFEST_KIND: &str = "Plugin";
 
+/// Longest `spec.secrets[].name` a manifest may declare.
+pub const MAX_SECRET_NAME_LEN: usize = 64;
+
 /// A manifest rejection. `field` is the dotted path of the offending key so
 /// every diagnostic names what to fix.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -117,25 +120,6 @@ pub struct PluginSecretSpec {
     /// token that the provider rotates on every refresh).
     #[serde(default)]
     pub rotatable: bool,
-}
-
-/// Longest `spec.secrets[].name` a manifest may declare.
-pub const MAX_SECRET_NAME_LEN: usize = 64;
-
-/// Whether `name` is an acceptable `spec.secrets[].name`: a lowercase letter,
-/// then lowercase letters, digits, `_` or `-`, at most
-/// [`MAX_SECRET_NAME_LEN`] bytes. The name becomes a key in the host's secret
-/// store and a CLI argument, so it is kept to a spelling that needs no
-/// quoting anywhere.
-pub fn is_valid_secret_name(name: &str) -> bool {
-    name.len() <= MAX_SECRET_NAME_LEN
-        && name
-            .bytes()
-            .next()
-            .is_some_and(|first| first.is_ascii_lowercase())
-        && name.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
-        })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,4 +326,20 @@ pub struct PluginConfigSection {
     pub schema: Option<String>,
     #[serde(default)]
     pub defaults: Option<Value>,
+}
+
+/// Whether `name` is an acceptable `spec.secrets[].name`: a lowercase letter,
+/// then lowercase letters, digits, `_` or `-`, at most
+/// [`MAX_SECRET_NAME_LEN`] bytes. The name becomes a key in the host's secret
+/// store and a CLI argument, so it is kept to a spelling that needs no
+/// quoting anywhere.
+pub fn is_valid_secret_name(name: &str) -> bool {
+    name.len() <= MAX_SECRET_NAME_LEN
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+        })
 }

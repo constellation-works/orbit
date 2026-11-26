@@ -2,6 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Derived block-triage answer that accepts open review findings and resumes
+/// the reviewed candidate. It is not stored on the request: readers add it
+/// the way they add `land`, and it carries [`DecisionAction::Requeue`] with
+/// no specification rewrite.
+pub const ACCEPT_FINDINGS_ANSWER_ID: &str = "accept-findings";
+
 /// Risk of an answer. Unknown is conservative for absent or future values.
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -35,12 +41,6 @@ impl<'de> Deserialize<'de> for DecisionRiskTier {
     }
 }
 
-/// Derived block-triage answer that accepts open review findings and resumes
-/// the reviewed candidate. It is not stored on the request: readers add it
-/// the way they add `land`, and it carries [`DecisionAction::Requeue`] with
-/// no specification rewrite.
-pub const ACCEPT_FINDINGS_ANSWER_ID: &str = "accept-findings";
-
 /// One allowed answer to a [`DecisionRequest`](super::model::DecisionRequest).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecisionAnswer {
@@ -71,8 +71,8 @@ impl DecisionAnswer {
             id: id.into(),
             label: label.into(),
             consequence: consequence.into(),
-            option: None,
             risk_tier: DecisionRiskTier::Unknown,
+            option: None,
         }
     }
 }

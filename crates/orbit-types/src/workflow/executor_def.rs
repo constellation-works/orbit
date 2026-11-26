@@ -214,38 +214,6 @@ pub struct ModelPairOverride {
     pub weak: String,
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-/// `host_os` on an executor definition: absent or null is unrestricted, and a
-/// present list must name at least one of `linux`, `macos` or `windows`.
-pub fn deserialize_executor_host_os<'de, D>(
-    deserializer: D,
-) -> Result<Option<BTreeSet<crate::task::HostOs>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let Some(values) = Option::<Vec<String>>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
-    if values.is_empty() {
-        return Err(D::Error::custom(
-            "host_os must list at least one of linux, macos, windows; omit host_os to allow every host",
-        ));
-    }
-    let mut hosts = BTreeSet::new();
-    for value in values {
-        let Some(os) = crate::task::HostOs::parse(&value) else {
-            return Err(D::Error::custom(format!(
-                "unknown host_os `{value}`; expected linux, macos, or windows"
-            )));
-        };
-        hosts.insert(os);
-    }
-    Ok(Some(hosts))
-}
-
 impl ExecutorDef {
     /// Convert a resource into its runtime definition. Each explicit timestamp
     /// takes precedence over the corresponding resource timestamp.
@@ -322,4 +290,36 @@ pub struct AuthProbe {
 pub enum AuthProbeSuccess {
     ExitZero,
     StdoutContains { text: String },
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// `host_os` on an executor definition: absent or null is unrestricted, and a
+/// present list must name at least one of `linux`, `macos` or `windows`.
+pub fn deserialize_executor_host_os<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeSet<crate::task::HostOs>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(values) = Option::<Vec<String>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if values.is_empty() {
+        return Err(D::Error::custom(
+            "host_os must list at least one of linux, macos, windows; omit host_os to allow every host",
+        ));
+    }
+    let mut hosts = BTreeSet::new();
+    for value in values {
+        let Some(os) = crate::task::HostOs::parse(&value) else {
+            return Err(D::Error::custom(format!(
+                "unknown host_os `{value}`; expected linux, macos, or windows"
+            )));
+        };
+        hosts.insert(os);
+    }
+    Ok(Some(hosts))
 }

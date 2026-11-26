@@ -55,14 +55,14 @@ pub const KNOWN_RED_VALIDATION_EVENT: &str = "known_red_validation";
 /// The marker a [`KnownRedValidation`] note starts with.
 pub const KNOWN_RED_MARKER: &str = "[known_red]";
 
-/// Whether a step failure says its required validation is red on the base.
-#[must_use]
-pub fn is_baseline_red_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(BASELINE_RED_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(BASELINE_RED_MARKER)
-        })
-}
+/// Most failure identities a hold displays; the rest are counted and hashed.
+const MAX_BASELINE_RED_FAILURES: usize = 20;
+/// Lines of output a hold keeps when the base run names no failure.
+const BASELINE_RED_TAIL_LINES: usize = 5;
+/// Longest failure identity or output line a hold keeps, in bytes.
+const MAX_BASELINE_RED_LINE_BYTES: usize = 240;
+/// Failures the one-line description names before counting the rest.
+const DESCRIBED_FAILURES: usize = 5;
 
 /// Which base a required command failed on, and the command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,15 +92,6 @@ pub struct BaselineRedHold {
     pub failures: BaselineRedFailures,
 }
 
-/// Most failure identities a hold displays; the rest are counted and hashed.
-const MAX_BASELINE_RED_FAILURES: usize = 20;
-/// Lines of output a hold keeps when the base run names no failure.
-const BASELINE_RED_TAIL_LINES: usize = 5;
-/// Longest failure identity or output line a hold keeps, in bytes.
-const MAX_BASELINE_RED_LINE_BYTES: usize = 240;
-/// Failures the one-line description names before counting the rest.
-const DESCRIBED_FAILURES: usize = 5;
-
 /// What a red base run named as failing, bounded so the persisted hold stays
 /// small [ORB-15374].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,10 +113,6 @@ pub struct BaselineRedFailures {
     /// names no failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tail: Vec<String>,
-}
-
-fn is_zero(count: &usize) -> bool {
-    *count == 0
 }
 
 impl BaselineRedFailures {
@@ -214,52 +201,6 @@ impl BaselineRedFailures {
             )
         })
     }
-}
-
-/// The last [`BASELINE_RED_TAIL_LINES`] non-blank lines of `output`, color
-/// codes dropped and each line bounded.
-fn output_tail(output: &str) -> Vec<String> {
-    let lines = output
-        .lines()
-        .map(|line| strip_ansi(line).trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
-    lines[lines.len().saturating_sub(BASELINE_RED_TAIL_LINES)..]
-        .iter()
-        .map(|line| bounded_line(line))
-        .collect()
-}
-
-/// `text` without its ANSI escape sequences (`ESC [ ... <letter>`).
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
-            out.push(ch);
-            continue;
-        }
-        if chars.next() == Some('[') {
-            for next in chars.by_ref() {
-                if next.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        }
-    }
-    out
-}
-
-/// `line` cut to [`MAX_BASELINE_RED_LINE_BYTES`] on a character boundary.
-fn bounded_line(line: &str) -> String {
-    if line.len() <= MAX_BASELINE_RED_LINE_BYTES {
-        return line.to_string();
-    }
-    let mut cut = MAX_BASELINE_RED_LINE_BYTES;
-    while !line.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}…", &line[..cut])
 }
 
 impl BaselineRedHold {
@@ -417,4 +358,63 @@ impl KnownRedValidation {
         }
         lines
     }
+}
+
+/// Whether a step failure says its required validation is red on the base.
+#[must_use]
+pub fn is_baseline_red_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(BASELINE_RED_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(BASELINE_RED_MARKER)
+        })
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
+/// The last [`BASELINE_RED_TAIL_LINES`] non-blank lines of `output`, color
+/// codes dropped and each line bounded.
+fn output_tail(output: &str) -> Vec<String> {
+    let lines = output
+        .lines()
+        .map(|line| strip_ansi(line).trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    lines[lines.len().saturating_sub(BASELINE_RED_TAIL_LINES)..]
+        .iter()
+        .map(|line| bounded_line(line))
+        .collect()
+}
+
+/// `text` without its ANSI escape sequences (`ESC [ ... <letter>`).
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
+            continue;
+        }
+        if chars.next() == Some('[') {
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `line` cut to [`MAX_BASELINE_RED_LINE_BYTES`] on a character boundary.
+fn bounded_line(line: &str) -> String {
+    if line.len() <= MAX_BASELINE_RED_LINE_BYTES {
+        return line.to_string();
+    }
+    let mut cut = MAX_BASELINE_RED_LINE_BYTES;
+    while !line.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", &line[..cut])
 }

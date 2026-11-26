@@ -65,6 +65,11 @@ impl WorkspacePublicationBinding {
     }
 }
 
+struct ParsedGitRemote {
+    identity: String,
+    has_credentials: bool,
+}
+
 /// Canonical `refs/heads/<name>` form, defaulting empty input to
 /// [`DEFAULT_PUBLICATION_BRANCH`].
 pub fn canonicalize_publication_branch(branch: &str) -> Result<String, WorkspaceError> {
@@ -253,11 +258,6 @@ pub fn redact_git_remote(remote: &str) -> String {
         return "***".to_string();
     }
     redact_scp_userinfo(remote).unwrap_or_else(|| remote.to_string())
-}
-
-struct ParsedGitRemote {
-    identity: String,
-    has_credentials: bool,
 }
 
 fn parse_git_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {

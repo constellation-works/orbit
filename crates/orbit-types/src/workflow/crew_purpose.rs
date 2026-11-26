@@ -20,6 +20,11 @@
 /// name a purpose for the tasks it files.
 pub const CREW_PURPOSE_TAG_PREFIX: &str = "crew-purpose:";
 
+/// Names [`CrewPurpose::SweepTasks`] had as three purposes, which tasks
+/// filed before they merged still record.
+const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
+    &["ci_failure_sweep", "merged_head_repair", "dependabot"];
+
 /// One purpose of work whose crew can be drawn from its own pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CrewPurpose {
@@ -42,11 +47,6 @@ pub enum CrewPurpose {
     /// executor declares `inspection_args` are drawn.
     PilotWarningTriage,
 }
-
-/// Names [`CrewPurpose::SweepTasks`] had as three purposes, which tasks
-/// filed before they merged still record.
-const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
-    &["ci_failure_sweep", "merged_head_repair", "dependabot"];
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.

@@ -15,6 +15,10 @@ pub const SOURCE_REPAIR_RESERVED: &str = "source_repair_reserved";
 /// Append-only link to the one admitted repair run.
 pub const SOURCE_REPAIR_LINKED: &str = "source_repair_linked";
 
+/// Fresh authorization of an unbound reservation after correcting its plan.
+/// The original reservation and its budget charge remain immutable.
+pub const SOURCE_REPAIR_RECONCILED: &str = "source_repair_reconciled";
+
 /// Observed immutable source and current task scope the operator authorizes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +121,14 @@ impl SourceRepairAdmission {
     }
 }
 
+/// Append-only proof of the original consent and the separately authorized plan.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRepairReconciliation {
+    pub reservation: SourceRepairAdmission,
+    pub authorization: SourceRepairAdmission,
+}
+
 /// Read every durable reservation, refusing unreadable history rather than
 /// refunding its budget. Callers serialize access with the owning task lock.
 pub fn source_repair_reservations(
@@ -127,18 +139,6 @@ pub fn source_repair_reservations(
         .filter(|entry| entry.event == SOURCE_REPAIR_RESERVED)
         .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap_or_default()))
         .collect()
-}
-
-/// Fresh authorization of an unbound reservation after correcting its plan.
-/// The original reservation and its budget charge remain immutable.
-pub const SOURCE_REPAIR_RECONCILED: &str = "source_repair_reconciled";
-
-/// Append-only proof of the original consent and the separately authorized plan.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceRepairReconciliation {
-    pub reservation: SourceRepairAdmission,
-    pub authorization: SourceRepairAdmission,
 }
 
 /// Resolve each reservation's sole effective authorization without changing its

@@ -89,47 +89,6 @@ impl ReviewValidation {
     }
 }
 
-/// How `records` and `retired` fail to account for the earlier required
-/// record `id`, which was observed with `outcome`; `None` when they do.
-///
-/// A record carrying the id as `required` or `superseded` accounts for it
-/// (the role rules then judge that record), as does `excluded` when the
-/// earlier record never ran. Otherwise a retirement with a reason accounts
-/// for any earlier record that did not fail.
-pub fn record_gap(
-    id: &str,
-    outcome: ValidationOutcome,
-    records: &[ReviewValidation],
-    retired: &[RetiredValidation],
-) -> Option<RecordGap> {
-    let never_ran = matches!(
-        outcome,
-        ValidationOutcome::NotRun | ValidationOutcome::Denied
-    );
-    let mut carriers = records
-        .iter()
-        .filter(|record| record.record_id() == Some(id))
-        .peekable();
-    let first_role = carriers.peek().map(|record| record.role);
-    if carriers.any(|record| match record.role {
-        ValidationRole::Required | ValidationRole::Superseded => true,
-        ValidationRole::Excluded => never_ran,
-        ValidationRole::ExpectedFailure | ValidationRole::Diagnostic => false,
-    }) {
-        return None;
-    }
-    if let Some(retirement) = retired.iter().find(|retired| retired.id.trim() == id) {
-        return if retirement.reason.trim().is_empty() {
-            Some(RecordGap::RetirementUnexplained)
-        } else if outcome == ValidationOutcome::Failed {
-            Some(RecordGap::FailureRetired)
-        } else {
-            None
-        };
-    }
-    Some(first_role.map_or(RecordGap::Omitted, RecordGap::Reclassified))
-}
-
 impl ReviewReportHistory {
     /// Refuse a newly submitted report whose required validation records lack
     /// stable ids, naming every such record and a free id for each so a
@@ -220,6 +179,47 @@ impl ReviewReportHistory {
         }
         Ok(())
     }
+}
+
+/// How `records` and `retired` fail to account for the earlier required
+/// record `id`, which was observed with `outcome`; `None` when they do.
+///
+/// A record carrying the id as `required` or `superseded` accounts for it
+/// (the role rules then judge that record), as does `excluded` when the
+/// earlier record never ran. Otherwise a retirement with a reason accounts
+/// for any earlier record that did not fail.
+pub fn record_gap(
+    id: &str,
+    outcome: ValidationOutcome,
+    records: &[ReviewValidation],
+    retired: &[RetiredValidation],
+) -> Option<RecordGap> {
+    let never_ran = matches!(
+        outcome,
+        ValidationOutcome::NotRun | ValidationOutcome::Denied
+    );
+    let mut carriers = records
+        .iter()
+        .filter(|record| record.record_id() == Some(id))
+        .peekable();
+    let first_role = carriers.peek().map(|record| record.role);
+    if carriers.any(|record| match record.role {
+        ValidationRole::Required | ValidationRole::Superseded => true,
+        ValidationRole::Excluded => never_ran,
+        ValidationRole::ExpectedFailure | ValidationRole::Diagnostic => false,
+    }) {
+        return None;
+    }
+    if let Some(retirement) = retired.iter().find(|retired| retired.id.trim() == id) {
+        return if retirement.reason.trim().is_empty() {
+            Some(RecordGap::RetirementUnexplained)
+        } else if outcome == ValidationOutcome::Failed {
+            Some(RecordGap::FailureRetired)
+        } else {
+            None
+        };
+    }
+    Some(first_role.map_or(RecordGap::Omitted, RecordGap::Reclassified))
 }
 
 fn one_line(command: &str) -> String {

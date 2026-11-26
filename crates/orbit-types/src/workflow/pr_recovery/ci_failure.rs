@@ -138,10 +138,11 @@ pub fn ci_failure_ledger(history: &[TaskHistoryEntry]) -> Vec<CiFailureLedgerEnt
             {
                 continue;
             }
+            let class = record.class;
             ledger.push(CiFailureLedgerEntry {
                 recorded_at: entry.at,
-                class: record.class,
                 record,
+                class,
                 changes: Vec::new(),
             });
         } else if entry.event == CI_FAILURE_RECLASSIFIED_EVENT {

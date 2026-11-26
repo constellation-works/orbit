@@ -2,6 +2,18 @@ use super::IdentityError;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Maximum encoded length for a stable registry identifier.
+pub const REGISTRY_IDENTIFIER_MAX_BYTES: usize = 128;
+/// Namespace prefix for generated machine identifiers.
+pub const MACHINE_ID_PREFIX: &str = "hm_";
+
+/// Task-id namespaces Orbit reserves for its own artifact kinds, plus the
+/// historical default. None may be chosen for a fresh machine.
+const RESERVED_TASK_PREFIXES: [&str; 4] = ["ORB", "ADR", "L", "F"];
+/// The namespace every pre-`machine.task_prefix` installation minted under.
+/// Still valid when already persisted; never selectable for a new machine.
+pub const LEGACY_TASK_PREFIX: &str = "ORB";
+
 /// An operator's acknowledgement that a registered host is deliberately offline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,11 +40,6 @@ pub struct AcknowledgedHost {
     #[serde(flatten)]
     pub offline: HostOffline,
 }
-
-/// Maximum encoded length for a stable registry identifier.
-pub const REGISTRY_IDENTIFIER_MAX_BYTES: usize = 128;
-/// Namespace prefix for generated machine identifiers.
-pub const MACHINE_ID_PREFIX: &str = "hm_";
 
 /// Validate a path-free, normalized identifier stored in public registry
 /// records. Transport targets and filesystem paths are never identities.
@@ -84,13 +91,6 @@ pub fn validate_machine_id(machine_id: &str) -> Result<(), IdentityError> {
 pub fn validate_machine_name(machine_name: &str) -> Result<(), IdentityError> {
     validate_registry_identifier("machine_name", machine_name)
 }
-
-/// Task-id namespaces Orbit reserves for its own artifact kinds, plus the
-/// historical default. None may be chosen for a fresh machine.
-const RESERVED_TASK_PREFIXES: [&str; 4] = ["ORB", "ADR", "L", "F"];
-/// The namespace every pre-`machine.task_prefix` installation minted under.
-/// Still valid when already persisted; never selectable for a new machine.
-pub const LEGACY_TASK_PREFIX: &str = "ORB";
 
 /// Validate an operator's fresh task-prefix choice.
 ///

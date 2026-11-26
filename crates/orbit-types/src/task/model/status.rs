@@ -23,29 +23,9 @@ pub const NO_DRAIN_TAG: &str = "no-drain";
 /// a time on a host.
 pub const PERF_LANE_TAGS: [&str; 2] = ["performance", "perf-review"];
 
-/// Whether `tags` mark a task that needs the host-wide perf lane.
-pub fn needs_perf_lane(tags: &[String]) -> bool {
-    tags.iter()
-        .any(|tag| PERF_LANE_TAGS.contains(&tag.as_str()))
-}
-
 /// Prefix of a pull-admission deferral that waits on the host-wide perf lane.
 /// A pull drain reads this before treating a named holder as a footprint conflict.
 pub const PERF_LANE_BUSY_PREFIX: &str = "perf_lane_busy: ";
-
-/// What an operator reads for a task waiting on the lane.
-pub fn perf_lane_detail(holder: &str) -> String {
-    format!(
-        "Waits for the host-wide perf lane, held by {holder}. Tasks that run the paired timing \
-         protocol (tagged `performance` or `perf-review`) are admitted one at a time, so this \
-         one starts when {holder} leaves `in-progress`."
-    )
-}
-
-/// The pull-admission reason a drain classifies as `perf_lane_busy`.
-pub fn perf_lane_hold_reason(holder: &str) -> String {
-    format!("{PERF_LANE_BUSY_PREFIX}{}", perf_lane_detail(holder))
-}
 
 /// Task history event an operator records to discard the candidate the task's
 /// last failed run preserved; the next run implements fresh [ORB-13985].
@@ -96,49 +76,6 @@ pub const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 /// into a populated band — the unlabeled set is often the largest bucket
 /// (ORB-10889 / ORB-10891).
 pub const UNSET_BUCKET: &str = "unset";
-
-/// Map an optional indexed label onto a display bucket.
-///
-/// Empty or missing values become [`UNSET_BUCKET`]. A present non-empty value
-/// is returned unchanged so unexpected labels stay their own band instead of
-/// being merged into a known one.
-pub fn labeled_or_unset(value: Option<&str>) -> &str {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(label) => label,
-        None => UNSET_BUCKET,
-    }
-}
-
-/// Map an indexed complexity label onto a display bucket.
-///
-/// [`TaskComplexity::Unassessed`] is the stored spelling of "nobody assessed
-/// this" ([`TaskComplexity::is_assessed`] is `false`), and rows indexed before
-/// the column existed spell the same thing as `NULL`. Reporting surfaces get
-/// one bucket for that concept — [`UNSET_BUCKET`] — rather than splitting the
-/// unlabeled set across `unset` and `unassessed` (ORB-10895). The fold happens
-/// here, at read time: the persisted and indexed value stays the literal
-/// `unassessed` so provenance and `NULL`-backfill detection remain honest.
-pub fn complexity_bucket(value: Option<&str>) -> &str {
-    let label = labeled_or_unset(value);
-    if label == TaskComplexity::Unassessed.as_str() {
-        UNSET_BUCKET
-    } else {
-        label
-    }
-}
-
-/// Stable display order: `unset`, then `low` / `medium` / `hard` / `xhard`,
-/// then any unexpected label alphabetically.
-pub fn complexity_bucket_ord(label: &str) -> (u8, &str) {
-    match label {
-        UNSET_BUCKET => (0, ""),
-        "low" => (1, ""),
-        "medium" => (2, ""),
-        "hard" => (3, ""),
-        "xhard" => (4, ""),
-        other => (5, other),
-    }
-}
 
 /// Current lifecycle state of a task.
 ///
@@ -564,5 +501,68 @@ impl OrchestratorModelSource {
 impl Display for OrchestratorModelSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+/// Whether `tags` mark a task that needs the host-wide perf lane.
+pub fn needs_perf_lane(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|tag| PERF_LANE_TAGS.contains(&tag.as_str()))
+}
+
+/// What an operator reads for a task waiting on the lane.
+pub fn perf_lane_detail(holder: &str) -> String {
+    format!(
+        "Waits for the host-wide perf lane, held by {holder}. Tasks that run the paired timing \
+         protocol (tagged `performance` or `perf-review`) are admitted one at a time, so this \
+         one starts when {holder} leaves `in-progress`."
+    )
+}
+
+/// The pull-admission reason a drain classifies as `perf_lane_busy`.
+pub fn perf_lane_hold_reason(holder: &str) -> String {
+    format!("{PERF_LANE_BUSY_PREFIX}{}", perf_lane_detail(holder))
+}
+
+/// Map an optional indexed label onto a display bucket.
+///
+/// Empty or missing values become [`UNSET_BUCKET`]. A present non-empty value
+/// is returned unchanged so unexpected labels stay their own band instead of
+/// being merged into a known one.
+pub fn labeled_or_unset(value: Option<&str>) -> &str {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(label) => label,
+        None => UNSET_BUCKET,
+    }
+}
+
+/// Map an indexed complexity label onto a display bucket.
+///
+/// [`TaskComplexity::Unassessed`] is the stored spelling of "nobody assessed
+/// this" ([`TaskComplexity::is_assessed`] is `false`), and rows indexed before
+/// the column existed spell the same thing as `NULL`. Reporting surfaces get
+/// one bucket for that concept — [`UNSET_BUCKET`] — rather than splitting the
+/// unlabeled set across `unset` and `unassessed` (ORB-10895). The fold happens
+/// here, at read time: the persisted and indexed value stays the literal
+/// `unassessed` so provenance and `NULL`-backfill detection remain honest.
+pub fn complexity_bucket(value: Option<&str>) -> &str {
+    let label = labeled_or_unset(value);
+    if label == TaskComplexity::Unassessed.as_str() {
+        UNSET_BUCKET
+    } else {
+        label
+    }
+}
+
+/// Stable display order: `unset`, then `low` / `medium` / `hard` / `xhard`,
+/// then any unexpected label alphabetically.
+pub fn complexity_bucket_ord(label: &str) -> (u8, &str) {
+    match label {
+        UNSET_BUCKET => (0, ""),
+        "low" => (1, ""),
+        "medium" => (2, ""),
+        "hard" => (3, ""),
+        "xhard" => (4, ""),
+        other => (5, other),
     }
 }

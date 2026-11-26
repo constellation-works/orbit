@@ -31,15 +31,6 @@ impl ShipMode {
     }
 }
 
-/// Resolve a workspace's effective ship mode, defaulting safely to PR mode.
-pub fn resolved_ship_mode(workspace: &Workspace) -> ShipMode {
-    workspace
-        .ship_mode
-        .as_deref()
-        .and_then(|value| ShipMode::parse(value).ok())
-        .unwrap_or(ShipMode::Pr)
-}
-
 /// How far a submitted run is authorized to carry the work it delivers.
 ///
 /// `Review` is the default everywhere: a successful task ends in `review` and a
@@ -76,4 +67,13 @@ impl CompletionPolicy {
             ))),
         }
     }
+}
+
+/// Resolve a workspace's effective ship mode, defaulting safely to PR mode.
+pub fn resolved_ship_mode(workspace: &Workspace) -> ShipMode {
+    workspace
+        .ship_mode
+        .as_deref()
+        .and_then(|value| ShipMode::parse(value).ok())
+        .unwrap_or(ShipMode::Pr)
 }

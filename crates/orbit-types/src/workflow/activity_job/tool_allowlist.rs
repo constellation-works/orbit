@@ -26,6 +26,9 @@ pub const V2_TOOL_WILDCARD_ROOTS: &[&str] = &[
 
 pub const V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS: &[&str] = &["orbit.audit."];
 
+/// Tool whose activity-layer program allowlist must be declared explicitly.
+const PROC_SPAWN_TOOL: &str = "proc.spawn";
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ToolAllowlistError {
     #[error(
@@ -147,9 +150,6 @@ pub fn activity_tool_policy_deprecation(activity: &ActivityV2) -> Option<&'stati
         "declares an empty `tools:` list, whose enforcement is deprecated; declare explicit `tools` or a `tool_disallow_list`",
     )
 }
-
-/// Tool whose activity-layer program allowlist must be declared explicitly.
-const PROC_SPAWN_TOOL: &str = "proc.spawn";
 
 /// Validate an activity's declared tool allowlist at asset-load time.
 /// Returns Ok(()) when every entry is a concrete tool name or a permitted

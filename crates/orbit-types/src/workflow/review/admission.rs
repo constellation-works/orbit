@@ -47,19 +47,12 @@ pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 /// report makes.
 pub const REVIEW_BASELINE_ARTIFACT: &str = "review-baseline.json";
 
-/// Whether a canonical task artifact belongs to the reserved review namespace.
-/// Callers must first use [`crate::task::canonical_artifact_path`]. Reserving
-/// the whole prefix also protects future gate artifacts; ASCII case folding
-/// protects owners on case-insensitive filesystems.
-pub fn is_reserved_review_artifact(path: &str) -> bool {
-    const PREFIX: &str = "review-";
-    path.get(..PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
-}
-
 /// Default `review.minutes`: reviewer runtime for one candidate's review,
 /// its fix commit and final validation included [ORB-13992].
 pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
+
+/// The `decision` a passed budget preflight records.
+const PREFLIGHT_PASSED_DECISION: &str = "preflight_passed";
 
 /// When a managed delivery's reviewer runs. A run captures `before-pr`
 /// exactly when `review.timing` was `before_pr` at submission,
@@ -363,9 +356,6 @@ impl ReviewGateAdmissionOutput {
     }
 }
 
-/// The `decision` a passed budget preflight records.
-const PREFLIGHT_PASSED_DECISION: &str = "preflight_passed";
-
 /// How an admitted review gate proceeds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -529,11 +519,6 @@ impl ReviewGateNotApplicable {
     }
 }
 
-/// `started_at` as the gate first recorded it, `+00:00` offset included.
-fn serialize_rfc3339<S: Serializer>(at: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&at.to_rfc3339())
-}
-
 impl Serialize for ReviewGateAdmissionOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         /// `applies` first, then the case's own fields in order.
@@ -608,4 +593,19 @@ impl<'de> Deserialize<'de> for ReviewGateAdmissionOutput {
         };
         Ok(output)
     }
+}
+
+/// Whether a canonical task artifact belongs to the reserved review namespace.
+/// Callers must first use [`crate::task::canonical_artifact_path`]. Reserving
+/// the whole prefix also protects future gate artifacts; ASCII case folding
+/// protects owners on case-insensitive filesystems.
+pub fn is_reserved_review_artifact(path: &str) -> bool {
+    const PREFIX: &str = "review-";
+    path.get(..PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+}
+
+/// `started_at` as the gate first recorded it, `+00:00` offset included.
+fn serialize_rfc3339<S: Serializer>(at: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&at.to_rfc3339())
 }

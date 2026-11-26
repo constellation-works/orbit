@@ -19,6 +19,10 @@ use super::{
     PullDrainState, SteeringRound, SteeringWatermark, TaskCancellationPolicy,
 };
 
+/// The PR leaf step that admits the before-landing review of its open pull
+/// request [ORB-14849]; its output's `applies` says whether that review runs.
+const LANDING_REVIEW_ADMIT_STEP: &str = "landing_review_gate_admit";
+
 /// A crew whose `[crews.<name>] env` entries read sources the launching
 /// environment does not hold, or `file:` sources that cannot be read. Names
 /// and paths only, never values.
@@ -51,10 +55,6 @@ impl CrewEnvUnset {
         format!("crew `{}` env source {sources}", self.crew)
     }
 }
-
-/// The PR leaf step that admits the before-landing review of its open pull
-/// request [ORB-14849]; its output's `applies` says whether that review runs.
-const LANDING_REVIEW_ADMIT_STEP: &str = "landing_review_gate_admit";
 
 /// A successful indexed checkpoint checked against its named pipeline entry.
 /// This borrowed read result is not part of the persisted checkpoint format.
@@ -263,12 +263,13 @@ pub struct PipelineState {
 impl PipelineState {
     /// Create a new pipeline state from initial inputs.
     pub fn new(run_id: String, job_id: String, initial_input: Value) -> Self {
+        let pipeline = initial_input.clone();
         Self {
             run_id,
             job_id,
-            pipeline: initial_input.clone(),
             initial_input,
             crew_selection: None,
+            pipeline,
             step_outputs: BTreeMap::new(),
             compound_outputs: BTreeMap::new(),
             script_output_sets: BTreeMap::new(),

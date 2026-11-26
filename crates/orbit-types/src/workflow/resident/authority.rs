@@ -45,13 +45,6 @@ impl ResidentGrantRequest {
     }
 }
 
-fn sorted<T: Ord + Clone>(values: &[T]) -> Vec<T> {
-    let mut values = values.to_vec();
-    values.sort();
-    values.dedup();
-    values
-}
-
 /// One change to a mandate's authority, as its history lists it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResidentAuthorityEntry {
@@ -201,6 +194,13 @@ impl ResidentAuthority {
             .iter()
             .any(|candidate| candidate == workspace.trim())
     }
+}
+
+fn sorted<T: Ord + Clone>(values: &[T]) -> Vec<T> {
+    let mut values = values.to_vec();
+    values.sort();
+    values.dedup();
+    values
 }
 
 /// The authority revision a history has reached: the count of authority

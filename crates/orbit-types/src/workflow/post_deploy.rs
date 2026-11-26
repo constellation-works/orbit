@@ -133,30 +133,6 @@ pub struct PostDeployResult {
     pub evidence: String,
 }
 
-/// The outcome and criterion a comment's first line records, `None` when it
-/// is not a [`POST_DEPLOY_HEADER`] line, and an error when it is one that
-/// does not read `post-deploy: met|failed <N>`.
-pub fn post_deploy_header(line: &str) -> Option<Result<(PostDeployOutcome, usize), String>> {
-    let rest = line.trim().strip_prefix(POST_DEPLOY_HEADER)?;
-    let mut words = rest.split_whitespace();
-    let outcome = match words.next() {
-        Some("met") => Some(PostDeployOutcome::Met),
-        Some("failed") => Some(PostDeployOutcome::Failed),
-        _ => None,
-    };
-    let criterion = words
-        .next()
-        .and_then(|word| word.parse::<usize>().ok())
-        .filter(|criterion| *criterion > 0);
-    Some(match (outcome, criterion, words.next()) {
-        (Some(outcome), Some(criterion), None) => Ok((outcome, criterion)),
-        _ => Err(format!(
-            "a post-deploy record's first line reads `{POST_DEPLOY_HEADER} met <N>` or \
-             `{POST_DEPLOY_HEADER} failed <N>`, where N is the owed criterion"
-        )),
-    })
-}
-
 /// An operator's recorded result for one owed criterion.
 pub struct RecordedPostDeploy {
     /// The operator's measurement.
@@ -254,4 +230,28 @@ impl PostDeployRecord {
             .map(|(owed, _)| owed.criterion)
             .collect()
     }
+}
+
+/// The outcome and criterion a comment's first line records, `None` when it
+/// is not a [`POST_DEPLOY_HEADER`] line, and an error when it is one that
+/// does not read `post-deploy: met|failed <N>`.
+pub fn post_deploy_header(line: &str) -> Option<Result<(PostDeployOutcome, usize), String>> {
+    let rest = line.trim().strip_prefix(POST_DEPLOY_HEADER)?;
+    let mut words = rest.split_whitespace();
+    let outcome = match words.next() {
+        Some("met") => Some(PostDeployOutcome::Met),
+        Some("failed") => Some(PostDeployOutcome::Failed),
+        _ => None,
+    };
+    let criterion = words
+        .next()
+        .and_then(|word| word.parse::<usize>().ok())
+        .filter(|criterion| *criterion > 0);
+    Some(match (outcome, criterion, words.next()) {
+        (Some(outcome), Some(criterion), None) => Ok((outcome, criterion)),
+        _ => Err(format!(
+            "a post-deploy record's first line reads `{POST_DEPLOY_HEADER} met <N>` or \
+             `{POST_DEPLOY_HEADER} failed <N>`, where N is the owed criterion"
+        )),
+    })
 }

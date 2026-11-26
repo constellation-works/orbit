@@ -24,6 +24,63 @@ pub const MAX_HOST_LABEL_BYTES: usize = 64;
 /// The task field that names the labels a host must carry.
 pub const REQUIRES_LABELS_FIELD: &str = "requires_labels";
 
+/// Configuration key mapping task tags to additional required capabilities.
+pub const TAG_REQUIRES_LABELS_KEY: &str = "workflow.tag_requires_labels";
+
+/// Validated tag-to-capability policy. No tag or label has built-in placement
+/// meaning here; every matching tag adds requirements to the explicit set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "BTreeMap<String, Vec<String>>",
+    into = "BTreeMap<String, Vec<String>>"
+)]
+pub struct TagLabelRequirements(BTreeMap<String, Vec<String>>);
+
+impl TryFrom<BTreeMap<String, Vec<String>>> for TagLabelRequirements {
+    type Error = TaskError;
+
+    fn try_from(raw: BTreeMap<String, Vec<String>>) -> Result<Self, Self::Error> {
+        let mut mappings = BTreeMap::new();
+        for (raw_tag, labels) in raw {
+            let tag = crate::workflow::normalize_instruction_tag(&raw_tag).ok_or_else(|| {
+                TaskError::Invalid(format!("{TAG_REQUIRES_LABELS_KEY} contains a blank tag"))
+            })?;
+            let labels =
+                normalize_host_labels(labels, &format!("{TAG_REQUIRES_LABELS_KEY}.{tag}"))?;
+            if mappings.insert(tag.clone(), labels).is_some() {
+                return Err(TaskError::Invalid(format!(
+                    "{TAG_REQUIRES_LABELS_KEY} maps tag `{tag}` more than once; tags match case-insensitively"
+                )));
+            }
+        }
+        Ok(Self(mappings))
+    }
+}
+
+impl TagLabelRequirements {
+    /// Sorted, deduplicated union of explicit labels and all matching tags'
+    /// requirements. Explicit labels have already been normalized at write.
+    #[must_use]
+    pub fn required_labels(&self, tags: &[String], explicit: &[String]) -> Vec<String> {
+        if self.0.is_empty() {
+            return explicit.to_vec();
+        }
+        let mut required = explicit.iter().cloned().collect::<BTreeSet<_>>();
+        for tag in tags {
+            if let Some(labels) = self.0.get(&tag.trim().to_lowercase()) {
+                required.extend(labels.iter().cloned());
+            }
+        }
+        required.into_iter().collect()
+    }
+}
+
+impl From<TagLabelRequirements> for BTreeMap<String, Vec<String>> {
+    fn from(requirements: TagLabelRequirements) -> Self {
+        requirements.0
+    }
+}
+
 /// Trim, lowercase, sort and deduplicate `labels`, refusing a blank label, one
 /// longer than [`MAX_HOST_LABEL_BYTES`], or one with a character outside ASCII
 /// letters, digits, `-`, `_`, `.`, `:` and `/`. `field` names the setting or
@@ -110,62 +167,5 @@ pub fn quoted_labels<S: AsRef<str>>(labels: impl IntoIterator<Item = S>) -> Stri
         "none".to_string()
     } else {
         quoted.join(", ")
-    }
-}
-
-/// Configuration key mapping task tags to additional required capabilities.
-pub const TAG_REQUIRES_LABELS_KEY: &str = "workflow.tag_requires_labels";
-
-/// Validated tag-to-capability policy. No tag or label has built-in placement
-/// meaning here; every matching tag adds requirements to the explicit set.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    try_from = "BTreeMap<String, Vec<String>>",
-    into = "BTreeMap<String, Vec<String>>"
-)]
-pub struct TagLabelRequirements(BTreeMap<String, Vec<String>>);
-
-impl TryFrom<BTreeMap<String, Vec<String>>> for TagLabelRequirements {
-    type Error = TaskError;
-
-    fn try_from(raw: BTreeMap<String, Vec<String>>) -> Result<Self, Self::Error> {
-        let mut mappings = BTreeMap::new();
-        for (raw_tag, labels) in raw {
-            let tag = crate::workflow::normalize_instruction_tag(&raw_tag).ok_or_else(|| {
-                TaskError::Invalid(format!("{TAG_REQUIRES_LABELS_KEY} contains a blank tag"))
-            })?;
-            let labels =
-                normalize_host_labels(labels, &format!("{TAG_REQUIRES_LABELS_KEY}.{tag}"))?;
-            if mappings.insert(tag.clone(), labels).is_some() {
-                return Err(TaskError::Invalid(format!(
-                    "{TAG_REQUIRES_LABELS_KEY} maps tag `{tag}` more than once; tags match case-insensitively"
-                )));
-            }
-        }
-        Ok(Self(mappings))
-    }
-}
-
-impl TagLabelRequirements {
-    /// Sorted, deduplicated union of explicit labels and all matching tags'
-    /// requirements. Explicit labels have already been normalized at write.
-    #[must_use]
-    pub fn required_labels(&self, tags: &[String], explicit: &[String]) -> Vec<String> {
-        if self.0.is_empty() {
-            return explicit.to_vec();
-        }
-        let mut required = explicit.iter().cloned().collect::<BTreeSet<_>>();
-        for tag in tags {
-            if let Some(labels) = self.0.get(&tag.trim().to_lowercase()) {
-                required.extend(labels.iter().cloned());
-            }
-        }
-        required.into_iter().collect()
-    }
-}
-
-impl From<TagLabelRequirements> for BTreeMap<String, Vec<String>> {
-    fn from(requirements: TagLabelRequirements) -> Self {
-        requirements.0
     }
 }

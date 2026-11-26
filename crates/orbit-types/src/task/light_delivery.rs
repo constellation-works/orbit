@@ -33,6 +33,39 @@ pub const REVIEW_SKIP_TAGS_KEY: &str = "workflow.review_skip_tags";
 /// Most tags `workflow.review_skip_tags` may map.
 pub const MAX_REVIEW_SKIP_TAGS: usize = 32;
 
+/// The default allow-list: documentation (`docs/**`, Markdown outside
+/// `crates/**` and `plugin/**`), CI configuration (`.github/**`) and CI
+/// helper scripts. A `!` pattern excludes what it matches.
+pub const DEFAULT_LIGHT_DELIVERY_PATHS: &[&str] = &[
+    "docs/**",
+    "**/*.md",
+    "!crates/**",
+    "!plugin/**",
+    ".github/**",
+    "scripts/ci-*",
+    "scripts/test-*-workflow*.py",
+];
+
+/// Task history event: a light-delivery tag applied to a candidate.
+pub const LIGHT_DELIVERY_APPLIED_EVENT: &str = "light_delivery_applied";
+
+/// Task history event: a light-delivery tag was ignored for a candidate, and
+/// why.
+pub const LIGHT_DELIVERY_IGNORED_EVENT: &str = "light_delivery_ignored";
+
+const APPLIED_INFIX: &str = "` applied to candidate ";
+const IGNORED_INFIX: &str = "` ignored for candidate ";
+const GUARD_PASSED_NOTE: &str = " and its guard passed";
+const UNTAGGED_SUFFIX: &str = " in this delivery do(es) not carry it";
+const GUARD_FAILED_PREFIX: &str = "its guard failed: ";
+const GUARD_MISSING_PREFIX: &str = "its guard `";
+const GUARD_MISSING_SUFFIX: &str = "` is missing at the base revision";
+const EMPTY_REASON: &str = "the candidate changes no path";
+const LIGHT_PREFIX: &str = "every changed path (";
+const LIGHT_INFIX: &str = ") matches `";
+const OUTSIDE_ONE_INFIX: &str = "` is outside `";
+const OUTSIDE_MANY_INFIX: &str = " other changed path(s) are outside `";
+
 /// One mapped review-skip tag's profile: the paths a candidate carrying
 /// the tag may change, and an optional guard executable (repository-relative,
 /// read from the delivery's base revision) that must exit 0.
@@ -75,26 +108,6 @@ impl GuardOutcome {
         matches!(self, Self::NotConfigured | Self::Passed)
     }
 }
-
-/// The default allow-list: documentation (`docs/**`, Markdown outside
-/// `crates/**` and `plugin/**`), CI configuration (`.github/**`) and CI
-/// helper scripts. A `!` pattern excludes what it matches.
-pub const DEFAULT_LIGHT_DELIVERY_PATHS: &[&str] = &[
-    "docs/**",
-    "**/*.md",
-    "!crates/**",
-    "!plugin/**",
-    ".github/**",
-    "scripts/ci-*",
-    "scripts/test-*-workflow*.py",
-];
-
-/// Task history event: a light-delivery tag applied to a candidate.
-pub const LIGHT_DELIVERY_APPLIED_EVENT: &str = "light_delivery_applied";
-
-/// Task history event: a light-delivery tag was ignored for a candidate, and
-/// why.
-pub const LIGHT_DELIVERY_IGNORED_EVENT: &str = "light_delivery_ignored";
 
 /// Whether a candidate's changed paths keep it a light delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,19 +418,6 @@ impl LightDeliveryReplayKey {
 pub struct RecordedLightDeliveryDecision {
     key: LightDeliveryReplayKey,
 }
-
-const APPLIED_INFIX: &str = "` applied to candidate ";
-const IGNORED_INFIX: &str = "` ignored for candidate ";
-const GUARD_PASSED_NOTE: &str = " and its guard passed";
-const UNTAGGED_SUFFIX: &str = " in this delivery do(es) not carry it";
-const GUARD_FAILED_PREFIX: &str = "its guard failed: ";
-const GUARD_MISSING_PREFIX: &str = "its guard `";
-const GUARD_MISSING_SUFFIX: &str = "` is missing at the base revision";
-const EMPTY_REASON: &str = "the candidate changes no path";
-const LIGHT_PREFIX: &str = "every changed path (";
-const LIGHT_INFIX: &str = ") matches `";
-const OUTSIDE_ONE_INFIX: &str = "` is outside `";
-const OUTSIDE_MANY_INFIX: &str = " other changed path(s) are outside `";
 
 impl RecordedLightDeliveryDecision {
     /// The record `decision` writes.
