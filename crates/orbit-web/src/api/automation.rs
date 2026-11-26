@@ -10,6 +10,12 @@ use serde_json::json;
 
 pub(super) use orbit_core::application::automation::projection::automation_summary as summary;
 
+enum EvidenceLookup {
+    Body(Vec<u8>),
+    Missing,
+    UnknownWorkspace(String),
+}
+
 /// Full persisted membership is a read-only, explicitly requested resource.
 pub(super) async fn full_state(
     State(state): State<DashboardState>,
@@ -85,10 +91,4 @@ pub(super) async fn accepted_evidence(
         Ok(EvidenceLookup::UnknownWorkspace(reason)) => not_found(reason),
         Err(response) => *response,
     }
-}
-
-enum EvidenceLookup {
-    Body(Vec<u8>),
-    Missing,
-    UnknownWorkspace(String),
 }

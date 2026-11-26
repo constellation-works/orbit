@@ -56,6 +56,13 @@ impl Default for DenialDiagnostics {
     }
 }
 
+#[derive(Debug, Default)]
+struct CauseAggregate {
+    count: i64,
+    latest: Option<DateTime<Utc>>,
+    targets: BTreeMap<String, i64>,
+}
+
 /// Projects SQLite v2 audit rows into FsCallDenied / ToolDenied rows matching
 /// the supplied filters.
 fn project_v2_loop_denials(
@@ -579,13 +586,6 @@ fn rows_to_value(rows: &[(String, i64)], key_label: &str) -> Value {
             .map(|(name, count)| json!({ key_label: name, "count": count }))
             .collect(),
     )
-}
-
-#[derive(Debug, Default)]
-struct CauseAggregate {
-    count: i64,
-    latest: Option<DateTime<Utc>>,
-    targets: BTreeMap<String, i64>,
 }
 
 fn top_causes_to_value(rows: &[&DenialRow]) -> Value {

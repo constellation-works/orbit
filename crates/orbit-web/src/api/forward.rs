@@ -46,33 +46,6 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(60);
 /// operator session on task history and `task.mutation` audit rows.
 pub(in crate::api) const FORWARDED_WEB_CALLER_HEADER: &str = "x-orbit-web-caller";
 
-/// Resolve the web operator session caller for a dashboard task mutation.
-///
-/// Only an `--operator` server trusts a forwarded caller header (the tunnel
-/// forwarder strips client-supplied headers and stamps its own session id), and
-/// values are bounded to printable identifier characters.
-pub(in crate::api) fn web_write_caller(
-    state: &DashboardState,
-    headers: &axum::http::HeaderMap,
-) -> Option<String> {
-    if state.operator_session()
-        && let Some(forwarded) = headers
-            .get(FORWARDED_WEB_CALLER_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| {
-                !value.is_empty()
-                    && value.len() <= 128
-                    && value.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-                    })
-            })
-    {
-        return Some(forwarded.to_string());
-    }
-    state.operator_session_id().map(ToOwned::to_owned)
-}
-
 /// Request headers passed to the remote. Host and Origin are replaced with the
 /// remote's own loopback authority; cookies and the rest stay here.
 const FORWARDED_REQUEST_HEADERS: [HeaderName; 4] = [
@@ -100,11 +73,140 @@ const FORWARDED_RESPONSE_HEADERS: [HeaderName; 4] = [
 /// The same policy the local artifact route applies.
 const FORWARDED_CSP: &str = "sandbox; default-src 'none'";
 
+/// What the dashboard knows about one host's connection.
+#[derive(Debug, Serialize)]
+struct ConnectionState {
+    host: String,
+    machine_id: String,
+    local: bool,
+    reachable: bool,
+    /// `local`, `attached` (a dashboard already running there) or `spawned`
+    /// (started by this dashboard, stopped with its tunnel).
+    origin: Option<&'static str>,
+    binary_version: Option<String>,
+    protocol_fingerprint: Option<String>,
+    /// Version or protocol differs from the serving dashboard. Reported,
+    /// never refused.
+    skew: bool,
+    skew_fields: Vec<&'static str>,
+    error: Option<ForwardError>,
+    /// Whether this session may forward unsafe methods (`host.forward`), as
+    /// `{authorized, reason}`, so a dashboard disables writes it would refuse.
+    forward_writes: Value,
+}
+
+struct ForwardedBody {
+    inner: axum::body::BodyDataStream,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    closing: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    _lease: Lease,
+}
+
+impl ConnectionState {
+    fn reached(
+        host: String,
+        identity: RemoteIdentity,
+        local: bool,
+        origin: &'static str,
+        serving: &RemoteIdentity,
+    ) -> Self {
+        let mut skew_fields = Vec::new();
+        if identity.binary_version.is_some() && identity.binary_version != serving.binary_version {
+            skew_fields.push("binary_version");
+        }
+        if identity.protocol_fingerprint.is_some()
+            && identity.protocol_fingerprint != serving.protocol_fingerprint
+        {
+            skew_fields.push("protocol_fingerprint");
+        }
+        Self {
+            host,
+            machine_id: identity.machine_id,
+            local,
+            reachable: true,
+            origin: Some(origin),
+            binary_version: identity.binary_version,
+            protocol_fingerprint: identity.protocol_fingerprint,
+            skew: !skew_fields.is_empty(),
+            skew_fields,
+            error: None,
+            forward_writes: Value::Null,
+        }
+    }
+
+    fn failed(target: HostTarget, error: ForwardError) -> Self {
+        Self {
+            host: target.name,
+            machine_id: target.machine_id,
+            local: false,
+            reachable: false,
+            origin: None,
+            binary_version: None,
+            protocol_fingerprint: None,
+            skew: false,
+            skew_fields: Vec::new(),
+            error: Some(error),
+            forward_writes: Value::Null,
+        }
+    }
+}
+
+impl Stream for ForwardedBody {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(closing) = this.closing.as_mut()
+            && closing.as_mut().poll(cx).is_ready()
+        {
+            return Poll::Ready(None);
+        }
+        if let Some(deadline) = this.deadline.as_mut()
+            && deadline.as_mut().poll(cx).is_ready()
+        {
+            return Poll::Ready(Some(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the forwarded response did not finish in time",
+            ))));
+        }
+        Pin::new(&mut this.inner)
+            .poll_next(cx)
+            .map(|item| item.map(|chunk| chunk.map_err(std::io::Error::other)))
+    }
+}
+
 /// The host a request names: one of the serving host's registered remotes,
 /// or the serving host itself.
 enum Addressed {
     Local { name: String, machine_id: String },
     Remote(HostTarget),
+}
+
+/// Resolve the web operator session caller for a dashboard task mutation.
+///
+/// Only an `--operator` server trusts a forwarded caller header (the tunnel
+/// forwarder strips client-supplied headers and stamps its own session id), and
+/// values are bounded to printable identifier characters.
+pub(in crate::api) fn web_write_caller(
+    state: &DashboardState,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    if state.operator_session()
+        && let Some(forwarded) = headers
+            .get(FORWARDED_WEB_CALLER_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 128
+                    && value.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                    })
+            })
+    {
+        return Some(forwarded.to_string());
+    }
+    state.operator_session_id().map(ToOwned::to_owned)
 }
 
 /// `GET|POST|PUT|PATCH|DELETE /api/on/:host/*rest`.
@@ -248,77 +350,6 @@ pub(super) async fn connection(
             "internal_error",
             format!("host connection report panicked: {join}"),
         ),
-    }
-}
-
-/// What the dashboard knows about one host's connection.
-#[derive(Debug, Serialize)]
-struct ConnectionState {
-    host: String,
-    machine_id: String,
-    local: bool,
-    reachable: bool,
-    /// `local`, `attached` (a dashboard already running there) or `spawned`
-    /// (started by this dashboard, stopped with its tunnel).
-    origin: Option<&'static str>,
-    binary_version: Option<String>,
-    protocol_fingerprint: Option<String>,
-    /// Version or protocol differs from the serving dashboard. Reported,
-    /// never refused.
-    skew: bool,
-    skew_fields: Vec<&'static str>,
-    error: Option<ForwardError>,
-    /// Whether this session may forward unsafe methods (`host.forward`), as
-    /// `{authorized, reason}`, so a dashboard disables writes it would refuse.
-    forward_writes: Value,
-}
-
-impl ConnectionState {
-    fn reached(
-        host: String,
-        identity: RemoteIdentity,
-        local: bool,
-        origin: &'static str,
-        serving: &RemoteIdentity,
-    ) -> Self {
-        let mut skew_fields = Vec::new();
-        if identity.binary_version.is_some() && identity.binary_version != serving.binary_version {
-            skew_fields.push("binary_version");
-        }
-        if identity.protocol_fingerprint.is_some()
-            && identity.protocol_fingerprint != serving.protocol_fingerprint
-        {
-            skew_fields.push("protocol_fingerprint");
-        }
-        Self {
-            host,
-            machine_id: identity.machine_id,
-            local,
-            reachable: true,
-            origin: Some(origin),
-            binary_version: identity.binary_version,
-            protocol_fingerprint: identity.protocol_fingerprint,
-            skew: !skew_fields.is_empty(),
-            skew_fields,
-            error: None,
-            forward_writes: Value::Null,
-        }
-    }
-
-    fn failed(target: HostTarget, error: ForwardError) -> Self {
-        Self {
-            host: target.name,
-            machine_id: target.machine_id,
-            local: false,
-            reachable: false,
-            origin: None,
-            binary_version: None,
-            protocol_fingerprint: None,
-            skew: false,
-            skew_fields: Vec::new(),
-            error: Some(error),
-            forward_writes: Value::Null,
-        }
     }
 }
 
@@ -587,37 +618,6 @@ fn apply_local_response_policy(
             header::CONTENT_DISPOSITION,
             HeaderValue::from_static("attachment"),
         );
-    }
-}
-
-struct ForwardedBody {
-    inner: axum::body::BodyDataStream,
-    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
-    closing: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
-    _lease: Lease,
-}
-
-impl Stream for ForwardedBody {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        if let Some(closing) = this.closing.as_mut()
-            && closing.as_mut().poll(cx).is_ready()
-        {
-            return Poll::Ready(None);
-        }
-        if let Some(deadline) = this.deadline.as_mut()
-            && deadline.as_mut().poll(cx).is_ready()
-        {
-            return Poll::Ready(Some(Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "the forwarded response did not finish in time",
-            ))));
-        }
-        Pin::new(&mut this.inner)
-            .poll_next(cx)
-            .map(|item| item.map(|chunk| chunk.map_err(std::io::Error::other)))
     }
 }
 

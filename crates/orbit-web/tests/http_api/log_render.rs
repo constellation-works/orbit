@@ -1,5 +1,13 @@
 use super::support::{Fixture, Server, isolated, json_ok, spawn_server};
 use serde_json::{Value, json};
+#[derive(serde::Deserialize)]
+struct Rendered {
+    message_html: String,
+    agent_stdout: bool,
+    source: String,
+    target: String,
+}
+
 fn visible_text(html: &str) -> String {
     let mut in_tag = false;
     html.chars()
@@ -200,13 +208,6 @@ fn rendered_context_shortens_paths_without_losing_full_values_or_html_safety() {
     );
 }
 
-#[derive(serde::Deserialize)]
-struct Rendered {
-    message_html: String,
-    agent_stdout: bool,
-    source: String,
-    target: String,
-}
 fn snapshot_render(fixture: &Fixture, server: &Server, event: &Value) -> Rendered {
     std::fs::write(fixture.path("process.log"), format!("{event}\n")).unwrap();
     let snapshot = json_ok(server.get("/api/log?limit=1"));

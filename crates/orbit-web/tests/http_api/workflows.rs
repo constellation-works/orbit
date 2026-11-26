@@ -52,6 +52,16 @@ macro_rules! ecode {
     };
 }
 const WS: &str = "ws_http_fixture";
+// Not `ORBIT_`-prefixed: those names are never reported unset.
+const UNSET_PASS: &str = "FIXTURE_HTTP_NOTICE_TOKEN";
+
+const REVIEW_CREW: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [workflow]\ndefault_crew = \"reviewers\"\n\n[operation]\nreview_crew = \"reviewers\"\n";
+
+const TWO_CREWS: &str = "[crews.alpha]\nmodel = \"alpha-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [crews.beta]\nmodel = \"beta-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [workflow]\ndefault_crew = \"alpha\"\n";
+
 fn auto_uri() -> String {
     format!("/api/workflows/auto?workspace={WS}")
 }
@@ -1229,8 +1239,6 @@ fn fail_login_profiles(home: &std::path::Path) {
     std::fs::create_dir_all(home.join(".config/fish")).unwrap();
     std::fs::write(home.join(".config/fish/config.fish"), profile).unwrap();
 }
-// Not `ORBIT_`-prefixed: those names are never reported unset.
-const UNSET_PASS: &str = "FIXTURE_HTTP_NOTICE_TOKEN";
 // A fixture whose operator passes a variable the server does not hold, configured by `extra`, with both delivery workflows deployed.
 fn notice_fixture(extra: &str) -> Fixture {
     let fixture = Fixture::new();
@@ -1357,8 +1365,6 @@ fn run_input(fixture: &Fixture, started: &Value) -> Value {
         .input
         .expect("persisted run input")
 }
-const REVIEW_CREW: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
-     [workflow]\ndefault_crew = \"reviewers\"\n\n[operation]\nreview_crew = \"reviewers\"\n";
 // A dashboard drain start can add a review layer for that run, and its receipt names the captured layer; ship refuses a layer local-only delivery cannot run, and a value outside the two layers is a parse error.
 wf_test!(
     auto_start_and_ship_accept_a_strengthen_only_review_option,
@@ -1388,9 +1394,6 @@ wf_test!(
         perr!(server.send( "POST", &auto_uri(), json!({"for_duration":"1m","review":"after-landing"}), ) => "unknown variant");
     }
 );
-const TWO_CREWS: &str = "[crews.alpha]\nmodel = \"alpha-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
-     [crews.beta]\nmodel = \"beta-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
-     [workflow]\ndefault_crew = \"alpha\"\n";
 // The 4xx error text a refused start answers with.
 fn refusal(response: reqwest::blocking::Response) -> (u16, String) {
     let status = status_of(&response);

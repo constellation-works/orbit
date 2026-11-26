@@ -29,6 +29,85 @@ pub(super) const FAILED_RUN_STATES: [JobRunState; 3] = [
     JobRunState::Interrupted,
 ];
 
+#[derive(Deserialize, Default)]
+pub(super) struct JobRunListQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    job_id: Option<String>,
+    /// Exact task id. Matches `input.task_ids` membership or a text top-level
+    /// `input.task_id`, the same rule as `orbit run history --task`.
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    /// Include the dashboard's bounded running-run projection with an active
+    /// count read, so both consumers share one HTTP request.
+    #[serde(default)]
+    include_running: bool,
+    /// Duration (`24h`) or timestamp. Empty and `all` mean no time bound, so
+    /// the dashboard window and `orbit run history --since` share one parser.
+    #[serde(default)]
+    since: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum JobRunListState {
+    All,
+    Active,
+    Failed,
+    Concrete(JobRunState),
+    Terminal,
+}
+
+/// [ORB-10709] Optional body carrying the workspace claim token, for a resume
+/// submitted while another operator holds the claim.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(super) struct ResumeBody {
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+/// Parsed run-list filters shared by the workspace list and the aggregate list.
+///
+/// `since` is already resolved to one cutoff. `None` means the list is not
+/// time-bounded, which is what the dashboard's `all` window asks for.
+#[derive(Clone, Default)]
+pub(super) struct JobRunScope {
+    pub(super) job_id: Option<String>,
+    pub(super) task_id: Option<String>,
+    pub(super) since: Option<DateTime<Utc>>,
+}
+
+impl JobRunListState {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("all") => Ok(Self::All),
+            Some("active") => Ok(Self::Active),
+            Some("failed") => Ok(Self::Failed),
+            Some("pending") => Ok(Self::Concrete(JobRunState::Pending)),
+            Some("running") => Ok(Self::Concrete(JobRunState::Running)),
+            Some("terminal") => Ok(Self::Terminal),
+            Some(_) => Err(
+                "invalid state; expected one of: all, active, failed, pending, running, terminal"
+                    .to_string(),
+            ),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Active => "active",
+            Self::Failed => "failed",
+            Self::Concrete(JobRunState::Pending) => "pending",
+            Self::Concrete(JobRunState::Running) => "running",
+            Self::Concrete(_) => "concrete",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
 /// Submit a catalog job in the selected workspace.
 /// Delivery pipelines need task input and are deliberately unavailable through
 /// this no-input action. The UI directs operators to Ship or Drain for those.
@@ -64,39 +143,6 @@ pub(super) async fn run_job_action(
     }
 }
 
-#[derive(Deserialize, Default)]
-pub(super) struct JobRunListQuery {
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    job_id: Option<String>,
-    /// Exact task id. Matches `input.task_ids` membership or a text top-level
-    /// `input.task_id`, the same rule as `orbit run history --task`.
-    #[serde(default)]
-    task_id: Option<String>,
-    #[serde(default)]
-    state: Option<String>,
-    /// Include the dashboard's bounded running-run projection with an active
-    /// count read, so both consumers share one HTTP request.
-    #[serde(default)]
-    include_running: bool,
-    /// Duration (`24h`) or timestamp. Empty and `all` mean no time bound, so
-    /// the dashboard window and `orbit run history --since` share one parser.
-    #[serde(default)]
-    since: Option<String>,
-}
-
-/// Parsed run-list filters shared by the workspace list and the aggregate list.
-///
-/// `since` is already resolved to one cutoff. `None` means the list is not
-/// time-bounded, which is what the dashboard's `all` window asks for.
-#[derive(Clone, Default)]
-pub(super) struct JobRunScope {
-    pub(super) job_id: Option<String>,
-    pub(super) task_id: Option<String>,
-    pub(super) since: Option<DateTime<Utc>>,
-}
-
 fn trimmed_filter(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -121,44 +167,6 @@ pub(super) fn resolve_job_run_scope(
         task_id: trimmed_filter(task_id),
         since,
     })
-}
-
-#[derive(Clone, Copy)]
-enum JobRunListState {
-    All,
-    Active,
-    Failed,
-    Concrete(JobRunState),
-    Terminal,
-}
-
-impl JobRunListState {
-    fn parse(value: Option<&str>) -> Result<Self, String> {
-        match value {
-            None | Some("all") => Ok(Self::All),
-            Some("active") => Ok(Self::Active),
-            Some("failed") => Ok(Self::Failed),
-            Some("pending") => Ok(Self::Concrete(JobRunState::Pending)),
-            Some("running") => Ok(Self::Concrete(JobRunState::Running)),
-            Some("terminal") => Ok(Self::Terminal),
-            Some(_) => Err(
-                "invalid state; expected one of: all, active, failed, pending, running, terminal"
-                    .to_string(),
-            ),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Active => "active",
-            Self::Failed => "failed",
-            Self::Concrete(JobRunState::Pending) => "pending",
-            Self::Concrete(JobRunState::Running) => "running",
-            Self::Concrete(_) => "concrete",
-            Self::Terminal => "terminal",
-        }
-    }
 }
 
 pub(super) async fn list_jobs(WsCore(core): WsCore) -> Response {
@@ -308,14 +316,6 @@ fn job_run_list_params(
         limit,
         order_by: JobRunOrder::Recency,
     }
-}
-
-/// [ORB-10709] Optional body carrying the workspace claim token, for a resume
-/// submitted while another operator holds the claim.
-#[derive(Debug, Default, serde::Deserialize)]
-pub(super) struct ResumeBody {
-    #[serde(default)]
-    claim_token: Option<String>,
 }
 
 /// Submit a resume of a terminal resumable run as a new linked run.

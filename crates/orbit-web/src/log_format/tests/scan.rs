@@ -15,25 +15,6 @@ use orbit_cmd::log_format::{Filters, LevelFilter};
 
 const BLOCK: usize = 64 * 1024;
 
-fn record(ts: DateTime<Utc>, level: &str, id: &str, message: &str) -> String {
-    format!(
-        "{}\n",
-        json!({"timestamp": ts.to_rfc3339(), "level": level, "target": "backend",
-            "fields": {"event_id": id, "message": message}})
-    )
-}
-
-fn error_filters(since: DateTime<Utc>) -> Filters {
-    Filters::new(None, Some(LevelFilter::Error), Some(since))
-}
-
-fn event_ids(events: &[Value]) -> Vec<&str> {
-    events
-        .iter()
-        .map(|event| event["fields"]["event_id"].as_str().unwrap())
-        .collect()
-}
-
 /// An in-memory segment that counts the bytes read from it.
 struct Counting<'a> {
     inner: Cursor<&'a [u8]>,
@@ -52,6 +33,25 @@ impl Seek for Counting<'_> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         self.inner.seek(pos)
     }
+}
+
+fn record(ts: DateTime<Utc>, level: &str, id: &str, message: &str) -> String {
+    format!(
+        "{}\n",
+        json!({"timestamp": ts.to_rfc3339(), "level": level, "target": "backend",
+            "fields": {"event_id": id, "message": message}})
+    )
+}
+
+fn error_filters(since: DateTime<Utc>) -> Filters {
+    Filters::new(None, Some(LevelFilter::Error), Some(since))
+}
+
+fn event_ids(events: &[Value]) -> Vec<&str> {
+    events
+        .iter()
+        .map(|event| event["fields"]["event_id"].as_str().unwrap())
+        .collect()
 }
 
 fn rotated_name(active: &str, rotated_at: DateTime<Utc>) -> String {

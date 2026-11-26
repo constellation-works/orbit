@@ -15,6 +15,8 @@ use super::support::{Fixture, error_code, isolated, json_ok, write_json};
 
 const URL: &str = "/api/auto-tasks?workspace=ws_http_fixture";
 
+const DELETE_URL: &str = "/api/auto-tasks/delete?workspace=ws_http_fixture";
+
 fn definition(fixture: &Fixture, name: &str) {
     seed_auto_task_with_schedule(fixture, name, AutoTaskSchedule::every_minutes(60));
 }
@@ -613,8 +615,6 @@ fn disable_disabled_consumer_is_a_no_op_and_keeps_raw_cas() {
 fn newest_cursor_id(fixture: &Fixture) -> String {
     instance(fixture, vec!["cursor-reference".into()], TaskStatus::Done).id
 }
-
-const DELETE_URL: &str = "/api/auto-tasks/delete?workspace=ws_http_fixture";
 
 fn listed_names(server: &super::support::Server) -> Vec<String> {
     json_ok(server.get(URL))["definitions"]

@@ -73,18 +73,6 @@ pub(crate) struct TunnelConfig {
     pub(crate) identity_timeout: Duration,
 }
 
-fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
-    const PRODUCTION: Duration = Duration::from_secs(5);
-    if !debug_build {
-        return PRODUCTION;
-    }
-    value
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .filter(|milliseconds| (1..=5_000).contains(milliseconds))
-        .map(Duration::from_millis)
-        .unwrap_or(PRODUCTION)
-}
-
 impl TunnelConfig {
     pub(crate) fn from_env(env: &Env) -> Self {
         #[cfg(any(test, feature = "test-support"))]
@@ -457,6 +445,18 @@ impl HostTunnels {
             identity,
         })
     }
+}
+
+fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
+    const PRODUCTION: Duration = Duration::from_secs(5);
+    if !debug_build {
+        return PRODUCTION;
+    }
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|milliseconds| (1..=5_000).contains(milliseconds))
+        .map(Duration::from_millis)
+        .unwrap_or(PRODUCTION)
 }
 
 /// `ssh` options for a server that has no terminal: never prompt (a

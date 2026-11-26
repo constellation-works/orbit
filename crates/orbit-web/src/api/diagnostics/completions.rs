@@ -24,29 +24,6 @@ use crate::state::{DashboardState, Ws};
 /// Complexities `done` reports on its own; the rest add up to `other`.
 const DONE_SERIES: [&str; 3] = ["low", "medium", "hard"];
 
-pub(in crate::api) async fn diagnostics_completions(
-    State(state): State<DashboardState>,
-    Ws(runtime): Ws,
-    Query(q): Query<DiagnosticsQuery>,
-) -> Response {
-    let range = match trend_range(&q) {
-        Ok(range) => range,
-        Err(error) => return map_runtime_error(error),
-    };
-    let key = ("completions".to_string(), range.key.clone());
-    let compute_runtime = Arc::clone(&runtime);
-    match state
-        .metrics_trends_memo()
-        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
-            completion_trend(&compute_runtime, &range)
-        })
-        .await
-    {
-        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
-        Err(error) => map_runtime_error(error),
-    }
-}
-
 #[derive(Clone, Default)]
 struct Counts {
     done_by_complexity: HashMap<String, u64>,
@@ -80,6 +57,29 @@ impl Counts {
         }
         done["other"] = json!(total - listed);
         json!({ "done": done, "rejected": self.rejected, "archived": self.archived })
+    }
+}
+
+pub(in crate::api) async fn diagnostics_completions(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(q): Query<DiagnosticsQuery>,
+) -> Response {
+    let range = match trend_range(&q) {
+        Ok(range) => range,
+        Err(error) => return map_runtime_error(error),
+    };
+    let key = ("completions".to_string(), range.key.clone());
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            completion_trend(&compute_runtime, &range)
+        })
+        .await
+    {
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

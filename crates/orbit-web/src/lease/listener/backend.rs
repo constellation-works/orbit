@@ -138,6 +138,48 @@ impl IntakeLeaseBackend {
     }
 }
 
+impl LeaseBackend for IntakeLeaseBackend {
+    fn request(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Request, input)
+    }
+
+    fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Renew, input)
+    }
+
+    fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Expand, input)
+    }
+
+    fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Release, input)
+    }
+
+    fn show(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Show, input)
+    }
+
+    fn list(&self, caller: &LeaseCaller) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::List, json!({}))
+    }
+
+    fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Check, input)
+    }
+
+    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Notices, input)
+    }
+
+    fn notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>> {
+        self.open_notice_stream(caller, input)
+    }
+}
+
 /// An unreachable intake socket, or a refused handshake, such as from an
 /// Orbit Web of another protocol version; the reason is logged, not sent.
 fn intake_unavailable(error: &OrbitError) -> Response {
@@ -195,46 +237,4 @@ fn intake_error_response(mut error: LeaseIntakeError) -> Response {
         (status, Json(json!({"error": message, "code": error.code}))).into_response();
     response.extensions_mut().insert(AuditedByOrbit);
     response
-}
-
-impl LeaseBackend for IntakeLeaseBackend {
-    fn request(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Request, input)
-    }
-
-    fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Renew, input)
-    }
-
-    fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Expand, input)
-    }
-
-    fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Release, input)
-    }
-
-    fn show(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Show, input)
-    }
-
-    fn list(&self, caller: &LeaseCaller) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::List, json!({}))
-    }
-
-    fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Check, input)
-    }
-
-    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        self.forward(caller, LeaseIntakeOperation::Notices, input)
-    }
-
-    fn notice_stream(
-        &self,
-        caller: &LeaseCaller,
-        input: Value,
-    ) -> Result<LeaseNoticePages, Box<Response>> {
-        self.open_notice_stream(caller, input)
-    }
 }

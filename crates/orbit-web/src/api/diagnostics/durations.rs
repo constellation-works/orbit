@@ -28,6 +28,14 @@ const BUCKET_SERIES: [&str; 3] = ["low", "medium", "hard"];
 /// Complexities the window totals report, `all` aside.
 const TOTAL_SERIES: [&str; 5] = ["low", "medium", "hard", "xhard", UNSET_BUCKET];
 
+struct Run {
+    at: DateTime<Utc>,
+    actor: String,
+    complexity: String,
+    duration_ms: u64,
+    task_id: Option<String>,
+}
+
 pub(in crate::api) async fn diagnostics_implement_one(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -64,14 +72,6 @@ pub(in crate::api) async fn diagnostics_implement_one(
         Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
         Err(error) => map_runtime_error(error),
     }
-}
-
-struct Run {
-    at: DateTime<Utc>,
-    actor: String,
-    complexity: String,
-    duration_ms: u64,
-    task_id: Option<String>,
 }
 
 fn implement_one_trend(

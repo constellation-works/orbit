@@ -123,25 +123,6 @@ pub trait LeaseBackend: Send + Sync + 'static {
     ) -> Result<LeaseNoticePages, Box<Response>>;
 }
 
-/// Build only the `/leases` routes over a caller-supplied backend.
-///
-/// Nest this router under `/api`. It contains the lease operations, notice
-/// polling (`GET /leases/notices`) and the SSE event stream
-/// (`GET /leases/events`, resuming from `Last-Event-ID`), and no dashboard or
-/// health routes. It applies no dashboard session or localhost middleware.
-pub fn lease_router(backend: impl LeaseBackend) -> Router {
-    let backend: Arc<dyn LeaseBackend> = Arc::new(backend);
-    Router::new()
-        .route("/leases", get(list_leases).post(request_lease))
-        .route("/leases/check", post(check_leases))
-        .route("/leases/notices", get(lease_notices::get_lease_notices))
-        .route("/leases/events", get(lease_notices::stream_lease_notices))
-        .route("/leases/{id}", get(show_lease).delete(release_lease))
-        .route("/leases/{id}/renew", post(renew_lease))
-        .route("/leases/{id}/expand", post(expand_lease))
-        .with_state(backend)
-}
-
 /// The dashboard's runtime adapter; the listener supplies its own backend.
 pub(super) struct RuntimeLeaseBackend {
     pub(super) state: DashboardState,
@@ -245,6 +226,25 @@ impl LeaseBackend for RuntimeLeaseBackend {
     ) -> Result<LeaseNoticePages, Box<Response>> {
         lease_notices::open_runtime_notice_stream(self, caller, input)
     }
+}
+
+/// Build only the `/leases` routes over a caller-supplied backend.
+///
+/// Nest this router under `/api`. It contains the lease operations, notice
+/// polling (`GET /leases/notices`) and the SSE event stream
+/// (`GET /leases/events`, resuming from `Last-Event-ID`), and no dashboard or
+/// health routes. It applies no dashboard session or localhost middleware.
+pub fn lease_router(backend: impl LeaseBackend) -> Router {
+    let backend: Arc<dyn LeaseBackend> = Arc::new(backend);
+    Router::new()
+        .route("/leases", get(list_leases).post(request_lease))
+        .route("/leases/check", post(check_leases))
+        .route("/leases/notices", get(lease_notices::get_lease_notices))
+        .route("/leases/events", get(lease_notices::stream_lease_notices))
+        .route("/leases/{id}", get(show_lease).delete(release_lease))
+        .route("/leases/{id}/renew", post(renew_lease))
+        .route("/leases/{id}/expand", post(expand_lease))
+        .with_state(backend)
 }
 
 pub(super) fn lease_call_input(

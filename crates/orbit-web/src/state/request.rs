@@ -3,6 +3,13 @@ use orbit_core::Core;
 
 use super::*;
 
+/// Stable code for the environmental refusal when the selected workspace is
+/// not active in the pinned registry snapshot. That state can change between
+/// attempts and this rejection precedes any handler or receipt lookup, so a
+/// retained replay key must not treat it as proof that no dispatch was
+/// recorded. Mirrors the `workspace_unavailable` code in task creation.
+pub(crate) const WORKSPACE_UNAVAILABLE_CODE: &str = "workspace_unavailable";
+
 /// A request-pinned view of dashboard state: one immutable [`Snapshot`]
 /// generation plus shared access to the runtime cache. Every read and every
 /// runtime resolution is evaluated against this single snapshot, so one response
@@ -90,13 +97,6 @@ pub(crate) struct WsRejection {
     message: String,
     code: Option<&'static str>,
 }
-
-/// Stable code for the environmental refusal when the selected workspace is
-/// not active in the pinned registry snapshot. That state can change between
-/// attempts and this rejection precedes any handler or receipt lookup, so a
-/// retained replay key must not treat it as proof that no dispatch was
-/// recorded. Mirrors the `workspace_unavailable` code in task creation.
-pub(crate) const WORKSPACE_UNAVAILABLE_CODE: &str = "workspace_unavailable";
 
 impl WsRejection {
     pub(super) fn unknown(id: &str) -> Self {

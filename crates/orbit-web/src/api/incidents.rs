@@ -41,6 +41,11 @@ const INCIDENTS_DEFAULT_LIMIT: usize = 50;
 /// keeps exact raw-audit drilldowns independent of this preview bound.
 const INCIDENT_EVENT_PREVIEW_LIMIT: usize = 5;
 
+/// Scan cap for the audit-summary rollups, which only need counts. Held
+/// well below the store default so a header tile can never become the slowest
+/// query on the page.
+pub(super) const ROLLUP_SCAN_LIMIT: usize = HISTORY_MAX_LIMIT * 50;
+
 /// `?since=<24h|7d|RFC3339>&class=<deferred|denied|diagnostic|expected|unexpected>&limit=`.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct IncidentsQuery {
@@ -373,8 +378,3 @@ fn propagation_to_json(link: &PropagationLink) -> Value {
             .collect::<Vec<_>>(),
     })
 }
-
-/// Scan cap for the audit-summary rollups, which only need counts. Held
-/// well below the store default so a header tile can never become the slowest
-/// query on the page.
-pub(super) const ROLLUP_SCAN_LIMIT: usize = HISTORY_MAX_LIMIT * 50;

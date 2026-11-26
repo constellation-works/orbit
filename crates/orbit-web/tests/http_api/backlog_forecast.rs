@@ -13,6 +13,15 @@ use super::support::{Fixture, isolated, json_ok};
 
 pub(super) const ENDPOINT: &str = "/api/diagnostics/backlog_forecast?workspace=ws_http_fixture";
 
+/// The furthest apart two back-to-back forecast scans may be. Each live
+/// forecast builds its own riskiness model from a fresh wall-clock scan, so
+/// the two `observed_through` instants differ by the requests' own compute
+/// time — one second across the F2026-11-097 CI run. The semantic remainder
+/// must still match exactly, so this bound only recognizes same-test scans;
+/// it matches the cross-scan skew the
+/// `forecast_riskiness_preserves_observation_timestamps` regression allows.
+const NO_ARRIVALS_SCAN_SKEW_SECONDS: i64 = 3600;
+
 struct ForecastWorkspace<'a>(&'a Fixture);
 
 impl orbit_core::application::routines::loader::RoutineWorkspaceProvider for ForecastWorkspace<'_> {
@@ -35,6 +44,13 @@ impl orbit_core::application::routines::loader::RoutineWorkspaceProvider for For
             },
         )
     }
+}
+
+/// One riskiness observation window read from a forecast prediction.
+struct RiskinessScanWindow {
+    since: DateTime<Utc>,
+    observed_through: DateTime<Utc>,
+    window_days: u64,
 }
 
 pub(super) fn forecast_tick(fixture: &Fixture, now: DateTime<Utc>, dry_run: bool) {
@@ -1287,22 +1303,6 @@ fn arrivals_draining_before_the_generation_bound_stay_complete() {
             );
         },
     );
-}
-
-/// The furthest apart two back-to-back forecast scans may be. Each live
-/// forecast builds its own riskiness model from a fresh wall-clock scan, so
-/// the two `observed_through` instants differ by the requests' own compute
-/// time — one second across the F2026-11-097 CI run. The semantic remainder
-/// must still match exactly, so this bound only recognizes same-test scans;
-/// it matches the cross-scan skew the
-/// `forecast_riskiness_preserves_observation_timestamps` regression allows.
-const NO_ARRIVALS_SCAN_SKEW_SECONDS: i64 = 3600;
-
-/// One riskiness observation window read from a forecast prediction.
-struct RiskinessScanWindow {
-    since: DateTime<Utc>,
-    observed_through: DateTime<Utc>,
-    window_days: u64,
 }
 
 /// Validate every `task_predictions[].riskiness` observation window in

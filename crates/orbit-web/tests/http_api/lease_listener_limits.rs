@@ -23,6 +23,34 @@ use super::lease_listener::{
     short_intake_socket, write_frame,
 };
 
+struct StalledBody(Arc<tokio::sync::Notify>);
+
+impl hyper::body::Body for StalledBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        self.0.notify_one();
+        Poll::Pending
+    }
+}
+
+struct OversizedBody(Arc<std::sync::atomic::AtomicUsize>);
+
+impl hyper::body::Body for OversizedBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        let count = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Poll::Ready((count < 100).then(|| Ok(Frame::data(Bytes::from_static(b"xxxxxxxx")))))
+    }
+}
+
 #[tokio::test]
 async fn ipv6_prefixes_mapped_ipv4_and_proxy_clients_keep_one_address_budget() {
     let tmp = tempfile::tempdir().unwrap();
@@ -234,32 +262,6 @@ async fn token_writes_reads_and_other_tokens_have_separate_budgets() {
         if status == StatusCode::TOO_MANY_REQUESTS {
             assert!(headers.contains_key("retry-after"));
         }
-    }
-}
-
-struct StalledBody(Arc<tokio::sync::Notify>);
-impl hyper::body::Body for StalledBody {
-    type Data = Bytes;
-    type Error = std::io::Error;
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
-        self.0.notify_one();
-        Poll::Pending
-    }
-}
-
-struct OversizedBody(Arc<std::sync::atomic::AtomicUsize>);
-impl hyper::body::Body for OversizedBody {
-    type Data = Bytes;
-    type Error = std::io::Error;
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
-        let count = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Poll::Ready((count < 100).then(|| Ok(Frame::data(Bytes::from_static(b"xxxxxxxx")))))
     }
 }
 

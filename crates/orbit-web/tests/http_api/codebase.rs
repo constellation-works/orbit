@@ -26,6 +26,20 @@ pub(super) use fixtures::{
     pilot_receipt, pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
 };
 
+// Every analytics scenario gets its own authority-scrubbed child and fixture.
+// Derive the exact libtest name here so selectors cannot drift from isolation.
+macro_rules! analytics_test {
+    ($name:ident, |$fixture:ident| $body:block) => {
+        #[test]
+        fn $name() {
+            isolated(concat!("codebase::", stringify!($name)), || {
+                let $fixture = Fixture::new();
+                $body
+            });
+        }
+    };
+}
+
 const WS: &str = "workspace=ws_http_fixture";
 
 // File sets shared by the nearby-size riskiness scenarios: ten tasks of ten
@@ -125,20 +139,6 @@ fn reject_after_run(fixture: &Fixture, task: &str, now: DateTime<Utc>) {
     ] {
         append_event(fixture, task, now, event, None, Some(status));
     }
-}
-
-// Every analytics scenario gets its own authority-scrubbed child and fixture.
-// Derive the exact libtest name here so selectors cannot drift from isolation.
-macro_rules! analytics_test {
-    ($name:ident, |$fixture:ident| $body:block) => {
-        #[test]
-        fn $name() {
-            isolated(concat!("codebase::", stringify!($name)), || {
-                let $fixture = Fixture::new();
-                $body
-            });
-        }
-    };
 }
 
 analytics_test!(

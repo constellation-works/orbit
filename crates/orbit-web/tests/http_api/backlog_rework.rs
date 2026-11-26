@@ -12,6 +12,8 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 
+const WIDE: [&str; 3] = ["file:risky.rs", "file:risky-a.rs", "file:risky-b.rs"];
+
 fn bundle_path(fixture: &Fixture, id: &str) -> std::path::PathBuf {
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
         &orbit_store::maintenance::task_registry::task_registry_path(
@@ -69,8 +71,6 @@ fn link(target: &str) -> TaskRelation {
         regression: None,
     }
 }
-
-const WIDE: [&str; 3] = ["file:risky.rs", "file:risky-a.rs", "file:risky-b.rs"];
 
 fn measured_history(fixture: &Fixture, lag: Duration, missing_usd: bool) {
     seeded_history(fixture, lag, missing_usd, false);

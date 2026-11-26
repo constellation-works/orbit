@@ -16,6 +16,15 @@ use serde_json::{Value, json};
 use super::super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
 use super::super::{OptionalJson, bad_request, blocking, validate_id};
 
+/// Minimum window this endpoint accepts for `for_duration`, in seconds. A
+/// single pass is asked for explicitly with `one_pass`, so `0s` or a blank
+/// duration is rejected rather than silently read as one.
+const MIN_AUTO_DRAIN_SECONDS: u64 = 1;
+
+/// Read-only eligible/waiting projection for backlog-discovery auto-drain,
+/// same limit the CLI's `orbit run readiness` defaults to.
+const AUTO_DRAIN_READINESS_LIMIT: usize = 50;
+
 /// Request body for `POST /workflows/ship`.
 ///
 /// Unknown keys are rejected. A misspelled selector such as `task_id` must
@@ -44,73 +53,6 @@ pub(in crate::api) struct ShipBody {
     /// operator holds one.
     #[serde(default)]
     claim_token: Option<String>,
-}
-
-/// Submit a `ship` workflow run (`POST /workflows/ship?workspace=<id>`).
-///
-/// One-shot: responds as soon as the run is persisted, with the same
-/// `queued`/`submitted` states the CLI reports, and the same submission
-/// notices (`warning`, `validation_env_warning`) `orbit run ship` and
-/// `orbit.workflow` action `ship` report. Callers poll `GET /runs/:id` for progress.
-///
-/// An omitted `mode` resolves to the selected workspace's own ship mode
-/// (ORB-10444), so the dashboard's one-click Ship needs no PR/local toggle;
-/// a workspace with no registry binding (single/embedded mode) keeps the
-/// historical `pr` default.
-///
-/// [ORB-10544] Duplicate dispatch of an explicitly-selected task is refused by
-/// the shared submission path, not here: `submit_ship_run` returns
-/// `OrbitError::ShipRunInFlight` when one of the named tasks is already carried
-/// by a non-terminal delivery run, which `map_runtime_error` projects to this
-/// endpoint's stable 409. Auto (backlog-discovery) mode has no task ids to guard
-/// and is unaffected.
-pub(in crate::api) async fn ship_workflow_action(
-    WsCore(core): WsCore,
-    OptionalJson(body): OptionalJson<ShipBody>,
-) -> Response {
-    let explicit = match body.mode.as_deref() {
-        Some(raw) => match orbit_core::ShipMode::parse(raw) {
-            Ok(mode) => Some(mode),
-            Err(e) => return bad_request(e.to_string()),
-        },
-        None => None,
-    };
-    match blocking("ship workflow", move || {
-        let receipt = exec(
-            &core,
-            Command::ship(
-                explicit,
-                orbit_core::ShipRunRequest {
-                    base_branch: body.base.as_deref(),
-                    task_ids: &body.task_ids,
-                    // [ORB-11187] Completion authority is granted per invocation at the CLI
-                    // (`orbit run ship --complete`); the dashboard does not offer it, so
-                    // this endpoint always ends successful work at `review`.
-                    completion: orbit_core::CompletionPolicy::Review,
-                    allowed_crews: &[],
-                    actor: Some("dashboard"),
-                    claim_token: body.claim_token.as_deref(),
-                    trigger: JobRunTrigger::dashboard(),
-                    // Strict worker containment is a CLI-only flag.
-                    strict_containment: false,
-                    review: body.review,
-                    // The dashboard's Ship is an operator's explicit ship: it
-                    // overrides the drain's readiness gates for the named tasks.
-                    operator_override: true,
-                    ignore_dependency_delivery: false,
-                    ..Default::default()
-                },
-                ShipSubmissionProfile::Http,
-            ),
-        )?
-        .value;
-        Ok(receipt.to_json())
-    })
-    .await
-    {
-        Ok(shipped) => Json(shipped).into_response(),
-        Err(response) => *response,
-    }
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -181,6 +123,37 @@ pub(in crate::api) struct AutoDrainBody {
     claim_token: Option<String>,
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(in crate::api) struct AutoDrainStopBody {
+    /// Free-text reason recorded on the coordinator's stop marker and audit.
+    #[serde(default)]
+    reason: Option<String>,
+    /// [ORB-10709] Token for this workspace's exclusive claim, when another
+    /// operator holds one.
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+pub(in crate::api) struct AutoDrainReadinessQuery {
+    #[serde(default)]
+    concurrency: Option<u32>,
+    /// Comma-separated task ids to explain instead of the bounded backlog
+    /// listing, so a task detail gets its own answer wherever it ranks.
+    #[serde(default)]
+    task: Option<String>,
+    /// Add one task's full readiness entry beside the bounded workspace list.
+    #[serde(default)]
+    also_task: Option<String>,
+    /// Maximum tasks to explain, including an explicit selection (1-500).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Comma-separated configured crews to evaluate.
+    #[serde(default)]
+    allow_crew: Option<String>,
+}
+
 impl AutoDrainBody {
     fn complexity_crews(&self) -> orbit_core::ComplexityCrewPools {
         orbit_core::ComplexityCrewPools {
@@ -211,21 +184,79 @@ impl AutoDrainBody {
     }
 }
 
+/// Submit a `ship` workflow run (`POST /workflows/ship?workspace=<id>`).
+///
+/// One-shot: responds as soon as the run is persisted, with the same
+/// `queued`/`submitted` states the CLI reports, and the same submission
+/// notices (`warning`, `validation_env_warning`) `orbit run ship` and
+/// `orbit.workflow` action `ship` report. Callers poll `GET /runs/:id` for progress.
+///
+/// An omitted `mode` resolves to the selected workspace's own ship mode
+/// (ORB-10444), so the dashboard's one-click Ship needs no PR/local toggle;
+/// a workspace with no registry binding (single/embedded mode) keeps the
+/// historical `pr` default.
+///
+/// [ORB-10544] Duplicate dispatch of an explicitly-selected task is refused by
+/// the shared submission path, not here: `submit_ship_run` returns
+/// `OrbitError::ShipRunInFlight` when one of the named tasks is already carried
+/// by a non-terminal delivery run, which `map_runtime_error` projects to this
+/// endpoint's stable 409. Auto (backlog-discovery) mode has no task ids to guard
+/// and is unaffected.
+pub(in crate::api) async fn ship_workflow_action(
+    WsCore(core): WsCore,
+    OptionalJson(body): OptionalJson<ShipBody>,
+) -> Response {
+    let explicit = match body.mode.as_deref() {
+        Some(raw) => match orbit_core::ShipMode::parse(raw) {
+            Ok(mode) => Some(mode),
+            Err(e) => return bad_request(e.to_string()),
+        },
+        None => None,
+    };
+    match blocking("ship workflow", move || {
+        let receipt = exec(
+            &core,
+            Command::ship(
+                explicit,
+                orbit_core::ShipRunRequest {
+                    base_branch: body.base.as_deref(),
+                    task_ids: &body.task_ids,
+                    // [ORB-11187] Completion authority is granted per invocation at the CLI
+                    // (`orbit run ship --complete`); the dashboard does not offer it, so
+                    // this endpoint always ends successful work at `review`.
+                    completion: orbit_core::CompletionPolicy::Review,
+                    allowed_crews: &[],
+                    actor: Some("dashboard"),
+                    claim_token: body.claim_token.as_deref(),
+                    trigger: JobRunTrigger::dashboard(),
+                    // Strict worker containment is a CLI-only flag.
+                    strict_containment: false,
+                    review: body.review,
+                    // The dashboard's Ship is an operator's explicit ship: it
+                    // overrides the drain's readiness gates for the named tasks.
+                    operator_override: true,
+                    ignore_dependency_delivery: false,
+                    ..Default::default()
+                },
+                ShipSubmissionProfile::Http,
+            ),
+        )?
+        .value;
+        Ok(receipt.to_json())
+    })
+    .await
+    {
+        Ok(shipped) => Json(shipped).into_response(),
+        Err(response) => *response,
+    }
+}
+
 fn explicit_auto_concurrency<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<orbit_types::workflow::AutoConcurrencyMode>, D::Error> {
     <orbit_types::workflow::AutoConcurrencyMode as serde::Deserialize>::deserialize(deserializer)
         .map(Some)
 }
-
-/// Minimum window this endpoint accepts for `for_duration`, in seconds. A
-/// single pass is asked for explicitly with `one_pass`, so `0s` or a blank
-/// duration is rejected rather than silently read as one.
-const MIN_AUTO_DRAIN_SECONDS: u64 = 1;
-
-/// Read-only eligible/waiting projection for backlog-discovery auto-drain,
-/// same limit the CLI's `orbit run readiness` defaults to.
-const AUTO_DRAIN_READINESS_LIMIT: usize = 50;
 
 /// Parses a "30m"/"2h"/"1d"-shaped duration the same way the CLI's `--for`
 /// does, then requires a non-empty window.
@@ -409,18 +440,6 @@ fn pull_drain_start(
     Ok(receipt.to_json())
 }
 
-#[derive(serde::Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub(in crate::api) struct AutoDrainStopBody {
-    /// Free-text reason recorded on the coordinator's stop marker and audit.
-    #[serde(default)]
-    reason: Option<String>,
-    /// [ORB-10709] Token for this workspace's exclusive claim, when another
-    /// operator holds one.
-    #[serde(default)]
-    claim_token: Option<String>,
-}
-
 /// Stop new admissions for one workspace's live `auto` window
 /// (`POST /workflows/auto/stop?workspace=<id>`) [ORB-12728].
 ///
@@ -469,25 +488,6 @@ pub(in crate::api) async fn auto_drain_stop_action(
         }
         Err(response) => *response,
     }
-}
-
-#[derive(serde::Deserialize, Default)]
-pub(in crate::api) struct AutoDrainReadinessQuery {
-    #[serde(default)]
-    concurrency: Option<u32>,
-    /// Comma-separated task ids to explain instead of the bounded backlog
-    /// listing, so a task detail gets its own answer wherever it ranks.
-    #[serde(default)]
-    task: Option<String>,
-    /// Add one task's full readiness entry beside the bounded workspace list.
-    #[serde(default)]
-    also_task: Option<String>,
-    /// Maximum tasks to explain, including an explicit selection (1-500).
-    #[serde(default)]
-    limit: Option<usize>,
-    /// Comma-separated configured crews to evaluate.
-    #[serde(default)]
-    allow_crew: Option<String>,
 }
 
 /// The explicit selection a `?task=` value names; empty when it is absent.

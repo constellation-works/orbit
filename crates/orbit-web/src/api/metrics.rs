@@ -46,6 +46,25 @@ pub(super) struct OrchestratorMetricsQuery {
     until: Option<String>,
 }
 
+impl MetricsInvocationsQuery {
+    fn into_invocation_query(self) -> Result<InvocationQuery, orbit_core::OrbitError> {
+        Ok(InvocationQuery {
+            succeeded_candidate_only: false,
+            since: parse_rfc3339_opt(self.since, "since")?,
+            until: parse_rfc3339_opt(self.until, "until")?,
+            workspace_id: None,
+            job_run_id: optional_query_string(self.job_run_id),
+            activity_id: optional_query_string(self.activity_id),
+            task_id: optional_query_string(self.task_id),
+            agent: optional_query_string(self.agent),
+            model: optional_query_string(self.model),
+            tool_name: optional_query_string(self.tool_name),
+            limit: bounded_limit(self.limit, INVOCATIONS_DEFAULT_LIMIT),
+            skip_tool_calls: false,
+        })
+    }
+}
+
 /// Aggregates the most recent runs. An omitted `limit` covers the widest
 /// window the history endpoints allow rather than every run ever recorded.
 pub(super) async fn knowledge_metrics(Ws(runtime): Ws, Query(q): Query<LimitQuery>) -> Response {
@@ -141,25 +160,6 @@ pub(super) async fn ingest_invocation(
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => *response,
-    }
-}
-
-impl MetricsInvocationsQuery {
-    fn into_invocation_query(self) -> Result<InvocationQuery, orbit_core::OrbitError> {
-        Ok(InvocationQuery {
-            succeeded_candidate_only: false,
-            since: parse_rfc3339_opt(self.since, "since")?,
-            until: parse_rfc3339_opt(self.until, "until")?,
-            workspace_id: None,
-            job_run_id: optional_query_string(self.job_run_id),
-            activity_id: optional_query_string(self.activity_id),
-            task_id: optional_query_string(self.task_id),
-            agent: optional_query_string(self.agent),
-            model: optional_query_string(self.model),
-            tool_name: optional_query_string(self.tool_name),
-            limit: bounded_limit(self.limit, INVOCATIONS_DEFAULT_LIMIT),
-            skip_tool_calls: false,
-        })
     }
 }
 

@@ -54,6 +54,66 @@ struct Filters {
     model: Option<String>,
 }
 
+/// What one task adds to the points it falls in.
+#[derive(Clone, Copy)]
+enum Contribution {
+    Tokens(u64),
+    /// An invocation in scope has no covered model, so its total is unknown.
+    Uncovered,
+    /// No invocation in scope is linked to the task.
+    NoInvocations,
+}
+
+impl Contribution {
+    fn of(spend: Option<&TaskTokenSpend>) -> Self {
+        match spend {
+            Some(spend) if spend.invocation_count == 0 => Self::NoInvocations,
+            Some(spend) if spend.uncovered_invocation_count > 0 => Self::Uncovered,
+            Some(spend) => Self::Tokens(spend.normalized_token_total),
+            None => Self::NoInvocations,
+        }
+    }
+}
+
+/// The tasks one series point (or a series' window total) averages, and
+/// those it leaves out.
+#[derive(Clone, Default)]
+struct Cell {
+    tokens: Vec<u64>,
+    uncovered: u64,
+    no_invocations: u64,
+}
+
+impl Cell {
+    fn record(&mut self, contribution: Contribution) {
+        match contribution {
+            Contribution::Tokens(tokens) => self.tokens.push(tokens),
+            Contribution::Uncovered => self.uncovered += 1,
+            Contribution::NoInvocations => self.no_invocations += 1,
+        }
+    }
+}
+
+impl CohortCell for Cell {
+    fn is_empty(&self) -> bool {
+        self.tokens.is_empty() && self.uncovered == 0 && self.no_invocations == 0
+    }
+
+    fn to_json(&self) -> Value {
+        let n = self.tokens.len();
+        let (mean, median) = average(self.tokens.iter().copied());
+        json!({
+            "n": n,
+            "sum": self.tokens.iter().map(|tokens| u128::from(*tokens)).sum::<u128>() as f64,
+            "mean": mean,
+            "median": median,
+            "thin": n > 0 && n < MIN_TASKS,
+            "excluded_uncovered": self.uncovered,
+            "excluded_no_invocations": self.no_invocations,
+        })
+    }
+}
+
 fn parse_filters(q: &TaskTokensQuery) -> Result<Filters, orbit_core::OrbitError> {
     let cohort = CohortFilters::parse(
         q.outcome.as_deref(),
@@ -114,66 +174,6 @@ pub(in crate::api) async fn diagnostics_task_tokens(
         task_token_trend,
     )
     .await
-}
-
-/// What one task adds to the points it falls in.
-#[derive(Clone, Copy)]
-enum Contribution {
-    Tokens(u64),
-    /// An invocation in scope has no covered model, so its total is unknown.
-    Uncovered,
-    /// No invocation in scope is linked to the task.
-    NoInvocations,
-}
-
-impl Contribution {
-    fn of(spend: Option<&TaskTokenSpend>) -> Self {
-        match spend {
-            Some(spend) if spend.invocation_count == 0 => Self::NoInvocations,
-            Some(spend) if spend.uncovered_invocation_count > 0 => Self::Uncovered,
-            Some(spend) => Self::Tokens(spend.normalized_token_total),
-            None => Self::NoInvocations,
-        }
-    }
-}
-
-/// The tasks one series point (or a series' window total) averages, and
-/// those it leaves out.
-#[derive(Clone, Default)]
-struct Cell {
-    tokens: Vec<u64>,
-    uncovered: u64,
-    no_invocations: u64,
-}
-
-impl Cell {
-    fn record(&mut self, contribution: Contribution) {
-        match contribution {
-            Contribution::Tokens(tokens) => self.tokens.push(tokens),
-            Contribution::Uncovered => self.uncovered += 1,
-            Contribution::NoInvocations => self.no_invocations += 1,
-        }
-    }
-}
-
-impl CohortCell for Cell {
-    fn is_empty(&self) -> bool {
-        self.tokens.is_empty() && self.uncovered == 0 && self.no_invocations == 0
-    }
-
-    fn to_json(&self) -> Value {
-        let n = self.tokens.len();
-        let (mean, median) = average(self.tokens.iter().copied());
-        json!({
-            "n": n,
-            "sum": self.tokens.iter().map(|tokens| u128::from(*tokens)).sum::<u128>() as f64,
-            "mean": mean,
-            "median": median,
-            "thin": n > 0 && n < MIN_TASKS,
-            "excluded_uncovered": self.uncovered,
-            "excluded_no_invocations": self.no_invocations,
-        })
-    }
 }
 
 fn task_token_trend(

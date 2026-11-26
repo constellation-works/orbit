@@ -353,26 +353,6 @@ impl TaskPageQuery {
     }
 }
 
-fn split_values(value: &str) -> impl DoubleEndedIterator<Item = &str> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-}
-
-fn parse_limit(raw: &str) -> Result<usize, String> {
-    let value = raw
-        .parse::<usize>()
-        .map_err(|_| format!("invalid `limit` value `{raw}` (expected a positive integer)"))?;
-    if value == 0 {
-        return Err("`limit` must be at least 1".to_string());
-    }
-    // Clamp here, before `filter_key` embeds the limit in the cursor, so an
-    // oversized request cannot force an unbounded scan and cursors minted for
-    // it stay valid for the clamped page size.
-    Ok(value.min(HISTORY_MAX_LIMIT))
-}
-
 impl TaskCursor {
     pub(super) fn new(
         scope: &str,
@@ -451,4 +431,24 @@ impl TaskCursor {
         }
         blake3::hash(material.as_bytes()).to_hex().to_string()
     }
+}
+
+fn split_values(value: &str) -> impl DoubleEndedIterator<Item = &str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+}
+
+fn parse_limit(raw: &str) -> Result<usize, String> {
+    let value = raw
+        .parse::<usize>()
+        .map_err(|_| format!("invalid `limit` value `{raw}` (expected a positive integer)"))?;
+    if value == 0 {
+        return Err("`limit` must be at least 1".to_string());
+    }
+    // Clamp here, before `filter_key` embeds the limit in the cursor, so an
+    // oversized request cannot force an unbounded scan and cursors minted for
+    // it stay valid for the clamped page size.
+    Ok(value.min(HISTORY_MAX_LIMIT))
 }

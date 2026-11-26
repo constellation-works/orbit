@@ -16,58 +16,11 @@ use crate::state::DashboardState;
 // Compatibility shim. Retirement: callers import `crate::state::host_error_code`.
 pub(crate) use crate::state::host_error_code;
 
-/// Always reports the serving host, without a workspace extractor or remote
-/// routing. Beside the resource sample it carries `provider_limits`: the host's
-/// live provider usage readings (readiness's shape), plus `provider_pressures`
-/// and `crew_pressures`. Each is `null` when unavailable, so the top bar polls
-/// resources and weekly pressure in one request.
-pub(super) async fn resources(State(state): State<DashboardState>) -> Response {
-    match blocking("host resource sampling", move || {
-        host_resources_json(&state)
-    })
-    .await
-    {
-        Ok(body) => Json(body).into_response(),
-        Err(response) => *response,
-    }
-}
-
-/// The `/host/resources` body, which the change stream's `host.resources`
-/// notice also carries. Samples the host, so call it off the request worker.
-pub(super) fn host_resources_json(state: &DashboardState) -> Result<Value, OrbitError> {
-    // One pin for both reads: each pin re-stats the registry file and every
-    // registered checkout, so pinning twice taxed the poll per workspace.
-    let pinned = state.pin();
-    let status = state.host_resource_status_pinned(&pinned)?;
-    let mut body = to_json(&status)?;
-    if let Some(object) = body.as_object_mut() {
-        if let Some(Value::Object(limits)) = state.host_provider_limits_pinned(&pinned) {
-            object.extend(limits);
-        } else {
-            for key in ["provider_limits", "provider_pressures", "crew_pressures"] {
-                object.insert(key.into(), Value::Null);
-            }
-        }
-    }
-    Ok(body)
-}
-
-// Settings › Hosts [ORB-14451]. Every route calls the operation `orbit host`
-// calls, on the serving host's host file, and answers with the CLI's JSON
-// shape and error codes. Probes and file reads run on the blocking pool, and
-// each probe has its own federated budget, so an unreachable host never holds
-// a worker or another panel. Mutations pass the router's origin guard and are
-// governed: like a config write, a host-file edit needs the operator session.
-
 #[derive(Debug, Deserialize)]
 pub(super) struct HostListQuery {
     /// `false` lists cached fields only and opens no session.
     #[serde(default = "probe_by_default")]
     probe: bool,
-}
-
-fn probe_by_default() -> bool {
-    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +66,53 @@ where
         let body = Json::<T>::from_request(request, state).await;
         parse_body(body).map(Self).map_err(|response| *response)
     }
+}
+
+/// Always reports the serving host, without a workspace extractor or remote
+/// routing. Beside the resource sample it carries `provider_limits`: the host's
+/// live provider usage readings (readiness's shape), plus `provider_pressures`
+/// and `crew_pressures`. Each is `null` when unavailable, so the top bar polls
+/// resources and weekly pressure in one request.
+pub(super) async fn resources(State(state): State<DashboardState>) -> Response {
+    match blocking("host resource sampling", move || {
+        host_resources_json(&state)
+    })
+    .await
+    {
+        Ok(body) => Json(body).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// The `/host/resources` body, which the change stream's `host.resources`
+/// notice also carries. Samples the host, so call it off the request worker.
+pub(super) fn host_resources_json(state: &DashboardState) -> Result<Value, OrbitError> {
+    // One pin for both reads: each pin re-stats the registry file and every
+    // registered checkout, so pinning twice taxed the poll per workspace.
+    let pinned = state.pin();
+    let status = state.host_resource_status_pinned(&pinned)?;
+    let mut body = to_json(&status)?;
+    if let Some(object) = body.as_object_mut() {
+        if let Some(Value::Object(limits)) = state.host_provider_limits_pinned(&pinned) {
+            object.extend(limits);
+        } else {
+            for key in ["provider_limits", "provider_pressures", "crew_pressures"] {
+                object.insert(key.into(), Value::Null);
+            }
+        }
+    }
+    Ok(body)
+}
+
+// Settings › Hosts [ORB-14451]. Every route calls the operation `orbit host`
+// calls, on the serving host's host file, and answers with the CLI's JSON
+// shape and error codes. Probes and file reads run on the blocking pool, and
+// each probe has its own federated budget, so an unreachable host never holds
+// a worker or another panel. Mutations pass the router's origin guard and are
+// governed: like a config write, a host-file edit needs the operator session.
+
+fn probe_by_default() -> bool {
+    true
 }
 
 /// `GET /api/hosts[?probe=false]`: `orbit host list --json`, read from the
