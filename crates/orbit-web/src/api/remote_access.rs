@@ -4,7 +4,7 @@
 //! never runs a Tailscale command that changes state.
 
 use std::collections::BTreeSet;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -62,7 +62,7 @@ fn remote_access_json(state: &DashboardState) -> Value {
             .is_some_and(|web| !policy.matches(&web.trusted_hosts, &web.trusted_logins));
 
     let tailscale = serve_status(&access, state.env());
-    let served = served_names(&tailscale, access.bound_port());
+    let served = served_names(&tailscale, access.bound_addr());
     let warnings = warnings(&hosts, &tailscale, &served);
 
     let activity = access.snapshot();
@@ -217,7 +217,7 @@ struct Handler {
 
 /// Every web handler in a `tailscale serve status --json` config, including
 /// foreground sessions.
-fn handlers(config: &Value, dashboard_port: Option<u16>, out: &mut Vec<Handler>) {
+fn handlers(config: &Value, dashboard: Option<SocketAddr>, out: &mut Vec<Handler>) {
     if let Some(web) = config["Web"].as_object() {
         for (host_port, site) in web {
             let (name, port) = host_port
@@ -231,7 +231,7 @@ fn handlers(config: &Value, dashboard_port: Option<u16>, out: &mut Vec<Handler>)
                     name: name.to_ascii_lowercase(),
                     port,
                     path: path.clone(),
-                    to_dashboard: dashboard_port.is_some_and(|port| proxies_to(&proxy, port)),
+                    to_dashboard: dashboard.is_some_and(|dashboard| proxies_to(&proxy, dashboard)),
                     proxy,
                     funnel,
                 });
@@ -244,15 +244,18 @@ fn handlers(config: &Value, dashboard_port: Option<u16>, out: &mut Vec<Handler>)
         .flatten()
         .map(|(_, v)| v)
     {
-        handlers(session, dashboard_port, out);
+        handlers(session, dashboard, out);
     }
 }
 
 /// Whether a Serve proxy target (`7878`, `localhost:7878`,
-/// `http://127.0.0.1:7878`) is this dashboard's loopback port.
-fn proxies_to(proxy: &str, port: u16) -> bool {
+/// `http://127.0.0.1:7878`, `http://[::1]:7878`) is this dashboard's listener.
+/// A bare port or `localhost` matches the listener's port on either family.
+/// An explicit IP must be the listener's own address: the other loopback
+/// family on the same port is a different socket.
+fn proxies_to(proxy: &str, dashboard: SocketAddr) -> bool {
     if let Ok(bare) = proxy.parse::<u16>() {
-        return bare == port;
+        return bare == dashboard.port();
     }
     let target = if proxy.contains("://") {
         proxy.to_string()
@@ -260,19 +263,21 @@ fn proxies_to(proxy: &str, port: u16) -> bool {
         format!("http://{proxy}")
     };
     url::Url::parse(&target).is_ok_and(|url| {
-        url.scheme() == "http"
-            && url.port_or_known_default() == Some(port)
-            && url
-                .host_str()
-                .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1"))
+        let same_host = match url.host() {
+            Some(url::Host::Ipv4(ip)) => dashboard.ip() == IpAddr::V4(ip),
+            Some(url::Host::Ipv6(ip)) => dashboard.ip() == IpAddr::V6(ip),
+            Some(url::Host::Domain(name)) => name == "localhost",
+            None => false,
+        };
+        url.scheme() == "http" && url.port_or_known_default() == Some(dashboard.port()) && same_host
     })
 }
 
 /// Serve's handlers, when the reading is JSON.
-fn served_names(reading: &TailscaleReading, dashboard_port: Option<u16>) -> Vec<Handler> {
+fn served_names(reading: &TailscaleReading, dashboard: Option<SocketAddr>) -> Vec<Handler> {
     let mut out = Vec::new();
     if let TailscaleReading::Json(config) = reading {
-        handlers(config, dashboard_port, &mut out);
+        handlers(config, dashboard, &mut out);
     }
     out
 }

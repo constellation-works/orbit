@@ -7,7 +7,7 @@
 //! [`MAX_REFUSAL_KEYS`] refusal keys, each with fixed-size time buckets.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -58,8 +58,8 @@ pub(crate) struct RemoteAccess {
     /// Whether the policy came from `machine.web.*` at serve start (false for
     /// the embedded entry point, which admits loopback only).
     from_config: bool,
-    /// The bound port and when serving began, set once after the bind.
-    bound: OnceLock<(u16, DateTime<Utc>)>,
+    /// The bound listener address and when serving began, set once after the bind.
+    bound: OnceLock<(SocketAddr, DateTime<Utc>)>,
     activity: Mutex<Activity>,
     tailscale: Mutex<TailscaleCache>,
 }
@@ -82,14 +82,20 @@ impl RemoteAccess {
         self.from_config
     }
 
-    /// Record the port the server bound, once, after the bind; tracking
+    /// Record the address the server bound, once, after the bind; tracking
     /// counts from then.
-    pub(crate) fn set_bound_port(&self, port: u16) {
-        let _ = self.bound.set((port, Utc::now()));
+    pub(crate) fn set_bound_addr(&self, addr: SocketAddr) {
+        let _ = self.bound.set((addr, Utc::now()));
+    }
+
+    /// The listener address, so a Serve target can be matched by family as
+    /// well as port.
+    pub(crate) fn bound_addr(&self) -> Option<SocketAddr> {
+        self.bound.get().map(|(addr, _)| *addr)
     }
 
     pub(crate) fn bound_port(&self) -> Option<u16> {
-        self.bound.get().map(|(port, _)| *port)
+        self.bound_addr().map(|addr| addr.port())
     }
 
     /// When this server started tracking, if it has bound.

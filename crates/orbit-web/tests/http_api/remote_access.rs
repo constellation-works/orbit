@@ -31,14 +31,14 @@ fn tailscale_stub(fixture: &Fixture) -> std::path::PathBuf {
     bin
 }
 
-/// Point Serve's `<name>` handler at the server's own port.
-fn serve_json(bin: &std::path::Path, name: &str, origin: &str) {
+/// Point Serve's `<name>` handler at `target_host` on the server's own port.
+fn serve_json(bin: &std::path::Path, name: &str, origin: &str, target_host: &str) {
     let port = origin.rsplit(':').next().unwrap();
     fs::write(
         bin.join("serve.json"),
         json!({
             "TCP": {"443": {"HTTPS": true}},
-            "Web": {format!("{name}:443"): {"Handlers": {"/": {"Proxy": format!("http://127.0.0.1:{port}")}}}},
+            "Web": {format!("{name}:443"): {"Handlers": {"/": {"Proxy": format!("http://{target_host}:{port}")}}}},
         })
         .to_string(),
     )
@@ -54,7 +54,7 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             let fixture = Fixture::new();
             let bin = tailscale_stub(&fixture);
             let off = fixture.server_with_path(false, &bin);
-            serve_json(&bin, "dash.tailnet.ts.net", &off.origin);
+            serve_json(&bin, "dash.tailnet.ts.net", &off.origin, "127.0.0.1");
             let body = super::support::json_ok(off.get("/api/remote-access"));
             assert_eq!(body["enabled"], false, "{body}");
             assert_eq!(body["trusted_hosts"], json!([]));
@@ -86,7 +86,7 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             .unwrap();
             fs::remove_file(bin.join("serve.json")).unwrap();
             let on = fixture.server_with_path(false, &bin);
-            serve_json(&bin, "dash.tailnet.ts.net", &on.origin);
+            serve_json(&bin, "dash.tailnet.ts.net", &on.origin, "127.0.0.1");
             let api = "/api/tasks?workspace=ws_http_fixture";
             let trusted = |login: &str| {
                 on.request("GET", api)
@@ -183,6 +183,60 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             );
             assert_eq!(body["restart_required"], true, "{body}");
             assert_eq!(body["configured_policy_error"], Value::Null);
+        },
+    );
+}
+
+/// ORB-28659: a Serve target counts as this dashboard only on the listener's
+/// own loopback family. An explicit `127.0.0.1` or `[::1]` on the other family
+/// is a different socket even on the same port, so it must not be reported as
+/// the dashboard, and the trusted host must read as not served.
+#[test]
+fn remote_access_serve_target_must_match_the_listener_family() {
+    isolated(
+        "remote_access::remote_access_serve_target_must_match_the_listener_family",
+        || {
+            // (listener host, Serve target host, Serve reaches this dashboard)
+            let cases = [
+                ("127.0.0.1", "127.0.0.1", true),
+                ("127.0.0.1", "[::1]", false),
+                ("::1", "[::1]", true),
+                ("::1", "127.0.0.1", false),
+            ];
+            for (listener, target, reaches) in cases {
+                let fixture = Fixture::new();
+                let bin = tailscale_stub(&fixture);
+                let config = fixture.global.join("config.toml");
+                let base = fs::read_to_string(&config).unwrap();
+                fs::write(
+                    &config,
+                    format!(
+                        "{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\n\
+                         trusted_logins = [\"alice@example.com\"]\n"
+                    ),
+                )
+                .unwrap();
+                let server = fixture.server_with_path_envs(
+                    false,
+                    &bin,
+                    &[("ORBIT_HTTP_HOST", std::ffi::OsStr::new(listener))],
+                );
+                serve_json(&bin, "dash.tailnet.ts.net", &server.origin, target);
+
+                let body = super::support::json_ok(server.get("/api/remote-access"));
+                let case = format!("listener {listener}, Serve target {target}");
+                assert_eq!(body["tailscale"]["state"], "ok", "{case}: {body}");
+                assert_eq!(
+                    body["tailscale"]["handlers"][0]["to_dashboard"], reaches,
+                    "{case}: {body}"
+                );
+                let warnings = if reaches {
+                    json!([])
+                } else {
+                    json!([{"code": "trusted_host_not_served", "host": "dash.tailnet.ts.net"}])
+                };
+                assert_eq!(body["warnings"], warnings, "{case}: {body}");
+            }
         },
     );
 }
@@ -388,7 +442,12 @@ fn configure_trusted_remote_host(fixture: &Fixture, bin: &Path) {
         "schema_version = 1\n\n[[hosts]]\nname = \"hostb\"\nmachine_id = \"hm_hostb_remote\"\nssh = \"hostb-ssh\"\ntask_prefix = \"HB\"\n",
     )
     .unwrap();
-    serve_json(bin, "dash.tailnet.ts.net", "http://127.0.0.1:0");
+    serve_json(
+        bin,
+        "dash.tailnet.ts.net",
+        "http://127.0.0.1:0",
+        "127.0.0.1",
+    );
 }
 
 fn send_trusted(server: &Server, path: &str, login: &str, ip: &str) -> Response {
@@ -437,7 +496,7 @@ fn remote_access_caps_devices_and_refusal_keys_at_capacity() {
             let _ssh = install_ssh_stub(&bin, remote.port);
             configure_trusted_remote_host(&fixture, &bin);
             let server = fixture.server_with_path(false, &bin);
-            serve_json(&bin, "dash.tailnet.ts.net", &server.origin);
+            serve_json(&bin, "dash.tailnet.ts.net", &server.origin, "127.0.0.1");
 
             // Open 64 live forwarded SSE streams from 64 distinct devices.
             let mut open_streams = Vec::new();
@@ -628,7 +687,7 @@ fn remote_access_evicted_pending_stream_cannot_decrement_later_stream() {
             let _ssh = install_ssh_stub(&bin, remote.port);
             configure_trusted_remote_host(&fixture, &bin);
             let server = fixture.server_with_path(false, &bin);
-            serve_json(&bin, "dash.tailnet.ts.net", &server.origin);
+            serve_json(&bin, "dash.tailnet.ts.net", &server.origin, "127.0.0.1");
 
             // Start a forwarded SSE request that pauses before returning response headers.
             let origin = server.origin.clone();

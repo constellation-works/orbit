@@ -295,7 +295,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState, env: &Env) -> Resu
         // `--port 0` asks the OS for a free port, so report the address that
         // was actually bound rather than the one requested.
         let bound = listener.local_addr().unwrap_or(addr);
-        remote_access.set_bound_port(bound.port());
+        remote_access.set_bound_addr(bound);
         let url = format!("http://{bound}");
 
         #[allow(clippy::print_stdout)]
