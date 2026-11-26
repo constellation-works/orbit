@@ -26,6 +26,10 @@ pub mod security;
 pub mod storage;
 pub mod text;
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test environment helpers report fixture evidence directly to the harness"
+)]
 pub mod test_env;
 
 #[cfg(test)]

@@ -146,7 +146,7 @@ fn prompt_without_echo(prompt: &str) -> Result<String, OrbitError> {
             std::io::Error::last_os_error()
         )));
     }
-    let mut stderr = std::io::stderr();
+    let mut stderr = crate::output::common::sink::stderr();
     let _ = write!(stderr, "{prompt}");
     let _ = stderr.flush();
     let mut line = String::new();

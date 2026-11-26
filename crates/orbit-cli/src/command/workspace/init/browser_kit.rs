@@ -94,7 +94,7 @@ fn interactive() -> bool {
 }
 
 fn operator_accepts(marker: &str) -> bool {
-    let mut stderr = std::io::stderr();
+    let mut stderr = crate::output::common::sink::stderr();
     let asked = write!(
         stderr,
         "This repository has a web UI ({marker}). Install the headless browser kit workers \

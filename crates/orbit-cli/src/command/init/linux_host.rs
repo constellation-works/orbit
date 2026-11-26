@@ -244,7 +244,7 @@ impl Host for RealHost<'_> {
         let status = command
             .arg("-v")
             .stdin(Stdio::null())
-            .stdout(Stdio::from(std::io::stderr()))
+            .stdout(Stdio::from(crate::output::common::sink::stderr()))
             .status()
             .map_err(|error| {
                 OrbitError::Execution(format!("start sudo authentication: {error}"))
@@ -288,7 +288,7 @@ impl Host for RealHost<'_> {
             .env("DEBIAN_FRONTEND", "noninteractive")
             .stdin(Stdio::null())
             // Package-manager progress must not corrupt init's JSON stdout.
-            .stdout(Stdio::from(std::io::stderr()))
+            .stdout(Stdio::from(crate::output::common::sink::stderr()))
             .status()
             .map_err(|error| OrbitError::Execution(format!("start {path}: {error}")))?;
         if !status.success() {

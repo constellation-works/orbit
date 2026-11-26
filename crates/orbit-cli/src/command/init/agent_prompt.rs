@@ -25,14 +25,14 @@ pub struct StdinPrompter;
 
 impl Prompter for StdinPrompter {
     fn message(&mut self, text: &str) -> io::Result<()> {
-        let stderr = io::stderr();
+        let stderr = crate::output::common::sink::stderr();
         let mut out = stderr.lock();
         writeln!(out, "{text}")?;
         Ok(())
     }
 
     fn prompt(&mut self, prompt: &str) -> io::Result<String> {
-        let stderr = io::stderr();
+        let stderr = crate::output::common::sink::stderr();
         let mut out = stderr.lock();
         prompt_stdin::read_trimmed_line(prompt, &mut out)
             .map_err(|error| prompt_stdin::with_remedy(error, prompt_stdin::PROMPT_REMEDY))

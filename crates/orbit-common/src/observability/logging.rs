@@ -509,6 +509,10 @@ pub fn init_default_subscriber(env: &crate::Env, default_filter: &str) {
 /// Install stderr and JSONL layers with independent defaults. `RUST_LOG`, when
 /// set and valid, overrides both; otherwise callers can retain additional file
 /// evidence without also printing it as a terminal diagnostic.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the subscriber owns its stderr writer"
+)]
 pub fn init_subscriber_with_file_filter(
     env: &crate::Env,
     stderr_default: &str,
@@ -591,6 +595,10 @@ pub fn ansi_allowed(
 }
 
 /// [`ansi_allowed`] for stderr, reading the color environment from the process.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "subscriber color depends on whether stderr is a terminal"
+)]
 fn stderr_ansi_enabled(env: &crate::Env) -> bool {
     ansi_allowed(
         io::stderr().is_terminal(),

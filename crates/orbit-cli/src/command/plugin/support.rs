@@ -17,7 +17,7 @@ pub enum PluginScope {
 /// the operator sees what runs even when stdout is machine-readable.
 pub(super) fn show_build_plan(plan: &str) {
     use std::io::Write;
-    let mut stderr = std::io::stderr();
+    let mut stderr = crate::output::common::sink::stderr();
     let _ = writeln!(stderr, "{plan}");
     let _ = stderr.flush();
 }

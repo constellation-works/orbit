@@ -150,7 +150,7 @@ fn follow_logs(
                 // a following reader never silently loses retained evidence.
                 if prefix.is_some() && remainder.is_none() {
                     writeln!(
-                        std::io::stderr().lock(),
+                        crate::output::common::sink::stderr().lock(),
                         "Live logs differ from the retained capture; replaying captured {stream} for {provider}."
                     )?;
                 }
@@ -271,7 +271,9 @@ fn emit_follow_record(
         })?;
         writeln!(writer)?;
     } else if stream == "stderr" {
-        std::io::stderr().lock().write_all(text.as_bytes())?;
+        crate::output::common::sink::stderr()
+            .lock()
+            .write_all(text.as_bytes())?;
     } else {
         writer.write_all(text.as_bytes())?;
     }

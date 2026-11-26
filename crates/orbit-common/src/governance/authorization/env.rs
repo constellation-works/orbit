@@ -74,6 +74,10 @@ pub(super) fn agent_declared_in_env(env: &crate::Env) -> bool {
 /// pipeline, and `stderr` alone is true for a subprocess whose stderr was
 /// inherited from a terminal — neither on its own distinguishes a person from
 /// an automated caller that happened to inherit one handle.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "authorization checks both terminal handles to identify a human caller"
+)]
 pub(super) fn interactive_terminal() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
