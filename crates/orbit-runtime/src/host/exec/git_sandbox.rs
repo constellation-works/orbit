@@ -422,6 +422,10 @@ fn metadata_entry_refusal(path: &Path, hard_linked: bool) -> OrbitError {
              `git fsck`",
             path.display()
         )
+    } else if hard_linked {
+        "; a local `git clone` (or `cp -l`) of this checkout usually hard-links its objects: \
+         delete the clone, or re-clone with `--no-hardlinks`"
+            .to_string()
     } else {
         String::new()
     };
