@@ -1,5 +1,9 @@
 //! One generation-fenced checkpoint and receipt projection for all consumers.
 
+mod members;
+mod recovery;
+mod transition;
+
 use crate::{AutomationError, DeferredReason};
 use orbit_common::OrbitError;
 use orbit_store::Store;
@@ -57,10 +61,6 @@ pub(crate) fn diagnostic(
             .collect(),
     })
 }
-
-mod members;
-mod recovery;
-mod transition;
 
 /// Insert the first checkpoint for a consumer.
 pub fn initialize(tx: &orbit_store::Tx<'_>, state: &AutomationState) -> Result<bool, OrbitError> {

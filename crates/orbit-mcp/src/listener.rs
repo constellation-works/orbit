@@ -10,6 +10,9 @@
 //! lines in a browser's HTTP POST body. Loopback alone does not stop a page
 //! visited on the same machine from reaching the socket.
 
+#[path = "listener_peer.rs"]
+mod peer;
+
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -25,9 +28,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{McpHost, OrbitToolServer};
-
-#[path = "listener_peer.rs"]
-mod peer;
 
 /// Loopback port `orbit mcp listen` binds when no address is given.
 pub const DEFAULT_MCP_LISTEN_PORT: u16 = 7879;

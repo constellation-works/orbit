@@ -41,13 +41,14 @@ pub use settings::{
     ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
     save_clock_settings, set_clock_cadence,
 };
+
+pub use status::{ClockHealth, ClockStatus, clock_status, doctor_clock_not_running_issue};
+
 /// Cooperative budget for a host scheduler tick. The native manager supplies
 /// an independent hard ceiling for an operation that never returns. The clock's
 /// health reads it to judge an overdue tick; `orbit-automation` re-exports it
 /// for the sweep pass that spends it.
 pub const TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-
-pub use status::{ClockHealth, ClockStatus, clock_status, doctor_clock_not_running_issue};
 
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]

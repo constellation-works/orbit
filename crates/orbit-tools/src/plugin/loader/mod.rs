@@ -4,6 +4,10 @@
 //! [`PluginLoadError`] naming the manifest field, and the caller decides
 //! whether that refuses `orbit plugin add` or registers the plugin inactive.
 
+mod load;
+mod model;
+mod validation;
+
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -22,10 +26,6 @@ use std::collections::BTreeMap;
 
 use super::backend::{PluginBackendSpec, render_fs_roots};
 use super::schema::{CompiledSchema, params_from_input_schema};
-
-mod load;
-mod model;
-mod validation;
 
 pub use self::load::*;
 pub use self::model::*;

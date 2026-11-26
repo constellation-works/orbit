@@ -9,6 +9,8 @@
 //! reviewed content, or carried it unchanged onto a base that moved.
 //! Uncertain content is never excluded.
 
+mod validation;
+
 use orbit_types::task::Task;
 use orbit_types::workflow::automation::{Delivery, DeliveryExclusion};
 use orbit_types::workflow::{
@@ -18,8 +20,6 @@ use serde_json::json;
 
 use crate::AutomationError;
 use crate::delivery::json_definition_epoch;
-
-mod validation;
 
 pub use validation::{
     MutationTarget, SkippedCheck, ValidationContext, ValidationDefect, in_scope, mutation_targets,

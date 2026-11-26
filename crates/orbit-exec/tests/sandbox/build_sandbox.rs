@@ -1,120 +1,4 @@
 //! Exported build phase and capped log boundaries.
-use orbit_exec::BuildLog;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use orbit_exec::{
-    BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest, BuildSandboxSpec, run_build_phase,
-};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::time::Duration;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn path_env() -> Vec<(String, String)> {
-    vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn build_sandbox_available(test: &str) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let probe = orbit_exec::probe_bwrap();
-        if !probe.available {
-            orbit_exec::report_bwrap_deferral(test, &probe.detail);
-            return false;
-        }
-    }
-    #[cfg(target_os = "macos")]
-    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
-        return false;
-    }
-    true
-}
-
-/// The log keeps the first and last half of its cap whatever the chunking,
-/// so a runaway build cannot grow it and the failure at the end survives.
-#[test]
-fn the_build_log_keeps_its_head_and_tail_under_any_chunking() {
-    let output: Vec<u8> = (0..1000u32)
-        .flat_map(|n| format!("{n:04}\n").into_bytes())
-        .collect();
-    for chunk in [1, 3, 7, 64, 5000] {
-        let mut log = BuildLog::with_cap(100);
-        for piece in output.chunks(chunk) {
-            log.push(piece);
-        }
-        let rendered = String::from_utf8(log.render()).expect("utf8");
-        assert!(
-            rendered.starts_with("0000\n0001\n"),
-            "chunk {chunk}: {rendered}"
-        );
-        assert!(
-            rendered.ends_with("0998\n0999\n"),
-            "chunk {chunk}: {rendered}"
-        );
-        assert!(
-            rendered.contains(&format!(
-                "{} bytes of build output elided",
-                output.len() - 100
-            )),
-            "chunk {chunk}: {rendered}"
-        );
-    }
-    let mut small = BuildLog::with_cap(100);
-    small.push(b"short");
-    assert_eq!(small.render(), b"short");
-}
-
-/// The phase sees only the environment it was given, and cannot dump core.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_phase_gets_only_its_environment_and_no_core_dumps() {
-    if !build_sandbox_available("a_phase_gets_only_its_environment_and_no_core_dumps") {
-        return;
-    }
-    if super::audit_support::run_isolated(
-        "build_sandbox::a_phase_gets_only_its_environment_and_no_core_dumps",
-    ) {
-        return;
-    }
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cwd_dir = tempfile::tempdir().expect("working directory");
-    let cwd = cwd_dir
-        .path()
-        .canonicalize()
-        .expect("physical working directory");
-    let _ambient = orbit_common::test_env::scoped([("ORBIT_BUILD_AMBIENT_PROBE", Some("leaked"))]);
-    let env = path_env();
-    let mut log = BuildLog::default();
-    let argv = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "pwd; env; echo core=$(ulimit -c)".to_string(),
-    ];
-    let readable = vec![cwd.clone()];
-    let build_dir = dir.path().canonicalize().expect("physical build directory");
-    let request = BuildPhaseRequest {
-        sandbox: BuildSandboxSpec {
-            build_dir: &build_dir,
-            readable: &readable,
-            home: None,
-            network: BuildPhaseNetwork::None,
-        },
-        argv: &argv,
-        env: &env,
-        cwd: &cwd,
-        timeout: Duration::from_secs(20),
-        build_dir_cap_bytes: u64::MAX,
-    };
-    let end = run_build_phase(&orbit_common::Env::capture(), &request, &mut log).expect("run");
-    assert_eq!(end, BuildPhaseEnd::Exited(0));
-    let output = String::from_utf8_lossy(&log.render()).into_owned();
-    assert_eq!(
-        output.lines().next(),
-        Some(cwd.to_str().expect("utf8 cwd")),
-        "a phase must honor its requested cwd"
-    );
-    assert!(!output.contains("ORBIT_BUILD_AMBIENT_PROBE"), "{output}");
-    assert!(output.contains("core=0"), "{output}");
-}
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -245,6 +129,354 @@ mod macos {
             "a write beside the build directory landed"
         );
     }
+}
+
+/// A script in a linked worktree reads the repository's Git metadata, which
+/// lives in the common directory, and that directory is never writable.
+#[cfg(target_os = "linux")]
+mod script_linked_worktree {
+    use super::build_sandbox_available;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use orbit_exec::{
+        SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec,
+        compile_linux_script_argv, run_script_sandboxed,
+    };
+
+    struct LinkedWorktree {
+        _temp: tempfile::TempDir,
+        worktree: PathBuf,
+        common: PathBuf,
+        gitdir: PathBuf,
+        scratch: PathBuf,
+    }
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let output = crate::git_test_support::command()
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(cwd)
+            .args(["-c", "commit.gpgSign=false"])
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.com",
+            ])
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("utf8 git output")
+            .trim()
+            .to_string()
+    }
+
+    fn linked_worktree() -> LinkedWorktree {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().canonicalize().expect("canonical root");
+        let primary = root.join("primary");
+        let worktree = root.join("worktree");
+        let scratch = root.join("scratch");
+        fs::create_dir(&primary).expect("primary");
+        git(&primary, &["init", "-q"]);
+        git(
+            &primary,
+            &["commit", "-q", "--allow-empty", "-m", "fixture"],
+        );
+        git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "linked",
+                worktree.to_str().expect("utf8 worktree path"),
+            ],
+        );
+        for directory in SCRIPT_SCRATCH_DIRS {
+            fs::create_dir_all(scratch.join(directory)).expect("scratch directory");
+        }
+        let common = primary
+            .join(".git")
+            .canonicalize()
+            .expect("common directory");
+        let gitdir = common.join("worktrees").join("worktree");
+        LinkedWorktree {
+            worktree: worktree.canonicalize().expect("worktree"),
+            common,
+            gitdir,
+            scratch: scratch.canonicalize().expect("scratch"),
+            _temp: temp,
+        }
+    }
+
+    /// Where a read-only bind of `path` onto itself sits in the argv.
+    fn ro_bind_at(argv: &[String], path: &Path) -> Option<usize> {
+        let path = path.display().to_string();
+        argv.windows(3)
+            .position(|bind| bind[0] == "--ro-bind" && bind[1] == path && bind[2] == path)
+    }
+
+    #[test]
+    fn the_common_git_directory_is_read_only_beneath_the_worktree_gitdir() {
+        let fixture = linked_worktree();
+        let spec = ScriptSandboxSpec {
+            cwd: &fixture.worktree,
+            cwd_writable: true,
+            scratch: &fixture.scratch,
+            readable: &[],
+            writable: &[],
+            masked: &[],
+            home: None,
+            inputs: &[],
+            network: orbit_exec::ScriptSandboxNetwork::None,
+        };
+        let argv = compile_linux_script_argv(
+            &orbit_common::Env::capture(),
+            &spec,
+            &[],
+            &["/usr/bin/true".to_string()],
+        )
+        .expect("compile profile");
+        let pointer_at = ro_bind_at(&argv, &fixture.worktree.join(".git"))
+            .expect("the worktree Git pointer is bound read-only");
+        let cwd = fixture.worktree.display().to_string();
+        let cwd_at = argv
+            .windows(3)
+            .position(|bind| bind[0] == "--bind" && bind[1] == cwd && bind[2] == cwd)
+            .expect("the worktree is bound writable");
+        assert!(
+            pointer_at > cwd_at,
+            "the pointer bind must cover the writable worktree"
+        );
+        let common_at = ro_bind_at(&argv, &fixture.common)
+            .expect("the common Git directory is bound read-only");
+        let gitdir_at =
+            ro_bind_at(&argv, &fixture.gitdir).expect("the per-worktree gitdir is bound read-only");
+        assert!(
+            common_at < gitdir_at,
+            "the per-worktree gitdir must mount over the common directory: {argv:?}"
+        );
+        let worktree = fixture.worktree.display().to_string();
+        assert!(
+            argv.windows(3)
+                .any(|bind| bind[0] == "--bind" && bind[1] == worktree && bind[2] == worktree),
+            "the run worktree stays writable: {argv:?}"
+        );
+        let common = fixture.common.display().to_string();
+        assert!(
+            !argv
+                .windows(3)
+                .any(|bind| bind[0] == "--bind" && bind[1] == common),
+            "the common Git directory is never writable: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_script_in_a_linked_worktree_reads_git_and_keeps_its_writes() {
+        if !build_sandbox_available("a_script_in_a_linked_worktree_reads_git_and_keeps_its_writes")
+        {
+            return;
+        }
+        let fixture = linked_worktree();
+        let head = git(&fixture.worktree, &["rev-parse", "HEAD"]);
+        let config = fixture.common.join("config");
+        let config_before = fs::read(&config).expect("common config");
+        let pointer_before = fs::read(fixture.worktree.join(".git")).expect("Git pointer");
+        let script = format!(
+            "set -eu\n\
+             git rev-parse HEAD\n\
+             git log -1 --format=%H\n\
+             git status --porcelain\n\
+             git archive --format=tar -o /orbit-script/out/archive.tar HEAD\n\
+             echo generated > generated.txt\n\
+             if (echo tampered >> '{}') 2>/dev/null; then exit 3; fi\n\
+             if (: > .git) 2>/dev/null; then exit 4; fi\n\
+             if rm .git 2>/dev/null; then exit 5; fi\n\
+             if mv .git moved-git 2>/dev/null; then exit 6; fi\n\
+             echo replacement > replacement\n\
+             if mv -f replacement .git 2>/dev/null; then exit 7; fi\n\
+             if ln -sf replacement .git 2>/dev/null; then exit 8; fi\n",
+            config.display()
+        );
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script];
+        let env = vec![
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("HOME".to_string(), "/orbit-script/home".to_string()),
+        ];
+        let request = ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd: &fixture.worktree,
+                cwd_writable: true,
+                scratch: &fixture.scratch,
+                readable: &[],
+                writable: &[],
+                masked: &[],
+                home: None,
+                inputs: &[],
+                network: orbit_exec::ScriptSandboxNetwork::None,
+            },
+            argv: &argv,
+            env: &env,
+            launcher: &[],
+            launcher_env: &[],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(60),
+            scratch_cap_bytes: 64 * 1024 * 1024,
+        };
+        let run =
+            run_script_sandboxed(&orbit_common::Env::capture(), request).expect("run the script");
+        assert_eq!(
+            run.end,
+            ScriptRunEnd::Exited(0),
+            "log: {}",
+            String::from_utf8_lossy(&run.log)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            format!("{head}\n{head}\n")
+        );
+        assert!(fixture.scratch.join("out/archive.tar").is_file());
+        assert_eq!(
+            fs::read(fixture.worktree.join(".git")).expect("Git pointer"),
+            pointer_before
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.worktree.join("generated.txt")).expect("source write"),
+            "generated\n"
+        );
+        assert_eq!(
+            fs::read(&config).expect("common config"),
+            config_before,
+            "the common Git config is unchanged"
+        );
+    }
+}
+
+use orbit_exec::BuildLog;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use orbit_exec::{
+    BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest, BuildSandboxSpec, run_build_phase,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::time::Duration;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn path_env() -> Vec<(String, String)> {
+    vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn build_sandbox_available(test: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let probe = orbit_exec::probe_bwrap();
+        if !probe.available {
+            orbit_exec::report_bwrap_deferral(test, &probe.detail);
+            return false;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
+        return false;
+    }
+    true
+}
+
+/// The log keeps the first and last half of its cap whatever the chunking,
+/// so a runaway build cannot grow it and the failure at the end survives.
+#[test]
+fn the_build_log_keeps_its_head_and_tail_under_any_chunking() {
+    let output: Vec<u8> = (0..1000u32)
+        .flat_map(|n| format!("{n:04}\n").into_bytes())
+        .collect();
+    for chunk in [1, 3, 7, 64, 5000] {
+        let mut log = BuildLog::with_cap(100);
+        for piece in output.chunks(chunk) {
+            log.push(piece);
+        }
+        let rendered = String::from_utf8(log.render()).expect("utf8");
+        assert!(
+            rendered.starts_with("0000\n0001\n"),
+            "chunk {chunk}: {rendered}"
+        );
+        assert!(
+            rendered.ends_with("0998\n0999\n"),
+            "chunk {chunk}: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "{} bytes of build output elided",
+                output.len() - 100
+            )),
+            "chunk {chunk}: {rendered}"
+        );
+    }
+    let mut small = BuildLog::with_cap(100);
+    small.push(b"short");
+    assert_eq!(small.render(), b"short");
+}
+
+/// The phase sees only the environment it was given, and cannot dump core.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_phase_gets_only_its_environment_and_no_core_dumps() {
+    if !build_sandbox_available("a_phase_gets_only_its_environment_and_no_core_dumps") {
+        return;
+    }
+    if super::audit_support::run_isolated(
+        "build_sandbox::a_phase_gets_only_its_environment_and_no_core_dumps",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cwd_dir = tempfile::tempdir().expect("working directory");
+    let cwd = cwd_dir
+        .path()
+        .canonicalize()
+        .expect("physical working directory");
+    let _ambient = orbit_common::test_env::scoped([("ORBIT_BUILD_AMBIENT_PROBE", Some("leaked"))]);
+    let env = path_env();
+    let mut log = BuildLog::default();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "pwd; env; echo core=$(ulimit -c)".to_string(),
+    ];
+    let readable = vec![cwd.clone()];
+    let build_dir = dir.path().canonicalize().expect("physical build directory");
+    let request = BuildPhaseRequest {
+        sandbox: BuildSandboxSpec {
+            build_dir: &build_dir,
+            readable: &readable,
+            home: None,
+            network: BuildPhaseNetwork::None,
+        },
+        argv: &argv,
+        env: &env,
+        cwd: &cwd,
+        timeout: Duration::from_secs(20),
+        build_dir_cap_bytes: u64::MAX,
+    };
+    let end = run_build_phase(&orbit_common::Env::capture(), &request, &mut log).expect("run");
+    assert_eq!(end, BuildPhaseEnd::Exited(0));
+    let output = String::from_utf8_lossy(&log.render()).into_owned();
+    assert_eq!(
+        output.lines().next(),
+        Some(cwd.to_str().expect("utf8 cwd")),
+        "a phase must honor its requested cwd"
+    );
+    assert!(!output.contains("ORBIT_BUILD_AMBIENT_PROBE"), "{output}");
+    assert!(output.contains("core=0"), "{output}");
 }
 
 /// The host size walk cannot count an outside file reachable only through a
@@ -482,237 +714,6 @@ fn script_profile_preserves_masks_with_overlapping_grant() {
         "ok\n"
     );
     assert!(!git.join("new").exists());
-}
-
-/// A script in a linked worktree reads the repository's Git metadata, which
-/// lives in the common directory, and that directory is never writable.
-#[cfg(target_os = "linux")]
-mod script_linked_worktree {
-    use super::build_sandbox_available;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
-
-    use orbit_exec::{
-        SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec,
-        compile_linux_script_argv, run_script_sandboxed,
-    };
-
-    struct LinkedWorktree {
-        _temp: tempfile::TempDir,
-        worktree: PathBuf,
-        common: PathBuf,
-        gitdir: PathBuf,
-        scratch: PathBuf,
-    }
-
-    fn git(cwd: &Path, args: &[&str]) -> String {
-        let output = crate::git_test_support::command()
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .current_dir(cwd)
-            .args(["-c", "commit.gpgSign=false"])
-            .args([
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.com",
-            ])
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(
-            output.status.success(),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout)
-            .expect("utf8 git output")
-            .trim()
-            .to_string()
-    }
-
-    fn linked_worktree() -> LinkedWorktree {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let root = temp.path().canonicalize().expect("canonical root");
-        let primary = root.join("primary");
-        let worktree = root.join("worktree");
-        let scratch = root.join("scratch");
-        fs::create_dir(&primary).expect("primary");
-        git(&primary, &["init", "-q"]);
-        git(
-            &primary,
-            &["commit", "-q", "--allow-empty", "-m", "fixture"],
-        );
-        git(
-            &primary,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "linked",
-                worktree.to_str().expect("utf8 worktree path"),
-            ],
-        );
-        for directory in SCRIPT_SCRATCH_DIRS {
-            fs::create_dir_all(scratch.join(directory)).expect("scratch directory");
-        }
-        let common = primary
-            .join(".git")
-            .canonicalize()
-            .expect("common directory");
-        let gitdir = common.join("worktrees").join("worktree");
-        LinkedWorktree {
-            worktree: worktree.canonicalize().expect("worktree"),
-            common,
-            gitdir,
-            scratch: scratch.canonicalize().expect("scratch"),
-            _temp: temp,
-        }
-    }
-
-    /// Where a read-only bind of `path` onto itself sits in the argv.
-    fn ro_bind_at(argv: &[String], path: &Path) -> Option<usize> {
-        let path = path.display().to_string();
-        argv.windows(3)
-            .position(|bind| bind[0] == "--ro-bind" && bind[1] == path && bind[2] == path)
-    }
-
-    #[test]
-    fn the_common_git_directory_is_read_only_beneath_the_worktree_gitdir() {
-        let fixture = linked_worktree();
-        let spec = ScriptSandboxSpec {
-            cwd: &fixture.worktree,
-            cwd_writable: true,
-            scratch: &fixture.scratch,
-            readable: &[],
-            writable: &[],
-            masked: &[],
-            home: None,
-            inputs: &[],
-            network: orbit_exec::ScriptSandboxNetwork::None,
-        };
-        let argv = compile_linux_script_argv(
-            &orbit_common::Env::capture(),
-            &spec,
-            &[],
-            &["/usr/bin/true".to_string()],
-        )
-        .expect("compile profile");
-        let pointer_at = ro_bind_at(&argv, &fixture.worktree.join(".git"))
-            .expect("the worktree Git pointer is bound read-only");
-        let cwd = fixture.worktree.display().to_string();
-        let cwd_at = argv
-            .windows(3)
-            .position(|bind| bind[0] == "--bind" && bind[1] == cwd && bind[2] == cwd)
-            .expect("the worktree is bound writable");
-        assert!(
-            pointer_at > cwd_at,
-            "the pointer bind must cover the writable worktree"
-        );
-        let common_at = ro_bind_at(&argv, &fixture.common)
-            .expect("the common Git directory is bound read-only");
-        let gitdir_at =
-            ro_bind_at(&argv, &fixture.gitdir).expect("the per-worktree gitdir is bound read-only");
-        assert!(
-            common_at < gitdir_at,
-            "the per-worktree gitdir must mount over the common directory: {argv:?}"
-        );
-        let worktree = fixture.worktree.display().to_string();
-        assert!(
-            argv.windows(3)
-                .any(|bind| bind[0] == "--bind" && bind[1] == worktree && bind[2] == worktree),
-            "the run worktree stays writable: {argv:?}"
-        );
-        let common = fixture.common.display().to_string();
-        assert!(
-            !argv
-                .windows(3)
-                .any(|bind| bind[0] == "--bind" && bind[1] == common),
-            "the common Git directory is never writable: {argv:?}"
-        );
-    }
-
-    #[test]
-    fn a_script_in_a_linked_worktree_reads_git_and_keeps_its_writes() {
-        if !build_sandbox_available("a_script_in_a_linked_worktree_reads_git_and_keeps_its_writes")
-        {
-            return;
-        }
-        let fixture = linked_worktree();
-        let head = git(&fixture.worktree, &["rev-parse", "HEAD"]);
-        let config = fixture.common.join("config");
-        let config_before = fs::read(&config).expect("common config");
-        let pointer_before = fs::read(fixture.worktree.join(".git")).expect("Git pointer");
-        let script = format!(
-            "set -eu\n\
-             git rev-parse HEAD\n\
-             git log -1 --format=%H\n\
-             git status --porcelain\n\
-             git archive --format=tar -o /orbit-script/out/archive.tar HEAD\n\
-             echo generated > generated.txt\n\
-             if (echo tampered >> '{}') 2>/dev/null; then exit 3; fi\n\
-             if (: > .git) 2>/dev/null; then exit 4; fi\n\
-             if rm .git 2>/dev/null; then exit 5; fi\n\
-             if mv .git moved-git 2>/dev/null; then exit 6; fi\n\
-             echo replacement > replacement\n\
-             if mv -f replacement .git 2>/dev/null; then exit 7; fi\n\
-             if ln -sf replacement .git 2>/dev/null; then exit 8; fi\n",
-            config.display()
-        );
-        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script];
-        let env = vec![
-            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-            ("HOME".to_string(), "/orbit-script/home".to_string()),
-        ];
-        let request = ScriptSandboxRequest {
-            sandbox: ScriptSandboxSpec {
-                cwd: &fixture.worktree,
-                cwd_writable: true,
-                scratch: &fixture.scratch,
-                readable: &[],
-                writable: &[],
-                masked: &[],
-                home: None,
-                inputs: &[],
-                network: orbit_exec::ScriptSandboxNetwork::None,
-            },
-            argv: &argv,
-            env: &env,
-            launcher: &[],
-            launcher_env: &[],
-            stdin: Vec::new(),
-            timeout: Duration::from_secs(60),
-            scratch_cap_bytes: 64 * 1024 * 1024,
-        };
-        let run =
-            run_script_sandboxed(&orbit_common::Env::capture(), request).expect("run the script");
-        assert_eq!(
-            run.end,
-            ScriptRunEnd::Exited(0),
-            "log: {}",
-            String::from_utf8_lossy(&run.log)
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&run.stdout),
-            format!("{head}\n{head}\n")
-        );
-        assert!(fixture.scratch.join("out/archive.tar").is_file());
-        assert_eq!(
-            fs::read(fixture.worktree.join(".git")).expect("Git pointer"),
-            pointer_before
-        );
-        assert_eq!(
-            fs::read_to_string(fixture.worktree.join("generated.txt")).expect("source write"),
-            "generated\n"
-        );
-        assert_eq!(
-            fs::read(&config).expect("common config"),
-            config_before,
-            "the common Git config is unchanged"
-        );
-    }
 }
 
 /// The failing shape of a granted script whose read root is a file under the

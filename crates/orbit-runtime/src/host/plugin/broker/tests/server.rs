@@ -16,9 +16,9 @@ use super::super::PluginBroker;
 use super::super::peer::PeerAnchor;
 use super::super::protocol::{MAX_REQUEST_BYTES, read_frame, write_frame};
 use super::super::server::with_request_timeout;
+use super::EchoDispatch;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
-use super::EchoDispatch;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 

@@ -16,11 +16,11 @@ use orbit_common::process::supervisor::{
     CaptureSink, Outcome, OutputSink, RelaySink, Stdin, Stream, SupervisedChild, Supervision,
     Termination,
 };
-
-pub(crate) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 pub use orbit_common::process::supervisor::{
     INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, ProcessStopCause, TERMINATION_STATUS_NOTE,
 };
+
+pub(crate) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 const DEFAULT_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 

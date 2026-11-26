@@ -17,11 +17,11 @@ pub use envelope::{
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_schema_arg};
 pub(crate) use usage::request_usage;
+pub use wrapper::provider_invocation_diagnostic;
 
 pub(crate) fn tool_calls_in_documents(documents: &[Value]) -> Vec<ToolCallTrace> {
     tool_calls::extract_tool_calls(documents)
 }
-pub use wrapper::provider_invocation_diagnostic;
 
 /// Phrases a provider CLI prints in its own failure diagnostics when
 /// it cannot authenticate. Lowercase, matched case-insensitively [ORB-13941].

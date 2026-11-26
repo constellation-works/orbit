@@ -2,6 +2,29 @@
 
 //! Scheduling and coverage guarantees through the public automation boundary.
 
+#[path = "scheduling/condition_guards.rs"]
+mod condition_guards;
+#[path = "scheduling/definition_symlinks.rs"]
+mod definition_symlinks;
+#[path = "scheduling/delivery.rs"]
+mod delivery;
+#[path = "scheduling/delivery_adopt.rs"]
+mod delivery_adopt;
+#[path = "scheduling/delivery_recovery.rs"]
+mod delivery_recovery;
+#[path = "scheduling/failed_members.rs"]
+mod failed_members;
+#[path = "scheduling/member_consumers.rs"]
+mod member_consumers;
+#[path = "scheduling/pending_mints.rs"]
+mod pending_mints;
+#[path = "scheduling/released_attempts.rs"]
+mod released_attempts;
+#[path = "scheduling/retired_block_trigger.rs"]
+mod retired_block_trigger;
+#[path = "scheduling/routine_sweep.rs"]
+mod routine_sweep;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -40,29 +63,6 @@ use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, JobRunState, MAX_AUTO_TASK_INTERVAL_MINUTES,
     MissedRunPolicy,
 };
-
-#[path = "scheduling/condition_guards.rs"]
-mod condition_guards;
-#[path = "scheduling/definition_symlinks.rs"]
-mod definition_symlinks;
-#[path = "scheduling/delivery.rs"]
-mod delivery;
-#[path = "scheduling/delivery_adopt.rs"]
-mod delivery_adopt;
-#[path = "scheduling/delivery_recovery.rs"]
-mod delivery_recovery;
-#[path = "scheduling/failed_members.rs"]
-mod failed_members;
-#[path = "scheduling/member_consumers.rs"]
-mod member_consumers;
-#[path = "scheduling/pending_mints.rs"]
-mod pending_mints;
-#[path = "scheduling/released_attempts.rs"]
-mod released_attempts;
-#[path = "scheduling/retired_block_trigger.rs"]
-mod retired_block_trigger;
-#[path = "scheduling/routine_sweep.rs"]
-mod routine_sweep;
 
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)

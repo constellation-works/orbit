@@ -1,5 +1,9 @@
 //! Runtime-owned access to the workspace-partitioned friction repository.
 
+mod metrics;
+mod mutations;
+mod workspace;
+
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
@@ -10,10 +14,6 @@ use std::path::PathBuf;
 
 use crate::RuntimeKernel;
 use crate::workspace::catalog::WorkspaceScope;
-
-mod metrics;
-mod mutations;
-mod workspace;
 
 pub use workspace::WorkspaceFrictions;
 use workspace::validate_workspace_id;

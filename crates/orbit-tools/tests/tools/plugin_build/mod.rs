@@ -1,4 +1,9 @@
 //! Plugin build planning and installation through exported helpers.
+
+mod env;
+mod install;
+mod plan;
+
 use orbit_types::plugin::{PluginBuildOutput, PluginBuildSpec};
 
 fn spec(outputs: &[(&str, &str)]) -> PluginBuildSpec {
@@ -16,7 +21,3 @@ fn spec(outputs: &[(&str, &str)]) -> PluginBuildSpec {
         timeout_ms: None,
     }
 }
-
-mod env;
-mod install;
-mod plan;

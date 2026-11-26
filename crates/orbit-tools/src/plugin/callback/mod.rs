@@ -41,6 +41,11 @@
 //! intersection is computed per call and the manifest list is not it
 //! [ORB-12801].
 
+mod host_route;
+mod resolution;
+mod session;
+mod storage;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::mem::ManuallyDrop;
@@ -54,11 +59,6 @@ use orbit_types::plugin::PluginProvenance;
 use serde::{Deserialize, Serialize};
 
 use crate::upsert_env;
-
-mod host_route;
-mod resolution;
-mod session;
-mod storage;
 
 pub use self::host_route::{
     HostRouteOutcome, PLUGIN_HOST_ROUTE_FD, forward_host_routed_callback,

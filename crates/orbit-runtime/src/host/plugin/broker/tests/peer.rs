@@ -2,6 +2,9 @@
 //! run anywhere; a foreign PID namespace needs Bubblewrap and is covered by
 //! the real-sandbox tests in `sandbox.rs`.
 
+#[cfg(target_os = "linux")]
+mod namespace {}
+
 use std::process::{Child, Command, Stdio};
 
 use orbit_common::process::ancestry::{ProcessStartKey, process_start_key};
@@ -55,6 +58,3 @@ fn an_anchor_whose_pid_was_reused_is_refused() {
 
     assert!(refusal.contains("ended"), "{refusal}");
 }
-
-#[cfg(target_os = "linux")]
-mod namespace {}

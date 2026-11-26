@@ -1,20 +1,3 @@
-use std::time::{Duration, Instant};
-/// The monotonic instant admission and the request-budget checks compare with a
-/// request's deadline.
-pub(in crate::github_quota) fn monotonic_now() -> Instant {
-    #[cfg(any(test, feature = "test-support"))]
-    return refusal_clock::now();
-    #[cfg(not(any(test, feature = "test-support")))]
-    Instant::now()
-}
-
-/// Whether less than one whole millisecond of the budget ending at `deadline`
-/// remains: the point where a caller's floored remaining budget reads zero and
-/// it returns its timeout instead of spawning.
-pub(in crate::github_quota) fn budget_spent(deadline: Instant) -> bool {
-    deadline.saturating_duration_since(monotonic_now()) < Duration::from_millis(1)
-}
-
 /// A deadline clock a fixture can advance while a record's refusal is being
 /// evaluated, the instant between the record lock and the deadline check.
 #[cfg(any(test, feature = "test-support"))]
@@ -77,6 +60,24 @@ pub(super) mod refusal_clock {
             OFFSET.set(behind);
         }
     }
+}
+
+use std::time::{Duration, Instant};
+
+/// The monotonic instant admission and the request-budget checks compare with a
+/// request's deadline.
+pub(in crate::github_quota) fn monotonic_now() -> Instant {
+    #[cfg(any(test, feature = "test-support"))]
+    return refusal_clock::now();
+    #[cfg(not(any(test, feature = "test-support")))]
+    Instant::now()
+}
+
+/// Whether less than one whole millisecond of the budget ending at `deadline`
+/// remains: the point where a caller's floored remaining budget reads zero and
+/// it returns its timeout instead of spawning.
+pub(in crate::github_quota) fn budget_spent(deadline: Instant) -> bool {
+    deadline.saturating_duration_since(monotonic_now()) < Duration::from_millis(1)
 }
 
 /// Advance this thread's admission deadline clock to `deadline`, where a

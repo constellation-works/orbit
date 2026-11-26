@@ -13,6 +13,9 @@
 //! delivery PR through it (`application::task::external_merge`). No operation
 //! deletes a branch.
 
+pub mod refresh;
+mod rerun;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,12 +27,14 @@ use orbit_types::plugin::is_full_commit_id;
 use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
-pub mod refresh;
-mod rerun;
+pub use refresh::{BaseMergeInspection, inspect_base_merge};
+
+/// How a request to refresh a pull request's head with its base branch ended;
+/// shared with the delivery pipeline's base-inherited refresh [ORB-26860].
+pub use orbit_types::workflow::PullRequestRefreshOutcome;
+
 #[cfg(test)]
 mod tests;
-
-pub use refresh::{BaseMergeInspection, inspect_base_merge};
 
 /// One open pull request as the closure policy matches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,10 +124,6 @@ pub struct CheckRerunOutcome {
     /// The first request whose outcome could not be confirmed, and its error.
     pub uncertain: Option<(u64, String, String)>,
 }
-
-/// How a request to refresh a pull request's head with its base branch ended;
-/// shared with the delivery pipeline's base-inherited refresh [ORB-26860].
-pub use orbit_types::workflow::PullRequestRefreshOutcome;
 
 /// How a request to merge a pull request ended when the forge answered it.
 #[derive(Debug, Clone, PartialEq, Eq)]

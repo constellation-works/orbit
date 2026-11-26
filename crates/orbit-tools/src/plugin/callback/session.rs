@@ -3,14 +3,6 @@ use super::*;
 /// Informational namespace the backend already carries. Not the gate.
 pub use orbit_common::env_vars::ORBIT_PLUGIN as ORBIT_PLUGIN_ENV;
 
-/// The descriptor the host maps the session record onto in a backend child.
-///
-/// Fixed, so a backend written in any language reads its credential the same
-/// way and a descendant inherits it without being told. A shell backend must
-/// therefore leave it alone: `exec 3<&-` throws the plugin's identity away
-/// and every callback the child or its descendants make is refused.
-pub const PLUGIN_CALLBACK_FD: i32 = 3;
-
 /// Names the callback descriptor when it is not [`PLUGIN_CALLBACK_FD`].
 ///
 /// Stamped by the host as information and as the seam a test uses; it is not
@@ -23,6 +15,14 @@ pub use orbit_common::env_vars::ORBIT_PLUGIN_CALLBACK_FD as ORBIT_PLUGIN_CALLBAC
 /// host-issued descriptor. Older hosts stamped their retired token here;
 /// current hosts stamp a non-secret marker that never authorizes a callback.
 pub use orbit_common::env_vars::ORBIT_PLUGIN_CALLBACK as ORBIT_PLUGIN_CALLBACK_ENV;
+
+/// The descriptor the host maps the session record onto in a backend child.
+///
+/// Fixed, so a backend written in any language reads its credential the same
+/// way and a descendant inherits it without being told. A shell backend must
+/// therefore leave it alone: `exec 3<&-` throws the plugin's identity away
+/// and every callback the child or its descendants make is refused.
+pub const PLUGIN_CALLBACK_FD: i32 = 3;
 
 pub(super) const SESSION_DIR: &str = "state/plugin-callbacks";
 pub(super) const TOKEN_BYTES: usize = 32;

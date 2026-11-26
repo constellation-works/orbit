@@ -1,16 +1,16 @@
 //! State consumers share the sweep, generation-fenced Store and receipt path.
 
-use crate::AutomationError;
-use chrono::{DateTime, Utc};
-use orbit_types::workflow::automation::{members::*, *};
-use std::collections::{BTreeMap, BTreeSet};
-
 mod admission;
 mod evaluate;
 pub mod incidents;
 mod observe;
 pub mod preparation;
 mod reconcile;
+
+use crate::AutomationError;
+use chrono::{DateTime, Utc};
+use orbit_types::workflow::automation::{members::*, *};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use evaluate::evaluate;
 

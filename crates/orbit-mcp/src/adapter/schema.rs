@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 
 use super::name_map::sanitize_tool_name;
 
+/// One description for every advertised `workspace` selector.
+///
+/// Required versus optional stays in the schema `required` array. Routing
+/// rules live in the installed Orbit skill `references/task-fields-*.md` references.
+pub(crate) use orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
+
 pub(super) fn schema_to_tool(
     schema: ToolSchema,
     input_schema: JsonObject,
@@ -37,12 +43,6 @@ fn tool_annotations(annotations: McpToolAnnotations) -> ToolAnnotations {
 
 /// Canonical name of the authoritative server's workspace selector.
 pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
-
-/// One description for every advertised `workspace` selector.
-///
-/// Required versus optional stays in the schema `required` array. Routing
-/// rules live in the installed Orbit skill `references/task-fields-*.md` references.
-pub(crate) use orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 
 /// Property descriptions on these tools are hand-written concise contracts.
 const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] = &[
