@@ -15,16 +15,15 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use orbit_auth::scope::LeaseTokenScope;
-use orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE;
 use orbit_common::protocol::tool_input::optional_string_alias;
-use orbit_core::OrbitRuntime;
-use orbit_core::runtime::task::locks::lease;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, LeaseWrite, exec};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 use super::lease_notices;
-use super::routines::{authorization_denied, authorized_caller};
+use super::routines::authorization_denied;
 use super::{OptionalJson, bad_request, map_runtime_error};
 use crate::state::DashboardState;
 
@@ -149,15 +148,7 @@ pub(super) struct RuntimeLeaseBackend {
 }
 
 impl RuntimeLeaseBackend {
-    pub(super) fn lease_runtime(
-        &self,
-        caller: &LeaseCaller,
-        write: bool,
-    ) -> Result<Arc<OrbitRuntime>, Box<Response>> {
-        if write {
-            authorized_caller(&DASHBOARD_LEASE_WRITE, self.state.operator_session())
-                .map_err(|denial| Box::new(authorization_denied(denial)))?;
-        }
+    pub(super) fn lease_core(&self, caller: &LeaseCaller) -> Result<Arc<Core>, Box<Response>> {
         let pinned = self.state.pin();
         let workspace = caller
             .workspace
@@ -171,53 +162,80 @@ impl RuntimeLeaseBackend {
                 ))
             })?;
         pinned
-            .runtime_for(workspace)
+            .core_for(workspace)
             .map_err(|error| Box::new(error.into_response()))
     }
 }
 
 impl LeaseBackend for RuntimeLeaseBackend {
     fn request(&self, caller: &LeaseCaller, mut input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, true)?;
         if let Some(principal) = &caller.principal {
             input["principal"] = json!(principal);
         }
-        lease::request(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
+        let command =
+            Command::lease_write(LeaseWrite::Request, input, self.state.operator_session())
+                .map_err(|denial| Box::new(authorization_denied(denial)))?;
+        let core = self.lease_core(caller)?;
+        exec(&core, command)
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, true)?;
-        lease::renew(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+        let command = Command::lease_write(LeaseWrite::Renew, input, self.state.operator_session())
+            .map_err(|denial| Box::new(authorization_denied(denial)))?;
+        let core = self.lease_core(caller)?;
+        exec(&core, command)
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, true)?;
-        lease::expand(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
+        let command =
+            Command::lease_write(LeaseWrite::Expand, input, self.state.operator_session())
+                .map_err(|denial| Box::new(authorization_denied(denial)))?;
+        let core = self.lease_core(caller)?;
+        exec(&core, command)
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, true)?;
-        lease::release(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
+        let command =
+            Command::lease_write(LeaseWrite::Release, input, self.state.operator_session())
+                .map_err(|denial| Box::new(authorization_denied(denial)))?;
+        let core = self.lease_core(caller)?;
+        exec(&core, command)
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn show(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, false)?;
-        lease::show(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+        let core = self.lease_core(caller)?;
+        exec(&core, Command::lease_show(input))
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn list(&self, caller: &LeaseCaller) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, false)?;
-        lease::list(&runtime).map_err(|e| Box::new(map_runtime_error(e)))
+        let core = self.lease_core(caller)?;
+        exec(&core, Command::lease_list())
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, false)?;
-        lease::check(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+        let core = self.lease_core(caller)?;
+        exec(&core, Command::lease_check(input))
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let runtime = self.lease_runtime(caller, false)?;
-        lease::notices(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+        let core = self.lease_core(caller)?;
+        exec(&core, Command::lease_notices(input))
+            .map(|outcome| outcome.value)
+            .map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn notice_stream(

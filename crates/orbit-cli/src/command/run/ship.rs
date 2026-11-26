@@ -1,17 +1,13 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::ShipSubmissionProfile;
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipModeResolutionProfile, ShipRunRequest,
-    find_workflow,
-};
+use orbit_core::{CompletionPolicy, Core, ShipRunRequest};
 
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::support;
-
-const SHIP_WORKFLOW: &str = "ship";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ShipMode {
@@ -95,42 +91,32 @@ impl ShipCommand {
     }
 }
 
-impl Execute for ShipCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mode = runtime.resolve_ship_mode(
-            self.mode.map(ShipMode::to_core),
-            ShipModeResolutionProfile::NativeCliLegacyRoot,
-        )?;
-        ensure_workflow_exists(SHIP_WORKFLOW)?;
-        // Ship is the one workflow whose submission carries task-level
-        // admission checks, so it must not use the generic CLI dispatcher.
-        let invoke = runtime.submit_ship_run(ShipRunRequest {
-            mode,
-            base_branch: self.base.as_deref(),
-            task_ids: &self.task_ids,
-            completion: self.completion(),
-            allowed_crews: &self.allow_crew,
-            actor: None,
-            claim_token: self.claim_token.as_deref(),
-            trigger: orbit_types::workflow::JobRunTrigger::cli(),
-            strict_containment: self.strict_worker_containment,
-            review: self.review,
-            // Naming tasks is the operator's override of the drain's
-            // readiness gates; the run's task history records which.
-            operator_override: true,
-            ignore_dependency_delivery: self.ignore_dependency_delivery,
-        })?;
-        let receipt = runtime.ship_submission_receipt(
-            &invoke,
-            !self.task_ids.is_empty(),
-            ShipSubmissionProfile::Cli,
-        )?;
+impl ExecuteCore for ShipCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        let receipt = exec(
+            core,
+            Command::ship(
+                self.mode.map(ShipMode::to_core),
+                ShipRunRequest {
+                    base_branch: self.base.as_deref(),
+                    task_ids: &self.task_ids,
+                    completion: self.completion(),
+                    allowed_crews: &self.allow_crew,
+                    actor: None,
+                    claim_token: self.claim_token.as_deref(),
+                    trigger: orbit_types::workflow::JobRunTrigger::cli(),
+                    strict_containment: self.strict_worker_containment,
+                    review: self.review,
+                    // Naming tasks is the operator's override of the drain's
+                    // readiness gates; the run's task history records which.
+                    operator_override: true,
+                    ignore_dependency_delivery: self.ignore_dependency_delivery,
+                    ..Default::default()
+                },
+                ShipSubmissionProfile::Cli,
+            ),
+        )?
+        .value;
         support::ship_submission_payload(&receipt)
     }
-}
-
-fn ensure_workflow_exists(workflow_alias: &'static str) -> Result<(), OrbitError> {
-    find_workflow(workflow_alias)
-        .map(|_| ())
-        .ok_or_else(|| OrbitError::InvalidInput(format!("unknown workflow '{workflow_alias}'")))
 }

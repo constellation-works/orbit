@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::runtime::audit::run::RunAuditEvent;
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::events::summarize_audit_event;
-use super::steps::{RunRead, resolve_run};
 
 #[derive(Args)]
 #[command(
@@ -19,15 +19,14 @@ pub struct RunTraceArgs {
     pub run_id: Option<String>,
 }
 
-impl Execute for RunTraceArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        run_trace_payload(runtime, self.run_id.as_deref())
+impl ExecuteCore for RunTraceArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        run_trace_payload(core, self.run_id.as_deref())
     }
 }
 
-fn run_trace_payload(runtime: &OrbitRuntime, run_id: Option<&str>) -> CommandOut {
-    let run = resolve_run(runtime, run_id, RunRead::Reconcile)?;
-    let events = runtime.collect_run_audit_events(&run.run_id)?;
+fn run_trace_payload(core: &Core, run_id: Option<&str>) -> CommandOut {
+    let (run, events) = exec(core, Command::trace(run_id))?.value;
     let tree = build_trace_tree(&events);
     let doc = json!({
         "run_id": run.run_id,

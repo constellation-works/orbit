@@ -5,7 +5,8 @@ use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::runtime::host_resource::accuracy::{
     AccuracySelection, ErrorSummary, ForecastAccuracy,
 };
@@ -14,7 +15,7 @@ use orbit_core::runtime::host_resource::profile::{
 };
 use serde_json::json;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
@@ -44,8 +45,8 @@ pub struct RunProfilesArgs {
     pub wide: bool,
 }
 
-impl Execute for RunProfilesArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for RunProfilesArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         if self.accuracy {
             let report_at = Utc::now();
             // A time bound alone selects every forecast since then, as it
@@ -64,9 +65,9 @@ impl Execute for RunProfilesArgs {
             };
             selection.drain = self.drain;
             selection.mode = self.mode;
-            return accuracy(runtime, selection, report_at, self.wide);
+            return accuracy(core, selection, report_at, self.wide);
         }
-        let profiles = runtime.resource_profiles()?;
+        let profiles = exec(core, Command::profiles())?.value;
         let doc = json!({
             "built_at": profiles.built_at,
             "profiles": profiles
@@ -193,7 +194,7 @@ fn build_flags(profiles: &[std::sync::Arc<ResourceProfile>]) -> Option<String> {
 /// `--accuracy`: per-offset forecast error (a summary, or every column when
 /// `wide`), then per-drain shadow and enforce decisions.
 fn accuracy(
-    runtime: &OrbitRuntime,
+    core: &Core,
     selection: AccuracySelection,
     report_at: DateTime<Utc>,
     wide: bool,
@@ -202,7 +203,7 @@ fn accuracy(
     use comfy_table::Cell;
     use orbit_types::workflow::DrainPassOutcome;
 
-    let report = runtime.forecast_accuracy_selected(selection, report_at)?;
+    let report = exec(core, Command::accuracy(selection, report_at))?.value;
     let doc = serde_json::to_value(&report).map_err(|error| {
         orbit_core::OrbitError::Execution(format!("encode forecast accuracy: {error}"))
     })?;

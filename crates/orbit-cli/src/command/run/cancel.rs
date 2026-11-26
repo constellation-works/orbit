@@ -1,10 +1,11 @@
 //! `orbit run cancel` — terminalize a pending/running job run [ORB-10070].
 
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::{JobRunCancelOutcome, JobRunCancelResultProfile};
 
-use crate::command::{CommandOut, Execute, Payload, require_confirmation};
+use crate::command::{CommandOut, ExecuteCore, Payload, require_confirmation};
 
 #[derive(Args)]
 #[command(
@@ -33,17 +34,14 @@ pub struct RunCancelArgs {
     pub block: bool,
 }
 
-impl Execute for RunCancelArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for RunCancelArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         require_confirmation(self.confirm, "run cancellation")?;
-        let result = runtime.cancel_job_run_with_options_and_policy(
-            &self.run_id,
-            "cli",
-            "run_cancel",
-            self.reason.as_deref(),
-            self.force,
-            self.block,
-        )?;
+        let result = exec(
+            core,
+            Command::cancel(&self.run_id, self.reason.as_deref(), self.force, self.block),
+        )?
+        .value;
         let doc = result.to_json(JobRunCancelResultProfile::Cli);
         let mut lines = Vec::new();
         if result.outcome == JobRunCancelOutcome::Cancelling {

@@ -1,16 +1,15 @@
 //! Run detail JSON and supplementary audit projections.
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-
-use orbit_core::application::job::{
+use crate::application::job::{
     JobRunProjectionEvidence, JobRunProjectionProfile, RecordedJobRun,
     display_steps_with_agent_execution_to_json, project_job_run, pull_drain_detail,
     run_display_steps,
 };
-use orbit_core::runtime::audit::run::{RunAuditView, RunProviderProcess};
-use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
+use crate::runtime::audit::run::{RunAuditView, RunProviderProcess};
+use crate::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// One lazy scan of a run's audit trail, shared by the steps and
 /// provider-process halves of a single run-detail response.
@@ -73,18 +72,18 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         .collect::<Vec<_>>();
     let children = load_child_runs(runtime, &child_ids);
     let titles = or_warn(
-        super::tasks::task_titles(runtime, std::iter::once(run).chain(children.values())),
+        super::task_labels::task_titles(runtime, std::iter::once(run).chain(children.values())),
         run_id,
         "task titles",
     );
-    super::tasks::add_tasks(&mut full, run, &titles);
+    super::task_labels::add_tasks(&mut full, run, &titles);
     if let Some(dispatches) = full["child_dispatches"].as_array_mut() {
         for dispatch in dispatches {
             if let Some(child) = dispatch["child_run_id"]
                 .as_str()
                 .and_then(|id| children.get(id))
             {
-                super::tasks::add_tasks(dispatch, child, &titles);
+                super::task_labels::add_tasks(dispatch, child, &titles);
                 // A fire-and-forget dispatch can stay submitted forever. Its
                 // checkpoint is lineage, not the child's current outcome.
                 dispatch["state"] = json!(child.state);
@@ -186,11 +185,11 @@ pub(super) fn recorded_run_detail_to_json(
         },
     );
     let titles = or_warn(
-        super::tasks::task_titles(reader, std::iter::once(run)),
+        super::task_labels::task_titles(reader, std::iter::once(run)),
         run_id,
         "task titles",
     );
-    super::tasks::add_tasks(&mut full, run, &titles);
+    super::task_labels::add_tasks(&mut full, run, &titles);
     let steps = run_display_steps(run, Vec::new);
     let pull = pull_drain_detail::read_run_pull_drain_evidence(
         pull_drain_detail::RunPullDrainSource::Recorded,
@@ -267,11 +266,7 @@ fn warn_child_unavailable(child_run_id: &str, error: &OrbitError) {
 
 /// The run detail still renders when one supplementary read fails, but the
 /// failure is logged so it is not mistaken for "nothing recorded".
-fn or_warn<T: Default>(
-    result: Result<T, orbit_core::OrbitError>,
-    run_id: &str,
-    section: &str,
-) -> T {
+fn or_warn<T: Default>(result: Result<T, crate::OrbitError>, run_id: &str, section: &str) -> T {
     result.unwrap_or_else(|error| {
         tracing::warn!(run_id, section, %error, "run detail omitted a section");
         T::default()

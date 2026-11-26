@@ -1,10 +1,11 @@
 //! `orbit run concurrency` — retune a live drain's worker ceiling [ORB-11253].
 
 use clap::Args;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::{DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome};
-use orbit_core::{DrainWorkerLimitRequest, OrbitRuntime};
+use orbit_core::{Core, DrainWorkerLimitRequest};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 #[command(
@@ -59,17 +60,21 @@ pub struct RunConcurrencyArgs {
     pub claim_token: Option<String>,
 }
 
-impl Execute for RunConcurrencyArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let change = runtime.set_drain_worker_limit(DrainWorkerLimitRequest {
-            run_id: &self.run_id,
-            max_active_leaf_runs: self.set,
-            expected_revision: self.if_revision,
-            reason: self.reason.as_deref(),
-            actor: "cli",
-            source: "run_concurrency",
-            claim_token: self.claim_token.as_deref(),
-        })?;
+impl ExecuteCore for RunConcurrencyArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let change = exec(
+            core,
+            Command::concurrency(DrainWorkerLimitRequest {
+                run_id: &self.run_id,
+                max_active_leaf_runs: self.set,
+                expected_revision: self.if_revision,
+                reason: self.reason.as_deref(),
+                actor: "cli",
+                source: "run_concurrency",
+                claim_token: self.claim_token.as_deref(),
+            }),
+        )?
+        .value;
         let doc = change.to_json(DrainWorkerLimitChangeProfile::Standalone);
         let text = if change.outcome == DrainWorkerLimitOutcome::Unchanged {
             format!(

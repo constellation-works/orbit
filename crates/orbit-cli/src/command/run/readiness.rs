@@ -2,13 +2,14 @@
 
 use chrono::Utc;
 use clap::Args;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::task::ProviderLimitReading;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
 
 use super::format::{WaitingTaskFormatter, waiting_reason};
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
 const DEFAULT_LIMIT: usize = 50;
 
@@ -36,16 +37,20 @@ pub struct ReadinessCommand {
     pub allow_crew: Vec<String>,
 }
 
-impl Execute for ReadinessCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for ReadinessCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         validate_task_ids(&self.task_ids)?;
-        let payload = runtime.workspace_auto_readiness(
-            &self.task_ids,
-            self.concurrency,
-            self.limit,
-            &self.allow_crew,
-        )?;
-        readiness_payload(payload, &WaitingTaskFormatter::new(runtime))
+        let (payload, tasks) = exec(
+            core,
+            Command::readiness(
+                &self.task_ids,
+                self.concurrency,
+                self.limit,
+                &self.allow_crew,
+            ),
+        )?
+        .value;
+        readiness_payload(payload, &WaitingTaskFormatter::new(tasks))
     }
 }
 

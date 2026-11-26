@@ -1,5 +1,5 @@
 //! Find the workspace that holds a run on this host, for the run-detail and
-//! run-events reads, and for cancel and replay (see [`holding_runtime`]).
+//! run-events reads, and for cancel and replay (see [`with_run`]).
 //!
 //! A run link names a workspace, but the run's records may sit under a
 //! different workspace id in this host's store: the link carried the
@@ -10,35 +10,17 @@
 //! resolves the requested workspace first and then every workspace id the
 //! host store records the run under, and explains a run it cannot find.
 
-use std::sync::Arc;
+use orbit_core::app::run::{LookupError, Outcome, RunLookup};
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::job::{JobRunHolder, RecordedJobRun};
-use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_core::application::job::JobRunHolder;
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
 use crate::api::map_runtime_error;
-use crate::state::{DashboardState, Pinned};
+use crate::state::DashboardState;
 
-/// Where a run was found.
-pub(super) enum LocatedRun {
-    /// In a workspace registered and active on this host: its runtime serves
-    /// the full detail.
-    Registered {
-        runtime: Arc<OrbitRuntime>,
-        run: Box<JobRun>,
-    },
-    /// Under a workspace id this host's store holds but no registered
-    /// runtime serves. `reader` is a registered runtime used only to reach
-    /// the host store and keyed task titles.
-    Recorded {
-        reader: Arc<OrbitRuntime>,
-        recorded: Box<RecordedJobRun>,
-    },
-}
-
-/// Why a run could not be located; rendered as the response.
 pub(super) enum RunLookupFailure {
     Response(Box<Response>),
     Error(Box<OrbitError>),
@@ -72,152 +54,78 @@ pub(super) fn requested_workspace(query: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Locate `run_id` for a read, on the blocking pool.
-///
-/// Order: the requested workspace (or the default when none is named) when
-/// it is registered and holds the run; then every workspace id the host
-/// store records the run under, preferring the requested id; a registered
-/// holder is served by its own runtime, an unregistered one from the store.
-/// `reconcile` reads the run through the registered runtime's reconciling
-/// read; a recorded run is never reconciled, since no live runtime owns it.
-pub(super) fn locate_run(
+/// Select one host-store reader and provide the app with the pinned workspace resolver.
+pub(super) fn with_run<T>(
     state: &DashboardState,
     requested: Option<&str>,
-    run_id: &str,
-    reconcile: impl Fn(&OrbitRuntime, &str) -> Result<JobRun, OrbitError>,
-) -> Result<LocatedRun, RunLookupFailure> {
+    id: &str,
+    execute: impl FnOnce(&Core, RunLookup<'_>) -> Result<Outcome<Result<T, LookupError>>, OrbitError>,
+) -> Result<T, RunLookupFailure> {
     let pinned = state.pin();
     let selected = requested
-        .map(str::to_string)
-        .or_else(|| pinned.default_workspace().map(str::to_string));
-    let selected_runtime = selected.as_deref().map(|id| pinned.runtime_for(id));
-    if let Some(Ok(runtime)) = &selected_runtime {
-        match reconcile(runtime, run_id) {
-            Ok(run) => {
-                return Ok(LocatedRun::Registered {
-                    runtime: Arc::clone(runtime),
-                    run: Box::new(run),
-                });
-            }
-            Err(OrbitError::NotFound {
-                kind: NotFoundKind::JobRun,
-                ..
-            }) => {}
-            Err(error) => return Err(error.into()),
+        .or_else(|| pinned.default_workspace())
+        .and_then(|ws| pinned.core_for(ws).ok());
+    let is_selected = selected.is_some();
+    let reader = selected
+        .or_else(|| {
+            pinned
+                .entries()
+                .iter()
+                .filter(|entry| entry.active)
+                .find_map(|entry| pinned.core_for(&entry.id).ok())
+        })
+        .ok_or_else(|| {
+            RunLookupFailure::response(not_found(id, format!("run not found: {id}"), None))
+        })?;
+    let open = |ws: &str| {
+        pinned
+            .entries()
+            .iter()
+            .find(|entry| entry.active && entry.id == ws)
+            .and_then(|entry| pinned.core_for(&entry.id).ok())
+    };
+    let lookup = RunLookup {
+        id,
+        requested,
+        selected: is_selected,
+        open: &open,
+    };
+    let outcome = execute(&reader, lookup)?;
+    outcome.value.map_err(|error| match error {
+        LookupError::Flow(error) => error.into(),
+        LookupError::Absent(holder) => RunLookupFailure::response(absent(id, holder.map(|holder| *holder))),
+        LookupError::Ambiguous(workspaces) => RunLookupFailure::response(ambiguous(id, &workspaces)),
+        LookupError::Unregistered(workspace) => {
+            let body = json!({
+                "error": format!("run {id} is recorded under workspace {workspace}, which is not registered on this host, so it cannot be changed here"),
+                "run_id": id,
+                "code": "run_workspace_unregistered",
+            });
+            RunLookupFailure::response((StatusCode::CONFLICT, Json(body)).into_response())
         }
-    }
-    let Some(reader) = host_store_reader(&pinned, selected_runtime) else {
-        return Err(RunLookupFailure::response(not_found(
-            run_id,
-            format!("run not found: {run_id}"),
-            None,
-        )));
-    };
-    let holders = reader.job_run_recording_workspaces(run_id)?;
-    let chosen = match holders.as_slice() {
-        [] => return Err(RunLookupFailure::response(absent(&reader, run_id)?)),
-        [only] => only.clone(),
-        many => match requested.filter(|id| many.iter().any(|held| held == id)) {
-            Some(id) => id.to_string(),
-            None => {
-                return Err(RunLookupFailure::response(ambiguous(run_id, many)));
-            }
-        },
-    };
-    let registered = pinned
-        .entries()
-        .iter()
-        .any(|entry| entry.id == chosen && entry.active);
-    if registered && let Ok(runtime) = pinned.runtime_for(&chosen) {
-        let run = reconcile(&runtime, run_id)?;
-        return Ok(LocatedRun::Registered {
-            runtime,
-            run: Box::new(run),
-        });
-    }
-    match reader.recorded_job_run(&chosen, run_id)? {
-        Some(recorded) => Ok(LocatedRun::Recorded {
-            reader,
-            recorded: Box::new(recorded),
-        }),
-        // Pruned between the two reads.
-        None => Err(OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()).into()),
-    }
-}
-
-/// The registered runtime that holds `run_id`, for a write (cancel, replay).
-///
-/// A write acts on a live runtime, so a run recorded only under an
-/// unregistered workspace is refused with a 409 naming that workspace rather
-/// than located read-only.
-pub(super) fn holding_runtime(
-    state: &DashboardState,
-    requested: Option<&str>,
-    run_id: &str,
-) -> Result<Arc<OrbitRuntime>, RunLookupFailure> {
-    match locate_run(state, requested, run_id, |runtime, id| {
-        runtime.show_job_run_without_drain_leaf_settlement(id)
-    })? {
-        LocatedRun::Registered { runtime, .. } => Ok(runtime),
-        LocatedRun::Recorded { recorded, .. } => Err(RunLookupFailure::response(
-            (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": format!(
-                        "run {run_id} is recorded under workspace {}, which is not registered \
-                         on this host, so it cannot be changed here",
-                        recorded.workspace_id
-                    ),
-                    "run_id": run_id,
-                    "code": "run_workspace_unregistered",
-                })),
-            )
-                .into_response(),
-        )),
-    }
-}
-
-/// A registered runtime to read the host store through: the selected one
-/// when it opened, else the first active workspace that opens. Every
-/// runtime on this host shares the one host store.
-fn host_store_reader(
-    pinned: &Pinned,
-    selected: Option<Result<Arc<OrbitRuntime>, crate::state::WsRejection>>,
-) -> Option<Arc<OrbitRuntime>> {
-    if let Some(Ok(runtime)) = selected {
-        return Some(runtime);
-    }
-    pinned
-        .entries()
-        .iter()
-        .filter(|entry| entry.active)
-        .find_map(|entry| pinned.runtime_for(&entry.id).ok())
+    })
 }
 
 /// A run this host's store does not hold under any workspace. When a task
 /// names it, say which machine holds it and why it cannot be shown here.
-fn absent(reader: &OrbitRuntime, run_id: &str) -> Result<Response, OrbitError> {
-    let holder = reader.job_run_holder(run_id).unwrap_or_else(|error| {
-        tracing::warn!(run_id, %error, "run holder unreadable; reporting the run as not found");
-        None
-    });
+fn absent(run_id: &str, holder: Option<JobRunHolder>) -> Response {
     let Some(JobRunHolder {
         task_id,
         location,
         local,
     }) = holder
     else {
-        return Ok(not_found(run_id, format!("run not found: {run_id}"), None));
+        return not_found(run_id, format!("run not found: {run_id}"), None);
     };
     let Some(location) = location else {
-        return Ok(not_found(
+        return not_found(
             run_id,
             format!(
                 "run {run_id} is not in this host's store; task {task_id} names it \
                  but recorded no execution machine"
             ),
             None,
-        ));
+        );
     };
     let host = location
         .machine_name
@@ -246,7 +154,7 @@ fn absent(reader: &OrbitRuntime, run_id: &str) -> Result<Response, OrbitError> {
             ),
         )
     };
-    Ok(not_found(run_id, message, Some((code, holder))))
+    not_found(run_id, message, Some((code, holder)))
 }
 
 /// The run id is recorded under several workspaces and the request named

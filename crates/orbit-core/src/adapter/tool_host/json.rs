@@ -59,9 +59,7 @@ pub(crate) fn task_fields_to_json_from_row(
     )
 }
 
-pub(crate) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {
-    move |error| OrbitError::Execution(format!("{label}: {error}"))
-}
+pub(crate) use crate::app::tool_fields::serialize_error;
 
 /// Project one stored artifact into the read payload returned by
 /// `orbit.task.artifact.get`.

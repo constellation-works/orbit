@@ -17,8 +17,8 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_core::Stream;
-use orbit_core::runtime::task::locks::lease;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::OrbitError;
+use orbit_core::app::run::{Command, LeaseNoticeFeed, exec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc};
@@ -144,16 +144,17 @@ pub(super) fn open_runtime_notice_stream(
                 .into_response(),
         ));
     };
-    let runtime = backend.lease_runtime(caller, false)?;
-    let first =
-        lease::notices(&runtime, input.clone()).map_err(|e| Box::new(map_runtime_error(e)))?;
+    let runtime = backend.lease_core(caller)?;
+    let (first, feed) = exec(&runtime, Command::lease_notice_feed(input.clone()))
+        .map(|outcome| outcome.value)
+        .map_err(|e| Box::new(map_runtime_error(e)))?;
     let (pages, receiver) = mpsc::channel(4);
     tokio::spawn(async move {
         let _permit = permit;
         follow_notice_pages(
             first,
             input,
-            |input| read_runtime_page(Arc::clone(&runtime), input),
+            |input| read_runtime_page(feed.clone(), input["after"].clone()),
             pages,
         )
         .await;
@@ -161,8 +162,8 @@ pub(super) fn open_runtime_notice_stream(
     Ok(receiver)
 }
 
-async fn read_runtime_page(runtime: Arc<OrbitRuntime>, input: Value) -> LeaseBackendResult {
-    match tokio::task::spawn_blocking(move || lease::notices(&runtime, input)).await {
+async fn read_runtime_page(feed: LeaseNoticeFeed, cursor: Value) -> LeaseBackendResult {
+    match tokio::task::spawn_blocking(move || feed.after(cursor)).await {
         Ok(Ok(page)) => Ok(page),
         Ok(Err(error)) => Err(Box::new(map_runtime_error(error))),
         Err(error) => Err(Box::new(server_error(OrbitError::Execution(format!(

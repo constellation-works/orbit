@@ -1,16 +1,16 @@
 //! Job catalog and job-run listing handlers.
 
-use crate::state::Ws;
+use crate::state::WsCore;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
+use orbit_core::app::run::{Command, DashboardJobError, DashboardResumeError, exec};
 use orbit_core::application::job::{
-    JOB_FAILURE_STREAK_WARN, JobFailureStreak, JobRunListParams, JobRunOrder,
-    ResumeSubmissionProfile, ResumeSubmissionReceipt,
+    JobFailureStreak, JobRunListParams, JobRunOrder, ResumeSubmissionProfile,
+    ResumeSubmissionReceipt,
 };
-use orbit_core::{JobRunState, OrbitRuntime};
+use orbit_core::{Core, JobRunState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -18,9 +18,7 @@ use super::{OptionalJson, bad_request, blocking, bounded_limit, map_runtime_erro
 use crate::state::DashboardState;
 use orbit_core::application::job::job_catalog_to_json_with_last_run;
 
-use super::routines::{
-    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-};
+use super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
 
@@ -37,29 +35,25 @@ pub(super) const FAILED_RUN_STATES: [JobRunState; 3] = [
 pub(super) async fn run_job_action(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
 ) -> Response {
     if let Err(rejection) = explicit_workspace(&query) {
         return rejection.into_response();
     }
-    if let Err(denial) = authorized_caller(&DASHBOARD_JOB_RUN, state.operator_session()) {
-        return authorization_denied(denial);
-    }
-    let id = match validate_id(&id) {
-        Ok(id) => id.to_string(),
-        Err(message) => return bad_request(message),
-    };
+    let operator = state.operator_session();
     match blocking("run job", move || {
-        runtime.submit_no_input_catalog_job_run(
-            &id,
-            Some("dashboard"),
-            orbit_types::workflow::JobRunTrigger::dashboard(),
+        exec(
+            &core,
+            Command::submit_catalog_job(validate_id(&id), operator),
         )
+        .map(|outcome| outcome.value)
     })
     .await
     {
-        Ok(invoke) => Json(json!({
+        Ok(Err(DashboardJobError::Denied(denial))) => authorization_denied(denial),
+        Ok(Err(DashboardJobError::InvalidId(message))) => bad_request(message),
+        Ok(Ok(invoke)) => Json(json!({
             "job_id": invoke.job_name,
             "run_id": invoke.run_id,
             "state": if invoke.queued { "queued" } else { "submitted" },
@@ -167,17 +161,13 @@ impl JobRunListState {
     }
 }
 
-pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
-    use orbit_core::application::job::JobCatalogFilter;
+pub(super) async fn list_jobs(WsCore(core): WsCore) -> Response {
     match blocking("list jobs", move || {
-        let rows = runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All)?;
-        let job_ids: Vec<String> = rows.iter().map(|(entry, _)| entry.job_id.clone()).collect();
-        let streaks = runtime.job_failure_streaks(&job_ids)?;
-        Ok((rows, streaks))
+        exec(&core, Command::catalog_with_streaks()).map(|outcome| outcome.value)
     })
     .await
     {
-        Ok((rows, streaks)) => {
+        Ok(orbit_core::app::run::JobCatalog { rows, streaks }) => {
             let streaks: std::collections::HashMap<_, _> = streaks
                 .into_iter()
                 .map(|streak| (streak.job_id.clone(), streak))
@@ -199,27 +189,14 @@ pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
 }
 
 /// Jobs whose current failure streak has reached the fixed
-/// [`JOB_FAILURE_STREAK_WARN`] threshold, with that threshold. The dashboard reads this for the catalogue badges and
+/// configured failure-streak threshold, with that threshold. The dashboard reads this for the catalogue badges and
 /// the Jobs rail count. Only manual-runnable jobs — the jobs the Catalogue
 /// shows — are counted, so the badge stays consistent with what the operator
 /// can see there; delivery and other non-runnable jobs' streaks do not count.
 /// Display only.
-pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
-    use orbit_core::application::job::JobCatalogFilter;
+pub(super) async fn list_job_failure_streaks(WsCore(core): WsCore) -> Response {
     match blocking("list job failure streaks", move || {
-        let threshold = JOB_FAILURE_STREAK_WARN;
-        let job_ids: Vec<String> = runtime
-            .list_job_catalog_with_last_run(true, JobCatalogFilter::All)?
-            .into_iter()
-            .filter(|(entry, _)| entry.supports_no_input_submission())
-            .map(|(entry, _)| entry.job_id)
-            .collect();
-        let failing = runtime
-            .job_failure_streaks(&job_ids)?
-            .into_iter()
-            .filter(|streak| streak.count >= threshold as usize)
-            .collect::<Vec<_>>();
-        Ok((threshold, failing))
+        exec(&core, Command::failure_streaks()).map(|outcome| outcome.value)
     })
     .await
     {
@@ -232,7 +209,10 @@ pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
     }
 }
 
-pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQuery>) -> Response {
+pub(super) async fn list_job_runs(
+    WsCore(core): WsCore,
+    Query(q): Query<JobRunListQuery>,
+) -> Response {
     let limit = bounded_limit(q.limit, JOB_RUN_DEFAULT_LIMIT);
     let state = match JobRunListState::parse(q.state.as_deref()) {
         Ok(state) => state,
@@ -250,7 +230,7 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
         Err(message) => return bad_request(message),
     };
     match blocking("list job runs", move || {
-        job_runs_page(&runtime, &scope, state, limit, q.include_running)
+        job_runs_page(&core, &scope, state, limit, q.include_running)
     })
     .await
     {
@@ -260,46 +240,30 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
 }
 
 fn job_runs_page(
-    runtime: &OrbitRuntime,
+    core: &Core,
     scope: &JobRunScope,
     state: JobRunListState,
     limit: usize,
     include_running: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
     let params = job_run_list_params(scope, state, Some(limit));
-    // Reconcile once before selecting the combined state page. Counting the
-    // resulting stored rows must not start another stale-run scan.
-    let runs = runtime.list_job_runs(params.clone())?;
-    let total = runtime.count_job_runs_observed(params)?;
-    let truncated = total > runs.len() as u64;
-    let titles = super::runs::task_titles(runtime, &runs)?;
-    let items = super::runs::run_list_rows(runtime, &runs, &titles);
-    let mut page = json!({
-        "items": items,
-        "total": total,
-        "limit": limit,
-        "truncated": truncated,
-        "state": state.label(),
-    });
-    if include_running {
-        // Keep the same bounded running projection as the separate dashboard
-        // poll, but return it with the active total so one refresh needs one
-        // HTTP read. The active page above already reconciled stale runs once;
-        // read the already-reconciled running projection observed so this
-        // request performs no second stale-run scan.
-        const RUNNING_RUN_LIMIT: usize = 100;
-        let running_params = job_run_list_params(
+    let running = include_running.then(|| {
+        job_run_list_params(
             scope,
             JobRunListState::Concrete(JobRunState::Running),
-            Some(RUNNING_RUN_LIMIT),
-        );
-        let running = runtime.list_job_runs_observed(running_params)?;
-        let running_titles = super::runs::task_titles(runtime, &running)?;
-        page["running_items"] = Value::Array(super::runs::run_list_rows(
-            runtime,
-            &running,
-            &running_titles,
-        ));
+            Some(100),
+        )
+    });
+    let page_data = exec(core, Command::job_page(params, running))?.value;
+    let mut page = json!({
+        "items": page_data.items,
+        "total": page_data.total,
+        "limit": limit,
+        "truncated": page_data.total > page_data.items.len() as u64,
+        "state": state.label(),
+    });
+    if let Some(running) = page_data.running {
+        page["running_items"] = Value::Array(running);
     }
     Ok(page)
 }
@@ -307,7 +271,7 @@ fn job_runs_page(
 /// The task detail's bounded Runs tab projection, shared with the task list
 /// refresh when that tab is open.
 pub(super) fn task_runs_page(
-    runtime: &OrbitRuntime,
+    core: &Core,
     task_id: &str,
     limit: usize,
 ) -> Result<Value, orbit_core::OrbitError> {
@@ -315,7 +279,7 @@ pub(super) fn task_runs_page(
         task_id: Some(task_id.to_string()),
         ..Default::default()
     };
-    job_runs_page(runtime, &scope, JobRunListState::All, limit, false)
+    job_runs_page(core, &scope, JobRunListState::All, limit, false)
 }
 
 fn job_run_list_params(
@@ -366,7 +330,7 @@ pub(super) struct ResumeBody {
 /// progress and can cancel the returned run id while it executes.
 pub(super) async fn resume_job_run_action(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<ResumeBody>,
 ) -> Response {
@@ -376,28 +340,13 @@ pub(super) async fn resume_job_run_action(
     };
     let id = id.to_string();
     let retry_source_run_id = id.clone();
-    let completion_authority =
-        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
+    let operator = state.operator_session();
     match blocking("resume run", move || {
-        let source = runtime.show_job_run(&id)?;
-        if source
-            .input
-            .as_ref()
-            .and_then(|input| input.get("completion"))
-            .and_then(Value::as_str)
-            == Some("done")
-            && let Err(denial) = completion_authority
-        {
-            return Ok(Err(authorization_denied(denial)));
-        }
-        Ok(runtime
-            .submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref())
-            .map_err(|error| match error.job_validation_message() {
-                Some(message) => {
-                    (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
-                }
-                None => map_runtime_error(error),
-            }))
+        exec(
+            &core,
+            Command::resume_dashboard(&id, body.claim_token.as_deref(), operator),
+        )
+        .map(|outcome| outcome.value)
     })
     .await
     {
@@ -410,7 +359,11 @@ pub(super) async fn resume_job_run_action(
             .to_json(),
         )
         .into_response(),
-        Ok(Err(response)) => response,
+        Ok(Err(DashboardResumeError::Denied(denial))) => authorization_denied(denial),
+        Ok(Err(DashboardResumeError::Submit(error))) => match error.job_validation_message() {
+            Some(message) => (StatusCode::CONFLICT, Json(json!({"error":message}))).into_response(),
+            None => map_runtime_error(error),
+        },
         Err(response) => *response,
     }
 }

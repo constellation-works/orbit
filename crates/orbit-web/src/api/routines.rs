@@ -17,9 +17,9 @@ use orbit_cmd::registry_routines::{
 };
 use orbit_common::Env;
 use orbit_common::governance::authorization::{
-    AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
-    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_BREAKER,
-    DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, GovernedOperation, authorize,
+    AuthorizationDenial, CallerCapabilities, DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE,
+    DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_BREAKER, DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_ROUTINE_TRIGGER, GovernedOperation,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
@@ -29,7 +29,6 @@ use orbit_core::application::routines::{
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -666,25 +665,7 @@ pub(super) fn explicit_workspace(
         })
 }
 
-pub(super) fn authorized_caller(
-    operation: &'static GovernedOperation,
-    operator_session: bool,
-) -> Result<CallerCapabilities, AuthorizationDenial> {
-    let mut session = ToolSessionContext::default();
-    if operator_session {
-        session.effective_capabilities.insert(McpCapability::Agent);
-        session
-            .effective_capabilities
-            .insert(McpCapability::Operator);
-    }
-    // Session state only: the server's own stdin/stderr, `ORBIT_OPERATOR` and
-    // agent envelope never grant here, so a `--no-operator` server on a pty
-    // (an SSH `-tt` tunnel, or a terminal-started `web serve`) stays
-    // read-only, and a granted write is audited as the session [ORB-23047].
-    let caller = CallerCapabilities::resolve(&CallerEnvelope::dashboard_session(&session));
-    authorize(operation, &caller)?;
-    Ok(caller)
-}
+pub(super) use orbit_core::app::dashboard_authorize as authorized_caller;
 
 /// Project the same authorization decision enforced by the mutation endpoint.
 pub(super) fn action_capability(

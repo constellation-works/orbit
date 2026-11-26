@@ -1,8 +1,9 @@
+use crate::command::ExecuteCore;
 use clap::{Args, Subcommand};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::CommandOut;
 
 use super::auto;
 use super::cancel::RunCancelArgs;
@@ -49,8 +50,8 @@ pub struct RunCommand {
 }
 
 impl RunCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        self.command.execute_with_env(runtime, env)
+    pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
+        self.command.execute_with_env(core, env)
     }
 }
 
@@ -93,24 +94,26 @@ pub enum RunSubcommand {
 }
 
 impl RunSubcommand {
-    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         match self {
-            RunSubcommand::Auto(command) => command.execute(runtime),
-            RunSubcommand::Ship(command) => command.execute(runtime),
-            RunSubcommand::TaskPilot(command) => command.execute(runtime),
-            RunSubcommand::Readiness(command) => command.execute(runtime),
-            RunSubcommand::Profiles(command) => command.execute(runtime),
-            RunSubcommand::History(command) => command.execute(runtime),
-            RunSubcommand::Show(command) => command.execute(runtime),
-            RunSubcommand::Logs(command) => command.execute_with_env(runtime, env),
-            RunSubcommand::Events(command) => command.execute(runtime),
-            RunSubcommand::Trace(command) => command.execute(runtime),
-            RunSubcommand::Settlements(command) => command.execute(runtime),
-            RunSubcommand::SettlementsHydrate(command) => command.execute_with_env(runtime, env),
-            RunSubcommand::Cancel(command) => command.execute(runtime),
-            RunSubcommand::Concurrency(command) => command.execute(runtime),
-            RunSubcommand::Extend(command) => command.execute(runtime),
-            RunSubcommand::Job(command) => command.execute(runtime),
+            RunSubcommand::Auto(command) => command.execute(core),
+            RunSubcommand::Ship(command) => command.execute(core),
+            RunSubcommand::TaskPilot(command) => command.execute(core),
+            RunSubcommand::Readiness(command) => command.execute(core),
+            RunSubcommand::Profiles(command) => command.execute(core),
+            RunSubcommand::History(command) => command.execute(core),
+            RunSubcommand::Show(command) => command.execute(core),
+            RunSubcommand::Logs(command) => command.execute_with_env(core, env),
+            RunSubcommand::Events(command) => command.execute(core),
+            RunSubcommand::Trace(command) => command.execute(core),
+            RunSubcommand::Settlements(command) => command.execute(core),
+            RunSubcommand::SettlementsHydrate(command) => command.execute(core),
+            RunSubcommand::Cancel(command) => command.execute(core),
+            RunSubcommand::Concurrency(command) => command.execute(core),
+            RunSubcommand::Extend(command) => command.execute(core),
+            RunSubcommand::Job(command) => {
+                command.submit(core, orbit_core::app::run::JobEntry::RunJob)
+            }
         }
     }
 }

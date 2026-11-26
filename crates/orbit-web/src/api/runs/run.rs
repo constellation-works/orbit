@@ -4,19 +4,13 @@ use crate::state::DashboardState;
 use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use orbit_core::application::job::JobRunCancelResultProfile;
-use orbit_types::workflow::JobRunTrigger;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::super::routines::{
-    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-};
+use super::super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
 use super::super::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
-use super::detail::{job_run_detail_to_json, recorded_run_detail_to_json};
-use super::locate::{
-    LocatedRun, RunLookupFailure, holding_runtime, locate_run, requested_workspace,
-};
+use super::locate::{RunLookupFailure, requested_workspace, with_run};
+use orbit_core::app::run::{Command, DashboardReplay, exec};
 
 /// `GET /api/runs/:id`. The run is looked up in the requested workspace and
 /// then under every workspace id this host's store records it, so a link
@@ -33,19 +27,12 @@ pub(in crate::api) async fn get_run(
     };
     let requested = requested_workspace(query.as_deref());
     match blocking("get run", move || {
-        Ok(
-            match locate_run(&state, requested.as_deref(), &id, |runtime, id| {
-                runtime.show_job_run_without_drain_leaf_settlement(id)
-            }) {
-                Ok(LocatedRun::Registered { runtime, run }) => {
-                    Ok(job_run_detail_to_json(&runtime, &run))
-                }
-                Ok(LocatedRun::Recorded { reader, recorded }) => {
-                    Ok(recorded_run_detail_to_json(&reader, &recorded))
-                }
-                Err(failure) => Err(failure),
-            },
-        )
+        Ok(with_run(
+            &state,
+            requested.as_deref(),
+            &id,
+            |core, lookup| exec(core, Command::dashboard_detail(lookup)),
+        ))
     })
     .await
     {
@@ -73,7 +60,7 @@ pub(in crate::api) struct CancelRunBody {
 }
 
 /// `POST /api/runs/:id/cancel`. Acts on the registered runtime that holds the
-/// run, which need not be the requested workspace: see [`holding_runtime`].
+/// run, which need not be the requested workspace: see [`with_run`].
 pub(in crate::api) async fn cancel_run_action(
     State(state): State<DashboardState>,
     RawQuery(query): RawQuery,
@@ -89,27 +76,23 @@ pub(in crate::api) async fn cancel_run_action(
     }
     let requested = requested_workspace(query.as_deref());
     match blocking("cancel run", move || {
-        Ok(match holding_runtime(&state, requested.as_deref(), &id) {
-            Ok(runtime) => Ok(if body.queued_only {
-                runtime.cancel_queued_job_run(
-                    &id,
-                    "dashboard",
-                    "web",
-                    body.reason.as_deref(),
-                    body.block,
+        Ok(with_run(
+            &state,
+            requested.as_deref(),
+            &id,
+            |core, lookup| {
+                exec(
+                    core,
+                    Command::dashboard_cancel(
+                        lookup,
+                        body.queued_only,
+                        body.reason.as_deref(),
+                        body.force,
+                        body.block,
+                    ),
                 )
-            } else {
-                runtime.cancel_job_run_with_options_and_policy(
-                    &id,
-                    "dashboard",
-                    "web",
-                    body.reason.as_deref(),
-                    body.force,
-                    body.block,
-                )
-            }),
-            Err(failure) => Err(failure),
-        })
+            },
+        ))
     })
     .await
     {
@@ -133,7 +116,7 @@ pub(in crate::api) struct ReplayBody {
 
 /// `POST /api/runs/:id/replay`. The replay is submitted to the registered
 /// runtime that holds the source run, which need not be the requested
-/// workspace: see [`holding_runtime`].
+/// workspace: see [`with_run`].
 pub(in crate::api) async fn replay_run_action(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
@@ -144,40 +127,27 @@ pub(in crate::api) async fn replay_run_action(
     if let Err(response) = explicit_workspace(&query) {
         return response.into_response();
     }
-    if let Err(denial) = authorized_caller(&DASHBOARD_JOB_RUN, state.operator_session()) {
-        return authorization_denied(denial);
-    }
+    let replay = match DashboardReplay::admit(state.operator_session()) {
+        Ok(replay) => replay,
+        Err(denial) => return authorization_denied(denial),
+    };
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let completion_authority =
-        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
     let requested = requested_workspace(raw_query.as_deref());
     match blocking("replay run", move || {
-        let runtime = match holding_runtime(&state, requested.as_deref(), &id) {
-            Ok(runtime) => runtime,
-            Err(failure) => return Ok(Err(failure)),
-        };
-        let source = runtime.show_job_run(&id)?;
-        if source
-            .input
-            .as_ref()
-            .and_then(|input| input.get("completion"))
-            .and_then(Value::as_str)
-            == Some("done")
-            && let Err(denial) = completion_authority
-        {
-            return Ok(Ok(Err(denial)));
-        }
-        runtime
-            .submit_replay_run(
-                &id,
-                Some("dashboard"),
-                body.claim_token.as_deref(),
-                JobRunTrigger::dashboard(),
-            )
-            .map(|result| Ok(Ok(result)))
+        Ok(with_run(
+            &state,
+            requested.as_deref(),
+            &id,
+            |core, lookup| {
+                exec(
+                    core,
+                    Command::dashboard_replay(lookup, body.claim_token.as_deref(), replay),
+                )
+            },
+        ))
     })
     .await
     {

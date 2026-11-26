@@ -1,15 +1,15 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::runtime::audit::run::RunAuditEvent;
-use orbit_core::runtime::audit::run_events::RunEventsSelection;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::format::format_timestamp;
-use super::steps::{RunRead, resolve_run, resolve_step_filter};
+use super::steps::RunRead;
 
 #[derive(Args)]
 #[command(
@@ -35,10 +35,10 @@ pub struct RunEventsArgs {
     pub no_reconcile: bool,
 }
 
-impl Execute for RunEventsArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for RunEventsArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         run_events_payload(
-            runtime,
+            core,
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             self.event_type.as_deref(),
@@ -48,23 +48,13 @@ impl Execute for RunEventsArgs {
 }
 
 fn run_events_payload(
-    runtime: &OrbitRuntime,
+    core: &Core,
     run_id: Option<&str>,
     step_id: Option<&str>,
     event_type: Option<&str>,
     read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id, read)?;
-    let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
-    let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
-    let events = runtime.run_events_trail(
-        &run,
-        RunEventsSelection {
-            step_id: step_filter.as_deref(),
-            event_type,
-        },
-    )?;
-
+    let (run, events) = exec(core, Command::events(run_id, step_id, event_type, read))?.value;
     let doc = json!({
         "run_id": run.run_id,
         "job_id": run.job_id,

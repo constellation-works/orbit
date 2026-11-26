@@ -2,15 +2,15 @@
 //! Cost page.
 
 use crate::runtime_memo::{DASHBOARD_POLL_MEMO_TTL, Served};
+use crate::state::WsCore;
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitRuntime;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::metrics::cost::MetricsWindow;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
 
 use super::map_runtime_error;
 
@@ -26,10 +26,10 @@ pub(super) struct CostQuery {
 
 pub(super) async fn cost(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    workspace: Ws,
     Query(query): Query<CostQuery>,
 ) -> Response {
-    match served_cost(&state, runtime, &query).await {
+    match served_cost(&state, workspace, &query).await {
         Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
         Err(response) => *response,
     }
@@ -37,7 +37,7 @@ pub(super) async fn cost(
 
 async fn served_cost(
     state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
+    Ws(runtime): Ws,
     query: &CostQuery,
 ) -> Result<Served<Value>, Box<Response>> {
     let window = match query.window.as_deref() {
@@ -52,7 +52,7 @@ async fn served_cost(
             )
         })?,
     };
-    let runtime_for_compute = runtime.clone();
+    let WsCore(core) = WsCore::over(&runtime);
     state
         .cost_memo()
         .get_or_compute(
@@ -60,7 +60,7 @@ async fn served_cost(
             window.as_str().to_string(),
             DASHBOARD_POLL_MEMO_TTL,
             move || {
-                let cost = runtime_for_compute.managed_execution_cost(window)?;
+                let cost = exec(&core, Command::cost(window))?.value;
                 let body = serde_json::to_value(&cost)
                     .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
                 Ok(body)

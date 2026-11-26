@@ -27,32 +27,11 @@ pub(crate) struct WaitingTaskFormatter {
 }
 
 impl WaitingTaskFormatter {
-    pub(crate) fn new(runtime: &orbit_core::OrbitRuntime) -> Self {
+    pub(crate) fn new(tasks: orbit_core::app::run::WaitingTasks) -> Self {
         Self {
-            statuses: runtime.task_status_index().unwrap_or_else(|error| {
-                tracing::warn!(%error, "waiting task statuses unavailable");
-                Default::default()
-            }),
-            host_fleet: Default::default(),
+            statuses: tasks.statuses,
+            host_fleet: tasks.host_fleet,
         }
-    }
-
-    /// Name the matching hosts beside each of `task_ids`' host-OS waits.
-    pub(crate) fn with_host_fleet<'a>(
-        mut self,
-        runtime: &orbit_core::OrbitRuntime,
-        task_ids: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        for id in task_ids {
-            let note = runtime
-                .get_task(id)
-                .ok()
-                .and_then(|task| runtime.task_host_fleet_note(&task));
-            if let Some(note) = note {
-                self.host_fleet.insert(id.to_string(), note);
-            }
-        }
-        self
     }
 
     pub(crate) fn host_fleet(&self, task_id: &str) -> Option<&str> {

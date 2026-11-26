@@ -1,12 +1,13 @@
 //! CLI rendering for registry-derived task lock operations.
 
 use crate::command::task::output::format_task_locks;
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::output::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 use clap::Args;
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
+use orbit_core::app::run::{Command, exec};
+use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
@@ -154,9 +155,9 @@ pub struct LocksContentionArgs {
     pub limit: usize,
 }
 
-impl Execute for LocksContentionArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.task_lock_contention(&[TaskStatus::Backlog])?;
+impl ExecuteCore for LocksContentionArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let report = exec(core, Command::contention())?.value;
 
         let mut table = Table::new(vec![
             Column::new("SELECTOR").fixed(),

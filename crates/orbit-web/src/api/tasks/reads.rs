@@ -302,7 +302,7 @@ fn task_page_json(
             ),
         }
         if query.include_detail_runs() {
-            match super::super::jobs::task_runs_page(runtime, detail_id, 20) {
+            match super::super::jobs::task_runs_page(&WsCore::over(runtime).0, detail_id, 20) {
                 Ok(runs) => result["detail_runs"] = runs,
                 Err(error) => {
                     tracing::debug!(task_id = %detail_id, %error, "task list Runs projection unavailable");

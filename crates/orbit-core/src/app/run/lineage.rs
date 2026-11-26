@@ -3,11 +3,10 @@
 //! History folds a task's pipeline runs into one group per attempt from the
 //! listed runs' child dispatches and their retry sources'.
 
-use std::collections::{HashMap, HashSet};
-
-use orbit_core::JobRun;
-use orbit_core::application::job::JobRunListStates;
+use crate::JobRun;
+use crate::application::job::JobRunListStates;
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 
 /// Set `parent_run_id` on each listed run's value.
 ///

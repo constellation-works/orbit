@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::job_catalog_to_json_with_last_run;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::support::write_v2_step;
 
@@ -11,9 +12,9 @@ pub struct JobShowArgs {
     pub job_id: String,
 }
 
-impl Execute for JobShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let job = runtime.show_job_catalog_entry(&self.job_id)?;
+impl ExecuteCore for JobShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let job = exec(core, Command::job(&self.job_id))?.value;
         let doc = job_catalog_to_json_with_last_run(&job, None);
 
         use std::fmt::Write as _;

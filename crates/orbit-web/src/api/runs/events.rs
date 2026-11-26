@@ -5,15 +5,15 @@ use crate::state::DashboardState;
 use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::app::run::{Command, exec};
 use orbit_core::runtime::audit::run_events::{RunEventsPage, RunEventsPageResult};
-use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
 use serde_json::{Value, json};
 
 use super::super::{
     HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, blocking, bounded_limit,
     map_runtime_error, validate_id,
 };
-use super::locate::{LocatedRun, RunLookupFailure, locate_run, requested_workspace};
+use super::locate::{RunLookupFailure, requested_workspace, with_run};
 
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
 
@@ -45,12 +45,6 @@ pub(in crate::api) async fn list_run_events(
     let run_id = run_id.to_string();
     let requested = requested_workspace(query.as_deref());
     match blocking("run events", move || {
-        let located = match locate_run(&state, requested.as_deref(), &run_id, |runtime, id| {
-            runtime.show_job_run(id)
-        }) {
-            Ok(located) => located,
-            Err(failure) => return Ok(Err(failure)),
-        };
         let page = if q.tail {
             RunEventsPage::Tail { offset, limit }
         } else {
@@ -60,14 +54,10 @@ pub(in crate::api) async fn list_run_events(
                 limit,
             }
         };
-        Ok(Ok(match located {
-            LocatedRun::Registered { runtime, run } => runtime.run_events_page(&run, page)?,
-            LocatedRun::Recorded { reader, recorded } => reader.run_events_page_in_workspace(
-                &recorded.workspace_id,
-                &recorded.run.run_id,
-                page,
-            )?,
-        }))
+        let result = with_run(&state, requested.as_deref(), &run_id, |core, lookup| {
+            exec(core, Command::dashboard_events(lookup, page))
+        });
+        Ok(result)
     })
     .await
     {
@@ -107,24 +97,12 @@ pub(in crate::api) async fn list_run_logs(
     let run_id = run_id.to_string();
     let requested = requested_workspace(query.as_deref());
     match blocking("run logs", move || {
-        let located = match locate_run(&state, requested.as_deref(), &run_id, |runtime, id| {
-            runtime.show_job_run(id)
-        }) {
-            Ok(located) => located,
-            Err(failure) => return Ok(Err(failure)),
-        };
-        Ok(Ok(match located {
-            LocatedRun::Registered { runtime, .. } => runtime
-                .collect_run_cli_invocations_bounded(
-                    &run_id,
-                    Some(limit),
-                    RunCliInvocationProfile::HttpPreview.blob_read_max_bytes(),
-                )?
-                .iter()
-                .map(|record| record.to_profile_json(RunCliInvocationProfile::HttpPreview))
-                .collect(),
-            LocatedRun::Recorded { .. } => Vec::new(),
-        }))
+        Ok(with_run(
+            &state,
+            requested.as_deref(),
+            &run_id,
+            |core, lookup| exec(core, Command::dashboard_logs(lookup, limit)),
+        ))
     })
     .await
     {
