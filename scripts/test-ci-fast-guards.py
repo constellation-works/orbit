@@ -3971,6 +3971,57 @@ class PythonPreflightTests(unittest.TestCase):
         self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
 
 
+class SourceStyleDiffTests(unittest.TestCase):
+    def test_existing_findings_and_new_workspace_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            for name in ("check-source-style.py", "check-source-style-diff.py", "ci-test-affected.py"):
+                shutil.copy2(SCRIPTS / name, scripts)
+            subprocess.run(["git", "init", "-q", "-b", "agent-main"], cwd=root, check=True)
+            (root / "rustfmt.toml").write_text("max_width = 100\n")
+            (root / "Cargo.toml").touch()
+            legacy = root / "legacy.rs"
+            legacy.write_text("fn first() {}\nfn second() {}\n")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@localhost",
+                            "commit", "-qm", "base"], cwd=root, check=True)
+            env = {**os.environ, "CI_TEST_BASE": "HEAD"}
+
+            def check():
+                return subprocess.run([sys.executable, scripts / "check-source-style-diff.py"],
+                                      cwd=root, env=env, text=True, capture_output=True)
+
+            legacy.write_text("//! Existing file.\n\n" + legacy.read_text())
+            desktop = root / "desktop"
+            desktop.mkdir()
+            (desktop / "Cargo.toml").touch()
+            target = desktop / "widget.rs"
+            target.write_text("struct Widget;\n\nimpl Widget {\n    fn read(&self) {}\n\n"
+                              "    pub fn new() -> Self { Self }\n}\n")
+            broken = check()
+            self.assertEqual(broken.returncode, 1, broken.stderr)
+            self.assertIn("desktop/widget.rs:6: STD-12 R22", broken.stderr)
+            self.assertNotIn("legacy.rs", broken.stderr)
+            legacy.write_text(legacy.read_text() + "fn third() {}\n")
+            self.assertIn("legacy.rs:5: STD-12 R12", check().stderr)
+            target.write_text("struct Widget;\n\nfn between() {}\n\nimpl Widget {}\n"
+                              "\nuse super::super::Widget;\n\n#[rustfmt::skip]\nfn table() {}\n")
+            misplaced = check()
+            self.assertEqual(misplaced.returncode, 1, misplaced.stderr)
+            for rule in ("R21", "R26", "R19"):
+                self.assertIn(f"STD-12 {rule}", misplaced.stderr)
+            target.write_text("// @generated\nstruct Widget;\nfn read() {}\n")
+            example = desktop / "examples" / "example.rs"
+            example.parent.mkdir()
+            example.write_text("// https://example.org/" + "a" * 120 +
+                               "\n\n// Generated alignment table.\n#[rustfmt::skip]\nfn table() {}\n")
+            legacy.write_text(legacy.read_text().replace("fn third()", "\nfn third()"))
+            fixed = check()
+            self.assertEqual(fixed.returncode, 0, fixed.stderr)
+
+
 class RemovedDashboardLabelTests(unittest.TestCase):
     """Drive scripts/check-removed-dashboard-labels.py in a miniature repo."""
 

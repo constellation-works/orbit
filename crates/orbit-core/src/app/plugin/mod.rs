@@ -1,6 +1,7 @@
 //! The plugin lifecycle, inspection and tool dispatch entry.
 
 mod dashboard;
+
 mod scaffold;
 
 use std::path::PathBuf;
@@ -151,14 +152,6 @@ impl From<Error> for crate::Error {
         match error {
             Error::Flow(error) => error,
         }
-    }
-}
-
-/// Authorize, audit and run one plugin command.
-pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::DashboardToggle(toggle) => dashboard::exec(core, toggle),
-        command => exec::run::<PluginApp<'_>>(core, command),
     }
 }
 
@@ -348,5 +341,13 @@ impl<'a> App for PluginApp<'a> {
             Outcome::Diagnosed { issues, .. } => i32::from(*issues > 0),
             _ => 0,
         }
+    }
+}
+
+/// Authorize, audit and run one plugin command.
+pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
+    match command {
+        Command::DashboardToggle(toggle) => dashboard::exec(core, toggle),
+        command => exec::run::<PluginApp<'_>>(core, command),
     }
 }
