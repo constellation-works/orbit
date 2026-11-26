@@ -78,20 +78,6 @@ impl DeliveryJobShape {
     }
 }
 
-pub(super) fn host_activity(step: &JobV2Step) -> Option<&'static str> {
-    let JobV2StepBody::Target(TargetStep {
-        spec: ActivityV2Spec::Deterministic(spec),
-        activity_name: Some(name),
-        ..
-    }) = &step.body
-    else {
-        return None;
-    };
-    [COMMIT_ACTIVITY, PR_LANDING_ACTIVITY, LOCAL_LANDING_ACTIVITY]
-        .into_iter()
-        .find(|activity| name == activity && spec.action == *activity)
-}
-
 /// The catalogs one observation resolves definitions from, each parsed at
 /// most once however many runs it reads.
 #[derive(Default)]
@@ -525,6 +511,20 @@ impl OrbitRuntime {
         }
         Ok(None)
     }
+}
+
+pub(super) fn host_activity(step: &JobV2Step) -> Option<&'static str> {
+    let JobV2StepBody::Target(TargetStep {
+        spec: ActivityV2Spec::Deterministic(spec),
+        activity_name: Some(name),
+        ..
+    }) = &step.body
+    else {
+        return None;
+    };
+    [COMMIT_ACTIVITY, PR_LANDING_ACTIVITY, LOCAL_LANDING_ACTIVITY]
+        .into_iter()
+        .find(|activity| name == activity && spec.action == *activity)
 }
 
 fn no_task_delivery_run(task_id: &str) -> OrbitError {

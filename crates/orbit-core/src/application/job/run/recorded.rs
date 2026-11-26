@@ -73,14 +73,17 @@ impl OrbitRuntime {
     pub fn job_run_holder(&self, run_id: &str) -> Result<Option<JobRunHolder>, OrbitError> {
         let mut tasks = self.list_tasks_filtered(None, None, None, Some(run_id), None, None)?;
         tasks.sort_by_key(|task| task.job_run_machine.is_none());
-        let local = self.automation_machine_identity();
-        Ok(tasks.into_iter().next().map(|task| JobRunHolder {
-            local: task
+        let local_machine = self.automation_machine_identity();
+        Ok(tasks.into_iter().next().map(|task| {
+            let local = task
                 .job_run_machine
                 .as_ref()
-                .is_some_and(|location| local == Some(location.machine_id.as_str())),
-            task_id: task.id,
-            location: task.job_run_machine,
+                .is_some_and(|location| local_machine == Some(location.machine_id.as_str()));
+            JobRunHolder {
+                task_id: task.id,
+                location: task.job_run_machine,
+                local,
+            }
         }))
     }
 }

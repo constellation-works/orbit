@@ -13,29 +13,6 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-/// The hold an unsuccessful run of `job_id` ends on instead of failing, if
-/// its typed `error_code` or failure `message` names one. Owner-local runs hold on provider
-/// capacity, usage limits and unavailability; claimed leaves hold on usage limits.
-fn held_failure(
-    job_id: &str,
-    error_code: Option<&str>,
-    message: Option<&str>,
-) -> Option<HeldFailure> {
-    if orbit_types::workflow::is_claimed_delivery_leaf_job(job_id) {
-        HeldFailure::of_claimed_leaf(error_code, message)
-    } else {
-        HeldFailure::of_local(error_code, message)
-    }
-}
-
-/// The refusal identity retained across the engine/core error boundary.
-fn delivery_refusal_code(error: &OrbitError) -> Option<&'static str> {
-    match error {
-        OrbitError::DeliveryRefused { refusal, .. } => Some(refusal.error_code()),
-        _ => None,
-    }
-}
-
 /// Path-specific durable records retained while finalizing a v2 run.
 ///
 /// The foreground path predates per-step checkpointing, so its legacy summary
@@ -516,6 +493,29 @@ impl OrbitRuntime {
             )?;
         }
         Ok(())
+    }
+}
+
+/// The hold an unsuccessful run of `job_id` ends on instead of failing, if
+/// its typed `error_code` or failure `message` names one. Owner-local runs hold on provider
+/// capacity, usage limits and unavailability; claimed leaves hold on usage limits.
+fn held_failure(
+    job_id: &str,
+    error_code: Option<&str>,
+    message: Option<&str>,
+) -> Option<HeldFailure> {
+    if orbit_types::workflow::is_claimed_delivery_leaf_job(job_id) {
+        HeldFailure::of_claimed_leaf(error_code, message)
+    } else {
+        HeldFailure::of_local(error_code, message)
+    }
+}
+
+/// The refusal identity retained across the engine/core error boundary.
+fn delivery_refusal_code(error: &OrbitError) -> Option<&'static str> {
+    match error {
+        OrbitError::DeliveryRefused { refusal, .. } => Some(refusal.error_code()),
+        _ => None,
     }
 }
 

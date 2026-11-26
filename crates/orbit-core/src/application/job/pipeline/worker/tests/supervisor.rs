@@ -28,32 +28,6 @@ use super::super::supervisor::{PipelineRunHost, PipelineWorkerSupervisor};
 use crate::application::job::run::audit_record::SupervisedRuns;
 use crate::runtime::event_bus::EventLog;
 
-#[test]
-fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    drop(receiver);
-    // Exec sleep directly: this fixture has no descendants to leak.
-    let child = Command::new("sleep").arg("30").spawn().unwrap();
-    let pid = child.id();
-    let error = handoff_worker(sender, child).unwrap_err();
-    assert!(
-        matches!(error, WorkerLaunchError::Uncertain(_)),
-        "a spawned worker must never be reported as not started"
-    );
-    // Reaping matters: an unreaped killed child still has a process identity.
-    // SAFETY: signal 0 sends nothing and only probes whether `pid`, the child spawned
-    // above, still exists; its arguments are plain integers, so no pointer precondition applies.
-    assert_eq!(
-        unsafe { libc::kill(pid as libc::pid_t, 0) },
-        -1,
-        "observer handoff failure must stop and reap its worker"
-    );
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
-    );
-}
-
 struct ReadFaultStore {
     inner: Arc<JobRuns>,
     reads: AtomicUsize,
@@ -152,6 +126,69 @@ impl Drop for ObserverCleanup {
             libc::waitpid(self.pid as libc::pid_t, std::ptr::null_mut(), 0);
         }
     }
+}
+
+struct RescueHost {
+    inner: Arc<JobRuns>,
+    preserved: Arc<Mutex<Vec<String>>>,
+    provider_probes: Arc<AtomicUsize>,
+    defer_provider_probes: usize,
+}
+
+impl PipelineRunHost for RescueHost {
+    fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
+        Ok(self.inner.get_job_run(run_id)?.unwrap())
+    }
+
+    fn providers_stopped(&self, _run_id: &str) -> bool {
+        self.provider_probes.fetch_add(1, Ordering::SeqCst) >= self.defer_provider_probes
+    }
+
+    fn preserve_rescue_candidate(&self, run_id: &str) -> Option<String> {
+        self.preserved.lock().unwrap().push(run_id.to_string());
+        Some(format!(
+            "rescue candidate kept at `refs/orbit/rescue/{run_id}` (commit `abc123`)"
+        ))
+    }
+
+    fn terminalize_run(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+    ) -> Result<bool, OrbitError> {
+        Ok(matches!(
+            self.inner
+                .finalize_job_run_with_outcome(run_id, state, finished_at, Some(0))?,
+            orbit_store::contract::JobRunFinalization::Finalized
+        ))
+    }
+}
+
+#[test]
+fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    drop(receiver);
+    // Exec sleep directly: this fixture has no descendants to leak.
+    let child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id();
+    let error = handoff_worker(sender, child).unwrap_err();
+    assert!(
+        matches!(error, WorkerLaunchError::Uncertain(_)),
+        "a spawned worker must never be reported as not started"
+    );
+    // Reaping matters: an unreaped killed child still has a process identity.
+    // SAFETY: signal 0 sends nothing and only probes whether `pid`, the child spawned
+    // above, still exists; its arguments are plain integers, so no pointer precondition applies.
+    assert_eq!(
+        unsafe { libc::kill(pid as libc::pid_t, 0) },
+        -1,
+        "observer handoff failure must stop and reap its worker"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
 }
 
 #[test]
@@ -333,43 +370,6 @@ sys.exit(7)
         assert_reaped(pid);
         // These assertions run while this isolated parent remains alive;
         // parent-process exit cannot accidentally provide the missing reaper.
-    }
-}
-
-struct RescueHost {
-    inner: Arc<JobRuns>,
-    preserved: Arc<Mutex<Vec<String>>>,
-    provider_probes: Arc<AtomicUsize>,
-    defer_provider_probes: usize,
-}
-
-impl PipelineRunHost for RescueHost {
-    fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
-        Ok(self.inner.get_job_run(run_id)?.unwrap())
-    }
-
-    fn providers_stopped(&self, _run_id: &str) -> bool {
-        self.provider_probes.fetch_add(1, Ordering::SeqCst) >= self.defer_provider_probes
-    }
-
-    fn preserve_rescue_candidate(&self, run_id: &str) -> Option<String> {
-        self.preserved.lock().unwrap().push(run_id.to_string());
-        Some(format!(
-            "rescue candidate kept at `refs/orbit/rescue/{run_id}` (commit `abc123`)"
-        ))
-    }
-
-    fn terminalize_run(
-        &self,
-        run_id: &str,
-        state: JobRunState,
-        finished_at: DateTime<Utc>,
-    ) -> Result<bool, OrbitError> {
-        Ok(matches!(
-            self.inner
-                .finalize_job_run_with_outcome(run_id, state, finished_at, Some(0))?,
-            orbit_store::contract::JobRunFinalization::Finalized
-        ))
     }
 }
 

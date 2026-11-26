@@ -14,6 +14,13 @@ const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
 const EXPLORE_JOB_ID: &str = "agent_explore_pipeline";
 const RESULT_PREVIEW_LIMIT_BYTES: usize = 4096;
 
+/// Step-output keys an invocation's answer reads by name; every other
+/// envelope `result` key is `extra`.
+const ANSWER_FIELDS: [&str; 3] = ["summary", "findings", "next_steps"];
+
+/// The envelope `result` key an explorer lists the paths it read under.
+const PATHS_READ_FIELD: &str = "paths_read";
+
 /// A finished (or running) invocation, rendered for an operator.
 ///
 /// Deliberately distinguishes the ways an invocation can end. A provider that
@@ -93,13 +100,6 @@ pub struct AgentInvokeProgress {
     pub latest_message: Option<String>,
     pub latest_message_truncated: bool,
 }
-
-/// Step-output keys an invocation's answer reads by name; every other
-/// envelope `result` key is `extra`.
-const ANSWER_FIELDS: [&str; 3] = ["summary", "findings", "next_steps"];
-
-/// The envelope `result` key an explorer lists the paths it read under.
-const PATHS_READ_FIELD: &str = "paths_read";
 
 /// Read a finished or in-flight invocation for an operator [ORB-11354].
 ///

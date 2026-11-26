@@ -1,6 +1,19 @@
 //! Authenticate reviewer transitions between base synchronization and publication.
 use super::*;
 
+/// The before-landing settlement whose `incomplete` verdict the failure
+/// handoff preserves by pushing the reviewer's commit.
+const LANDING_SETTLE: &str = "landing_review_gate_settle";
+
+/// Preserved non-accept before-landing reviewer commit `R` on a durable
+/// candidate ref (`refs/orbit/candidates/<task>/<run>`), leaving `origin`
+/// PR branch and PR head at `published`.
+#[derive(Clone, Debug)]
+pub(super) struct PreservedReviewTip {
+    pub(super) head: String,
+    pub(super) durable_ref: String,
+}
+
 /// The settlement, revalidation and publication step ids of one review layer.
 fn review_steps(landing: bool) -> (&'static str, &'static str, &'static str) {
     if landing {
@@ -282,10 +295,6 @@ pub(super) fn published_head<'a>(
     Ok(if failed_landing_push { initial } else { head })
 }
 
-/// The before-landing settlement whose `incomplete` verdict the failure
-/// handoff preserves by pushing the reviewer's commit.
-const LANDING_SETTLE: &str = "landing_review_gate_settle";
-
 /// [ORB-25671] The reviewer commit an incomplete before-landing review left
 /// on the published head, when this run's own failure handoff attests that
 /// it pushed exactly that commit onto `published`: the head the branch and
@@ -377,15 +386,6 @@ pub(super) fn incomplete_review_pushed_head<'a>(
         ));
     }
     Ok(Some(pushed))
-}
-
-/// Preserved non-accept before-landing reviewer commit `R` on a durable
-/// candidate ref (`refs/orbit/candidates/<task>/<run>`), leaving `origin`
-/// PR branch and PR head at `published`.
-#[derive(Clone, Debug)]
-pub(super) struct PreservedReviewTip {
-    pub(super) head: String,
-    pub(super) durable_ref: String,
 }
 
 /// Read and authenticate `reviewer_preservation` recorded by `pr_failure_handoff`

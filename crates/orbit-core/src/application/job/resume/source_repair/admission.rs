@@ -41,128 +41,6 @@ pub(super) struct RepairLink {
     pub(super) run_id: String,
 }
 
-pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
-    OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
-}
-
-/// A refusal that waits on an operator decision (discard the candidate or
-/// select an explicit source). Reports exactly as the [`refuse`] text it
-/// carries; only [`hold_operator_source_repair_refusal`] classifies it.
-/// Integrity and authority refusals use [`refuse`] and stay failures.
-pub(super) fn refuse_operator_decision(message: impl Into<String>) -> OrbitError {
-    OrbitError::SourceRepairOperatorDecisionRefused {
-        message: format!("source repair refused: {}", message.into()),
-    }
-}
-
-/// Hold an operator-decision source-repair refusal without changing its text.
-///
-/// Only `owner_published_candidate` applies this. Shared helpers keep the
-/// refusal reporting as a job-validation error, so requeue, explicit source
-/// repair, handoff and completion stay failures.
-pub(super) fn hold_operator_source_repair_refusal(error: OrbitError) -> OrbitError {
-    match error {
-        OrbitError::SourceRepairOperatorDecisionRefused { message } => {
-            OrbitError::DeliveryRefused {
-                refusal: workflow::DeliveryRefusal::SourceRepairDecision,
-                message,
-            }
-        }
-        other => other,
-    }
-}
-
-/// A refusal caused by the run's state; reports exactly as the [`refuse`] text
-/// it carries, with the reason attached for callers to classify.
-pub(super) fn refuse_run_state(
-    reason: SourceRepairRunStateRefusal,
-    message: impl Into<String>,
-) -> OrbitError {
-    OrbitError::SourceRepairRunStateRefused {
-        reason,
-        message: format!("source repair refused: {}", message.into()),
-    }
-}
-
-/// A named authority refusal; reports exactly as the [`refuse`] text it replaced.
-pub(super) fn refuse_authority(code: SourceRepairAuthorityRefusal) -> OrbitError {
-    OrbitError::SourceRepairAuthorityRefused(code)
-}
-
-pub(super) fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError> {
-    serde_json::to_vec(value)
-        .map(|bytes| sha256_hex(&bytes))
-        .map_err(|error| refuse(format!("unreadable evidence: {error}")))
-}
-
-/// The persisted evidence digest of a repair source run. Its key order is part
-/// of the digest bytes (`serde_json/preserve_order`), so changing it would
-/// refuse every repair whose binding was written under the old order.
-pub(super) fn run_evidence_digest(
-    run: &JobRun,
-    checkpoints: &PipelineState,
-    definition: &JobV2,
-) -> Result<String, OrbitError> {
-    digest(&json!({"run":run,"steps":run.steps,"checkpoints":checkpoints,"definition":definition}))
-}
-
-pub(super) fn task_digest(task: &Task) -> Result<String, OrbitError> {
-    digest(&json!({
-        "meaning": orbit_automation::review::task_meaning_digest(task)
-            .map_err(|e| refuse(e.to_string()))?,
-        "required_tools": task.required_tools,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "complexity": task.complexity,
-    }))
-}
-
-pub(super) fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, OrbitError> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| refuse(format!("missing checkpoint field {name}")))
-}
-
-/// Corroborate an authenticated publication without selecting authority from
-/// reference order. Historical PRs remain intact; contradictory identities do
-/// not become valid merely because another reference matches.
-pub(super) fn task_pr_association(task: &Task, number: &str, url: &str) -> Result<(), OrbitError> {
-    let mut associated = false;
-    for reference in task
-        .external_refs
-        .iter()
-        .filter(|reference| reference.system == orbit_types::task::GITHUB_PR_EXTERNAL_REF_SYSTEM)
-    {
-        if reference.id == number {
-            // Key-only references are a supported persisted format. Repository
-            // authority comes from the host checkpoints, origin and provider.
-            if reference.url.as_deref().is_some_and(|value| value != url) {
-                return Err(refuse_authority(
-                    SourceRepairAuthorityRefusal::PrAssociationRepositoryConflict,
-                ));
-            }
-            associated = true;
-        } else if reference.url.as_deref() == Some(url) {
-            return Err(refuse_authority(
-                SourceRepairAuthorityRefusal::PrAssociationNumberConflict,
-            ));
-        }
-    }
-    if !associated {
-        return Err(refuse_authority(
-            SourceRepairAuthorityRefusal::PrAssociationMissing,
-        ));
-    }
-    Ok(())
-}
-
-fn history(runtime: &OrbitRuntime, task: &str) -> Result<Vec<SourceRepairAdmission>, OrbitError> {
-    orbit_types::workflow::source_repair_authorizations(&runtime.get_task_history(task)?)
-        .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))
-}
-
 impl OrbitRuntime {
     /// Use the ordinary source-repair admission with the exact publication
     /// observed by the owner. Only the authenticated resident tool supplies
@@ -687,10 +565,11 @@ impl OrbitRuntime {
         // Normal admission resolves the current task crew with its original
         // assignment provenance. Copying task.crew into an explicit run override
         // would bypass provider holds and turn a pool/default into operator intent.
+        let attempt = source.attempt.saturating_add(1);
         let plan = ResumePlan {
-            attempt: source.attempt.saturating_add(1),
             source,
             input: input.clone(),
+            attempt,
             resume_state: None,
             lineage,
             ancestors,
@@ -883,4 +762,126 @@ impl OrbitRuntime {
         binding.superseded = superseded;
         Ok((source, task, binding))
     }
+}
+
+pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
+    OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
+}
+
+/// A refusal that waits on an operator decision (discard the candidate or
+/// select an explicit source). Reports exactly as the [`refuse`] text it
+/// carries; only [`hold_operator_source_repair_refusal`] classifies it.
+/// Integrity and authority refusals use [`refuse`] and stay failures.
+pub(super) fn refuse_operator_decision(message: impl Into<String>) -> OrbitError {
+    OrbitError::SourceRepairOperatorDecisionRefused {
+        message: format!("source repair refused: {}", message.into()),
+    }
+}
+
+/// Hold an operator-decision source-repair refusal without changing its text.
+///
+/// Only `owner_published_candidate` applies this. Shared helpers keep the
+/// refusal reporting as a job-validation error, so requeue, explicit source
+/// repair, handoff and completion stay failures.
+pub(super) fn hold_operator_source_repair_refusal(error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::SourceRepairOperatorDecisionRefused { message } => {
+            OrbitError::DeliveryRefused {
+                refusal: workflow::DeliveryRefusal::SourceRepairDecision,
+                message,
+            }
+        }
+        other => other,
+    }
+}
+
+/// A refusal caused by the run's state; reports exactly as the [`refuse`] text
+/// it carries, with the reason attached for callers to classify.
+pub(super) fn refuse_run_state(
+    reason: SourceRepairRunStateRefusal,
+    message: impl Into<String>,
+) -> OrbitError {
+    OrbitError::SourceRepairRunStateRefused {
+        reason,
+        message: format!("source repair refused: {}", message.into()),
+    }
+}
+
+/// A named authority refusal; reports exactly as the [`refuse`] text it replaced.
+pub(super) fn refuse_authority(code: SourceRepairAuthorityRefusal) -> OrbitError {
+    OrbitError::SourceRepairAuthorityRefused(code)
+}
+
+pub(super) fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError> {
+    serde_json::to_vec(value)
+        .map(|bytes| sha256_hex(&bytes))
+        .map_err(|error| refuse(format!("unreadable evidence: {error}")))
+}
+
+/// The persisted evidence digest of a repair source run. Its key order is part
+/// of the digest bytes (`serde_json/preserve_order`), so changing it would
+/// refuse every repair whose binding was written under the old order.
+pub(super) fn run_evidence_digest(
+    run: &JobRun,
+    checkpoints: &PipelineState,
+    definition: &JobV2,
+) -> Result<String, OrbitError> {
+    digest(&json!({"run":run,"steps":run.steps,"checkpoints":checkpoints,"definition":definition}))
+}
+
+pub(super) fn task_digest(task: &Task) -> Result<String, OrbitError> {
+    digest(&json!({
+        "meaning": orbit_automation::review::task_meaning_digest(task)
+            .map_err(|e| refuse(e.to_string()))?,
+        "required_tools": task.required_tools,
+        "crew": task.crew,
+        "crew_source": task.crew_source,
+        "complexity": task.complexity,
+    }))
+}
+
+pub(super) fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, OrbitError> {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| refuse(format!("missing checkpoint field {name}")))
+}
+
+/// Corroborate an authenticated publication without selecting authority from
+/// reference order. Historical PRs remain intact; contradictory identities do
+/// not become valid merely because another reference matches.
+pub(super) fn task_pr_association(task: &Task, number: &str, url: &str) -> Result<(), OrbitError> {
+    let mut associated = false;
+    for reference in task
+        .external_refs
+        .iter()
+        .filter(|reference| reference.system == orbit_types::task::GITHUB_PR_EXTERNAL_REF_SYSTEM)
+    {
+        if reference.id == number {
+            // Key-only references are a supported persisted format. Repository
+            // authority comes from the host checkpoints, origin and provider.
+            if reference.url.as_deref().is_some_and(|value| value != url) {
+                return Err(refuse_authority(
+                    SourceRepairAuthorityRefusal::PrAssociationRepositoryConflict,
+                ));
+            }
+            associated = true;
+        } else if reference.url.as_deref() == Some(url) {
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::PrAssociationNumberConflict,
+            ));
+        }
+    }
+    if !associated {
+        return Err(refuse_authority(
+            SourceRepairAuthorityRefusal::PrAssociationMissing,
+        ));
+    }
+    Ok(())
+}
+
+fn history(runtime: &OrbitRuntime, task: &str) -> Result<Vec<SourceRepairAdmission>, OrbitError> {
+    orbit_types::workflow::source_repair_authorizations(&runtime.get_task_history(task)?)
+        .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))
 }

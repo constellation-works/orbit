@@ -13,23 +13,6 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
-/// The drain intent as readiness and the dashboard report it: `intent` is
-/// `off`, `on` or `paused`; `by`, `source`, `at` and `reason` say who set it,
-/// from which surface, when and why (absent while `off`).
-#[must_use]
-pub fn drain_intent_json(record: Option<&DrainIntentRecord>) -> Value {
-    match record {
-        None => json!({ "intent": "off" }),
-        Some(record) => json!({
-            "intent": record.intent.as_str(),
-            "by": record.actor,
-            "source": record.source,
-            "at": record.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            "reason": record.reason,
-        }),
-    }
-}
-
 /// One drain's admission window: from when it started to when it stopped
 /// admitting (its deadline, an admissions stop or cancel, or its end,
 /// whichever came first). A drain still admitting ends at `now`.
@@ -143,5 +126,22 @@ impl OrbitRuntime {
                 "drain intent not recorded"
             );
         }
+    }
+}
+
+/// The drain intent as readiness and the dashboard report it: `intent` is
+/// `off`, `on` or `paused`; `by`, `source`, `at` and `reason` say who set it,
+/// from which surface, when and why (absent while `off`).
+#[must_use]
+pub fn drain_intent_json(record: Option<&DrainIntentRecord>) -> Value {
+    match record {
+        None => json!({ "intent": "off" }),
+        Some(record) => json!({
+            "intent": record.intent.as_str(),
+            "by": record.actor,
+            "source": record.source,
+            "at": record.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "reason": record.reason,
+        }),
     }
 }

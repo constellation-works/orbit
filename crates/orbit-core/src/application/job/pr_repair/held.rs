@@ -38,6 +38,9 @@ pub(super) const HELD_HANDBACK_CEILING: usize = 3;
 /// hand-back of the same pull request for the same hold code doubles it.
 pub(super) const HELD_BACKOFF_BASE: Duration = Duration::from_secs(300);
 
+/// The diagnostic prefix an auto-fix stop carries inside its hold message.
+const AUTO_FIX_STOP_DIAGNOSTIC: &str = "auto_fix_stopped:";
+
 /// The delivery refusals a fresh forge read can clear, so completion is
 /// handed the pull request again. Each other refusal names its own next step
 /// (an operator decision, a new head or a new delivery attempt), the clock or
@@ -127,9 +130,6 @@ pub(super) fn held_handbacks(
         .filter(|start| start.head_sha == head_sha && start.hold_code.as_deref() == Some(code))
         .count()
 }
-
-/// The diagnostic prefix an auto-fix stop carries inside its hold message.
-const AUTO_FIX_STOP_DIAGNOSTIC: &str = "auto_fix_stopped:";
 
 /// A run held by an auto-fix stop that no hand-back hold covers, which can be
 /// reconsidered once checks turn green [ORB-27221].

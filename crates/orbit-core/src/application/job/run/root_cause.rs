@@ -25,6 +25,17 @@ use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
 
 use super::projection::{job_run_task_ids, run_error_step};
 
+#[cfg(feature = "test-support")]
+thread_local! {
+    static ROOT_CAUSE_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// How far [`RunFailureContextProfile::DeepestObserved`] follows child
+/// dispatches. Matches the cancel cascade.
+const DEEPEST_OBSERVED_MAX_DEPTH: usize = 8;
+
 /// One incident in a run listing: the row that stands for it and the
 /// cascaded parents folded into it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,85 +51,6 @@ pub struct RunIncident {
     /// An Orbit upgrade's designed pause, not a failure: the listed leaf says
     /// so, or with no leaf listed, an echo does. See [`run_upgrade_paused`].
     pub upgrade_paused: bool,
-}
-
-/// Whether `run` stands for an Orbit upgrade's designed pause, which the clock
-/// resumes, rather than a failure: it is `interrupted` under
-/// `upgrade_quiesce`, or it failed only because it echoes a leaf that was.
-/// A lost or killed worker records another code and stays a failure.
-pub fn run_upgrade_paused(run: &JobRun, state: Option<&PipelineState>) -> bool {
-    if !matches!(
-        run.state,
-        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-    ) {
-        return false;
-    }
-    let code = match state
-        .and_then(|state| state.root_cause.as_ref())
-        .filter(|cause| cause.leaf_run_id != run.run_id)
-    {
-        Some(cause) => cause.code.as_deref(),
-        None if run.state == JobRunState::Interrupted => {
-            run_error_step(run).and_then(|step| step.error_code.as_deref())
-        }
-        None => None,
-    };
-    code == Some(UPGRADE_QUIESCE_ERROR_CODE)
-}
-
-/// Fold a run listing into one entry per incident, in listing order of each
-/// incident's first row. A run with no recorded root cause is its own leaf;
-/// a run whose root cause names a leaf joins that leaf's incident, whether
-/// or not the leaf itself is listed.
-pub fn fold_run_incidents(runs: &[JobRun], states: &[Option<&PipelineState>]) -> Vec<RunIncident> {
-    let leaf_of = |index: usize| {
-        states
-            .get(index)
-            .copied()
-            .flatten()
-            .and_then(|state| state.root_cause.as_ref())
-            .map_or(runs[index].run_id.as_str(), |cause| {
-                cause.leaf_run_id.as_str()
-            })
-    };
-    let mut incidents: Vec<RunIncident> = Vec::new();
-    let mut by_leaf: HashMap<&str, usize> = HashMap::new();
-    for (index, run) in runs.iter().enumerate() {
-        let leaf = leaf_of(index);
-        let upgrade_paused = run_upgrade_paused(run, states.get(index).copied().flatten());
-        let Some(&slot) = by_leaf.get(leaf) else {
-            by_leaf.insert(leaf, incidents.len());
-            incidents.push(RunIncident {
-                index,
-                leaf_run_id: leaf.to_string(),
-                cascaded_run_ids: Vec::new(),
-                upgrade_paused,
-            });
-            continue;
-        };
-        let incident = &mut incidents[slot];
-        if run.run_id == leaf {
-            // The leaf itself represents its incident once it is listed.
-            let echo = runs[incident.index].run_id.clone();
-            incident.cascaded_run_ids.insert(0, echo);
-            incident.index = index;
-            incident.upgrade_paused = upgrade_paused;
-        } else {
-            incident.upgrade_paused |=
-                upgrade_paused && runs[incident.index].run_id.as_str() != leaf;
-            incident.cascaded_run_ids.push(run.run_id.clone());
-        }
-    }
-    incidents
-}
-
-/// Use the recorded code or typed terminal outcome. Diagnostic prose and
-/// captured command output cannot supply a classification.
-fn failure_code(error_code: Option<&str>, state: JobRunState) -> Option<String> {
-    if let Some(code) = error_code.filter(|code| !code.trim().is_empty()) {
-        return Some(code.to_string());
-    }
-    (state.is_terminal() && state != JobRunState::Success).then(|| state.to_string())
 }
 
 impl OrbitRuntime {
@@ -235,42 +167,6 @@ impl OrbitRuntime {
     }
 }
 
-#[cfg(feature = "test-support")]
-thread_local! {
-    static ROOT_CAUSE_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
-        std::cell::RefCell::new(None)
-    };
-}
-
-/// Interleave one control write immediately before a root-cause write on this
-/// thread, restoring the previous hook on return or unwind.
-#[cfg(feature = "test-support")]
-pub fn with_run_root_cause_write_hook<T>(
-    hook: impl FnOnce() + 'static,
-    operation: impl FnOnce() -> T,
-) -> T {
-    struct Restore(Option<Box<dyn FnOnce()>>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.replace(self.0.take()));
-        }
-    }
-    let _restore = Restore(ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.replace(Some(Box::new(hook)))));
-    operation()
-}
-
-#[cfg(feature = "test-support")]
-fn run_root_cause_write_hook() {
-    let hook = ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-/// How far [`RunFailureContextProfile::DeepestObserved`] follows child
-/// dispatches. Matches the cancel cascade.
-const DEEPEST_OBSERVED_MAX_DEPTH: usize = 8;
-
 /// How a run-failure query reads each descendant run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunFailureRead {
@@ -381,30 +277,6 @@ impl RunFailureContextWarning {
             error: error.to_string(),
         }
     }
-}
-
-/// A failed, timed-out, interrupted or cancelled run: one a failure query may
-/// name as a cause. `held` is outside this set, including a host-manager stop
-/// (`operator_stopped`).
-fn is_chain_failure(state: JobRunState) -> bool {
-    matches!(
-        state,
-        JobRunState::Failed
-            | JobRunState::Timeout
-            | JobRunState::Interrupted
-            | JobRunState::Cancelled
-    )
-}
-
-/// Whether a failure query names `run`. A host-manager stop recorded as
-/// `operator_stopped` is not a cause, including when an earlier writer left
-/// the run in a chain-failure state.
-fn counts_in_failure_query(run: &JobRun) -> bool {
-    if !is_chain_failure(run.state) {
-        return false;
-    }
-    run_error_step(run).and_then(|step| step.error_code.as_deref())
-        != Some(OPERATOR_STOPPED_ERROR_CODE)
 }
 
 struct FailureWalk<'w> {
@@ -566,6 +438,134 @@ impl OrbitRuntime {
         }
         Ok(true)
     }
+}
+
+/// Whether `run` stands for an Orbit upgrade's designed pause, which the clock
+/// resumes, rather than a failure: it is `interrupted` under
+/// `upgrade_quiesce`, or it failed only because it echoes a leaf that was.
+/// A lost or killed worker records another code and stays a failure.
+pub fn run_upgrade_paused(run: &JobRun, state: Option<&PipelineState>) -> bool {
+    if !matches!(
+        run.state,
+        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+    ) {
+        return false;
+    }
+    let code = match state
+        .and_then(|state| state.root_cause.as_ref())
+        .filter(|cause| cause.leaf_run_id != run.run_id)
+    {
+        Some(cause) => cause.code.as_deref(),
+        None if run.state == JobRunState::Interrupted => {
+            run_error_step(run).and_then(|step| step.error_code.as_deref())
+        }
+        None => None,
+    };
+    code == Some(UPGRADE_QUIESCE_ERROR_CODE)
+}
+
+/// Fold a run listing into one entry per incident, in listing order of each
+/// incident's first row. A run with no recorded root cause is its own leaf;
+/// a run whose root cause names a leaf joins that leaf's incident, whether
+/// or not the leaf itself is listed.
+pub fn fold_run_incidents(runs: &[JobRun], states: &[Option<&PipelineState>]) -> Vec<RunIncident> {
+    let leaf_of = |index: usize| {
+        states
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|state| state.root_cause.as_ref())
+            .map_or(runs[index].run_id.as_str(), |cause| {
+                cause.leaf_run_id.as_str()
+            })
+    };
+    let mut incidents: Vec<RunIncident> = Vec::new();
+    let mut by_leaf: HashMap<&str, usize> = HashMap::new();
+    for (index, run) in runs.iter().enumerate() {
+        let leaf = leaf_of(index);
+        let upgrade_paused = run_upgrade_paused(run, states.get(index).copied().flatten());
+        let Some(&slot) = by_leaf.get(leaf) else {
+            by_leaf.insert(leaf, incidents.len());
+            incidents.push(RunIncident {
+                index,
+                leaf_run_id: leaf.to_string(),
+                cascaded_run_ids: Vec::new(),
+                upgrade_paused,
+            });
+            continue;
+        };
+        let incident = &mut incidents[slot];
+        if run.run_id == leaf {
+            // The leaf itself represents its incident once it is listed.
+            let echo = runs[incident.index].run_id.clone();
+            incident.cascaded_run_ids.insert(0, echo);
+            incident.index = index;
+            incident.upgrade_paused = upgrade_paused;
+        } else {
+            incident.upgrade_paused |=
+                upgrade_paused && runs[incident.index].run_id.as_str() != leaf;
+            incident.cascaded_run_ids.push(run.run_id.clone());
+        }
+    }
+    incidents
+}
+
+/// Use the recorded code or typed terminal outcome. Diagnostic prose and
+/// captured command output cannot supply a classification.
+fn failure_code(error_code: Option<&str>, state: JobRunState) -> Option<String> {
+    if let Some(code) = error_code.filter(|code| !code.trim().is_empty()) {
+        return Some(code.to_string());
+    }
+    (state.is_terminal() && state != JobRunState::Success).then(|| state.to_string())
+}
+
+/// Interleave one control write immediately before a root-cause write on this
+/// thread, restoring the previous hook on return or unwind.
+#[cfg(feature = "test-support")]
+pub fn with_run_root_cause_write_hook<T>(
+    hook: impl FnOnce() + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Box<dyn FnOnce()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.replace(Some(Box::new(hook)))));
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+fn run_root_cause_write_hook() {
+    let hook = ROOT_CAUSE_WRITE_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// A failed, timed-out, interrupted or cancelled run: one a failure query may
+/// name as a cause. `held` is outside this set, including a host-manager stop
+/// (`operator_stopped`).
+fn is_chain_failure(state: JobRunState) -> bool {
+    matches!(
+        state,
+        JobRunState::Failed
+            | JobRunState::Timeout
+            | JobRunState::Interrupted
+            | JobRunState::Cancelled
+    )
+}
+
+/// Whether a failure query names `run`. A host-manager stop recorded as
+/// `operator_stopped` is not a cause, including when an earlier writer left
+/// the run in a chain-failure state.
+fn counts_in_failure_query(run: &JobRun) -> bool {
+    if !is_chain_failure(run.state) {
+        return false;
+    }
+    run_error_step(run).and_then(|step| step.error_code.as_deref())
+        != Some(OPERATOR_STOPPED_ERROR_CODE)
 }
 
 /// [`RunFailureContextProfile::AllFailedLeaves`] precedence: a non-skipped

@@ -29,41 +29,6 @@ use orbit_types::workflow::FailureActivityCheckpoint;
 const KEPT_PUBLICATION_DECISIONS: [&str; 2] =
     ["review_completion_failure", "landing_review_failure"];
 
-fn validate_failure_handoff_receipt(
-    receipt: &FailureActivityCheckpoint,
-    source_id: &str,
-    task: &Task,
-) -> Result<(), OrbitError> {
-    let output = &receipt.output;
-    if receipt.activity_name != "pr_failure_handoff"
-        || !KEPT_PUBLICATION_DECISIONS.contains(&field(output, "decision")?)
-        || output.get("candidate_preserved").and_then(Value::as_bool) != Some(true)
-        || field(output, "failed_step_id")? != receipt.failed_step_id
-    {
-        return Err(refuse(
-            "the run's failure handoff did not keep its published pull request",
-        ));
-    }
-    // A receipt written before it named its run and specification
-    // cannot show the candidate still implements this task.
-    if output.get("handoff_run_id").and_then(Value::as_str) != Some(source_id)
-        || output.get("task_id").and_then(Value::as_str) != Some(task.id.as_str())
-    {
-        return Err(refuse(
-            "the run's completion-failure receipt does not name this run and task",
-        ));
-    }
-    let recorded = field(output, "task_spec_digest")?;
-    if !task.spec_digest_matches(recorded) {
-        return Err(refuse(format!(
-            "the task specification changed after its run published pull request #{}, so that \
-             candidate no longer implements this task",
-            output["pr_number"].as_str().unwrap_or("?")
-        )));
-    }
-    Ok(())
-}
-
 impl OrbitRuntime {
     /// Check local escalated/pipeline publication requeue preconditions without
     /// contacting remotes or the forge.
@@ -198,4 +163,39 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+}
+
+fn validate_failure_handoff_receipt(
+    receipt: &FailureActivityCheckpoint,
+    source_id: &str,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    let output = &receipt.output;
+    if receipt.activity_name != "pr_failure_handoff"
+        || !KEPT_PUBLICATION_DECISIONS.contains(&field(output, "decision")?)
+        || output.get("candidate_preserved").and_then(Value::as_bool) != Some(true)
+        || field(output, "failed_step_id")? != receipt.failed_step_id
+    {
+        return Err(refuse(
+            "the run's failure handoff did not keep its published pull request",
+        ));
+    }
+    // A receipt written before it named its run and specification
+    // cannot show the candidate still implements this task.
+    if output.get("handoff_run_id").and_then(Value::as_str) != Some(source_id)
+        || output.get("task_id").and_then(Value::as_str) != Some(task.id.as_str())
+    {
+        return Err(refuse(
+            "the run's completion-failure receipt does not name this run and task",
+        ));
+    }
+    let recorded = field(output, "task_spec_digest")?;
+    if !task.spec_digest_matches(recorded) {
+        return Err(refuse(format!(
+            "the task specification changed after its run published pull request #{}, so that \
+             candidate no longer implements this task",
+            output["pr_number"].as_str().unwrap_or("?")
+        )));
+    }
+    Ok(())
 }

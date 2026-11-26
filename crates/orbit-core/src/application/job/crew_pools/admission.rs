@@ -70,36 +70,6 @@ struct ProviderLimitWrite {
     pools: CapturedCrewPools,
 }
 
-/// Replay recaptures automatic admission under current policy. Only a crew
-/// recorded as the caller's explicit choice survives; run-level pool overrides
-/// and allowlists remain caller input. Other jobs do not use this admission.
-pub(crate) fn strip_auto_crew_admission(job_name: &str, input: &mut Value) {
-    if !POLICY_PIPELINES.contains(&job_name) {
-        return;
-    }
-    if let Some(object) = input.as_object_mut() {
-        let explicit = object
-            .get(SELECTION_KEY)
-            .and_then(|selection| selection.get("source"))
-            .and_then(Value::as_str)
-            == Some("explicit");
-        object.remove(SELECTION_KEY);
-        object.remove(POOLS_KEY);
-        if !explicit {
-            object.remove("crew");
-        }
-    }
-}
-
-/// The local task whose crew selection and run insertion must be serialized
-/// against scope edits. Coordinator submissions with no single task take no lock.
-pub(crate) fn crew_admission_task_id<'a>(job_name: &str, input: &'a Value) -> Option<&'a str> {
-    POLICY_PIPELINES
-        .contains(&job_name)
-        .then(|| auto_task_id(input))
-        .flatten()
-}
-
 impl OrbitRuntime {
     /// Whether an implicit edit must preserve this task's execution identity.
     /// Call under the task write lock. A stopped attempt still owns historical
@@ -405,16 +375,13 @@ impl OrbitRuntime {
             && let Some(redraw) = self.usage_pressure_redraw_view(task)?
             && let Some(automatic) = redraw.crew_source
         {
+            let note =
+                usage_pressure_redraw_note(original, &automatic, &selected.crew.name, weighting);
             usage_pressure = Some(UsagePressureRedraw {
-                note: usage_pressure_redraw_note(
-                    original,
-                    &automatic,
-                    &selected.crew.name,
-                    weighting,
-                ),
                 original: original.to_string(),
                 source: automatic,
                 replacement: selected.crew.name.clone(),
+                note,
             });
         }
         if reason == Some(RedrawReason::Allowlist)
@@ -422,20 +389,21 @@ impl OrbitRuntime {
             && original != selected.crew.name
             && let Some(automatic) = self.task_crew_source(task)?
         {
+            let note = format!(
+                "crew redrawn from {automatic} (`{original}`) to {automatic} (`{}`) at admission under the crew allowlist",
+                selected.crew.name
+            );
             usage_pressure = Some(UsagePressureRedraw {
-                note: format!(
-                    "crew redrawn from {automatic} (`{original}`) to {automatic} (`{}`) at admission under the crew allowlist",
-                    selected.crew.name
-                ),
                 original: original.to_string(),
                 source: automatic,
                 replacement: selected.crew.name.clone(),
+                note,
             });
         }
         let reassignment_write = match reassignment {
             Some(plan) if plan.original != selected.crew.name => Some(ProviderLimitWrite {
-                replacement: selected.crew.name.clone(),
                 plan,
+                replacement: selected.crew.name.clone(),
                 pools,
             }),
             _ => None,
@@ -561,8 +529,8 @@ impl OrbitRuntime {
             }
         }
         Some(ProviderLimitReassignment {
-            provider: crew.assignment.provider.clone(),
             original,
+            provider: crew.assignment.provider.clone(),
             limit,
             complexity,
         })
@@ -639,13 +607,6 @@ impl OrbitRuntime {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     crew: Some(Some(replacement.to_string())),
                     crew_source: Some(Some(CrewSource::Pool(plan.complexity))),
-                    expected_status: Some(vec![current.status]),
-                    append_comments: vec![TaskComment {
-                        at: now,
-                        by: SYSTEM_ACTOR_LABEL.to_string(),
-                        message: warning.clone(),
-                        operation_id: None,
-                    }],
                     append_history: vec![TaskHistoryEntry {
                         at: now,
                         by: SYSTEM_ACTOR_LABEL.to_string(),
@@ -674,6 +635,13 @@ impl OrbitRuntime {
                         surface: None,
                         caller: None,
                     }],
+                    append_comments: vec![TaskComment {
+                        at: now,
+                        by: SYSTEM_ACTOR_LABEL.to_string(),
+                        message: warning.clone(),
+                        operation_id: None,
+                    }],
+                    expected_status: Some(vec![current.status]),
                     ..Default::default()
                 },
             )?;
@@ -759,7 +727,6 @@ impl OrbitRuntime {
                         actor: SYSTEM_ACTOR_LABEL.to_string(),
                         crew: Some(Some(replacement.to_string())),
                         crew_source: Some(Some(source.clone())),
-                        expected_status: Some(vec![current.status]),
                         append_history: vec![TaskHistoryEntry {
                             at: now,
                             by: SYSTEM_ACTOR_LABEL.to_string(),
@@ -785,12 +752,43 @@ impl OrbitRuntime {
                             surface: None,
                             caller: None,
                         }],
+                        expected_status: Some(vec![current.status]),
                         ..Default::default()
                     },
                 )?;
                 Ok(())
             })
     }
+}
+
+/// Replay recaptures automatic admission under current policy. Only a crew
+/// recorded as the caller's explicit choice survives; run-level pool overrides
+/// and allowlists remain caller input. Other jobs do not use this admission.
+pub(crate) fn strip_auto_crew_admission(job_name: &str, input: &mut Value) {
+    if !POLICY_PIPELINES.contains(&job_name) {
+        return;
+    }
+    if let Some(object) = input.as_object_mut() {
+        let explicit = object
+            .get(SELECTION_KEY)
+            .and_then(|selection| selection.get("source"))
+            .and_then(Value::as_str)
+            == Some("explicit");
+        object.remove(SELECTION_KEY);
+        object.remove(POOLS_KEY);
+        if !explicit {
+            object.remove("crew");
+        }
+    }
+}
+
+/// The local task whose crew selection and run insertion must be serialized
+/// against scope edits. Coordinator submissions with no single task take no lock.
+pub(crate) fn crew_admission_task_id<'a>(job_name: &str, input: &'a Value) -> Option<&'a str> {
+    POLICY_PIPELINES
+        .contains(&job_name)
+        .then(|| auto_task_id(input))
+        .flatten()
 }
 
 /// The history note for a usage-pressure re-draw [ORB-17770]: the crew it

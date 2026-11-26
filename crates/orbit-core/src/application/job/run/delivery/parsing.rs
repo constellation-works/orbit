@@ -14,6 +14,8 @@ use super::observation::{
     DeliveryJobShape, DeliveryStep, LOCAL_LANDING_ACTIVITY, MAX_PR_NUMBER_DIGITS,
 };
 
+pub(super) type ParsedCommit = (CommitObservationStatus, Option<String>, Option<String>);
+
 pub(super) fn observe_commit(
     run: &JobRun,
     state: Option<&PipelineState>,
@@ -55,8 +57,6 @@ pub(super) fn observe_commit(
         Err(gap) => commit_gap(gap, Some(step)),
     }
 }
-
-pub(super) type ParsedCommit = (CommitObservationStatus, Option<String>, Option<String>);
 
 /// Read the `git_commit` output contract. Unknown decisions, a missing head
 /// for a performed commit, or a malformed SHA all refuse rather than guess.

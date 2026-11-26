@@ -37,6 +37,46 @@ pub(super) struct OutOfRunStart {
     pub(super) drain_run_id: Option<String>,
 }
 
+impl OrbitRuntime {
+    /// Record `start` in the task's history, which bounds later passes. A
+    /// lost record is logged: the resumed run's own ledger admission still
+    /// bounds its repair.
+    pub(super) fn record_out_of_run_start(&self, task_id: &str, start: &OutOfRunStart) {
+        let result = serde_json::to_string(start)
+            .map_err(|error| OrbitError::Execution(error.to_string()))
+            .and_then(|note| {
+                self.apply_task_automation_update(
+                    task_id,
+                    TaskAutomationUpdate {
+                        append_history: vec![TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: PR_AUTO_FIX_OUT_OF_RUN_EVENT.to_string(),
+                            note: Some(note),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                            surface: None,
+                            caller: None,
+                        }],
+                        ..TaskAutomationUpdate::default()
+                    },
+                )
+                .map(|_| ())
+            });
+        if let Err(error) = result {
+            tracing::warn!(
+                target: "orbit.core.drain",
+                task_id = %task_id,
+                resumed_run_id = %start.resumed_run_id,
+                error = %error,
+                "could not record the out-of-run auto-fix in task history",
+            );
+        }
+    }
+}
+
 /// Every out-of-run auto-fix recorded for `pr_number`.
 pub(super) fn out_of_run_starts(
     history: &[TaskHistoryEntry],
@@ -159,44 +199,4 @@ pub(super) fn ledger_admits(
         ));
     }
     Ok(())
-}
-
-impl OrbitRuntime {
-    /// Record `start` in the task's history, which bounds later passes. A
-    /// lost record is logged: the resumed run's own ledger admission still
-    /// bounds its repair.
-    pub(super) fn record_out_of_run_start(&self, task_id: &str, start: &OutOfRunStart) {
-        let result = serde_json::to_string(start)
-            .map_err(|error| OrbitError::Execution(error.to_string()))
-            .and_then(|note| {
-                self.apply_task_automation_update(
-                    task_id,
-                    TaskAutomationUpdate {
-                        append_history: vec![TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: PR_AUTO_FIX_OUT_OF_RUN_EVENT.to_string(),
-                            note: Some(note),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                            surface: None,
-                            caller: None,
-                        }],
-                        ..TaskAutomationUpdate::default()
-                    },
-                )
-                .map(|_| ())
-            });
-        if let Err(error) = result {
-            tracing::warn!(
-                target: "orbit.core.drain",
-                task_id = %task_id,
-                resumed_run_id = %start.resumed_run_id,
-                error = %error,
-                "could not record the out-of-run auto-fix in task history",
-            );
-        }
-    }
 }

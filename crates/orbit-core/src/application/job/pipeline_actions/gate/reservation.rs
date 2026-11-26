@@ -25,6 +25,40 @@ use crate::runtime::stored::locks::{
     workspace_orbit_dir, workspace_task_reservation_id,
 };
 
+/// The dependency picture for a bundle, split by what the caller should do
+/// about it.
+///
+/// `waiting_on` is the poll-and-retry set; `unsatisfiable` is the fail-now set.
+/// An edge appears in exactly one of them — every unsatisfiable edge is also
+/// unmet, but it is reported only as unsatisfiable so the two causes never
+/// blur together in a diagnostic.
+#[derive(Debug, Default)]
+pub(super) struct BundleDependencyAdmission {
+    pub(super) waiting_on: Vec<String>,
+    pub(super) unsatisfiable: Vec<UnsatisfiableTaskDependency>,
+}
+
+impl BundleDependencyAdmission {
+    /// Failure message for the unsatisfiable set. Prefixed with a stable
+    /// `task.dependencies.unsatisfiable:` marker so an operator (or a
+    /// parent job parsing run errors) can tell this apart from
+    /// `gate.starvation`, which means the opposite thing: waiting was
+    /// legitimate but ran out of budget.
+    pub(super) fn unsatisfiable_message(&self) -> String {
+        let labels = self
+            .unsatisfiable
+            .iter()
+            .map(UnsatisfiableTaskDependency::label)
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "task.dependencies.unsatisfiable: {labels}. \
+             These dependency edges can never reach 'done', so waiting cannot clear them \
+             (no file-lock conflict is involved). Fix the task graph and re-dispatch."
+        )
+    }
+}
+
 /// Whether the bundle's footprint is clear: task locks held by other tasks,
 /// after reconciling stale owned reservations, plus live store reservations.
 /// Expired reservations met on the way are audited.
@@ -231,40 +265,6 @@ fn operator_lock_override(
         },
         denied @ ReservationOutcome::Denied { .. } => denied,
     })
-}
-
-/// The dependency picture for a bundle, split by what the caller should do
-/// about it.
-///
-/// `waiting_on` is the poll-and-retry set; `unsatisfiable` is the fail-now set.
-/// An edge appears in exactly one of them — every unsatisfiable edge is also
-/// unmet, but it is reported only as unsatisfiable so the two causes never
-/// blur together in a diagnostic.
-#[derive(Debug, Default)]
-pub(super) struct BundleDependencyAdmission {
-    pub(super) waiting_on: Vec<String>,
-    pub(super) unsatisfiable: Vec<UnsatisfiableTaskDependency>,
-}
-
-impl BundleDependencyAdmission {
-    /// Failure message for the unsatisfiable set. Prefixed with a stable
-    /// `task.dependencies.unsatisfiable:` marker so an operator (or a
-    /// parent job parsing run errors) can tell this apart from
-    /// `gate.starvation`, which means the opposite thing: waiting was
-    /// legitimate but ran out of budget.
-    pub(super) fn unsatisfiable_message(&self) -> String {
-        let labels = self
-            .unsatisfiable
-            .iter()
-            .map(UnsatisfiableTaskDependency::label)
-            .collect::<Vec<_>>()
-            .join("; ");
-        format!(
-            "task.dependencies.unsatisfiable: {labels}. \
-             These dependency edges can never reach 'done', so waiting cannot clear them \
-             (no file-lock conflict is involved). Fix the task graph and re-dispatch."
-        )
-    }
 }
 
 pub(super) fn dependency_admission_for_input(

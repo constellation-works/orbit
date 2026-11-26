@@ -18,6 +18,213 @@ use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
 
+/// The child results a guard step checks: one `result`, a `results` list, or
+/// both. A null either way is absent.
+#[derive(Default, Deserialize)]
+struct CheckedResults {
+    #[serde(default)]
+    result: Option<Value>,
+    #[serde(default)]
+    results: Field<Vec<Value>>,
+}
+
+impl CheckedResults {
+    fn parse(input: &Value) -> Self {
+        Self::deserialize(input).unwrap_or_default()
+    }
+}
+
+/// One task outcome inside a task-pilot apply result.
+#[derive(Default, Deserialize)]
+struct CheckedTaskOutcome {
+    #[serde(default)]
+    outcome: Field<String>,
+}
+
+/// One partition decision inside a task-pilot apply result.
+#[derive(Default, Deserialize)]
+struct CheckedPartitionDecision {
+    #[serde(default)]
+    outcome: Field<String>,
+    #[serde(default)]
+    task_outcomes: Field<Vec<CheckedTaskOutcome>>,
+}
+
+/// One child result a guard checks, parsed once: a wait entry, an
+/// `invoke_and_wait` summary, a synthetic admission stop or a task-pilot
+/// apply result. A field of the wrong JSON type reads as absent to the guard;
+/// the recording path still refuses a non-string `error`.
+#[derive(Default, Deserialize)]
+struct CheckedEntry {
+    #[serde(default)]
+    run_id: Field<String>,
+    #[serde(default)]
+    status: Field<PipelineWaitStatus>,
+    #[serde(default)]
+    error: Field<String>,
+    #[serde(default)]
+    error_code: Field<String>,
+    #[serde(default)]
+    failure_kind: Field<String>,
+    /// A task-pilot apply result, named by its counts instead of a run.
+    #[serde(default)]
+    partition_decisions: Field<Vec<CheckedPartitionDecision>>,
+    #[serde(default)]
+    task_outcomes: Field<Vec<CheckedTaskOutcome>>,
+    #[serde(default)]
+    applied_count: Field<u64>,
+    #[serde(default)]
+    unresolved_count: Field<u64>,
+}
+
+impl CheckedEntry {
+    /// A non-object entry has none of the fields.
+    fn parse(entry: &Value) -> Self {
+        if entry.is_object() {
+            Self::deserialize(entry).unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    fn has_partition_decisions(&self) -> bool {
+        self.partition_decisions.valid().is_some()
+    }
+
+    /// A task-pilot apply that applied at least one task while leaving
+    /// others unresolved: its applied results stand, and the unresolved
+    /// tasks are held for the operator rather than failing the siblings'
+    /// results [ORB-21172].
+    fn is_partial_apply(&self) -> bool {
+        self.has_partition_decisions()
+            && self
+                .status
+                .valid()
+                .is_some_and(|status| status.as_str() == "failed")
+            && self.applied_count.valid().copied().unwrap_or(0) > 0
+            && self.unresolved_count.valid().copied().unwrap_or(0) > 0
+    }
+
+    /// A failed task-pilot apply whose every unresolved task is an
+    /// apply-rejected assessment (`invalid` after the targeted repair
+    /// round): the refusal is fail-closed by design and its tasks are
+    /// already held for the operator, so the run is held regardless of
+    /// how many tasks applied [ORB-24083]. Any other failure — a failed
+    /// or skipped partition whose tasks are not all `invalid`, a missing
+    /// apply envelope, or no unresolved tasks — still fails the guard.
+    fn is_rejected_apply_hold(&self) -> bool {
+        if !self.has_partition_decisions()
+            || !self
+                .status
+                .valid()
+                .is_some_and(|status| status.as_str() == "failed")
+        {
+            return false;
+        }
+        let unresolved_count = self.unresolved_count.valid().copied().unwrap_or(0);
+        if unresolved_count == 0 {
+            return false;
+        }
+        let Some(partitions) = self.partition_decisions.valid() else {
+            return false;
+        };
+        // A skipped partition settled its tasks stale, not rejected.
+        if partitions
+            .iter()
+            .any(|partition| partition.outcome.valid().map(String::as_str) == Some("skipped_stale"))
+        {
+            return false;
+        }
+        // The unresolved task outcomes, from the rolled-up list when the
+        // apply carries one and otherwise from its partition decisions.
+        match self.task_outcomes.valid() {
+            Some(outcomes) if !outcomes.is_empty() => {
+                Self::outcomes_all_rejected(outcomes, unresolved_count)
+            }
+            _ => self.partitions_all_rejected(unresolved_count),
+        }
+    }
+
+    fn partitions_all_rejected(&self, unresolved_count: u64) -> bool {
+        let Some(partitions) = self.partition_decisions.valid() else {
+            return false;
+        };
+        let outcomes = partitions
+            .iter()
+            .filter_map(|partition| partition.task_outcomes.valid())
+            .flatten()
+            .collect::<Vec<_>>();
+        if outcomes.is_empty() {
+            return false;
+        }
+        let unresolved = outcomes
+            .iter()
+            .filter(|task| {
+                !matches!(
+                    task.outcome.valid().map(String::as_str),
+                    Some("applied" | "already_applied" | "superseded" | "escalated")
+                )
+            })
+            .collect::<Vec<_>>();
+        unresolved.len() as u64 == unresolved_count
+            && unresolved
+                .iter()
+                .all(|task| task.outcome.valid().map(String::as_str) == Some("invalid"))
+    }
+
+    fn outcomes_all_rejected(outcomes: &[CheckedTaskOutcome], unresolved_count: u64) -> bool {
+        let unresolved = outcomes
+            .iter()
+            .filter(|task| {
+                !matches!(
+                    task.outcome.valid().map(String::as_str),
+                    Some("applied" | "already_applied" | "superseded" | "escalated")
+                )
+            })
+            .collect::<Vec<_>>();
+        !unresolved.is_empty()
+            && unresolved.len() as u64 == unresolved_count
+            && unresolved
+                .iter()
+                .all(|task| task.outcome.valid().map(String::as_str) == Some("invalid"))
+    }
+
+    fn run_id(&self) -> Option<&str> {
+        self.run_id
+            .valid()
+            .map(String::as_str)
+            .filter(|run_id| !run_id.trim().is_empty())
+    }
+}
+
+/// An entry field that is absent or null, holds the expected type, or holds
+/// some other JSON value.
+#[derive(Default)]
+enum Field<T> {
+    #[default]
+    Absent,
+    Valid(T),
+    Invalid,
+}
+
+impl<T> Field<T> {
+    fn valid(&self) -> Option<&T> {
+        match self {
+            Self::Valid(value) => Some(value),
+            Self::Absent | Self::Invalid => None,
+        }
+    }
+}
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Field<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::Null => Self::Absent,
+            value => T::deserialize(value).map_or(Self::Invalid, Self::Valid),
+        })
+    }
+}
+
 pub(crate) fn pipeline_success_guard(
     runtime: &OrbitRuntime,
     action: &str,
@@ -361,213 +568,6 @@ fn pipeline_wait_entry_failure(
         ),
         None => format!("{label} run {run_id} status {status}"),
     })
-}
-
-/// The child results a guard step checks: one `result`, a `results` list, or
-/// both. A null either way is absent.
-#[derive(Default, Deserialize)]
-struct CheckedResults {
-    #[serde(default)]
-    result: Option<Value>,
-    #[serde(default)]
-    results: Field<Vec<Value>>,
-}
-
-impl CheckedResults {
-    fn parse(input: &Value) -> Self {
-        Self::deserialize(input).unwrap_or_default()
-    }
-}
-
-/// One task outcome inside a task-pilot apply result.
-#[derive(Default, Deserialize)]
-struct CheckedTaskOutcome {
-    #[serde(default)]
-    outcome: Field<String>,
-}
-
-/// One partition decision inside a task-pilot apply result.
-#[derive(Default, Deserialize)]
-struct CheckedPartitionDecision {
-    #[serde(default)]
-    outcome: Field<String>,
-    #[serde(default)]
-    task_outcomes: Field<Vec<CheckedTaskOutcome>>,
-}
-
-/// One child result a guard checks, parsed once: a wait entry, an
-/// `invoke_and_wait` summary, a synthetic admission stop or a task-pilot
-/// apply result. A field of the wrong JSON type reads as absent to the guard;
-/// the recording path still refuses a non-string `error`.
-#[derive(Default, Deserialize)]
-struct CheckedEntry {
-    #[serde(default)]
-    run_id: Field<String>,
-    #[serde(default)]
-    status: Field<PipelineWaitStatus>,
-    #[serde(default)]
-    error: Field<String>,
-    #[serde(default)]
-    error_code: Field<String>,
-    #[serde(default)]
-    failure_kind: Field<String>,
-    /// A task-pilot apply result, named by its counts instead of a run.
-    #[serde(default)]
-    partition_decisions: Field<Vec<CheckedPartitionDecision>>,
-    #[serde(default)]
-    task_outcomes: Field<Vec<CheckedTaskOutcome>>,
-    #[serde(default)]
-    applied_count: Field<u64>,
-    #[serde(default)]
-    unresolved_count: Field<u64>,
-}
-
-impl CheckedEntry {
-    /// A non-object entry has none of the fields.
-    fn parse(entry: &Value) -> Self {
-        if entry.is_object() {
-            Self::deserialize(entry).unwrap_or_default()
-        } else {
-            Self::default()
-        }
-    }
-
-    fn has_partition_decisions(&self) -> bool {
-        self.partition_decisions.valid().is_some()
-    }
-
-    /// A task-pilot apply that applied at least one task while leaving
-    /// others unresolved: its applied results stand, and the unresolved
-    /// tasks are held for the operator rather than failing the siblings'
-    /// results [ORB-21172].
-    fn is_partial_apply(&self) -> bool {
-        self.has_partition_decisions()
-            && self
-                .status
-                .valid()
-                .is_some_and(|status| status.as_str() == "failed")
-            && self.applied_count.valid().copied().unwrap_or(0) > 0
-            && self.unresolved_count.valid().copied().unwrap_or(0) > 0
-    }
-
-    /// A failed task-pilot apply whose every unresolved task is an
-    /// apply-rejected assessment (`invalid` after the targeted repair
-    /// round): the refusal is fail-closed by design and its tasks are
-    /// already held for the operator, so the run is held regardless of
-    /// how many tasks applied [ORB-24083]. Any other failure — a failed
-    /// or skipped partition whose tasks are not all `invalid`, a missing
-    /// apply envelope, or no unresolved tasks — still fails the guard.
-    fn is_rejected_apply_hold(&self) -> bool {
-        if !self.has_partition_decisions()
-            || !self
-                .status
-                .valid()
-                .is_some_and(|status| status.as_str() == "failed")
-        {
-            return false;
-        }
-        let unresolved_count = self.unresolved_count.valid().copied().unwrap_or(0);
-        if unresolved_count == 0 {
-            return false;
-        }
-        let Some(partitions) = self.partition_decisions.valid() else {
-            return false;
-        };
-        // A skipped partition settled its tasks stale, not rejected.
-        if partitions
-            .iter()
-            .any(|partition| partition.outcome.valid().map(String::as_str) == Some("skipped_stale"))
-        {
-            return false;
-        }
-        // The unresolved task outcomes, from the rolled-up list when the
-        // apply carries one and otherwise from its partition decisions.
-        match self.task_outcomes.valid() {
-            Some(outcomes) if !outcomes.is_empty() => {
-                Self::outcomes_all_rejected(outcomes, unresolved_count)
-            }
-            _ => self.partitions_all_rejected(unresolved_count),
-        }
-    }
-
-    fn partitions_all_rejected(&self, unresolved_count: u64) -> bool {
-        let Some(partitions) = self.partition_decisions.valid() else {
-            return false;
-        };
-        let outcomes = partitions
-            .iter()
-            .filter_map(|partition| partition.task_outcomes.valid())
-            .flatten()
-            .collect::<Vec<_>>();
-        if outcomes.is_empty() {
-            return false;
-        }
-        let unresolved = outcomes
-            .iter()
-            .filter(|task| {
-                !matches!(
-                    task.outcome.valid().map(String::as_str),
-                    Some("applied" | "already_applied" | "superseded" | "escalated")
-                )
-            })
-            .collect::<Vec<_>>();
-        unresolved.len() as u64 == unresolved_count
-            && unresolved
-                .iter()
-                .all(|task| task.outcome.valid().map(String::as_str) == Some("invalid"))
-    }
-
-    fn outcomes_all_rejected(outcomes: &[CheckedTaskOutcome], unresolved_count: u64) -> bool {
-        let unresolved = outcomes
-            .iter()
-            .filter(|task| {
-                !matches!(
-                    task.outcome.valid().map(String::as_str),
-                    Some("applied" | "already_applied" | "superseded" | "escalated")
-                )
-            })
-            .collect::<Vec<_>>();
-        !unresolved.is_empty()
-            && unresolved.len() as u64 == unresolved_count
-            && unresolved
-                .iter()
-                .all(|task| task.outcome.valid().map(String::as_str) == Some("invalid"))
-    }
-
-    fn run_id(&self) -> Option<&str> {
-        self.run_id
-            .valid()
-            .map(String::as_str)
-            .filter(|run_id| !run_id.trim().is_empty())
-    }
-}
-
-/// An entry field that is absent or null, holds the expected type, or holds
-/// some other JSON value.
-#[derive(Default)]
-enum Field<T> {
-    #[default]
-    Absent,
-    Valid(T),
-    Invalid,
-}
-
-impl<T> Field<T> {
-    fn valid(&self) -> Option<&T> {
-        match self {
-            Self::Valid(value) => Some(value),
-            Self::Absent | Self::Invalid => None,
-        }
-    }
-}
-
-impl<'de, T: DeserializeOwned> Deserialize<'de> for Field<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match Value::deserialize(deserializer)? {
-            Value::Null => Self::Absent,
-            value => T::deserialize(value).map_or(Self::Invalid, Self::Valid),
-        })
-    }
 }
 
 /// Parent echoes stay bounded even for malformed identities or many children.

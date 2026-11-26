@@ -14,6 +14,24 @@ const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 86400;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 pub(super) const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
 
+/// Worker processes this process's startup observers have reaped [ORB-16033].
+///
+/// A worker exits only after it has written its run's outcome, and the
+/// observer counts it only after reaping it and settling a run the exit left
+/// non-terminal (a cancelled run is the canceller's to settle, so its waits
+/// keep polling). The CLI or tool call that submitted a run owns that observer,
+/// so its wait sleeps here instead of on a bare timer and rereads durable
+/// state as soon as the worker is gone. A count change certifies nothing: the
+/// wait only rereads, and any exit wakes every wait in the process. A wait
+/// whose worker another process launched gets no wake and keeps its poll.
+static WORKER_EXITS: (Mutex<u64>, Condvar) = (Mutex::new(0), Condvar::new());
+
+#[cfg(feature = "test-support")]
+static OBSERVED_WORKER_EXITS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
+
+#[cfg(feature = "test-support")]
+static SPAWNED_WORKERS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
+
 pub(crate) trait PipelineWaitClock {
     fn elapsed(&self) -> Duration;
     /// Sleep for up to `duration`, ending early once this process reaps a
@@ -53,124 +71,6 @@ impl PipelineWaitClock for SystemPipelineWaitClock {
         }
         sleep_until_worker_exit(exits_seen, duration);
     }
-}
-
-fn system_pipeline_wait_clock(env: &Env) -> SystemPipelineWaitClock {
-    #[cfg(not(all(debug_assertions, any(test, feature = "test-support"))))]
-    let _ = env;
-    SystemPipelineWaitClock {
-        started_at: Instant::now(),
-        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
-        virtual_millis: match env
-            .orbit_test_pipeline_wait_virtual()
-            .and_then(OsStr::to_str)
-        {
-            Some("1") => Some(AtomicU64::new(0)),
-            _ => None,
-        },
-    }
-}
-
-/// Worker processes this process's startup observers have reaped [ORB-16033].
-///
-/// A worker exits only after it has written its run's outcome, and the
-/// observer counts it only after reaping it and settling a run the exit left
-/// non-terminal (a cancelled run is the canceller's to settle, so its waits
-/// keep polling). The CLI or tool call that submitted a run owns that observer,
-/// so its wait sleeps here instead of on a bare timer and rereads durable
-/// state as soon as the worker is gone. A count change certifies nothing: the
-/// wait only rereads, and any exit wakes every wait in the process. A wait
-/// whose worker another process launched gets no wake and keeps its poll.
-static WORKER_EXITS: (Mutex<u64>, Condvar) = (Mutex::new(0), Condvar::new());
-
-/// The reaped-worker count. A wait reads it before each snapshot, so an exit
-/// announced after that read, even before the sleep starts, cuts the sleep short.
-pub(super) fn worker_exits_seen() -> u64 {
-    *WORKER_EXITS
-        .0
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Wake every wait in this process to reread durable run state.
-pub(super) fn announce_worker_exit() {
-    let (exits, changed) = &WORKER_EXITS;
-    let mut count = exits.lock().unwrap_or_else(PoisonError::into_inner);
-    *count = count.wrapping_add(1);
-    drop(count);
-    changed.notify_all();
-}
-
-#[cfg(feature = "test-support")]
-static OBSERVED_WORKER_EXITS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
-
-/// Record that the startup observer for `run_id` finished all of its
-/// post-reap work (test support only; production builds keep no record).
-#[cfg(feature = "test-support")]
-pub(super) fn record_worker_exit(workspace: &Path, run_id: &str, worker_pid: u32) {
-    OBSERVED_WORKER_EXITS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
-}
-
-/// Whether this workspace's startup observer for `run_id` and `worker_pid`
-/// has finished all of its post-reap work in this process. Run IDs are
-/// workspace-local, and two observers of the same run can own different
-/// workers. Only recorded under `test-support`.
-#[cfg(feature = "test-support")]
-pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker_pid: u32) -> bool {
-    OBSERVED_WORKER_EXITS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .any(|(observed_workspace, observed_run, observed_pid)| {
-            observed_workspace == workspace && observed_run == run_id && *observed_pid == worker_pid
-        })
-}
-
-#[cfg(feature = "test-support")]
-static SPAWNED_WORKERS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
-
-/// Record that a worker for `run_id` was launched and handed to its startup
-/// observer (test support only). The parent publishes the record once the
-/// observer owns the child. The child runs independently of that publication,
-/// so its identity handshake may land before or after it; the record does not
-/// wait for the handshake. The observer reaps the worker, so a fixture that
-/// owns the launch can wait for its exit.
-#[cfg(feature = "test-support")]
-pub(super) fn record_worker_spawn(workspace: &Path, run_id: &str, worker_pid: u32) {
-    SPAWNED_WORKERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
-}
-
-/// Every `(run_id, worker_pid)` launched for this workspace in this process,
-/// including launches whose worker has not yet identified itself. Only
-/// recorded under `test-support`.
-#[cfg(feature = "test-support")]
-pub fn pipeline_workers_spawned(workspace: &Path) -> Vec<(String, u32)> {
-    SPAWNED_WORKERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .filter(|(observed_workspace, _, _)| observed_workspace == workspace)
-        .map(|(_, run, pid)| (run.clone(), *pid))
-        .collect()
-}
-
-/// Sleep for up to `duration` while the count still equals `exits_seen`.
-/// Spurious condvar wakeups resume the sleep; only a count change or the
-/// timeout ends it, so a missed wake costs at most the poll interval.
-pub(super) fn sleep_until_worker_exit(exits_seen: u64, duration: Duration) {
-    let (exits, changed) = &WORKER_EXITS;
-    let count = exits.lock().unwrap_or_else(PoisonError::into_inner);
-    drop(
-        changed
-            .wait_timeout_while(count, duration, |count| *count == exits_seen)
-            .unwrap_or_else(PoisonError::into_inner),
-    );
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -525,4 +425,104 @@ impl OrbitRuntime {
             None,
         )
     }
+}
+
+fn system_pipeline_wait_clock(env: &Env) -> SystemPipelineWaitClock {
+    #[cfg(not(all(debug_assertions, any(test, feature = "test-support"))))]
+    let _ = env;
+    SystemPipelineWaitClock {
+        started_at: Instant::now(),
+        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+        virtual_millis: match env
+            .orbit_test_pipeline_wait_virtual()
+            .and_then(OsStr::to_str)
+        {
+            Some("1") => Some(AtomicU64::new(0)),
+            _ => None,
+        },
+    }
+}
+
+/// The reaped-worker count. A wait reads it before each snapshot, so an exit
+/// announced after that read, even before the sleep starts, cuts the sleep short.
+pub(super) fn worker_exits_seen() -> u64 {
+    *WORKER_EXITS
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Wake every wait in this process to reread durable run state.
+pub(super) fn announce_worker_exit() {
+    let (exits, changed) = &WORKER_EXITS;
+    let mut count = exits.lock().unwrap_or_else(PoisonError::into_inner);
+    *count = count.wrapping_add(1);
+    drop(count);
+    changed.notify_all();
+}
+
+/// Record that the startup observer for `run_id` finished all of its
+/// post-reap work (test support only; production builds keep no record).
+#[cfg(feature = "test-support")]
+pub(super) fn record_worker_exit(workspace: &Path, run_id: &str, worker_pid: u32) {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
+}
+
+/// Whether this workspace's startup observer for `run_id` and `worker_pid`
+/// has finished all of its post-reap work in this process. Run IDs are
+/// workspace-local, and two observers of the same run can own different
+/// workers. Only recorded under `test-support`.
+#[cfg(feature = "test-support")]
+pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker_pid: u32) -> bool {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|(observed_workspace, observed_run, observed_pid)| {
+            observed_workspace == workspace && observed_run == run_id && *observed_pid == worker_pid
+        })
+}
+
+/// Record that a worker for `run_id` was launched and handed to its startup
+/// observer (test support only). The parent publishes the record once the
+/// observer owns the child. The child runs independently of that publication,
+/// so its identity handshake may land before or after it; the record does not
+/// wait for the handshake. The observer reaps the worker, so a fixture that
+/// owns the launch can wait for its exit.
+#[cfg(feature = "test-support")]
+pub(super) fn record_worker_spawn(workspace: &Path, run_id: &str, worker_pid: u32) {
+    SPAWNED_WORKERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
+}
+
+/// Every `(run_id, worker_pid)` launched for this workspace in this process,
+/// including launches whose worker has not yet identified itself. Only
+/// recorded under `test-support`.
+#[cfg(feature = "test-support")]
+pub fn pipeline_workers_spawned(workspace: &Path) -> Vec<(String, u32)> {
+    SPAWNED_WORKERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .filter(|(observed_workspace, _, _)| observed_workspace == workspace)
+        .map(|(_, run, pid)| (run.clone(), *pid))
+        .collect()
+}
+
+/// Sleep for up to `duration` while the count still equals `exits_seen`.
+/// Spurious condvar wakeups resume the sleep; only a count change or the
+/// timeout ends it, so a missed wake costs at most the poll interval.
+pub(super) fn sleep_until_worker_exit(exits_seen: u64, duration: Duration) {
+    let (exits, changed) = &WORKER_EXITS;
+    let count = exits.lock().unwrap_or_else(PoisonError::into_inner);
+    drop(
+        changed
+            .wait_timeout_while(count, duration, |count| *count == exits_seen)
+            .unwrap_or_else(PoisonError::into_inner),
+    );
 }

@@ -1,6 +1,10 @@
 use super::super::*;
 use crate::application::job::{JobAutoConcurrencyPort, JobDrainPort, ReviewAdmissionHook};
 
+/// Default `max_active_leaf_runs` ceiling when neither the run input nor the
+/// drain job definition's `default_input` records one.
+const DEFAULT_AUTO_DRAIN_CONCURRENCY: u32 = 5;
+
 /// One workspace auto-drain submission: the window and the authority this
 /// drain carries for every pass.
 ///
@@ -160,10 +164,6 @@ impl OrbitRuntime {
             .unwrap_or_else(|| json!(DEFAULT_AUTO_DRAIN_CONCURRENCY)))
     }
 }
-
-/// Default `max_active_leaf_runs` ceiling when neither the run input nor the
-/// drain job definition's `default_input` records one.
-const DEFAULT_AUTO_DRAIN_CONCURRENCY: u32 = 5;
 
 /// Whether an `auto` submission started a local owner drain or a replica's
 /// pull drain.

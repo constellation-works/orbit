@@ -3,14 +3,6 @@
 
 use super::*;
 
-pub(super) fn effective_strict_containment(
-    configured: bool,
-    override_for_run: bool,
-    inherited: Option<&std::ffi::OsStr>,
-) -> bool {
-    configured || override_for_run || inherited == Some(std::ffi::OsStr::new("1"))
-}
-
 impl OrbitRuntime {
     /// [ORB-11998] A routine-dispatched run declares the `.orbit` directory of
     /// the workspace that owns it (see [`ROUTINE_DISPATCH_ORBIT_DIR_FIELD`]).
@@ -192,4 +184,12 @@ impl OrbitRuntime {
         self.pipeline_worker_supervisor(false)
             .finalize_startup_failure(run, message, error_code, actor)
     }
+}
+
+pub(super) fn effective_strict_containment(
+    configured: bool,
+    override_for_run: bool,
+    inherited: Option<&std::ffi::OsStr>,
+) -> bool {
+    configured || override_for_run || inherited == Some(std::ffi::OsStr::new("1"))
 }

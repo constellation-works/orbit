@@ -23,46 +23,6 @@ use crate::application::contracts::{AutoEffortSubject, CrewCandidate};
 
 use super::draw::seeded_crew_ticket;
 
-/// The subject an implementer draw for `task` resolves `@auto` against: its
-/// assessed complexity and the number of distinct files its context
-/// selectors declare (the task-risk forecast's pre-dispatch size; the final
-/// diff never feeds it). Exploration is seeded by the task, so every
-/// selection of one task's crew resolves alike.
-pub(crate) fn task_auto_effort_subject(task: &Task) -> AutoEffortSubject {
-    AutoEffortSubject {
-        signal: footprint_signal(task.complexity, &task.context_files),
-        seed: Some(format!("auto-effort:{}", task.id)),
-        forced: None,
-    }
-}
-
-/// The signal of a task not yet created: no seed, so it never explores.
-pub(crate) fn creation_auto_effort_subject(
-    complexity: Option<orbit_types::task::TaskComplexity>,
-    context_files: &[String],
-) -> AutoEffortSubject {
-    AutoEffortSubject {
-        signal: footprint_signal(complexity, context_files),
-        seed: None,
-        forced: None,
-    }
-}
-
-fn footprint_signal(
-    complexity: Option<orbit_types::task::TaskComplexity>,
-    context_files: &[String],
-) -> AutoEffortSignal {
-    let anchors = context_files
-        .iter()
-        .filter_map(|selector| Anchor::parse(selector))
-        .collect::<BTreeSet<_>>();
-    AutoEffortSignal {
-        complexity: complexity.filter(|tier| tier.is_assessed()),
-        lines: None,
-        files: (!anchors.is_empty()).then_some(anchors.len() as u64),
-    }
-}
-
 impl OrbitRuntime {
     /// The draw candidate one pool entry `name` contributes, or `None` when
     /// it names no enabled crew. A `<crew>@auto` entry resolves against
@@ -152,6 +112,46 @@ impl OrbitRuntime {
             });
         }
         Ok(merge_same_crew(resolved))
+    }
+}
+
+/// The subject an implementer draw for `task` resolves `@auto` against: its
+/// assessed complexity and the number of distinct files its context
+/// selectors declare (the task-risk forecast's pre-dispatch size; the final
+/// diff never feeds it). Exploration is seeded by the task, so every
+/// selection of one task's crew resolves alike.
+pub(crate) fn task_auto_effort_subject(task: &Task) -> AutoEffortSubject {
+    AutoEffortSubject {
+        signal: footprint_signal(task.complexity, &task.context_files),
+        seed: Some(format!("auto-effort:{}", task.id)),
+        forced: None,
+    }
+}
+
+/// The signal of a task not yet created: no seed, so it never explores.
+pub(crate) fn creation_auto_effort_subject(
+    complexity: Option<orbit_types::task::TaskComplexity>,
+    context_files: &[String],
+) -> AutoEffortSubject {
+    AutoEffortSubject {
+        signal: footprint_signal(complexity, context_files),
+        seed: None,
+        forced: None,
+    }
+}
+
+fn footprint_signal(
+    complexity: Option<orbit_types::task::TaskComplexity>,
+    context_files: &[String],
+) -> AutoEffortSignal {
+    let anchors = context_files
+        .iter()
+        .filter_map(|selector| Anchor::parse(selector))
+        .collect::<BTreeSet<_>>();
+    AutoEffortSignal {
+        complexity: complexity.filter(|tier| tier.is_assessed()),
+        lines: None,
+        files: (!anchors.is_empty()).then_some(anchors.len() as u64),
     }
 }
 

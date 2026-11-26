@@ -118,15 +118,15 @@ impl OrbitRuntime {
             SubmissionKind::Ship { explicit } => explicit,
             SubmissionKind::Drain | SubmissionKind::PullDrain => true,
         };
+        let worker_containment_note = (self.host_os() == Some(orbit_types::task::HostOs::Macos)).then(|| {
+            if self.settings().worker_containment().enabled {
+                "Worker containment: watchdog (1s polling), without kernel enforcement; strict requires kernel containment.".to_string()
+            } else {
+                "Worker containment: off; no watchdog or kernel limits.".to_string()
+            }
+        });
         SubmissionNotices {
             kind,
-            worker_containment_note: (self.host_os() == Some(orbit_types::task::HostOs::Macos)).then(|| {
-                if self.settings().worker_containment().enabled {
-                    "Worker containment: watchdog (1s polling), without kernel enforcement; strict requires kernel containment.".to_string()
-                } else {
-                    "Worker containment: off; no watchdog or kernel limits.".to_string()
-                }
-            }),
             resource_throttle: throttled.then(|| self.admission_throttle()).flatten(),
             validation_env_warning: self.validation_env_preflight_warning(),
             host_os_backlog_warning: (kind == SubmissionKind::Drain)
@@ -145,6 +145,7 @@ impl OrbitRuntime {
                 .is_drain()
                 .then(|| self.required_validation_note())
                 .flatten(),
+            worker_containment_note,
         }
     }
 }

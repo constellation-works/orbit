@@ -10,41 +10,6 @@ use crate::application::task::TaskRow;
 
 use super::{history, value};
 
-pub(super) fn failed_step_id(runtime: &OrbitRuntime, run: &JobRun) -> Option<String> {
-    if let Ok(Some(state)) = runtime.read_run_state(&run.run_id)
-        && let Some(checkpoint) = &state.failure_activity_checkpoint
-    {
-        return Some(checkpoint.failed_step_id.clone());
-    }
-    // Audit-derived steps carry the YAML step id (e.g. `complete_pr`).
-    let display = run_display_steps(run, || {
-        runtime
-            .collect_run_audit_steps(&run.run_id)
-            .unwrap_or_default()
-    });
-    let from_display = display
-        .records
-        .iter()
-        .rev()
-        .find(|step| {
-            step.state != "skipped"
-                && (step.error_message.is_some()
-                    || matches!(step.state.as_str(), "failed" | "timeout" | "interrupted"))
-        })
-        .map(|step| step.target_id.clone());
-    if from_display.is_some() {
-        return from_display;
-    }
-    run_error_step(run).map(|step| step.target_id.clone())
-}
-
-fn is_live(run: &JobRun) -> bool {
-    matches!(
-        run.state,
-        JobRunState::Pending | JobRunState::Running | JobRunState::Retrying
-    )
-}
-
 impl OrbitRuntime {
     /// Attention for one task row, using the same lookup and projection as lists.
     pub fn delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError> {
@@ -142,4 +107,39 @@ impl OrbitRuntime {
         }
         Ok(best)
     }
+}
+
+pub(super) fn failed_step_id(runtime: &OrbitRuntime, run: &JobRun) -> Option<String> {
+    if let Ok(Some(state)) = runtime.read_run_state(&run.run_id)
+        && let Some(checkpoint) = &state.failure_activity_checkpoint
+    {
+        return Some(checkpoint.failed_step_id.clone());
+    }
+    // Audit-derived steps carry the YAML step id (e.g. `complete_pr`).
+    let display = run_display_steps(run, || {
+        runtime
+            .collect_run_audit_steps(&run.run_id)
+            .unwrap_or_default()
+    });
+    let from_display = display
+        .records
+        .iter()
+        .rev()
+        .find(|step| {
+            step.state != "skipped"
+                && (step.error_message.is_some()
+                    || matches!(step.state.as_str(), "failed" | "timeout" | "interrupted"))
+        })
+        .map(|step| step.target_id.clone());
+    if from_display.is_some() {
+        return from_display;
+    }
+    run_error_step(run).map(|step| step.target_id.clone())
+}
+
+fn is_live(run: &JobRun) -> bool {
+    matches!(
+        run.state,
+        JobRunState::Pending | JobRunState::Running | JobRunState::Retrying
+    )
 }

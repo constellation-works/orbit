@@ -89,6 +89,194 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// its executable name or where it was built.
 static WORKER_REEXEC_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// How this workspace launches a detached worker process.
+///
+/// Production re-execs this same `orbit` binary at the hidden worker
+/// subcommand; workspace context comes from the child's cwd. The launch policy
+/// that cannot be derived at the call site is whether the parent runtime was
+/// pinned to a single root and which resource limits bound the worker, so this
+/// carries both.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkerCommandConfig {
+    /// `--root` to forward to the worker, so the child opens the same global
+    /// store the parent used to persist the run [ORB-10821]. `None` for the
+    /// default split-root layout; see [`pipeline_worker_root_override`].
+    root_override: Option<PathBuf>,
+    /// Limits for the worker's own systemd scope [ORB-12903]; `None` launches
+    /// it in the caller's cgroup.
+    containment: Option<WorkerLimits>,
+    strict_containment: bool,
+    environment: Option<orbit_config::ExecutionEnvPolicy>,
+    /// The environment the runtime was composed with. The worker's scope
+    /// probe and its launch read this, never the ambient process environment.
+    env: orbit_common::Env,
+}
+
+impl WorkerCommandConfig {
+    /// Launch policy without resource containment.
+    pub(crate) fn for_paths(paths: &WorkspacePaths, env: &orbit_common::Env) -> Self {
+        Self {
+            root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
+            containment: None,
+            strict_containment: false,
+            environment: None,
+            env: env.clone(),
+        }
+    }
+
+    /// The environment this worker config launches under.
+    pub(crate) fn env(&self) -> &orbit_common::Env {
+        &self.env
+    }
+
+    /// Bound every worker this config launches by `limits`.
+    pub(crate) fn contained(mut self, limits: Option<WorkerLimits>) -> Self {
+        self.containment = limits;
+        self
+    }
+
+    /// Apply the effective policy to this worker and all workers it starts.
+    pub(crate) fn strict_containment(mut self, strict: bool) -> Self {
+        self.strict_containment = strict;
+        self
+    }
+
+    /// Carry runtime credentials into the trusted worker without changing the
+    /// parent's environment. Explicit worker edits retain precedence.
+    pub(crate) fn environment(mut self, policy: orbit_config::ExecutionEnvPolicy) -> Self {
+        self.environment = Some(policy);
+        self
+    }
+
+    /// Limits and runtime policy for a worker program the caller already built.
+    /// Production launch uses [`Self::for_paths`] and [`Self::build`].
+    #[cfg(test)]
+    pub(crate) fn for_prepared_worker(
+        limits: Option<WorkerLimits>,
+        policy: orbit_config::ExecutionEnvPolicy,
+    ) -> Self {
+        let env = policy.process_env().clone();
+        Self {
+            root_override: None,
+            containment: limits,
+            strict_containment: false,
+            environment: Some(policy),
+            env,
+        }
+    }
+
+    /// Apply the admitted policy, then contain the prepared program using an
+    /// injected scope-availability result instead of the live systemd probe.
+    #[cfg(test)]
+    pub(crate) fn contain_prepared(
+        &self,
+        mut command: Command,
+        run_id: &str,
+        availability: Result<(), String>,
+    ) -> Result<Command, OrbitError> {
+        self.apply_launch_environment(&mut command);
+        contain_worker_command_with_availability(
+            command,
+            run_id,
+            self.containment.as_ref(),
+            self.strict_containment,
+            availability,
+            true,
+            &std::sync::Once::new(),
+        )
+    }
+
+    /// The command that runs `run_id`'s worker from `workspace`.
+    pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
+        let mut command = self.build_uncontained(workspace, run_id)?;
+        self.apply_launch_environment(&mut command);
+        contain_worker_command(
+            command,
+            run_id,
+            self.containment.as_ref(),
+            self.strict_containment,
+            &self.env,
+        )
+    }
+
+    /// Admitted runtime credentials (`pass` names and crew `env` sources) and
+    /// the strict-containment flag.
+    ///
+    /// An edit already on `command`, including a removal, keeps precedence over
+    /// the policy snapshot.
+    fn apply_launch_environment(&self, command: &mut Command) {
+        // A worker is its own run. Submitted from a managed process (a resident
+        // cycle outside a sandbox, say), it must not inherit that run's binding
+        // and activity policy, or its own tool calls would be judged as the
+        // submitter's. The workspace and registry locators stay.
+        if crate::runtime::run_input::managed_run_context_from_env(&self.env) {
+            for name in MCP_MANAGED_BINDING_ENV_VARS
+                .iter()
+                .copied()
+                .filter(|name| {
+                    ![MCP_MANAGED_WORKSPACE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV].contains(name)
+                })
+                .chain([env_vars::ORBIT_TASK_ID, "ORBIT_ACTIVE_TASK_ID"])
+            {
+                command.env_remove(name);
+            }
+        }
+        if let Some(policy) = &self.environment {
+            // Crew `env` sources ride along under their own names: the worker
+            // composes each crew's agent environment from its own process
+            // environment, and a scope admits them name-only.
+            for (name, value) in policy
+                .agent_subprocess_env(&[])
+                .into_iter()
+                .chain(policy.crew_source_env())
+            {
+                if !command
+                    .get_envs()
+                    .any(|(held, _)| held == OsStr::new(&name))
+                {
+                    command.env(name, value);
+                }
+            }
+        }
+        if self.strict_containment {
+            command.env(STRICT_WORKER_CONTAINMENT_ENV, "1");
+        } else {
+            command.env_remove(STRICT_WORKER_CONTAINMENT_ENV);
+        }
+    }
+
+    fn build_uncontained(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(command) = worker_command_override::command(workspace, run_id) {
+            return Ok(command);
+        }
+
+        #[cfg(test)]
+        {
+            // A test binary must never re-exec itself, so an in-crate test
+            // substitutes its own program and there is no `orbit` invocation
+            // left to forward the pinned root to.
+            let _pinned_root = self.root_override.as_deref();
+            Err(OrbitError::Execution(
+                "test pipeline worker requires an explicit worker command override".to_string(),
+            ))
+        }
+
+        #[cfg(not(test))]
+        {
+            let current_exe = std::env::current_exe().map_err(|error| {
+                OrbitError::Execution(format!("resolve current orbit executable: {error}"))
+            })?;
+            orbit_worker_command(
+                current_exe,
+                workspace,
+                run_id,
+                self.root_override.as_deref(),
+            )
+        }
+    }
+}
+
 pub(crate) fn mark_process_as_pipeline_worker_binary() {
     WORKER_REEXEC_ENABLED.store(true, Ordering::Relaxed);
 }
@@ -306,191 +494,4 @@ pub(crate) fn orbit_worker_command_with_permission(
     let mut command = Command::new(executable);
     configure_pipeline_worker_command(&mut command, workspace, run_id, root_override);
     Ok(command)
-}
-
-/// How this workspace launches a detached worker process.
-///
-/// Production re-execs this same `orbit` binary at the hidden worker
-/// subcommand; workspace context comes from the child's cwd. The launch policy
-/// that cannot be derived at the call site is whether the parent runtime was
-/// pinned to a single root and which resource limits bound the worker, so this
-/// carries both.
-#[derive(Clone, Debug)]
-pub(crate) struct WorkerCommandConfig {
-    /// `--root` to forward to the worker, so the child opens the same global
-    /// store the parent used to persist the run [ORB-10821]. `None` for the
-    /// default split-root layout; see [`pipeline_worker_root_override`].
-    root_override: Option<PathBuf>,
-    /// Limits for the worker's own systemd scope [ORB-12903]; `None` launches
-    /// it in the caller's cgroup.
-    containment: Option<WorkerLimits>,
-    strict_containment: bool,
-    environment: Option<orbit_config::ExecutionEnvPolicy>,
-    /// The environment the runtime was composed with. The worker's scope
-    /// probe and its launch read this, never the ambient process environment.
-    env: orbit_common::Env,
-}
-
-impl WorkerCommandConfig {
-    /// Launch policy without resource containment.
-    pub(crate) fn for_paths(paths: &WorkspacePaths, env: &orbit_common::Env) -> Self {
-        Self {
-            root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
-            containment: None,
-            strict_containment: false,
-            environment: None,
-            env: env.clone(),
-        }
-    }
-
-    /// The environment this worker config launches under.
-    pub(crate) fn env(&self) -> &orbit_common::Env {
-        &self.env
-    }
-
-    /// Bound every worker this config launches by `limits`.
-    pub(crate) fn contained(mut self, limits: Option<WorkerLimits>) -> Self {
-        self.containment = limits;
-        self
-    }
-
-    /// Apply the effective policy to this worker and all workers it starts.
-    pub(crate) fn strict_containment(mut self, strict: bool) -> Self {
-        self.strict_containment = strict;
-        self
-    }
-
-    /// Carry runtime credentials into the trusted worker without changing the
-    /// parent's environment. Explicit worker edits retain precedence.
-    pub(crate) fn environment(mut self, policy: orbit_config::ExecutionEnvPolicy) -> Self {
-        self.environment = Some(policy);
-        self
-    }
-
-    /// Limits and runtime policy for a worker program the caller already built.
-    /// Production launch uses [`Self::for_paths`] and [`Self::build`].
-    #[cfg(test)]
-    pub(crate) fn for_prepared_worker(
-        limits: Option<WorkerLimits>,
-        policy: orbit_config::ExecutionEnvPolicy,
-    ) -> Self {
-        Self {
-            root_override: None,
-            containment: limits,
-            strict_containment: false,
-            env: policy.process_env().clone(),
-            environment: Some(policy),
-        }
-    }
-
-    /// Apply the admitted policy, then contain the prepared program using an
-    /// injected scope-availability result instead of the live systemd probe.
-    #[cfg(test)]
-    pub(crate) fn contain_prepared(
-        &self,
-        mut command: Command,
-        run_id: &str,
-        availability: Result<(), String>,
-    ) -> Result<Command, OrbitError> {
-        self.apply_launch_environment(&mut command);
-        contain_worker_command_with_availability(
-            command,
-            run_id,
-            self.containment.as_ref(),
-            self.strict_containment,
-            availability,
-            true,
-            &std::sync::Once::new(),
-        )
-    }
-
-    /// The command that runs `run_id`'s worker from `workspace`.
-    pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
-        let mut command = self.build_uncontained(workspace, run_id)?;
-        self.apply_launch_environment(&mut command);
-        contain_worker_command(
-            command,
-            run_id,
-            self.containment.as_ref(),
-            self.strict_containment,
-            &self.env,
-        )
-    }
-
-    /// Admitted runtime credentials (`pass` names and crew `env` sources) and
-    /// the strict-containment flag.
-    ///
-    /// An edit already on `command`, including a removal, keeps precedence over
-    /// the policy snapshot.
-    fn apply_launch_environment(&self, command: &mut Command) {
-        // A worker is its own run. Submitted from a managed process (a resident
-        // cycle outside a sandbox, say), it must not inherit that run's binding
-        // and activity policy, or its own tool calls would be judged as the
-        // submitter's. The workspace and registry locators stay.
-        if crate::runtime::run_input::managed_run_context_from_env(&self.env) {
-            for name in MCP_MANAGED_BINDING_ENV_VARS
-                .iter()
-                .copied()
-                .filter(|name| {
-                    ![MCP_MANAGED_WORKSPACE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV].contains(name)
-                })
-                .chain([env_vars::ORBIT_TASK_ID, "ORBIT_ACTIVE_TASK_ID"])
-            {
-                command.env_remove(name);
-            }
-        }
-        if let Some(policy) = &self.environment {
-            // Crew `env` sources ride along under their own names: the worker
-            // composes each crew's agent environment from its own process
-            // environment, and a scope admits them name-only.
-            for (name, value) in policy
-                .agent_subprocess_env(&[])
-                .into_iter()
-                .chain(policy.crew_source_env())
-            {
-                if !command
-                    .get_envs()
-                    .any(|(held, _)| held == OsStr::new(&name))
-                {
-                    command.env(name, value);
-                }
-            }
-        }
-        if self.strict_containment {
-            command.env(STRICT_WORKER_CONTAINMENT_ENV, "1");
-        } else {
-            command.env_remove(STRICT_WORKER_CONTAINMENT_ENV);
-        }
-    }
-
-    fn build_uncontained(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(command) = worker_command_override::command(workspace, run_id) {
-            return Ok(command);
-        }
-
-        #[cfg(test)]
-        {
-            // A test binary must never re-exec itself, so an in-crate test
-            // substitutes its own program and there is no `orbit` invocation
-            // left to forward the pinned root to.
-            let _pinned_root = self.root_override.as_deref();
-            Err(OrbitError::Execution(
-                "test pipeline worker requires an explicit worker command override".to_string(),
-            ))
-        }
-
-        #[cfg(not(test))]
-        {
-            let current_exe = std::env::current_exe().map_err(|error| {
-                OrbitError::Execution(format!("resolve current orbit executable: {error}"))
-            })?;
-            orbit_worker_command(
-                current_exe,
-                workspace,
-                run_id,
-                self.root_override.as_deref(),
-            )
-        }
-    }
 }

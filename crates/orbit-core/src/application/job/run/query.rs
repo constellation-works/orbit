@@ -91,10 +91,10 @@ impl OrbitRuntime {
             })?
             .into_iter()
             .map(|record| ActivityInvocationEvidence {
+                execution: record.execution,
                 activity_id: record.activity_id,
                 provider: record.provider.unwrap_or(record.agent),
                 model: record.model,
-                execution: record.execution,
             })
             .collect())
     }

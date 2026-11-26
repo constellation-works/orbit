@@ -717,12 +717,12 @@ impl OrbitRuntime {
                 let updated = self.stores().task_records().update(id, TaskRecordUpdateParams {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     status: restored,
-                    expected_status: Some(vec![task.status]),
                     job_run_id: restamp.cloned().map(Some),
                     status_event: Some(if restored == Some(TaskStatus::Review) {
                         "resume_review_restored"
                     } else { "resume_readmitted" }.to_string()),
                     status_note: Some(note.clone()),
+                    expected_status: Some(vec![task.status]),
                     ..Default::default()
                 })?;
                 let event = if restored == Some(TaskStatus::InProgress) {

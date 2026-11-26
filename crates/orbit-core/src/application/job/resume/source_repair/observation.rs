@@ -3,60 +3,6 @@ use super::*;
 use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::workflow::{SuccessfulCheckpoint, pr_auto_fix_pushes};
 
-/// Whether a source-repair identity is a full SHA-1 object name.
-pub(super) fn is_exact_sha(sha: &str) -> bool {
-    is_sha1_commit_id(sha)
-}
-
-/// Read Git output with the deadline and refusal appropriate to the observation.
-pub(super) fn read_git_observation(
-    repo: &std::path::Path,
-    args: &[&str],
-    completion: bool,
-) -> Result<String, OrbitError> {
-    use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_REMOTE_TIMEOUT, run_git_within};
-    let timeout = if args.first() == Some(&"ls-remote") {
-        GIT_REMOTE_TIMEOUT
-    } else {
-        GIT_LOCAL_TIMEOUT
-    };
-    let output = run_git_within(&orbit_common::Env::capture(), repo, args, timeout)?;
-    if !output.success {
-        return Err(if completion {
-            refuse("completion Git observation failed")
-        } else {
-            refuse(format!("Git observation failed: {}", output.stderr))
-        });
-    }
-    Ok(output.stdout.trim().to_string())
-}
-
-/// Non-success Git exits, including errors, never establish ancestry.
-pub(super) fn is_git_ancestor(
-    repo: &std::path::Path,
-    ancestor: &str,
-    descendant: &str,
-) -> Result<bool, OrbitError> {
-    Ok(matches!(
-        orbit_common::fs::git::git_ancestry(
-            &orbit_common::Env::capture(),
-            repo,
-            ancestor,
-            descendant
-        )?,
-        orbit_common::fs::git::GitAncestry::Ancestor
-    ))
-}
-
-/// Verify that the supplied name resolves exactly to the same commit.
-pub(super) fn resolves_to_commit(repo: &std::path::Path, sha: &str) -> Result<bool, OrbitError> {
-    Ok(read_git_observation(
-        repo,
-        &["rev-parse", "--verify", &format!("{sha}^{{commit}}")],
-        false,
-    )? == sha)
-}
-
 const MAX_HELD_RETRY_HOPS: usize = 64;
 
 impl OrbitRuntime {
@@ -329,6 +275,60 @@ impl OrbitRuntime {
         }
         Ok(binding)
     }
+}
+
+/// Whether a source-repair identity is a full SHA-1 object name.
+pub(super) fn is_exact_sha(sha: &str) -> bool {
+    is_sha1_commit_id(sha)
+}
+
+/// Read Git output with the deadline and refusal appropriate to the observation.
+pub(super) fn read_git_observation(
+    repo: &std::path::Path,
+    args: &[&str],
+    completion: bool,
+) -> Result<String, OrbitError> {
+    use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_REMOTE_TIMEOUT, run_git_within};
+    let timeout = if args.first() == Some(&"ls-remote") {
+        GIT_REMOTE_TIMEOUT
+    } else {
+        GIT_LOCAL_TIMEOUT
+    };
+    let output = run_git_within(&orbit_common::Env::capture(), repo, args, timeout)?;
+    if !output.success {
+        return Err(if completion {
+            refuse("completion Git observation failed")
+        } else {
+            refuse(format!("Git observation failed: {}", output.stderr))
+        });
+    }
+    Ok(output.stdout.trim().to_string())
+}
+
+/// Non-success Git exits, including errors, never establish ancestry.
+pub(super) fn is_git_ancestor(
+    repo: &std::path::Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, OrbitError> {
+    Ok(matches!(
+        orbit_common::fs::git::git_ancestry(
+            &orbit_common::Env::capture(),
+            repo,
+            ancestor,
+            descendant
+        )?,
+        orbit_common::fs::git::GitAncestry::Ancestor
+    ))
+}
+
+/// Verify that the supplied name resolves exactly to the same commit.
+pub(super) fn resolves_to_commit(repo: &std::path::Path, sha: &str) -> Result<bool, OrbitError> {
+    Ok(read_git_observation(
+        repo,
+        &["rev-parse", "--verify", &format!("{sha}^{{commit}}")],
+        false,
+    )? == sha)
 }
 
 /// The head `published` reaches through the repaired heads any run in `lineage`

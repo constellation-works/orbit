@@ -24,6 +24,16 @@ use super::step::{Refusal, refuse};
 /// The timeout a step gets when neither the step nor the manifest sets one.
 const DEFAULT_SCRIPT_TIMEOUT_SECONDS: u64 = 600;
 
+/// The names [`script_env_with_env`] sets itself; a grant's `env_pass` never
+/// replaces them.
+const SCRIPT_FIXED_ENV: [&str; 5] = [
+    env_vars::PATH,
+    env_vars::HOME,
+    env_vars::TMPDIR,
+    env_vars::LANG,
+    env_vars::TZ,
+];
+
 /// The step's scratch directory under the workspace state, removed after
 /// the attempt.
 pub(super) struct ScriptScratch {
@@ -69,20 +79,6 @@ impl ScriptScratch {
     }
 }
 
-pub(super) fn path_segment(value: &str) -> String {
-    value
-        .chars()
-        .take(128)
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 pub(super) struct RunPlan<'a> {
     pub(super) env: &'a Env,
     pub(super) request: &'a ScriptStepRequest,
@@ -101,6 +97,37 @@ pub(super) struct RunPlan<'a> {
     pub(super) launcher_env: &'a [(String, String)],
     pub(super) stdin: Vec<u8>,
     pub(super) record: &'a mut ScriptExecutionRecord,
+}
+
+/// The granted `env_pass` variables this process holds, and the granted
+/// names it does not.
+pub(super) struct ScriptPassedEnv {
+    vars: Vec<(String, String)>,
+    pub(super) unset: Vec<String>,
+}
+
+impl ScriptPassedEnv {
+    pub(super) fn names(&self) -> Vec<String> {
+        self.vars.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    fn values(&self) -> Vec<String> {
+        self.vars.iter().map(|(_, value)| value.clone()).collect()
+    }
+}
+
+pub(super) fn path_segment(value: &str) -> String {
+    value
+        .chars()
+        .take(128)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
@@ -279,23 +306,6 @@ pub(crate) fn script_launcher_env_from(
     )
 }
 
-/// The granted `env_pass` variables this process holds, and the granted
-/// names it does not.
-pub(super) struct ScriptPassedEnv {
-    vars: Vec<(String, String)>,
-    pub(super) unset: Vec<String>,
-}
-
-impl ScriptPassedEnv {
-    pub(super) fn names(&self) -> Vec<String> {
-        self.vars.iter().map(|(name, _)| name.clone()).collect()
-    }
-
-    fn values(&self) -> Vec<String> {
-        self.vars.iter().map(|(_, value)| value.clone()).collect()
-    }
-}
-
 /// The variables a grant passes into the script (§3 Environment), read from
 /// `parent`. Only names the grant lists are copied, and a name the parent
 /// does not hold (or holds empty) is unset, never an empty string. An
@@ -328,16 +338,6 @@ pub(super) fn script_passed_env(
     }
     passed
 }
-
-/// The names [`script_env_with_env`] sets itself; a grant's `env_pass` never
-/// replaces them.
-const SCRIPT_FIXED_ENV: [&str; 5] = [
-    env_vars::PATH,
-    env_vars::HOME,
-    env_vars::TMPDIR,
-    env_vars::LANG,
-    env_vars::TZ,
-];
 
 /// Test wrapper around [`script_env_with_env`] using this process's environment.
 #[cfg(test)]

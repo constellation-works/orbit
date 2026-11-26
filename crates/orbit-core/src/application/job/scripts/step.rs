@@ -46,6 +46,12 @@ use super::execution::{
     RunPlan, ScriptScratch, run_in_scratch, script_launcher_env, script_passed_env,
 };
 
+/// Why `machine.worker_containment = strict` refuses a script step on macOS.
+const MACOS_STRICT_REFUSAL: &str = "machine.worker_containment is strict, and macOS gives a \
+     script step no kernel containment (no memory or task limits), so strict refuses every \
+     script step on macOS; set machine.worker_containment to warn to run it under the profile \
+     alone";
+
 /// This host's script profile, as `orbit doctor` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptSandboxReport {
@@ -74,12 +80,6 @@ impl OrbitRuntime {
         }
     }
 }
-
-/// Why `machine.worker_containment = strict` refuses a script step on macOS.
-const MACOS_STRICT_REFUSAL: &str = "machine.worker_containment is strict, and macOS gives a \
-     script step no kernel containment (no memory or task limits), so strict refuses every \
-     script step on macOS; set machine.worker_containment to warn to run it under the profile \
-     alone";
 
 pub(super) struct Refusal {
     code: &'static str,

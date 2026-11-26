@@ -36,6 +36,11 @@ const PRODUCER_RECORD: &str = "producer.json";
 const FILES_DIR: &str = "files";
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
+/// How many `retry_source_run_id` hops a lineage check walks up from the
+/// consuming run. Matches the resume planner's bound; a deeper chain is
+/// treated as unrelated rather than scanned without limit.
+const LINEAGE_MAX_HOPS: usize = 64;
+
 /// The caps one attempt's output set is held to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ScriptOutputCaps {
@@ -72,6 +77,14 @@ struct ScriptOutputProducer<'a> {
     workspace_id: &'a str,
     run_id: &'a str,
     step_id: &'a str,
+}
+
+/// One `out/` entry that passed the listing checks.
+struct AdmittedEntry {
+    name: String,
+    len: u64,
+    #[cfg(unix)]
+    identity: (u64, u64),
 }
 
 /// Where every output set of this workspace lives.
@@ -144,14 +157,6 @@ fn keep_script_outputs(
         Ok(set) => ScriptStepOutputs::Kept(set),
         Err(rejected) => rejected,
     }
-}
-
-/// One `out/` entry that passed the listing checks.
-struct AdmittedEntry {
-    name: String,
-    len: u64,
-    #[cfg(unix)]
-    identity: (u64, u64),
 }
 
 fn rejected(code: &'static str, message: impl Into<String>) -> ScriptStepOutputs {
@@ -430,11 +435,6 @@ fn remove_tree(path: &Path) {
         );
     }
 }
-
-/// How many `retry_source_run_id` hops a lineage check walks up from the
-/// consuming run. Matches the resume planner's bound; a deeper chain is
-/// treated as unrelated rather than scanned without limit.
-const LINEAGE_MAX_HOPS: usize = 64;
 
 /// Honour a descriptor only when `consumer_run_id` or one of its
 /// `retry_source_run_id` ancestors produced it, this workspace's producer
