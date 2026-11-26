@@ -95,7 +95,7 @@ impl crate::OrbitRuntime {
     /// through here, which is why the message does not talk about writes.
     pub(super) fn ensure_distributed_owner_workspace(&self) -> Result<(), OrbitError> {
         self.ensure_coordination_task_write_permitted()
-            .map_err(|error| match (&error, self.coordination_write_owner()) {
+            .map_err(|error| match (&error, self.role().replica_owner()) {
                 (OrbitError::CapabilityRefused(_), Some(owner)) => {
                     OrbitError::CapabilityRefused(format!(
                         "this checkout is a replica of machine '{owner}'; the distributed \

@@ -517,7 +517,7 @@ pub(super) fn readiness_approvals(
         .unwrap_or_default();
     // A replica sees no proposed tasks here, as `task_candidates` would
     // return none to it.
-    let proposed = if runtime.coordination_task_reads_visible() {
+    let proposed = if runtime.stored().task().reads_visible() {
         population
             .values()
             .filter(|task| task.status == TaskStatus::Proposed)

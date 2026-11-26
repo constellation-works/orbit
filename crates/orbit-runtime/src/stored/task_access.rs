@@ -1,5 +1,6 @@
 //! The task access [`Stored`] is built with: this checkout's own store, or
-//! the owner route for a claimed worker.
+//! the owner route for a claimed worker. Replica checkouts hide coordination
+//! listings. Both workers and replicas refuse local coordination writes.
 //!
 //! The route is chosen once from the process's [`Role`]. A task read calls
 //! [`Stored::task`] and does not ask which kind of process it runs in. Each
@@ -28,7 +29,8 @@ use serde_json::{Value, json};
 
 use super::Stored;
 use super::stores::OrbitStores;
-use crate::base::role::Role;
+use crate::RuntimeKernel;
+use crate::base::role::{CoordinationAccess, Role};
 
 pub use self::metadata::{list_task_metadata_in, list_task_metadata_matching, metadata_task};
 pub(crate) use self::owner::OwnerRoute;
@@ -36,40 +38,33 @@ pub(crate) use self::owner::OwnerRoute;
 pub use self::owner::with_owner_read_retry_wait;
 pub(crate) use self::owner::worker_binding_missing;
 
-/// Where this process's task reads go, chosen once from its [`Role`] when
-/// [`Stored`] is built.
-#[derive(Clone)]
-pub(crate) enum TaskRoute {
-    /// This checkout's own store.
-    Local,
-    /// A claimed worker: the drain owner answers every read.
-    Owner(OwnerRoute),
-}
+/// The coordination access bound to the worker's actual owner route, if any.
+pub(crate) type TaskRoute = CoordinationAccess<OwnerRoute>;
 
 impl TaskRoute {
-    /// The one place the route is chosen. `coordinator` is the owner
-    /// coordinator composition has attached so far, if any.
     pub(crate) fn for_role(role: &Role, coordinator: Option<Arc<dyn OwnerCoordinator>>) -> Self {
-        match role {
-            Role::Worker(invocation) => {
-                Self::Owner(OwnerRoute::new(Arc::clone(invocation), coordinator))
-            }
-            Role::Operator | Role::DrainOwner | Role::Replica { .. } => Self::Local,
-        }
+        role.coordination(|invocation| OwnerRoute::new(Arc::clone(invocation), coordinator))
     }
 
     pub(crate) fn owner(&self) -> Option<&OwnerRoute> {
         match self {
-            Self::Owner(route) => Some(route),
-            Self::Local => None,
+            Self::Claimed(route) => Some(route),
+            Self::Local | Self::Replica(_) => None,
         }
     }
 
     pub(crate) fn owner_mut(&mut self) -> Option<&mut OwnerRoute> {
         match self {
-            Self::Owner(route) => Some(route),
-            Self::Local => None,
+            Self::Claimed(route) => Some(route),
+            Self::Local | Self::Replica(_) => None,
         }
+    }
+}
+
+impl RuntimeKernel {
+    /// Refuse control-plane work in a replica checkout or claimed worker.
+    pub fn ensure_coordination_task_write_permitted(&self) -> Result<(), OrbitError> {
+        self.stored().task().writer().map(|_| ())
     }
 }
 
@@ -170,7 +165,7 @@ impl RunTaskScope {
     }
 }
 
-/// This process's task reads: [`Stored::task`].
+/// This process's task reads and coordination writes: [`Stored::task`].
 #[derive(Clone, Copy)]
 pub struct TaskAccess<'a> {
     stored: &'a Stored,
@@ -181,14 +176,32 @@ impl<'a> TaskAccess<'a> {
         Self { stored }
     }
 
-    fn chosen(&self) -> Chosen<'a> {
+    /// Whether this checkout exposes coordination task listings and projections.
+    pub fn reads_visible(&self) -> bool {
+        self.stored.task_route.reads_visible()
+    }
+
+    /// The local task store for a coordination write, or this checkout's refusal.
+    pub fn writer(&self) -> Result<&'a orbit_store::TaskV2Store, OrbitError> {
+        self.stored.task_route.ensure_write()?;
+        Ok(self.stored.stores.tasks())
+    }
+
+    fn visible_read(&self) -> Option<Chosen<'a>> {
         match &self.stored.task_route {
-            TaskRoute::Local => Chosen::Local(&self.stored.stores),
-            TaskRoute::Owner(route) => Chosen::Owner(OwnerRead {
+            TaskRoute::Local => Some(Chosen::Local(&self.stored.stores)),
+            TaskRoute::Replica(_) => None,
+            TaskRoute::Claimed(route) => Some(Chosen::Owner(OwnerRead {
                 route,
                 checkout: &self.stored.base.paths().repo_root,
-            }),
+            })),
         }
+    }
+
+    /// Direct task and history reads also use the local store on a replica.
+    fn chosen(&self) -> Chosen<'a> {
+        self.visible_read()
+            .unwrap_or(Chosen::Local(&self.stored.stores))
     }
 
     /// One task. Local: the store's `get_task`. Owner: the `task` projection.
@@ -236,8 +249,9 @@ impl<'a> TaskAccess<'a> {
     /// store's listed `get_task_row`. Owner: the `listed_task` projection,
     /// `null` when the owner lists none.
     pub fn listed_row(&self, id: &str) -> Result<ListedRow, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => match owner.projection::<Value>(id, "listed_task") {
+        match self.visible_read() {
+            None => Ok(ListedRow::Absent),
+            Some(Chosen::Owner(owner)) => match owner.projection::<Value>(id, "listed_task") {
                 Ok(Value::Null) => Ok(ListedRow::Absent),
                 Ok(value) => serde_json::from_value(value)
                     .map(|row| ListedRow::Row(Box::new(row)))
@@ -246,7 +260,7 @@ impl<'a> TaskAccess<'a> {
                     }),
                 Err(error) => Ok(ListedRow::Unserved(error)),
             },
-            Chosen::Local(stores) => Ok(match stores.tasks().get_task_row(id, true)? {
+            Some(Chosen::Local(stores)) => Ok(match stores.tasks().get_task_row(id, true)? {
                 Some(row) => ListedRow::Row(Box::new(row)),
                 None => ListedRow::Absent,
             }),
@@ -399,18 +413,20 @@ impl<'a> TaskAccess<'a> {
 
     /// Local: the store's `list_tasks`. Owner: the `tasks` projection.
     pub fn list(&self) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => owner.projection("", "tasks"),
-            Chosen::Local(stores) => stores.tasks().list_tasks(),
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => owner.projection("", "tasks"),
+            Some(Chosen::Local(stores)) => stores.tasks().list_tasks(),
         }
     }
 
     /// Every task without its body documents. Local: the index. Owner:
     /// complete bounded `task_metadata` pages; any failed page fails the read.
     pub fn metadata(&self) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => metadata::collect_owner_metadata(&owner, None),
-            Chosen::Local(stores) => list_task_metadata_in(stores.tasks()),
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => metadata::collect_owner_metadata(&owner, None),
+            Some(Chosen::Local(stores)) => list_task_metadata_in(stores.tasks()),
         }
     }
 
@@ -419,8 +435,9 @@ impl<'a> TaskAccess<'a> {
     /// page, filtered here.
     pub fn metadata_with_any_tag(&self, tags: &BTreeSet<String>) -> Result<Vec<Task>, OrbitError> {
         let any_tags: Vec<String> = tags.iter().cloned().collect();
-        match self.chosen() {
-            Chosen::Owner(owner) => {
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => {
                 let mut tasks = metadata::collect_owner_metadata(&owner, None)?;
                 let normalized = orbit_types::task::normalize_task_tags(any_tags);
                 tasks.retain(|task| {
@@ -430,7 +447,7 @@ impl<'a> TaskAccess<'a> {
                 });
                 Ok(tasks)
             }
-            Chosen::Local(stores) => list_task_metadata_matching(
+            Some(Chosen::Local(stores)) => list_task_metadata_matching(
                 stores.tasks(),
                 &TaskListFilter {
                     any_tags,
@@ -445,18 +462,20 @@ impl<'a> TaskAccess<'a> {
     /// from the index. Owner: every task, since the owner answers whole
     /// `task_metadata` scans only.
     pub fn metadata_covering(&self, filter: &TaskListFilter) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => metadata::collect_owner_metadata(&owner, None),
-            Chosen::Local(stores) => list_task_metadata_matching(stores.tasks(), filter),
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => metadata::collect_owner_metadata(&owner, None),
+            Some(Chosen::Local(stores)) => list_task_metadata_matching(stores.tasks(), filter),
         }
     }
 
     /// [`Self::metadata`] for the listed `ids` only. Local: one keyed envelope
     /// read per id. Owner: bounded `task_metadata` ID selections.
     pub fn metadata_for_ids(&self, ids: &BTreeSet<String>) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => metadata::collect_owner_metadata(&owner, Some(ids)),
-            Chosen::Local(stores) => Ok(stores
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => metadata::collect_owner_metadata(&owner, Some(ids)),
+            Some(Chosen::Local(stores)) => Ok(stores
                 .tasks()
                 .task_envelopes_for_ids(ids)?
                 .into_iter()
@@ -473,8 +492,9 @@ impl<'a> TaskAccess<'a> {
         statuses: &[TaskStatus],
         updated_since: DateTime<Utc>,
     ) -> Result<Vec<TaskLifecycleStamp>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(_) => Ok(self
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(_)) => Ok(self
                 .metadata()?
                 .into_iter()
                 .filter(|task| statuses.contains(&task.status) || task.updated_at >= updated_since)
@@ -484,7 +504,7 @@ impl<'a> TaskAccess<'a> {
                     created_at: task.created_at,
                 })
                 .collect()),
-            Chosen::Local(stores) => stores
+            Some(Chosen::Local(stores)) => stores
                 .tasks()
                 .task_lifecycle_stamps_matching(statuses, updated_since),
         }
@@ -493,17 +513,19 @@ impl<'a> TaskAccess<'a> {
     /// Local: the store's `task_status_index`. Owner: the `status_index`
     /// projection.
     pub fn status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => owner.projection("", "status_index"),
-            Chosen::Local(stores) => stores.tasks().task_status_index(),
+        match self.visible_read() {
+            None => Ok(BTreeMap::new()),
+            Some(Chosen::Owner(owner)) => owner.projection("", "status_index"),
+            Some(Chosen::Local(stores)) => stores.tasks().task_status_index(),
         }
     }
 
     /// Local: the store's `task_completion_by_complexity`. Owner: the
     /// `completion_by_complexity` projection.
     pub fn completion_by_complexity(&self) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => {
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => {
                 let rows: Vec<(String, i64, BTreeMap<String, i64>)> =
                     owner.projection("", "completion_by_complexity")?;
                 Ok(rows
@@ -517,16 +539,17 @@ impl<'a> TaskAccess<'a> {
                     )
                     .collect())
             }
-            Chosen::Local(stores) => stores.tasks().task_completion_by_complexity(),
+            Some(Chosen::Local(stores)) => stores.tasks().task_completion_by_complexity(),
         }
     }
 
     /// Local: the store's `task_complexity_by_id`. Owner: the
     /// `complexity_by_id` projection.
     pub fn complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => owner.projection("", "complexity_by_id"),
-            Chosen::Local(stores) => stores.tasks().task_complexity_by_id(),
+        match self.visible_read() {
+            None => Ok(BTreeMap::new()),
+            Some(Chosen::Owner(owner)) => owner.projection("", "complexity_by_id"),
+            Some(Chosen::Local(stores)) => stores.tasks().task_complexity_by_id(),
         }
     }
 
@@ -536,11 +559,12 @@ impl<'a> TaskAccess<'a> {
         &self,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<TaskTerminalTransition>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => {
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => {
                 owner.request(json!({"_worker_read": "terminal_transitions", "since": since}))
             }
-            Chosen::Local(stores) => stores.tasks().task_terminal_transitions(since),
+            Some(Chosen::Local(stores)) => stores.tasks().task_terminal_transitions(since),
         }
     }
 
@@ -550,19 +574,23 @@ impl<'a> TaskAccess<'a> {
         &self,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<TaskDefectFiling>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => {
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => {
                 owner.request(json!({"_worker_read": "defect_filings", "since": since}))
             }
-            Chosen::Local(stores) => stores.tasks().task_defect_filings(since),
+            Some(Chosen::Local(stores)) => stores.tasks().task_defect_filings(since),
         }
     }
 
     /// Local: the store's `list_tasks_by_tags`. Owner: the `tags` projection.
     pub fn list_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => owner.request(json!({"_worker_read": "tags", "tags": tags})),
-            Chosen::Local(stores) => stores.tasks().list_tasks_by_tags(tags),
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => {
+                owner.request(json!({"_worker_read": "tags", "tags": tags}))
+            }
+            Some(Chosen::Local(stores)) => stores.tasks().list_tasks_by_tags(tags),
         }
     }
 
@@ -577,9 +605,10 @@ impl<'a> TaskAccess<'a> {
         external_ref: Option<&ExternalRef>,
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => owner.request(json!({"_worker_read": "filtered", "status": status, "priority": priority, "parent_id": parent_id, "job_run_id": job_run_id, "external_ref": external_ref, "has_external_ref_system": has_external_ref_system})),
-            Chosen::Local(stores) => stores.tasks().list_tasks_filtered(
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => owner.request(json!({"_worker_read": "filtered", "status": status, "priority": priority, "parent_id": parent_id, "job_run_id": job_run_id, "external_ref": external_ref, "has_external_ref_system": has_external_ref_system})),
+            Some(Chosen::Local(stores)) => stores.tasks().list_tasks_filtered(
                 status,
                 priority,
                 parent_id,
@@ -609,20 +638,22 @@ impl<'a> TaskAccess<'a> {
     /// Local: the store's `search_tasks`. Owner: the `search` projection with
     /// no tags.
     pub fn search(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(_) => self.search_filtered(query, &[]),
-            Chosen::Local(stores) => stores.tasks().search_tasks(query),
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(_)) => self.search_filtered(query, &[]),
+            Some(Chosen::Local(stores)) => stores.tasks().search_tasks(query),
         }
     }
 
     /// Local: the store's `search_tasks_filtered`. Owner: the `search`
     /// projection.
     pub fn search_filtered(&self, query: &str, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(owner) => {
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => {
                 owner.request(json!({"_worker_read": "search", "query": query, "tags": tags}))
             }
-            Chosen::Local(stores) => stores.tasks().search_tasks_filtered(query, tags),
+            Some(Chosen::Local(stores)) => stores.tasks().search_tasks_filtered(query, tags),
         }
     }
 
@@ -638,8 +669,9 @@ impl<'a> TaskAccess<'a> {
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
-        match self.chosen() {
-            Chosen::Owner(_) => {
+        match self.visible_read() {
+            None => Ok(()),
+            Some(Chosen::Owner(_)) => {
                 for task in self.search_filtered(query, tags)? {
                     if statuses.is_none_or(|statuses| statuses.contains(&task.status))
                         && admit(&task)
@@ -650,7 +682,7 @@ impl<'a> TaskAccess<'a> {
                 }
                 Ok(())
             }
-            Chosen::Local(stores) => stores
+            Some(Chosen::Local(stores)) => stores
                 .tasks()
                 .search_tasks_visit(query, tags, statuses, admit, visit),
         }
@@ -663,9 +695,9 @@ impl<'a> TaskAccess<'a> {
         &self,
         op: impl FnOnce() -> Result<T, OrbitError>,
     ) -> Result<T, OrbitError> {
-        let stores = match self.chosen() {
-            Chosen::Owner(_) => return op(),
-            Chosen::Local(stores) => stores,
+        let stores = match self.visible_read() {
+            None | Some(Chosen::Owner(_)) => return op(),
+            Some(Chosen::Local(stores)) => stores,
         };
         let mut op = Some(op);
         let mut output = None;

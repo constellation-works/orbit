@@ -300,7 +300,7 @@ pub(crate) fn attention_query(
             &open_tasks,
         );
         if reads_runtime && filter.selected(AttentionKind::HostUnhealthy) {
-            let owner = selected.coordination_task_reads_visible();
+            let owner = selected.stored().task().reads_visible();
             match host::read_doctor_host_item(runtime, selected, &workspace, &host, owner) {
                 Ok(Some(item)) => candidates.items.push(item),
                 Ok(None) => {}

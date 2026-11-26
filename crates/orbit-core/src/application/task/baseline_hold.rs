@@ -200,7 +200,7 @@ impl OrbitRuntime {
                 Some("a claimed worker never checks baseline holds; its owner does".to_string());
             return Ok(refresh);
         }
-        if let Some(owner) = self.coordination_write_owner() {
+        if let Some(owner) = self.role().replica_owner() {
             refresh.skipped = Some(format!(
                 "this replica checkout does not own its task records; machine '{owner}' checks \
                  their baseline holds"

@@ -266,7 +266,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             Some("sweep.notice_closure_failed"),
             None,
             |_, runtime| {
-                if runtime.coordination_write_owner().is_none() {
+                if !runtime.role().is_replica() {
                     runtime.run_notice_closure_tick()?;
                 }
                 Ok(())

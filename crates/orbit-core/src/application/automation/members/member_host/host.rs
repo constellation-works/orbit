@@ -70,7 +70,7 @@ impl MemberHost for Host<'_> {
 
     fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
         // Hidden task reads say nothing about membership; retire nothing.
-        if !self.runtime.coordination_task_reads_visible() {
+        if !self.runtime.stored().task().reads_visible() {
             return Ok(keys.clone());
         }
 

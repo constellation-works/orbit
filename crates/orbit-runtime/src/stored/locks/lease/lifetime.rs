@@ -20,7 +20,7 @@ use crate::RuntimeKernel;
 /// Errors checking one landing leave that lease to its TTL and do not stop
 /// checks for other leases. The shared tick deadline bounds new forge work.
 pub fn sweep_lease_lifetimes(runtime: &RuntimeKernel, deadline: Instant) -> Result<(), OrbitError> {
-    if runtime.coordination_write_owner().is_some() {
+    if runtime.role().is_replica() {
         return Ok(());
     }
     let orbit_dir = workspace_orbit_dir(runtime);

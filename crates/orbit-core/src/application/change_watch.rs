@@ -57,7 +57,7 @@ impl OrbitRuntime {
     /// successful read, so a watcher can skip rebuilding its comparison. A
     /// failed read leaves that previous snapshot with the caller.
     pub fn task_change_stamps(&self) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(Arc::new(Vec::new()));
         }
         self.stores().tasks().task_change_stamps()

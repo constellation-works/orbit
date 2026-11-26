@@ -201,7 +201,7 @@ fn with_task_residual<T>(
 
 impl OrbitRuntime {
     pub fn query_task_rows(&self, query: &TaskListQuery) -> Result<TaskPage, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(TaskPage::default());
         }
         let os_readout = query
@@ -224,7 +224,7 @@ impl OrbitRuntime {
         if pages.is_empty() {
             return Ok(Vec::new());
         }
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(pages.iter().map(|_| TaskPage::default()).collect());
         }
         let os_readout = query
@@ -269,7 +269,7 @@ impl OrbitRuntime {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(TaskCandidates::default());
         }
         self.stores().tasks().task_candidates(filter, limit)
@@ -284,7 +284,7 @@ impl OrbitRuntime {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(TaskCandidates::default());
         }
         self.stores().tasks().observe_task_candidates(filter, limit)
@@ -297,9 +297,6 @@ impl OrbitRuntime {
     /// as attention) must use this route so a pending task commit is left
     /// for an ordinary operational read to settle.
     pub fn observe_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         Ok(self
             .observe_task_candidates(&TaskListFilter::default(), usize::MAX)?
             .items
@@ -313,9 +310,6 @@ impl OrbitRuntime {
     /// only the open envelopes, in the same newest-first order, instead of
     /// reading every envelope and filtering terminal tasks in Rust.
     pub fn observe_open_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         let open = TaskListFilter {
             statuses: Some(
                 TaskStatus::ALL
@@ -341,7 +335,7 @@ impl OrbitRuntime {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(Some(Default::default()));
         }
         self.stores().tasks().task_candidate_keys(filter, limit)
@@ -355,7 +349,7 @@ impl OrbitRuntime {
         limit: usize,
     ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
         super::candidate_checkpoint::notify_candidate_selection()?;
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(Some(Default::default()));
         }
         self.stores()
@@ -372,7 +366,7 @@ impl OrbitRuntime {
         pages: &[(TaskListFilter, usize)],
     ) -> Result<Option<Vec<Result<TaskCandidateKeys, OrbitError>>>, OrbitError> {
         super::candidate_checkpoint::notify_candidate_selection()?;
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(Some(
                 pages
                     .iter()
@@ -392,7 +386,7 @@ impl OrbitRuntime {
         &self,
         targets: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(BTreeMap::new());
         }
         let workspace_id = self.workspace_id()?;
@@ -409,7 +403,7 @@ impl OrbitRuntime {
     }
 
     pub fn get_listed_task_row(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(None);
         }
         self.stores().tasks().get_task_row(id, true)
@@ -418,9 +412,6 @@ impl OrbitRuntime {
     /// [`Self::get_listed_task_row`] through this process's task access: a
     /// claimed worker asks its owner, which may not serve the projection.
     pub(crate) fn listed_task_row(&self, id: &str) -> Result<ListedRow, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(ListedRow::Absent);
-        }
         self.stored().task().listed_row(id)
     }
 
@@ -445,7 +436,7 @@ impl OrbitRuntime {
                 "eligibility candidates are `backlog` or `proposed` tasks; `{status}` is not a candidate status"
             )));
         }
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(TaskEligibility::default());
         }
         let statuses: &[TaskStatus] = if query.statuses.is_empty() {

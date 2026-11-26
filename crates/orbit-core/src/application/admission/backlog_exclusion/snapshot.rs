@@ -168,7 +168,7 @@ pub(super) fn backlog_snapshot_in_mode(
         BacklogReadMode::Observation {
             shared_status: Some(shared),
             ..
-        } if runtime.coordination_task_reads_visible() => {
+        } if runtime.stored().task().reads_visible() => {
             let mut status_by_id = shared.clone();
             runtime.satisfy_completed_archived_dependencies(&mut status_by_id, backlog_tasks);
             status_by_id

@@ -168,7 +168,7 @@ pub(super) fn attribute(
         let Some(number) = pull_request_number(&delivery.key) else {
             continue;
         };
-        if !runtime.coordination_task_reads_visible() {
+        if !runtime.stored().task().reads_visible() {
             delivery.unattributed = Some(UNATTRIBUTED_TASKS_UNREADABLE.into());
             continue;
         }

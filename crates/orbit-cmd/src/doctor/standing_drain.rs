@@ -14,7 +14,7 @@ use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 const CHECK: &str = "standing-drain";
 
 pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    if let Some(owner) = runtime.coordination_write_owner() {
+    if let Some(owner) = runtime.role().replica_owner() {
         return row(
             WorkspaceDoctorStatus::Skipped,
             format!(

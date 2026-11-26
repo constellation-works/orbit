@@ -116,9 +116,7 @@ pub(in crate::api) async fn create_proposal(
                 .binding
                 .as_ref()
                 .ok_or_else(|| OrbitError::PolicyDenied("workspace binding unavailable".into()))?;
-            if let Some(refusal) = runtime.coordination_task_write_refusal() {
-                return Err(refusal);
-            }
+            runtime.ensure_coordination_task_write_permitted()?;
             let machine =
                 orbit_registry::machine_identity::load_machine_identity(state.global_root())?;
             if binding.checkout_role != Some(WorkspaceCheckoutRole::Owner)

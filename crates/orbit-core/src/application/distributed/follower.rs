@@ -420,9 +420,7 @@ impl crate::OrbitRuntime {
     /// contacted: an owner checkout drains with plain `orbit run auto`. `None`
     /// on a replica. Surfaces that offer `--pull` show it before submission.
     pub fn pull_drain_checkout_refusal(&self) -> Option<OrbitError> {
-        self.coordination_write_owner()
-            .is_none()
-            .then(pull_on_owner_refusal)
+        (!self.role().is_replica()).then(pull_on_owner_refusal)
     }
 
     /// [ORB-15622] How this replica's `workflow.required_validation_commands`
@@ -471,7 +469,8 @@ impl crate::OrbitRuntime {
     ) -> Result<(PullDestination, Option<ValidationGates>), OrbitError> {
         let selector = selector.trim();
         let owner_machine = self
-            .coordination_write_owner()
+            .role()
+            .replica_owner()
             .ok_or_else(pull_on_owner_refusal)?;
         let (selector_machine, selector_workspace) = selector.split_once('/').ok_or_else(|| {
             OrbitError::UnknownSelector(format!(

@@ -161,7 +161,7 @@ impl OrbitRuntime {
         run_id: &str,
         task_id: &str,
     ) -> WorktreeGcTaskLookup {
-        let Some(owner_machine) = self.coordination_write_owner() else {
+        let Some(owner_machine) = self.role().replica_owner() else {
             return self.worktree_gc_local_task_lookup(task_id);
         };
         // Uninitialized legacy runtimes allocate under ORB. Registered runtime
@@ -299,7 +299,7 @@ impl OrbitRuntime {
     /// Scope for memoizing owner lookups during one worktree GC sweep.
     /// Different claimed leaves can belong to different owner destinations.
     pub(crate) fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
-        let Some(owner_machine) = self.coordination_write_owner() else {
+        let Some(owner_machine) = self.role().replica_owner() else {
             return Some("local".to_string());
         };
         self.worktree_gc_owner_selector(owner_machine, run_id)

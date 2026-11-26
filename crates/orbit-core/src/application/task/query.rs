@@ -167,9 +167,6 @@ impl OrbitRuntime {
     }
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().list()
     }
 
@@ -184,9 +181,6 @@ impl OrbitRuntime {
     /// [`Self::get_task`]. Worker invocations collect complete bounded bodyless
     /// pages through their authenticated owner; any failed page fails the read.
     pub fn list_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().metadata()
     }
 
@@ -202,9 +196,6 @@ impl OrbitRuntime {
         if tags.is_empty() {
             return Ok(Vec::new());
         }
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().metadata_with_any_tag(tags)
     }
 
@@ -215,9 +206,6 @@ impl OrbitRuntime {
         &self,
         ids: &BTreeSet<String>,
     ) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().metadata_for_ids(ids)
     }
 
@@ -230,9 +218,6 @@ impl OrbitRuntime {
         statuses: &[TaskStatus],
         updated_since: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<orbit_store::contract::TaskLifecycleStamp>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored()
             .task()
             .lifecycle_stamps_matching(statuses, updated_since)
@@ -286,26 +271,23 @@ impl OrbitRuntime {
         if self.browser_kit_verified() {
             return Ok(Vec::new());
         }
-        let candidates = if !self.coordination_task_reads_visible() {
-            Vec::new()
-        } else {
-            // The local index narrows to this filter; an owner answers whole
-            // metadata scans only, so the predicate below decides either way.
-            let filter = TaskListFilter {
-                statuses: Some(vec![TaskStatus::Backlog]),
-                any_tags: vec![orbit_types::task::UI_TAG.to_string()],
-                ..TaskListFilter::default()
-            };
-            self.stored()
-                .task()
-                .metadata_covering(&filter)?
-                .into_iter()
-                .filter(|task| {
-                    task.status == TaskStatus::Backlog
-                        && orbit_types::task::requires_browser_kit(&task.tags)
-                })
-                .collect::<Vec<_>>()
+        // The local index narrows to this filter; an owner answers whole
+        // metadata scans only, so the predicate below decides either way.
+        let filter = TaskListFilter {
+            statuses: Some(vec![TaskStatus::Backlog]),
+            any_tags: vec![orbit_types::task::UI_TAG.to_string()],
+            ..TaskListFilter::default()
         };
+        let candidates = self
+            .stored()
+            .task()
+            .metadata_covering(&filter)?
+            .into_iter()
+            .filter(|task| {
+                task.status == TaskStatus::Backlog
+                    && orbit_types::task::requires_browser_kit(&task.tags)
+            })
+            .collect::<Vec<_>>();
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
@@ -323,9 +305,6 @@ impl OrbitRuntime {
     pub fn task_status_index(
         &self,
     ) -> Result<BTreeMap<String, orbit_types::task::TaskStatus>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(BTreeMap::new());
-        }
         self.stored().task().status_index()
     }
 
@@ -382,17 +361,11 @@ impl OrbitRuntime {
     pub fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<orbit_store::TaskCompletionByComplexity>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().completion_by_complexity()
     }
 
     /// `task_id →` complexity bucket from the generated task index.
     pub fn task_complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(BTreeMap::new());
-        }
         self.stored().task().complexity_by_id()
     }
 
@@ -403,9 +376,6 @@ impl OrbitRuntime {
         &self,
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<orbit_store::TaskTerminalTransition>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().terminal_transitions(since)
     }
 
@@ -416,16 +386,10 @@ impl OrbitRuntime {
         &self,
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<orbit_store::TaskDefectFiling>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().defect_filings(since)
     }
 
     pub fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().list_by_tags(tags)
     }
 
@@ -438,9 +402,6 @@ impl OrbitRuntime {
         external_ref: Option<&ExternalRef>,
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().list_filtered(
             status,
             priority,
@@ -467,9 +428,6 @@ impl OrbitRuntime {
     }
 
     pub fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().search(query)
     }
 
@@ -491,9 +449,6 @@ impl OrbitRuntime {
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(());
-        }
         self.stored()
             .task()
             .search_visit(query, tags, statuses, admit, visit)
@@ -510,9 +465,6 @@ impl OrbitRuntime {
         &self,
         op: impl FnOnce() -> Result<T, OrbitError>,
     ) -> Result<T, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return op();
-        }
         self.stored().task().in_read_section(op)
     }
 
@@ -566,9 +518,6 @@ impl OrbitRuntime {
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
-        if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
-        }
         self.stored().task().search_filtered(query, tags)
     }
 }

@@ -586,7 +586,10 @@ fn list_json(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let role_refusal = runtime
-        .coordination_task_write_refusal()
+        .stored()
+        .task()
+        .writer()
+        .err()
         .map(|error| error.to_string());
     let create_capability = role_refusal.as_deref().map_or_else(
         || action_capability(&DASHBOARD_AUTO_TASK_CREATE, operator_session),

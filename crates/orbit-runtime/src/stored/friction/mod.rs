@@ -41,7 +41,7 @@ impl RuntimeKernel {
     /// existing record, never add, reopen, or move one through this exception.
     /// Claimed workers still have to use their owner route.
     pub fn ensure_local_friction_resolution_permitted(&self, id: &str) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() || self.coordination_write_owner().is_none() {
+        if !self.role().is_replica() {
             return self.ensure_coordination_task_write_permitted();
         }
         store_for(self)?

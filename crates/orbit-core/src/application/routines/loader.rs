@@ -121,7 +121,8 @@ pub(crate) fn collect_host_routines_across(groups: &[&DiscoveredWorkspaces]) -> 
         .flat_map(|discovered| discovered.replicas.iter())
         .map(|(workspace, runtime)| {
             let owner = runtime
-                .coordination_write_owner()
+                .role()
+                .replica_owner()
                 .map(str::to_owned)
                 .or_else(|| workspace.owner_machine_id.clone())
                 .unwrap_or_else(|| "its owner".to_string());
@@ -248,7 +249,7 @@ impl DiscoveredWorkspaces {
     /// role: a replica checkout contributes only its replica-local routines.
     pub(crate) fn single_checkout(workspace: Workspace, runtime: OrbitRuntime) -> Self {
         let checkout = vec![(workspace, runtime)];
-        if checkout[0].1.coordination_write_owner().is_some() {
+        if checkout[0].1.role().is_replica() {
             Self {
                 replicas: checkout,
                 ..Self::default()

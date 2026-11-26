@@ -26,8 +26,8 @@ use crate::base::role::Role;
 #[derive(Clone)]
 pub struct Stored {
     pub(crate) stores: OrbitStores,
-    /// Where task reads go: this checkout's store, or the drain owner for a
-    /// claimed worker. Chosen once from the base's role; see
+    /// Task read routing, projection visibility and coordination write access.
+    /// Chosen once from the base's role; see
     /// [`Self::set_role`] for the builders that re-resolve it.
     task_route: TaskRoute,
     /// This process joined a live executable generation other than its own
@@ -79,7 +79,7 @@ impl Stored {
         &self.stores
     }
 
-    /// This process's task reads, through the route chosen for its role.
+    /// This process's task reads and coordination writes, chosen for its role.
     pub fn task(&self) -> TaskAccess<'_> {
         TaskAccess::new(self)
     }

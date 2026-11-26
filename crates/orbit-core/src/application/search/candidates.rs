@@ -98,7 +98,7 @@ impl OrbitRuntime {
                 .take(limit)
                 .collect());
         }
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(Vec::new());
         }
         let page = self.stores().tasks().query_task_rows(

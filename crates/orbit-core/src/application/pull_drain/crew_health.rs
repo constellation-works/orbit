@@ -127,7 +127,7 @@ pub(crate) fn record_pool_crew_health(
                 Ok(())
             })?;
         for (crew, streak) in warnings {
-            if runtime.coordination_task_write_refusal().is_some() {
+            if runtime.stored().task().writer().is_err() {
                 tracing::warn!(target: "orbit.core.job_run", signal = "crew_pool_excluded", run_id, crew, warning = %streak.describe(&crew), "configured pool crew is excluded on every admission pass");
                 continue;
             }

@@ -1108,9 +1108,8 @@ raiser, the weakness the precedent spec already names for agent-declared tiers.
 ### 12.7 Cross-host apply: the request lives where the effect lives
 
 Decision requests are task history, so they live on the host that owns the task's
-workspace. Answering is a coordination write. In a replica checkout,
-`coordination_task_write_refusal` (`orbit-runtime/src/orbit_runtime/identity.rs`)
-refuses it, and a claimed worker is refused the same way. The apply tool must run where
+workspace. Answering is a coordination write. The task access chosen for the checkout refuses local
+coordination writes by replicas and claimed workers. The apply tool must run where
 the plugin and its data are.
 
 **Rule: a plugin request is raised only on a task its plugin can apply on the same

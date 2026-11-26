@@ -177,7 +177,7 @@ impl OrbitRuntime {
     /// closed either way. Returns how many linked tasks it closed
     /// notices for.
     pub fn run_notice_closure_tick(&self) -> Result<usize, OrbitError> {
-        if self.coordination_write_owner().is_some() {
+        if self.role().is_replica() {
             return Ok(0);
         }
         let workspace_id = self.workspace_id()?;
@@ -194,7 +194,7 @@ impl OrbitRuntime {
     }
 
     fn materialize_notice_closures(&self, task_id: &str) -> Result<(), OrbitError> {
-        if self.coordination_write_owner().is_some() {
+        if self.role().is_replica() {
             return Ok(());
         }
         let store = self.sqlite_store()?;
