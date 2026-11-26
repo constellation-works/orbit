@@ -119,14 +119,18 @@ fn active_devices_follow_the_request_window_and_open_streams() {
     access.record_admitted_at(ip(1), "a@example.com", sent);
     access.record_admitted_at(ip(2), "b@example.com", sent);
     // The second device keeps a stream open; the first only sent a request.
-    let _stream = access.open_stream(ip(2), "b@example.com").unwrap();
+    let Some(_stream) = access.open_stream(ip(2), "b@example.com") else {
+        panic!("opening the stream for the active-device window test should succeed");
+    };
 
     let edge = access.snapshot_at(sent + Duration::seconds(15 * 60));
     assert_eq!(edge.active_devices(), 2);
 
     let past = access.snapshot_at(sent + Duration::seconds(15 * 60 + 1));
     assert_eq!(past.active_devices(), 1);
-    let streaming = past.devices.iter().find(|d| d.open_streams > 0).unwrap();
+    let Some(streaming) = past.devices.iter().find(|d| d.open_streams > 0) else {
+        panic!("the open stream should keep its device active");
+    };
     assert_eq!(streaming.requests_15m, 0);
     assert_eq!(streaming.login, "b@example.com");
 }
