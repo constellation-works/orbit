@@ -15,30 +15,6 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::plugin_grant_witness_path;
 use crate::runtime::plugin::paths::plugin_namespace_dir;
 
-/// Global install only (§3): a plugin tree inside the repository would be
-/// vendored state the workspace must not carry.
-pub(super) fn refuse_in_repository_source(
-    runtime: &OrbitRuntime,
-    source_root: &Path,
-) -> Result<(), OrbitError> {
-    let repo_root = runtime.paths().repo_root.clone();
-    let Ok(repo_root) = std::fs::canonicalize(&repo_root) else {
-        return Ok(());
-    };
-    if !source_root.starts_with(&repo_root) {
-        return Ok(());
-    }
-    Err(OrbitError::InvalidInput(format!(
-        "refusing to install '{}': it is inside the repository at {}. Orbit plugins are \
-         global-install-only — the host installs once under `~/.orbit/plugins/` and a \
-         checkout only pins them in `.orbit/plugins.yaml`, so a plugin tree is never vendored \
-         into a checkout. Move the plugin outside the repository and add it from there, or \
-         pin it in `.orbit/plugins.yaml` and run `orbit plugin sync`.",
-        source_root.display(),
-        repo_root.display()
-    )))
-}
-
 /// A plugin tree staged beside the version directories, and the tree it
 /// replaces.
 ///
@@ -198,6 +174,30 @@ impl Drop for StagedInstall {
         }
         remove_install_scratch(&self.staging);
     }
+}
+
+/// Global install only (§3): a plugin tree inside the repository would be
+/// vendored state the workspace must not carry.
+pub(super) fn refuse_in_repository_source(
+    runtime: &OrbitRuntime,
+    source_root: &Path,
+) -> Result<(), OrbitError> {
+    let repo_root = runtime.paths().repo_root.clone();
+    let Ok(repo_root) = std::fs::canonicalize(&repo_root) else {
+        return Ok(());
+    };
+    if !source_root.starts_with(&repo_root) {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "refusing to install '{}': it is inside the repository at {}. Orbit plugins are \
+         global-install-only — the host installs once under `~/.orbit/plugins/` and a \
+         checkout only pins them in `.orbit/plugins.yaml`, so a plugin tree is never vendored \
+         into a checkout. Move the plugin outside the repository and add it from there, or \
+         pin it in `.orbit/plugins.yaml` and run `orbit plugin sync`.",
+        source_root.display(),
+        repo_root.display()
+    )))
 }
 
 /// A name inside the namespace directory that only this install owns. The

@@ -20,6 +20,15 @@ pub(super) mod filesystem {
         pub newest: (i64, i64),
     }
 
+    struct DirectoryStream(*mut libc::DIR);
+
+    impl Drop for DirectoryStream {
+        fn drop(&mut self) {
+            // SAFETY: fdopendir created this stream and it is closed only here.
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+
     pub(super) fn collect(
         checkout: &Path,
         result: &mut TmpGcResult,
@@ -123,15 +132,6 @@ pub(super) mod filesystem {
         } else {
             // SAFETY: openat returned a new descriptor owned by this caller.
             Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-        }
-    }
-
-    struct DirectoryStream(*mut libc::DIR);
-
-    impl Drop for DirectoryStream {
-        fn drop(&mut self) {
-            // SAFETY: fdopendir created this stream and it is closed only here.
-            unsafe { libc::closedir(self.0) };
         }
     }
 
@@ -321,15 +321,6 @@ pub struct TmpGcResult {
     pub reports: Vec<TmpGcReport>,
 }
 
-// Reports use the same lossy display as human output, while traversal retains
-// the original byte names. A non-UTF-8 entry must not fail JSON after deletion.
-fn display_path<S: serde::Serializer>(
-    path: &std::path::Path,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&path.to_string_lossy())
-}
-
 impl OrbitRuntime {
     /// Preview or empty this workspace checkout's `.orbit/tmp`, retaining the
     /// directory. Pending, running, and retrying runs refuse deletion even with
@@ -380,4 +371,13 @@ impl OrbitRuntime {
             Err(OrbitError::TmpGcActiveRuns { run_ids })
         }
     }
+}
+
+// Reports use the same lossy display as human output, while traversal retains
+// the original byte names. A non-UTF-8 entry must not fail JSON after deletion.
+fn display_path<S: serde::Serializer>(
+    path: &std::path::Path,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.to_string_lossy())
 }

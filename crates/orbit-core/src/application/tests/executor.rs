@@ -7,29 +7,6 @@ use crate::application::executor::seed_default_executors_for_platform;
 
 const LINUX: &str = "linux";
 
-fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
-    let now = UtcTimestamp::try_from(std::time::SystemTime::now()).expect("executor timestamp");
-    ExecutorDef {
-        name: name.to_string(),
-        executor_type,
-        command: Some("noop".to_string()),
-        args: Vec::new(),
-        inspection_args: None,
-        image_input: None,
-        stdout_format: None,
-        model_pair_override: None,
-        model_flag: None,
-        timeout_seconds: None,
-        auth_probe: None,
-        env: Default::default(),
-        sandbox: None,
-        allow_fallback: false,
-        host_os: None,
-        created_at: Some(now),
-        updated_at: Some(now),
-    }
-}
-
 /// Executor store over a temporary directory, so the seed path runs against
 /// the real file repository without touching the host's executors.
 struct TempExecutorStore {
@@ -64,6 +41,29 @@ impl TempExecutorStore {
 
     fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
         self.store.write(|tx| tx.executor_def().put(def))
+    }
+}
+
+fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
+    let now = UtcTimestamp::try_from(std::time::SystemTime::now()).expect("executor timestamp");
+    ExecutorDef {
+        name: name.to_string(),
+        executor_type,
+        command: Some("noop".to_string()),
+        args: Vec::new(),
+        inspection_args: None,
+        image_input: None,
+        stdout_format: None,
+        model_pair_override: None,
+        model_flag: None,
+        timeout_seconds: None,
+        auth_probe: None,
+        env: Default::default(),
+        sandbox: None,
+        allow_fallback: false,
+        host_os: None,
+        created_at: Some(now),
+        updated_at: Some(now),
     }
 }
 

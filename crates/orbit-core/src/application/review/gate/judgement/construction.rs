@@ -94,8 +94,8 @@ impl Judgement {
         };
         let retained_obligations = retained_obligations(revisions, &report.validation);
         Ok(Self {
-            external_evidence: report.external_evidence,
             verdict: report.verdict,
+            external_evidence: report.external_evidence,
             findings: report.findings,
             validation: report.validation,
             retained_obligations,

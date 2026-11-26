@@ -43,19 +43,6 @@ const OWNER_NONCE_FILE: &str = ".resident-cycle-owner";
 const OWNER_RECORD_MAX_BYTES: usize = 1024;
 const OWNER_NONCE_HEX_LEN: usize = 64;
 
-/// The managed worktree for `run_id`'s cycle, or `None` when the run id
-/// cannot name a single directory component.
-pub(crate) fn resident_cycle_worktree_path(worktrees_dir: &Path, run_id: &str) -> Option<PathBuf> {
-    if run_id.is_empty()
-        || !run_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return None;
-    }
-    Some(worktrees_dir.join(format!("resident-{run_id}")))
-}
-
 impl OrbitRuntime {
     /// Create (or reuse, for a resumed run) this cycle's managed worktree
     /// at the workspace `HEAD`.
@@ -273,6 +260,51 @@ enum WorktreePathKind {
     NotDirectory,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegisteredWorktree {
+    NotRegistered,
+    Registered { locked: bool },
+}
+
+/// One entry of `git worktree list --porcelain -z`: the exact registered
+/// path and whether Git marks it locked (with or without a reason).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GitWorktreePorcelainRecord {
+    path: PathBuf,
+    locked: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectoryIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OwnerRecord {
+    created: Option<DirectoryIdentity>,
+    checkout: Option<DirectoryIdentity>,
+    nonce_sha256: Option<String>,
+}
+
+enum Ownership {
+    Proven,
+    Denied(String),
+}
+
+/// The managed worktree for `run_id`'s cycle, or `None` when the run id
+/// cannot name a single directory component.
+pub(crate) fn resident_cycle_worktree_path(worktrees_dir: &Path, run_id: &str) -> Option<PathBuf> {
+    if run_id.is_empty()
+        || !run_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some(worktrees_dir.join(format!("resident-{run_id}")))
+}
+
 fn worktree_path_kind(path: &Path) -> Result<WorktreePathKind, OrbitError> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(WorktreePathKind::Absent),
@@ -361,12 +393,6 @@ fn warn_if_prune_fails(repo_root: &Path, target: &str) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RegisteredWorktree {
-    NotRegistered,
-    Registered { locked: bool },
-}
-
 fn worktree_is_registered(repo_root: &Path, path: &Path) -> Result<bool, OrbitError> {
     Ok(matches!(
         registered_worktree_state(repo_root, path)?,
@@ -399,14 +425,6 @@ fn registered_worktree_state(
     let records = decode_worktree_porcelain(&output.stdout)
         .map_err(|reason| preserved(&path_text(path), &reason))?;
     select_registered_worktree(&records, path)
-}
-
-/// One entry of `git worktree list --porcelain -z`: the exact registered
-/// path and whether Git marks it locked (with or without a reason).
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct GitWorktreePorcelainRecord {
-    path: PathBuf,
-    locked: bool,
 }
 
 /// Decode Git's NUL-delimited worktree listing once, at the boundary.
@@ -643,12 +661,6 @@ fn utf8_path(path: &Path) -> Result<String, OrbitError> {
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DirectoryIdentity {
-    dev: u64,
-    ino: u64,
-}
-
 fn directory_identity(path: &Path) -> Result<Option<DirectoryIdentity>, std::io::Error> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -671,18 +683,6 @@ fn directory_identity(path: &Path) -> Result<Option<DirectoryIdentity>, std::io:
 fn real_directory(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct OwnerRecord {
-    created: Option<DirectoryIdentity>,
-    checkout: Option<DirectoryIdentity>,
-    nonce_sha256: Option<String>,
-}
-
-enum Ownership {
-    Proven,
-    Denied(String),
 }
 
 fn ownership(state_dir: &Path, run_id: &str, path: &Path) -> Ownership {

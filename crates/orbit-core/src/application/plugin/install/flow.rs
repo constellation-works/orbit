@@ -30,6 +30,18 @@ use super::staging::{
 };
 use super::{PluginAddOptions, PluginInstallOutcome, PluginUpgradeOptions, PluginUpgradeResult};
 
+/// Where a digest came from when the operator passed one directly, named in
+/// the refusal an unpinned or mismatching archive produces.
+const FLAG_DIGEST_ORIGIN: &str = "the `--digest` option";
+
+struct ExpectedPluginIdentity<'a> {
+    name: &'a str,
+    version: Option<&'a str>,
+    /// An upgrade replaces a recorded install; it must not turn into a fresh
+    /// one because a `remove` landed between its first read and the lock.
+    installed: bool,
+}
+
 /// Install `source` for this host: a local directory, a `git+<url>#<ref>`
 /// reference, a local archive, or a digest-pinned `https://` archive.
 pub fn install_plugin(
@@ -51,18 +63,6 @@ pub(crate) fn install_plugin_reporting_enable(
     options: &PluginAddOptions,
 ) -> Result<PluginInstallOutcome, OrbitError> {
     install_plugin_inner(runtime, source, options, None, FLAG_DIGEST_ORIGIN)
-}
-
-/// Where a digest came from when the operator passed one directly, named in
-/// the refusal an unpinned or mismatching archive produces.
-const FLAG_DIGEST_ORIGIN: &str = "the `--digest` option";
-
-struct ExpectedPluginIdentity<'a> {
-    name: &'a str,
-    version: Option<&'a str>,
-    /// An upgrade replaces a recorded install; it must not turn into a fresh
-    /// one because a `remove` landed between its first read and the lock.
-    installed: bool,
 }
 
 /// Install a workspace pin only when its declared identity matches the source

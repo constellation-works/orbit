@@ -131,14 +131,6 @@ impl ArtifactKind {
     }
 }
 
-/// Command that refreshes the catalog containing this artifact kind.
-pub(super) fn init_command(kind: ArtifactKind) -> &'static str {
-    match kind {
-        ArtifactKind::Skill | ArtifactKind::Job | ArtifactKind::Activity => "orbit init",
-        ArtifactKind::AutoTask | ArtifactKind::Routine => "orbit workspace sync",
-    }
-}
-
 /// Why an artifact is not healthy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactCondition {
@@ -327,6 +319,99 @@ impl ManagedCatalog {
     }
 }
 
+impl OrbitRuntime {
+    /// Diagnose every definition-artifact kind. Probe failures degrade into
+    /// findings rather than aborting the pass, mirroring `orbit doctor`'s
+    /// contract that one broken subsystem never hides the rest.
+    pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
+        let mut report = Vec::new();
+        for mut catalog in managed_catalogs(self) {
+            let mut health = artifact_diagnosis::diagnose_catalog(self, &catalog);
+            health
+                .findings
+                .extend(artifact_diagnosis::diagnose_workspace_catalog_copies(
+                    self,
+                    catalog.kind,
+                ));
+            if catalog.kind == ArtifactKind::AutoTask && self.local_root() != self.shared_root() {
+                // Both catalogs can supply an inspected definition. Diagnose
+                // each with its own settings and manifest, retaining local
+                // candidate faults as well as faults in the shared catalog.
+                catalog.dir = auto_tasks_dir(&self.shared_root());
+                let shared = artifact_diagnosis::diagnose_catalog(self, &catalog);
+                health.scanned += shared.scanned;
+                health.findings.extend(shared.findings);
+            }
+            if catalog.kind == ArtifactKind::Skill
+                && let Some(base) = self.global_root().parent()
+            {
+                let roots = crate::application::skill::skill_link_roots(base);
+                let links = match dangling_client_skill_links(&roots) {
+                    Ok(links) => links,
+                    Err(error) => {
+                        health.findings.push(ArtifactFinding {
+                            kind: ArtifactKind::Skill,
+                            name: "provider discovery links".to_string(),
+                            path: base.to_path_buf(),
+                            condition: ArtifactCondition::Faulty,
+                            provenance: ArtifactProvenance::UserAuthored,
+                            detail: format!("cannot inspect provider skill links: {error}"),
+                            remediation: format!(
+                                "Check access to the skill discovery roots beside `{}`, then rerun `orbit doctor`.",
+                                base.display(),
+                            ),
+                        });
+                        Vec::new()
+                    }
+                };
+                for path in links {
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    let detail =
+                        format!("dangling skill link at {} (target missing)", path.display());
+                    let remediation = skill_link_remediation(&path);
+                    health.findings.push(ArtifactFinding {
+                        kind: ArtifactKind::Skill,
+                        name,
+                        path,
+                        condition: ArtifactCondition::DanglingLink,
+                        provenance: ArtifactProvenance::UserAuthored,
+                        detail,
+                        remediation,
+                    });
+                }
+            }
+            report.push(health);
+        }
+        Ok(report)
+    }
+
+    /// Retire deprecated managed artifacts: delete the ones whose recorded
+    /// digest proves Orbit wrote them, preserve locally modified ones outside
+    /// the active catalog, and leave everything else — faulty, stale, and
+    /// user-authored files alike — exactly as found.
+    ///
+    /// Returns the number of artifacts removed from the active catalog.
+    pub fn remove_stale_definition_artifacts(&self) -> Result<usize, OrbitError> {
+        let mut removed = 0usize;
+        for catalog in managed_catalogs(self) {
+            removed += retire_catalog(&catalog)?;
+        }
+        Ok(removed)
+    }
+}
+
+/// Command that refreshes the catalog containing this artifact kind.
+pub(super) fn init_command(kind: ArtifactKind) -> &'static str {
+    match kind {
+        ArtifactKind::Skill | ArtifactKind::Job | ArtifactKind::Activity => "orbit init",
+        ArtifactKind::AutoTask | ArtifactKind::Routine => "orbit workspace sync",
+    }
+}
+
 /// The base branch shipped auto-tasks in this runtime's catalogs are
 /// judged against: the registered base branch of the workspace whose
 /// catalog is being read.
@@ -438,90 +523,6 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
         )
         .leaving_out(left_out.routine_set()),
     ]
-}
-
-impl OrbitRuntime {
-    /// Diagnose every definition-artifact kind. Probe failures degrade into
-    /// findings rather than aborting the pass, mirroring `orbit doctor`'s
-    /// contract that one broken subsystem never hides the rest.
-    pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
-        let mut report = Vec::new();
-        for mut catalog in managed_catalogs(self) {
-            let mut health = artifact_diagnosis::diagnose_catalog(self, &catalog);
-            health
-                .findings
-                .extend(artifact_diagnosis::diagnose_workspace_catalog_copies(
-                    self,
-                    catalog.kind,
-                ));
-            if catalog.kind == ArtifactKind::AutoTask && self.local_root() != self.shared_root() {
-                // Both catalogs can supply an inspected definition. Diagnose
-                // each with its own settings and manifest, retaining local
-                // candidate faults as well as faults in the shared catalog.
-                catalog.dir = auto_tasks_dir(&self.shared_root());
-                let shared = artifact_diagnosis::diagnose_catalog(self, &catalog);
-                health.scanned += shared.scanned;
-                health.findings.extend(shared.findings);
-            }
-            if catalog.kind == ArtifactKind::Skill
-                && let Some(base) = self.global_root().parent()
-            {
-                let roots = crate::application::skill::skill_link_roots(base);
-                let links = match dangling_client_skill_links(&roots) {
-                    Ok(links) => links,
-                    Err(error) => {
-                        health.findings.push(ArtifactFinding {
-                            kind: ArtifactKind::Skill,
-                            name: "provider discovery links".to_string(),
-                            path: base.to_path_buf(),
-                            condition: ArtifactCondition::Faulty,
-                            provenance: ArtifactProvenance::UserAuthored,
-                            detail: format!("cannot inspect provider skill links: {error}"),
-                            remediation: format!(
-                                "Check access to the skill discovery roots beside `{}`, then rerun `orbit doctor`.",
-                                base.display(),
-                            ),
-                        });
-                        Vec::new()
-                    }
-                };
-                for path in links {
-                    health.findings.push(ArtifactFinding {
-                        kind: ArtifactKind::Skill,
-                        name: path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("?")
-                            .to_string(),
-                        condition: ArtifactCondition::DanglingLink,
-                        provenance: ArtifactProvenance::UserAuthored,
-                        detail: format!(
-                            "dangling skill link at {} (target missing)",
-                            path.display(),
-                        ),
-                        remediation: skill_link_remediation(&path),
-                        path,
-                    });
-                }
-            }
-            report.push(health);
-        }
-        Ok(report)
-    }
-
-    /// Retire deprecated managed artifacts: delete the ones whose recorded
-    /// digest proves Orbit wrote them, preserve locally modified ones outside
-    /// the active catalog, and leave everything else — faulty, stale, and
-    /// user-authored files alike — exactly as found.
-    ///
-    /// Returns the number of artifacts removed from the active catalog.
-    pub fn remove_stale_definition_artifacts(&self) -> Result<usize, OrbitError> {
-        let mut removed = 0usize;
-        for catalog in managed_catalogs(self) {
-            removed += retire_catalog(&catalog)?;
-        }
-        Ok(removed)
-    }
 }
 
 /// Read one artifact file, treating an unreadable file as absent.

@@ -33,6 +33,40 @@ use super::approvals::{
     held_json, proposed_tasks,
 };
 
+/// One task-pilot child this drain dispatched.
+pub(super) struct PilotChild {
+    pub(super) run_id: String,
+    /// The tasks it was asked to pilot, from its own run input.
+    pub(super) task_ids: Vec<String>,
+    pub(super) submitted_at: DateTime<Utc>,
+    /// Its terminal state; `None` while it is pending or running.
+    finished: Option<JobRunState>,
+    /// Whether the drain still has to record what it approved. Recording
+    /// closes the dispatch, so each pilot is counted once.
+    unrecorded: bool,
+    /// Whether a step failed for a task-independent reason, such as a provider
+    /// outage or missing inspection-capable crew. Such a pilot says nothing
+    /// about its tasks, so it is never recorded against them.
+    task_independent_failure: bool,
+}
+
+impl PilotChild {
+    pub(super) fn is_live(&self) -> bool {
+        self.finished.is_none()
+    }
+
+    pub(super) fn awaits_recording(&self) -> bool {
+        self.unrecorded && !self.is_live()
+    }
+}
+
+/// A finished pilot and the tasks this drain approved through it.
+pub(super) struct RecordedPilot {
+    run_id: String,
+    status: JobRunState,
+    approved: Vec<String>,
+}
+
 /// A live task-pilot run that names `task_id` in its input, or whose
 /// reservation or prepare checkpoint is among `holders`.
 ///
@@ -63,33 +97,6 @@ pub(super) fn live_pilot_run(
         .next()
         .map(|run| run.run_id)
         .or_else(|| holders.get(task_id)?.iter().next().cloned()))
-}
-
-/// One task-pilot child this drain dispatched.
-pub(super) struct PilotChild {
-    pub(super) run_id: String,
-    /// The tasks it was asked to pilot, from its own run input.
-    pub(super) task_ids: Vec<String>,
-    pub(super) submitted_at: DateTime<Utc>,
-    /// Its terminal state; `None` while it is pending or running.
-    finished: Option<JobRunState>,
-    /// Whether the drain still has to record what it approved. Recording
-    /// closes the dispatch, so each pilot is counted once.
-    unrecorded: bool,
-    /// Whether a step failed for a task-independent reason, such as a provider
-    /// outage or missing inspection-capable crew. Such a pilot says nothing
-    /// about its tasks, so it is never recorded against them.
-    task_independent_failure: bool,
-}
-
-impl PilotChild {
-    pub(super) fn is_live(&self) -> bool {
-        self.finished.is_none()
-    }
-
-    pub(super) fn awaits_recording(&self) -> bool {
-        self.unrecorded && !self.is_live()
-    }
 }
 
 /// The task-pilot children this drain dispatched, live and finished.
@@ -347,13 +354,6 @@ fn approved_by(runtime: &OrbitRuntime, run_id: &str, task_ids: &[String]) -> Vec
         })
         .cloned()
         .collect()
-}
-
-/// A finished pilot and the tasks this drain approved through it.
-pub(super) struct RecordedPilot {
-    run_id: String,
-    status: JobRunState,
-    approved: Vec<String>,
 }
 
 /// Replace the held view and add the pass's closed tasks and each finished

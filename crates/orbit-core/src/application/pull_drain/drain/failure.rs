@@ -27,6 +27,26 @@ use super::super::candidate::{
 /// the executor's run record; the owner's reader needs enough to decide.
 const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 
+/// Largest reason a typed failure carries.
+const MAX_FAILURE_REASON_BYTES: usize = 1024;
+
+/// Orbit's typed failure markers, which a failure's reason quotes without.
+/// The owner-route entry cleans only the reason text of legacy records
+/// written before the typed step-failure code; classification branches
+/// on the typed code in [`leaf_failure`].
+const FAILURE_MARKERS: [&str; 10] = [
+    FORGE_UNAVAILABLE_MARKER,
+    PROVIDER_UNAVAILABLE_MARKER,
+    PROVIDER_CAPACITY_MARKER,
+    PROVIDER_LIMIT_MARKER,
+    VALIDATION_ENVIRONMENT_MARKER,
+    OWNER_ROUTE_UNAVAILABLE_MARKER,
+    BASELINE_RED_MARKER,
+    TRANSIENT_FAILURE_MARKER,
+    OWNER_BUSY_MARKER,
+    UPGRADE_PENDING_MARKER,
+];
+
 /// The settlement a terminal leaf implies, by how far its admission got: a
 /// leaf that never launched was cancelled while queued, so nothing ran and
 /// its claim is released back to the owner's backlog. A launched leaf ended
@@ -352,9 +372,6 @@ fn evidence_hold_release(
     })
 }
 
-/// Largest reason a typed failure carries.
-const MAX_FAILURE_REASON_BYTES: usize = 1024;
-
 /// Why a launched leaf ended, typed. An operator's cancel wins; then the
 /// typed marker of the last failed step, of any provider or red-base failure
 /// the run recorded, or of the terminalizing caller's diagnostic; then a
@@ -531,23 +548,6 @@ fn leaf_failure(
         delivery_hold: is_stale_branch_hold(run, diagnostic),
     }
 }
-
-/// Orbit's typed failure markers, which a failure's reason quotes without.
-/// The owner-route entry cleans only the reason text of legacy records
-/// written before the typed step-failure code; classification branches
-/// on the typed code in [`leaf_failure`].
-const FAILURE_MARKERS: [&str; 10] = [
-    FORGE_UNAVAILABLE_MARKER,
-    PROVIDER_UNAVAILABLE_MARKER,
-    PROVIDER_CAPACITY_MARKER,
-    PROVIDER_LIMIT_MARKER,
-    VALIDATION_ENVIRONMENT_MARKER,
-    OWNER_ROUTE_UNAVAILABLE_MARKER,
-    BASELINE_RED_MARKER,
-    TRANSIENT_FAILURE_MARKER,
-    OWNER_BUSY_MARKER,
-    UPGRADE_PENDING_MARKER,
-];
 
 /// The baseline hold a terminal leaf failed on: a failed step, or the
 /// terminalizing caller's own diagnostic, carrying the typed

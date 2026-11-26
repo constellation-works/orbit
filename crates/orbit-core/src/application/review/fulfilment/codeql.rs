@@ -78,41 +78,15 @@ impl EvidenceCodeqlSandbox {
             }
         }
         Self {
+            checkout,
             profile: ResolvedFsProfile {
                 name: "review-evidence-fulfilment".to_string(),
                 read: Vec::new(),
                 modify,
             },
-            checkout,
             env: env.clone(),
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-fn cargo_home_candidates(env: &Env) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(home) = env.cargo_home().filter(|home| !home.is_empty()) {
-        candidates.push(PathBuf::from(home));
-    }
-    if let Some(home) = env.home().filter(|home| !home.is_empty()) {
-        candidates.push(PathBuf::from(home).join(".cargo"));
-    }
-    let current_dir = std::env::current_dir().ok();
-    let mut canonical = std::collections::BTreeSet::new();
-    candidates
-        .into_iter()
-        .filter_map(|path| {
-            let absolute = if path.is_absolute() {
-                path
-            } else {
-                current_dir.as_ref()?.join(path)
-            };
-            let path = absolute.canonicalize().ok()?;
-            path.is_dir().then_some(path)
-        })
-        .filter(|path| canonical.insert(path.clone()))
-        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -408,6 +382,42 @@ impl OrbitRuntime {
     }
 }
 
+/// What a complete run's SARIF reported.
+struct SarifJudgement {
+    /// The log's `sarif` record: run, result and rule counts.
+    summary: Value,
+    results: usize,
+    rules: Vec<String>,
+    /// Up to [`MAX_SUMMARIZED_RESULTS`] results, without their check name.
+    findings: Vec<ReviewEvidenceFinding>,
+}
+
+#[cfg(target_os = "linux")]
+fn cargo_home_candidates(env: &Env) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = env.cargo_home().filter(|home| !home.is_empty()) {
+        candidates.push(PathBuf::from(home));
+    }
+    if let Some(home) = env.home().filter(|home| !home.is_empty()) {
+        candidates.push(PathBuf::from(home).join(".cargo"));
+    }
+    let current_dir = std::env::current_dir().ok();
+    let mut canonical = std::collections::BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter_map(|path| {
+            let absolute = if path.is_absolute() {
+                path
+            } else {
+                current_dir.as_ref()?.join(path)
+            };
+            let path = absolute.canonicalize().ok()?;
+            path.is_dir().then_some(path)
+        })
+        .filter(|path| canonical.insert(path.clone()))
+        .collect()
+}
+
 /// The script's arguments when `command` is exactly the CodeQL script with
 /// its own options and one query selector. Every word is restricted to
 /// characters with no shell meaning, so no hold can name another program.
@@ -477,16 +487,6 @@ fn codeql_command_refusal(command: &str, why: &str) -> String {
          so a copy saved without the executable bit cannot run. \
          A custom command is not fulfilled"
     )
-}
-
-/// What a complete run's SARIF reported.
-struct SarifJudgement {
-    /// The log's `sarif` record: run, result and rule counts.
-    summary: Value,
-    results: usize,
-    rules: Vec<String>,
-    /// Up to [`MAX_SUMMARIZED_RESULTS`] results, without their check name.
-    findings: Vec<ReviewEvidenceFinding>,
 }
 
 /// The run's SARIF, from the run directory the script printed inside

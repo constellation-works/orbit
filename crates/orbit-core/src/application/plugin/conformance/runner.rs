@@ -26,6 +26,52 @@ use crate::runtime::plugin::requirements::{host_version, unmet_requirement};
 use super::model::{PluginTestDeferral, PluginTestOptions, PluginTestOutcome, PluginTestReport};
 use super::{gate, golden};
 
+/// The secret source of a conformance run: the current case's `secrets`
+/// map, replaced before each case. One backend serves every case (an `mcp`
+/// server is spawned once), and delivery reads the source per call, so the
+/// case that is running is the case whose fixtures a call carries.
+#[derive(Default)]
+struct FixtureSecrets(Mutex<BTreeMap<String, DeliveredPluginSecret>>);
+
+impl FixtureSecrets {
+    fn supply(&self, secrets: &BTreeMap<String, String>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = secrets
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    DeliveredPluginSecret {
+                        value: value.clone(),
+                        version: FIXTURE_SECRET_VERSION.to_string(),
+                    },
+                )
+            })
+            .collect();
+    }
+}
+
+impl PluginSecretSource for FixtureSecrets {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        let supplied = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok(names
+            .iter()
+            .filter_map(|name| {
+                supplied
+                    .get(name)
+                    .map(|secret| (name.clone(), secret.clone()))
+            })
+            .collect())
+    }
+}
+
+struct CaseExecution {
+    outcome: PluginTestOutcome,
+    actual_output: Option<Value>,
+}
+
 /// Run a plugin source's conformance goldens. `dir` is a checkout holding
 /// `.orbit-plugin/` or that directory itself.
 pub fn test_plugin_dir(
@@ -342,47 +388,6 @@ fn deferred_report(
     Ok(report)
 }
 
-/// The secret source of a conformance run: the current case's `secrets`
-/// map, replaced before each case. One backend serves every case (an `mcp`
-/// server is spawned once), and delivery reads the source per call, so the
-/// case that is running is the case whose fixtures a call carries.
-#[derive(Default)]
-struct FixtureSecrets(Mutex<BTreeMap<String, DeliveredPluginSecret>>);
-
-impl FixtureSecrets {
-    fn supply(&self, secrets: &BTreeMap<String, String>) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = secrets
-            .iter()
-            .map(|(name, value)| {
-                (
-                    name.clone(),
-                    DeliveredPluginSecret {
-                        value: value.clone(),
-                        version: FIXTURE_SECRET_VERSION.to_string(),
-                    },
-                )
-            })
-            .collect();
-    }
-}
-
-impl PluginSecretSource for FixtureSecrets {
-    fn read(
-        &self,
-        names: &[String],
-    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
-        let supplied = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        Ok(names
-            .iter()
-            .filter_map(|name| {
-                supplied
-                    .get(name)
-                    .map(|secret| (name.clone(), secret.clone()))
-            })
-            .collect())
-    }
-}
-
 fn selected_case_locations(
     plugin: &LoadedPlugin,
     selected: Option<&str>,
@@ -431,11 +436,6 @@ fn write_golden_file(loaded: &LoadedPluginTestFile) -> Result<(), OrbitError> {
     }
     atomic_write_text(&loaded.path, &encoded)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", loaded.path.display())))
-}
-
-struct CaseExecution {
-    outcome: PluginTestOutcome,
-    actual_output: Option<Value>,
 }
 
 /// Run one golden and compare the output to what the manifest promises.

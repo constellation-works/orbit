@@ -93,7 +93,7 @@ pub(super) fn render_backend_profile(
                 (name, value)
             })
             .collect();
-        environments.push(PluginRenderedEnvironment { variables, tool });
+        environments.push(PluginRenderedEnvironment { tool, variables });
     }
     let paths = |items: Vec<PathBuf>| {
         items
@@ -134,12 +134,12 @@ pub(super) fn permission_rows(
         .grant_requests()
         .into_iter()
         .map(|request| PluginPermissionSummary {
+            grant: request.grant,
+            requested: request.requested,
             granted: granted.contains(request.grant),
             granted_roots: granted
                 .entry(request.grant)
                 .and_then(|entry| entry.roots.clone()),
-            grant: request.grant,
-            requested: request.requested,
         })
         .collect()
 }

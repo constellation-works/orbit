@@ -36,6 +36,32 @@ use crate::OrbitRuntime;
 use crate::application::task::pilot::auto_approval_opted_out;
 use crate::runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceScope};
 
+std::thread_local! {
+    /// The key of the most recent ledgered write on this thread that
+    /// failed, was refused, or failed to close its ledger row. The broker
+    /// dispatch on the same thread takes it to fill the envelope `action_key`
+    /// (ORB-25284). The CLI also takes it for JSON errors; each dispatch clears
+    /// stale keys first.
+    static FAILED_RESIDENT_ACTION_KEY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static RESIDENT_ACTION_CLOSE_FAILURE: std::cell::RefCell<Option<Box<dyn FnOnce() -> OrbitError>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The checkpoint tool's name.
+const RESIDENT_CHECKPOINT_TOOL: &str = "orbit.resident.checkpoint";
+
+/// Friction update is the one resident write a cycle may also call through
+/// another covered workspace's runtime on the same host.
+const RESIDENT_FRICTION_UPDATE_TOOL: &str = "orbit.friction.update";
+
+/// The refusal of a resident's move to `done` while the task's PR is open.
+const RESIDENT_DONE_PR_OPEN: &str = "resident_done_pr_open";
+
 /// What a tool call needs from a resident cycle's grant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResidentCallClass {
@@ -90,189 +116,6 @@ impl ResidentActionTicket {
     pub(crate) fn resident_action_key(&self) -> &str {
         &self.row.key
     }
-}
-
-std::thread_local! {
-    /// The key of the most recent ledgered write on this thread that
-    /// failed, was refused, or failed to close its ledger row. The broker
-    /// dispatch on the same thread takes it to fill the envelope `action_key`
-    /// (ORB-25284). The CLI also takes it for JSON errors; each dispatch clears
-    /// stale keys first.
-    static FAILED_RESIDENT_ACTION_KEY: std::cell::RefCell<Option<String>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(feature = "test-support")]
-thread_local! {
-    static RESIDENT_ACTION_CLOSE_FAILURE: std::cell::RefCell<Option<Box<dyn FnOnce() -> OrbitError>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Run `operation` with the next terminal resident-action ledger write on this
-/// thread failing with `fail()`, after admission and the tool handler succeed.
-#[cfg(feature = "test-support")]
-pub fn with_resident_action_close_failure<T>(
-    fail: impl FnOnce() -> OrbitError + 'static,
-    operation: impl FnOnce() -> T,
-) -> T {
-    struct Restore(Option<Box<dyn FnOnce() -> OrbitError>>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            RESIDENT_ACTION_CLOSE_FAILURE.with(|slot| *slot.borrow_mut() = self.0.take());
-        }
-    }
-    let previous =
-        RESIDENT_ACTION_CLOSE_FAILURE.with(|slot| slot.borrow_mut().replace(Box::new(fail)));
-    let _restore = Restore(previous);
-    operation()
-}
-
-#[cfg(feature = "test-support")]
-fn take_resident_action_close_failure() -> Option<OrbitError> {
-    RESIDENT_ACTION_CLOSE_FAILURE
-        .with(|slot| slot.borrow_mut().take())
-        .map(|fail| fail())
-}
-
-/// Drop any stale ledger key left on this thread.
-pub(crate) fn clear_failed_resident_action_key() {
-    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = None);
-}
-
-/// Take the ledger key a ledgered write on this thread failed with.
-pub fn take_failed_resident_action_key() -> Option<String> {
-    FAILED_RESIDENT_ACTION_KEY.with(|slot| slot.borrow_mut().take())
-}
-
-fn record_failed_resident_action_key(key: &str) {
-    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = Some(key.to_string()));
-}
-
-/// Every action row recorded under `cycle`, latest state per key, in key order.
-pub(crate) fn action_rows(history: &[TaskHistoryEntry], cycle: &str) -> Vec<ResidentActionRow> {
-    let mut rows: Vec<ResidentActionRow> = Vec::new();
-    for row in history
-        .iter()
-        .filter(|entry| entry.event == RESIDENT_ACTION_EVENT)
-        .filter_map(|entry| serde_json::from_str::<ResidentActionRow>(entry.note.as_deref()?).ok())
-        .filter(|row| row.cycle == cycle)
-    {
-        match rows.iter_mut().find(|existing| existing.key == row.key) {
-            Some(existing) => *existing = row,
-            None => rows.push(row),
-        }
-    }
-    rows
-}
-
-fn digest_of(bytes: &[u8]) -> String {
-    orbit_types::identity::lower_hex(Sha256::digest(bytes))
-}
-
-/// `sha256:v2:` over the call's canonical input (object keys sorted
-/// recursively, array order preserved).
-fn input_digest(tool: &str, input: &Value) -> String {
-    let canonical = serde_json::to_vec(&json!([
-        tool,
-        orbit_common::protocol::sorted_keys_json_value(input)
-    ]))
-    .unwrap_or_default();
-    format!("sha256:v2:{}", digest_of(&canonical))
-}
-
-/// Pre-canonicalisation digest (`sha256:<hex>` over the input as
-/// serialised). Only used to recognise byte-identical legacy rows.
-fn legacy_input_digest(tool: &str, input: &Value) -> String {
-    let bytes = serde_json::to_vec(&json!([tool, input])).unwrap_or_default();
-    format!("sha256:{}", digest_of(&bytes))
-}
-
-fn is_legacy_digest(digest: &str) -> bool {
-    digest.starts_with("sha256:") && !digest.starts_with("sha256:v2:")
-}
-
-/// A `field` projection of one field answers that field's bare value, which
-/// has no object to carry the `resident_action_key` a cycle cites. Refuse it
-/// before the ledger opens, so the write never runs unrecorded. A `fields`
-/// list, or a `field` naming several fields, answers an object and keeps it.
-fn refuse_scalar_field_projection(tool: &str, input: &Value) -> Result<(), OrbitError> {
-    if input.get("fields").is_some() {
-        return Ok(());
-    }
-    let projection = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
-    if projection.is_some_and(|fields| fields.len() == 1) {
-        return Err(refused(
-            "resident_projection_refused",
-            format!(
-                "`{tool}` with a `field` projection answers a bare value, which carries \
-                 no `resident_action_key`; request the field in a `fields` list instead"
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn subject_of(input: &Value) -> Option<String> {
-    ["id", "task_id"]
-        .into_iter()
-        .find_map(|key| input.get(key).and_then(Value::as_str))
-        .map(str::to_string)
-}
-
-/// The workspaces a call's input names.
-fn named_workspaces(input: &Value) -> Vec<String> {
-    let mut named = Vec::new();
-    for key in ["workspace", "workspaces"] {
-        match input.get(key) {
-            Some(Value::String(value)) if !value.trim().is_empty() => {
-                named.push(value.trim().to_string());
-            }
-            Some(Value::Array(values)) => named.extend(
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-            ),
-            _ => {}
-        }
-    }
-    named
-}
-
-/// The checkpoint tool's name.
-const RESIDENT_CHECKPOINT_TOOL: &str = "orbit.resident.checkpoint";
-
-/// Friction update is the one resident write a cycle may also call through
-/// another covered workspace's runtime on the same host.
-const RESIDENT_FRICTION_UPDATE_TOOL: &str = "orbit.friction.update";
-
-/// The refusal of a resident's move to `done` while the task's PR is open.
-const RESIDENT_DONE_PR_OPEN: &str = "resident_done_pr_open";
-
-fn refused(code: &str, detail: impl std::fmt::Display) -> OrbitError {
-    OrbitError::PolicyDenied(format!("{code}: {detail}"))
-}
-
-/// Refuse a right-gated write the grant does not hold the right for.
-fn require_right(
-    grant: &ResidentCycleGrant,
-    tool: &str,
-    right: ResidentRight,
-) -> Result<(), OrbitError> {
-    if grant.rights.contains(&right) {
-        return Ok(());
-    }
-    let why = grant
-        .narrowed_by
-        .as_deref()
-        .map(|cause| format!(" (observe-only: {cause})"))
-        .unwrap_or_default();
-    Err(refused(
-        "resident_right_refused",
-        format!("`{tool}` needs the `{}` right{why}", right.as_str()),
-    ))
 }
 
 impl OrbitRuntime {
@@ -962,4 +805,161 @@ impl OrbitRuntime {
         }
         outcome
     }
+}
+
+/// Run `operation` with the next terminal resident-action ledger write on this
+/// thread failing with `fail()`, after admission and the tool handler succeed.
+#[cfg(feature = "test-support")]
+pub fn with_resident_action_close_failure<T>(
+    fail: impl FnOnce() -> OrbitError + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Box<dyn FnOnce() -> OrbitError>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RESIDENT_ACTION_CLOSE_FAILURE.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let previous =
+        RESIDENT_ACTION_CLOSE_FAILURE.with(|slot| slot.borrow_mut().replace(Box::new(fail)));
+    let _restore = Restore(previous);
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+fn take_resident_action_close_failure() -> Option<OrbitError> {
+    RESIDENT_ACTION_CLOSE_FAILURE
+        .with(|slot| slot.borrow_mut().take())
+        .map(|fail| fail())
+}
+
+/// Drop any stale ledger key left on this thread.
+pub(crate) fn clear_failed_resident_action_key() {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Take the ledger key a ledgered write on this thread failed with.
+pub fn take_failed_resident_action_key() -> Option<String> {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| slot.borrow_mut().take())
+}
+
+fn record_failed_resident_action_key(key: &str) {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = Some(key.to_string()));
+}
+
+/// Every action row recorded under `cycle`, latest state per key, in key order.
+pub(crate) fn action_rows(history: &[TaskHistoryEntry], cycle: &str) -> Vec<ResidentActionRow> {
+    let mut rows: Vec<ResidentActionRow> = Vec::new();
+    for row in history
+        .iter()
+        .filter(|entry| entry.event == RESIDENT_ACTION_EVENT)
+        .filter_map(|entry| serde_json::from_str::<ResidentActionRow>(entry.note.as_deref()?).ok())
+        .filter(|row| row.cycle == cycle)
+    {
+        match rows.iter_mut().find(|existing| existing.key == row.key) {
+            Some(existing) => *existing = row,
+            None => rows.push(row),
+        }
+    }
+    rows
+}
+
+fn digest_of(bytes: &[u8]) -> String {
+    orbit_types::identity::lower_hex(Sha256::digest(bytes))
+}
+
+/// `sha256:v2:` over the call's canonical input (object keys sorted
+/// recursively, array order preserved).
+fn input_digest(tool: &str, input: &Value) -> String {
+    let canonical = serde_json::to_vec(&json!([
+        tool,
+        orbit_common::protocol::sorted_keys_json_value(input)
+    ]))
+    .unwrap_or_default();
+    format!("sha256:v2:{}", digest_of(&canonical))
+}
+
+/// Pre-canonicalisation digest (`sha256:<hex>` over the input as
+/// serialised). Only used to recognise byte-identical legacy rows.
+fn legacy_input_digest(tool: &str, input: &Value) -> String {
+    let bytes = serde_json::to_vec(&json!([tool, input])).unwrap_or_default();
+    format!("sha256:{}", digest_of(&bytes))
+}
+
+fn is_legacy_digest(digest: &str) -> bool {
+    digest.starts_with("sha256:") && !digest.starts_with("sha256:v2:")
+}
+
+/// A `field` projection of one field answers that field's bare value, which
+/// has no object to carry the `resident_action_key` a cycle cites. Refuse it
+/// before the ledger opens, so the write never runs unrecorded. A `fields`
+/// list, or a `field` naming several fields, answers an object and keeps it.
+fn refuse_scalar_field_projection(tool: &str, input: &Value) -> Result<(), OrbitError> {
+    if input.get("fields").is_some() {
+        return Ok(());
+    }
+    let projection = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
+    if projection.is_some_and(|fields| fields.len() == 1) {
+        return Err(refused(
+            "resident_projection_refused",
+            format!(
+                "`{tool}` with a `field` projection answers a bare value, which carries \
+                 no `resident_action_key`; request the field in a `fields` list instead"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn subject_of(input: &Value) -> Option<String> {
+    ["id", "task_id"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .map(str::to_string)
+}
+
+/// The workspaces a call's input names.
+fn named_workspaces(input: &Value) -> Vec<String> {
+    let mut named = Vec::new();
+    for key in ["workspace", "workspaces"] {
+        match input.get(key) {
+            Some(Value::String(value)) if !value.trim().is_empty() => {
+                named.push(value.trim().to_string());
+            }
+            Some(Value::Array(values)) => named.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            ),
+            _ => {}
+        }
+    }
+    named
+}
+
+fn refused(code: &str, detail: impl std::fmt::Display) -> OrbitError {
+    OrbitError::PolicyDenied(format!("{code}: {detail}"))
+}
+
+/// Refuse a right-gated write the grant does not hold the right for.
+fn require_right(
+    grant: &ResidentCycleGrant,
+    tool: &str,
+    right: ResidentRight,
+) -> Result<(), OrbitError> {
+    if grant.rights.contains(&right) {
+        return Ok(());
+    }
+    let why = grant
+        .narrowed_by
+        .as_deref()
+        .map(|cause| format!(" (observe-only: {cause})"))
+        .unwrap_or_default();
+    Err(refused(
+        "resident_right_refused",
+        format!("`{tool}` needs the `{}` right{why}", right.as_str()),
+    ))
 }

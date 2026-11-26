@@ -101,24 +101,6 @@ impl GlobalSearchParams {
     }
 }
 
-/// The next-step note for a multi-word query with no hits, or with partial
-/// hits. The matching rules live in the orbit skill's search reference, so the
-/// note names only the next step and points there.
-pub(crate) fn whitespace_query_note(query: &str, results_empty: bool) -> Option<String> {
-    let trimmed = query.trim();
-    if trimmed.split_whitespace().count() < 2 {
-        return None;
-    }
-    let outcome = if results_empty {
-        "no hit"
-    } else {
-        "some hits match only some terms"
-    };
-    Some(format!(
-        "query {trimmed:?}: {outcome}; retry one distinctive term (matching rules: the orbit skill's search reference)."
-    ))
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct GlobalSearchResponse {
     pub mode: GlobalSearchMode,
@@ -199,4 +181,22 @@ pub struct GlobalSearchHit {
     /// second lookup per hit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record: Option<serde_json::Value>,
+}
+
+/// The next-step note for a multi-word query with no hits, or with partial
+/// hits. The matching rules live in the orbit skill's search reference, so the
+/// note names only the next step and points there.
+pub(crate) fn whitespace_query_note(query: &str, results_empty: bool) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.split_whitespace().count() < 2 {
+        return None;
+    }
+    let outcome = if results_empty {
+        "no hit"
+    } else {
+        "some hits match only some terms"
+    };
+    Some(format!(
+        "query {trimmed:?}: {outcome}; retry one distinctive term (matching rules: the orbit skill's search reference)."
+    ))
 }

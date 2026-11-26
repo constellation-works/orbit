@@ -10,19 +10,27 @@ thread_local! {
     static CLOSE_SNAPSHOT_HOOK: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
-/// Run notice posts at a fixed owner time on this thread, restoring the
-/// previous time on return or unwind. Other threads keep the real clock.
-pub fn with_notice_post_time<T>(now: DateTime<Utc>, operation: impl FnOnce() -> T) -> T {
-    let _restore = Restore(POST_TIME.replace(Some(now)));
-    operation()
-}
-
 struct Restore(Option<DateTime<Utc>>);
 
 impl Drop for Restore {
     fn drop(&mut self) {
         POST_TIME.set(self.0);
     }
+}
+
+struct CloseHookRestore(Option<Rc<dyn Fn()>>);
+
+impl Drop for CloseHookRestore {
+    fn drop(&mut self) {
+        CLOSE_SNAPSHOT_HOOK.with(|slot| slot.replace(self.0.take()));
+    }
+}
+
+/// Run notice posts at a fixed owner time on this thread, restoring the
+/// previous time on return or unwind. Other threads keep the real clock.
+pub fn with_notice_post_time<T>(now: DateTime<Utc>, operation: impl FnOnce() -> T) -> T {
+    let _restore = Restore(POST_TIME.replace(Some(now)));
+    operation()
 }
 
 pub(super) fn notice_post_time() -> DateTime<Utc> {
@@ -40,14 +48,6 @@ pub fn with_notice_close_snapshot_hook<T>(
     let _restore =
         CloseHookRestore(CLOSE_SNAPSHOT_HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
     operation()
-}
-
-struct CloseHookRestore(Option<Rc<dyn Fn()>>);
-
-impl Drop for CloseHookRestore {
-    fn drop(&mut self) {
-        CLOSE_SNAPSHOT_HOOK.with(|slot| slot.replace(self.0.take()));
-    }
 }
 
 pub(super) fn after_notice_close_snapshot() {

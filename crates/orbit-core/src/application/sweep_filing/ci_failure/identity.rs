@@ -64,15 +64,19 @@ impl<'a> CiTaskIdentities<'a> {
         }
         let history = self.runtime.get_task_history(&task.id)?;
         let identity = match CiFailureIdentity::from_history(&history) {
-            Ok(Some(identity)) => Some(TaskCiIdentity {
-                archive_signature: identity
+            Ok(Some(identity)) => {
+                let archive_signature = identity
                     .signature
                     .clone()
-                    .or_else(|| retained_archive_signature(task)),
-                prior_compiler_cause_digest: identity.compiler_cause_digest.clone(),
-                identity,
-                legacy_source_ids: None,
-            }),
+                    .or_else(|| retained_archive_signature(task));
+                let prior_compiler_cause_digest = identity.compiler_cause_digest.clone();
+                Some(TaskCiIdentity {
+                    identity,
+                    archive_signature,
+                    prior_compiler_cause_digest,
+                    legacy_source_ids: None,
+                })
+            }
             Ok(None) => Some(ci_identity_from_description_legacy(task)),
             // A foreign decision is authoritative; never reinterpret its prose.
             Err(_) => None,
@@ -83,90 +87,6 @@ impl<'a> CiTaskIdentities<'a> {
             .insert(task.id.clone(), identity.clone());
         Ok(identity)
     }
-}
-
-/// The only compatibility reader for pre-decision CI tasks. Keep the old
-/// distinction between a rendered complete cause and its retained log subset,
-/// and the old whole-description provenance membership semantics.
-fn ci_identity_from_description_legacy(task: &Task) -> TaskCiIdentity {
-    let description = &task.description;
-    let identity_line = |prefix| {
-        description.lines().find_map(|line| {
-            line.trim_end()
-                .strip_prefix(prefix)?
-                .strip_suffix('`')
-                .map(str::to_string)
-        })
-    };
-    let retained_cause = compiler_cause(description);
-    let prior_compiler_cause_digest = retained_cause.as_ref().map(|cause| digest(&[cause]));
-    let compiler_cause_digest = identity_line(COMPILER_CAUSE_LINE);
-    let open_compiler_set = identity_line(OPEN_COMPILER_SET_LINE).or_else(|| {
-        // An old excerpt can establish the coordinate-free set only if it
-        // contains the entire cause named by the complete-cause line.
-        if compiler_cause_digest.as_ref() != prior_compiler_cause_digest.as_ref()
-            || retained_cause.is_none()
-        {
-            return None;
-        }
-        compiler_diagnostic_set(description).map(|set| digest(&[&set]))
-    });
-    let labels = |prefix: &str, suffix: &str| {
-        description
-            .match_indices(prefix)
-            .filter_map(|(offset, _)| {
-                description[offset + prefix.len()..]
-                    .split_once(suffix)
-                    .map(|(value, _)| value.to_string())
-            })
-            .collect()
-    };
-    TaskCiIdentity {
-        archive_signature: identity_line(SIGNATURE_LINE)
-            .or_else(|| retained_archive_signature(task)),
-        identity: CiFailureIdentity {
-            failure_key: task
-                .tags
-                .iter()
-                .find_map(|tag| tag.strip_prefix(CI_FAILURE_KEY_TAG_PREFIX))
-                .unwrap_or_default()
-                .to_string(),
-            compiler_cause_digest,
-            open_compiler_set,
-            signature: identity_line(SIGNATURE_LINE),
-            tested_commit: identity_line("- Commit the runner actually checked out: `")
-                .unwrap_or_default(),
-            sources: Vec::new(),
-        },
-        prior_compiler_cause_digest,
-        legacy_source_ids: Some([
-            labels("run `", "`"),
-            labels("(id `", "`)"),
-            labels("commit actually checked out: `", "`"),
-        ]),
-    }
-}
-
-fn retained_archive_signature(task: &Task) -> Option<String> {
-    let section = task
-        .description
-        .split_once("\n## Failed-step log excerpt\n")?
-        .1;
-    let section = section
-        .split_once("\n## ")
-        .map_or(section, |(excerpt, _)| excerpt);
-    // An incomplete excerpt cannot establish a different cause. Do not scan
-    // other prose, recommendations or comments for diagnostic-looking text.
-    if section.contains("truncated") || section.contains("omitted") || section.contains("[...") {
-        return None;
-    }
-    let log = section
-        .trim_start()
-        .strip_prefix("```\n")?
-        .split_once("\n```")?
-        .0;
-    let signature = error_signature(log, "");
-    (!signature.step_fallback).then_some(signature.text)
 }
 
 /// Exclude a rejected broad-key collision before shared duplicate lookup can
@@ -211,4 +131,88 @@ impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for CauseCheckedLookup
     fn searchable_text(&self, task: &Task) -> Result<Rc<str>, OrbitError> {
         self.inner.searchable_text(task)
     }
+}
+
+/// The only compatibility reader for pre-decision CI tasks. Keep the old
+/// distinction between a rendered complete cause and its retained log subset,
+/// and the old whole-description provenance membership semantics.
+fn ci_identity_from_description_legacy(task: &Task) -> TaskCiIdentity {
+    let description = &task.description;
+    let identity_line = |prefix| {
+        description.lines().find_map(|line| {
+            line.trim_end()
+                .strip_prefix(prefix)?
+                .strip_suffix('`')
+                .map(str::to_string)
+        })
+    };
+    let retained_cause = compiler_cause(description);
+    let prior_compiler_cause_digest = retained_cause.as_ref().map(|cause| digest(&[cause]));
+    let compiler_cause_digest = identity_line(COMPILER_CAUSE_LINE);
+    let open_compiler_set = identity_line(OPEN_COMPILER_SET_LINE).or_else(|| {
+        // An old excerpt can establish the coordinate-free set only if it
+        // contains the entire cause named by the complete-cause line.
+        if compiler_cause_digest.as_ref() != prior_compiler_cause_digest.as_ref()
+            || retained_cause.is_none()
+        {
+            return None;
+        }
+        compiler_diagnostic_set(description).map(|set| digest(&[&set]))
+    });
+    let labels = |prefix: &str, suffix: &str| {
+        description
+            .match_indices(prefix)
+            .filter_map(|(offset, _)| {
+                description[offset + prefix.len()..]
+                    .split_once(suffix)
+                    .map(|(value, _)| value.to_string())
+            })
+            .collect()
+    };
+    TaskCiIdentity {
+        identity: CiFailureIdentity {
+            failure_key: task
+                .tags
+                .iter()
+                .find_map(|tag| tag.strip_prefix(CI_FAILURE_KEY_TAG_PREFIX))
+                .unwrap_or_default()
+                .to_string(),
+            compiler_cause_digest,
+            open_compiler_set,
+            signature: identity_line(SIGNATURE_LINE),
+            tested_commit: identity_line("- Commit the runner actually checked out: `")
+                .unwrap_or_default(),
+            sources: Vec::new(),
+        },
+        archive_signature: identity_line(SIGNATURE_LINE)
+            .or_else(|| retained_archive_signature(task)),
+        prior_compiler_cause_digest,
+        legacy_source_ids: Some([
+            labels("run `", "`"),
+            labels("(id `", "`)"),
+            labels("commit actually checked out: `", "`"),
+        ]),
+    }
+}
+
+fn retained_archive_signature(task: &Task) -> Option<String> {
+    let section = task
+        .description
+        .split_once("\n## Failed-step log excerpt\n")?
+        .1;
+    let section = section
+        .split_once("\n## ")
+        .map_or(section, |(excerpt, _)| excerpt);
+    // An incomplete excerpt cannot establish a different cause. Do not scan
+    // other prose, recommendations or comments for diagnostic-looking text.
+    if section.contains("truncated") || section.contains("omitted") || section.contains("[...") {
+        return None;
+    }
+    let log = section
+        .trim_start()
+        .strip_prefix("```\n")?
+        .split_once("\n```")?
+        .0;
+    let signature = error_signature(log, "");
+    (!signature.step_fallback).then_some(signature.text)
 }

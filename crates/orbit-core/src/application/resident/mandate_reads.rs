@@ -19,18 +19,6 @@ use super::{
 use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
 
-fn status_line_notice_json(notice: &Notice) -> Value {
-    json!({
-        "notice_id": notice.id,
-        "title": notice.title,
-        "body": notice.body,
-        "posted_at": notice.updated_at,
-        "expires_at": notice.expires_at,
-        "status": notice.status,
-        "stale": notice.status != orbit_types::record::EffectiveStatus::Open,
-    })
-}
-
 impl OrbitRuntime {
     /// Judge mandate bytes the way every mandate read does: the
     /// `resident.mandate/v1` field rules and a configured crew. The error is
@@ -447,6 +435,18 @@ impl OrbitRuntime {
         }
         Ok(json!({ "count": rows.len(), "mandates": rows }))
     }
+}
+
+fn status_line_notice_json(notice: &Notice) -> Value {
+    json!({
+        "notice_id": notice.id,
+        "title": notice.title,
+        "body": notice.body,
+        "posted_at": notice.updated_at,
+        "expires_at": notice.expires_at,
+        "status": notice.status,
+        "stale": notice.status != orbit_types::record::EffectiveStatus::Open,
+    })
 }
 
 // The first ending event in the current terminal spell is the stop time.

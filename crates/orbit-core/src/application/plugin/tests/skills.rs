@@ -13,13 +13,6 @@ use crate::application::plugin::skills::{
     dangling_plugin_skill_links_in, unlink_plugin_skills_from,
 };
 
-fn roots(fixture: &PluginFixture) -> Vec<PathBuf> {
-    [".agents", ".claude"]
-        .into_iter()
-        .map(|dir| fixture.repo_root.join(dir).join("skills"))
-        .collect()
-}
-
 /// Discovery names that unlink must remove and doctor must treat as this
 /// plugin's links. Spellings that only look local, or that cannot be resolved,
 /// stay listed in the preserved set below.
@@ -45,6 +38,95 @@ const PRESERVED_LINKS: &[&str] = &[
     "symlink-cycle",
     "unrelated",
 ];
+
+struct NamespaceLayout {
+    family: PathBuf,
+    sources: PathBuf,
+    discovery: PathBuf,
+    other_discovery: PathBuf,
+}
+
+impl NamespaceLayout {
+    fn prepare(fixture: &PluginFixture, plugin_root: &Path) -> Self {
+        let family = plugin_root
+            .parent()
+            .expect("plugin install family")
+            .to_path_buf();
+        let sources = family
+            .parent()
+            .expect("canonical sources dir")
+            .to_path_buf();
+        let other_skill = sources.join("other/1.0.0/skills/guide");
+        std::fs::create_dir_all(&other_skill).expect("create the other plugin skill");
+        std::fs::write(other_skill.join("SKILL.md"), "# Other\n").expect("write other skill");
+        create_dir_symlink(&family, &sources.join("alias-graph")).expect("alias the graph family");
+        create_dir_symlink(&sources.join("other/1.0.0"), &family.join("via-other"))
+            .expect("symlink an ancestor out of the family");
+        create_dir_symlink(&family.join("cycle"), &family.join("cycle")).expect("symlink cycle");
+        create_dir_symlink(&sources.join("other/1.0.0"), &plugin_root.join("escape"))
+            .expect("symlink an ancestor out of the plugin root");
+
+        let mut discovery_roots = roots(fixture);
+        let other_discovery = discovery_roots.pop().expect("second discovery root");
+        let discovery = discovery_roots.pop().expect("discovery root");
+        for root in [&discovery, &other_discovery] {
+            std::fs::create_dir_all(root).expect("create discovery root");
+        }
+        // `relative_to` counts path components, so the discovery roots must be
+        // spelled as the plugin root is: symlink-free. Under a symlinked temp
+        // directory (macOS `/var`) the spelled root has one component fewer
+        // than the physical one and every relative alias would climb one level
+        // short.
+        let discovery = discovery.canonicalize().expect("resolve discovery root");
+        let other_discovery = other_discovery
+            .canonicalize()
+            .expect("resolve other discovery root");
+        Self {
+            family,
+            sources,
+            discovery,
+            other_discovery,
+        }
+    }
+
+    fn roots(&self) -> Vec<PathBuf> {
+        vec![self.discovery.clone(), self.other_discovery.clone()]
+    }
+
+    fn relative_alias(&self, tail: &str) -> PathBuf {
+        relative_to(
+            &self.discovery,
+            &self
+                .sources
+                .join("other")
+                .join("..")
+                .join("alias-graph")
+                .join(tail),
+        )
+    }
+
+    fn relative_alias_inside_plugin(&self, plugin_root: &Path, skill_name: &str) -> PathBuf {
+        let plugin_dir = plugin_root.file_name().expect("plugin directory name");
+        self.relative_alias(&format!(
+            "{}/skills/{skill_name}",
+            plugin_dir.to_string_lossy()
+        ))
+    }
+
+    fn alias_to_skill(&self, skill_dir: &Path) -> PathBuf {
+        let relative = skill_dir
+            .strip_prefix(&self.family)
+            .expect("skill stays inside the install family");
+        self.sources.join("alias-graph").join(relative)
+    }
+}
+
+fn roots(fixture: &PluginFixture) -> Vec<PathBuf> {
+    [".agents", ".claude"]
+        .into_iter()
+        .map(|dir| fixture.repo_root.join(dir).join("skills"))
+        .collect()
+}
 
 #[test]
 fn disabling_preserves_links_that_resolve_outside_the_namespace() {
@@ -247,91 +329,9 @@ fn disabling_preserves_links_that_resolve_outside_the_namespace() {
     );
 }
 
-struct NamespaceLayout {
-    family: PathBuf,
-    sources: PathBuf,
-    discovery: PathBuf,
-    other_discovery: PathBuf,
-}
-
 fn install_link(target: &Path, link: &Path) {
     create_dir_symlink(target, link)
         .unwrap_or_else(|error| panic!("link {} -> {}: {error}", link.display(), target.display()));
-}
-
-impl NamespaceLayout {
-    fn prepare(fixture: &PluginFixture, plugin_root: &Path) -> Self {
-        let family = plugin_root
-            .parent()
-            .expect("plugin install family")
-            .to_path_buf();
-        let sources = family
-            .parent()
-            .expect("canonical sources dir")
-            .to_path_buf();
-        let other_skill = sources.join("other/1.0.0/skills/guide");
-        std::fs::create_dir_all(&other_skill).expect("create the other plugin skill");
-        std::fs::write(other_skill.join("SKILL.md"), "# Other\n").expect("write other skill");
-        create_dir_symlink(&family, &sources.join("alias-graph")).expect("alias the graph family");
-        create_dir_symlink(&sources.join("other/1.0.0"), &family.join("via-other"))
-            .expect("symlink an ancestor out of the family");
-        create_dir_symlink(&family.join("cycle"), &family.join("cycle")).expect("symlink cycle");
-        create_dir_symlink(&sources.join("other/1.0.0"), &plugin_root.join("escape"))
-            .expect("symlink an ancestor out of the plugin root");
-
-        let mut discovery_roots = roots(fixture);
-        let other_discovery = discovery_roots.pop().expect("second discovery root");
-        let discovery = discovery_roots.pop().expect("discovery root");
-        for root in [&discovery, &other_discovery] {
-            std::fs::create_dir_all(root).expect("create discovery root");
-        }
-        // `relative_to` counts path components, so the discovery roots must be
-        // spelled as the plugin root is: symlink-free. Under a symlinked temp
-        // directory (macOS `/var`) the spelled root has one component fewer
-        // than the physical one and every relative alias would climb one level
-        // short.
-        let discovery = discovery.canonicalize().expect("resolve discovery root");
-        let other_discovery = other_discovery
-            .canonicalize()
-            .expect("resolve other discovery root");
-        Self {
-            family,
-            sources,
-            discovery,
-            other_discovery,
-        }
-    }
-
-    fn roots(&self) -> Vec<PathBuf> {
-        vec![self.discovery.clone(), self.other_discovery.clone()]
-    }
-
-    fn relative_alias(&self, tail: &str) -> PathBuf {
-        relative_to(
-            &self.discovery,
-            &self
-                .sources
-                .join("other")
-                .join("..")
-                .join("alias-graph")
-                .join(tail),
-        )
-    }
-
-    fn relative_alias_inside_plugin(&self, plugin_root: &Path, skill_name: &str) -> PathBuf {
-        let plugin_dir = plugin_root.file_name().expect("plugin directory name");
-        self.relative_alias(&format!(
-            "{}/skills/{skill_name}",
-            plugin_dir.to_string_lossy()
-        ))
-    }
-
-    fn alias_to_skill(&self, skill_dir: &Path) -> PathBuf {
-        let relative = skill_dir
-            .strip_prefix(&self.family)
-            .expect("skill stays inside the install family");
-        self.sources.join("alias-graph").join(relative)
-    }
 }
 
 fn write_user_skill(fixture: &PluginFixture) -> PathBuf {

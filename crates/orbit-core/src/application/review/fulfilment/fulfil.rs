@@ -422,8 +422,8 @@ impl OrbitRuntime {
         self.update_task_as_system(
             &task.id,
             TaskUpdateParams {
-                upsert_artifacts: artifacts,
                 comment,
+                upsert_artifacts: artifacts,
                 ..TaskUpdateParams::default()
             },
             Some(run_id.to_string()),

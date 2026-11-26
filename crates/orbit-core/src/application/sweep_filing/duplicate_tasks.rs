@@ -25,6 +25,18 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{Task, TaskComment, TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
+const MAX_EVIDENCE_FIELDS: usize = 6;
+const MAX_EVIDENCE_CHARS: usize = 160;
+
+/// Persisted heading written by `append_alert_ledger`. Rejected grouped tasks
+/// already store these bytes; matching a renamed heading would stop binding
+/// an alert to its own location and restore cross-alert suppression.
+const PER_ALERT_LEDGER_HEADING: &str = "Per-alert evidence ledger";
+
+/// Words the sweep writer emits as fixed labels. Their case is prose, so they
+/// compare case-insensitively; every other token keeps its exact case.
+const EXACT_LABEL_WORDS: [&str; 5] = ["alert", "rule", "location", "line", "lines"];
+
 /// Why a covering task owns a candidate, serialized snake_case at the report
 /// boundary (`exact_key`, `material_coverage`, `rejected_owner`,
 /// `confirmed_duplicate`, `open_compiler_diagnostics`, `covered_by_repair`).
@@ -38,9 +50,6 @@ pub(crate) enum DuplicateMatchKind {
     OpenCompilerDiagnostics,
     CoveredByRepair,
 }
-
-const MAX_EVIDENCE_FIELDS: usize = 6;
-const MAX_EVIDENCE_CHARS: usize = 160;
 
 pub(crate) trait DuplicateTaskLookup {
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError>;
@@ -316,6 +325,17 @@ pub(crate) struct DuplicateTaskMatch {
     pub evidence: Value,
 }
 
+enum RejectedTaskOwnership {
+    SupersededBy(String),
+    LegacyCoveredBy(String),
+    OwnRejection,
+}
+
+struct RejectedTaskOwner<'a> {
+    task: &'a Task,
+    ownership: RejectedTaskOwnership,
+}
+
 /// Find a still-open task covering `candidate`.
 ///
 /// The tag query deliberately happens before the broader task listing. An
@@ -404,17 +424,6 @@ where
     }
 
     rejected_owner_match(lookup, candidate, &rejected)
-}
-
-enum RejectedTaskOwnership {
-    SupersededBy(String),
-    LegacyCoveredBy(String),
-    OwnRejection,
-}
-
-struct RejectedTaskOwner<'a> {
-    task: &'a Task,
-    ownership: RejectedTaskOwnership,
 }
 
 fn resolve_rejected_task_ownership<'a, L>(
@@ -627,11 +636,6 @@ fn fingerprint_matches(searchable: &str, fingerprint: &CoverageFingerprint) -> b
     anchors_match(searchable, fingerprint.anchors.iter())
 }
 
-/// Persisted heading written by `append_alert_ledger`. Rejected grouped tasks
-/// already store these bytes; matching a renamed heading would stop binding
-/// an alert to its own location and restore cross-alert suppression.
-const PER_ALERT_LEDGER_HEADING: &str = "Per-alert evidence ledger";
-
 fn rejected_owner_fingerprint_matches(
     task: &Task,
     comments: &[TaskComment],
@@ -668,10 +672,6 @@ fn rejected_owner_fingerprint_matches(
         None => exact_anchors_match(&searchable, colocated.iter().copied()),
     }
 }
-
-/// Words the sweep writer emits as fixed labels. Their case is prose, so they
-/// compare case-insensitively; every other token keeps its exact case.
-const EXACT_LABEL_WORDS: [&str; 5] = ["alert", "rule", "location", "line", "lines"];
 
 /// Split text on whitespace and Markdown framing (backticks, `:`, `#`, `*`,
 /// commas, semicolons, brackets, pipes) only. Unlike `canonical_text`,

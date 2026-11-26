@@ -29,6 +29,89 @@ pub(super) const DRAIN_JOB_NAME: &str = "workspace_auto_pipeline";
 /// its own child finishes rather than when the slowest child in the batch does.
 pub(super) const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
 
+/// The live drain run, with both the ceiling it was submitted with and the one
+/// an operator has since set.
+pub(super) struct ActiveDrain {
+    pub(super) run_id: String,
+    pub(super) created_at: DateTime<Utc>,
+    pub(super) input: Value,
+    submitted: u32,
+    pub(super) limit: Option<DrainWorkerLimit>,
+    pub(super) stop: Option<DrainAdmissionsStop>,
+}
+
+impl ActiveDrain {
+    pub(super) fn admissions_stopped(&self) -> bool {
+        self.stop.is_some()
+    }
+
+    pub(super) fn effective_max_active_leaf_runs(&self) -> u32 {
+        self.limit
+            .as_ref()
+            .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
+    }
+}
+
+impl OrbitRuntime {
+    /// The leaf-run ceiling a drain is admitting under right now, and its
+    /// source, as readiness reports it without `--concurrency`: `run_control`
+    /// or `run_input` for the live local drain, `pull_run_control` or
+    /// `pull_run_input` for a live pull drain, else `default`.
+    pub fn drain_concurrency_ceiling(&self) -> Result<(u64, &'static str), OrbitError> {
+        let (active, _) = workspace_drains(self)?;
+        let pull = live_pull_drain(self)?;
+        Ok(drain_ceiling(active.as_ref(), pull.as_ref()))
+    }
+
+    /// The auto-concurrency mode the live local drain admits under (its own
+    /// override, else the host's configured mode) and `live_drain`; with no
+    /// live local drain, the configured mode and `configured`.
+    pub(crate) fn drain_auto_concurrency_mode(
+        &self,
+    ) -> Result<(AutoConcurrencyMode, &'static str), OrbitError> {
+        let (active, _) = workspace_drains(self)?;
+        Ok(match active {
+            Some(drain) => (
+                super::mode::effective_mode(self, &drain.input)?,
+                "live_drain",
+            ),
+            None => (super::mode::effective_mode(self, &json!({}))?, "configured"),
+        })
+    }
+}
+
+/// The live pull-drain run on a replica checkout, with its admissions stop
+/// and the ceiling it is admitting under [ORB-16337].
+pub(super) struct LivePullDrain {
+    pub(super) run_id: String,
+    pub(super) input: Value,
+    pub(super) stop: Option<DrainAdmissionsStop>,
+    /// Why its last pass requested no claim although its window was open
+    /// [ORB-15637].
+    pub(super) refusal: Option<String>,
+    submitted: u32,
+    /// An operator adjustment, when one has been accepted. It wins over
+    /// `submitted`, the same way it does for a local drain.
+    pub(super) limit: Option<DrainWorkerLimit>,
+}
+
+impl LivePullDrain {
+    /// The ceiling this pull drain is admitting under: the operator
+    /// adjustment when one is recorded, otherwise the value it was submitted
+    /// with (the job default of 5 when the input omits it).
+    pub(super) fn effective_max_active_leaf_runs(&self) -> u32 {
+        self.limit
+            .as_ref()
+            .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
+    }
+}
+
+/// A live `task_auto_pipeline` run and the tasks it is carrying.
+pub(crate) struct LiveLeafRun {
+    pub(crate) run_id: String,
+    pub(crate) task_ids: Vec<String>,
+}
+
 /// Reads the engine-injected drain `run_id` from an activity input.
 pub(super) fn drain_run_id(input: &Value) -> Option<&str> {
     input
@@ -64,29 +147,6 @@ pub(super) fn live_drain_state(runtime: &OrbitRuntime, input: &Value) -> Option<
     runtime.read_run_state(run_id).ok().flatten()
 }
 
-/// The live drain run, with both the ceiling it was submitted with and the one
-/// an operator has since set.
-pub(super) struct ActiveDrain {
-    pub(super) run_id: String,
-    pub(super) created_at: DateTime<Utc>,
-    pub(super) input: Value,
-    submitted: u32,
-    pub(super) limit: Option<DrainWorkerLimit>,
-    pub(super) stop: Option<DrainAdmissionsStop>,
-}
-
-impl ActiveDrain {
-    pub(super) fn admissions_stopped(&self) -> bool {
-        self.stop.is_some()
-    }
-
-    pub(super) fn effective_max_active_leaf_runs(&self) -> u32 {
-        self.limit
-            .as_ref()
-            .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
-    }
-}
-
 /// The leaf-run ceiling the live drain admits under, and where it comes
 /// from: the live local drain's (an operator adjustment, else its submitted
 /// value), then the live pull drain's, else the job default.
@@ -112,34 +172,6 @@ pub(super) fn drain_ceiling(
             },
         ),
         (None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
-    }
-}
-
-impl OrbitRuntime {
-    /// The leaf-run ceiling a drain is admitting under right now, and its
-    /// source, as readiness reports it without `--concurrency`: `run_control`
-    /// or `run_input` for the live local drain, `pull_run_control` or
-    /// `pull_run_input` for a live pull drain, else `default`.
-    pub fn drain_concurrency_ceiling(&self) -> Result<(u64, &'static str), OrbitError> {
-        let (active, _) = workspace_drains(self)?;
-        let pull = live_pull_drain(self)?;
-        Ok(drain_ceiling(active.as_ref(), pull.as_ref()))
-    }
-
-    /// The auto-concurrency mode the live local drain admits under (its own
-    /// override, else the host's configured mode) and `live_drain`; with no
-    /// live local drain, the configured mode and `configured`.
-    pub(crate) fn drain_auto_concurrency_mode(
-        &self,
-    ) -> Result<(AutoConcurrencyMode, &'static str), OrbitError> {
-        let (active, _) = workspace_drains(self)?;
-        Ok(match active {
-            Some(drain) => (
-                super::mode::effective_mode(self, &drain.input)?,
-                "live_drain",
-            ),
-            None => (super::mode::effective_mode(self, &json!({}))?, "configured"),
-        })
     }
 }
 
@@ -251,32 +283,6 @@ fn queued_drain(runtime: &OrbitRuntime, run: &JobRun) -> Value {
     })
 }
 
-/// The live pull-drain run on a replica checkout, with its admissions stop
-/// and the ceiling it is admitting under [ORB-16337].
-pub(super) struct LivePullDrain {
-    pub(super) run_id: String,
-    pub(super) input: Value,
-    pub(super) stop: Option<DrainAdmissionsStop>,
-    /// Why its last pass requested no claim although its window was open
-    /// [ORB-15637].
-    pub(super) refusal: Option<String>,
-    submitted: u32,
-    /// An operator adjustment, when one has been accepted. It wins over
-    /// `submitted`, the same way it does for a local drain.
-    pub(super) limit: Option<DrainWorkerLimit>,
-}
-
-impl LivePullDrain {
-    /// The ceiling this pull drain is admitting under: the operator
-    /// adjustment when one is recorded, otherwise the value it was submitted
-    /// with (the job default of 5 when the input omits it).
-    pub(super) fn effective_max_active_leaf_runs(&self) -> u32 {
-        self.limit
-            .as_ref()
-            .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
-    }
-}
-
 /// The running `workspace_pull_pipeline` run, if any. `orbit run auto --stop`
 /// stops its admissions along with the auto coordinator's, so readiness must
 /// show it or a replica's operator cannot tell a live drain from an idle one.
@@ -337,12 +343,6 @@ fn json_u32(value: &Value) -> Option<u32> {
         Value::String(text) => text.trim().parse::<u32>().ok(),
         _ => None,
     }
-}
-
-/// A live `task_auto_pipeline` run and the tasks it is carrying.
-pub(crate) struct LiveLeafRun {
-    pub(crate) run_id: String,
-    pub(crate) task_ids: Vec<String>,
 }
 
 pub(super) fn live_leaf_runs(

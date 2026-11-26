@@ -13,31 +13,8 @@ use crate::OrbitRuntime;
 use crate::application::distributed::{OwnerAnswer, RefusedPullSettlement};
 use crate::application::pull_drain::drain::{BreakerGate, PullDrain};
 
-/// Preserve the cause before the engine terminalizes the drain. Its outbox
-/// remains available to leaf workers and later settlement-only passes.
-pub(super) fn protocol_skew_failure(
-    runtime: &OrbitRuntime,
-    action: &str,
-    run_id: &str,
-    throttle: Option<orbit_types::workflow::ResourceThrottle>,
-    message: String,
-) -> DispatchError {
-    match runtime.record_pull_pass(
-        run_id,
-        throttle,
-        None,
-        Some(&format!("protocol_skew: {message}")),
-        Some("protocol_skew"),
-        OwnerAnswer::None,
-        None,
-    ) {
-        Ok(_) => DispatchError::ProtocolSkew(message),
-        Err(error) => DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("pull drain could not record pass health: {error}"),
-        },
-    }
-}
+/// The refusal code of a pass the load forecast held.
+const FORECAST_NO_HEADROOM: &str = "forecast_no_headroom";
 
 /// What decided a pull pass's outcome, for its drain's pass counters. Only a
 /// pass whose window was open is counted: a settle-only pass admits nothing
@@ -58,9 +35,6 @@ pub(super) struct PullPass<'a> {
     /// A stop or cancel was observed by the refill's admission gate.
     pub(super) admissions_stopped: bool,
 }
-
-/// The refusal code of a pass the load forecast held.
-const FORECAST_NO_HEADROOM: &str = "forecast_no_headroom";
 
 impl PullPass<'_> {
     /// The pass's one outcome, in [`DrainPassOutcome`]'s precedence. The
@@ -101,6 +75,32 @@ impl PullPass<'_> {
             DrainPassOutcome::Held
         };
         observation
+    }
+}
+
+/// Preserve the cause before the engine terminalizes the drain. Its outbox
+/// remains available to leaf workers and later settlement-only passes.
+pub(super) fn protocol_skew_failure(
+    runtime: &OrbitRuntime,
+    action: &str,
+    run_id: &str,
+    throttle: Option<orbit_types::workflow::ResourceThrottle>,
+    message: String,
+) -> DispatchError {
+    match runtime.record_pull_pass(
+        run_id,
+        throttle,
+        None,
+        Some(&format!("protocol_skew: {message}")),
+        Some("protocol_skew"),
+        OwnerAnswer::None,
+        None,
+    ) {
+        Ok(_) => DispatchError::ProtocolSkew(message),
+        Err(error) => DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("pull drain could not record pass health: {error}"),
+        },
     }
 }
 

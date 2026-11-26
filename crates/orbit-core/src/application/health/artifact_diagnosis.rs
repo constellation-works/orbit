@@ -31,6 +31,24 @@ use orbit_automation::auto_tasks::settings::{
     AutoTaskOverrides, AutoTaskSettings, load_settings_table,
 };
 
+struct LoadFault {
+    name: String,
+    path: PathBuf,
+    condition: ArtifactCondition,
+    detail: String,
+}
+
+impl From<ActivityCatalogFault> for LoadFault {
+    fn from(fault: ActivityCatalogFault) -> Self {
+        Self {
+            name: fault.name,
+            path: fault.path,
+            condition: ArtifactCondition::Faulty,
+            detail: fault.detail,
+        }
+    }
+}
+
 /// Inspect stale, retired, and preserved legacy workspace copies without
 /// changing them or adopting user files. Startup uses the same refresh mode.
 pub(super) fn diagnose_workspace_catalog_copies(
@@ -755,24 +773,6 @@ fn finish_catalog_health(
         kind,
         scanned,
         findings,
-    }
-}
-
-struct LoadFault {
-    name: String,
-    path: PathBuf,
-    condition: ArtifactCondition,
-    detail: String,
-}
-
-impl From<ActivityCatalogFault> for LoadFault {
-    fn from(fault: ActivityCatalogFault) -> Self {
-        Self {
-            name: fault.name,
-            path: fault.path,
-            condition: ArtifactCondition::Faulty,
-            detail: fault.detail,
-        }
     }
 }
 

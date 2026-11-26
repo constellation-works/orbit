@@ -18,48 +18,6 @@ pub struct FleetReadinessFacts {
     pub(super) status_index: Option<BTreeMap<String, TaskStatus>>,
 }
 
-fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) {
-    payload["replica"] = json!(runtime.replica_owner_machine().is_some());
-    let acknowledged = hosts::acknowledged_hosts(runtime);
-    if !acknowledged.is_empty() {
-        payload["acknowledged"] = json!(acknowledged);
-    }
-    payload["validation_env_warning"] = json!(runtime.readiness_validation_env_warning());
-    // [ORB-25965] The recorded drain intent, with who paused it and when. An
-    // unreadable row is reported as such, never as `off`.
-    payload["drain_intent"] = match runtime.workspace_drain_intent() {
-        Ok(record) => crate::application::job::drain_intent_json(record.as_ref()),
-        Err(error) => json!({ "intent": "unknown", "error": error.to_string() }),
-    };
-    // [ORB-25991] The standing-drain keeper: whether it is enabled, its
-    // flags and breaker while it is, and its last recorded decision.
-    payload["drain_keeper"] = match runtime.standing_drain_keeper_view() {
-        Ok(view) => view.to_json(),
-        Err(error) => json!({ "error": error.to_string() }),
-    };
-}
-
-/// Explain the same snapshot that auto-drain uses without performing its
-/// stale-run reconciliation. This is deliberately an observation API: it
-/// neither reserves work nor creates a pipeline run, and its answer can go
-/// stale immediately after the stores are read.
-fn explain_workspace_auto_readiness(
-    runtime: &OrbitRuntime,
-    task_ids: &[String],
-    max_active_leaf_runs: Option<u32>,
-    limit: usize,
-    allowed_crews: &[String],
-) -> Result<Value, OrbitError> {
-    snapshot::readiness_snapshot(
-        runtime,
-        task_ids,
-        max_active_leaf_runs,
-        limit,
-        allowed_crews,
-        ReadinessDepth::Full,
-    )
-}
-
 impl OrbitRuntime {
     /// Read-only projection of the current auto-drain admission snapshot.
     pub fn workspace_auto_readiness(
@@ -187,4 +145,46 @@ impl OrbitRuntime {
             })
             .collect())
     }
+}
+
+fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) {
+    payload["replica"] = json!(runtime.replica_owner_machine().is_some());
+    let acknowledged = hosts::acknowledged_hosts(runtime);
+    if !acknowledged.is_empty() {
+        payload["acknowledged"] = json!(acknowledged);
+    }
+    payload["validation_env_warning"] = json!(runtime.readiness_validation_env_warning());
+    // [ORB-25965] The recorded drain intent, with who paused it and when. An
+    // unreadable row is reported as such, never as `off`.
+    payload["drain_intent"] = match runtime.workspace_drain_intent() {
+        Ok(record) => crate::application::job::drain_intent_json(record.as_ref()),
+        Err(error) => json!({ "intent": "unknown", "error": error.to_string() }),
+    };
+    // [ORB-25991] The standing-drain keeper: whether it is enabled, its
+    // flags and breaker while it is, and its last recorded decision.
+    payload["drain_keeper"] = match runtime.standing_drain_keeper_view() {
+        Ok(view) => view.to_json(),
+        Err(error) => json!({ "error": error.to_string() }),
+    };
+}
+
+/// Explain the same snapshot that auto-drain uses without performing its
+/// stale-run reconciliation. This is deliberately an observation API: it
+/// neither reserves work nor creates a pipeline run, and its answer can go
+/// stale immediately after the stores are read.
+fn explain_workspace_auto_readiness(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    max_active_leaf_runs: Option<u32>,
+    limit: usize,
+    allowed_crews: &[String],
+) -> Result<Value, OrbitError> {
+    snapshot::readiness_snapshot(
+        runtime,
+        task_ids,
+        max_active_leaf_runs,
+        limit,
+        allowed_crews,
+        ReadinessDepth::Full,
+    )
 }

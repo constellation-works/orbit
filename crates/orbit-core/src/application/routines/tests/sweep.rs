@@ -34,6 +34,28 @@ impl RoutineWorkspaceProvider for BlockedWorkspace {
     }
 }
 
+struct OneWorkspace(OrbitRuntime);
+
+impl RoutineWorkspaceProvider for OneWorkspace {
+    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let workspace = Workspace {
+            id: self.0.workspace_id().expect("workspace id"),
+            name: "horizon".into(),
+            owner_machine_id: None,
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".into(),
+            status: WorkspaceStatus::Active,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        Ok(DiscoveredWorkspaces {
+            entries: vec![(workspace, self.0.clone())],
+            ..DiscoveredWorkspaces::default()
+        })
+    }
+}
+
 #[test]
 fn blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces() {
     if crate::application::run_isolated_test(std::any::type_name_of_val(
@@ -233,26 +255,4 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
         "{:?}",
         fired.auto_task_reports
     );
-}
-
-struct OneWorkspace(OrbitRuntime);
-
-impl RoutineWorkspaceProvider for OneWorkspace {
-    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
-        let workspace = Workspace {
-            id: self.0.workspace_id().expect("workspace id"),
-            name: "horizon".into(),
-            owner_machine_id: None,
-            git_remote: None,
-            ship_mode: None,
-            base_branch: "main".into(),
-            status: WorkspaceStatus::Active,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
-        Ok(DiscoveredWorkspaces {
-            entries: vec![(workspace, self.0.clone())],
-            ..DiscoveredWorkspaces::default()
-        })
-    }
 }

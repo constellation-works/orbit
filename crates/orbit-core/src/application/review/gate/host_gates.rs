@@ -43,103 +43,6 @@ use super::judgement::{Judgement, extend_note};
 /// The admission input naming the run's pre-review validation step.
 pub(super) const HOST_VALIDATION_STEP_INPUT: &str = "host_validation_step";
 
-/// The claim host's results for the owner's `trusted` commands on `head`,
-/// as the run's `step` recorded them. Empty when the run is not a claimed
-/// leaf, the step recorded nothing, or it validated another commit.
-pub(super) fn recorded_host_gates(
-    runtime: &OrbitRuntime,
-    context: &GateContext,
-    step: &str,
-    head: &str,
-    trusted: &[String],
-) -> Result<Vec<HostGateResult>, OrbitError> {
-    if !context.claimed {
-        return Ok(Vec::new());
-    }
-    let state = runtime.stores().jobs().read_run_state(&context.run_id)?;
-    let Some(output) = state.as_ref().and_then(|state| state.pipeline.get(step)) else {
-        return Ok(Vec::new());
-    };
-    Ok(host_gates_from_output(
-        output,
-        &context.run_id,
-        step,
-        head,
-        trusted,
-    ))
-}
-
-/// The results a `claim_validate` output records for `head`, restricted to
-/// `trusted` commands.
-fn host_gates_from_output(
-    output: &Value,
-    run_id: &str,
-    step: &str,
-    head: &str,
-    trusted: &[String],
-) -> Vec<HostGateResult> {
-    if output.get("tested_head").and_then(Value::as_str) != Some(head) {
-        return Vec::new();
-    }
-    let known_red = output
-        .get("known_red")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<KnownRedValidation>>(value).ok())
-        .unwrap_or_default();
-    let results = output
-        .get("results")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    results
-        .iter()
-        .filter_map(|result| {
-            let command = result.get("command").and_then(Value::as_str)?.trim();
-            if !trusted.iter().any(|trusted| trusted.trim() == command) {
-                return None;
-            }
-            // Outputs recorded before known red applied to claims carried
-            // only passed commands, without an exit status.
-            let exit_code = result
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .and_then(|code| i32::try_from(code).ok())
-                .unwrap_or(0);
-            let known_red = known_red
-                .iter()
-                .find(|known| known.command.trim() == command && known.tested_head == head)
-                .cloned();
-            Some(HostGateResult {
-                command: command.to_string(),
-                outcome: if exit_code == 0 && known_red.is_none() {
-                    ValidationOutcome::Passed
-                } else {
-                    ValidationOutcome::Failed
-                },
-                exit_code,
-                tested_head: head.to_string(),
-                run_id: run_id.to_string(),
-                step: step.to_string(),
-                known_red,
-            })
-        })
-        .collect()
-}
-
-/// The host results an admission carries for `reviewed`, the candidate the
-/// attempt admitted.
-pub(super) fn admitted_host_gates(
-    admitted: &ReviewGateAdmitted,
-    reviewed: &str,
-) -> Vec<HostGateResult> {
-    admitted
-        .host_validation
-        .iter()
-        .filter(|gate| gate.tested_head == reviewed)
-        .cloned()
-        .collect()
-}
-
 impl Judgement {
     /// Decide every check `gates` ran from the host's result rather than the
     /// reviewer's record. `base` is the pinned base commit and `repaired`
@@ -297,6 +200,103 @@ impl Judgement {
             .iter()
             .any(|gate| same_host_command(record, &gate.command))
     }
+}
+
+/// The claim host's results for the owner's `trusted` commands on `head`,
+/// as the run's `step` recorded them. Empty when the run is not a claimed
+/// leaf, the step recorded nothing, or it validated another commit.
+pub(super) fn recorded_host_gates(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    step: &str,
+    head: &str,
+    trusted: &[String],
+) -> Result<Vec<HostGateResult>, OrbitError> {
+    if !context.claimed {
+        return Ok(Vec::new());
+    }
+    let state = runtime.stores().jobs().read_run_state(&context.run_id)?;
+    let Some(output) = state.as_ref().and_then(|state| state.pipeline.get(step)) else {
+        return Ok(Vec::new());
+    };
+    Ok(host_gates_from_output(
+        output,
+        &context.run_id,
+        step,
+        head,
+        trusted,
+    ))
+}
+
+/// The results a `claim_validate` output records for `head`, restricted to
+/// `trusted` commands.
+fn host_gates_from_output(
+    output: &Value,
+    run_id: &str,
+    step: &str,
+    head: &str,
+    trusted: &[String],
+) -> Vec<HostGateResult> {
+    if output.get("tested_head").and_then(Value::as_str) != Some(head) {
+        return Vec::new();
+    }
+    let known_red = output
+        .get("known_red")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<KnownRedValidation>>(value).ok())
+        .unwrap_or_default();
+    let results = output
+        .get("results")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    results
+        .iter()
+        .filter_map(|result| {
+            let command = result.get("command").and_then(Value::as_str)?.trim();
+            if !trusted.iter().any(|trusted| trusted.trim() == command) {
+                return None;
+            }
+            // Outputs recorded before known red applied to claims carried
+            // only passed commands, without an exit status.
+            let exit_code = result
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .and_then(|code| i32::try_from(code).ok())
+                .unwrap_or(0);
+            let known_red = known_red
+                .iter()
+                .find(|known| known.command.trim() == command && known.tested_head == head)
+                .cloned();
+            Some(HostGateResult {
+                command: command.to_string(),
+                outcome: if exit_code == 0 && known_red.is_none() {
+                    ValidationOutcome::Passed
+                } else {
+                    ValidationOutcome::Failed
+                },
+                exit_code,
+                tested_head: head.to_string(),
+                run_id: run_id.to_string(),
+                step: step.to_string(),
+                known_red,
+            })
+        })
+        .collect()
+}
+
+/// The host results an admission carries for `reviewed`, the candidate the
+/// attempt admitted.
+pub(super) fn admitted_host_gates(
+    admitted: &ReviewGateAdmitted,
+    reviewed: &str,
+) -> Vec<HostGateResult> {
+    admitted
+        .host_validation
+        .iter()
+        .filter(|gate| gate.tested_head == reviewed)
+        .cloned()
+        .collect()
 }
 
 fn host_note(gate: &HostGateResult, verdict: &str) -> String {

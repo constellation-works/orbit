@@ -39,6 +39,16 @@ pub(super) struct DependencyFold {
     pub(super) folded_targets: BTreeMap<usize, Vec<usize>>,
 }
 
+/// What the per-cluster loop produced, for the final report.
+pub(super) struct FiledClusters {
+    pub(super) filed: Vec<CiSweepFilingEvidence>,
+    pub(super) pilot_candidates: Vec<CiSweepFilingEvidence>,
+    pub(super) skipped_existing: Vec<Value>,
+    pub(super) withheld: Vec<Value>,
+    pub(super) skipped_over_cap: Vec<Value>,
+    pub(super) folded_clusters: Vec<usize>,
+}
+
 pub(super) fn dependency_fold(
     clusters: &[FailureCluster],
     owners: &ClusterOwners,
@@ -92,16 +102,6 @@ pub(super) fn dependency_fold(
         sibling_index,
         folded_targets,
     }
-}
-
-/// What the per-cluster loop produced, for the final report.
-pub(super) struct FiledClusters {
-    pub(super) filed: Vec<CiSweepFilingEvidence>,
-    pub(super) pilot_candidates: Vec<CiSweepFilingEvidence>,
-    pub(super) skipped_existing: Vec<Value>,
-    pub(super) withheld: Vec<Value>,
-    pub(super) skipped_over_cap: Vec<Value>,
-    pub(super) folded_clusters: Vec<usize>,
 }
 
 /// Covered descendant landings join `snapshot.pending_supersession`, and
@@ -289,6 +289,23 @@ where
             }
         }
         let task_id = add_task(TaskAddParams {
+            title: cluster.title(),
+            description,
+            acceptance_criteria: cluster.acceptance_criteria(),
+            tags,
+            // Deliberately empty: the evidence is already in the description,
+            // so the task ships on the ordinary agent baseline.
+            required_tools: Vec::new(),
+            context_files: cluster.context_files(),
+            priority: TaskPriority::High,
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Bug),
+            // Filing is quarantine, not dispatch authorization. The
+            // task-pilot apply boundary is the only CI-sweep path that may
+            // promote a relevant, selector-backed repair to backlog.
+            status: Some(TaskStatus::Proposed),
+            system_created: true,
+            crew: None,
             creation_decision: Some(TaskDecision::CiFailureIdentity(CiFailureIdentity {
                 failure_key: cluster.failure_key.clone(),
                 compiler_cause_digest: cluster
@@ -301,23 +318,6 @@ where
                 tested_commit: cluster.tested_commit.clone(),
                 sources: cluster.sources.clone(),
             })),
-            title: cluster.title(),
-            description,
-            acceptance_criteria: cluster.acceptance_criteria(),
-            tags,
-            context_files: cluster.context_files(),
-            // Deliberately empty: the evidence is already in the description,
-            // so the task ships on the ordinary agent baseline.
-            required_tools: Vec::new(),
-            crew: None,
-            priority: TaskPriority::High,
-            complexity: TaskComplexity::Medium,
-            task_type: Some(TaskType::Bug),
-            // Filing is quarantine, not dispatch authorization. The
-            // task-pilot apply boundary is the only CI-sweep path that may
-            // promote a relevant, selector-backed repair to backlog.
-            status: Some(TaskStatus::Proposed),
-            system_created: true,
             ..TaskAddParams::default()
         })
         .map_err(|error| {

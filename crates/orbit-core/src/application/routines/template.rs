@@ -24,6 +24,32 @@ use crate::application::managed_assets::{
     RoutineMaterializationBinding, load_managed_asset_manifest,
 };
 
+/// Which template family an on-disk managed routine is a lifecycle-only
+/// variant of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShippedShape {
+    /// Matches the template this Orbit ships for the stem.
+    Current,
+    /// Matches an earlier shape of a template this Orbit still ships.
+    Superseded,
+    /// Matches the last shape of a default this Orbit no longer ships.
+    Retired,
+}
+
+impl RoutineMaterializationBinding {
+    /// The values this binding renders, for a drift report.
+    pub(super) fn describe(&self) -> String {
+        let mut described = format!("name '{}'", self.name);
+        if let Some(owner_machine) = &self.owner_machine {
+            described.push_str(&format!(", owner '{owner_machine}'"));
+        }
+        if let Some(branch) = &self.branch {
+            described.push_str(&format!(", branch '{branch}'"));
+        }
+        described
+    }
+}
+
 /// Whether `orbit workspace sync` would remove the routine definition at
 /// `path` from `routines_dir`'s active catalog.
 ///
@@ -68,18 +94,6 @@ pub(crate) fn is_seeded_routine_file(path: &Path) -> bool {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .is_some_and(|stem| DEFAULT_ROUTINE_FILES.iter().any(|(name, _)| *name == stem))
-}
-
-/// Which template family an on-disk managed routine is a lifecycle-only
-/// variant of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShippedShape {
-    /// Matches the template this Orbit ships for the stem.
-    Current,
-    /// Matches an earlier shape of a template this Orbit still ships.
-    Superseded,
-    /// Matches the last shape of a default this Orbit no longer ships.
-    Retired,
 }
 
 /// The fields a shipped template owns. `enabled` is the operator's opt-in
@@ -278,20 +292,6 @@ pub(super) fn binding_of(definition: &RoutineDefinition) -> RoutineMaterializati
         name: definition.name.clone(),
         owner_machine: state.map(|trigger| trigger.owner_machine.clone()),
         branch: state.map(|trigger| trigger.branch.clone()),
-    }
-}
-
-impl RoutineMaterializationBinding {
-    /// The values this binding renders, for a drift report.
-    pub(super) fn describe(&self) -> String {
-        let mut described = format!("name '{}'", self.name);
-        if let Some(owner_machine) = &self.owner_machine {
-            described.push_str(&format!(", owner '{owner_machine}'"));
-        }
-        if let Some(branch) = &self.branch {
-            described.push_str(&format!(", branch '{branch}'"));
-        }
-        described
     }
 }
 

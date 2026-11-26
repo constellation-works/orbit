@@ -113,166 +113,12 @@ impl ResidentDue {
     }
 }
 
-/// Every cycle start the history records, oldest first.
-pub(crate) fn started_cycles(history: &[TaskHistoryEntry]) -> Vec<StartedCycle> {
-    history
-        .iter()
-        .filter_map(|entry| match ResidentCycleChange::from_entry(entry)? {
-            Ok(ResidentCycleChange::Started(live)) => Some(StartedCycle { live, at: entry.at }),
-            Ok(ResidentCycleChange::Cleared) | Err(_) => None,
-        })
-        .collect()
-}
-
-/// The grant recorded for `cycle`, if observe recorded one.
-pub(crate) fn cycle_grant(history: &[TaskHistoryEntry], cycle: &str) -> Option<ResidentCycleGrant> {
-    history
-        .iter()
-        .rev()
-        .filter(|entry| entry.event == RESIDENT_CYCLE_GRANTED_EVENT)
-        .filter_map(|entry| serde_json::from_str::<ResidentCycleGrant>(entry.note.as_deref()?).ok())
-        .find(|grant| grant.cycle == cycle)
-}
-
-/// Whether `cycle` fell back to `continuity: rebuilt` after an expired or
-/// unresumable conversation reference.
-pub(crate) fn continuity_rebuilt(history: &[TaskHistoryEntry], cycle: &str) -> bool {
-    history.iter().any(|entry| {
-        entry.event == orbit_types::workflow::RESIDENT_CONTINUITY_REBUILT_EVENT
-            && entry.note.as_deref() == Some(cycle)
-    })
-}
-
-/// The mandate's checkpoints, oldest first.
-pub(crate) fn checkpoints(task_id: &str, comments: &[TaskComment]) -> Vec<ResidentCheckpoint> {
-    comments
-        .iter()
-        .filter_map(
-            |comment| match ResidentComment::parse(&comment.message).ok()? {
-                ResidentComment::Checkpoint(record) if record.mandate == task_id => Some(*record),
-                _ => None,
-            },
-        )
-        .collect()
-}
-
 /// Why an active mandate is stalled, and since when.
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentStall {
     pub(crate) reason: String,
     pub(crate) since: DateTime<Utc>,
     pub(crate) last_checkpoint_at: Option<DateTime<Utc>>,
-}
-
-/// Whether a mandate is stalled at `now`: no checkpoint (or, never having
-/// checkpointed, no first one since the task was created) for twice its
-/// heartbeat, or its last three checkpoints all `incomplete`. Callers ask
-/// only for an active mandate: a paused or taken-over one is meant to wait.
-pub(crate) fn resident_stall(
-    task: &Task,
-    mandate: &ResidentMandate,
-    comments: &[TaskComment],
-    now: DateTime<Utc>,
-) -> Option<ResidentStall> {
-    let written: Vec<(DateTime<Utc>, String)> = comments
-        .iter()
-        .filter_map(
-            |comment| match ResidentComment::parse(&comment.message).ok()? {
-                ResidentComment::Checkpoint(record) if record.mandate == task.id.as_str() => {
-                    Some((comment.at, record.outcome))
-                }
-                _ => None,
-            },
-        )
-        .collect();
-    let last_checkpoint_at = written.last().map(|(at, _)| *at);
-    let tail: Vec<&(DateTime<Utc>, String)> =
-        written.iter().rev().take(STALLED_INCOMPLETE_RUN).collect();
-    if tail.len() == STALLED_INCOMPLETE_RUN
-        && tail.iter().all(|(_, outcome)| outcome == "incomplete")
-    {
-        return Some(ResidentStall {
-            reason: format!("its last {STALLED_INCOMPLETE_RUN} cycles were all incomplete"),
-            since: tail.last().map_or(now, |(at, _)| *at),
-            last_checkpoint_at,
-        });
-    }
-    let since = last_checkpoint_at.unwrap_or(task.created_at);
-    let limit = Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes));
-    (now - since >= limit).then(|| ResidentStall {
-        reason: match last_checkpoint_at {
-            Some(_) => format!(
-                "no checkpoint for over twice its {}-minute heartbeat",
-                mandate.cadence.heartbeat_minutes
-            ),
-            None => format!(
-                "no first checkpoint within twice its {}-minute heartbeat",
-                mandate.cadence.heartbeat_minutes
-            ),
-        },
-        since,
-        last_checkpoint_at,
-    })
-}
-
-fn digest_of(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    format!(
-        "sha256:{}",
-        orbit_types::identity::lower_hex(Sha256::digest(bytes))
-    )
-}
-
-/// Comments a cycle reacts to: everything but the resident's own
-/// checkpoints and requests, and, while a cycle was live, only what a human
-/// wrote (an agent's comments inside a cycle are the cycle's own work).
-fn wake_comments(comments: &[TaskComment], cycles: &[StartedCycle]) -> Vec<serde_json::Value> {
-    comments
-        .iter()
-        .filter(|comment| {
-            match ResidentComment::parse(&comment.message) {
-                Ok(ResidentComment::Answer(_)) => return true,
-                Ok(ResidentComment::Checkpoint(_) | ResidentComment::Request(_)) => return false,
-                Err(_) => {}
-            }
-            comment.by.starts_with("human")
-                || !cycles
-                    .iter()
-                    .any(|cycle| comment.at >= cycle.at && comment.at <= cycle.live.expires_at)
-        })
-        .map(|comment| {
-            json!([
-                comment.at,
-                comment.by,
-                orbit_types::identity::lower_hex(Sha256::digest(comment.message.as_bytes()))
-            ])
-        })
-        .collect()
-}
-
-/// When the mandate's next unprompted cycle is due after the last cycle
-/// started at `started`: its last checkpoint's planned `next_wake`, clamped
-/// between the floor and the heartbeat, or the heartbeat when the last
-/// cycle left no checkpoint of its own or ended `incomplete` (a synthesized
-/// or failed cycle's plan is not the resident's).
-fn planned_wake_at(
-    mandate: &ResidentMandate,
-    started: &StartedCycle,
-    last: Option<&ResidentCheckpoint>,
-) -> DateTime<Utc> {
-    let floor = started.at + Duration::minutes(i64::from(mandate.cadence.floor_minutes));
-    let heartbeat = started.at + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes));
-    match last {
-        Some(checkpoint)
-            if checkpoint.cycle == started.live.cycle && checkpoint.outcome != "incomplete" =>
-        {
-            checkpoint
-                .next_wake
-                .not_before
-                .clamp(floor, heartbeat.max(floor))
-        }
-        _ => heartbeat,
-    }
 }
 
 impl OrbitRuntime {
@@ -652,13 +498,14 @@ impl OrbitRuntime {
         {
             withheld = Some("cadence_floor".into());
         }
+        let baseline_unchanged = baseline
+            .as_ref()
+            .is_some_and(|baseline| *baseline == wake_observation);
         Ok(ResidentDue {
             mandate,
             digest,
-            baseline_unchanged: baseline
-                .as_ref()
-                .is_some_and(|baseline| *baseline == wake_observation),
             wake_observation,
+            baseline_unchanged,
             reasons,
             withheld,
             last_cycle,
@@ -668,5 +515,159 @@ impl OrbitRuntime {
             notices,
             wake_at: pending_wake.map(|(_, at)| at),
         })
+    }
+}
+
+/// Every cycle start the history records, oldest first.
+pub(crate) fn started_cycles(history: &[TaskHistoryEntry]) -> Vec<StartedCycle> {
+    history
+        .iter()
+        .filter_map(|entry| match ResidentCycleChange::from_entry(entry)? {
+            Ok(ResidentCycleChange::Started(live)) => Some(StartedCycle { live, at: entry.at }),
+            Ok(ResidentCycleChange::Cleared) | Err(_) => None,
+        })
+        .collect()
+}
+
+/// The grant recorded for `cycle`, if observe recorded one.
+pub(crate) fn cycle_grant(history: &[TaskHistoryEntry], cycle: &str) -> Option<ResidentCycleGrant> {
+    history
+        .iter()
+        .rev()
+        .filter(|entry| entry.event == RESIDENT_CYCLE_GRANTED_EVENT)
+        .filter_map(|entry| serde_json::from_str::<ResidentCycleGrant>(entry.note.as_deref()?).ok())
+        .find(|grant| grant.cycle == cycle)
+}
+
+/// Whether `cycle` fell back to `continuity: rebuilt` after an expired or
+/// unresumable conversation reference.
+pub(crate) fn continuity_rebuilt(history: &[TaskHistoryEntry], cycle: &str) -> bool {
+    history.iter().any(|entry| {
+        entry.event == orbit_types::workflow::RESIDENT_CONTINUITY_REBUILT_EVENT
+            && entry.note.as_deref() == Some(cycle)
+    })
+}
+
+/// The mandate's checkpoints, oldest first.
+pub(crate) fn checkpoints(task_id: &str, comments: &[TaskComment]) -> Vec<ResidentCheckpoint> {
+    comments
+        .iter()
+        .filter_map(
+            |comment| match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(record) if record.mandate == task_id => Some(*record),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Whether a mandate is stalled at `now`: no checkpoint (or, never having
+/// checkpointed, no first one since the task was created) for twice its
+/// heartbeat, or its last three checkpoints all `incomplete`. Callers ask
+/// only for an active mandate: a paused or taken-over one is meant to wait.
+pub(crate) fn resident_stall(
+    task: &Task,
+    mandate: &ResidentMandate,
+    comments: &[TaskComment],
+    now: DateTime<Utc>,
+) -> Option<ResidentStall> {
+    let written: Vec<(DateTime<Utc>, String)> = comments
+        .iter()
+        .filter_map(
+            |comment| match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(record) if record.mandate == task.id.as_str() => {
+                    Some((comment.at, record.outcome))
+                }
+                _ => None,
+            },
+        )
+        .collect();
+    let last_checkpoint_at = written.last().map(|(at, _)| *at);
+    let tail: Vec<&(DateTime<Utc>, String)> =
+        written.iter().rev().take(STALLED_INCOMPLETE_RUN).collect();
+    if tail.len() == STALLED_INCOMPLETE_RUN
+        && tail.iter().all(|(_, outcome)| outcome == "incomplete")
+    {
+        return Some(ResidentStall {
+            reason: format!("its last {STALLED_INCOMPLETE_RUN} cycles were all incomplete"),
+            since: tail.last().map_or(now, |(at, _)| *at),
+            last_checkpoint_at,
+        });
+    }
+    let since = last_checkpoint_at.unwrap_or(task.created_at);
+    let limit = Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes));
+    (now - since >= limit).then(|| ResidentStall {
+        reason: match last_checkpoint_at {
+            Some(_) => format!(
+                "no checkpoint for over twice its {}-minute heartbeat",
+                mandate.cadence.heartbeat_minutes
+            ),
+            None => format!(
+                "no first checkpoint within twice its {}-minute heartbeat",
+                mandate.cadence.heartbeat_minutes
+            ),
+        },
+        since,
+        last_checkpoint_at,
+    })
+}
+
+fn digest_of(value: &serde_json::Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    format!(
+        "sha256:{}",
+        orbit_types::identity::lower_hex(Sha256::digest(bytes))
+    )
+}
+
+/// Comments a cycle reacts to: everything but the resident's own
+/// checkpoints and requests, and, while a cycle was live, only what a human
+/// wrote (an agent's comments inside a cycle are the cycle's own work).
+fn wake_comments(comments: &[TaskComment], cycles: &[StartedCycle]) -> Vec<serde_json::Value> {
+    comments
+        .iter()
+        .filter(|comment| {
+            match ResidentComment::parse(&comment.message) {
+                Ok(ResidentComment::Answer(_)) => return true,
+                Ok(ResidentComment::Checkpoint(_) | ResidentComment::Request(_)) => return false,
+                Err(_) => {}
+            }
+            comment.by.starts_with("human")
+                || !cycles
+                    .iter()
+                    .any(|cycle| comment.at >= cycle.at && comment.at <= cycle.live.expires_at)
+        })
+        .map(|comment| {
+            json!([
+                comment.at,
+                comment.by,
+                orbit_types::identity::lower_hex(Sha256::digest(comment.message.as_bytes()))
+            ])
+        })
+        .collect()
+}
+
+/// When the mandate's next unprompted cycle is due after the last cycle
+/// started at `started`: its last checkpoint's planned `next_wake`, clamped
+/// between the floor and the heartbeat, or the heartbeat when the last
+/// cycle left no checkpoint of its own or ended `incomplete` (a synthesized
+/// or failed cycle's plan is not the resident's).
+fn planned_wake_at(
+    mandate: &ResidentMandate,
+    started: &StartedCycle,
+    last: Option<&ResidentCheckpoint>,
+) -> DateTime<Utc> {
+    let floor = started.at + Duration::minutes(i64::from(mandate.cadence.floor_minutes));
+    let heartbeat = started.at + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes));
+    match last {
+        Some(checkpoint)
+            if checkpoint.cycle == started.live.cycle && checkpoint.outcome != "incomplete" =>
+        {
+            checkpoint
+                .next_wake
+                .not_before
+                .clamp(floor, heartbeat.max(floor))
+        }
+        _ => heartbeat,
     }
 }

@@ -29,6 +29,67 @@ use crate::OrbitRuntime;
 use crate::application::contracts::review_layer_json;
 use crate::application::job::ReviewAdmissionHook;
 
+impl OrbitRuntime {
+    /// A run's captured review layer as `{"timing", "source"}`, or null
+    /// when it captured no review admission.
+    pub fn run_review_layer(&self, run_id: &str) -> Result<Value, OrbitError> {
+        Ok(run_review_admission(self, run_id)?
+            .as_ref()
+            .map_or(Value::Null, review_layer_json))
+    }
+}
+
+impl ReviewAdmissionHook for OrbitRuntime {
+    fn install_review_admission(
+        &self,
+        job_name: &str,
+        input: &mut Value,
+        parent_run_id: Option<&str>,
+        resuming: bool,
+    ) -> Result<(), OrbitError> {
+        install_review_admission(self, job_name, input, parent_run_id, resuming)
+    }
+
+    fn admit_review_request(
+        &self,
+        input: &mut Value,
+        review: Option<ReviewLayer>,
+        local_route: bool,
+    ) -> Result<(), OrbitError> {
+        admit_review_request(self, input, review, local_route)
+    }
+
+    fn local_route_review_refusal(&self, layer: ReviewLayer) -> String {
+        local_route_run_option_refusal(layer)
+    }
+
+    fn captured_review_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<ReviewAdmission>, OrbitError> {
+        run_review_admission(self, run_id)
+    }
+
+    fn release_run_review_attempts(
+        &self,
+        run_id: &str,
+        finished_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        self.best_effort_release_run_review_attempts(run_id, finished_at);
+    }
+
+    fn upgrade_resume_review_mismatch(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<String> {
+        upgrade_resume_admission_mismatch(self, run)
+    }
+
+    fn completion_review_mismatch(&self, run: &orbit_types::workflow::JobRun) -> Option<String> {
+        completion_admission_mismatch(self, run)
+    }
+}
+
 /// Whether caller-shaped run input names the reserved review key.
 fn declares_review_admission(input: &Value) -> bool {
     input
@@ -410,16 +471,6 @@ pub(crate) fn run_review_admission(
         .map(Option::flatten)
 }
 
-impl OrbitRuntime {
-    /// A run's captured review layer as `{"timing", "source"}`, or null
-    /// when it captured no review admission.
-    pub fn run_review_layer(&self, run_id: &str) -> Result<Value, OrbitError> {
-        Ok(run_review_admission(self, run_id)?
-            .as_ref()
-            .map_or(Value::Null, review_layer_json))
-    }
-}
-
 /// The review admission of the run an activity executes in, named by the
 /// engine-injected `run_id` of its input.
 pub(crate) fn input_run_review_admission(
@@ -560,55 +611,4 @@ fn reserved_review_key_error(job_name: &str) -> OrbitError {
          effective review.timing is captured from configuration at submission and cannot be \
          requested through ordinary job input"
     ))
-}
-
-impl ReviewAdmissionHook for OrbitRuntime {
-    fn install_review_admission(
-        &self,
-        job_name: &str,
-        input: &mut Value,
-        parent_run_id: Option<&str>,
-        resuming: bool,
-    ) -> Result<(), OrbitError> {
-        install_review_admission(self, job_name, input, parent_run_id, resuming)
-    }
-
-    fn admit_review_request(
-        &self,
-        input: &mut Value,
-        review: Option<ReviewLayer>,
-        local_route: bool,
-    ) -> Result<(), OrbitError> {
-        admit_review_request(self, input, review, local_route)
-    }
-
-    fn local_route_review_refusal(&self, layer: ReviewLayer) -> String {
-        local_route_run_option_refusal(layer)
-    }
-
-    fn captured_review_admission(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<ReviewAdmission>, OrbitError> {
-        run_review_admission(self, run_id)
-    }
-
-    fn release_run_review_attempts(
-        &self,
-        run_id: &str,
-        finished_at: chrono::DateTime<chrono::Utc>,
-    ) {
-        self.best_effort_release_run_review_attempts(run_id, finished_at);
-    }
-
-    fn upgrade_resume_review_mismatch(
-        &self,
-        run: &orbit_types::workflow::JobRun,
-    ) -> Option<String> {
-        upgrade_resume_admission_mismatch(self, run)
-    }
-
-    fn completion_review_mismatch(&self, run: &orbit_types::workflow::JobRun) -> Option<String> {
-        completion_admission_mismatch(self, run)
-    }
 }

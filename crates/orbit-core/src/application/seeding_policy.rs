@@ -62,6 +62,57 @@ const _: () = assert!(
     "every REFERENCE_AUTO_TASK_FILES name must be in orbit_config::DEMOTED_DEFAULT_AUTO_TASKS"
 );
 
+/// What a workspace's seeding policy leaves out, as `orbit workspace show`
+/// and the doctor report it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SeedingPolicyExclusions {
+    /// Shipped default routines (file stems) the policy does not seed.
+    pub routines: Vec<&'static str>,
+    /// Shipped default auto-tasks the policy does not seed.
+    pub auto_tasks: Vec<&'static str>,
+}
+
+impl SeedingPolicyExclusions {
+    /// The shipped defaults `policies` leaves out, in shipped order.
+    pub fn of(policies: &WorkspaceSeedingPolicies) -> Self {
+        let excluded = |files: &'static [(&'static str, &'static str)], policy: &SeedingPolicy| {
+            files
+                .iter()
+                .map(|(name, _)| *name)
+                .filter(|name| !policy.includes(name))
+                .collect()
+        };
+        Self {
+            routines: excluded(DEFAULT_ROUTINE_FILES, &policies.routines),
+            auto_tasks: excluded(DEFAULT_AUTO_TASK_FILES, &policies.auto_tasks),
+        }
+    }
+
+    /// The excluded names of one kind as a set, for catalog filtering.
+    pub(crate) fn routine_set(&self) -> BTreeSet<String> {
+        self.routines
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect()
+    }
+
+    /// The excluded auto-task names as a set.
+    pub(crate) fn auto_task_set(&self) -> BTreeSet<String> {
+        self.auto_tasks
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect()
+    }
+}
+
+impl OrbitRuntime {
+    /// This workspace's seeding policies, read from the config layers this
+    /// runtime resolves (`seeding.routines`, `seeding.auto_tasks`).
+    pub fn workspace_seeding_policies(&self) -> Result<WorkspaceSeedingPolicies, OrbitError> {
+        workspace_seeding_policies(&self.global_root(), &self.shared_root())
+    }
+}
+
 const fn same_str(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
     if left.len() != right.len() {
@@ -169,55 +220,4 @@ pub(crate) fn seeded_defaults(
         .filter(|(name, _)| policy.includes(name))
         .copied()
         .collect()
-}
-
-/// What a workspace's seeding policy leaves out, as `orbit workspace show`
-/// and the doctor report it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct SeedingPolicyExclusions {
-    /// Shipped default routines (file stems) the policy does not seed.
-    pub routines: Vec<&'static str>,
-    /// Shipped default auto-tasks the policy does not seed.
-    pub auto_tasks: Vec<&'static str>,
-}
-
-impl SeedingPolicyExclusions {
-    /// The shipped defaults `policies` leaves out, in shipped order.
-    pub fn of(policies: &WorkspaceSeedingPolicies) -> Self {
-        let excluded = |files: &'static [(&'static str, &'static str)], policy: &SeedingPolicy| {
-            files
-                .iter()
-                .map(|(name, _)| *name)
-                .filter(|name| !policy.includes(name))
-                .collect()
-        };
-        Self {
-            routines: excluded(DEFAULT_ROUTINE_FILES, &policies.routines),
-            auto_tasks: excluded(DEFAULT_AUTO_TASK_FILES, &policies.auto_tasks),
-        }
-    }
-
-    /// The excluded names of one kind as a set, for catalog filtering.
-    pub(crate) fn routine_set(&self) -> BTreeSet<String> {
-        self.routines
-            .iter()
-            .map(|name| (*name).to_string())
-            .collect()
-    }
-
-    /// The excluded auto-task names as a set.
-    pub(crate) fn auto_task_set(&self) -> BTreeSet<String> {
-        self.auto_tasks
-            .iter()
-            .map(|name| (*name).to_string())
-            .collect()
-    }
-}
-
-impl OrbitRuntime {
-    /// This workspace's seeding policies, read from the config layers this
-    /// runtime resolves (`seeding.routines`, `seeding.auto_tasks`).
-    pub fn workspace_seeding_policies(&self) -> Result<WorkspaceSeedingPolicies, OrbitError> {
-        workspace_seeding_policies(&self.global_root(), &self.shared_root())
-    }
 }

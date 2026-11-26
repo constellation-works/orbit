@@ -9,24 +9,6 @@ use super::test_support;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
-/// The live cycle the latest cycle change records. A malformed latest change
-/// refuses the read: an unreadable lease is never treated as clear.
-pub(in crate::application::resident) fn live_cycle_from_history(
-    history: &[TaskHistoryEntry],
-) -> Result<Option<ResidentLiveCycle>, OrbitError> {
-    match history
-        .iter()
-        .rev()
-        .find_map(ResidentCycleChange::from_entry)
-    {
-        None | Some(Ok(ResidentCycleChange::Cleared)) => Ok(None),
-        Some(Ok(ResidentCycleChange::Started(live))) => Ok(Some(live)),
-        Some(Err(error)) => Err(OrbitError::Execution(format!(
-            "resident cycle state is unreadable: {error}"
-        ))),
-    }
-}
-
 impl OrbitRuntime {
     /// Publish or clear the live cycle under the assignment's write lock.
     /// Observe calls this after acquiring its lease; finalize clears with its
@@ -146,5 +128,23 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         Ok(prior_history)
+    }
+}
+
+/// The live cycle the latest cycle change records. A malformed latest change
+/// refuses the read: an unreadable lease is never treated as clear.
+pub(in crate::application::resident) fn live_cycle_from_history(
+    history: &[TaskHistoryEntry],
+) -> Result<Option<ResidentLiveCycle>, OrbitError> {
+    match history
+        .iter()
+        .rev()
+        .find_map(ResidentCycleChange::from_entry)
+    {
+        None | Some(Ok(ResidentCycleChange::Cleared)) => Ok(None),
+        Some(Ok(ResidentCycleChange::Started(live))) => Ok(Some(live)),
+        Some(Err(error)) => Err(OrbitError::Execution(format!(
+            "resident cycle state is unreadable: {error}"
+        ))),
     }
 }

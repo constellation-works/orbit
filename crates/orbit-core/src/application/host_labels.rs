@@ -28,36 +28,6 @@ const SERVING_LABEL_EVIDENCE_DAYS: i64 = 7;
 /// The name of this host when the runtime has no machine identity.
 const LOCAL_HOST: &str = "this host";
 
-/// Why any grant keeps a task off followers, regardless of the tool's kind.
-pub(crate) fn granted_tools_owner_hold(task: &Task) -> Option<String> {
-    (!task.granted_tools.is_empty()).then(|| {
-        format!(
-            "granted tools {} require execution on the owner host",
-            quoted_labels(&task.granted_tools)
-        )
-    })
-}
-
-/// This host's label gap, including the owner pin when the task has grants.
-fn required_labels_host_wait(
-    task: &Task,
-    required: &[String],
-    labels: &BTreeSet<String>,
-) -> Option<String> {
-    let missing = missing_host_labels(required, labels);
-    (!missing.is_empty()).then(|| {
-        let wait = format!(
-            "{}; this host lacks {}",
-            host_labels_wait(required),
-            quoted_labels(&missing)
-        );
-        match granted_tools_owner_hold(task) {
-            Some(grant) => format!("{grant}; {wait}"),
-            None => wait,
-        }
-    })
-}
-
 /// One host's effective labels, as placement reads them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FleetLabelHost {
@@ -146,13 +116,14 @@ impl OrbitRuntime {
             if own.as_deref() == Some(entry.machine_id.as_str()) || entry.seen_at < cutoff {
                 continue;
             }
+            let live = live.contains(&entry.machine_id);
             hosts.push(FleetLabelHost {
-                local: false,
-                live: live.contains(&entry.machine_id),
-                labels: effective_host_labels(&entry.capability.labels, entry.capability.os),
-                os: entry.capability.os,
-                seen_at: Some(entry.seen_at),
                 machine: entry.machine_id,
+                local: false,
+                os: entry.capability.os,
+                labels: effective_host_labels(&entry.capability.labels, entry.capability.os),
+                live,
+                seen_at: Some(entry.seen_at),
             });
         }
         hosts
@@ -238,6 +209,36 @@ impl OrbitRuntime {
                 .collect(),
         )
     }
+}
+
+/// Why any grant keeps a task off followers, regardless of the tool's kind.
+pub(crate) fn granted_tools_owner_hold(task: &Task) -> Option<String> {
+    (!task.granted_tools.is_empty()).then(|| {
+        format!(
+            "granted tools {} require execution on the owner host",
+            quoted_labels(&task.granted_tools)
+        )
+    })
+}
+
+/// This host's label gap, including the owner pin when the task has grants.
+fn required_labels_host_wait(
+    task: &Task,
+    required: &[String],
+    labels: &BTreeSet<String>,
+) -> Option<String> {
+    let missing = missing_host_labels(required, labels);
+    (!missing.is_empty()).then(|| {
+        let wait = format!(
+            "{}; this host lacks {}",
+            host_labels_wait(required),
+            quoted_labels(&missing)
+        );
+        match granted_tools_owner_hold(task) {
+            Some(grant) => format!("{grant}; {wait}"),
+            None => wait,
+        }
+    })
 }
 
 /// The named wait for a task no live host can run for its labels, read

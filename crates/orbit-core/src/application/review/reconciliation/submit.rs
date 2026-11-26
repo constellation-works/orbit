@@ -38,6 +38,58 @@ struct Operator {
     provenance: String,
 }
 
+/// The bound delivery a proposed remediation is judged against.
+struct Delivery<'a> {
+    env: &'a orbit_common::Env,
+    repo: &'a std::path::Path,
+    landing: String,
+    number: u64,
+    head: String,
+    /// The provider's landed commit bound into the reconciliation.
+    landed: String,
+}
+
+impl Delivery<'_> {
+    /// Refuse a remediation that is not on the landing branch, is already
+    /// part of the merged head, or does not contain the landed delivery: a
+    /// check of such a commit says nothing about the code that merged. Only
+    /// containment of the landed commit is required, never of the pull
+    /// request's head, which a squash landing does not keep.
+    fn admit(&self, remediation: &str) -> Result<(), OrbitError> {
+        let Self {
+            env,
+            repo,
+            landing,
+            number,
+            head,
+            landed,
+        } = self;
+        let on_landing = [format!("origin/{landing}"), landing.clone()]
+            .iter()
+            .any(|tip| review_gate::contains_commit(env, repo, remediation, tip).unwrap_or(false));
+        if !on_landing {
+            return Err(OrbitError::InvalidInput(format!(
+                "remediation {remediation} is not on {landing}; land the fix there (fetch the \
+                 landing branch if it already landed) and retry"
+            )));
+        }
+        if review_gate::contains_commit(env, repo, remediation, head)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "remediation {remediation} is already part of the merged head {head}, so it \
+                 cannot explain a failure of that head"
+            )));
+        }
+        if !review_gate::contains_commit(env, repo, landed, remediation)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "remediation {remediation} does not contain commit {landed} that pull request \
+                 #{number} landed as, so a check there cannot show the delivered code passes; \
+                 land the fix on {landing} after that commit and retry with the new commit"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// `orbit.task.reconcile_review`: `action` is `inspect`, `submit`, `status`
 /// or `accept_baseline`. Every action is operator-only; a managed agent can
 /// neither produce nor dispose its own evidence.
@@ -246,11 +298,11 @@ fn submit(
             .map_err(|error| OrbitError::Execution(format!("encode admission: {error}")))?,
     });
     let (submitted, _) = runtime.submit_keyed_pipeline_run(PipelineSubmission {
-        reconciliation: true,
         retry_key: Some(RetryKey {
             field: ATTEMPT_FIELD,
             scan_limit: ATTEMPT_SCAN_LIMIT,
         }),
+        reconciliation: true,
         ..PipelineSubmission::catalog(REVIEW_RECONCILIATION_JOB, input, Some(&operator.actor))
     })?;
     let record = bind_attempt_run(runtime, &reconciliation_id, attempt, &submitted.run_id)?;
@@ -551,58 +603,6 @@ fn accept_baseline(
     )?;
     audit(runtime, operator, &record, "baseline_disposed", None)?;
     view(runtime, task_id, &record, false)
-}
-
-/// The bound delivery a proposed remediation is judged against.
-struct Delivery<'a> {
-    env: &'a orbit_common::Env,
-    repo: &'a std::path::Path,
-    landing: String,
-    number: u64,
-    head: String,
-    /// The provider's landed commit bound into the reconciliation.
-    landed: String,
-}
-
-impl Delivery<'_> {
-    /// Refuse a remediation that is not on the landing branch, is already
-    /// part of the merged head, or does not contain the landed delivery: a
-    /// check of such a commit says nothing about the code that merged. Only
-    /// containment of the landed commit is required, never of the pull
-    /// request's head, which a squash landing does not keep.
-    fn admit(&self, remediation: &str) -> Result<(), OrbitError> {
-        let Self {
-            env,
-            repo,
-            landing,
-            number,
-            head,
-            landed,
-        } = self;
-        let on_landing = [format!("origin/{landing}"), landing.clone()]
-            .iter()
-            .any(|tip| review_gate::contains_commit(env, repo, remediation, tip).unwrap_or(false));
-        if !on_landing {
-            return Err(OrbitError::InvalidInput(format!(
-                "remediation {remediation} is not on {landing}; land the fix there (fetch the \
-                 landing branch if it already landed) and retry"
-            )));
-        }
-        if review_gate::contains_commit(env, repo, remediation, head)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "remediation {remediation} is already part of the merged head {head}, so it \
-                 cannot explain a failure of that head"
-            )));
-        }
-        if !review_gate::contains_commit(env, repo, landed, remediation)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "remediation {remediation} does not contain commit {landed} that pull request \
-                 #{number} landed as, so a check there cannot show the delivered code passes; \
-                 land the fix on {landing} after that commit and retry with the new commit"
-            )));
-        }
-        Ok(())
-    }
 }
 
 /// Refuse once the provider no longer reports the delivery `binding_digest`

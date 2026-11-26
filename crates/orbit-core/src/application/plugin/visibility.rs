@@ -48,6 +48,38 @@ impl PluginActivity for PluginHostLoad {
     }
 }
 
+impl InactivePlugin {
+    /// The operator-facing skip reason: which plugin, the command that turns
+    /// it back on, and the file to delete instead.
+    ///
+    /// `workspace` names the workspace for a host-wide surface (routines span
+    /// every registered workspace); `None` reads as "this workspace".
+    pub fn reason(&self, path: &Path, workspace: Option<&str>) -> String {
+        let Self {
+            namespace, version, ..
+        } = self;
+        match (self.scope, workspace) {
+            (InactivePluginScope::Workspace, None) => format!(
+                "seeded by plugin:{namespace}@{version}, which is switched off in this \
+                 workspace; run `orbit plugin enable {namespace} --scope workspace` to fire it \
+                 again, or delete '{}'",
+                path.display()
+            ),
+            (InactivePluginScope::Workspace, Some(workspace)) => format!(
+                "seeded by plugin:{namespace}@{version}, which is switched off in workspace \
+                 '{workspace}'; run `orbit plugin enable {namespace} --scope workspace` there to \
+                 fire it again, or delete '{}'",
+                path.display()
+            ),
+            (InactivePluginScope::Host, _) => format!(
+                "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
+                 `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
+                path.display()
+            ),
+        }
+    }
+}
+
 /// The plugin that makes the definition at `path` inactive, if any.
 ///
 /// `definitions_dir` is the routines or auto-tasks directory that may contain
@@ -81,36 +113,4 @@ pub fn inactive_plugin(
 /// `include_inactive_plugins`.
 pub fn is_listed(plugin_inactive: bool, include_inactive_plugins: bool) -> bool {
     !plugin_inactive || include_inactive_plugins
-}
-
-impl InactivePlugin {
-    /// The operator-facing skip reason: which plugin, the command that turns
-    /// it back on, and the file to delete instead.
-    ///
-    /// `workspace` names the workspace for a host-wide surface (routines span
-    /// every registered workspace); `None` reads as "this workspace".
-    pub fn reason(&self, path: &Path, workspace: Option<&str>) -> String {
-        let Self {
-            namespace, version, ..
-        } = self;
-        match (self.scope, workspace) {
-            (InactivePluginScope::Workspace, None) => format!(
-                "seeded by plugin:{namespace}@{version}, which is switched off in this \
-                 workspace; run `orbit plugin enable {namespace} --scope workspace` to fire it \
-                 again, or delete '{}'",
-                path.display()
-            ),
-            (InactivePluginScope::Workspace, Some(workspace)) => format!(
-                "seeded by plugin:{namespace}@{version}, which is switched off in workspace \
-                 '{workspace}'; run `orbit plugin enable {namespace} --scope workspace` there to \
-                 fire it again, or delete '{}'",
-                path.display()
-            ),
-            (InactivePluginScope::Host, _) => format!(
-                "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
-                 `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
-                path.display()
-            ),
-        }
-    }
 }

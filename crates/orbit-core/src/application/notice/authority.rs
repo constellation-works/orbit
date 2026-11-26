@@ -156,13 +156,6 @@ impl NoticePoster {
     }
 }
 
-fn non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 impl OrbitRuntime {
     /// The notice terms of the mandate on `task_id`: its status line lapses
     /// after twice the heartbeat, the same silence the stall check uses. A
@@ -321,4 +314,11 @@ impl OrbitRuntime {
             "only the operator, an orchestrator session or a managed agent run may write notices",
         ))
     }
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }

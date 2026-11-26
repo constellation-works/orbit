@@ -55,11 +55,6 @@ pub(crate) const REVIEW_CREW_SELECTION_RULE: &str = "each review draws one crew 
      preferring one that did not implement the reviewed work and skipping disabled or \
      provider-limited crews";
 
-/// Provenance of a crew drawn from a pool configured in `layer`.
-pub(crate) fn pool_source(layer: &str) -> String {
-    format!("{layer} pool")
-}
-
 impl OrbitRuntime {
     /// The pool before-PR and before-landing review draw from as canonical
     /// members, in the shape a review admission captures:
@@ -249,6 +244,11 @@ impl OrbitRuntime {
         let candidates = self.review_crew_candidates(eligible)?;
         self.draw_review_crew(candidates, implementers, random)
     }
+}
+
+/// Provenance of a crew drawn from a pool configured in `layer`.
+pub(crate) fn pool_source(layer: &str) -> String {
+    format!("{layer} pool")
 }
 
 /// The entries of review pool `key` as canonical, weighed members. The value

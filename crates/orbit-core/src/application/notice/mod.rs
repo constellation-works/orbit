@@ -144,9 +144,9 @@ pub struct NoticeView {
     pub history: Option<Vec<NoticeHistoryEntry>>,
 }
 
+/// Done linked tasks by id, with the time each was last updated.
+pub(crate) type LinkedDone = BTreeMap<String, DateTime<Utc>>;
+
 fn refuse(code: NoticeRefusalCode, message: impl Into<String>) -> OrbitError {
     OrbitError::notice_refused(code, message)
 }
-
-/// Done linked tasks by id, with the time each was last updated.
-pub(crate) type LinkedDone = BTreeMap<String, DateTime<Utc>>;

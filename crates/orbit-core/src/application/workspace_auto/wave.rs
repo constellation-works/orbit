@@ -76,27 +76,6 @@ pub(super) struct AdmissionWave<'a> {
     footprint_waits: &'a BTreeMap<String, FootprintWait>,
 }
 
-/// The light budget, gate and unreserved free-slot count.
-///
-/// This is the only `LightBudget` and `ResourceGate` construction under
-/// `workspace_auto`.
-pub(super) fn unreserved_admission_slots<'a>(
-    claimed: impl IntoIterator<Item = &'a String>,
-    task_lookup: &BTreeMap<String, Task>,
-    throttle: Option<&ResourceThrottle>,
-    unthrottled_slots: usize,
-) -> UnreservedAdmissionSlots {
-    // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
-    let light_budget = LightBudget::new(CPU_LIGHT_LEAVES, claimed, task_lookup);
-    let gate = ResourceGate::new(throttle, &light_budget);
-    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
-    UnreservedAdmissionSlots {
-        light_budget,
-        gate,
-        free_slots,
-    }
-}
-
 impl<'a> AdmissionWave<'a> {
     /// Build the wave in snapshot order: pending, then the gate filter, then
     /// the examined prefix.
@@ -201,5 +180,26 @@ impl<'a> AdmissionWave<'a> {
     /// before it ran out of slots.
     pub(super) fn candidate_pool_truncated(&self, selected_len: usize) -> bool {
         self.candidate_count > self.examined.len() && selected_len < self.free_slots
+    }
+}
+
+/// The light budget, gate and unreserved free-slot count.
+///
+/// This is the only `LightBudget` and `ResourceGate` construction under
+/// `workspace_auto`.
+pub(super) fn unreserved_admission_slots<'a>(
+    claimed: impl IntoIterator<Item = &'a String>,
+    task_lookup: &BTreeMap<String, Task>,
+    throttle: Option<&ResourceThrottle>,
+    unthrottled_slots: usize,
+) -> UnreservedAdmissionSlots {
+    // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
+    let light_budget = LightBudget::new(CPU_LIGHT_LEAVES, claimed, task_lookup);
+    let gate = ResourceGate::new(throttle, &light_budget);
+    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
+    UnreservedAdmissionSlots {
+        light_budget,
+        gate,
+        free_slots,
     }
 }

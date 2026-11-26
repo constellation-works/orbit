@@ -18,6 +18,11 @@ use serde_json::Value;
 
 use super::fields::{truncate_bytes, value_string};
 
+pub(super) struct FailedStepExcerpt {
+    pub(super) body: String,
+    pub(super) has_anchor: bool,
+}
+
 /// Distinctive diagnostic lines a manual repair brief can quote without
 /// generated `workflow` / `failing job` / `failing step` labels.
 pub(super) fn specific_error_anchors(log: &str, signature: &str) -> Vec<String> {
@@ -366,11 +371,6 @@ fn skip_from_excerpt(kind: LineKind) -> bool {
             | LineKind::Bookkeeping
             | LineKind::CargoStatus
     )
-}
-
-pub(super) struct FailedStepExcerpt {
-    pub(super) body: String,
-    pub(super) has_anchor: bool,
 }
 
 /// Command line plus the failure region, never a head-biased env dump.

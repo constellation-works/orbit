@@ -216,11 +216,11 @@ fn plan(sources: Vec<SourceTask>) -> (Vec<Consolidation>, Vec<Value>) {
                 .filter(|dependency| !source_ids.contains(dependency))
                 .collect();
             consolidations.push(Consolidation {
+                group,
                 repository: repository.clone(),
                 source_ids: source_ids.into_iter().collect(),
                 dependencies,
                 context_files: union_of(members.iter().map(|source| &source.context_files)),
-                group,
             });
         }
     }

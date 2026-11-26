@@ -21,36 +21,6 @@ use serde_json::json;
 use super::super::REVIEW_AUDIT;
 use crate::OrbitRuntime;
 
-/// Release the attempt a failing run admitted. An attempt already settled
-/// with a verdict, or unknown to its lineage, is left alone.
-pub(crate) fn release_review_attempt(
-    runtime: &OrbitRuntime,
-    request: &ReviewReleaseRequest,
-) -> Result<(), OrbitError> {
-    let store = runtime.sqlite_store()?;
-    let workspace_id = runtime.workspace_id()?;
-    let Some(ledger) = store.read().and_then(|snapshot| {
-        snapshot
-            .review()
-            .ledger(&workspace_id, &request.lineage_key)
-    })?
-    else {
-        return Ok(());
-    };
-    let Some(attempt) = ledger
-        .attempts
-        .iter()
-        .find(|attempt| attempt.attempt_id == request.attempt_id)
-    else {
-        return Ok(());
-    };
-    if attempt.released_at.is_none() && attempt.state != ReviewAttemptState::Open {
-        return Ok(());
-    }
-    let now = Utc::now();
-    release(runtime, &workspace_id, &ledger, attempt, now, now)
-}
-
 impl OrbitRuntime {
     /// Release every review attempt a terminating run still holds, so no
     /// run ends with an attempt open — whether it failed, was cancelled or
@@ -86,6 +56,36 @@ impl OrbitRuntime {
             ),
         }
     }
+}
+
+/// Release the attempt a failing run admitted. An attempt already settled
+/// with a verdict, or unknown to its lineage, is left alone.
+pub(crate) fn release_review_attempt(
+    runtime: &OrbitRuntime,
+    request: &ReviewReleaseRequest,
+) -> Result<(), OrbitError> {
+    let store = runtime.sqlite_store()?;
+    let workspace_id = runtime.workspace_id()?;
+    let Some(ledger) = store.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .ledger(&workspace_id, &request.lineage_key)
+    })?
+    else {
+        return Ok(());
+    };
+    let Some(attempt) = ledger
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == request.attempt_id)
+    else {
+        return Ok(());
+    };
+    if attempt.released_at.is_none() && attempt.state != ReviewAttemptState::Open {
+        return Ok(());
+    }
+    let now = Utc::now();
+    release(runtime, &workspace_id, &ledger, attempt, now, now)
 }
 
 /// Release an attempt still held by a different run of the lineage, so a

@@ -32,22 +32,6 @@ use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 /// How long a cycle's lease lasts: the agent step's budget plus margin.
 pub const RESIDENT_CYCLE_LEASE_MINUTES: i64 = 40;
 
-/// The cycle id a run takes.
-pub fn resident_cycle_id(run_id: &str) -> String {
-    format!("rcy-{run_id}")
-}
-
-fn skipped(task_id: &str, reason: &str) -> Value {
-    json!({"task_id": task_id, "cycle_count": 0, "skip_reason": reason})
-}
-
-fn with_worktree_removal_error(mut result: Value, error: Option<String>) -> Value {
-    if let Some(error) = error {
-        result["worktree_removal_error"] = json!(error);
-    }
-    result
-}
-
 impl OrbitRuntime {
     /// The mandate a resident cycle run serves: the single task id the
     /// scheduler put in its input. Only a `resident_cycle_pipeline` run has one.
@@ -986,4 +970,20 @@ impl OrbitRuntime {
         )?;
         Ok(())
     }
+}
+
+/// The cycle id a run takes.
+pub fn resident_cycle_id(run_id: &str) -> String {
+    format!("rcy-{run_id}")
+}
+
+fn skipped(task_id: &str, reason: &str) -> Value {
+    json!({"task_id": task_id, "cycle_count": 0, "skip_reason": reason})
+}
+
+fn with_worktree_removal_error(mut result: Value, error: Option<String>) -> Value {
+    if let Some(error) = error {
+        result["worktree_removal_error"] = json!(error);
+    }
+    result
 }

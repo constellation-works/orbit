@@ -160,21 +160,6 @@ impl ResidentTaskWakeItem {
     }
 }
 
-/// Open decisions are already visible in the brief. Only a settlement wakes.
-pub(super) fn settled_decisions(requests: &[DecisionRequest]) -> String {
-    let mut settled: Vec<String> = requests
-        .iter()
-        .filter(|request| request.state != DecisionRequestState::Open)
-        .map(|request| format!("{}={}", request.id, request.state.as_str()))
-        .collect();
-    settled.sort();
-    if settled.is_empty() {
-        String::new()
-    } else {
-        format!("decisions:{}", settled.join(","))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResidentWakeItem {
     Task(ResidentTaskWakeItem),
@@ -258,5 +243,20 @@ impl ResidentWakeObservation {
             .0
             .keys()
             .any(|key| !matches!(key, ResidentWakeItemKey::Task(_)) && !self.0.contains_key(key))
+    }
+}
+
+/// Open decisions are already visible in the brief. Only a settlement wakes.
+pub(super) fn settled_decisions(requests: &[DecisionRequest]) -> String {
+    let mut settled: Vec<String> = requests
+        .iter()
+        .filter(|request| request.state != DecisionRequestState::Open)
+        .map(|request| format!("{}={}", request.id, request.state.as_str()))
+        .collect();
+    settled.sort();
+    if settled.is_empty() {
+        String::new()
+    } else {
+        format!("decisions:{}", settled.join(","))
     }
 }

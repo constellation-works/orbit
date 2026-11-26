@@ -12,6 +12,19 @@ const RESIDENT_CYCLE_ACTIVITY: &str = "resident_cycle";
 const WORKFLOW_TOOL: &str = "orbit.workflow";
 const RECOVER_TOOL: &str = "orbit.task.recover";
 
+impl OrbitRuntime {
+    /// Discover the families reached by this launch's own live cycle.
+    /// The provider's input and its task selectors carry no grant authority.
+    pub(crate) fn resident_cycle_granted_tools(&self, run_id: &str, activity: &str) -> Vec<String> {
+        if activity != RESIDENT_CYCLE_ACTIVITY {
+            return Vec::new();
+        }
+        self.live_cycle_home_grant_local(run_id)
+            .filter(|(_, grant)| !grant.observe_only)
+            .map_or_else(Vec::new, |(_, grant)| tools_of_rights(&grant.rights))
+    }
+}
+
 /// The tool families a right reaches: `dispatch` ships, re-pilots and requeues,
 /// `merge` lands, `refresh` refreshes and `recover` resumes a delivery.
 /// Promotion uses tools every cycle already has; `plugin_upgrade` reaches no
@@ -35,17 +48,4 @@ fn tools_of_rights(rights: &[ResidentRight]) -> Vec<String> {
     }
     tools.sort();
     tools
-}
-
-impl OrbitRuntime {
-    /// Discover the families reached by this launch's own live cycle.
-    /// The provider's input and its task selectors carry no grant authority.
-    pub(crate) fn resident_cycle_granted_tools(&self, run_id: &str, activity: &str) -> Vec<String> {
-        if activity != RESIDENT_CYCLE_ACTIVITY {
-            return Vec::new();
-        }
-        self.live_cycle_home_grant_local(run_id)
-            .filter(|(_, grant)| !grant.observe_only)
-            .map_or_else(Vec::new, |(_, grant)| tools_of_rights(&grant.rights))
-    }
 }

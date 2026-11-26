@@ -54,9 +54,9 @@ impl OrbitRuntime {
             title: params.title,
             description: params.description,
             acceptance_criteria: mandate.exit_criteria.clone(),
-            crew: Some(mandate.crew.clone()),
             tags: vec![RESIDENT_TAG.to_string()],
             complexity: params.complexity,
+            crew: Some(mandate.crew.clone()),
             origin: Some(TaskOrigin::OperatorRequest),
             ..TaskAddParams::default()
         })?;

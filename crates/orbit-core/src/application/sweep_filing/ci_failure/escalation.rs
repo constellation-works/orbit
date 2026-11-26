@@ -116,7 +116,6 @@ where
                 "github-actions".to_string(),
             ],
             required_tools: Vec::new(),
-            crew: None,
             priority: TaskPriority::High,
             complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Bug),
@@ -124,6 +123,7 @@ where
             // pilot could assess, so an operator triages it from the run.
             status: Some(TaskStatus::Proposed),
             system_created: true,
+            crew: None,
             ..TaskAddParams::default()
         })
         .map_err(|error| lookup_error("orbit.task.add", error))?;

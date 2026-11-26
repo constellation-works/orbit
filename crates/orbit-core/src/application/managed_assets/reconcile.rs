@@ -20,6 +20,37 @@ use super::{
 use super::manifest::{validate_managed_asset_name, write_confined_asset};
 use super::retired::{ambiguous_legacy_yaml_files, unsafe_preservation_component};
 
+/// The manifest an opt-out replaced, kept so the caller can put it back.
+#[must_use = "revert the opt-out when the operation it belongs to fails"]
+pub(crate) struct ManagedAssetOptOut {
+    manifest_path: PathBuf,
+    previous: Option<ManagedAssetManifest>,
+    changed: bool,
+}
+
+impl ManagedAssetOptOut {
+    /// Restore the manifest as it stood before the opt-out, removing one the
+    /// opt-out created. Runs within the caller's original cursor lock; a new
+    /// acquisition here alone would not protect the saved manifest snapshot.
+    pub(crate) fn revert(self) -> Result<(), OrbitError> {
+        if !self.changed {
+            return Ok(());
+        }
+        match &self.previous {
+            Some(previous) => write_managed_asset_manifest(&self.manifest_path, previous),
+            None => fs::remove_file(&self.manifest_path).map_err(|error| {
+                OrbitError::io_with_context(
+                    &error,
+                    format!(
+                        "remove managed asset manifest '{}': {error}",
+                        self.manifest_path.display()
+                    ),
+                )
+            }),
+        }
+    }
+}
+
 /// Materialize the current embedded resource set and reconcile assets retired
 /// since the previous manifest-aware seed.
 ///
@@ -535,37 +566,6 @@ pub(crate) fn record_managed_asset_opt_out(
         previous,
         changed,
     })
-}
-
-/// The manifest an opt-out replaced, kept so the caller can put it back.
-#[must_use = "revert the opt-out when the operation it belongs to fails"]
-pub(crate) struct ManagedAssetOptOut {
-    manifest_path: PathBuf,
-    previous: Option<ManagedAssetManifest>,
-    changed: bool,
-}
-
-impl ManagedAssetOptOut {
-    /// Restore the manifest as it stood before the opt-out, removing one the
-    /// opt-out created. Runs within the caller's original cursor lock; a new
-    /// acquisition here alone would not protect the saved manifest snapshot.
-    pub(crate) fn revert(self) -> Result<(), OrbitError> {
-        if !self.changed {
-            return Ok(());
-        }
-        match &self.previous {
-            Some(previous) => write_managed_asset_manifest(&self.manifest_path, previous),
-            None => fs::remove_file(&self.manifest_path).map_err(|error| {
-                OrbitError::io_with_context(
-                    &error,
-                    format!(
-                        "remove managed asset manifest '{}': {error}",
-                        self.manifest_path.display()
-                    ),
-                )
-            }),
-        }
-    }
 }
 
 /// Clear an operator opt-out and record `digest` as the provenance of the

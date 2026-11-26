@@ -70,6 +70,12 @@ struct LiveAgentCounts {
     reviewers: u64,
 }
 
+enum LiveAgentKind {
+    Pilots,
+    Recovery,
+    Reviewers,
+}
+
 /// Three integers for the drain card, or nothing when the runs cannot be read.
 ///
 /// A zero result is still returned: the card shows the figures at zero. One
@@ -141,12 +147,6 @@ fn live_agent_counts(runtime: &OrbitRuntime) -> Result<LiveAgentCounts, OrbitErr
         }
     }
     Ok(counts)
-}
-
-enum LiveAgentKind {
-    Pilots,
-    Recovery,
-    Reviewers,
 }
 
 fn classify_live_agent(activity_name: &str) -> Option<LiveAgentKind> {

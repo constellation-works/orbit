@@ -278,13 +278,13 @@ pub(super) fn unset_secret_rows(
             Ok(unset) => unset,
             Err(error) => {
                 rows.push(PluginDoctorResult {
-                    intentional: false,
                     plugin: installed.name.clone(),
                     status: PluginStatus::Inactive,
                     message: format!(
                         "could not read the secrets of plugin '{}': {error}",
                         installed.name
                     ),
+                    intentional: false,
                 });
                 continue;
             }
@@ -295,7 +295,6 @@ pub(super) fn unset_secret_rows(
             .unwrap_or(PluginStatus::Disabled);
         for name in unset {
             rows.push(PluginDoctorResult {
-                intentional: false,
                 plugin: installed.name.clone(),
                 status: plugin_status,
                 message: format!(
@@ -303,6 +302,7 @@ pub(super) fn unset_secret_rows(
                      `orbit plugin secret set {} {name}`",
                     installed.name, installed.name
                 ),
+                intentional: false,
             });
         }
     }

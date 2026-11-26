@@ -43,6 +43,12 @@ const SECRET_TITLE_PREFIX: &str = "[secret-scanning-sweep] ";
 const DEFAULT_MAX_TASKS: u64 = 10;
 const MAX_TASKS: u64 = 50;
 
+/// Minimum Dependabot and code-scanning severity the security sweep files
+/// when its job input names none.
+///
+/// The former `security_alert_sweep.min_severity` default, fixed when the key was removed [ORB-22808].
+pub(crate) const SECURITY_ALERT_MIN_SEVERITY: &str = "moderate";
+
 struct PendingTask {
     params: TaskAddParams,
     result: Value,
@@ -224,13 +230,13 @@ where
                     "security".to_string(),
                 ],
                 required_tools: Vec::new(),
-                crew: None,
+                context_files,
                 priority: priority_for_rank(highest),
                 complexity: TaskComplexity::Low,
                 task_type: Some(TaskType::Bug),
                 status: Some(TaskStatus::Backlog),
                 system_created: true,
-                context_files,
+                crew: None,
                 ..TaskAddParams::default()
             };
             pending_tasks.push(PendingTask {
@@ -537,12 +543,6 @@ where
         "codeql_bundle_prerequisites": codeql_bundle_prerequisites,
     }))
 }
-
-/// Minimum Dependabot and code-scanning severity the security sweep files
-/// when its job input names none.
-///
-/// The former `security_alert_sweep.min_severity` default, fixed when the key was removed [ORB-22808].
-pub(crate) const SECURITY_ALERT_MIN_SEVERITY: &str = "moderate";
 
 fn severity_floor(input: &Value) -> Result<(String, &'static str), OrbitError> {
     match input.get("min_severity") {
