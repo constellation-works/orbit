@@ -121,7 +121,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 
 New apps with no `application/` entry: `friction` (built, `app/friction/`), `host`, `update`. They have no row, since there is no entry.
 
-A module beside `application/`: `metrics` dissolves into `app::run` (order 2) in two steps, neither filed ([design §3](../design/architecture-restructure/2_design.md#metrics-dissolves-into-the-run-app)). It has no row, since it is not an `application/` entry.
+A module beside `application/`: `metrics` dissolves into `app::run` (order 2) in two steps, ORB-28962 then ORB-28963 ([design §3](../design/architecture-restructure/2_design.md#metrics-dissolves-into-the-run-app)). It has no row, since it is not an `application/` entry.
 
 ### Decided by callers
 

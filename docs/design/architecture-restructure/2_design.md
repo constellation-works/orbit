@@ -125,7 +125,7 @@ pub fn exec(core: &Core, command: Command) -> Result<Outcome, Error> {
 
 ### `metrics` dissolves into the run app
 
-`crates/orbit-core/src/metrics/` sits beside `application/`, so the app table has no row for it and no filed task moves it. It is not a subject a user can name: it holds three things that share only a dashboard page. Read at `84f63223cd`. Daniel, 2026-11-26, shown this placement: "add it to the restructure design".
+`crates/orbit-core/src/metrics/` sits beside `application/`, so the app table has no row for it and the 95 tasks did not move it; [ORB-28962] and [ORB-28963] were filed for it afterwards. It is not a subject a user can name: it holds three things that share only a dashboard page. Read at `84f63223cd`. Daniel, 2026-11-26, shown this placement: "add it to the restructure design".
 
 | Today | What it is | Goes to |
 |---|---|---|
@@ -134,11 +134,11 @@ pub fn exec(core: &Core, command: Command) -> Result<Outcome, Error> {
 | `metrics/summary.rs` (132 lines) | `aggregate`, a pure function over `JobRun::knowledge_metrics` | `app/run/`, behind a run command |
 
 - **Why the run app.** Every input is a run record, and what a user asks is about runs: how often they fail and what they cost. The one production caller of the reliability reads is already `app::run::Command::fleet_reliability`, with `Command::cost` beside it in `app/run/metrics.rs`. `reliability.rs` also takes `JobDefinitionReads` from `application/job/catalog`, which goes to `app::run`.
-- **It has to happen before the exports close.** Four dashboard files import `orbit_core::metrics::…` (`api/metrics.rs`, `api/reliability.rs`, `api/cost.rs`, `api/diagnostics/task_tokens.rs`), and five integration tests of `orbit-core` import `metrics::reliability::ReliabilityWindow`. [ORB-28417] leaves `lib.rs` with `app`, `Core` and `Error` only, and its footprint declares neither `app/run` nor those files.
-- **Step 1, at the surface, before [ORB-28417].** `app::run` exports the types the dashboard names: `MetricsWindow`, `ManagedExecutionCost`, `TaskTokenSpend`, `TaskTokenTotals`, `ReliabilityWindow`, `RuntimeReliability` and the shapes inside it. The knowledge handler stops listing runs from the runtime and calling `aggregate` itself; it calls one run command whose flow does both. The handlers and the tests import from `app::run`, and `metrics` becomes `pub(crate)`.
-- **Step 2, inside core, in pass A with the run chain (§11).** After the last of `application/job` has moved [ORB-28443] and before `application/` is deleted [ORB-28450]: the two files move into `app/run/`, the `OrbitRuntime` methods become functions that take `rt: &OrbitRuntime`, and `metrics/` is deleted with its line in `docs/architecture/orbit-core.md`. It is a move, like every other conversion.
+- **It has to happen before the exports close.** Four dashboard files import `orbit_core::metrics::…` (`api/metrics.rs`, `api/reliability.rs`, `api/cost.rs`, `api/diagnostics/task_tokens.rs`), and five integration tests of `orbit-core` import `metrics::reliability::ReliabilityWindow`. [ORB-28417] leaves `lib.rs` with `app`, `Core` and `Error` only, so those imports must name `app::run` by then.
+- **Step 1, at the surface, before [ORB-28417]: [ORB-28962].** `app::run` exports the types the dashboard names: `MetricsWindow`, `ManagedExecutionCost`, `TaskTokenSpend`, `TaskTokenTotals`, `ReliabilityWindow`, `RuntimeReliability` and the shapes inside it. The knowledge handler stops listing runs from the runtime and calling `aggregate` itself; it calls one run command whose flow does both. The handlers and the tests import from `app::run`, and `metrics` becomes `pub(crate)`.
+- **Step 2, inside core, in pass A with the run chain (§11): [ORB-28963].** After the last of `application/job` has moved [ORB-28443] and before `application/` is deleted [ORB-28450]: the two files move into `app/run/`, the `OrbitRuntime` methods become functions that take `rt: &OrbitRuntime`, and `metrics/` is deleted with its line in `docs/architecture/orbit-core.md`. It is a move, like every other conversion.
 - **The knowledge route stays supported**, so `summary.rs` moves like the rest and nothing here removes it.
-- **`api/metrics.rs` is in no task's footprint.** It has seven routed handlers that hold the runtime, and `api/route.rs` registers all seven: knowledge, and six over the invocation store (activity, tool, task and orchestrator metrics, the invocation list, and the ingest, `POST /metrics/invocations`). [ORB-28415] gives the dashboard a `Core` and declares `api/cost.rs`, `api/reliability.rs` and `api/diagnostics/task_tokens.rs`, but not this file, and no task tagged `architecture-restructure` declares it (103 tasks read on 2026-11-26). Step 1 covers the knowledge handler. The other six are run data as well (their methods sit in the runtime's `run/engine/invocation.rs`, beside the cost read), so they become run commands too.
+- **`api/metrics.rs` has seven routed handlers that hold the runtime**, and `api/route.rs` registers all seven: knowledge, and six over the invocation store (activity, tool, task and orchestrator metrics, the invocation list, and the ingest, `POST /metrics/invocations`). Step 1 converts the knowledge handler. [ORB-28415], which gives the dashboard a `Core`, declares the file and converts the other six. They are run data as well (their methods sit in the runtime's `run/engine/invocation.rs`, beside the cost read), so they become run commands too.
 - **The ingest is the one write.** It records an invocation under the serving runtime's workspace, whatever workspace the payload claims. Today it is an ordinary write: the router's origin check applies, no operator session is required (`ORDINARY_WRITES` in `crates/orbit-web/tests/http_api/guards.rs`), and the handler writes no audit row. A conversion changes no behaviour, so its command keeps all three: it gains neither an operator requirement nor an audit row at the chokepoint.
 
 ## 4. The runtime: layers that each add a capability
@@ -363,7 +363,7 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 - **A conversion is a move.** Function bodies do not change, only where they live and what they receive. Tests are not rewritten, and the frozen surface fixtures stay as they are.
 - **One writer per set of files.** Tasks that may run side by side declare disjoint files. Readiness is not disjointness: two tasks with the same predecessors can declare the same file, and a dependency must order any two that share one.
 - **Decided at filing, not measured.** The app table in [ORB-28364] is a starting table that the task checks against the code. The two passes and the place of the runtime layout come from reading the code, not from a trial conversion.
-- **Not filed: `metrics`.** The 95 tasks were cut from `application/`, so the two steps that dissolve `crates/orbit-core/src/metrics/` into the run app (§3) have no task. Step 1 belongs to phase 4 and must land before [ORB-28417]; step 2 belongs to phase 5, after [ORB-28443].
+- **`metrics` was filed afterwards.** The 95 tasks were cut from `application/`, so the two steps that dissolve `crates/orbit-core/src/metrics/` into the run app (§3) were added later. Step 1 is [ORB-28962] in phase 4, and [ORB-28415] waits for it. Step 2 is [ORB-28963] in phase 5, after [ORB-28443], and [ORB-28450] waits for it.
 
 ## 12. Concerns & Honest Limitations
 
@@ -398,6 +398,8 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 - [ORB-28451] — starts pass B: narrows flows to `&Base`.
 - [ORB-28454] — ends pass B: narrows the remaining flows to `&Run`.
 - [ORB-28455] — deletes the wrapper and builds layers on demand.
+- [ORB-28962] — exports the run metrics types from `app::run` and converts the knowledge handler.
+- [ORB-28963] — moves `metrics/` into the run app and deletes it.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
