@@ -420,9 +420,11 @@ certifies the repaired head as both the original head and publication lease.
 ### `handoff_landing::handoff_landing_contracts_1`
 
 - `a_local_candidate_landing_names_its_task_before_the_branch_moves`
+- `owner_local_landing_refuses_and_preserves_cache_shaped_work`
 - `a_candidate_that_cannot_fast_forward_records_no_landing_intent`
 - `a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts`
 - `an_already_landed_landing_holds_when_its_evidence_went_stale`
+- `handoff_fake_refuses_unscoped_automation_updates`
 
 ### `handoff_landing::handoff_landing_contracts_2`
 
@@ -433,8 +435,10 @@ certifies the repaired head as both the original head and publication lease.
 ### `handoff_landing::handoff_landing_contracts_3`
 
 - `owner_landing_waits_for_exact_required_checks_before_one_verified_merge`
+- `owner_landing_waits_out_pending_only_block_before_checks_pass`
 - `owner_landing_waits_for_required_checks_the_head_has_not_reported`
 - `owner_landing_pending_evidence_never_extends_refusal_or_merge_authority`
+- `landing_poll_uses_the_completion_clock_for_elapsed_provider_time`
 
 ### `handoff_landing::handoff_landing_contracts_4`
 
@@ -442,12 +446,47 @@ certifies the repaired head as both the original head and publication lease.
 - `a_required_aggregate_after_recovery_is_classified_without_waiting`: labelled rows `after rerun` (retired `a_required_aggregate_after_rerun_is_classified_without_waiting`) and `after branch update` (retired `a_required_aggregate_after_branch_update_is_classified_without_waiting`)
 - `a_transient_rerun_waits_for_queued_replacement_jobs`
 - `owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence`
+- `externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref`
+- `handoff_merge_in_progress_contracts`
 
 ### `handoff_landing::handoff_landing_contracts_5`
 
 - `adopted_provider_head_accepts_readable_empty_policy`
 - `adopted_provider_head_accepts_authentic_legacy_success`
 - `adopted_provider_head_refuses_unavailable_or_unsatisfied_policy`
+
+### `handoff_landing::handoff_landing_contracts_6`
+
+- `untouched_failure_reruns_once_after_fresh_base_pass`
+- `suspicion_only_history_cannot_admit_repair_from_a_non_pr_run`
+- `untouched_failure_uses_a_fresh_pass_behind_the_moving_tip`
+- `untouched_failure_requires_the_same_signature_unchanged_head_rerun`
+- `untouched_failure_escalates_after_configured_base_ci_cycles`
+- `base_suspect_failure_on_a_proven_green_base_requeues_the_candidate`
+- `untouched_failure_on_a_moved_tip_follows_the_fresh_base_check`
+- `a_candidate_caused_check_failure_requeues_the_candidate`
+
+### `handoff_landing::handoff_landing_contracts_7`
+
+- `a_check_failure_inherited_from_the_base_updates_the_branch_and_lands`
+- `inherited_landing_waits_for_a_later_passing_base_and_updates_again`
+- `landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop`
+- `an_inherited_failure_that_survives_the_branch_update_gets_one_repair`
+- `a_branch_update_is_verified_against_the_base_it_merged`
+
+### `handoff_landing::handoff_landing_contracts_8`
+
+- `untouched_failure_with_a_passing_base_repairs_when_its_retry_is_unreadable`
+- `unreadable_retry_evidence_stops_the_landing_naming_the_read_failure`
+- `an_unreadable_log_and_a_spent_transient_rerun_hold_the_landing`
+- `a_transient_check_failure_respects_the_configured_retry_limit`
+- `a_check_failure_whose_evidence_cannot_be_read_spends_nothing`
+- `a_required_aggregate_failure_is_classified_from_its_source_annotations`
+
+### `handoff_landing::handoff_landing_contracts_9`
+
+- `untouched_failure_checks_push_history_through_the_real_adapter`
+- `transient_non_pull_request_rerun_is_refused_without_retrying`
 
 ### `forge_hold::forge_hold_contracts_1`
 

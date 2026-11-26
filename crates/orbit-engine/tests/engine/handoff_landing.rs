@@ -1,48 +1,93 @@
 //! The owner's landing of a claimed candidate.
 //!
-//! A fast-forward has no provider identity, so the owner's delivery consumers
-//! can attribute it only from a direct landing intent retained before the
-//! branch moves. The landing names the accepted handoff and its task in that
-//! intent; a candidate that cannot fast-forward lands nothing and records none
-//! [ORB-13894]. PR reconciliation resolves external uncertainty before stopping
-//! a mismatched delivery, so subsequent attempts see the settled state. A stop
-//! on a conflicting or stale base is marked repairable [ORB-14261]. A hosted
-//! check the review owed the owner gates the merge, and only an explicit
-//! success counts [ORB-15677] [ORB-15812]. A failed check is classified from
-//! its job log: one inherited from the base updates the branch, and one that
-//! still fails on a base tip where the same job passes earns one repair
-//! [ORB-16322]; a transient one uses the configured retry budget, and the candidate's own earns
-//! one repair [ORB-15956].
-//! Evidence that cannot be read decides none of those and spends nothing,
-//! and a branch update is verified against the base as the provider merged
-//! it, not as the owner last fetched it [ORB-15970].
-//! A cached updated head cannot bypass a failed initial fetch [ORB-15976].
+//! Direct fast-forward landings retain a landing intent naming the handoff and
+//! task before `main` moves; a diverged branch records none [ORB-13894]. PR
+//! reconciliation settles external state before stopping mismatches. Conflicting
+//! or stale bases stop repairable [ORB-14261]. Owed hosted checks gate merging
+//! on explicit success [ORB-15677] [ORB-15812]. Failed checks classify from job
+//! logs (inherited -> update branch, surviving on green tip -> one repair
+//! [ORB-16322], transient -> retry budget, candidate -> requeue [ORB-15956]);
+//! unreadable evidence spends nothing, branch updates verify against the merged
+//! base [ORB-15970], and cached heads require a fresh base fetch [ORB-15976].
 
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
+use orbit_engine::test_support::{NullRuntimeHost, with_prerequisite_clock, with_vcs_retry_wait};
 use orbit_engine::{
-    HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, RuntimeHost,
-    execute_deterministic_action, observe_candidate,
+    BaseSyncMode, DispatchError, HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate,
+    PrConfig, RuntimeHost, TaskAutomationUpdate, dispatch_error_to_orbit,
+    execute_deterministic_action, execute_job_with_resume, observe_candidate,
 };
-use orbit_types::workflow::DeliveryRefusal;
+use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::automation::DirectLandingRequest;
-use orbit_types::workflow::handoff::HandoffDelivery;
+use orbit_types::workflow::handoff::{
+    HandoffArtifactRef, HandoffDelivery, LANDING_WAITING_FOR_BASE_EVENT,
+};
+use orbit_types::workflow::{
+    CI_BASE_SUSPECT_RECLASSIFIED_EVENT, CI_FAILURE_RECLASSIFIED_EVENT, CI_FAILURE_RECORDED_EVENT,
+    CiBaseSuspectReclassification, CiFailureClass, CiInfrastructureRetryPolicy, CiRerunAdmission,
+    CiRerunPlan, DeliveryRefusal, HeldFailure, JobRunState, PR_BASE_UPDATE_RESERVED_EVENT,
+    PrBaseUpdateAdmission, PrBaseUpdateReservation, ci_failure_ledger, decide_ci_rerun_with_policy,
+    decide_pr_base_update,
+};
 use serde_json::{Value, json};
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
+
+use HandoffLandingStep::{Complete, PublishIntent, ResolveIntent, Stop, StopForRequeue};
 
 const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-landing-test";
+const STOP: HandoffLandingStep = Stop { repairable: false };
+const NO_RERUN_UPDATE_OR_MERGE: &[&str] = &["ci.rerun_failed", "pr.update_branch", "pr.merge"];
+const NO_RERUN_OR_UPDATE: &[&str] = &["ci.rerun_failed", "pr.update_branch"];
+const NO_MERGE_OR_UPDATE: &[&str] = &["pr.merge", "pr.update_branch"];
 
 mod log_read;
+
+macro_rules! scenario_family {
+    ($(#[$attr:meta])* $name:ident: $($row:ident),+ $(,)?) => {
+        $(#[$attr])*
+        #[test]
+        fn $name() {
+            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
+                crate::git_fixture::run_scenarios(&[$((stringify!($row), $row as fn())),+]);
+            });
+        }
+    };
+}
+
+fn pick<T>(cond: bool, t: T, f: T) -> T {
+    if cond { t } else { f }
+}
+
+fn pop_keep_last<T: Clone>(q: &mut VecDeque<T>) -> T {
+    let val = q.front().unwrap().clone();
+    if q.len() > 1 {
+        q.pop_front();
+    }
+    val
+}
+
+fn pop_or_auth(q: &mut VecDeque<Value>) -> Result<Value, OrbitError> {
+    let ans = pop_keep_last(q);
+    if ans == json!("auth") {
+        Err(OrbitError::Execution("HTTP 401: Bad credentials".into()))
+    } else {
+        Ok(ans)
+    }
+}
 
 struct LandingHost {
     repo: PathBuf,
     context: HandoffLandingContext,
     steps: Mutex<Vec<HandoffLandingStep>>,
-    /// Each retained intent with the landing branch's tip when it was retained.
     intents: Mutex<Vec<(DirectLandingRequest, String)>>,
 }
 
@@ -52,59 +97,76 @@ impl LandingHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for LandingHost {
+impl NullRuntimeHost for LandingHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
     }
-
-    fn handoff_landing_context(
-        &self,
-        _handoff_id: &str,
-    ) -> Result<HandoffLandingContext, OrbitError> {
+    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
         Ok(self.context.clone())
     }
-
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         self.steps.lock().unwrap().push(update.step.clone());
         Ok(())
     }
-
-    fn record_direct_landing_intent(
-        &self,
-        request: &DirectLandingRequest,
-    ) -> Result<(), OrbitError> {
-        let tip = git(&self.repo, &["rev-parse", "main"]);
-        self.intents.lock().unwrap().push((request.clone(), tip));
+    fn record_direct_landing_intent(&self, req: &DirectLandingRequest) -> Result<(), OrbitError> {
+        let tip = git_rev(&self.repo, "main");
+        self.intents.lock().unwrap().push((req.clone(), tip));
         Ok(())
     }
 }
 
-/// An owner checkout on `main` with the claimed candidate on `orbit/T1`, and
-/// the host the landing job hands the accepted handoff to.
-fn owner_checkout(repo: &Path) -> LandingHost {
-    git(repo, &["init", "-q", "-b", "main"]);
-    std::fs::write(repo.join("README.md"), "base\n").unwrap();
-    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
-    std::fs::write(repo.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
-    git(repo, &["add", "README.md"]);
-    git(repo, &["add", ".github/workflows/ci.yml"]);
-    git(repo, &["commit", "-q", "-m", "base"]);
-    git(repo, &["checkout", "-q", "-b", "orbit/T1"]);
-    std::fs::write(repo.join("work.txt"), "delivered\n").unwrap();
-    git(repo, &["add", "work.txt"]);
-    git(repo, &["commit", "-q", "-m", "candidate"]);
-    git(repo, &["checkout", "-q", "main"]);
-    let candidate = observe_candidate(
-        &orbit_common::Env::capture(),
+fn git_rev(repo: &Path, rev: &str) -> String {
+    git(repo, &["rev-parse", rev])
+}
+
+fn commit_file(repo: &Path, path: &str, content: &str, msg: &str) -> String {
+    let target = repo.join(path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(target, content).unwrap();
+    git(repo, &["add", path]);
+    git(repo, &["commit", "-q", "-m", msg]);
+    git_rev(repo, "HEAD")
+}
+
+fn commit_tree(repo: &Path, tree: &str, parents: &[&str], msg: &str) -> String {
+    let mut args = vec!["commit-tree", tree];
+    for p in parents {
+        args.extend(["-p", p]);
+    }
+    args.extend(["-m", msg]);
+    git(repo, &args)
+}
+
+fn observe_local(
+    repo: &Path,
+    src: &str,
+    base: &str,
+) -> orbit_types::workflow::handoff::HandoffCandidate {
+    observe_candidate(
+        &Env::capture(),
         repo,
-        Some("orbit/T1"),
-        "main",
-        "main",
+        Some(src),
+        base,
+        base,
         HandoffDelivery::LocalCandidate,
         "workspace",
-        orbit_engine::BaseSyncMode::Local,
+        BaseSyncMode::Local,
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn owner_checkout(repo: &Path) -> LandingHost {
+    git(repo, &["init", "-q", "-b", "main"]);
+    fs::write(repo.join("README.md"), "base\n").unwrap();
+    fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    fs::write(repo.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
+    git(repo, &["add", "README.md", ".github/workflows/ci.yml"]);
+    git(repo, &["commit", "-q", "-m", "base"]);
+    git(repo, &["checkout", "-q", "-b", "orbit/T1"]);
+    commit_file(repo, "work.txt", "delivered\n", "candidate");
+    git(repo, &["checkout", "-q", "main"]);
     LandingHost {
         repo: repo.to_path_buf(),
         context: HandoffLandingContext {
@@ -112,7 +174,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
             task_id: TASK_ID.into(),
             claim_id: "claim-1".into(),
             producing_run_id: "run-1".into(),
-            candidate,
+            candidate: observe_local(repo, "orbit/T1", "main"),
             unresolved_merge_intent: None,
             workspace_path: repo.to_path_buf(),
             owed_hosted_checks: Vec::new(),
@@ -124,109 +186,170 @@ fn owner_checkout(repo: &Path) -> LandingHost {
     }
 }
 
+fn owner_fixture() -> (TempDir, LandingHost) {
+    let sandbox = tempdir().unwrap();
+    let host = owner_checkout(sandbox.path());
+    (sandbox, host)
+}
+
 fn land(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
     land_with(host, json!({}))
 }
 
-/// [`land`] with `extra` merged into the step input.
 fn land_with(host: &impl RuntimeHost, extra: Value) -> Result<Value, OrbitError> {
     let mut input = json!({"handoff_id": "handoff-1", "task_id": TASK_ID, "run_id": RUN_ID});
-    if let (Some(input), Value::Object(extra)) = (input.as_object_mut(), extra) {
-        input.extend(extra);
+    if let (Some(i), Value::Object(e)) = (input.as_object_mut(), extra) {
+        i.extend(e);
     }
+    let empty = HashMap::new();
     execute_deterministic_action(
         host,
         "handoff_land",
         &json!({}),
         &input,
         false,
-        &HashMap::new(),
+        &empty,
         None,
     )
 }
 
-/// An owner checkout's context re-pointed at pull request #42.
-fn pr_context(sandbox: &Path) -> HandoffLandingContext {
-    let mut context = owner_checkout(sandbox).context;
-    context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-    context.candidate.repository = "owner/repository".into();
-    context
-}
-
-/// Land with no owner wait.
 fn land_now(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
     land_with(host, json!({"max_wait_seconds": 0}))
 }
 
-/// Land through the retry-wait hook, recording wait durations, never sleeping.
+fn land_cycles(host: &impl RuntimeHost, cycles: u64) -> Result<Value, OrbitError> {
+    let input =
+        json!({"max_wait_seconds": 30, "poll_interval_seconds": 5, "max_base_ci_cycles": cycles});
+    with_vcs_retry_wait(|_| {}, || land_with(host, input))
+}
+
 fn counted_land(host: &impl RuntimeHost, input: Value) -> (Result<Value, OrbitError>, Vec<u64>) {
-    let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let captured = waits.clone();
-    let result = orbit_engine::test_support::with_vcs_retry_wait(
-        move |duration| captured.borrow_mut().push(duration.as_secs()),
+    let waits = Rc::new(RefCell::new(Vec::new()));
+    let cap = waits.clone();
+    let res = with_vcs_retry_wait(
+        move |d| cap.borrow_mut().push(d.as_secs()),
         || land_with(host, input),
     );
     let durations = waits.borrow().clone();
-    (result, durations)
+    (res, durations)
 }
 
-/// Commit the base's fix on `main`; return its new tip.
+fn land_poll(host: &impl RuntimeHost, max: u64, iv: u64) -> (Result<Value, OrbitError>, Vec<u64>) {
+    counted_land(
+        host,
+        json!({"max_wait_seconds": max, "poll_interval_seconds": iv}),
+    )
+}
+
+fn land_counting_polls(forge: &FakeForge) -> (Result<Value, OrbitError>, usize) {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let c = polls.clone();
+    let input = json!({"max_wait_seconds": 60, "poll_interval_seconds": 5});
+    let res = with_vcs_retry_wait(
+        move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        },
+        || land_with(forge, input),
+    );
+    (res, polls.load(Ordering::SeqCst))
+}
+
+fn pr_context(sandbox: &Path) -> HandoffLandingContext {
+    let mut ctx = owner_checkout(sandbox).context;
+    ctx.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+    ctx.candidate.repository = "owner/repository".into();
+    ctx
+}
+
 fn fix_base(repo: &Path) -> String {
-    std::fs::write(repo.join("fix.txt"), "the base's fix\n").unwrap();
-    git(repo, &["add", "fix.txt"]);
-    git(repo, &["commit", "-q", "-m", "fix the base"]);
-    git(repo, &["rev-parse", "main"])
+    commit_file(repo, "fix.txt", "the base's fix\n", "fix the base")
 }
 
-/// A fresh forge in its own sandbox, with candidate and base commits.
-fn forge_fixture(owed: bool, spent: bool) -> (tempfile::TempDir, FakeForge, String, String) {
+/// A fresh forge with candidate and base commits.
+fn forge_fixture(owed: bool, spent: bool) -> (TempDir, FakeForge, String, String) {
     let sandbox = tempdir().unwrap();
     let mut forge = FakeForge::new(sandbox.path(), owed);
     forge.context.automatic_repair_spent = spent;
-    let candidate = forge.context.candidate.candidate.commit.clone();
+    let cand = forge.context.candidate.candidate.commit.clone();
     let base = forge.context.candidate.base.commit.clone();
-    (sandbox, forge, candidate, base)
+    (sandbox, forge, cand, base)
 }
 
-/// Change the workflow file on the candidate branch and refresh the PR
-/// observation so the landing classifies a citation to that changed file.
-fn change_candidate_workflow(forge: &mut FakeForge) -> String {
-    let candidate_branch = forge.context.candidate.source_branch.clone();
-    let base_branch = forge.context.candidate.base_branch.clone();
-    git(&forge.repo, &["checkout", "-q", &candidate_branch]);
-    std::fs::write(
-        forge.repo.join(".github/workflows/ci.yml"),
-        "name: changed CI\n",
-    )
-    .unwrap();
-    git(&forge.repo, &["add", ".github/workflows/ci.yml"]);
-    git(&forge.repo, &["commit", "-q", "-m", "change workflow"]);
-    git(&forge.repo, &["checkout", "-q", &base_branch]);
+fn published_forge(owed: bool, advance: bool) -> (TempDir, TempDir, FakeForge, String, String) {
+    let remote = tempdir().unwrap();
+    let (sandbox, mut forge, cand, base) = forge_fixture(owed, false);
+    if advance {
+        fix_base(&forge.repo);
+    }
+    forge.publish(remote.path());
+    (remote, sandbox, forge, cand, base)
+}
 
-    let mut candidate = observe_candidate(
-        &orbit_common::Env::capture(),
-        &forge.repo,
-        Some(&candidate_branch),
-        &base_branch,
-        &base_branch,
-        HandoffDelivery::LocalCandidate,
-        "workspace",
-        orbit_engine::BaseSyncMode::Local,
-    )
-    .unwrap();
-    candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-    candidate.repository = "owner/repository".into();
-    let commit = candidate.candidate.commit.clone();
-    forge.context.candidate = candidate;
-    forge.state.lock().unwrap().head = commit.clone();
+#[cfg(unix)]
+fn install_fake_gh(repo: &Path, script: &str) -> impl Drop {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = repo.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    fs::write(&gh, script).unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let path = std::env::join_paths(paths).unwrap();
+    orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))])
+}
+
+fn change_candidate_workflow(forge: &mut FakeForge) -> String {
+    let src = forge.context.candidate.source_branch.clone();
+    let base = forge.context.candidate.base_branch.clone();
+    git(&forge.repo, &["checkout", "-q", &src]);
+    let wf = ".github/workflows/ci.yml";
+    commit_file(&forge.repo, wf, "name: changed CI\n", "change workflow");
+    git(&forge.repo, &["checkout", "-q", &base]);
+    let mut cand = observe_local(&forge.repo, &src, &base);
+    cand.delivery = HandoffDelivery::PullRequest { number: 42 };
+    cand.repository = "owner/repository".into();
+    let commit = cand.candidate.commit.clone();
+    forge.context.candidate = cand;
+    forge.with_state(|s| s.head = commit.clone());
     commit
 }
 
-/// Script the inherited-failure jobs: candidate and base fail, tip answers `tip`.
-fn inherited_jobs(forge: &FakeForge, candidate: &str, base: &str, fixed: &str, tip: FakeJob) {
-    forge.job(candidate, failed(1, 11, CLIPPY_DEAD_CODE));
+fn inherited_jobs(forge: &FakeForge, cand: &str, base: &str, fixed: &str, tip: FakeJob) {
+    forge.job(cand, failed(1, 11, CLIPPY_DEAD_CODE));
     forge.job(base, failed(2, 21, CLIPPY_DEAD_CODE));
     forge.job(fixed, tip);
+}
+
+fn at(hhmm: &str) -> String {
+    format!("2026-10-26T{hhmm}:00Z")
+}
+
+fn set_times(forge: &FakeForge, times: &[(u64, &str, &str)]) {
+    forge.with_state(|s| {
+        for (job, start, end) in times {
+            s.job_times.insert(*job, (at(start), at(end)));
+        }
+    });
+}
+
+fn history_row(by: &str, event: &str, note: Option<String>) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at: chrono::Utc::now(),
+        by: by.into(),
+        event: event.into(),
+        note,
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: None,
+        surface: None,
+        caller: None,
+    }
+}
+
+fn check_run(name: &str, wf: &str, status: &str, conclusion: &str) -> Value {
+    json!({"__typename":"CheckRun","name":name,"workflowName":wf,"status":status,"conclusion":conclusion})
 }
 
 fn assert_not_sent(forge: &FakeForge, ops: &[&str], label: &str) {
@@ -239,16 +362,20 @@ fn assert_steps(steps: &[HandoffLandingStep], expected: &[HandoffLandingStep], l
     assert_eq!(steps, expected, "{label}");
 }
 
-/// [model ranking §5.1] The current class of each recorded check failure.
-fn ledger_classes(forge: &FakeForge) -> Vec<orbit_types::workflow::CiFailureClass> {
-    orbit_types::workflow::ci_failure_ledger(&forge.history.lock().unwrap())
-        .into_iter()
-        .map(|entry| entry.class)
-        .collect()
+fn assert_landed(outcome: Result<Value, OrbitError>, label: &str) {
+    let val = outcome.expect(label);
+    assert_eq!(val["phase"], "landed", "{label}: {val}");
 }
 
-fn assert_sent_len(forge: &FakeForge, op: &str, expected: usize, label: &str) {
-    assert_eq!(forge.sent(op).len(), expected, "{label}: {op}");
+fn is_base_pending(error: &OrbitError) -> bool {
+    matches!(error, OrbitError::DeliveryRefused { refusal, .. } if refusal.error_code() == "delivery_base_checks_pending")
+}
+
+fn ledger_classes(forge: &FakeForge) -> Vec<CiFailureClass> {
+    ci_failure_ledger(&forge.history.lock().unwrap())
+        .into_iter()
+        .map(|e| e.class)
+        .collect()
 }
 
 fn assert_contains(text: &str, parts: &[&str], label: &str) {
@@ -262,65 +389,53 @@ fn evidence_of(forge: &FakeForge) -> Value {
 }
 
 fn head_of(forge: &FakeForge) -> String {
-    forge.state.lock().unwrap().head.clone()
+    forge.with_state(|s| s.head.clone())
 }
 
-fn assert_reason(forge: &FakeForge, label: &str, parts: &[&str]) {
-    let reason = forge.stop_reason();
-    for part in parts {
-        assert!(reason.contains(part), "{label}: {reason}");
-    }
+fn policy_commit(p: &mut Value) -> &mut Value {
+    &mut p["pull_request"]["commits"]["nodes"][0]["commit"]
 }
-
-fn policy_commit(policy: &mut Value) -> &mut Value {
-    &mut policy["pull_request"]["commits"]["nodes"][0]["commit"]
+fn policy_contexts(p: &mut Value) -> &mut Value {
+    &mut policy_commit(p)["statusCheckRollup"]["contexts"]
 }
-
-fn policy_contexts(policy: &mut Value) -> &mut Value {
-    &mut policy_commit(policy)["statusCheckRollup"]["contexts"]
+fn policy_nodes(p: &mut Value) -> &mut Value {
+    &mut policy_contexts(p)["nodes"]
 }
-
-/// The mutable required-check context nodes of a pending policy.
-fn policy_nodes(policy: &mut Value) -> &mut Value {
-    &mut policy_contexts(policy)["nodes"]
+fn policy_first(p: &mut Value) -> &mut Value {
+    &mut policy_nodes(p)[0]
 }
-
-fn policy_first(policy: &mut Value) -> &mut Value {
-    &mut policy_nodes(policy)[0]
+fn rm_key(v: &mut Value, k: &str) {
+    v.as_object_mut().unwrap().remove(k);
 }
 
 fn a_local_candidate_landing_names_its_task_before_the_branch_moves() {
-    let sandbox = tempdir().unwrap();
-    let host = owner_checkout(sandbox.path());
-    let base = git(&host.repo, &["rev-parse", "main"]);
+    let (_sb, host) = owner_fixture();
+    let base = git_rev(&host.repo, "main");
     let candidate = host.context.candidate.candidate.commit.clone();
 
     land(&host).expect("the candidate fast-forwards");
 
-    assert_eq!(git(&host.repo, &["rev-parse", "main"]), candidate);
+    assert_eq!(git_rev(&host.repo, "main"), candidate);
+    let expected = DirectLandingRequest {
+        run_id: RUN_ID.into(),
+        branch: "main".into(),
+        before_commit: base.clone(),
+        after_commit: candidate,
+        task_ids: vec![TASK_ID.into()],
+        handoff_id: Some("handoff-1".into()),
+    };
     assert_eq!(
         *host.intents.lock().unwrap(),
-        vec![(
-            DirectLandingRequest {
-                run_id: RUN_ID.into(),
-                branch: "main".into(),
-                before_commit: base.clone(),
-                after_commit: candidate,
-                task_ids: vec![TASK_ID.into()],
-                handoff_id: Some("handoff-1".into()),
-            },
-            base,
-        )],
-        "one intent, naming the handoff and its task, retained while main was still at the base"
+        vec![(expected, base)],
+        "intent retained before main moved"
     );
-    assert_eq!(host.last_step(), Some(HandoffLandingStep::Complete));
+    assert_eq!(host.last_step(), Some(Complete));
 }
 
 fn owner_local_landing_refuses_and_preserves_cache_shaped_work() {
-    let sandbox = tempdir().unwrap();
-    let host = owner_checkout(sandbox.path());
-    let base = git(&host.repo, &["rev-parse", "main"]);
-    std::fs::create_dir_all(host.repo.join("pkg/__pycache__")).unwrap();
+    let (_sb, host) = owner_fixture();
+    let base = git_rev(&host.repo, "main");
+    fs::create_dir_all(host.repo.join("pkg/__pycache__")).unwrap();
     let files = [
         ("pkg/__pycache__/notes.txt", b"owner notes\r\n".as_slice()),
         (
@@ -329,79 +444,62 @@ fn owner_local_landing_refuses_and_preserves_cache_shaped_work() {
         ),
         ("fixture.pyc", b"\0standalone bytecode\xff"),
     ];
-    for (path, bytes) in files {
-        std::fs::write(host.repo.join(path), bytes).unwrap();
+    for (p, b) in files {
+        fs::write(host.repo.join(p), b).unwrap();
     }
-    let status = git(
-        &host.repo,
-        &["status", "--porcelain", "--untracked-files=all"],
-    );
+    let status_args = ["status", "--porcelain", "--untracked-files=all"];
+    let status = git(&host.repo, &status_args);
 
     let result = land(&host);
 
-    for (path, bytes) in files {
-        assert_eq!(
-            std::fs::read(host.repo.join(path))
-                .unwrap_or_else(|error| panic!("read {path} after landing: {error}")),
-            bytes,
-            "{path}"
-        );
+    for (p, b) in files {
+        let got = fs::read(host.repo.join(p)).unwrap_or_else(|e| panic!("read {p}: {e}"));
+        assert_eq!(got, b, "{p}");
     }
-    let error = result.expect_err("cache-shaped files make the owner checkout dirty");
-    let message = error.to_string();
-    assert!(message.contains("owner landing checkout") && message.contains("must be clean before"));
-    for (path, _) in files {
-        assert!(
-            message.contains(path),
-            "missing {path} in refusal: {message}"
-        );
-    }
-    assert_eq!(git(&host.repo, &["rev-parse", "main"]), base);
-    assert_eq!(
-        git(
-            &host.repo,
-            &["status", "--porcelain", "--untracked-files=all"]
-        ),
-        status
+    let msg = result
+        .expect_err("cache-shaped files make the owner checkout dirty")
+        .to_string();
+    assert_contains(
+        &msg,
+        &["owner landing checkout", "must be clean before"],
+        "refusal",
     );
+    for (p, _) in files {
+        assert!(msg.contains(p), "missing {p} in refusal: {msg}");
+    }
+    assert_eq!(git_rev(&host.repo, "main"), base);
+    assert_eq!(git(&host.repo, &status_args), status);
     assert!(host.intents.lock().unwrap().is_empty());
 }
 
 fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
-    let sandbox = tempdir().unwrap();
-    let host = owner_checkout(sandbox.path());
-    std::fs::write(host.repo.join("other.txt"), "another landing\n").unwrap();
-    git(&host.repo, &["add", "other.txt"]);
-    git(&host.repo, &["commit", "-q", "-m", "another landing"]);
+    let (_sb, host) = owner_fixture();
+    commit_file(
+        &host.repo,
+        "other.txt",
+        "another landing\n",
+        "another landing",
+    );
 
     land(&host).expect_err("a diverged landing branch stops the attempt");
 
     assert!(host.intents.lock().unwrap().is_empty());
-    let stop = HandoffLandingStep::Stop { repairable: true };
-    assert_eq!(host.last_step(), Some(stop));
+    assert_eq!(host.last_step(), Some(Stop { repairable: true }));
 }
 
-/// The owner's completion write rechecks a NoDiff or already-landed
-/// checkpoint against the task as it is now. Evidence a task edit made stale
-/// is refused there as typed stale evidence; the landing records its stop and
-/// holds the run with the candidate in review, instead of failing it
-/// [ORB-25394].
+/// Rechecked stale NoDiff/already-landed evidence stops and holds in review [ORB-25394].
 struct StaleEvidenceHost {
     context: HandoffLandingContext,
     steps: Mutex<Vec<HandoffLandingStep>>,
     stops: Mutex<Vec<String>>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for StaleEvidenceHost {
-    fn handoff_landing_context(
-        &self,
-        _handoff_id: &str,
-    ) -> Result<HandoffLandingContext, OrbitError> {
+impl NullRuntimeHost for StaleEvidenceHost {
+    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
         Ok(self.context.clone())
     }
-
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        if matches!(update.step, HandoffLandingStep::Complete) {
+        if matches!(update.step, Complete) {
             return Err(OrbitError::DeliveryRefused {
                 refusal: DeliveryRefusal::EvidenceStale,
                 message: "already_landed_unverified: task scope changed at scope.relations; \
@@ -409,7 +507,7 @@ impl orbit_engine::test_support::NullRuntimeHost for StaleEvidenceHost {
                     .into(),
             });
         }
-        if matches!(update.step, HandoffLandingStep::Stop { .. }) {
+        if matches!(update.step, Stop { .. }) {
             self.stops.lock().unwrap().push(update.evidence.clone());
         }
         self.steps.lock().unwrap().push(update.step.clone());
@@ -418,91 +516,72 @@ impl orbit_engine::test_support::NullRuntimeHost for StaleEvidenceHost {
 }
 
 fn an_already_landed_landing_holds_when_its_evidence_went_stale() {
-    let sandbox = tempdir().unwrap();
-    let mut context = owner_checkout(sandbox.path()).context;
-    context.candidate.candidate = context.candidate.base.clone();
-    context.candidate.delivery = HandoffDelivery::NoDiff {
-        evidence: orbit_types::workflow::handoff::HandoffArtifactRef {
-            path: "checkpoint.json".into(),
-            sha256: "0".repeat(64),
-        },
+    let (_sb, host) = owner_fixture();
+    let mut ctx = host.context;
+    ctx.candidate.candidate = ctx.candidate.base.clone();
+    let ev_ref = HandoffArtifactRef {
+        path: "checkpoint.json".into(),
+        sha256: "0".repeat(64),
     };
+    ctx.candidate.delivery = HandoffDelivery::NoDiff { evidence: ev_ref };
     let host = StaleEvidenceHost {
-        context,
+        context: ctx,
         steps: Mutex::default(),
         stops: Mutex::default(),
     };
 
-    let error = land(&host).expect_err("stale evidence cannot complete the landing");
-
+    let err = land(&host).expect_err("stale evidence cannot complete the landing");
     assert!(
-        matches!(
-            &error,
-            OrbitError::DeliveryRefused { refusal: DeliveryRefusal::EvidenceStale, message }
-                if message.contains("scope.relations")
-                    && message.contains("the candidate stays in review")
-        ),
-        "the landing is held, not a failed run: {error:?}"
+        matches!(&err, OrbitError::DeliveryRefused { refusal: DeliveryRefusal::EvidenceStale, message } if message.contains("scope.relations") && message.contains("the candidate stays in review")),
+        "the landing is held, not a failed run: {err:?}"
     );
     assert_eq!(
         *host.steps.lock().unwrap(),
-        vec![HandoffLandingStep::Stop { repairable: false }],
+        vec![STOP],
         "one recorded stop, and no completion"
     );
     assert_eq!(host.stops.lock().unwrap().len(), 1);
 }
 
-/// Model the owner's journal guards at the RuntimeHost boundary: Stop needs a
-/// resolved intent, and a settled attempt cannot accept more landing writes.
+/// Journal guards: Stop needs a resolved intent; settled attempts reject further writes.
 struct ReconciliationHost {
     context: Mutex<HandoffLandingContext>,
     updates: Mutex<Vec<HandoffLandingUpdate>>,
     status: Value,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ReconciliationHost {
-    fn handoff_landing_context(
-        &self,
-        _handoff_id: &str,
-    ) -> Result<HandoffLandingContext, OrbitError> {
+impl NullRuntimeHost for ReconciliationHost {
+    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
         Ok(self.context.lock().unwrap().clone())
     }
-
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         let mut updates = self.updates.lock().unwrap();
         if updates
             .last()
-            .is_some_and(|u| matches!(u.step, HandoffLandingStep::Stop { .. }))
+            .is_some_and(|u| matches!(u.step, Stop { .. }))
         {
             return Err(OrbitError::InvalidInput(
                 "landing attempt is already settled".into(),
             ));
         }
-        let mut context = self.context.lock().unwrap();
+        let mut ctx = self.context.lock().unwrap();
         match &update.step {
-            HandoffLandingStep::ResolveIntent { intent_id, .. } => {
-                assert_eq!(context.unresolved_merge_intent.as_ref(), Some(intent_id));
-                context.unresolved_merge_intent = None;
+            ResolveIntent { intent_id, .. } => {
+                assert_eq!(ctx.unresolved_merge_intent.as_ref(), Some(intent_id));
+                ctx.unresolved_merge_intent = None;
             }
-            HandoffLandingStep::Stop { .. } => {
-                assert!(
-                    context.unresolved_merge_intent.is_none(),
-                    "Stop must follow intent resolution"
-                );
-            }
+            Stop { .. } => assert!(
+                ctx.unresolved_merge_intent.is_none(),
+                "Stop follows resolution"
+            ),
             other => panic!("a mismatched reconciled PR must not reach {other:?}"),
         }
         updates.push(update.clone());
         Ok(())
     }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        _input: Value,
-    ) -> Result<Value, OrbitError> {
+    fn run_private_vcs_operation(&self, op: &str, _: Value) -> Result<Value, OrbitError> {
         assert_eq!(
-            operation, "pr.status",
+            op, "pr.status",
             "reconciliation must not send another merge"
         );
         Ok(json!({"pull_request": self.status}))
@@ -510,96 +589,73 @@ impl orbit_engine::test_support::NullRuntimeHost for ReconciliationHost {
 }
 
 fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
-    for (field, replacement) in [
-        ("headRefName", "another-branch"),
-        ("baseRefName", "another-base"),
-        ("headRefOid", "another-commit"),
-    ] {
+    let secret = format!("ghp_{}", "a".repeat(36));
+    let rows = [
+        ("headRefName", "another-branch", "head_branch"),
+        ("baseRefName", "another-base", "base_branch"),
+        ("headRefOid", "another-commit", "head"),
+    ];
+    for (field, repl, obs_field) in rows {
         let sandbox = tempdir().unwrap();
-        let mut context = pr_context(sandbox.path());
-        let intent_id = "handoff-1:42".to_string();
-        // A lost merge reply leaves this intent for the next attempt to read.
-        context.unresolved_merge_intent = Some(intent_id.clone());
-        let mut status = json!({
-            "state": "MERGED",
-            "headRefName": context.candidate.source_branch,
-            "baseRefName": context.candidate.base_branch,
-            "headRefOid": context.candidate.candidate.commit,
-            "mergeCommit": {"oid": "provider-merge"},
-            // Arbitrary provider payload is excluded from persisted evidence.
-            "futureField": {"transcript": format!("ghp_{}", "a".repeat(36))},
-        });
-        status[field] = json!(replacement);
+        let mut ctx = pr_context(sandbox.path());
+        let id = "handoff-1:42".to_string();
+        ctx.unresolved_merge_intent = Some(id.clone());
+        let mut status = json!({"state":"MERGED","headRefName":ctx.candidate.source_branch,"baseRefName":ctx.candidate.base_branch,"headRefOid":ctx.candidate.candidate.commit,"mergeCommit":{"oid":"provider-merge"},"futureField":{"transcript":secret}});
+        status[field] = json!(repl);
         let host = ReconciliationHost {
-            context: Mutex::new(context),
+            context: Mutex::new(ctx),
             updates: Mutex::default(),
             status,
         };
 
-        let error = land(&host).expect_err("a foreign merged identity cannot complete the handoff");
+        let err = land(&host).expect_err("a foreign merged identity cannot complete the handoff");
         let updates = host.updates.lock().unwrap().clone();
         assert_eq!(updates.len(), 2, "{field}: resolved intent and Stop");
-        let resolved = HandoffLandingStep::ResolveIntent {
-            intent_id,
-            merged: true,
-        };
-        assert_eq!(updates[0].step, resolved, "{field}");
-        let stop = HandoffLandingStep::Stop { repairable: false };
-        assert_eq!(updates[1].step, stop, "{field}: stale evidence");
+        assert_eq!(
+            updates[0].step,
+            ResolveIntent {
+                intent_id: id,
+                merged: true
+            },
+            "{field}"
+        );
+        assert_eq!(updates[1].step, STOP, "{field}: stale evidence");
         let stopped: Value = serde_json::from_str(&updates[1].evidence).unwrap();
+        let obs = &stopped["observation"];
         assert_eq!(stopped["kind"], "owner_landing_refusal");
-        let observation = &stopped["observation"];
-        assert_eq!(observation["required_checks"]["state"], "not_collected");
+        assert_eq!(obs["required_checks"]["state"], "not_collected");
         assert!(updates[1].observed.is_none());
         let reason = stopped["reason"]["value"].as_str().unwrap();
-        assert_contains(
-            reason,
-            &["delivery_evidence_stale", field, replacement],
-            field,
-        );
-        assert!(
-            matches!(error, OrbitError::Execution(ref message) if message == &format!("handoff_land: {reason}"))
-        );
-        let reconciled: Value = serde_json::from_str(&updates[0].evidence).unwrap();
-        assert_eq!(reconciled["reconciled"], "pull_request_merged");
-        assert_eq!(reconciled["pull_request"], 42);
-        assert_eq!(reconciled["delivery_error"]["value"], reason);
-        let observed_field = match field {
-            "headRefName" => "head_branch",
-            "baseRefName" => "base_branch",
-            "headRefOid" => "head",
-            _ => unreachable!(),
-        };
-        let provider = &reconciled["provider_state"][observed_field];
-        assert_eq!(provider["value"], replacement, "{field}");
-        assert_eq!(observation["pr"][observed_field]["value"], replacement);
-        for update in &updates {
-            assert!(!update.evidence.contains("futureField"));
-            assert!(!update.evidence.contains(&format!("ghp_{}", "a".repeat(36))));
+        assert_contains(reason, &["delivery_evidence_stale", field, repl], field);
+        let exp_msg = format!("handoff_land: {reason}");
+        assert!(matches!(err, OrbitError::Execution(ref m) if m == &exp_msg));
+        let rec: Value = serde_json::from_str(&updates[0].evidence).unwrap();
+        assert_eq!(rec["reconciled"], "pull_request_merged");
+        assert_eq!(rec["pull_request"], 42);
+        assert_eq!(rec["delivery_error"]["value"], reason);
+        assert_eq!(rec["provider_state"][obs_field]["value"], repl, "{field}");
+        assert_eq!(obs["pr"][obs_field]["value"], repl);
+        for u in &updates {
+            assert!(!u.evidence.contains("futureField") && !u.evidence.contains(&secret));
         }
-        assert!(
-            host.handoff_landing_context("handoff-1")
-                .unwrap()
-                .unresolved_merge_intent
-                .is_none()
-        );
+        let ctx_now = RuntimeHost::handoff_landing_context(&host, "handoff-1").unwrap();
+        assert!(ctx_now.unresolved_merge_intent.is_none());
 
         let retry = land(&host).expect_err("a later attempt sees the settled Stop");
         assert!(
-            matches!(retry, OrbitError::InvalidInput(ref message) if message == "landing attempt is already settled")
+            matches!(retry, OrbitError::InvalidInput(ref m) if m == "landing attempt is already settled")
         );
         assert_eq!(
             *host.updates.lock().unwrap(),
             updates,
-            "retry retains the original Stop evidence"
+            "retry retains Stop evidence"
         );
     }
 }
 
-/// A pull request the provider reports open with a fixed merge state and
-/// status rollup. It answers status and required-check reads; any other
-/// operation is recorded and refused, so a test sees whether it tried to merge.
+/// An open PR fixture with fixed merge state and rollup; records any non-read op.
 struct OpenPullRequestHost {
+    _sandbox: TempDir,
     context: HandoffLandingContext,
     steps: Mutex<Vec<HandoffLandingStep>>,
     merge_state: &'static str,
@@ -612,13 +668,14 @@ impl OpenPullRequestHost {
     fn steps(&self) -> Vec<HandoffLandingStep> {
         self.steps.lock().unwrap().clone()
     }
-
     fn sent_ops(&self) -> Vec<String> {
         self.sent.lock().unwrap().clone()
     }
-
-    fn new(context: HandoffLandingContext, merge_state: &'static str, rollup: Value) -> Self {
+    fn new(merge_state: &'static str, rollup: Value) -> Self {
+        let sandbox = tempdir().unwrap();
+        let context = pr_context(sandbox.path());
         Self {
+            _sandbox: sandbox,
             context,
             steps: Mutex::default(),
             merge_state,
@@ -629,176 +686,101 @@ impl OpenPullRequestHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
-    fn handoff_landing_context(
-        &self,
-        _handoff_id: &str,
-    ) -> Result<HandoffLandingContext, OrbitError> {
+impl NullRuntimeHost for OpenPullRequestHost {
+    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
         Ok(self.context.clone())
     }
-
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         self.steps.lock().unwrap().push(update.step.clone());
         Ok(())
     }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        _input: Value,
-    ) -> Result<Value, OrbitError> {
-        if operation == "ci.commit_jobs" {
-            return Ok(json!({"jobs": []}));
-        }
-        if operation == "pr.required_checks" {
-            let head = &self.context.candidate.candidate.commit;
-            return Ok(
+    fn run_private_vcs_operation(&self, op: &str, _: Value) -> Result<Value, OrbitError> {
+        let c = &self.context.candidate;
+        let head = &c.candidate.commit;
+        match op {
+            "ci.commit_jobs" => Ok(json!({"jobs": []})),
+            "pr.required_checks" => Ok(
                 json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}}),
-            );
+            ),
+            "pr.status" => Ok(
+                json!({"pull_request":{"state":"OPEN","headRefName":c.source_branch,"baseRefName":c.base_branch,"headRefOid":head,"mergeStateStatus":self.merge_state,"reviewDecision":self.review_decision,"statusCheckRollup":self.rollup}}),
+            ),
+            _ => {
+                self.sent.lock().unwrap().push(op.to_string());
+                Err(OrbitError::Execution(format!("fixture sends no {op}")))
+            }
         }
-        if operation != "pr.status" {
-            self.sent.lock().unwrap().push(operation.to_string());
-            return Err(OrbitError::Execution(format!(
-                "fixture sends no {operation}"
-            )));
-        }
-        let candidate = &self.context.candidate;
-        Ok(
-            json!({"pull_request": { "state": "OPEN", "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": candidate.candidate.commit, "mergeStateStatus": self.merge_state, "reviewDecision": self.review_decision, "statusCheckRollup": self.rollup, }}),
-        )
     }
 }
 
-/// [ORB-14261] Only a stop a rebase can cure earns the automatic repair: a
-/// conflicting or stale base. A protection refusal stays an operator's call.
+/// [ORB-14261] Only conflicting or stale base stops are marked repairable.
 fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
-    for (merge_state, repairable) in [
+    let rows = [
         ("DIRTY", true),
         ("BEHIND", true),
         ("DRAFT", false),
         (" DIRTY ", false),
-    ] {
-        let sandbox = tempdir().unwrap();
-        let context = pr_context(sandbox.path());
-        let host = OpenPullRequestHost::new(context, merge_state, json!([]));
-
+    ];
+    for (ms, repairable) in rows {
+        let host = OpenPullRequestHost::new(ms, json!([]));
         land_now(&host).expect_err("an unmergeable pull request stops the landing");
-
-        assert_steps(
-            &host.steps(),
-            &[HandoffLandingStep::Stop { repairable }],
-            merge_state,
-        );
+        assert_steps(&host.steps(), &[Stop { repairable }], ms);
         assert!(
             host.sent_ops().is_empty(),
-            "merge state {merge_state}: no merge sent"
+            "merge state {ms}: no merge sent"
         );
     }
 }
 
-/// [ORB-15677] [ORB-15812] A check the before-landing review owed the pull
-/// request's hosted CI gates the merge itself, even where branch protection
-/// does not require it: the landing merges only once that check reports an
-/// explicit success on the pinned head, stops when it failed, and never
-/// merges while it is absent, still running, skipped, or neutral. A
-/// StatusContext success still passes. A local candidate, which no hosted CI
-/// runs, never lands with one.
+/// [ORB-15677] [ORB-15812] An owed hosted check requires explicit success on the pinned head.
 fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
     const OWED: &str = "CodeQL / Analyze (rust)";
-    let check = |conclusion: Option<&str>| json!({ "__typename": "CheckRun", "name": "Analyze (rust)", "workflowName": "CodeQL", "status": if conclusion.is_some() { "COMPLETED" } else { "IN_PROGRESS" }, "conclusion": conclusion.unwrap_or_default(), });
-    let other = json!({"__typename": "CheckRun", "name": "fast", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"});
-    let status_success =
-        json!({ "__typename": "StatusContext", "context": OWED, "state": "SUCCESS", });
-    for (case, rollup, merges, stop_reason) in [
-        ("passed", json!([other, check(Some("SUCCESS"))]), true, None),
-        (
-            "skipped",
-            json!([other, check(Some("SKIPPED"))]),
-            false,
-            Some("not yet passed"),
-        ),
-        (
-            "neutral",
-            json!([other, check(Some("NEUTRAL"))]),
-            false,
-            Some("not yet passed"),
-        ),
-        (
-            "failed",
-            json!([other, check(Some("FAILURE"))]),
-            false,
-            Some("failed"),
-        ),
-        (
-            "running",
-            json!([other, check(None)]),
-            false,
-            Some("not yet passed"),
-        ),
-        ("absent", json!([other]), false, Some("not yet passed")),
-        (
-            "status context passed",
-            json!([other, status_success]),
-            true,
-            None,
-        ),
-    ] {
-        let sandbox = tempdir().unwrap();
-        let mut context = pr_context(sandbox.path());
-        context.owed_hosted_checks = vec![OWED.into()];
-        let host = OpenPullRequestHost::new(context, "CLEAN", rollup);
-
-        let error = land_now(&host).expect_err("the fixture never reports a merge");
-
+    let chk = |c: Option<&str>| {
+        let st = pick(c.is_some(), "COMPLETED", "IN_PROGRESS");
+        check_run("Analyze (rust)", "CodeQL", st, c.unwrap_or_default())
+    };
+    let ok = check_run("fast", "CI", "COMPLETED", "SUCCESS");
+    let st_ok = json!({"__typename": "StatusContext", "context": OWED, "state": "SUCCESS"});
+    let run = |case: &str, rollup: Value, merges: bool, stop_reason: Option<&str>| {
+        let mut host = OpenPullRequestHost::new("CLEAN", rollup);
+        host.context.owed_hosted_checks = vec![OWED.into()];
+        let msg = land_now(&host)
+            .expect_err("the fixture never reports a merge")
+            .to_string();
         let sent = host.sent_ops();
-        assert_eq!(!sent.is_empty(), merges, "{case}: {sent:?} {error}");
-        let steps = host.steps();
+        assert_eq!(!sent.is_empty(), merges, "{case}: {sent:?} {msg}");
+        assert_steps(&host.steps(), &[STOP], case);
         match stop_reason {
-            // The owed check passed, so the landing went on to the merge; the
-            // fixture refuses its merge-policy read, and the failed run
-            // settles with its own stop rather than an owed-check refusal.
-            None => {
-                assert_steps(
-                    &steps,
-                    &[HandoffLandingStep::Stop { repairable: false }],
-                    case,
-                );
-                let message = error.to_string();
-                assert!(
-                    message.contains("no permitted merge method") && !message.contains(OWED),
-                    "{case}: {message}"
-                );
-            }
-            Some(reason) => {
-                assert_steps(
-                    &steps,
-                    &[HandoffLandingStep::Stop { repairable: false }],
-                    case,
-                );
-                let message = error.to_string();
-                assert!(
-                    message.contains(OWED) && message.contains(reason),
-                    "{case}: {message}"
-                );
-            }
+            None => assert!(
+                msg.contains("no permitted merge method") && !msg.contains(OWED),
+                "{case}: {msg}"
+            ),
+            Some(r) => assert!(msg.contains(OWED) && msg.contains(r), "{case}: {msg}"),
         }
-    }
-
-    let sandbox = tempdir().unwrap();
-    let mut host = owner_checkout(sandbox.path());
-    host.context.owed_hosted_checks = vec![OWED.into()];
-    let tip = git(&host.repo, &["rev-parse", "main"]);
-    let error = land(&host).expect_err("no hosted CI runs a local candidate");
-    assert!(error.to_string().contains(OWED), "{error}");
-    assert_eq!(
-        *host.steps.lock().unwrap(),
-        vec![HandoffLandingStep::Stop { repairable: false }]
+    };
+    let p = Some("not yet passed");
+    run("passed", json!([ok, chk(Some("SUCCESS"))]), true, None);
+    run("skipped", json!([ok, chk(Some("SKIPPED"))]), false, p);
+    run("neutral", json!([ok, chk(Some("NEUTRAL"))]), false, p);
+    run(
+        "failed",
+        json!([ok, chk(Some("FAILURE"))]),
+        false,
+        Some("failed"),
     );
-    let main_tip = git(&host.repo, &["rev-parse", "main"]);
-    assert_eq!(main_tip, tip, "nothing landed");
+    run("running", json!([ok, chk(None)]), false, p);
+    run("absent", json!([ok]), false, p);
+    run("status context passed", json!([ok, st_ok]), true, None);
+
+    let (_sb, mut host) = owner_fixture();
+    host.context.owed_hosted_checks = vec![OWED.into()];
+    let tip = git_rev(&host.repo, "main");
+    let err = land(&host).expect_err("no hosted CI runs a local candidate");
+    assert!(err.to_string().contains(OWED), "{err}");
+    assert_eq!(*host.steps.lock().unwrap(), vec![STOP]);
+    assert_eq!(git_rev(&host.repo, "main"), tip, "nothing landed");
 }
 
-/// The hosted CI one failed check job ran: its run, job and log.
 struct FakeJob {
     run_id: u64,
     job_id: u64,
@@ -808,82 +790,52 @@ struct FakeJob {
     event: &'static str,
 }
 
-/// What a read of one job's log answers.
 #[derive(Clone, Copy)]
 enum FakeLog {
     Text(&'static str),
-    /// No text, with the reason the log reader's per-job fallback gives.
     Unrecovered,
-    /// The read itself fails.
     Unreadable,
 }
 
-/// The head a provider branch update leaves on the published branch.
 #[derive(Clone, Copy, Default, Debug)]
 enum UpdateShape {
-    /// The candidate merged cleanly with the advanced base.
     #[default]
     CleanMerge,
-    /// A clean merge with a commit the landing branch does not contain.
     Foreign,
-    /// A merge whose tree is not the clean merge of its parents.
     Dirty,
-    /// One parent, not a merge.
     NotAMerge,
-    /// A clean merge, after which the landing branch cannot be fetched.
     BaseGone,
 }
 
-/// What the fake forge reports for one commit: its check's job, if any ran.
 #[derive(Default)]
 struct ForgeState {
     head: String,
     merged: bool,
-    /// Return the in-progress outcome, with the next read merged or still open.
     merge_in_progress: Option<bool>,
     merge_commit: Option<String>,
-    /// The `CI / clippy` job on each commit.
     jobs: HashMap<String, FakeJob>,
-    /// Provider timestamps for the stale-base regression; absent in other fixtures.
-    job_times: HashMap<u64, (&'static str, &'static str)>,
-    /// Exercise the real branch-run adapter against a local substitute gh.
+    job_times: HashMap<u64, (String, String)>,
     base_push_provider: bool,
-    /// Exercise the real `ci.rerun_plan` adapter against a local substitute gh.
     real_rerun_plan: bool,
-    /// Commits whose job query fails.
     unreadable: Vec<String>,
-    /// Deterministic log collector timeouts before the real log becomes readable.
     log_timeouts: HashMap<u64, u64>,
-    /// What a rerun of a failed job leaves on the head.
     after_rerun: Option<FakeJob>,
-    /// A read failure every retry-plan authentication returns.
     rerun_plan_error: Option<&'static str>,
-    /// Keep the failed rollup while replacement jobs have not registered.
     queued_rerun: bool,
-    /// What the check reports on a head the branch update produced.
     after_update: Option<FakeJob>,
-    /// The head a branch update on a published remote produces.
     update: UpdateShape,
-    /// Provider observations for the bounded owner wait, independent of jobs.
-    merge_states: std::collections::VecDeque<&'static str>,
+    merge_states: VecDeque<&'static str>,
     review_decision: Option<&'static str>,
-    /// [ORB-16185] A failed required `CodeQL` aggregate outside any workflow,
-    /// whose one failure annotation names this file.
+    /// [ORB-16185] Failed required `CodeQL` aggregate whose annotation names this file.
     aggregate: Option<&'static str>,
-    /// A required aggregate that fails only after recovery has been spent.
     after_recovery_aggregate: Option<&'static str>,
-    /// A failed rollup check no job answers and branch protection does not
-    /// require. It makes the rerun planner ineligible without outranking a
-    /// transient job.
     extra_unanswered_check: bool,
+    observations: VecDeque<Value>,
+    policies: VecDeque<Value>,
+    gates: VecDeque<Value>,
 }
 
-/// A forge whose pull request #42 carries the claimed candidate, with one
-/// `CI / clippy` check per commit. It answers the reads a landing makes,
-/// reruns and updates the branch the way the provider does — an update
-/// merges `main` into the head as a real commit — and records every
-/// operation, so a test sees what the landing asked for. Once published, the
-/// update runs on the remote, the way the provider merges its own base.
+/// PR #42 fake forge with one `CI / clippy` check per commit and real Git updates.
 struct FakeForge {
     repo: PathBuf,
     remote: Option<PathBuf>,
@@ -891,27 +843,25 @@ struct FakeForge {
     state: Mutex<ForgeState>,
     ops: Mutex<Vec<(String, Value)>>,
     updates: Mutex<Vec<HandoffLandingUpdate>>,
-    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
-    ci_retry_policy: orbit_types::workflow::CiInfrastructureRetryPolicy,
+    history: Mutex<Vec<TaskHistoryEntry>>,
+    ci_retry_policy: CiInfrastructureRetryPolicy,
 }
 
 impl FakeForge {
     fn new(sandbox: &Path, owed: bool) -> Self {
-        let host = owner_checkout(sandbox);
-        let mut context = host.context;
-        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-        context.candidate.repository = "owner/repository".into();
+        let mut ctx = pr_context(sandbox);
         if owed {
-            context.owed_hosted_checks = vec!["CI / clippy".into()];
+            ctx.owed_hosted_checks = vec!["CI / clippy".into()];
         }
+        let head = ctx.candidate.candidate.commit.clone();
         Self {
-            repo: host.repo,
+            repo: ctx.workspace_path.clone(),
             remote: None,
             state: Mutex::new(ForgeState {
-                head: context.candidate.candidate.commit.clone(),
+                head,
                 ..ForgeState::default()
             }),
-            context,
+            context: ctx,
             ops: Mutex::default(),
             updates: Mutex::default(),
             history: Mutex::default(),
@@ -919,44 +869,47 @@ impl FakeForge {
         }
     }
 
-    /// Publish the owner checkout to a bare `origin` at `remote`, so the
-    /// landing reads `origin/main` and fetches it.
+    fn with_state<R>(&self, f: impl FnOnce(&mut ForgeState) -> R) -> R {
+        f(&mut self.state.lock().unwrap())
+    }
+    fn set_after_rerun(&self, job: FakeJob) {
+        self.with_state(|s| s.after_rerun = Some(job));
+    }
+    fn set_after_update(&self, job: FakeJob) {
+        self.with_state(|s| s.after_update = Some(job));
+    }
     fn publish(&mut self, remote: &Path) {
-        let repo = self.repo.to_string_lossy().into_owned();
-        let origin = remote.to_string_lossy();
+        let (repo, origin) = (
+            self.repo.to_string_lossy().into_owned(),
+            remote.to_string_lossy(),
+        );
         git(remote, &["clone", "-q", "--bare", &repo, "."]);
         git(&self.repo, &["remote", "add", "origin", &origin]);
         git(&self.repo, &["fetch", "-q", "origin"]);
         self.remote = Some(remote.to_path_buf());
     }
-
     fn job(&self, commit: &str, job: FakeJob) {
-        self.state
-            .lock()
-            .unwrap()
-            .jobs
-            .insert(commit.to_string(), job);
+        self.with_state(|s| {
+            s.jobs.insert(commit.to_string(), job);
+        });
     }
-
-    fn sent(&self, operation: &str) -> Vec<Value> {
+    fn sent(&self, op: &str) -> Vec<Value> {
         self.ops
             .lock()
             .unwrap()
             .iter()
-            .filter(|(sent, _)| sent == operation)
-            .map(|(_, input)| input.clone())
+            .filter(|(s, _)| s == op)
+            .map(|(_, v)| v.clone())
             .collect()
     }
-
     fn steps(&self) -> Vec<HandoffLandingStep> {
         self.updates
             .lock()
             .unwrap()
             .iter()
-            .map(|update| update.step.clone())
+            .map(|u| u.step.clone())
             .collect()
     }
-
     fn last_evidence(&self) -> String {
         self.updates
             .lock()
@@ -966,385 +919,307 @@ impl FakeForge {
             .evidence
             .clone()
     }
-
     fn stop_reason(&self) -> String {
-        let evidence: Value = serde_json::from_str(&self.last_evidence()).unwrap();
-        evidence["reason"]["value"].as_str().unwrap().to_owned()
+        evidence_of(self)["reason"]["value"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
-
-    fn job_json(job: &FakeJob) -> Value {
-        json!({ "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "workflow_id":1,"started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z","name": "clippy", "status": "completed", "conclusion": job.conclusion, "failed_step": (job.conclusion == "failure").then_some("Run clippy"), "run_attempt": job.run_attempt, "event": job.event, "pull_requests": [{"number": 42}], "pull_request_numbers": [42], })
+    fn history_count(&self, event: &str) -> usize {
+        self.history
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.event == event)
+            .count()
+    }
+    fn history_notes(&self, event: &str) -> Vec<Value> {
+        let hist = self.history.lock().unwrap();
+        hist.iter()
+            .filter(|r| r.event == event)
+            .map(|r| serde_json::from_str(r.note.as_deref().unwrap()).unwrap())
+            .collect()
+    }
+    fn push_history(&self, row: TaskHistoryEntry) {
+        self.history.lock().unwrap().push(row);
+    }
+    fn assert_sent(&self, op: &str, expected: usize, label: &str) {
+        assert_eq!(self.sent(op).len(), expected, "{label}: {op}");
+    }
+    fn assert_none(&self, ops: &[&str], label: &str) {
+        assert_not_sent(self, ops, label);
+    }
+    fn assert_step(&self, step: HandoffLandingStep, label: &str) {
+        assert_steps(&self.steps(), &[step], label);
+    }
+    fn assert_reason(&self, label: &str, parts: &[&str]) {
+        assert_contains(&self.stop_reason(), parts, label);
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        orbit_engine::PrConfig {
+impl NullRuntimeHost for FakeForge {
+    fn pr_config(&self) -> PrConfig {
+        PrConfig {
             ci_infrastructure_retry: self.ci_retry_policy,
             ..Default::default()
         }
     }
     fn apply_task_automation_update(
         &self,
-        _task_id: &str,
-        _update: orbit_engine::TaskAutomationUpdate,
+        _: &str,
+        _: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        Err(OrbitError::InvalidInput(
-            "active execution claim requires a claim-scoped mutation".into(),
-        ))
+        let msg = "active execution claim requires a claim-scoped mutation";
+        Err(OrbitError::InvalidInput(msg.into()))
     }
     fn admit_ci_rerun(
         &self,
-        _tasks: &[String],
-        _handoff: Option<&str>,
-        plan: &orbit_types::workflow::CiRerunPlan,
+        _: &[String],
+        _: Option<&str>,
+        plan: &CiRerunPlan,
         now_ms: u64,
-    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
-        let mut history = self.history.lock().unwrap();
-        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
-            &history,
-            plan,
-            self.ci_retry_policy,
-            now_ms,
-        );
-        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
-            history.push(plan.reservation_entry(
-                chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap(),
-            ));
+    ) -> Result<CiRerunAdmission, OrbitError> {
+        let mut h = self.history.lock().unwrap();
+        let d = decide_ci_rerun_with_policy(&h, plan, self.ci_retry_policy, now_ms);
+        if matches!(d, CiRerunAdmission::Reserved) {
+            let ts = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
+            h.push(plan.reservation_entry(ts));
         }
-        Ok(decision)
+        Ok(d)
     }
     fn admit_handoff_base_update(
         &self,
         _: &str,
-        request: &orbit_types::workflow::PrBaseUpdateReservation,
-    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], request)
+        req: &PrBaseUpdateReservation,
+    ) -> Result<PrBaseUpdateAdmission, OrbitError> {
+        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], req)
     }
-
-    fn get_task_history(
-        &self,
-        _: &str,
-    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+    fn get_task_history(&self, _: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         Ok(self.history.lock().unwrap().clone())
     }
     fn admit_pr_base_update(
         &self,
         _: &[String],
-        request: &orbit_types::workflow::PrBaseUpdateReservation,
-    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        use orbit_types::workflow::{
-            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
-        };
-        let mut history = self.history.lock().unwrap();
-        let decision = decide_pr_base_update(&history, request);
-        if matches!(decision, PrBaseUpdateAdmission::Reserved) {
-            history.push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: "owner".into(),
-                event: PR_BASE_UPDATE_RESERVED_EVENT.into(),
-                note: Some(serde_json::to_string(request).unwrap()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-                surface: None,
-                caller: None,
-            });
+        req: &PrBaseUpdateReservation,
+    ) -> Result<PrBaseUpdateAdmission, OrbitError> {
+        let mut h = self.history.lock().unwrap();
+        let d = decide_pr_base_update(&h, req);
+        if matches!(d, PrBaseUpdateAdmission::Reserved) {
+            let note = Some(serde_json::to_string(req).unwrap());
+            h.push(history_row("owner", PR_BASE_UPDATE_RESERVED_EVENT, note));
         }
-        Ok(decision)
+        Ok(d)
     }
-    fn handoff_landing_context(
-        &self,
-        _handoff_id: &str,
-    ) -> Result<HandoffLandingContext, OrbitError> {
+    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
         Ok(self.context.clone())
     }
-
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         self.updates.lock().unwrap().push(update.clone());
         Ok(())
     }
-
     fn record_handoff_landing_wait(&self, _: &str, reason: &str) -> Result<(), OrbitError> {
-        self.history
-            .lock()
-            .unwrap()
-            .push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: "owner".into(),
-                event: orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT.into(),
-                note: Some(reason.into()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-                surface: None,
-                caller: None,
-            });
+        let row = history_row("owner", LANDING_WAITING_FOR_BASE_EVENT, Some(reason.into()));
+        self.push_history(row);
         Ok(())
     }
-
     fn record_handoff_landing_history(
         &self,
-        handoff_id: &str,
-        event: &str,
+        id: &str,
+        ev: &str,
         note: &str,
     ) -> Result<(), OrbitError> {
-        if handoff_id != self.context.handoff_id
-            || !matches!(
-                event,
-                "ci_check_rerun"
-                    | "ci_base_suspect"
-                    | "ci_infrastructure_retry_backoff"
-                    | "ci_infrastructure_retry_exhausted"
-                    | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
-                    | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
-                    | orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT
-            )
-        {
-            return Err(OrbitError::InvalidInput(
-                "current handoff claim does not authorize this history event".into(),
-            ));
+        let allowed = matches!(
+            ev,
+            "ci_check_rerun"
+                | "ci_base_suspect"
+                | "ci_infrastructure_retry_backoff"
+                | "ci_infrastructure_retry_exhausted"
+                | CI_FAILURE_RECORDED_EVENT
+                | CI_FAILURE_RECLASSIFIED_EVENT
+                | CI_BASE_SUSPECT_RECLASSIFIED_EVENT
+        );
+        if id != self.context.handoff_id || !allowed {
+            let msg = "current handoff claim does not authorize this history event";
+            return Err(OrbitError::InvalidInput(msg.into()));
         }
-        self.history
-            .lock()
-            .unwrap()
-            .push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: "system".into(),
-                event: event.into(),
-                note: Some(note.into()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-                surface: None,
-                caller: None,
-            });
+        self.push_history(history_row("system", ev, Some(note.into())));
         Ok(())
     }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        input: Value,
-    ) -> Result<Value, OrbitError> {
+    fn run_private_vcs_operation(&self, op: &str, input: Value) -> Result<Value, OrbitError> {
         self.ops
             .lock()
             .unwrap()
-            .push((operation.to_string(), input.clone()));
-        let mut state = self.state.lock().unwrap();
-        let candidate = &self.context.candidate;
-        match operation {
+            .push((op.to_string(), input.clone()));
+        let mut s = self.state.lock().unwrap();
+        let c = &self.context.candidate;
+        match op {
             "ci.rerun_plan" => {
-                if state.real_rerun_plan {
-                    drop(state);
-                    return orbit_engine::run_private_vcs_operation(
-                        &orbit_common::Env::capture(),
-                        operation,
-                        &input,
-                    );
+                if s.real_rerun_plan {
+                    drop(s);
+                    return orbit_engine::run_private_vcs_operation(&Env::capture(), op, &input);
                 }
-                if let Some(error) = state.rerun_plan_error {
-                    return Err(OrbitError::Execution(error.into()));
+                if let Some(err) = s.rerun_plan_error {
+                    return Err(OrbitError::Execution(err.into()));
                 }
-                let job = state.jobs.get(&state.head).unwrap();
+                let job = s.jobs.get(&s.head).unwrap();
                 if job.event != "pull_request" {
                     return Err(OrbitError::Execution("foreign retry event".into()));
                 }
-                Ok(
-                    json!({"plan":orbit_types::workflow::CiRerunPlan {schema_version:1,repository:candidate.repository.clone(),repository_id:1,pr_number:"42".into(),head_sha:state.head.clone(),head_branch:candidate.source_branch.clone(),base_branch:candidate.base_branch.clone(),accepted_base:candidate.base.commit.clone(),run_id:job.run_id,run_attempt:job.run_attempt,workflow_id:1,roots:serde_json::from_value(input["roots"].clone()).unwrap(),failed_jobs:vec![json!({"id":job.job_id,"name":"clippy","started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z"})],authentication:json!({})}}),
-                )
+                let v = json!({"plan":CiRerunPlan{schema_version:1,repository:c.repository.clone(),repository_id:1,pr_number:"42".into(),head_sha:s.head.clone(),head_branch:c.source_branch.clone(),base_branch:c.base_branch.clone(),accepted_base:c.base.commit.clone(),run_id:job.run_id,run_attempt:job.run_attempt,workflow_id:1,roots:serde_json::from_value(input["roots"].clone()).unwrap(),failed_jobs:vec![json!({"id":job.job_id,"name":"clippy","started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z"})],authentication:json!({})}});
+                Ok(v)
             }
-            "ci.current_gates" => Ok(json!({"gates_passed":true,"required":[],"missing":[]})),
+            "ci.current_gates" => {
+                if !s.gates.is_empty() {
+                    return pop_or_auth(&mut s.gates);
+                }
+                Ok(json!({"gates_passed":true,"required":[],"missing":[]}))
+            }
             "ci.emission_evidence" => Ok(json!({"evidence":null})),
             "pr.status" => {
-                let scripted_state = state.merge_states.front().copied();
-                if state.merge_states.len() > 1 {
-                    state.merge_states.pop_front();
-                }
-                let job = state.jobs.get(&state.head);
-                let (status, conclusion) = match job.map(|job| job.conclusion) {
-                    None if state.queued_rerun => ("COMPLETED", "FAILURE"),
+                let scripted =
+                    (!s.merge_states.is_empty()).then(|| pop_keep_last(&mut s.merge_states));
+                let (status, conc) = match s.jobs.get(&s.head).map(|j| j.conclusion) {
+                    None if s.queued_rerun => ("COMPLETED", "FAILURE"),
                     None => ("IN_PROGRESS", ""),
                     Some("success") => ("COMPLETED", "SUCCESS"),
                     Some(_) => ("COMPLETED", "FAILURE"),
                 };
-                let merge_state = scripted_state.unwrap_or(match conclusion {
-                    _ if state.aggregate.is_some() => "BLOCKED",
+                let ms = scripted.unwrap_or(match conc {
+                    _ if s.aggregate.is_some() => "BLOCKED",
                     "SUCCESS" => "CLEAN",
                     "" => "PENDING",
                     _ => "BLOCKED",
                 });
-                let mut rollup = vec![
-                    json!({ "__typename": "CheckRun", "name": "clippy", "workflowName": "CI", "status": status, "conclusion": conclusion, }),
-                ];
-                if state.aggregate.is_some() {
-                    rollup.push(json!({"__typename": "CheckRun", "name": "CodeQL", "workflowName": "", "status": "COMPLETED", "conclusion": "FAILURE"}));
+                let mut rollup = vec![check_run("clippy", "CI", status, conc)];
+                if s.aggregate.is_some() {
+                    rollup.push(check_run("CodeQL", "", "COMPLETED", "FAILURE"));
                 }
-                if state.extra_unanswered_check {
-                    rollup.push(json!({"__typename": "CheckRun", "name": "optional", "workflowName": "Extra", "status": "COMPLETED", "conclusion": "FAILURE"}));
+                if s.extra_unanswered_check {
+                    rollup.push(check_run("optional", "Extra", "COMPLETED", "FAILURE"));
                 }
-                let pr = json!({"number": 42, "url": "https://github.com/owner/repository/pull/42", "state": if state.merged { "MERGED" } else { "OPEN" }, "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": state.head, "mergeStateStatus": merge_state, "reviewDecision": state.review_decision.unwrap_or(""), "mergeCommit": state.merged.then(|| json!({"oid": state.merge_commit.as_deref().unwrap_or("provider-merge")})), "statusCheckRollup": rollup});
+                let mut pr = json!({"number":42,"url":"https://github.com/owner/repository/pull/42","state":pick(s.merged,"MERGED","OPEN"),"headRefName":c.source_branch,"baseRefName":c.base_branch,"headRefOid":s.head,"mergeStateStatus":ms,"reviewDecision":s.review_decision.unwrap_or(""),"mergeCommit":s.merged.then(|| json!({"oid":s.merge_commit.as_deref().unwrap_or("provider-merge")})),"statusCheckRollup":rollup});
+                if !s.merged && !s.observations.is_empty() {
+                    let patch = s.observations.front().unwrap().as_object().unwrap().clone();
+                    if let Some(err) = patch.get("error").and_then(Value::as_str) {
+                        return Err(OrbitError::Execution(err.into()));
+                    }
+                    pr.as_object_mut().unwrap().extend(patch);
+                    if s.observations.len() > 1 {
+                        s.observations.pop_front();
+                    }
+                }
                 Ok(json!({"pull_request": pr}))
             }
             "pr.required_checks" => {
-                let mut policy = pending_policy(
-                    &state.head,
-                    if state.jobs.contains_key(&state.head) {
-                        "COMPLETED"
-                    } else {
-                        "IN_PROGRESS"
-                    },
-                    true,
-                );
-                if state.aggregate.is_some() {
-                    policy_nodes(&mut policy).as_array_mut().unwrap().push(
- json!({"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED", "conclusion":"FAILURE","isRequired":true,"databaseId":7001, "checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}),
-                    );
+                if !s.policies.is_empty() {
+                    return pop_or_auth(&mut s.policies);
+                }
+                let st = pick(s.jobs.contains_key(&s.head), "COMPLETED", "IN_PROGRESS");
+                let mut policy = pending_policy(&s.head, st, true);
+                if s.aggregate.is_some() {
+                    policy_nodes(&mut policy).as_array_mut().unwrap().push(json!({"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"FAILURE","isRequired":true,"databaseId":7001,"checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}));
                 }
                 Ok(policy)
             }
             "ci.check_annotations" => {
-                let path = state.aggregate.expect("an aggregate was scripted");
-                assert_eq!(
-                    (&input["check_run_id"], &input["app_id"], &input["head_sha"]),
-                    (&json!(7001), &json!(57789), &json!(state.head))
-                );
-                let annotation = json!({"path": path, "start_line": 1, "end_line": 1, "blob_href": format!("https://github.com/owner/repository/blob/{}/{path}", state.head), "annotation_level": "failure", "title": "Uncontrolled data used in path expression", "message": "This path depends on a user-provided value."});
-                Ok(
-                    json!({"repository": "owner/repository", "pr": 42, "head_sha": state.head, "check_run": {"id": 7001, "name": "CodeQL", "app_id": 57789, "conclusion": "failure", "annotations_count": 1}, "annotations": [annotation]}),
-                )
+                let path = s.aggregate.expect("an aggregate was scripted");
+                let got = (&input["check_run_id"], &input["app_id"], &input["head_sha"]);
+                assert_eq!(got, (&json!(7001), &json!(57789), &json!(s.head)));
+                let ann = json!({"path":path,"start_line":1,"end_line":1,"blob_href":format!("https://github.com/owner/repository/blob/{}/{path}", s.head),"annotation_level":"failure","title":"Uncontrolled data used in path expression","message":"This path depends on a user-provided value."});
+                let v = json!({"repository":"owner/repository","pr":42,"head_sha":s.head,"check_run":{"id":7001,"name":"CodeQL","app_id":57789,"conclusion":"failure","annotations_count":1},"annotations":[ann]});
+                Ok(v)
             }
             "ci.commit_jobs" => {
-                if state.base_push_provider && input["base_push_tip"].is_string() {
-                    return orbit_engine::run_private_vcs_operation(
-                        &orbit_common::Env::capture(),
-                        operation,
-                        &input,
-                    );
+                if s.base_push_provider && input["base_push_tip"].is_string() {
+                    return orbit_engine::run_private_vcs_operation(&Env::capture(), op, &input);
                 }
                 let commit = input["commit"].as_str().unwrap();
-                if state.unreadable.iter().any(|bad| bad == commit) {
-                    return Err(OrbitError::Execution(
-                        "gh api failed: HTTP 401: Bad credentials".into(),
-                    ));
+                if s.unreadable.iter().any(|bad| bad == commit) {
+                    let msg = "gh api failed: HTTP 401: Bad credentials";
+                    return Err(OrbitError::Execution(msg.into()));
                 }
-                let jobs: Vec<Value> = state
-                    .jobs
-                    .iter()
-                    .filter(|(sha, _)| {
-                        if let Some(tip) = input["base_push_tip"].as_str() {
-                            git(&self.repo, &["merge-base", commit, sha]) == commit
-                                && git(&self.repo, &["merge-base", sha, tip]) == **sha
-                        } else {
-                            *sha == commit
-                        }
-                    })
-                    .map(|(sha, job)| {
-                        let mut value = Self::job_json(job);
-                        value["head_sha"] = json!(sha);
-                        value["head_branch"] = json!(self.context.candidate.source_branch);
-                        value["repository_id"] = json!(1);
-                        value["repository"] = json!(self.context.candidate.repository);
-                        if let Some((started, completed)) = state.job_times.get(&job.job_id) {
-                            value["started_at"] = json!(started);
-                            value["completed_at"] = json!(completed);
-                            value["run_started_at"] = json!(started);
-                            value["run_status"] = json!("completed");
-                        }
-                        value
-                    })
-                    .collect();
+                let jobs: Vec<Value> = s.jobs.iter().filter(|(sha, _)| match input["base_push_tip"].as_str() {
+                    Some(tip) => git(&self.repo, &["merge-base", commit, sha]) == commit && git(&self.repo, &["merge-base", sha, tip]) == **sha,
+                    None => *sha == commit,
+                }).map(|(sha, j)| {
+                    let mut v = json!({"run_id":j.run_id,"job_id":j.job_id,"workflow":"CI","workflow_id":1,"started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z","name":"clippy","status":"completed","conclusion":j.conclusion,"failed_step":(j.conclusion=="failure").then_some("Run clippy"),"run_attempt":j.run_attempt,"event":j.event,"pull_requests":[{"number":42}],"pull_request_numbers":[42],"head_sha":sha,"head_branch":c.source_branch,"repository_id":1,"repository":c.repository});
+                    if let Some((start, end)) = s.job_times.get(&j.job_id) {
+                        (v["started_at"], v["completed_at"], v["run_started_at"], v["run_status"]) = (json!(start), json!(end), json!(start), json!("completed"));
+                    }
+                    v
+                }).collect();
                 Ok(json!({"commit": commit, "jobs": jobs}))
             }
             "ci.job_log" => {
                 let job_id: u64 = input["job_id"].as_str().unwrap().parse().unwrap();
-                if let Some(remaining) = state.log_timeouts.get_mut(&job_id)
-                    && *remaining > 0
+                if let Some(rem) = s.log_timeouts.get_mut(&job_id)
+                    && *rem > 0
                 {
-                    *remaining -= 1;
-                    return Ok(json!({"log":"", "fallback_error":
-                        "process timed out after 15000ms: gh run view --log"}));
+                    *rem -= 1;
+                    let v = json!({"log":"","fallback_error":"process timed out after 15000ms: gh run view --log"});
+                    return Ok(v);
                 }
-                let log = state
+                let log = s
                     .jobs
                     .values()
-                    .find(|job| job.job_id == job_id)
-                    .map(|job| job.log)
-                    .expect("a log for a job the forge reported");
+                    .find(|j| j.job_id == job_id)
+                    .expect("log")
+                    .log;
                 match log {
                     FakeLog::Text(log) => {
-                        Ok(json!({"log": log, "truncated": false, "fallback_error": null}))
+                        Ok(json!({"log":log,"truncated":false,"fallback_error":null}))
                     }
-                    FakeLog::Unrecovered => Ok(
-                        json!({ "log": "", "truncated": false, "fallback_error": format!("job {job_id} (`clippy`) returned no log text"), }),
-                    ),
+                    FakeLog::Unrecovered => {
+                        let v = json!({"log":"","truncated":false,"fallback_error":format!("job {job_id} (`clippy`) returned no log text")});
+                        Ok(v)
+                    }
                     FakeLog::Unreadable => Err(OrbitError::Execution(
                         "gh api job logs failed: HTTP 502".into(),
                     )),
                 }
             }
             "ci.rerun_failed" => {
-                let head = state.head.clone();
-                if state.queued_rerun {
-                    state.jobs.remove(&head);
+                let head = s.head.clone();
+                if s.queued_rerun {
+                    s.jobs.remove(&head);
                 } else {
-                    let mut rerun = state.after_rerun.take().expect("a scripted rerun");
-                    let original = state.jobs.get(&head).unwrap();
-                    rerun.run_attempt = original.run_attempt + 1;
-                    rerun.event = original.event;
-                    state.job_times.insert(
-                        rerun.job_id,
-                        ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"),
-                    );
-                    state.jobs.insert(head, rerun);
+                    let mut rerun = s.after_rerun.take().expect("a scripted rerun");
+                    let orig = s.jobs.get(&head).unwrap();
+                    (rerun.run_attempt, rerun.event) = (orig.run_attempt + 1, orig.event);
+                    s.job_times.insert(rerun.job_id, (at("14:02"), at("14:03")));
+                    s.jobs.insert(head, rerun);
                 }
-                state.aggregate = state.after_recovery_aggregate.take();
+                s.aggregate = s.after_recovery_aggregate.take();
                 Ok(json!({}))
             }
             "pr.update_branch" => {
-                assert_eq!(input["expected_head_sha"], state.head.as_str());
+                assert_eq!(input["expected_head_sha"], s.head.as_str());
                 let merge = match &self.remote {
-                    Some(remote) => provider_update(remote, &state.head, state.update),
+                    Some(remote) => provider_update(remote, &s.head, s.update),
                     None => {
-                        let tree = git(
-                            &self.repo,
-                            &["merge-tree", "--write-tree", &state.head, "main"],
-                        );
-                        git(
-                            &self.repo,
-                            &[
-                                "commit-tree",
-                                &tree,
-                                "-p",
-                                &state.head,
-                                "-p",
-                                "main",
-                                "-m",
-                                "Merge branch 'main' into orbit/T1",
-                            ],
-                        )
+                        let t = git(&self.repo, &["merge-tree", "--write-tree", &s.head, "main"]);
+                        let msg = "Merge branch 'main' into orbit/T1";
+                        commit_tree(&self.repo, &t, &[&s.head, "main"], msg)
                     }
                 };
-                let after = state.after_update.take().expect("a scripted update");
-                state.jobs.insert(merge.clone(), after);
-                state.head = merge;
-                state.aggregate = state.after_recovery_aggregate.take();
+                let after = s.after_update.take().expect("a scripted update");
+                s.jobs.insert(merge.clone(), after);
+                s.head = merge;
+                s.aggregate = s.after_recovery_aggregate.take();
                 Ok(json!({}))
             }
-            "pr.merge_capabilities" => Ok(
-                json!({"repository": { "name_with_owner": candidate.repository, "base_branch": candidate.base_branch, "allow_squash_merge": true, "allow_rebase_merge": false, "allow_merge_commit": false, "allow_auto_merge": false, "requires_linear_history": false, }}),
-            ),
+            "pr.merge_capabilities" => {
+                let v = json!({"repository":{"name_with_owner":c.repository,"base_branch":c.base_branch,"allow_squash_merge":true,"allow_rebase_merge":false,"allow_merge_commit":false,"allow_auto_merge":false,"requires_linear_history":false}});
+                Ok(v)
+            }
             "pr.merge" => {
-                assert_eq!(input["reviewed_head_sha"], state.head.as_str());
-                if let Some(merged) = state.merge_in_progress {
-                    state.merged = merged;
-                    return Ok(json!({"merged":false,"refusal":"merge_in_progress",
-                        "stderr":"gh: Merge already in progress (HTTP 405)"}));
+                assert_eq!(input["reviewed_head_sha"], s.head.as_str());
+                if let Some(merged) = s.merge_in_progress {
+                    s.merged = merged;
+                    let v = json!({"merged":false,"refusal":"merge_in_progress","stderr":"gh: Merge already in progress (HTTP 405)"});
+                    return Ok(v);
                 }
-                state.merged = true;
+                s.merged = true;
                 Ok(json!({"landed_commit": "provider-merge"}))
             }
             other => panic!("the landing sent an unexpected {other}"),
@@ -1352,464 +1227,280 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
     }
 }
 
-/// Two authenticated provider reads can settle at different times: the PR
-/// rollup has only the aggregate NEUTRAL result while the exact-head policy
-/// read already observes the required Rust job queued. Neither is success.
-struct PendingForge {
-    forge: FakeForge,
-    observations: Mutex<std::collections::VecDeque<Value>>,
-    policies: Mutex<std::collections::VecDeque<Value>>,
-    /// Current branch-policy gate answers; empty leaves the forge's own.
-    gates: Mutex<std::collections::VecDeque<Value>>,
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for PendingForge {
-    fn handoff_landing_context(&self, id: &str) -> Result<HandoffLandingContext, OrbitError> {
-        RuntimeHost::handoff_landing_context(&self.forge, id)
-    }
-
-    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        RuntimeHost::record_handoff_landing(&self.forge, update)
-    }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        input: Value,
-    ) -> Result<Value, OrbitError> {
-        if operation == "ci.current_gates" && !self.gates.lock().unwrap().is_empty() {
-            self.forge
-                .ops
-                .lock()
-                .unwrap()
-                .push((operation.into(), input));
-            let mut gates = self.gates.lock().unwrap();
-            let answer = gates.front().unwrap().clone();
-            if gates.len() > 1 {
-                gates.pop_front();
-            }
-            if answer == json!("auth") {
-                return Err(OrbitError::Execution("HTTP 401: Bad credentials".into()));
-            }
-            return Ok(answer);
-        }
-        if operation == "pr.required_checks" {
-            self.forge
-                .ops
-                .lock()
-                .unwrap()
-                .push((operation.into(), input));
-            let mut policies = self.policies.lock().unwrap();
-            let answer = policies.front().unwrap().clone();
-            if policies.len() > 1 {
-                policies.pop_front();
-            }
-            if answer == json!("auth") {
-                return Err(OrbitError::Execution("HTTP 401: Bad credentials".into()));
-            }
-            return Ok(answer);
-        }
-        let mut answer = RuntimeHost::run_private_vcs_operation(&self.forge, operation, input)?;
-        if operation == "pr.status" && answer["pull_request"]["state"] != "MERGED" {
-            let mut observations = self.observations.lock().unwrap();
-            let patch = observations.front().unwrap().as_object().unwrap();
-            if let Some(error) = patch.get("error").and_then(Value::as_str) {
-                return Err(OrbitError::Execution(error.into()));
-            }
-            answer["pull_request"]
-                .as_object_mut()
-                .unwrap()
-                .extend(patch.clone());
-            if observations.len() > 1 {
-                observations.pop_front();
-            }
-        }
-        Ok(answer)
-    }
-}
-
 fn pending_policy(head: &str, status: &str, required: bool) -> Value {
-    json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{
-        "oid":head,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},
-        "nodes":[{"__typename":"CheckRun","name":"clippy","status":status,
-        "conclusion":if status == "COMPLETED" {"SUCCESS"} else {""},"isRequired":required,
-        "checkSuite":{"workflowRun":{"workflow":{"name":"CI"}}}}]}}
-    }}]}}})
+    json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"__typename":"CheckRun","name":"clippy","status":status,"conclusion":pick(status=="COMPLETED","SUCCESS",""),"isRequired":required,"checkSuite":{"workflowRun":{"workflow":{"name":"CI"}}}}]}}}}]}}})
 }
 
-fn pending_forge(repo: &Path, observations: Vec<Value>, policies: Vec<Value>) -> PendingForge {
-    let forge = FakeForge::new(repo, false);
-    forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
-    PendingForge {
-        forge,
-        observations: Mutex::new(observations.into()),
-        policies: Mutex::new(policies.into()),
-        gates: Mutex::default(),
-    }
+fn pending_forge(
+    obs: Vec<Value>,
+    make_policies: impl FnOnce(&str) -> Vec<Value>,
+) -> (TempDir, FakeForge, String) {
+    let (sandbox, forge, head, _) = forge_fixture(false, false);
+    forge.job(&head, passed(1, 11));
+    let policies = make_policies(&head);
+    forge.with_state(|s| {
+        s.observations = obs.into();
+        s.policies = policies.into();
+    });
+    (sandbox, forge, head)
 }
 
 fn blocked_aggregate() -> Value {
-    json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[{ "__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"NEUTRAL" }]})
+    json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"NEUTRAL"}]})
 }
 
 fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
-    let sandbox = tempdir().unwrap();
-    let host = pending_forge(
-        sandbox.path(),
+    let obs = vec![
+        blocked_aggregate(),
+        blocked_aggregate(),
+        json!({"mergeStateStatus":"CLEAN"}),
+    ];
+    let (_sb, forge, _) = pending_forge(obs, |h| {
         vec![
-            blocked_aggregate(),
-            blocked_aggregate(),
-            json!({"mergeStateStatus":"CLEAN"}),
-        ],
-        vec![],
-    );
-    let head = host.forge.context.candidate.candidate.commit.clone();
-    *host.policies.lock().unwrap() = vec![
-        pending_policy(&head, "QUEUED", true),
-        pending_policy(&head, "IN_PROGRESS", true),
-        pending_policy(&head, "COMPLETED", true),
-    ]
-    .into();
-    let (result, waits) = counted_land(
-        &host,
-        json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
-    );
-    assert_eq!(
-        result.expect("BLOCKED with conclusive exact-head required pending must wait")["phase"],
-        "landed"
+            pending_policy(h, "QUEUED", true),
+            pending_policy(h, "IN_PROGRESS", true),
+            pending_policy(h, "COMPLETED", true),
+        ]
+    });
+    let (result, waits) = land_poll(&forge, 15, 5);
+    assert_landed(
+        result,
+        "BLOCKED with conclusive exact-head required pending must wait",
     );
     assert_eq!(waits, [5, 5]);
-    assert_sent_len(&host.forge, "pr.required_checks", 3, "exact");
-    assert_sent_len(&host.forge, "pr.status", 4, "exact");
-    assert_sent_len(&host.forge, "pr.merge", 1, "exact");
-    let ops = host.forge.ops.lock().unwrap();
-    let deadlines: Vec<u64> = ops
+    forge.assert_sent("pr.required_checks", 3, "exact");
+    forge.assert_sent("pr.status", 4, "exact");
+    forge.assert_sent("pr.merge", 1, "exact");
+    let ops = forge.ops.lock().unwrap();
+    let dl: Vec<u64> = ops
         .iter()
         .filter(|(op, _)| matches!(op.as_str(), "pr.status" | "pr.required_checks"))
-        .map(|(_, input)| {
-            input["deadline_ms"]
+        .map(|(_, i)| {
+            i["deadline_ms"]
                 .as_u64()
-                .expect("poll reads carry the original deadline")
+                .expect("poll reads carry deadline")
         })
         .collect();
-    assert_eq!(deadlines.len(), 7);
-    let first_deadline = deadlines[0];
-    let uniform = deadlines.iter().all(|d| *d == first_deadline);
-    assert!(uniform, "deadline never resets: {deadlines:?}");
+    assert_eq!(dl.len(), 7);
+    assert!(
+        dl.iter().all(|d| *d == dl[0]),
+        "deadline never resets: {dl:?}"
+    );
     let merge = ops.iter().position(|(op, _)| op == "pr.merge").unwrap();
-    let before_merge = ops[..merge]
+    let pre = ops[..merge]
         .iter()
         .filter(|(op, _)| op == "pr.status")
         .count();
-    assert_eq!(before_merge, 3, "no merge before checks settle");
-    let intent = "handoff-1:42".to_string();
-    let expected_steps = [
-        HandoffLandingStep::PublishIntent {
-            intent_id: intent.clone(),
-        },
-        HandoffLandingStep::ResolveIntent {
-            intent_id: intent,
-            merged: true,
-        },
-        HandoffLandingStep::Complete,
-    ];
-    assert_steps(&host.forge.steps(), &expected_steps, "exact");
+    assert_eq!(pre, 3, "no merge before checks settle");
+    let id = "handoff-1:42".to_string();
+    let p = PublishIntent {
+        intent_id: id.clone(),
+    };
+    let r = ResolveIntent {
+        intent_id: id,
+        merged: true,
+    };
+    assert_steps(&forge.steps(), &[p, r, Complete], "exact");
 }
 
-/// A BLOCKED head can report running checks before either required-check
-/// view identifies them. Waiting grants no merge authority: only CLEAN does.
-#[test]
 fn owner_landing_waits_out_pending_only_block_before_checks_pass() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "owner_landing_waits_out_pending_only_block_before_checks_pass",
-        || {
-            for passes in [true, false] {
-                let sandbox = tempdir().unwrap();
-                let pending = json!({"mergeStateStatus":"BLOCKED", "statusCheckRollup":[
-                    {"name":"clippy", "workflowName":"CI", "status":"IN_PROGRESS"}
-                ]});
-                let observations = if passes {
-                    vec![
-                        pending.clone(),
-                        pending,
-                        json!({"mergeStateStatus":"CLEAN"}),
-                    ]
-                } else {
-                    vec![pending]
-                };
-                let host = pending_forge(sandbox.path(), observations, vec![]);
-                let head = host.forge.context.candidate.candidate.commit.clone();
-                *host.policies.lock().unwrap() =
-                    vec![pending_policy(&head, "COMPLETED", false)].into();
-                let (result, waits) = counted_land(
-                    &host,
-                    json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
-                );
-                if passes {
-                    assert_eq!(
-                        result.expect("pending-only BLOCKED must keep waiting")["phase"],
-                        "landed"
-                    );
-                    assert_eq!(waits, [5, 5]);
-                    assert_sent_len(&host.forge, "pr.merge", 1, "checks passed");
-                    assert_eq!(
-                        host.forge.steps().last(),
-                        Some(&HandoffLandingStep::Complete)
-                    );
-                } else {
-                    let error = result.unwrap_err().to_string();
-                    assert_eq!(
-                        serde_json::from_str::<Value>(&host.forge.last_evidence()).unwrap()["waiting_gate"],
-                        "required_checks_pending",
-                        "a check wait must remain distinguishable from review refusal after the job ends"
-                    );
-                    // [ORB-22485] The rollup-only wait names its running checks.
-                    assert!(
-                        error.contains("within 15s")
-                            && error.contains("CI / clippy")
-                            && error.contains("still running"),
-                        "deadline: {error}"
-                    );
-                    assert_eq!(waits, [5, 5, 5]);
-                    assert_not_sent(&host.forge, &["pr.merge"], "checks still pending");
-                    assert_steps(
-                        &host.forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: false }],
-                        "deadline",
-                    );
-                }
-                assert_not_sent(
-                    &host.forge,
-                    &["ci.rerun_failed", "pr.update_branch"],
-                    "pending only",
-                );
-            }
-        },
-    );
-}
-
-/// [ORB-16339] A freshly pushed head reads BLOCKED before the provider has
-/// queued any check run, so neither the rollup nor the required-check read
-/// names anything. While current branch policy names a required check the
-/// head has not reported, the owner waits within its deadline and merges once
-/// the provider reports the pull request mergeable; a check that never
-/// appears stops at the deadline and names it. Unreadable policy earns only
-/// the bounded unsettled-poll grace, never a wait to the deadline.
-fn owner_landing_waits_for_required_checks_the_head_has_not_reported() {
-    let unreported = || json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[]});
-    let missing = json!({"gates_passed":false,"required":[{"context":"clippy","app_id":null}], "missing":[{"context":"clippy","app_id":null}]});
-    for (case, observations, gates, max_wait, expected_waits, stop_reason) in [
-        (
-            "appears",
+    for passes in [true, false] {
+        let pend = json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"}]});
+        let obs = pick(
+            passes,
             vec![
-                unreported(),
-                unreported(),
+                pend.clone(),
+                pend.clone(),
                 json!({"mergeStateStatus":"CLEAN"}),
             ],
-            missing.clone(),
-            15,
-            2,
-            None,
-        ),
-        (
-            "never",
-            vec![unreported()],
-            missing.clone(),
-            10,
-            2,
-            Some("within 10s (required checks the head has not reported: clippy)"),
-        ),
-        (
-            "unreadable",
-            vec![unreported()],
-            json!("auth"),
-            60,
-            4,
-            Some("required reviews or checks are not satisfied"),
-        ),
-    ] {
-        let sandbox = tempdir().unwrap();
-        let host = pending_forge(sandbox.path(), observations, vec![]);
-        let head = host.forge.context.candidate.candidate.commit.clone();
-        *host.policies.lock().unwrap() = vec![json!({"pull_request":{"headRefOid":head, "commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}})]
-        .into();
-        *host.gates.lock().unwrap() = vec![gates].into();
-        let (result, waits) = counted_land(
-            &host,
-            json!({"max_wait_seconds":max_wait,"poll_interval_seconds":5}),
+            vec![pend],
         );
-        assert_eq!(waits.len(), expected_waits, "{case}: {result:?}");
-        let gates = if case == "unreadable" { 5 } else { 2 };
-        assert_sent_len(&host.forge, "ci.current_gates", gates, case);
-        match stop_reason {
+        let (_sb, forge, _) = pending_forge(obs, |h| vec![pending_policy(h, "COMPLETED", false)]);
+        let (result, waits) = land_poll(&forge, 15, 5);
+        if passes {
+            assert_landed(result, "pending-only BLOCKED must keep waiting");
+            assert_eq!(waits, [5, 5]);
+            forge.assert_sent("pr.merge", 1, "checks passed");
+            assert_eq!(forge.steps().last(), Some(&Complete));
+        } else {
+            let err = result.unwrap_err().to_string();
+            assert_eq!(
+                evidence_of(&forge)["waiting_gate"],
+                "required_checks_pending"
+            );
+            // [ORB-22485] The rollup-only wait names its running checks.
+            assert_contains(
+                &err,
+                &["within 15s", "CI / clippy", "still running"],
+                "deadline",
+            );
+            assert_eq!(waits, [5, 5, 5]);
+            forge.assert_none(&["pr.merge"], "checks still pending");
+            forge.assert_step(STOP, "deadline");
+        }
+        forge.assert_none(NO_RERUN_OR_UPDATE, "pending only");
+    }
+}
+
+/// [ORB-16339] Wait for unreported required checks named by branch policy; unreadable gets grace polls.
+fn owner_landing_waits_for_required_checks_the_head_has_not_reported() {
+    let u = || json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[]});
+    let miss = json!({"gates_passed":false,"required":[{"context":"clippy","app_id":null}],"missing":[{"context":"clippy","app_id":null}]});
+    let run = |case: &str,
+               appears: bool,
+               auth: bool,
+               max_wait: u64,
+               exp: usize,
+               stop: Option<&str>| {
+        let obs = pick(
+            appears,
+            vec![u(), u(), json!({"mergeStateStatus":"CLEAN"})],
+            vec![u()],
+        );
+        let (_sb, forge, _) = pending_forge(obs, |h| {
+            let p = json!({"pull_request":{"headRefOid":h,"commits":{"nodes":[{"commit":{"oid":h,"statusCheckRollup":null}}]}}});
+            vec![p]
+        });
+        let gate = pick(auth, json!("auth"), miss.clone());
+        forge.with_state(|s| s.gates = vec![gate].into());
+        let (result, waits) = land_poll(&forge, max_wait, 5);
+        assert_eq!(waits.len(), exp, "{case}: {result:?}");
+        forge.assert_sent("ci.current_gates", pick(auth, 5, 2), case);
+        match stop {
             None => {
-                assert_eq!(result.unwrap()["phase"], "landed", "{case}");
-                assert_sent_len(&host.forge, "pr.merge", 1, case);
+                assert_landed(result, case);
+                forge.assert_sent("pr.merge", 1, case);
             }
             Some(reason) => {
-                let error = result.unwrap_err().to_string();
-                assert!(error.contains(reason), "{case}: {error}");
-                assert_not_sent(&host.forge, &["pr.merge"], case);
-                assert_steps(
-                    &host.forge.steps(),
-                    &[HandoffLandingStep::Stop { repairable: false }],
-                    case,
-                );
+                assert_contains(&result.unwrap_err().to_string(), &[reason], case);
+                forge.assert_none(&["pr.merge"], case);
+                forge.assert_step(STOP, case);
             }
         }
+    };
+    let s1 = "within 10s (required checks the head has not reported: clippy)";
+    let s2 = "required reviews or checks are not satisfied";
+    run("appears", true, false, 15, 2, None);
+    run("never", false, false, 10, 2, Some(s1));
+    run("unreadable", false, true, 60, 4, Some(s2));
+}
+
+fn check_pending_refusal(
+    forge: &FakeForge,
+    case: &str,
+    head: &str,
+    reason: &str,
+    err: &str,
+) -> (String, Value) {
+    forge.assert_step(STOP, case);
+    let updates = forge.updates.lock().unwrap();
+    let stopped = updates.last().unwrap();
+    assert!(
+        stopped.observed.is_none(),
+        "diagnostics never carry candidate authority"
+    );
+    let ev: Value = serde_json::from_str(&stopped.evidence).unwrap();
+    assert_eq!(ev["schema_version"], 1, "{case}: {ev}");
+    assert_eq!(ev["kind"], "owner_landing_refusal");
+    assert_eq!(ev["repairable"], false);
+    let ev_reason = ev["reason"]["value"].as_str().unwrap();
+    assert!(ev_reason.contains(reason), "{case}: {ev_reason}");
+    if case == "optional" {
+        assert_contains(err, &["optional", "still running"], case);
+        assert_contains(ev_reason, &["optional", "still running"], case);
     }
+    assert_eq!(ev["accepted"]["candidate"]["value"], head);
+    assert_eq!(ev["emission_proof"]["state"], "not_collected");
+    assert_eq!(ev["workflow_prerequisites"]["state"], "not_collected");
+    (stopped.evidence.clone(), ev)
 }
 
 /// Controls share the public accepted-candidate setup, without real sleeps.
 #[allow(clippy::print_stderr)] // Identify each control in isolated child failure output.
 fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
-    for case in [
-        "optional",
-        "empty_contexts",
-        "null_contexts",
-        "missing_contexts",
-        "bounded_redacted",
-        "bounded_reason",
-        "optional_failed_required_pending",
-        "administrative",
-        "review",
-        "review_failed",
-        "draft_failed",
-        "contradiction_failed",
-        "missing_state",
-        "changes_requested",
-        "unknown_review",
-        "unreadable_rollup",
-        "auth",
-        "foreign_policy",
-        "foreign_commit",
-        "missing_policy",
-        "missing_policy_head",
-        "truncated",
-        "unknown_check",
-        "contradiction",
-        "head_changed",
-        "base_changed",
-        "policy_changed",
-        "timeout",
-        "changing_checks_timeout",
-        "cancelled",
-        "owed",
-        "neutral",
-        "skipped",
-        "owed_absent",
-        "owed_foreign",
-        "required_neutral",
-        "required_skipped",
-    ] {
+    const CASES: &str = "optional empty_contexts null_contexts missing_contexts bounded_redacted \
+        bounded_reason optional_failed_required_pending administrative review review_failed \
+        draft_failed contradiction_failed missing_state changes_requested unknown_review \
+        unreadable_rollup auth foreign_policy foreign_commit missing_policy missing_policy_head \
+        truncated unknown_check contradiction head_changed base_changed policy_changed timeout \
+        changing_checks_timeout cancelled owed neutral skipped owed_absent owed_foreign \
+        required_neutral required_skipped";
+    const ZERO_READS: &str = "review review_failed draft_failed contradiction_failed \
+        missing_state changes_requested unknown_review unreadable_rollup contradiction bounded_reason";
+    let secret = format!("ghp_{}", "a".repeat(36));
+    for case in CASES.split_whitespace() {
         eprintln!("pending evidence control: {case}");
-        let sandbox = tempdir().unwrap();
-        let mut host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
-        let head = host.forge.context.candidate.candidate.commit.clone();
-        let mut patch = blocked_aggregate();
-        let mut policy = pending_policy(&head, "IN_PROGRESS", true);
-        let mut after = None;
-        let mut next_policy = None;
-        let mut expected_waits = 0;
-        let mut merges = false;
-        let mut reason = "cannot be merged";
+        let (_sb, mut forge, head) = pending_forge(vec![blocked_aggregate()], |_| vec![]);
+        let (mut patch, mut policy) = (
+            blocked_aggregate(),
+            pending_policy(&head, "IN_PROGRESS", true),
+        );
+        let (mut after, mut next_pol, mut exp_waits, mut merges, mut reason) =
+            (None, None, 0, false, "cannot be merged");
         match case {
             "empty_contexts" => {
                 patch["statusCheckRollup"] = json!([]);
                 *policy_nodes(&mut policy) = json!([]);
             }
-            "null_contexts" | "missing_contexts" => {
-                let commit = policy_commit(&mut policy);
-                if case == "null_contexts" {
-                    commit["statusCheckRollup"] = Value::Null;
-                } else {
-                    commit.as_object_mut().unwrap().remove("statusCheckRollup");
-                }
-            }
+            "null_contexts" => policy_commit(&mut policy)["statusCheckRollup"] = Value::Null,
+            "missing_contexts" => rm_key(policy_commit(&mut policy), "statusCheckRollup"),
             "bounded_reason" => {
-                patch["mergedAt"] = json!(format!("ghp_{}{}", "a".repeat(36), "界".repeat(5000)));
-                reason = "contradictory";
+                (patch["mergedAt"], reason) = (
+                    json!(format!("{secret}{}", "界".repeat(5000))),
+                    "contradictory",
+                )
             }
             "bounded_redacted" => {
-                let secret = format!("ghp_{}", "a".repeat(36));
-                // NEUTRAL keeps this redaction case an immediate blocked
-                // refusal: it is not the all-explicit-success head whose
-                // lagging merge state landing re-polls [ORB-22350].
-                patch["statusCheckRollup"] = json!(
-                    (0..40)
- .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"NEUTRAL" }))
-                        .collect::<Vec<_>>()
-                );
-                // Arbitrary raw payload must never enter persisted diagnostics.
+                let big = format!("{secret} {}", "界".repeat(800));
+                // NEUTRAL keeps this redaction case an immediate blocked refusal [ORB-22350].
+                let mk = |c, req: Option<bool>| {
+                    (0..40).map(|_| if let Some(r) = req { json!({"name":big,"status":"COMPLETED","conclusion":c,"isRequired":r}) } else { json!({"name":big,"status":"COMPLETED","conclusion":c}) }).collect::<Vec<_>>()
+                };
+                patch["statusCheckRollup"] = json!(mk("NEUTRAL", None));
                 policy["transcript"] = json!("untrusted-raw-payload-sentinel");
-                *policy_nodes(&mut policy) = json!(
-                    (0..40)
- .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"SUCCESS", "isRequired":true }))
-                        .collect::<Vec<_>>()
-                );
+                *policy_nodes(&mut policy) = json!(mk("SUCCESS", Some(true)));
             }
             "optional" => {
                 policy = pending_policy(&head, "IN_PROGRESS", false);
                 patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
-                expected_waits = 2;
-                reason = "within 10s";
+                (exp_waits, reason) = (2, "within 10s");
             }
             "optional_failed_required_pending" => {
-                patch["statusCheckRollup"] = json!([ {"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"}, {"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"} ]);
+                patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"},{"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"}]);
             }
             "administrative" => policy = pending_policy(&head, "COMPLETED", true),
             "review" => patch["reviewDecision"] = json!("REVIEW_REQUIRED"),
-            "missing_state" => {
-                patch["state"] = Value::Null;
-                reason = "unavailable";
-            }
+            "missing_state" => (patch["state"], reason) = (Value::Null, "unavailable"),
             "review_failed" | "draft_failed" | "contradiction_failed" => {
-                host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
+                forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
                 patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE"}]);
-                if case == "review_failed" {
-                    patch["reviewDecision"] = json!("REVIEW_REQUIRED");
-                }
-                if case == "draft_failed" {
-                    patch["mergeStateStatus"] = json!("DRAFT");
-                }
-                if case == "contradiction_failed" {
-                    patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
-                    reason = "contradictory";
+                match case {
+                    "review_failed" => patch["reviewDecision"] = json!("REVIEW_REQUIRED"),
+                    "draft_failed" => patch["mergeStateStatus"] = json!("DRAFT"),
+                    _ => {
+                        (patch["mergedAt"], reason) =
+                            (json!("2026-10-15T00:00:00Z"), "contradictory")
+                    }
                 }
             }
             "changes_requested" => patch["reviewDecision"] = json!("CHANGES_REQUESTED"),
             "unknown_review" => patch["reviewDecision"] = json!(42),
             "unreadable_rollup" => patch["statusCheckRollup"] = Value::Null,
-            "auth" => {
-                policy = json!("auth");
-                reason = "HTTP 401";
-            }
+            "auth" => (policy, reason) = (json!("auth"), "HTTP 401"),
             "foreign_policy" => {
-                policy = pending_policy("foreign", "QUEUED", true);
-                reason = "current head";
+                (policy, reason) = (pending_policy("foreign", "QUEUED", true), "current head")
             }
             "foreign_commit" => {
-                policy_commit(&mut policy)["oid"] = json!("foreign");
-                reason = "current head";
+                (policy_commit(&mut policy)["oid"], reason) = (json!("foreign"), "current head")
             }
-            "missing_policy" => {
-                policy = json!({});
-                reason = "no pull request";
-            }
+            "missing_policy" => (policy, reason) = (json!({}), "no pull request"),
             "required_neutral" | "required_skipped" => {
                 policy = pending_policy(&head, "COMPLETED", true);
-                policy_first(&mut policy)["conclusion"] = json!(if case == "required_neutral" {
-                    "NEUTRAL"
-                } else {
-                    "SKIPPED"
-                });
+                let c = pick(case == "required_neutral", "NEUTRAL", "SKIPPED");
+                policy_first(&mut policy)["conclusion"] = json!(c);
             }
             "missing_policy_head" => {
-                policy["pull_request"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("headRefOid");
+                rm_key(&mut policy["pull_request"], "headRefOid");
                 reason = "current head";
             }
             "truncated" => {
@@ -1821,258 +1512,170 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 reason = "unreadable";
             }
             "contradiction" => {
-                patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
-                reason = "contradictory";
+                (patch["mergedAt"], reason) = (json!("2026-10-15T00:00:00Z"), "contradictory")
             }
             "head_changed" | "base_changed" => {
-                after = Some(
-                    json!({if case == "head_changed" { "headRefOid" } else { "baseRefName" }:"foreign"}),
-                );
-                expected_waits = 1;
-                reason = "delivery_evidence_stale";
+                let k = pick(case == "head_changed", "headRefOid", "baseRefName");
+                (after, exp_waits, reason) =
+                    (Some(json!({k: "foreign"})), 1, "delivery_evidence_stale");
             }
             "policy_changed" => {
-                next_policy = Some(pending_policy(&head, "QUEUED", false));
-                expected_waits = 1;
+                (next_pol, exp_waits) = (Some(pending_policy(&head, "QUEUED", false)), 1)
             }
             "timeout" | "changing_checks_timeout" => {
-                expected_waits = 2;
-                reason = "within 10s";
+                (exp_waits, reason) = (2, "within 10s");
                 if case == "changing_checks_timeout" {
                     let mut next = pending_policy(&head, "QUEUED", true);
                     policy_first(&mut next)["name"] = json!("another required job");
-                    next_policy = Some(next);
+                    next_pol = Some(next);
                 }
             }
             "cancelled" => {
-                after = Some(json!({"error":"execution cancelled"}));
-                expected_waits = 1;
-                reason = "cancelled";
+                (after, exp_waits, reason) =
+                    (Some(json!({"error":"execution cancelled"})), 1, "cancelled")
             }
             "owed" | "neutral" | "skipped" | "owed_absent" | "owed_foreign" => {
-                host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
+                forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
                 policy = pending_policy(&head, "IN_PROGRESS", false);
-                if case != "owed_absent" {
-                    patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":if case == "owed" {"QUEUED"} else {"COMPLETED"},"conclusion":if case == "neutral" {"NEUTRAL"} else {"SKIPPED"}}]);
-                }
                 if case == "owed_foreign" {
                     patch["statusCheckRollup"] =
                         json!([{"name":"clippy","workflowName":"Foreign","status":"QUEUED"}]);
-                    expected_waits = 2;
-                    reason = "within 10s";
+                    (exp_waits, reason) = (2, "within 10s");
+                } else if case != "owed_absent" {
+                    let st = pick(case == "owed", "QUEUED", "COMPLETED");
+                    let conc = pick(case == "neutral", "NEUTRAL", "SKIPPED");
+                    patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":st,"conclusion":conc}]);
                 }
                 if case == "owed" {
-                    after = Some(json!({"mergeStateStatus":"CLEAN"}));
-                    expected_waits = 1;
-                    merges = true;
+                    (after, exp_waits, merges) =
+                        (Some(json!({"mergeStateStatus":"CLEAN"})), 1, true);
                 }
             }
             _ => unreachable!(),
         }
-        let mut observations = vec![patch];
-        if let Some(after) = after {
-            observations.push(after);
-        }
-        let mut policies = vec![policy];
-        if let Some(next) = next_policy {
-            policies.push(next);
-        }
-        *host.observations.lock().unwrap() = observations.into();
-        *host.policies.lock().unwrap() = policies.into();
-        let (result, waits) = counted_land(
-            &host,
-            json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
-        );
-        assert_eq!(waits.len(), expected_waits, "{case}: {result:?}");
-        assert_not_sent(&host.forge, &["ci.rerun_failed", "pr.update_branch"], case);
-        if case == "optional_failed_required_pending" {
-            assert_sent_len(&host.forge, "ci.commit_jobs", 1, case);
-        } else {
-            assert_not_sent(&host.forge, &["ci.commit_jobs"], case);
-        }
-        assert_sent_len(&host.forge, "pr.merge", usize::from(merges), case);
+        forge.with_state(|s| {
+            s.observations = [Some(patch), after].into_iter().flatten().collect();
+            s.policies = [Some(policy), next_pol].into_iter().flatten().collect();
+        });
+        let (result, waits) = land_poll(&forge, 10, 5);
+        assert_eq!(waits.len(), exp_waits, "{case}: {result:?}");
+        forge.assert_none(NO_RERUN_OR_UPDATE, case);
+        let jobs_n = usize::from(case == "optional_failed_required_pending");
+        forge.assert_sent("ci.commit_jobs", jobs_n, case);
+        forge.assert_sent("pr.merge", usize::from(merges), case);
         if merges {
-            assert_eq!(result.unwrap()["phase"], "landed");
-        } else {
-            let error = result.unwrap_err().to_string();
-            assert!(error.contains(reason), "{case}: {error}");
-            if case != "cancelled" {
-                assert_steps(
-                    &host.forge.steps(),
-                    &[HandoffLandingStep::Stop { repairable: false }],
-                    case,
-                );
-                let updates = host.forge.updates.lock().unwrap();
-                let stopped = updates.last().unwrap();
-                assert!(
-                    stopped.observed.is_none(),
-                    "diagnostics never carry candidate authority"
-                );
-                let evidence: Value = serde_json::from_str(&stopped.evidence).unwrap();
-                assert_eq!(evidence["schema_version"], 1, "{case}: {evidence}");
-                assert_eq!(evidence["kind"], "owner_landing_refusal");
-                assert_eq!(evidence["repairable"], false);
-                let ev_reason = evidence["reason"]["value"].as_str().unwrap();
-                assert!(ev_reason.contains(reason), "{case}: {ev_reason}");
-                // [ORB-22485] A landing stopped only by running rollup checks
-                // names them in the durable stop reason the refusal surfaces.
-                if case == "optional" {
-                    assert!(
-                        error.contains("optional") && error.contains("still running"),
-                        "{case}: {error}"
-                    );
-                    assert!(
-                        ev_reason.contains("optional") && ev_reason.contains("still running"),
-                        "{case}: {ev_reason}"
-                    );
-                }
-                assert_eq!(evidence["accepted"]["candidate"]["value"], head);
-                assert_eq!(evidence["emission_proof"]["state"], "not_collected");
-                assert_eq!(evidence["workflow_prerequisites"]["state"], "not_collected");
-                let observation = &evidence["observation"];
-                let required = &observation["required_checks"];
-                match case {
-                    "empty_contexts" => {
-                        assert_eq!(observation["pr"]["rollup"]["original_count"], 0);
-                        assert_eq!(required["contexts"]["original_count"], 0);
-                        assert_eq!(required["outcome"], "parsed");
-                        assert_eq!(
-                            observation["classification"]["value"],
-                            "blocked: required reviews or checks are not satisfied"
-                        );
-                    }
-                    "null_contexts" | "missing_contexts" => {
-                        assert_eq!(required["outcome"], "parsed");
-                        assert_eq!(required["contexts"]["state"], "missing");
-                        let rollup_state = if case == "null_contexts" {
-                            "null"
-                        } else {
-                            "missing"
-                        };
-                        assert_eq!(required["rollup_state"], rollup_state, "{case}");
-                    }
-                    "timeout" | "changing_checks_timeout" => {
-                        assert_eq!(required["outcome"], "parsed");
-                        assert_eq!(required["contexts"]["items"][0]["state"], "Pending");
-                        assert_eq!(observation["classification"]["value"], "pending");
-                    }
-                    "review" => {
-                        assert_eq!(observation["pr"]["review"]["value"], "REVIEW_REQUIRED");
-                        assert_eq!(required["state"], "not_collected");
-                    }
-                    "optional_failed_required_pending" => {
-                        assert_eq!(observation["pr"]["rollup"]["items"][1]["state"], "Failed");
-                        assert_eq!(required["outcome"], "parsed");
-                    }
-                    "auth" => assert_eq!(required["outcome"], "read_error"),
-                    "missing_policy" | "truncated" => {
-                        assert_eq!(required["outcome"], "parse_error")
-                    }
-                    "foreign_policy" | "foreign_commit" | "missing_policy_head" => {
-                        assert_eq!(required["outcome"], "head_mismatch");
-                    }
-                    "unknown_check" => {
-                        assert_eq!(required["outcome"], "unreadable_state");
-                        let provider = &required["contexts"]["items"][0]["provider_status"];
-                        assert_eq!(provider["value"], "UNRECOGNIZED", "{case}");
-                    }
-                    "unreadable_rollup" => {
-                        assert_eq!(observation["pr"]["rollup"]["state"], "null");
-                        assert_eq!(required["state"], "not_collected");
-                    }
-                    "bounded_reason" => {
-                        let reason = &evidence["reason"];
-                        assert_eq!(reason["truncated"], true);
-                        assert!(reason["original_chars"].as_u64().unwrap() > 5000);
-                        let human = reason["value"].as_str().unwrap();
-                        assert_eq!(human.chars().count(), 4096);
-                        assert!(human.ends_with("landing needs an unambiguous merged state"));
-                        let secret = format!("ghp_{}", "a".repeat(36));
-                        assert!(!stopped.evidence.contains(&secret), "{case}");
-                    }
-                    "bounded_redacted" => {
-                        let secret = format!("ghp_{}", "a".repeat(36));
-                        assert!(!stopped.evidence.contains(&secret), "{case}");
-                        assert!(!stopped.evidence.contains("untrusted-raw-payload-sentinel"));
-                        for entries in [&observation["pr"]["rollup"], &required["contexts"]] {
-                            assert_eq!(entries["original_count"], 40);
-                            assert_eq!(entries["truncated"], true);
-                            assert_eq!(entries["items"].as_array().unwrap().len(), 32);
-                            let name = &entries["items"][0]["name"];
-                            assert_eq!(name["original_chars"], 841);
-                            assert_eq!(name["truncated"], true);
-                            assert_eq!(name["value"].as_str().unwrap().chars().count(), 512);
-                        }
-                        assert!(stopped.evidence.len() < 160_000);
-                    }
-                    _ => {}
-                }
-                let reads = match case {
-                    "review"
-                    | "review_failed"
-                    | "draft_failed"
-                    | "contradiction_failed"
-                    | "missing_state"
-                    | "changes_requested"
-                    | "unknown_review"
-                    | "unreadable_rollup"
-                    | "contradiction"
-                    | "bounded_reason" => 0,
-                    "timeout" | "changing_checks_timeout" | "optional" | "owed_foreign" => {
-                        expected_waits
-                    }
-                    "head_changed" | "base_changed" => 1,
-                    _ => expected_waits + 1,
-                };
-                assert_sent_len(&host.forge, "pr.required_checks", reads, case);
-            }
+            assert_landed(result, case);
+            continue;
         }
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains(reason), "{case}: {err}");
+        if case == "cancelled" {
+            continue;
+        }
+        let (raw, ev) = check_pending_refusal(&forge, case, &head, reason, &err);
+        let (obs, req) = (&ev["observation"], &ev["observation"]["required_checks"]);
+        match case {
+            "empty_contexts" => {
+                assert_eq!(obs["pr"]["rollup"]["original_count"], 0);
+                assert_eq!(req["contexts"]["original_count"], 0);
+                assert_eq!(req["outcome"], "parsed");
+                let want = "blocked: required reviews or checks are not satisfied";
+                assert_eq!(obs["classification"]["value"], want);
+            }
+            "null_contexts" | "missing_contexts" => {
+                assert_eq!(req["outcome"], "parsed");
+                assert_eq!(req["contexts"]["state"], "missing");
+                let want = pick(case == "null_contexts", "null", "missing");
+                assert_eq!(req["rollup_state"], want, "{case}");
+            }
+            "timeout" | "changing_checks_timeout" => {
+                assert_eq!(req["outcome"], "parsed");
+                assert_eq!(req["contexts"]["items"][0]["state"], "Pending");
+                assert_eq!(obs["classification"]["value"], "pending");
+            }
+            "review" => {
+                assert_eq!(obs["pr"]["review"]["value"], "REVIEW_REQUIRED");
+                assert_eq!(req["state"], "not_collected");
+            }
+            "optional_failed_required_pending" => {
+                assert_eq!(obs["pr"]["rollup"]["items"][1]["state"], "Failed");
+                assert_eq!(req["outcome"], "parsed");
+            }
+            "auth" => assert_eq!(req["outcome"], "read_error"),
+            "missing_policy" | "truncated" => assert_eq!(req["outcome"], "parse_error"),
+            "foreign_policy" | "foreign_commit" | "missing_policy_head" => {
+                assert_eq!(req["outcome"], "head_mismatch")
+            }
+            "unknown_check" => {
+                assert_eq!(req["outcome"], "unreadable_state");
+                assert_eq!(
+                    req["contexts"]["items"][0]["provider_status"]["value"], "UNRECOGNIZED",
+                    "{case}"
+                );
+            }
+            "unreadable_rollup" => {
+                assert_eq!(obs["pr"]["rollup"]["state"], "null");
+                assert_eq!(req["state"], "not_collected");
+            }
+            "bounded_reason" => {
+                let r = &ev["reason"];
+                assert_eq!(r["truncated"], true);
+                assert!(r["original_chars"].as_u64().unwrap() > 5000);
+                let human = r["value"].as_str().unwrap();
+                assert_eq!(human.chars().count(), 4096);
+                assert!(human.ends_with("landing needs an unambiguous merged state"));
+                assert!(!raw.contains(&secret), "{case}");
+            }
+            "bounded_redacted" => {
+                assert!(
+                    !raw.contains(&secret) && !raw.contains("untrusted-raw-payload-sentinel"),
+                    "{case}"
+                );
+                for e in [&obs["pr"]["rollup"], &req["contexts"]] {
+                    assert_eq!(
+                        (&e["original_count"], &e["truncated"]),
+                        (&json!(40), &json!(true))
+                    );
+                    assert_eq!(e["items"].as_array().unwrap().len(), 32);
+                    let n = &e["items"][0]["name"];
+                    assert_eq!(
+                        (&n["original_chars"], &n["truncated"]),
+                        (&json!(841), &json!(true))
+                    );
+                    assert_eq!(n["value"].as_str().unwrap().chars().count(), 512);
+                }
+                assert!(raw.len() < 160_000);
+            }
+            _ => {}
+        }
+        let reads = match case {
+            c if ZERO_READS.split_whitespace().any(|z| z == c) => 0,
+            "timeout" | "changing_checks_timeout" | "optional" | "owed_foreign" => exp_waits,
+            "head_changed" | "base_changed" => 1,
+            _ => exp_waits + 1,
+        };
+        forge.assert_sent("pr.required_checks", reads, case);
     }
 }
 
-/// The provider's branch update of `head` on the published `remote`, after
-/// `main` there advanced past what the owner fetched, shaped by `shape`.
 fn provider_update(remote: &Path, head: &str, shape: UpdateShape) -> String {
-    let base_tree = git(remote, &["rev-parse", "main^{tree}"]);
-    let advance_args = [
-        "commit-tree",
-        base_tree.as_str(),
-        "-p",
-        "main",
-        "-m",
-        "the base advances",
-    ];
-    let advanced = git(remote, &advance_args);
+    let base_tree = git_rev(remote, "main^{tree}");
+    let advanced = commit_tree(remote, &base_tree, &["main"], "the base advances");
     git(remote, &["update-ref", "refs/heads/main", &advanced]);
     let base_side = match shape {
-        UpdateShape::Foreign => {
-            let foreign = [
-                "commit-tree",
-                base_tree.as_str(),
-                "-p",
-                &advanced,
-                "-m",
-                "not on main",
-            ];
-            git(remote, &foreign)
-        }
+        UpdateShape::Foreign => commit_tree(remote, &base_tree, &[&advanced], "not on main"),
         _ => advanced,
     };
-    let clean = git(remote, &["merge-tree", "--write-tree", head, &base_side]);
-    let mut args = vec!["commit-tree".to_string()];
-    match shape {
-        UpdateShape::Dirty => args.push(git(remote, &["rev-parse", &format!("{head}^{{tree}}")])),
-        _ => args.push(clean),
-    }
-    args.extend(["-p".to_string(), head.to_string()]);
-    if !matches!(shape, UpdateShape::NotAMerge) {
-        args.extend(["-p".to_string(), base_side]);
-    }
-    args.extend([
-        "-m".to_string(),
-        "Merge branch 'main' into orbit/T1".to_string(),
-    ]);
-    let merge = git(remote, &args.iter().map(String::as_str).collect::<Vec<_>>());
+    let tree = match shape {
+        UpdateShape::Dirty => git_rev(remote, &format!("{head}^{{tree}}")),
+        _ => git(remote, &["merge-tree", "--write-tree", head, &base_side]),
+    };
+    let parents = pick(
+        matches!(shape, UpdateShape::NotAMerge),
+        vec![head],
+        vec![head, &base_side],
+    );
+    let merge = commit_tree(remote, &tree, &parents, "Merge branch 'main' into orbit/T1");
     git(remote, &["update-ref", "refs/heads/orbit/T1", &merge]);
     if matches!(shape, UpdateShape::BaseGone) {
         git(remote, &["update-ref", "-d", "refs/heads/main"]);
@@ -2091,6 +1694,9 @@ const NETWORK_FLAKE: &str = "Run cargo fetch\n\
      error: failed to download from `https://index.crates.io/config.json`\n\
      curl: (28) Operation timed out after 30000 milliseconds\n\
      ##[error]Process completed with exit code 101.";
+const UNTOUCHED_TEST_FAILURE: &str = "error: shutdown test timed out\n --> README.md:1:1\n";
+const RETRY_UNREADABLE: &str =
+    "workflow prerequisite evidence is unavailable (retry requires a completed failed attempt)";
 
 fn failed(run_id: u64, job_id: u64, log: &'static str) -> FakeJob {
     failed_reading(run_id, job_id, FakeLog::Text(log))
@@ -2118,1292 +1724,666 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
     }
 }
 
-const UNTOUCHED_TEST_FAILURE: &str = "error: shutdown test timed out\n --> README.md:1:1\n";
-
-#[test]
 fn handoff_fake_refuses_unscoped_automation_updates() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "handoff_fake_refuses_unscoped_automation_updates",
-        || {
-            let (_sandbox, forge, _, _) = forge_fixture(true, false);
-            let error = RuntimeHost::apply_task_automation_update(
-                &forge,
-                TASK_ID,
-                orbit_engine::TaskAutomationUpdate::default(),
-            )
-            .expect_err("a live handoff claim fences the unscoped writer");
-            assert!(
-                error
-                    .to_string()
-                    .contains("active execution claim requires a claim-scoped mutation"),
-                "unscoped automation update refusal: {error}"
-            );
-        },
+    let (_sb, forge, _, _) = forge_fixture(true, false);
+    let u = TaskAutomationUpdate::default();
+    let err = RuntimeHost::apply_task_automation_update(&forge, TASK_ID, u).expect_err("fenced");
+    assert_contains(
+        &err.to_string(),
+        &["active execution claim requires a claim-scoped mutation"],
+        "unscoped",
     );
 }
 
-/// ORB-19342: a fresh base pass warrants a flake rerun before a repair,
-/// including when the repair is spent or a retry finishes after that pass.
-#[test]
+/// ORB-19342: fresh base pass warrants a flake rerun before repair, including spent/shared/transient cases.
 fn untouched_failure_reruns_once_after_fresh_base_pass() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "untouched_failure_reruns_once_after_fresh_base_pass",
-        || {
-            for case in [
-                "pass",
-                "repeat",
-                "repair_spent",
-                "repeat_spent",
-                "shared_budget",
-                "transient_after_flake",
-            ] {
-                let (_sandbox, mut forge, head, base) =
-                    forge_fixture(true, matches!(case, "repair_spent" | "repeat_spent"));
-                if case == "transient_after_flake" {
-                    forge.ci_retry_policy.max_attempts = 1;
-                }
-                forge.job(
-                    &head,
-                    failed(
-                        1,
-                        11,
-                        if case == "shared_budget" {
-                            NETWORK_FLAKE
-                        } else {
-                            UNTOUCHED_TEST_FAILURE
-                        },
-                    ),
-                );
-                forge.job(&base, passed(2, 21));
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state
-                        .job_times
-                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-                    state.job_times.insert(
-                        21,
-                        if case == "shared_budget" {
-                            ("2026-10-26T14:06:00Z", "2026-10-26T14:07:00Z")
-                        } else {
-                            ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
-                        },
-                    );
-                    // A repeated failure must not wait for yet another base run.
-                    state
-                        .job_times
-                        .insert(12, ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"));
-                    state.after_rerun = Some(if matches!(case, "pass" | "repair_spent") {
-                        passed(1, 12)
-                    } else if case == "transient_after_flake" {
-                        failed(1, 12, NETWORK_FLAKE)
-                    } else {
-                        failed(1, 12, UNTOUCHED_TEST_FAILURE)
-                    });
-                }
-                let outcome = land_now(&forge);
-                assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-                assert_not_sent(&forge, &["pr.update_branch"], case);
-                if matches!(case, "pass" | "repair_spent") {
-                    assert_eq!(outcome.expect(case)["phase"], "landed");
-                    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
-                    assert!(
-                        !forge
-                            .steps()
-                            .iter()
-                            .any(|step| matches!(step, HandoffLandingStep::Stop { .. }))
-                    );
-                } else {
-                    outcome.expect_err(case);
-                    let step = if matches!(case, "repeat" | "repeat_spent") {
-                        HandoffLandingStep::StopForRequeue
-                    } else {
-                        HandoffLandingStep::Stop {
-                            repairable: !matches!(case, "transient_after_flake" | "shared_budget"),
-                        }
-                    };
-                    assert_steps(&forge.steps(), &[step], case);
-                    assert_reason(
-                        &forge,
-                        case,
-                        if case == "transient_after_flake" {
-                            &[
-                                "ci_infrastructure_retry_exhausted",
-                                "classification=transient",
-                                "attempts=1",
-                            ]
-                        } else if case == "shared_budget" {
-                            &["CI retry was reserved", "observing without resending"]
-                        } else {
-                            &["classified `candidate`", "returns the task to the backlog"]
-                        },
-                    );
-                }
-                let history = forge.history.lock().unwrap();
-                let reruns = history
-                    .iter()
-                    .filter(|row| row.event == "ci_check_rerun")
-                    .collect::<Vec<_>>();
-                assert_eq!(reruns.len(), 1, "{case}: record the rerun once");
-                let note: Value = serde_json::from_str(reruns[0].note.as_deref().unwrap()).unwrap();
-                assert_eq!(note["head"], head);
-                assert_eq!(note["run_id"], 1);
-                assert_eq!(note["jobs"][0]["job_id"], 11);
-                assert_eq!(note["jobs"][0]["check"], "CI / clippy");
-            }
-        },
-    );
+    const CASES: &str = "pass repeat repair_spent repeat_spent shared_budget transient_after_flake";
+    for case in CASES.split_whitespace() {
+        let spent = matches!(case, "repair_spent" | "repeat_spent");
+        let (_sb, mut forge, head, base) = forge_fixture(true, spent);
+        if case == "transient_after_flake" {
+            forge.ci_retry_policy.max_attempts = 1;
+        }
+        let shared = case == "shared_budget";
+        forge.job(
+            &head,
+            failed(1, 11, pick(shared, NETWORK_FLAKE, UNTOUCHED_TEST_FAILURE)),
+        );
+        forge.job(&base, passed(2, 21));
+        let (bs, be) = pick(shared, ("14:06", "14:07"), ("14:02", "14:03"));
+        let ts = [(11, "14:00", "14:01"), (21, bs, be), (12, "14:04", "14:05")];
+        set_times(&forge, &ts);
+        forge.set_after_rerun(match case {
+            "pass" | "repair_spent" => passed(1, 12),
+            "transient_after_flake" => failed(1, 12, NETWORK_FLAKE),
+            _ => failed(1, 12, UNTOUCHED_TEST_FAILURE),
+        });
+        let outcome = land_now(&forge);
+        forge.assert_sent("ci.rerun_failed", 1, case);
+        forge.assert_none(&["pr.update_branch"], case);
+        if matches!(case, "pass" | "repair_spent") {
+            assert_landed(outcome, case);
+            assert_eq!(forge.steps().last(), Some(&Complete));
+            assert!(!forge.steps().iter().any(|s| matches!(s, Stop { .. })));
+        } else {
+            outcome.expect_err(case);
+            let rep = matches!(case, "repeat" | "repeat_spent");
+            forge.assert_step(pick(rep, StopForRequeue, STOP), case);
+            let parts: &[&str] = match case {
+                "transient_after_flake" => &[
+                    "ci_infrastructure_retry_exhausted",
+                    "classification=transient",
+                    "attempts=1",
+                ],
+                "shared_budget" => &["CI retry was reserved", "observing without resending"],
+                _ => &["classified `candidate`", "returns the task to the backlog"],
+            };
+            forge.assert_reason(case, parts);
+        }
+        let reruns = forge.history_notes("ci_check_rerun");
+        assert_eq!(reruns.len(), 1, "{case}: record the rerun once");
+        let r = &reruns[0];
+        assert_eq!((&r["head"], &r["run_id"]), (&json!(head), &json!(1)));
+        assert_eq!(
+            (&r["jobs"][0]["job_id"], &r["jobs"][0]["check"]),
+            (&json!(11), &json!("CI / clippy"))
+        );
+    }
 }
 
-/// A `ci_base_suspect` record proves no rerun was requested. A later push
-/// or workflow_dispatch run on the same head cannot be treated as the
-/// unchanged-head PR rerun
-/// and cannot admit candidate repair. Only a verified rerun of the same
-/// provider run — same PR, head and run, later attempt, same signature —
-/// releases the hold in a resumed landing.
-#[test]
+/// Only a verified same-PR same-run later-attempt rerun releases a `ci_base_suspect` hold.
 fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "suspicion_only_history_cannot_admit_repair_from_a_non_pr_run",
-        || {
-            for case in ["push_other_run", "dispatch_other_run", "valid_pr_rerun"] {
-                let (_sandbox, forge, head, base) = forge_fixture(true, false);
-                let mut current = if case == "valid_pr_rerun" {
-                    failed(1, 12, UNTOUCHED_TEST_FAILURE)
-                } else {
-                    failed(3, 31, UNTOUCHED_TEST_FAILURE)
-                };
-                current.run_attempt = if case == "valid_pr_rerun" { 2 } else { 1 };
-                current.event = match case {
-                    "push_other_run" => "push",
-                    "dispatch_other_run" => "workflow_dispatch",
-                    _ => "pull_request",
-                };
-                let current_job_id = current.job_id;
-                forge.job(&head, current);
-                forge.job(&base, passed(2, 21));
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state.job_times.insert(
-                        current_job_id,
-                        ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"),
-                    );
-                    state
-                        .job_times
-                        .insert(21, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
-                }
-                forge
-                    .history
-                    .lock()
-                    .unwrap()
-                    .push(orbit_types::task::TaskHistoryEntry {
-                        at: chrono::Utc::now(),
-                        by: "system".into(),
-                        event: "ci_base_suspect".into(),
-                        note: Some(
-                            json!({
-                                "head": head, "check": "CI / clippy",
-                                "signature": "error: shutdown test timed out",
-                                "run_id": 1, "job_id": 11, "run_attempt": 1,
-                                "pr_number": 42,
-                                "started_at": "2026-10-26T14:00:00Z",
-                                "completed_at": "2026-10-26T14:01:00Z",
-                            })
-                            .to_string(),
-                        ),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                        surface: None,
-                        caller: None,
-                    });
-                let outcome = land_now(&forge);
-                assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
-                if case == "valid_pr_rerun" {
-                    outcome.expect_err(case);
-                    assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
-                    assert_reason(&forge, case, &["classified `candidate`"]);
-                    assert_not_sent(&forge, &["ci.rerun_failed"], case);
-                } else {
-                    // A foreign push or workflow_dispatch run is not a verified
-                    // rerun, so it cannot admit repair or requeue. The full
-                    // step list is the guard: `StopForRequeue` and
-                    // `Stop { repairable: true }` both fail it.
-                    outcome.expect_err(case);
-                    assert_sent_len(&forge, "ci.rerun_failed", 0, case);
-                    assert_steps(
-                        &forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: false }],
-                        case,
-                    );
-                }
-            }
-        },
-    );
+    let rows = [
+        ("push_other_run", 3, 31, 1, "push"),
+        ("dispatch_other_run", 3, 31, 1, "workflow_dispatch"),
+        ("valid_pr_rerun", 1, 12, 2, "pull_request"),
+    ];
+    for (case, run_id, job_id, attempt, event) in rows {
+        let (_sb, forge, head, base) = forge_fixture(true, false);
+        let mut current = failed(run_id, job_id, UNTOUCHED_TEST_FAILURE);
+        (current.run_attempt, current.event) = (attempt, event);
+        forge.job(&head, current);
+        forge.job(&base, passed(2, 21));
+        set_times(
+            &forge,
+            &[(job_id, "14:04", "14:05"), (21, "14:02", "14:03")],
+        );
+        let note = json!({"head":head,"check":"CI / clippy","signature":"error: shutdown test timed out","run_id":1,"job_id":11,"run_attempt":1,"pr_number":42,"started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z"});
+        forge.push_history(history_row(
+            "system",
+            "ci_base_suspect",
+            Some(note.to_string()),
+        ));
+        land_now(&forge).expect_err(case);
+        forge.assert_none(NO_MERGE_OR_UPDATE, case);
+        if case == "valid_pr_rerun" {
+            forge.assert_step(StopForRequeue, case);
+            forge.assert_reason(case, &["classified `candidate`"]);
+            forge.assert_none(&["ci.rerun_failed"], case);
+        } else {
+            forge.assert_sent("ci.rerun_failed", 0, case);
+            forge.assert_step(STOP, case);
+        }
+    }
 }
 
-/// A finished push on the accepted base ancestry can authorize the PR rerun
-/// even when its job or run predates the first candidate failure.
-#[test]
 fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "untouched_failure_uses_a_fresh_pass_behind_the_moving_tip",
-        || {
-            for case in ["fresh_base", "fresh_middle", "stale_middle"] {
-                let (_sandbox, forge, head, base) = forge_fixture(true, false);
-                let middle = fix_base(&forge.repo);
-                git(
-                    &forge.repo,
-                    &["commit", "--allow-empty", "-m", "tip moved again"],
-                );
-                forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
-                forge.job(
-                    if case == "fresh_base" { &base } else { &middle },
-                    passed(2, 21),
-                );
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state
-                        .job_times
-                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-                    state.job_times.insert(
-                        21,
-                        if case == "stale_middle" {
-                            ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z")
-                        } else {
-                            ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
-                        },
-                    );
-                    state.after_rerun = Some(if case == "stale_middle" {
-                        failed(1, 12, UNTOUCHED_TEST_FAILURE)
-                    } else {
-                        passed(1, 12)
-                    });
-                }
-                let outcome = land_now(&forge);
-                if case == "stale_middle" {
-                    let error = outcome.expect_err(case);
-                    assert!(
-                        error.to_string().contains("classified `candidate`"),
-                        "{error}"
-                    );
-                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-                    assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
-                } else {
-                    assert_eq!(outcome.expect(case)["phase"], "landed");
-                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-                }
-                assert_not_sent(&forge, &["pr.update_branch"], case);
-            }
-        },
-    );
-}
-
-/// The real provider adapter finds a superseded push, and cannot substitute
-/// a stale run, PR run, foreign branch/commit or incomplete workflow for it.
-#[cfg(unix)]
-#[test]
-fn untouched_failure_checks_push_history_through_the_real_adapter() {
-    use std::os::unix::fs::PermissionsExt;
-
-    crate::git_fixture::isolated(
-        module_path!(),
-        "untouched_failure_checks_push_history_through_the_real_adapter",
-        || {
-            for case in [
-                "fresh",
-                "stale_job",
-                "stale_run",
-                "pull_request",
-                "other_branch",
-                "foreign_commit",
-                "pending",
-                "cancelled",
-                "wrong_job",
-            ] {
-                let (_sandbox, forge, head, base) = forge_fixture(true, false);
-                let middle = fix_base(&forge.repo);
-                git(
-                    &forge.repo,
-                    &["commit", "--allow-empty", "-m", "tip moved again"],
-                );
-                let tip = git(&forge.repo, &["rev-parse", "main"]);
-                forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
-                forge.job(&base, passed(9, 91));
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state.base_push_provider = true;
-                    state
-                        .job_times
-                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-                    state.after_rerun = Some(passed(1, 12));
-                }
-                let runs = json!({"total_count":200,"workflow_runs":[
-                    {"id":2,"workflow_id":1,"name":"CI","event":if case == "pull_request" {"pull_request"} else {"push"},"head_branch":if case == "other_branch" {"other"} else {"main"},"head_sha":if case == "foreign_commit" {&head} else {&middle},"status":if case == "pending" {"in_progress"} else {"completed"},"conclusion":if case == "cancelled" {"cancelled"} else {"success"},"run_started_at":if case == "stale_run" {"2026-10-26T12:00:00Z"} else {"2026-10-26T14:02:00Z"}},
-                    {"id":3,"workflow_id":1,"name":"CI","event":"push","head_branch":"main","head_sha":tip,"status":"in_progress","conclusion":null,"run_started_at":"2026-10-26T14:04:00Z"}
-                ]});
-                let jobs = json!({"total_count":1,"jobs":[{"id":21,"name":if case == "wrong_job" {"other"} else {"clippy"},"status":"completed","conclusion":"success","started_at":if case == "stale_job" {"2026-10-26T12:00:00Z"} else {"2026-10-26T14:02:00Z"},"completed_at":"2026-10-26T14:03:00Z","steps":[]}]});
-                std::fs::write(forge.repo.join("ci-runs.json"), runs.to_string()).unwrap();
-                std::fs::write(forge.repo.join("ci-jobs.json"), jobs.to_string()).unwrap();
-                let bin = forge.repo.join("bin");
-                std::fs::create_dir(&bin).unwrap();
-                let gh = bin.join("gh");
-                std::fs::write(&gh, "#!/bin/sh\nset -eu\ncase \"$*\" in\n *'/actions/runs/2/jobs'*) cat ci-jobs.json ;;\n *'/actions/runs') exit 1 ;;\n *'/actions/runs '*)\n  case \"$*\" in\n   *head_sha=*) printf '%s' '{\"total_count\":0,\"workflow_runs\":[]}' ;;\n   *event=push*branch=main*) cat ci-runs.json ;;\n   *) exit 1 ;;\n  esac ;;\n *) exit 1 ;;\nesac\n").unwrap();
-                std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-                let mut paths = vec![bin];
-                paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-                let path = std::env::join_paths(paths).unwrap();
-                let _env = orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))]);
-
-                let outcome = land_now(&forge);
-                if matches!(case, "fresh" | "stale_job" | "stale_run") {
-                    assert_eq!(outcome.expect(case)["phase"], "landed");
-                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-                } else {
-                    assert!(
-                        matches!(&outcome, Err(OrbitError::DeliveryRefused { refusal, .. }) if refusal.error_code() == "delivery_base_checks_pending"),
-                        "{case}: {outcome:?}"
-                    );
-                    assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], case);
-                }
-                assert_not_sent(&forge, &["pr.update_branch"], case);
-            }
-        },
-    );
-}
-
-/// [ORB-15956] The incident: a pull request goes red on its base's own
-/// dead-code error, which the base fails the same way, while `main` has
-/// since moved past a fix and passes. The landing merges `main` into the
-/// branch, waits for the check on that head, and lands it — no stop, so no
-/// repair and no agent run. The owner's observation stays the validated
-/// candidate; the merge is pinned to the updated head.
-#[test]
-fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
-    let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
-    let fixed = fix_base(&forge.repo);
-    inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
-    forge.state.lock().unwrap().after_update = Some(passed(4, 41));
-
-    let landed = land_now(&forge).expect("the update lands");
-
-    assert_eq!(landed["phase"], "landed", "{landed}");
-    assert_sent_len(&forge, "pr.update_branch", 1, "inherited");
-    assert_not_sent(&forge, &["ci.rerun_failed"], "inherited");
-    // The base fails the same check: infrastructure, never the head's.
-    assert_eq!(
-        ledger_classes(&forge),
-        [orbit_types::workflow::CiFailureClass::Infrastructure]
-    );
-    let head = head_of(&forge);
-    assert_eq!(
+    for case in ["fresh_base", "fresh_middle", "stale_middle"] {
+        let (_sb, forge, head, base) = forge_fixture(true, false);
+        let middle = fix_base(&forge.repo);
         git(
             &forge.repo,
-            &["rev-parse", &format!("{head}^1"), &format!("{head}^2")]
-        ),
-        format!("{candidate}\n{fixed}"),
-        "the merged head is the candidate merged with the fixed base"
+            &["commit", "--allow-empty", "-m", "tip moved again"],
+        );
+        forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+        forge.job(pick(case == "fresh_base", &base, &middle), passed(2, 21));
+        let (bs, be) = pick(
+            case == "stale_middle",
+            ("12:00", "12:01"),
+            ("14:02", "14:03"),
+        );
+        set_times(&forge, &[(11, "14:00", "14:01"), (21, bs, be)]);
+        let after = pick(
+            case == "stale_middle",
+            failed(1, 12, UNTOUCHED_TEST_FAILURE),
+            passed(1, 12),
+        );
+        forge.set_after_rerun(after);
+        let outcome = land_now(&forge);
+        forge.assert_sent("ci.rerun_failed", 1, case);
+        if case == "stale_middle" {
+            assert_contains(
+                &outcome.expect_err(case).to_string(),
+                &["classified `candidate`"],
+                case,
+            );
+            forge.assert_step(StopForRequeue, case);
+        } else {
+            assert_landed(outcome, case);
+        }
+        forge.assert_none(&["pr.update_branch"], case);
+    }
+}
+
+#[cfg(unix)]
+fn untouched_failure_checks_push_history_through_the_real_adapter() {
+    const CASES: &str = "fresh stale_job stale_run pull_request other_branch foreign_commit pending cancelled wrong_job";
+    const GH: &str = "#!/bin/sh\nset -eu\ncase \"$*\" in\n *'/actions/runs/2/jobs'*) cat ci-jobs.json ;;\n *'/actions/runs') exit 1 ;;\n *'/actions/runs '*)\n  case \"$*\" in\n   *head_sha=*) printf '%s' '{\"total_count\":0,\"workflow_runs\":[]}' ;;\n   *event=push*branch=main*) cat ci-runs.json ;;\n   *) exit 1 ;;\n  esac ;;\n *) exit 1 ;;\nesac\n";
+    for case in CASES.split_whitespace() {
+        let (_sb, forge, head, base) = forge_fixture(true, false);
+        let middle = fix_base(&forge.repo);
+        git(
+            &forge.repo,
+            &["commit", "--allow-empty", "-m", "tip moved again"],
+        );
+        let tip = git_rev(&forge.repo, "main");
+        forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+        forge.job(&base, passed(9, 91));
+        forge.with_state(|s| {
+            s.base_push_provider = true;
+            s.job_times.insert(11, (at("14:00"), at("14:01")));
+            s.after_rerun = Some(passed(1, 12));
+        });
+        let runs = json!({"total_count":200,"workflow_runs":[
+            {"id":2,"workflow_id":1,"name":"CI","event":pick(case=="pull_request","pull_request","push"),"head_branch":pick(case=="other_branch","other","main"),"head_sha":pick(case=="foreign_commit",&head,&middle),"status":pick(case=="pending","in_progress","completed"),"conclusion":pick(case=="cancelled","cancelled","success"),"run_started_at":pick(case=="stale_run","2026-10-26T12:00:00Z","2026-10-26T14:02:00Z")},
+            {"id":3,"workflow_id":1,"name":"CI","event":"push","head_branch":"main","head_sha":tip,"status":"in_progress","conclusion":null,"run_started_at":"2026-10-26T14:04:00Z"}
+        ]});
+        let jobs = json!({"total_count":1,"jobs":[{"id":21,"name":pick(case=="wrong_job","other","clippy"),"status":"completed","conclusion":"success","started_at":pick(case=="stale_job","2026-10-26T12:00:00Z","2026-10-26T14:02:00Z"),"completed_at":"2026-10-26T14:03:00Z","steps":[]}]});
+        fs::write(forge.repo.join("ci-runs.json"), runs.to_string()).unwrap();
+        fs::write(forge.repo.join("ci-jobs.json"), jobs.to_string()).unwrap();
+        let _env = install_fake_gh(&forge.repo, GH);
+
+        let outcome = land_now(&forge);
+        if matches!(case, "fresh" | "stale_job" | "stale_run") {
+            assert_landed(outcome, case);
+            forge.assert_sent("ci.rerun_failed", 1, case);
+        } else {
+            assert!(
+                outcome.as_ref().is_err_and(is_base_pending),
+                "{case}: {outcome:?}"
+            );
+            forge.assert_none(&["ci.rerun_failed", "pr.merge"], case);
+        }
+        forge.assert_none(&["pr.update_branch"], case);
+    }
+}
+
+/// [ORB-15956] An inherited failure updates the branch onto the fixed base and lands.
+fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
+    let (_sb, forge, cand, base) = forge_fixture(true, false);
+    let fixed = fix_base(&forge.repo);
+    inherited_jobs(&forge, &cand, &base, &fixed, passed(3, 31));
+    forge.set_after_update(passed(4, 41));
+
+    assert_landed(land_now(&forge), "the update lands");
+    forge.assert_sent("pr.update_branch", 1, "inherited");
+    forge.assert_none(&["ci.rerun_failed"], "inherited");
+    assert_eq!(ledger_classes(&forge), [CiFailureClass::Infrastructure]);
+    let head = head_of(&forge);
+    let parents = git(
+        &forge.repo,
+        &["rev-parse", &format!("{head}^1"), &format!("{head}^2")],
+    );
+    assert_eq!(
+        parents,
+        format!("{cand}\n{fixed}"),
+        "merged head has candidate + fixed base"
     );
     assert_eq!(
         forge.sent("pr.merge")[0]["reviewed_head_sha"],
         head.as_str()
     );
     let steps = forge.steps();
-    assert_eq!(
-        steps.last(),
-        Some(&HandoffLandingStep::Complete),
-        "{steps:?}"
-    );
-    assert!(
-        !steps
-            .iter()
-            .any(|step| matches!(step, HandoffLandingStep::Stop { .. })),
-        "{steps:?}"
-    );
+    assert_eq!(steps.last(), Some(&Complete), "{steps:?}");
+    assert!(!steps.iter().any(|s| matches!(s, Stop { .. })), "{steps:?}");
     let updates = forge.updates.lock().unwrap().clone();
+    let kept = updates
+        .iter()
+        .filter_map(|u| u.observed.as_ref())
+        .all(|o| o.candidate.commit == cand);
     assert!(
-        updates
-            .iter()
-            .filter_map(|update| update.observed.as_ref())
-            .all(|observed| observed.candidate.commit == candidate),
+        kept,
         "the owner observes the validated candidate, never the merged head"
     );
-    let evidence = evidence_of(&forge);
-    assert_eq!(evidence["updated_head"], head.as_str(), "{evidence}");
-    assert!(
-        evidence["check_recovery"][0]
-            .as_str()
-            .is_some_and(|action| action.contains("inherited") && action.contains(&fixed)),
-        "{evidence}"
-    );
+    let ev = evidence_of(&forge);
+    assert_eq!(ev["updated_head"], head.as_str(), "{ev}");
+    let rec = ev["check_recovery"][0].as_str().unwrap();
+    assert_contains(rec, &["inherited", &fixed], "check_recovery");
 }
 
-/// The base fix arrives only after the first updated head has failed.
-#[test]
 fn inherited_landing_waits_for_a_later_passing_base_and_updates_again() {
-    let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
-    let forge = std::rc::Rc::new(forge);
+    let (_sb, forge, cand, base) = forge_fixture(true, false);
+    let forge = Rc::new(forge);
     let red_tip = fix_base(&forge.repo);
     inherited_jobs(
         &forge,
-        &candidate,
+        &cand,
         &base,
         &red_tip,
         failed(3, 31, CLIPPY_DEAD_CODE),
     );
-    forge.state.lock().unwrap().after_update = Some(failed(4, 41, CLIPPY_DEAD_CODE));
-    let waits = std::rc::Rc::new(std::cell::Cell::new(0));
-    let captured_waits = waits.clone();
-    let captured_forge = forge.clone();
-    let result = orbit_engine::test_support::with_vcs_retry_wait(
+    forge.set_after_update(failed(4, 41, CLIPPY_DEAD_CODE));
+    let (waits, cap_forge) = (Rc::new(Cell::new(0)), forge.clone());
+    let cap_waits = waits.clone();
+    let res = with_vcs_retry_wait(
         move |_| {
-            let forge = &captured_forge;
-            let waits = &captured_waits;
-            waits.set(waits.get() + 1);
-            if waits.get() == 1 {
-                // While the landing waits, the base's own fix lands on main.
-                let tree = git(&forge.repo, &["rev-parse", "main^{tree}"]);
-                let fixed = git(
-                    &forge.repo,
-                    &[
-                        "commit-tree",
-                        &tree,
-                        "-p",
-                        "main",
-                        "-m",
-                        "the base recovers",
-                    ],
-                );
-                git(&forge.repo, &["update-ref", "refs/heads/main", &fixed]);
-                forge.job(&fixed, passed(5, 51));
-                forge.state.lock().unwrap().after_update = Some(passed(6, 61));
+            cap_waits.set(cap_waits.get() + 1);
+            if cap_waits.get() == 1 {
+                let tree = git_rev(&cap_forge.repo, "main^{tree}");
+                let fixed = commit_tree(&cap_forge.repo, &tree, &["main"], "the base recovers");
+                git(&cap_forge.repo, &["update-ref", "refs/heads/main", &fixed]);
+                cap_forge.job(&fixed, passed(5, 51));
+                cap_forge.set_after_update(passed(6, 61));
             }
         },
         || {
             land_with(
                 forge.as_ref(),
-                json!({"max_wait_seconds":30,"poll_interval_seconds":5}),
+                json!({"max_wait_seconds": 30, "poll_interval_seconds": 5}),
             )
         },
     );
-    assert_eq!(
-        result.expect("the later base fix resumes landing")["phase"],
-        "landed"
-    );
+    assert_landed(res, "the later base fix resumes landing");
     assert_eq!(waits.get(), 1);
-    assert_sent_len(&forge, "pr.update_branch", 2, "later recovery");
-    let history = forge.history.lock().unwrap();
-    assert!(
-        history
-            .iter()
-            .any(|row| row.event == orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT)
-    );
-    assert_eq!(
-        history
-            .iter()
-            .filter(|row| row.event == "pr_base_update_reserved")
-            .count(),
-        2
-    );
+    forge.assert_sent("pr.update_branch", 2, "later recovery");
+    assert!(forge.history_count(LANDING_WAITING_FOR_BASE_EVENT) > 0);
+    assert_eq!(forge.history_count("pr_base_update_reserved"), 2);
 }
 
-#[test]
 fn landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop",
-        || {
-            for shape in [
-                UpdateShape::CleanMerge,
-                UpdateShape::Dirty,
-                UpdateShape::NotAMerge,
-                UpdateShape::Foreign,
-            ] {
-                let sandbox = tempdir().unwrap();
-                let remote = tempdir().unwrap();
-                let mut forge = FakeForge::new(sandbox.path(), false);
-                fix_base(&forge.repo);
-                forge.publish(remote.path());
-                let candidate = forge.context.candidate.candidate.commit.clone();
-                let first = provider_update(remote.path(), &candidate, shape);
-                let second = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
-                forge.state.lock().unwrap().head = second.clone();
-                forge.job(&second, passed(1, 11));
-                let result = land_now(&forge);
-                if matches!(shape, UpdateShape::CleanMerge) {
-                    assert_eq!(
-                        result.expect("both clean hops are the accepted candidate")["phase"],
-                        "landed"
-                    );
-                    assert_eq!(forge.sent("pr.merge")[0]["reviewed_head_sha"], second);
-                } else {
-                    result.expect_err("a clean outer merge cannot hide an invalid inner hop");
-                    assert_not_sent(&forge, &["pr.merge"], "invalid inner hop");
-                }
-            }
-        },
-    );
-}
-
-/// [ORB-16322] An inherited check that still fails after the one branch
-/// update is the candidate's when the same job passes on the base tip. The
-/// landing stops for the one automatic repair, and the stop evidence carries
-/// the failed job, its signature and a log excerpt. A landing whose repair
-/// is already spent stops for a backlog requeue after that same one update
-/// [ORB-16890]. A tip that does not pass the job stays a review stop, and
-/// nothing here reruns the job or updates the branch a second time.
-#[test]
-fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
-    for (label, repair_spent, tip_passes, after, repairable, signature) in [
-        (
-            "candidate diagnostic on a green tip",
-            false,
-            true,
-            CANDIDATE_ERROR,
-            true,
-            "cannot find value `delivered` in this scope",
-        ),
-        (
-            "repair already spent",
-            true,
-            true,
-            CANDIDATE_ERROR,
-            false,
-            "cannot find value `delivered` in this scope",
-        ),
-        (
-            "the base diagnostic survives onto a green tip",
-            false,
-            true,
-            CLIPPY_DEAD_CODE,
-            true,
-            "function `stale_helper` is never used",
-        ),
-        (
-            "the tip is red too",
-            false,
-            false,
-            CLIPPY_DEAD_CODE,
-            false,
-            "function `stale_helper` is never used",
-        ),
-    ] {
-        let (_sandbox, forge, candidate, base) = forge_fixture(true, repair_spent);
-        let fixed = fix_base(&forge.repo);
-        let tip = if tip_passes {
-            passed(3, 31)
+    use UpdateShape::{CleanMerge, Dirty, Foreign, NotAMerge};
+    for shape in [CleanMerge, Dirty, NotAMerge, Foreign] {
+        let (remote, _sb, forge, cand, _) = published_forge(false, true);
+        let first = provider_update(remote.path(), &cand, shape);
+        let second = provider_update(remote.path(), &first, CleanMerge);
+        forge.with_state(|s| s.head = second.clone());
+        forge.job(&second, passed(1, 11));
+        let res = land_now(&forge);
+        if matches!(shape, CleanMerge) {
+            assert_landed(res, "both clean hops are the accepted candidate");
+            assert_eq!(forge.sent("pr.merge")[0]["reviewed_head_sha"], second);
         } else {
-            failed(3, 31, CLIPPY_DEAD_CODE)
-        };
-        inherited_jobs(&forge, &candidate, &base, &fixed, tip);
-        forge.state.lock().unwrap().after_update = Some(failed(4, 41, after));
-
-        let error = land_now(&forge).expect_err("the surviving failure stops the landing");
-        if repair_spent && tip_passes {
-            // The spent repair requeues. The run is held and the refusal keeps
-            // the candidate for the backlog return.
-            assert_candidate_requeue_held(&error, &forge, &candidate, label);
-        } else if tip_passes {
-            // A green tip whose repair is still available is repaired, so it
-            // ends the run failed. A red tip keeps its review stop below.
-            assert!(
-                !matches!(&error, OrbitError::DeliveryRefused { .. }),
-                "{label}: a surviving inherited failure on a green tip with repair remaining ends the run failed: {error}"
-            );
+            res.expect_err("a clean outer merge cannot hide an invalid inner hop");
+            forge.assert_none(&["pr.merge"], "invalid inner hop");
         }
-
-        assert_sent_len(&forge, "pr.update_branch", 1, label);
-        assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], label);
-        let step = if repair_spent && tip_passes {
-            HandoffLandingStep::StopForRequeue
-        } else {
-            HandoffLandingStep::Stop { repairable }
-        };
-        assert_steps(&forge.steps(), &[step], label);
-        let reason = forge.stop_reason();
-        assert!(
-            reason.contains("CI / clippy")
-                && reason.contains(signature)
-                && reason.contains("Process completed with exit code 101"),
-            "{label}: the stop carries the failed job, signature and excerpt: {reason}"
-        );
-        if repairable {
-            assert!(
-                reason.contains("automatic repair") && !reason.contains("stays in review"),
-                "{label}: {reason}"
-            );
-        } else if repair_spent {
-            assert!(
-                reason.contains("automatic repair is already spent")
-                    && reason.contains("returns the task to the backlog"),
-                "{label}: {reason}"
-            );
-        } else {
-            assert!(
-                reason.contains("base never recovered")
-                    && reason.contains("stays in review")
-                    && !reason.contains("automatic repair"),
-                "{label}: {reason}"
-            );
-        }
-        assert!(error.to_string().contains(signature), "{label}: {error}");
     }
 }
 
-/// A check the candidate itself fails returns the candidate to the backlog
-/// with the failed step's signature and log excerpt, whether or not an
-/// automatic repair has already been spent.
-/// The stop goes through check recovery's requeue and `refuse_pr`
-/// with [`HandoffLandingStep::StopForRequeue`], and the landing run is held
-/// as `delivery_landing_repair_requeue` rather than failed [ORB-23953].
-/// A base whose job query succeeds with no jobs ran nothing to fail, which is
-/// not a failed read. [model ranking §5.1] A failure that cites no file the
-/// head changed is first rerun once on the unchanged head; failing again
-/// there records it as the head's own (`code`), upgraded from `unknown` with
-/// an audited reclassification.
-#[test]
+/// [ORB-16322] [ORB-16890] Surviving inherited failures repair once, requeue if spent, or hold on red tip.
+fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
+    let run = |label: &str, spent: bool, tip_ok: bool, after: &'static str| {
+        let rep = tip_ok && !spent;
+        let sig = pick(
+            after == CANDIDATE_ERROR,
+            "cannot find value `delivered` in this scope",
+            "function `stale_helper` is never used",
+        );
+        let (_sb, forge, cand, base) = forge_fixture(true, spent);
+        let fixed = fix_base(&forge.repo);
+        let tip = pick(tip_ok, passed(3, 31), failed(3, 31, CLIPPY_DEAD_CODE));
+        inherited_jobs(&forge, &cand, &base, &fixed, tip);
+        forge.set_after_update(failed(4, 41, after));
+
+        let err = land_now(&forge).expect_err("the surviving failure stops the landing");
+        if spent && tip_ok {
+            assert_candidate_requeue_held(&err, &forge, &cand, label);
+        } else if tip_ok {
+            assert!(
+                !matches!(&err, OrbitError::DeliveryRefused { .. }),
+                "{label}: {err}"
+            );
+        }
+        forge.assert_sent("pr.update_branch", 1, label);
+        forge.assert_none(&["ci.rerun_failed", "pr.merge"], label);
+        let step = pick(spent && tip_ok, StopForRequeue, Stop { repairable: rep });
+        forge.assert_step(step, label);
+        let r = forge.stop_reason();
+        let ex = "Process completed with exit code 101";
+        assert_contains(&r, &["CI / clippy", sig, ex], label);
+        if rep {
+            assert!(
+                r.contains("automatic repair") && !r.contains("stays in review"),
+                "{label}: {r}"
+            );
+        } else if spent {
+            let p = [
+                "automatic repair is already spent",
+                "returns the task to the backlog",
+            ];
+            assert_contains(&r, &p, label);
+        } else {
+            let ok = r.contains("base never recovered") && r.contains("stays in review");
+            assert!(ok && !r.contains("automatic repair"), "{label}: {r}");
+        }
+        assert!(err.to_string().contains(sig), "{label}: {err}");
+    };
+    run(
+        "candidate diagnostic on a green tip",
+        false,
+        true,
+        CANDIDATE_ERROR,
+    );
+    run("repair already spent", true, true, CANDIDATE_ERROR);
+    run(
+        "the base diagnostic survives onto a green tip",
+        false,
+        true,
+        CLIPPY_DEAD_CODE,
+    );
+    run("the tip is red too", false, false, CLIPPY_DEAD_CODE);
+}
+
+/// [ORB-23953] [model ranking §5.1] Candidate-caused failures rerun once when citing no changed file, then requeue held.
 fn a_candidate_caused_check_failure_requeues_the_candidate() {
-    for (repair_spent, base_ran, step) in [
-        (false, true, HandoffLandingStep::StopForRequeue),
-        (true, true, HandoffLandingStep::StopForRequeue),
-        (false, false, HandoffLandingStep::StopForRequeue),
-    ] {
-        let (_sandbox, forge, candidate, base) = forge_fixture(false, repair_spent);
-        forge.job(&candidate, failed(1, 11, CANDIDATE_ERROR));
-        forge.state.lock().unwrap().after_rerun = Some(failed(1, 12, CANDIDATE_ERROR));
+    for (spent, base_ran) in [(false, true), (true, true), (false, false)] {
+        let (_sb, forge, cand, base) = forge_fixture(false, spent);
+        forge.job(&cand, failed(1, 11, CANDIDATE_ERROR));
+        forge.set_after_rerun(failed(1, 12, CANDIDATE_ERROR));
         if base_ran {
             forge.job(&base, passed(2, 21));
         }
 
-        let error = land_now(&forge).expect_err("the candidate's failure stops the landing");
-        assert_candidate_requeue_held(&error, &forge, &candidate, "candidate-caused");
-
-        assert_steps(&forge.steps(), &[step], "candidate-caused");
-        assert_reason(
-            &forge,
-            "candidate-caused",
-            &[
-                "classified `candidate`",
-                "cannot find value `delivered` in this scope",
-                "Process completed with exit code 101",
-            ],
-        );
-        assert!(
-            error.to_string().contains("classified `candidate`"),
-            "{error}"
-        );
-        assert_not_sent(
-            &forge,
-            &["pr.merge", "pr.update_branch"],
-            "candidate failure",
-        );
-        assert_sent_len(&forge, "ci.rerun_failed", 1, "candidate failure");
-        let ledger = orbit_types::workflow::ci_failure_ledger(&forge.history.lock().unwrap());
-        let [entry] = ledger.as_slice() else {
-            panic!("candidate failure: one recorded failure, got {ledger:?}");
+        let err = land_now(&forge).expect_err("the candidate's failure stops the landing");
+        assert_candidate_requeue_held(&err, &forge, &cand, "candidate-caused");
+        forge.assert_step(StopForRequeue, "candidate-caused");
+        let sig = "cannot find value `delivered` in this scope";
+        let ex = "Process completed with exit code 101";
+        forge.assert_reason("candidate-caused", &["classified `candidate`", sig, ex]);
+        assert!(err.to_string().contains("classified `candidate`"), "{err}");
+        forge.assert_none(NO_MERGE_OR_UPDATE, "candidate failure");
+        forge.assert_sent("ci.rerun_failed", 1, "candidate failure");
+        let ledger = ci_failure_ledger(&forge.history.lock().unwrap());
+        let [e] = ledger.as_slice() else {
+            panic!("one recorded failure, got {ledger:?}");
         };
-        assert_eq!(
-            (
-                entry.record.class,
-                entry.class,
-                entry.record.head_sha.as_str()
-            ),
-            (
-                orbit_types::workflow::CiFailureClass::Unknown,
-                orbit_types::workflow::CiFailureClass::Code,
-                candidate.as_str(),
-            ),
-            "candidate failure: {entry:?}"
-        );
-        assert_eq!(entry.changes.len(), 1, "candidate failure: {entry:?}");
+        assert_eq!(e.record.class, CiFailureClass::Unknown);
+        assert_eq!(e.class, CiFailureClass::Code);
+        assert_eq!(e.record.head_sha, cand);
+        assert_eq!(e.changes.len(), 1, "candidate failure: {e:?}");
     }
 }
 
-/// A green base run, even an earlier one, only authorizes one unchanged-head
-/// PR rerun. The same signature on that rerun is candidate-caused; a passing
-/// rerun clears it, and a newly failing base remains a bounded hold.
-#[test]
 fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
-    // Runner checkout paths, as a hosted lockfile audit cites them.
-    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
-                             ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
-    const CHANGED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
-                           ┌─ /home/runner/work/repo/repo/work.txt:365:1\n";
-    const UNCHANGED_GITHUB: &str = "error[workflow]: invalid action pin\n    \
-                                    ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
-    const CHANGED_GITHUB: &str = "error[workflow]: invalid action pin\n    \
-                                  ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
-    for case in [
-        "stale",
-        "changed",
-        "fresh_green",
-        "fresh_red",
-        "github_stale",
-        "github_changed",
-        "stale_pass",
-    ] {
-        let (_sandbox, mut forge, original_candidate, base) = forge_fixture(false, false);
-        let candidate = if case == "github_changed" {
+    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
+    const CHANGED: &str = "error[vulnerability]: allocator shim corrupts memory\n    ┌─ /home/runner/work/repo/repo/work.txt:365:1\n";
+    const UNCHANGED_GH: &str = "error[workflow]: invalid action pin\n    ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
+    const CASES: &str =
+        "stale changed fresh_green fresh_red github_stale github_changed stale_pass";
+    for case in CASES.split_whitespace() {
+        let (_sb, mut forge, orig, base) = forge_fixture(false, false);
+        let cand = if case == "github_changed" {
             change_candidate_workflow(&mut forge)
         } else {
-            original_candidate
+            orig
         };
-        let forge = std::sync::Arc::new(forge);
-        forge.job(
-            &candidate,
-            failed(
-                1,
-                11,
-                if case == "changed" {
-                    CHANGED
-                } else if case == "github_stale" {
-                    UNCHANGED_GITHUB
-                } else if case == "github_changed" {
-                    CHANGED_GITHUB
-                } else {
-                    UNTOUCHED
-                },
-            ),
+        let forge = Arc::new(forge);
+        let log = match case {
+            "changed" => CHANGED,
+            "github_stale" | "github_changed" => UNCHANGED_GH,
+            _ => UNTOUCHED,
+        };
+        let reruns = matches!(case, "fresh_green" | "stale" | "github_stale");
+        forge.job(&cand, failed(1, 11, log));
+        let bjob = pick(
+            case == "fresh_red",
+            failed(2, 21, CLIPPY_DEAD_CODE),
+            passed(2, 21),
         );
-        forge.job(
-            &base,
-            if case == "fresh_red" {
-                failed(2, 21, CLIPPY_DEAD_CODE)
-            } else {
-                passed(2, 21)
-            },
-        );
-        {
-            let mut state = forge.state.lock().unwrap();
-            if matches!(case, "fresh_green" | "stale" | "github_stale") {
-                state.after_rerun = Some(failed(
-                    1,
-                    12,
-                    if case == "github_stale" {
-                        UNCHANGED_GITHUB
-                    } else {
-                        UNTOUCHED
-                    },
-                ));
-            } else if case == "stale_pass" {
-                state.after_rerun = Some(passed(1, 12));
-            }
-            state
-                .job_times
-                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-            state
-                .job_times
-                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+        forge.job(&base, bjob);
+        if reruns {
+            let rlog = pick(case == "github_stale", UNCHANGED_GH, UNTOUCHED);
+            forge.set_after_rerun(failed(1, 12, rlog));
+        } else if case == "stale_pass" {
+            forge.set_after_rerun(passed(1, 12));
         }
-        let captured = forge.clone();
-        let refreshed_base = base.clone();
-        let outcome = orbit_engine::test_support::with_vcs_retry_wait(
+        set_times(&forge, &[(11, "14:00", "14:01"), (21, "12:00", "12:01")]);
+        let (cap, ref_base) = (forge.clone(), base.clone());
+        let input = json!({"max_wait_seconds": 60, "poll_interval_seconds": 30});
+        let outcome = with_vcs_retry_wait(
             move |_| {
                 if case.starts_with("fresh_") {
-                    let mut state = captured.state.lock().unwrap();
-                    state.jobs.insert(
-                        refreshed_base.clone(),
-                        if case == "fresh_green" {
-                            passed(3, 31)
-                        } else {
-                            failed(3, 31, UNTOUCHED)
-                        },
-                    );
-                    state
-                        .job_times
-                        .insert(31, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+                    cap.with_state(|s| {
+                        let fg = case == "fresh_green";
+                        let j = pick(fg, passed(3, 31), failed(3, 31, UNTOUCHED));
+                        s.jobs.insert(ref_base.clone(), j);
+                        s.job_times.insert(31, (at("14:02"), at("14:03")));
+                    });
                 }
             },
-            || {
-                land_with(
-                    forge.as_ref(),
-                    json!({"max_wait_seconds":60,"poll_interval_seconds":30}),
-                )
-            },
+            || land_with(forge.as_ref(), input),
         );
         if case == "stale_pass" {
-            assert_eq!(
-                outcome.expect("a passing same-head rerun clears the failure")["phase"],
-                "landed"
-            );
-            assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-            // The same head passed the same check on its rerun: flaky.
-            assert_eq!(
-                ledger_classes(&forge),
-                [orbit_types::workflow::CiFailureClass::Flaky],
-                "{case}"
-            );
+            assert_landed(outcome, "a passing same-head rerun clears the failure");
+            forge.assert_sent("ci.rerun_failed", 1, case);
+            assert_eq!(ledger_classes(&forge), [CiFailureClass::Flaky], "{case}");
             continue;
         }
-        let error = outcome.expect_err(case);
-        if matches!(case, "fresh_red") {
-            assert!(
-                matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
-                    if refusal.error_code() == "delivery_base_checks_pending"),
-                "{case}: the base wait must not dispatch job recovery: {error}"
-            );
+        let err = outcome.expect_err(case);
+        if case == "fresh_red" {
+            assert!(is_base_pending(&err), "{case}: no job recovery: {err}");
         }
-        let repairable = matches!(
-            case,
-            "changed" | "fresh_green" | "github_changed" | "stale" | "github_stale"
-        );
-        let step = if repairable {
-            HandoffLandingStep::StopForRequeue
-        } else {
-            HandoffLandingStep::Stop { repairable: false }
-        };
-        assert_steps(&forge.steps(), &[step], case);
-        assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
-        assert_sent_len(
-            &forge,
-            "ci.rerun_failed",
-            usize::from(matches!(case, "fresh_green" | "stale" | "github_stale")),
-            case,
-        );
-        if matches!(case, "changed" | "github_changed") {
-            assert_reason(&forge, case, &["classified `candidate`"]);
-        } else if matches!(case, "stale" | "fresh_green" | "github_stale") {
-            assert_reason(&forge, case, &["classified `candidate`"]);
+        let changed = matches!(case, "changed" | "github_changed");
+        forge.assert_step(pick(reruns || changed, StopForRequeue, STOP), case);
+        forge.assert_none(NO_MERGE_OR_UPDATE, case);
+        forge.assert_sent("ci.rerun_failed", usize::from(reruns), case);
+        if changed {
+            forge.assert_reason(case, &["classified `candidate`"]);
+        } else if reruns {
+            forge.assert_reason(case, &["classified `candidate`"]);
             assert_eq!(
-                forge
-                    .history
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|row| row.event == "ci_base_suspect")
-                    .count(),
+                forge.history_count("ci_base_suspect"),
                 0,
-                "{case}: a passing base run authorizes a rerun, not a base-suspect hold"
+                "{case}: no suspect hold"
             );
         } else {
-            let records = forge
-                .history
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|row| row.event == "ci_base_suspect")
-                .count();
-            assert_eq!(records, 1, "{case}: surface base-wide suspicion once");
+            assert_eq!(
+                forge.history_count("ci_base_suspect"),
+                1,
+                "{case}: suspect once"
+            );
+            let cj = forge.sent("ci.commit_jobs");
             assert!(
-                forge
-                    .sent("ci.commit_jobs")
-                    .iter()
-                    .filter(|input| input["commit"] == base)
-                    .count()
-                    >= 2,
-                "{case}: re-check the base after its stale run"
+                cj.iter().filter(|i| i["commit"] == base).count() >= 2,
+                "{case}"
             );
             assert_eq!(case, "fresh_red");
-            assert_reason(&forge, case, &["classified `inherited`"]);
+            forge.assert_reason(case, &["classified `inherited`"]);
         }
     }
 }
 
-/// A base-suspect hold with no decisive base result is held in review as
-/// `delivery_base_checks_pending` at the configured observation-cycle limit,
-/// and keeps the failed check and signature in its evidence. The run is held,
-/// not failed: the base's own result is still owed, so nothing is repaired.
-#[test]
 fn untouched_failure_escalates_after_configured_base_ci_cycles() {
-    let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
-    forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+    let (_sb, forge, cand, base) = forge_fixture(false, false);
+    forge.job(&cand, failed(1, 11, UNTOUCHED_TEST_FAILURE));
 
-    let error = orbit_engine::test_support::with_vcs_retry_wait(
-        |_| {},
-        || {
-            land_with(
-                &forge,
-                json!({
-                    "max_wait_seconds": 30,
-                    "poll_interval_seconds": 5,
-                    "max_base_ci_cycles": 2,
-                }),
-            )
-        },
-    )
-    .expect_err("the unresolved base evidence is held");
-
+    let err = land_cycles(&forge, 2).expect_err("the unresolved base evidence is held");
+    let esc = "escalated after 2 base CI observation cycles";
     assert!(
-        matches!(&error, OrbitError::DeliveryRefused { refusal, message }
-            if refusal.error_code() == "delivery_base_checks_pending"
-                && message.contains("escalated after 2 base CI observation cycles")),
-        "the exhausted base budget holds as delivery_base_checks_pending: {error}"
+        is_base_pending(&err) && err.to_string().contains(esc),
+        "held: {err}"
     );
+    assert_eq!(evidence_of(&forge)["waiting_gate"], "base_checks_pending");
+    let parts = ["CI / clippy", "shutdown test timed out", "agent-main"];
+    forge.assert_reason("base cycle limit", &parts);
+    forge.assert_step(STOP, "base cycle limit");
+    let cj = forge.sent("ci.commit_jobs");
+    let obs = cj
+        .iter()
+        .filter(|i| i["commit"] == base && i["latest_push_branch"] == "main")
+        .count();
     assert_eq!(
-        serde_json::from_str::<Value>(&forge.last_evidence()).unwrap()["waiting_gate"],
-        "base_checks_pending",
-        "a base wait must be eligible for the owner's stopped-landing retry loop"
+        obs, 3,
+        "one observation per cycle plus final base proof (ORB-25926)"
     );
-    assert_reason(
-        &forge,
-        "base cycle limit",
-        &["CI / clippy", "shutdown test timed out", "agent-main"],
-    );
-    assert_steps(
-        &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: false }],
-        "base cycle limit",
-    );
-    assert_eq!(
-        forge
-            .sent("ci.commit_jobs")
-            .iter()
-            .filter(|input| input["commit"] == base && input["latest_push_branch"] == "main")
-            .count(),
-        3,
-        "one base ancestry observation per configured cycle, plus the final base proof (ORB-25926)"
-    );
-    assert_not_sent(
-        &forge,
-        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-        "base cycle limit",
-    );
+    forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, "base cycle limit");
 }
 
-/// ORB-25809 / ORB-25871: a follower handoff whose required check fails on
-/// the candidate, held base-suspect because the failure cites only untouched
-/// files, used to stop at the end of base observation even though the same
-/// check passed on the base. When observation ends with that pass proven and
-/// no same-check failure on the base, the failure is the candidate's: it is
-/// recorded as reclassified and takes the candidate requeue route. A base
-/// with no same-check pass, or a red tip, keeps today's base hold.
-#[test]
+/// ORB-25809 / ORB-25871: a proven green base at end of observation reclassifies base-suspect to candidate requeue.
 fn base_suspect_failure_on_a_proven_green_base_requeues_the_candidate() {
     for case in ["proven green", "no base pass", "red tip"] {
-        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
-        // A push run on the head is never a verified pull_request rerun, so
-        // the only way out of base suspicion is the base's own evidence.
+        let (_sb, forge, cand, base) = forge_fixture(false, false);
         let mut head_job = failed(1, 11, UNTOUCHED_TEST_FAILURE);
         head_job.event = "push";
-        forge.job(&candidate, head_job);
+        forge.job(&cand, head_job);
         if case != "no base pass" {
             forge.job(&base, passed(2, 21));
         }
-        let tip = (case == "red tip").then(|| fix_base(&forge.repo));
-        if let Some(tip) = &tip {
-            forge.job(tip, failed(3, 31, UNTOUCHED_TEST_FAILURE));
+        if case == "red tip" {
+            let tip = fix_base(&forge.repo);
+            forge.job(&tip, failed(3, 31, UNTOUCHED_TEST_FAILURE));
         }
-        {
-            let mut state = forge.state.lock().unwrap();
-            state
-                .job_times
-                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-            state
-                .job_times
-                .insert(21, ("2026-10-26T13:00:00Z", "2026-10-26T13:01:00Z"));
-            // Started before the head failed, so it is not a fresh inherited failure.
-            state
-                .job_times
-                .insert(31, ("2026-10-26T13:30:00Z", "2026-10-26T13:31:00Z"));
-        }
+        let ts = [
+            (11, "14:00", "14:01"),
+            (21, "13:00", "13:01"),
+            (31, "13:30", "13:31"),
+        ];
+        set_times(&forge, &ts);
 
-        let error = orbit_engine::test_support::with_vcs_retry_wait(
-            |_| {},
-            || {
-                land_with(
-                    &forge,
-                    json!({
-                        "max_wait_seconds": 30,
-                        "poll_interval_seconds": 5,
-                        "max_base_ci_cycles": 2,
-                    }),
-                )
-            },
-        )
-        .expect_err(case);
-
-        assert_not_sent(
-            &forge,
-            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-            case,
-        );
-        let reclassified = forge
-            .history
-            .lock()
-            .unwrap()
+        let err = land_cycles(&forge, 2).expect_err(case);
+        forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, case);
+        let hist = forge.history.lock().unwrap();
+        let reclass: Vec<_> = hist
             .iter()
-            .filter(|row| row.event == orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT)
-            .filter_map(|row| {
-                orbit_types::workflow::CiBaseSuspectReclassification::from_history_note(
-                    row.note.as_deref(),
-                )
-            })
-            .collect::<Vec<_>>();
+            .filter(|r| r.event == CI_BASE_SUSPECT_RECLASSIFIED_EVENT)
+            .filter_map(|r| CiBaseSuspectReclassification::from_history_note(r.note.as_deref()))
+            .collect();
+        drop(hist);
         if case == "proven green" {
-            assert_candidate_requeue_held(&error, &forge, &candidate, case);
-            assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
-            assert_reason(
-                &forge,
-                case,
-                &["classified `candidate`", "base-suspect observation ended"],
-            );
-            let [record] = reclassified.as_slice() else {
-                panic!("{case}: one reclassification record, got {reclassified:?}");
+            assert_candidate_requeue_held(&err, &forge, &cand, case);
+            forge.assert_step(StopForRequeue, case);
+            let p = ["classified `candidate`", "base-suspect observation ended"];
+            forge.assert_reason(case, &p);
+            let [r] = reclass.as_slice() else {
+                panic!("{case}: got {reclass:?}");
             };
+            assert_eq!(r.base_run_id, Some(2));
             assert_eq!(
-                (
-                    record.base_run_id,
-                    record.base_sha.as_str(),
-                    record.check.as_str(),
-                    record.head.as_str(),
-                    record.from.as_str(),
-                    record.to.as_str(),
-                ),
-                (
-                    Some(2),
-                    base.as_str(),
-                    "CI / clippy",
-                    candidate.as_str(),
-                    "base-suspect",
-                    "candidate",
-                ),
-                "{case}: {record:?}"
+                (r.base_sha.as_str(), r.check.as_str()),
+                (base.as_str(), "CI / clippy")
+            );
+            assert_eq!(
+                (r.head.as_str(), r.from.as_str(), r.to.as_str()),
+                (cand.as_str(), "base-suspect", "candidate")
             );
         } else {
+            let esc = "escalated after 2 base CI observation cycles";
             assert!(
-                matches!(&error, OrbitError::DeliveryRefused { refusal, message }
-                    if *refusal == DeliveryRefusal::BaseChecksPending
-                        && message.contains("escalated after 2 base CI observation cycles")),
-                "{case}: an unproven base keeps the base hold: {error}"
+                is_base_pending(&err) && err.to_string().contains(esc),
+                "{case}: {err}"
             );
-            assert_steps(
-                &forge.steps(),
-                &[HandoffLandingStep::Stop { repairable: false }],
-                case,
-            );
+            forge.assert_step(STOP, case);
             assert!(
-                reclassified.is_empty(),
-                "{case}: nothing is reclassified: {reclassified:?}"
+                reclass.is_empty(),
+                "{case}: nothing is reclassified: {reclass:?}"
             );
         }
     }
 }
 
-/// A base-suspect failure whose landing tip has moved is decided only by
-/// a fresh run of the same job on that tip: a fresh pass permits one
-/// rerun before repair, with no branch update, and a fresh
-/// same-signature failure is inherited (one branch update, then a review
-/// stop while the tip does not pass).
-#[test]
 fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
-    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
-                             ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
-    for (case, tip_passes) in [("fresh pass", true), ("fresh same failure", false)] {
-        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
+    for (case, tip_ok) in [("fresh pass", true), ("fresh same failure", false)] {
+        let (_sb, forge, cand, base) = forge_fixture(false, false);
         let fixed = fix_base(&forge.repo);
-        forge.job(&candidate, failed(1, 11, UNTOUCHED));
+        forge.job(&cand, failed(1, 11, UNTOUCHED));
         forge.job(&base, passed(2, 21));
         forge.job(
             &fixed,
-            if tip_passes {
-                passed(3, 31)
-            } else {
-                failed(3, 31, UNTOUCHED)
-            },
+            pick(tip_ok, passed(3, 31), failed(3, 31, UNTOUCHED)),
         );
-        if !tip_passes {
-            forge.state.lock().unwrap().after_update = Some(failed(4, 41, UNTOUCHED));
+        if tip_ok {
+            forge.set_after_rerun(failed(1, 12, UNTOUCHED));
         } else {
-            forge.state.lock().unwrap().after_rerun = Some(failed(1, 12, UNTOUCHED));
+            forge.set_after_update(failed(4, 41, UNTOUCHED));
         }
-        {
-            let mut state = forge.state.lock().unwrap();
-            state
-                .job_times
-                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-            state
-                .job_times
-                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
-            state
-                .job_times
-                .insert(31, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
-            state
-                .job_times
-                .insert(41, ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"));
-        }
-
-        let error = land_now(&forge).expect_err(case);
-
-        assert!(
-            error.to_string().contains("allocator shim"),
-            "{case}: {error}"
-        );
-        assert_not_sent(&forge, &["pr.merge"], case);
-        assert_sent_len(&forge, "ci.rerun_failed", usize::from(tip_passes), case);
-        if tip_passes {
-            assert_not_sent(&forge, &["pr.update_branch"], case);
-            assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
-            assert_reason(&forge, case, &["classified `candidate`"]);
-            assert_eq!(
-                forge
-                    .history
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|row| row.event == "ci_base_suspect")
-                    .count(),
-                0,
-                "{case}: a fresh pass is not recorded as base-suspect"
-            );
-        } else {
-            assert_sent_len(&forge, "pr.update_branch", 1, case);
-            assert_steps(
-                &forge.steps(),
-                &[HandoffLandingStep::Stop { repairable: false }],
-                case,
-            );
-            assert_reason(
-                &forge,
-                case,
-                &[
-                    "classified `inherited`",
-                    "base never recovered",
-                    "stays in review",
-                ],
-            );
-        }
-    }
-}
-
-/// The retry authentication read failures the ORB-21586 landing held on.
-const RETRY_UNREADABLE: &str = "workflow prerequisite evidence is unavailable \
-     (retry requires a completed failed attempt)";
-
-/// Land with a 60-second deadline and instant polls, counting the polls.
-fn land_counting_polls(forge: &FakeForge) -> (Result<Value, OrbitError>, usize) {
-    let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = polls.clone();
-    let outcome = orbit_engine::test_support::with_vcs_retry_wait(
-        move |_| {
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        },
-        || {
-            land_with(
-                forge,
-                json!({"max_wait_seconds":60,"poll_interval_seconds":5}),
-            )
-        },
-    );
-    (outcome, polls.load(std::sync::atomic::Ordering::SeqCst))
-}
-
-/// ORB-21586: an untouched-file failure whose same check passes on the base
-/// is the candidate's own. When its unchanged-head retry stays unreadable,
-/// the landing hands it to the repair path (or the requeue once the repair
-/// is spent) after the configured observation cycles, instead of waiting
-/// out the landing deadline.
-#[test]
-fn untouched_failure_with_a_passing_base_repairs_when_its_retry_is_unreadable() {
-    for spent in [false, true] {
-        let case = if spent {
-            "repair spent"
-        } else {
-            "repair available"
-        };
-        let (_sandbox, forge, candidate, base) = forge_fixture(false, spent);
-        forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
-        forge.job(&base, passed(2, 21));
-        {
-            let mut state = forge.state.lock().unwrap();
-            state.rerun_plan_error = Some(RETRY_UNREADABLE);
-            state
-                .job_times
-                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
-            state
-                .job_times
-                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
-        }
-
-        let (outcome, polls) = land_counting_polls(&forge);
-
-        let error = outcome.expect_err(case);
-        assert!(
-            !matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
-                if refusal.error_code() == "delivery_base_checks_pending"),
-            "{case}: the landing must not wait out its deadline: {error}"
-        );
-        assert_eq!(polls, 2, "{case}: escalate on the third observation cycle");
-        assert_sent_len(&forge, "ci.rerun_plan", 3, case);
-        assert_not_sent(
+        set_times(
             &forge,
-            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-            case,
-        );
-        let step = if spent {
-            HandoffLandingStep::StopForRequeue
-        } else {
-            HandoffLandingStep::Stop { repairable: true }
-        };
-        assert_steps(&forge.steps(), &[step], case);
-        assert_reason(
-            &forge,
-            case,
             &[
-                "classified `flaky`",
-                "the failure is the candidate's own",
-                "retry requires a completed failed attempt",
+                (11, "14:00", "14:01"),
+                (21, "12:00", "12:01"),
+                (31, "14:02", "14:03"),
+                (41, "14:04", "14:05"),
             ],
         );
+
+        let err = land_now(&forge).expect_err(case);
+
+        assert!(err.to_string().contains("allocator shim"), "{case}: {err}");
+        forge.assert_none(&["pr.merge"], case);
+        forge.assert_sent("ci.rerun_failed", usize::from(tip_ok), case);
+        if tip_ok {
+            forge.assert_none(&["pr.update_branch"], case);
+            forge.assert_step(StopForRequeue, case);
+            forge.assert_reason(case, &["classified `candidate`"]);
+            assert_eq!(
+                forge.history_count("ci_base_suspect"),
+                0,
+                "{case}: not base-suspect"
+            );
+        } else {
+            forge.assert_sent("pr.update_branch", 1, case);
+            forge.assert_step(STOP, case);
+            let parts = [
+                "classified `inherited`",
+                "base never recovered",
+                "stays in review",
+            ];
+            forge.assert_reason(case, &parts);
+        }
     }
 }
 
-/// ORB-21586: a failure whose retry evidence stays unreadable, and that no
-/// base pass attributes to the candidate, stops in review within the
-/// observation-cycle limit with the read failure as its reason, not a
-/// `waiting_for_base` hold until the landing deadline.
-#[test]
-fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
-    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
-    forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
-    forge.state.lock().unwrap().rerun_plan_error = Some(RETRY_UNREADABLE);
+/// ORB-21586: untouched failure with passing base repairs/requeues when its retry stays unreadable.
+fn untouched_failure_with_a_passing_base_repairs_when_its_retry_is_unreadable() {
+    for (case, spent) in [("repair available", false), ("repair spent", true)] {
+        let (_sb, forge, cand, base) = forge_fixture(false, spent);
+        forge.job(&cand, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+        forge.job(&base, passed(2, 21));
+        forge.with_state(|s| s.rerun_plan_error = Some(RETRY_UNREADABLE));
+        set_times(&forge, &[(11, "14:00", "14:01"), (21, "12:00", "12:01")]);
 
-    let (outcome, polls) = land_counting_polls(&forge);
-
-    let error = outcome.expect_err("unreadable retry evidence stops the landing");
-    assert!(
-        !matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
-            if refusal.error_code() == "delivery_base_checks_pending"),
-        "the landing must not wait out its deadline: {error}"
-    );
-    assert_eq!(polls, 2, "stop on the third observation cycle");
-    assert_steps(
-        &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: false }],
-        "unreadable retry",
-    );
-    assert_reason(
-        &forge,
-        "unreadable retry",
-        &[
-            "could not be read after 3 observation cycles",
+        let (outcome, polls) = land_counting_polls(&forge);
+        let err = outcome.expect_err(case);
+        assert!(
+            !is_base_pending(&err),
+            "{case}: must not wait out deadline: {err}"
+        );
+        assert_eq!(polls, 2, "{case}: escalate on the third observation cycle");
+        forge.assert_sent("ci.rerun_plan", 3, case);
+        forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, case);
+        forge.assert_step(pick(spent, StopForRequeue, Stop { repairable: true }), case);
+        let parts = [
+            "classified `flaky`",
+            "the failure is the candidate's own",
             "retry requires a completed failed attempt",
-        ],
-    );
-    let reason = forge.stop_reason();
-    assert!(!reason.contains("waiting for"), "{reason}");
-    assert_not_sent(
-        &forge,
-        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-        "unreadable retry",
-    );
+        ];
+        forge.assert_reason(case, &parts);
+    }
 }
 
-/// A candidate check's `StopForRequeue` holds the landing. The recorded refusal
-/// is what the owner applies as a backlog return, and it keeps the accepted
-/// candidate. Finalization persists `held` for this code, which is neither
-/// `failed` nor `interrupted`.
-fn assert_candidate_requeue_held(
-    error: &OrbitError,
-    forge: &FakeForge,
-    candidate: &str,
-    case: &str,
-) {
+/// ORB-21586: unreadable retry evidence without a base pass stops in review naming the read failure.
+fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
+    let (_sb, forge, cand, _) = forge_fixture(false, false);
+    forge.job(&cand, failed(1, 11, NETWORK_FLAKE));
+    forge.with_state(|s| s.rerun_plan_error = Some(RETRY_UNREADABLE));
+
+    let (outcome, polls) = land_counting_polls(&forge);
+    let err = outcome.expect_err("unreadable retry evidence stops the landing");
+    assert!(!is_base_pending(&err), "must not wait out deadline: {err}");
+    assert_eq!(polls, 2, "stop on the third observation cycle");
+    forge.assert_step(STOP, "unreadable retry");
+    let parts = [
+        "could not be read after 3 observation cycles",
+        "retry requires a completed failed attempt",
+    ];
+    forge.assert_reason("unreadable retry", &parts);
+    assert!(!forge.stop_reason().contains("waiting for"));
+    forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, "unreadable retry");
+}
+
+fn assert_candidate_requeue_held(error: &OrbitError, forge: &FakeForge, cand: &str, case: &str) {
     let OrbitError::DeliveryRefused { refusal, message } = error else {
-        panic!("{case}: a candidate requeue holds the landing instead of failing the run: {error}");
+        panic!("{case}: a candidate requeue holds the landing instead of failing: {error}");
     };
     assert_eq!(
         *refusal,
@@ -3411,595 +2391,331 @@ fn assert_candidate_requeue_held(
         "{case}: {message}"
     );
     assert_eq!(refusal.error_code(), "delivery_landing_repair_requeue");
-    let held = orbit_types::workflow::HeldFailure::of(Some(refusal.error_code()), Some(message));
-    let recorded = match held {
-        Some(orbit_types::workflow::HeldFailure::DeliveryRefused(actual)) => {
+    let rec = match HeldFailure::of(Some(refusal.error_code()), Some(message)) {
+        Some(HeldFailure::DeliveryRefused(actual)) => {
             assert_eq!(actual, DeliveryRefusal::LandingRepairRequeue, "{case}");
-            orbit_types::workflow::JobRunState::Held
+            JobRunState::Held
         }
-        other => panic!("{case}: the refusal must record a held outcome, got {other:?}"),
+        other => panic!("{case}: expected held outcome, got {other:?}"),
     };
-    assert_eq!(recorded.to_string(), "held", "{case}");
-    assert_ne!(
-        recorded,
-        orbit_types::workflow::JobRunState::Failed,
-        "{case}"
-    );
-    assert_ne!(
-        recorded,
-        orbit_types::workflow::JobRunState::Interrupted,
-        "{case}"
-    );
-    let parsed = orbit_types::workflow::handoff::LandingStopEvidence::parse(&forge.last_evidence());
-    let orbit_types::workflow::handoff::LandingStopEvidence::OwnerRefusal(evidence) = parsed else {
+    assert_eq!(rec.to_string(), "held", "{case}");
+    assert_ne!(rec, JobRunState::Failed, "{case}");
+    assert_ne!(rec, JobRunState::Interrupted, "{case}");
+    let orbit_types::workflow::handoff::LandingStopEvidence::OwnerRefusal(ev) =
+        orbit_types::workflow::handoff::LandingStopEvidence::parse(&forge.last_evidence())
+    else {
         panic!("{case}: requeue evidence is the owner landing refusal");
     };
-    assert_eq!(evidence.requeue, Some(true), "{case}: {evidence:?}");
+    assert_eq!(ev.requeue, Some(true), "{case}: {ev:?}");
+    let phrase = "returns the task to the backlog";
     assert!(
-        evidence
-            .reason
-            .value
-            .contains("returns the task to the backlog"),
+        ev.reason.value.contains(phrase),
         "{case}: {}",
-        evidence.reason.value
+        ev.reason.value
     );
     assert_eq!(
-        evidence.accepted["candidate"]["value"].as_str(),
-        Some(candidate),
-        "{case}: the backlog return keeps the candidate: {}",
-        evidence.accepted
+        ev.accepted["candidate"]["value"].as_str(),
+        Some(cand),
+        "{case}: {}",
+        ev.accepted
     );
     assert!(
-        message.contains("handoff_land:")
-            && error
-                .to_string()
-                .contains("returns the task to the backlog"),
+        message.contains("handoff_land:") && error.to_string().contains(phrase),
         "{case}: {error}"
     );
 }
 
-fn assert_held_in_review(error: OrbitError, case: &str, phrases: &[&str]) {
-    let message = error.to_string();
-    assert!(
-        matches!(
-            error,
-            OrbitError::DeliveryRefused {
-                refusal: DeliveryRefusal::CheckEvidenceInconclusive,
-                ..
-            }
-        ),
-        "{case}: the landing is held, not a failed run: {message}"
-    );
-    for phrase in phrases {
-        assert!(message.contains(phrase), "{case}: {message}");
-    }
-}
-
-/// An unreadable required-check log, and a transient failure the rerun
-/// planner will not run again, stay in review as a held run.
-#[test]
 fn an_unreadable_log_and_a_spent_transient_rerun_hold_the_landing() {
-    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
-    forge.job(&candidate, failed_reading(1, 11, FakeLog::Unreadable));
-    let error = land_now(&forge).expect_err("an unreadable log stays resumable in review");
-    assert!(matches!(
-        error,
+    let (_sb, forge, cand, _) = forge_fixture(false, false);
+    forge.job(&cand, failed_reading(1, 11, FakeLog::Unreadable));
+    let err = land_now(&forge).expect_err("an unreadable log stays resumable in review");
+    let is_unavail = matches!(
+        err,
         OrbitError::DeliveryRefused {
             refusal: DeliveryRefusal::ForgeObservationUnavailable,
             ..
         }
-    ));
-    assert_contains(
-        &error.to_string(),
-        &[
-            "the failure was not classified",
-            "the log of 'CI / clippy' could not be read",
-        ],
-        "unreadable log",
     );
-    assert_steps(
-        &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: false }],
-        "unreadable log",
-    );
-    assert_not_sent(
-        &forge,
-        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-        "unreadable log",
-    );
+    assert!(is_unavail, "unreadable log: {err}");
+    let p1 = [
+        "the failure was not classified",
+        "the log of 'CI / clippy' could not be read",
+    ];
+    assert_contains(&err.to_string(), &p1, "unreadable log");
+    forge.assert_step(STOP, "unreadable log");
+    forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, "unreadable log");
 
-    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
-    forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
-    forge.state.lock().unwrap().extra_unanswered_check = true;
-    assert_held_in_review(
-        land_now(&forge).expect_err("a spent transient rerun stays in review"),
-        "spent transient",
-        &[
-            "classified `transient`",
-            "it failed again after its one rerun, so the candidate stays in review",
-        ],
+    let (_sb, forge, cand, _) = forge_fixture(false, false);
+    forge.job(&cand, failed(1, 11, NETWORK_FLAKE));
+    forge.with_state(|s| s.extra_unanswered_check = true);
+    let err = land_now(&forge).expect_err("a spent transient rerun stays in review");
+    let is_inc = matches!(
+        err,
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+            ..
+        }
     );
-    assert_steps(
-        &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: false }],
-        "spent transient",
-    );
-    assert_not_sent(
-        &forge,
-        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-        "spent transient",
-    );
+    assert!(is_inc, "spent transient: {err}");
+    let p2 = [
+        "classified `transient`",
+        "it failed again after its one rerun, so the candidate stays in review",
+    ];
+    assert_contains(&err.to_string(), &p2, "spent transient");
+    forge.assert_step(STOP, "spent transient");
+    forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, "spent transient");
 }
 
-/// A one-attempt infrastructure budget retains the original rerun-once
-/// behavior: a passing rerun lands, and another transient failure records
-/// its exhausted classification and count without admitting source repair.
-#[test]
 fn a_transient_check_failure_respects_the_configured_retry_limit() {
     for (rerun, lands) in [(passed(1, 12), true), (failed(1, 12, NETWORK_FLAKE), false)] {
-        let (_sandbox, mut forge, candidate, _base) = forge_fixture(true, false);
+        let (_sb, mut forge, cand, _) = forge_fixture(true, false);
         forge.ci_retry_policy.max_attempts = 1;
-        forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
-        forge.state.lock().unwrap().after_rerun = Some(rerun);
+        forge.job(&cand, failed(1, 11, NETWORK_FLAKE));
+        forge.set_after_rerun(rerun);
 
         let outcome = land_now(&forge);
-
         let sent = forge.sent("ci.rerun_failed");
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0]["run_id"], "1");
-        assert_eq!(sent[0]["plan"]["head_sha"], candidate);
+        assert_eq!(sent[0]["plan"]["head_sha"], cand);
         assert_eq!(sent[0]["plan"]["failed_jobs"][0]["id"], 11);
-        assert_not_sent(&forge, &["pr.update_branch"], "transient");
-        // A network failure is infrastructure whether or not the rerun passes.
-        assert_eq!(
-            ledger_classes(&forge),
-            [orbit_types::workflow::CiFailureClass::Infrastructure]
-        );
+        forge.assert_none(&["pr.update_branch"], "transient");
+        assert_eq!(ledger_classes(&forge), [CiFailureClass::Infrastructure]);
         if lands {
-            assert_eq!(outcome.expect("the rerun passes")["phase"], "landed");
+            assert_landed(outcome, "the rerun passes");
         } else {
-            let error = outcome.expect_err("a second transient failure stops");
+            let err = outcome.expect_err("a second transient failure stops");
             assert!(
-                !matches!(&error, OrbitError::DeliveryRefused { .. }),
-                "transient: a second transient failure ends the run failed, never held: {error}"
+                !matches!(&err, OrbitError::DeliveryRefused { .. }),
+                "transient: {err}"
             );
-            assert_steps(
-                &forge.steps(),
-                &[HandoffLandingStep::Stop { repairable: false }],
-                "transient",
-            );
-            assert_reason(
-                &forge,
-                "transient",
-                &[
-                    "ci_infrastructure_retry_exhausted",
-                    "classification=transient",
-                    "attempts=1",
-                    "limit=1",
-                ],
-            );
-            let history = forge.history.lock().unwrap();
-            let holds = history
-                .iter()
-                .filter(|entry| entry.event == "ci_infrastructure_retry_exhausted")
-                .collect::<Vec<_>>();
+            forge.assert_step(STOP, "transient");
+            let parts = [
+                "ci_infrastructure_retry_exhausted",
+                "classification=transient",
+                "attempts=1",
+                "limit=1",
+            ];
+            forge.assert_reason("transient", &parts);
+            let holds = forge.history_notes("ci_infrastructure_retry_exhausted");
             assert_eq!(holds.len(), 1);
-            let hold: Value = serde_json::from_str(holds[0].note.as_deref().unwrap()).unwrap();
-            assert_eq!(hold["classification"], "transient");
-            assert_eq!(hold["attempts"], 1);
+            assert_eq!(holds[0]["classification"], "transient");
+            assert_eq!(holds[0]["attempts"], 1);
         }
     }
 }
 
-/// Non-`pull_request` transient workflow runs (such as `push` or
-/// `workflow_dispatch`) are refused by the real `ci.rerun_plan` adapter before
-/// any rerun or repair is sent.
 #[cfg(unix)]
-#[test]
 fn transient_non_pull_request_rerun_is_refused_without_retrying() {
-    use std::os::unix::fs::PermissionsExt;
+    const GH: &str = "#!/bin/sh\nset -eu\ncase \"$*\" in\n *'graphql'*) cat gh-policy.json ;;\n *'pulls/42'*) cat gh-pr.json ;;\n *'rules/branches/'*) cat gh-rules.json ;;\n *'check-runs'*) cat gh-checks.json ;;\n *'/status'*) cat gh-statuses.json ;;\n *'/actions/runs?'*) cat gh-runs.json ;;\n *'/actions/runs/1'*) cat gh-run.json ;;\n *'repos/{owner}/{repo}') cat gh-repo.json ;;\n *) exit 1 ;;\nesac\n";
+    for event in ["push", "workflow_dispatch"] {
+        let (_sb, forge, cand, base) = forge_fixture(true, false);
+        let mut failure = failed(1, 11, NETWORK_FLAKE);
+        failure.event = event;
+        forge.job(&cand, failure);
+        forge.with_state(|s| s.real_rerun_plan = true);
 
-    crate::git_fixture::isolated(
-        module_path!(),
-        "transient_non_pull_request_rerun_is_refused_without_retrying",
-        || {
-            for event in ["push", "workflow_dispatch"] {
-                let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
-                let mut failure = failed(1, 11, NETWORK_FLAKE);
-                failure.event = event;
-                forge.job(&candidate, failure);
-                forge.state.lock().unwrap().real_rerun_plan = true;
+        let rj = json!({"id":1,"full_name":"owner/repository","url":"https://api.github.com/repos/owner/repository"});
+        let w = |n: &str, v: Value| fs::write(forge.repo.join(n), v.to_string()).unwrap();
+        w("gh-repo.json", rj.clone());
+        w(
+            "gh-pr.json",
+            json!({"number":42,"state":"open","merged":false,"head":{"sha":cand,"ref":"orbit/T1","repo":rj},"base":{"sha":base,"ref":"main","repo":rj}}),
+        );
+        w(
+            "gh-policy.json",
+            json!({"data":{"repository":{"pullRequest":{"headRefOid":cand,"baseRefName":"main","reviewDecision":null,"baseRef":{"branchProtectionRule":{"requiredStatusChecks":[{"context":"clippy","app":{"databaseId":15368}}]}}}}}}),
+        );
+        w("gh-rules.json", json!([]));
+        w(
+            "gh-checks.json",
+            json!({"total_count":1,"check_runs":[{"id":100,"head_sha":cand,"name":"clippy","app":{"id":15368,"slug":"github-actions"},"status":"completed","conclusion":"failure","check_suite":{"id":10}}]}),
+        );
+        w(
+            "gh-statuses.json",
+            json!({"sha":cand,"repository":rj,"total_count":0,"statuses":[]}),
+        );
+        w(
+            "gh-runs.json",
+            json!({"total_count":1,"workflow_runs":[{"id":1,"workflow_id":1,"run_attempt":1}]}),
+        );
+        w(
+            "gh-run.json",
+            json!({"id":1,"workflow_id":1,"run_attempt":1,"repository":{"id":1},"head_repository":{"id":1},"head_sha":cand,"head_branch":"orbit/T1","event":event}),
+        );
+        let _env = install_fake_gh(&forge.repo, GH);
 
-                let repo_json = json!({
-                    "id": 1,
-                    "full_name": "owner/repository",
-                    "url": "https://api.github.com/repos/owner/repository",
-                });
-                let pr_json = json!({
-                    "number": 42,
-                    "state": "open",
-                    "merged": false,
-                    "head": {"sha": candidate, "ref": "orbit/T1", "repo": repo_json},
-                    "base": {"sha": base, "ref": "main", "repo": repo_json},
-                });
-                let policy_json = json!({
-                    "data": {
-                        "repository": {
-                            "pullRequest": {
-                                "headRefOid": candidate,
-                                "baseRefName": "main",
-                                "reviewDecision": null,
-                                "baseRef": {
-                                    "branchProtectionRule": {
-                                        "requiredStatusChecks": [
-                                            {"context": "clippy", "app": {"databaseId": 15368}}
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-                let checks_json = json!({
-                    "total_count": 1,
-                    "check_runs": [{
-                        "id": 100,
-                        "head_sha": candidate,
-                        "name": "clippy",
-                        "app": {"id": 15368, "slug": "github-actions"},
-                        "status": "completed",
-                        "conclusion": "failure",
-                        "check_suite": {"id": 10}
-                    }]
-                });
-                let statuses_json = json!({
-                    "sha": candidate,
-                    "repository": repo_json,
-                    "total_count": 0,
-                    "statuses": []
-                });
-                let runs_json = json!({
-                    "total_count": 1,
-                    "workflow_runs": [{"id": 1, "workflow_id": 1, "run_attempt": 1}]
-                });
-                let run_json = json!({
-                    "id": 1,
-                    "workflow_id": 1,
-                    "run_attempt": 1,
-                    "repository": {"id": 1},
-                    "head_repository": {"id": 1},
-                    "head_sha": candidate,
-                    "head_branch": "orbit/T1",
-                    "event": event,
-                });
-                for (name, body) in [
-                    ("gh-repo.json", repo_json),
-                    ("gh-pr.json", pr_json),
-                    ("gh-policy.json", policy_json),
-                    ("gh-rules.json", json!([])),
-                    ("gh-checks.json", checks_json),
-                    ("gh-statuses.json", statuses_json),
-                    ("gh-runs.json", runs_json),
-                    ("gh-run.json", run_json),
-                ] {
-                    std::fs::write(forge.repo.join(name), body.to_string()).unwrap();
-                }
-                let bin = forge.repo.join("bin");
-                std::fs::create_dir(&bin).unwrap();
-                let gh = bin.join("gh");
-                std::fs::write(
-                    &gh,
-                    "#!/bin/sh\nset -eu\ncase \"$*\" in\n\
-                     *'graphql'*) cat gh-policy.json ;;\n\
-                     *'pulls/42'*) cat gh-pr.json ;;\n\
-                     *'rules/branches/'*) cat gh-rules.json ;;\n\
-                     *'check-runs'*) cat gh-checks.json ;;\n\
-                     *'/status'*) cat gh-statuses.json ;;\n\
-                     *'/actions/runs?'*) cat gh-runs.json ;;\n\
-                     *'/actions/runs/1'*) cat gh-run.json ;;\n\
-                     *'repos/{owner}/{repo}') cat gh-repo.json ;;\n\
-                     *) exit 1 ;;\n\
-                     esac\n",
-                )
-                .unwrap();
-                std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-                let mut paths = vec![bin];
-                paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-                let path = std::env::join_paths(paths).unwrap();
-                let _env = orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))]);
-
-                let error = land_with(
-                    &forge,
-                    json!({"max_wait_seconds": 0, "max_base_ci_cycles": 1}),
-                )
-                .expect_err("a foreign event cannot authorize a PR retry");
-                assert!(
-                    error.to_string().contains("workflow event"),
-                    "{event}: expected real adapter workflow event refusal: {error}"
-                );
-                assert_steps(
-                    &forge.steps(),
-                    &[HandoffLandingStep::Stop { repairable: false }],
-                    event,
-                );
-                assert_reason(
-                    &forge,
-                    event,
-                    &["workflow event", "nothing is rerun, updated or repaired"],
-                );
-                assert_not_sent(
-                    &forge,
-                    &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-                    event,
-                );
-                assert!(
-                    !forge
-                        .history
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .any(|row| row.event == "ci_check_rerun"),
-                    "{event}: no rerun recorded"
-                );
-            }
-        },
-    );
+        let err = land_with(
+            &forge,
+            json!({"max_wait_seconds": 0, "max_base_ci_cycles": 1}),
+        )
+        .expect_err("refused");
+        assert!(err.to_string().contains("workflow event"), "{event}: {err}");
+        forge.assert_step(STOP, event);
+        forge.assert_reason(
+            event,
+            &["workflow event", "nothing is rerun, updated or repaired"],
+        );
+        forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, event);
+        assert_eq!(
+            forge.history_count("ci_check_rerun"),
+            0,
+            "{event}: no rerun recorded"
+        );
+    }
 }
 
-/// [ORB-15970] A classification needs every read it rests on. A failed job
-/// query on the base or its moved tip, a base log that cannot be read or
-/// recovered no text, and a log that names only its failed step decide
-/// nothing: the landing stops in review, unrepaired, and spends no rerun,
-/// update or repair. In every row the base branch has moved to a tip where
-/// the check passes, so a misread would have updated the branch or repaired.
-#[test]
+/// [ORB-15970] Unreadable jobs/logs or diagnostic-free logs stop in review and spend nothing.
 fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
     use FakeLog::{Text, Unreadable, Unrecovered};
-    for (case, head_log, base_log, base_readable, tip_readable, why) in [
-        (
-            "base jobs unreadable",
-            Text(CLIPPY_DEAD_CODE),
-            Some(Text(CLIPPY_DEAD_CODE)),
-            false,
-            true,
-            "the jobs on base",
-        ),
-        (
-            "current base jobs unreadable",
-            Text(CANDIDATE_ERROR),
-            None,
-            true,
-            false,
-            "the jobs on the current base",
-        ),
-        (
-            "base log unreadable",
-            Text(CLIPPY_DEAD_CODE),
-            Some(Unreadable),
-            true,
-            true,
-            "HTTP 502",
-        ),
-        (
-            "base log recovered no text",
-            Text(CLIPPY_DEAD_CODE),
-            Some(Unrecovered),
-            true,
-            true,
-            "recovered no text",
-        ),
-        (
-            "head log recovered no text",
-            Unrecovered,
-            Some(Text("")),
-            true,
-            true,
-            "recovered no text",
-        ),
-        (
-            "step names only",
-            Text(""),
-            Some(Text("")),
-            true,
-            true,
-            "names no diagnostic",
-        ),
-    ] {
-        let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
+    let run = |case: &str, h_log: FakeLog, b_log: Option<FakeLog>, unrd: u8, why: &str| {
+        let (_sb, forge, cand, base) = forge_fixture(true, false);
         let fixed = fix_base(&forge.repo);
-        forge.job(&candidate, failed_reading(1, 11, head_log));
-        forge.job(
-            &base,
-            base_log.map_or_else(|| passed(2, 21), |log| failed_reading(2, 21, log)),
-        );
+        forge.job(&cand, failed_reading(1, 11, h_log));
+        let bj = b_log.map_or_else(|| passed(2, 21), |l| failed_reading(2, 21, l));
+        forge.job(&base, bj);
         forge.job(&fixed, passed(3, 31));
-        {
-            let mut state = forge.state.lock().unwrap();
-            if !base_readable {
-                state.unreadable.push(base);
+        forge.with_state(|s| {
+            if unrd == 1 {
+                s.unreadable.push(base);
+            } else if unrd == 2 {
+                s.unreadable.push(fixed);
             }
-            if !tip_readable {
-                state.unreadable.push(fixed);
-            }
-        }
-
+        });
         land_now(&forge).expect_err("unreadable evidence stops the landing");
+        forge.assert_step(STOP, case);
+        forge.assert_reason(case, &[why, "stays in review"]);
+        forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, case);
+        assert_eq!(ledger_classes(&forge), [CiFailureClass::Unknown], "{case}");
+    };
+    let (dc, ce, em) = (Text(CLIPPY_DEAD_CODE), Text(CANDIDATE_ERROR), Text(""));
+    run("base jobs unreadable", dc, Some(dc), 1, "the jobs on base");
+    run(
+        "current base jobs unreadable",
+        ce,
+        None,
+        2,
+        "the jobs on the current base",
+    );
+    run("base log unreadable", dc, Some(Unreadable), 0, "HTTP 502");
+    run(
+        "base log recovered no text",
+        dc,
+        Some(Unrecovered),
+        0,
+        "recovered no text",
+    );
+    run(
+        "head log recovered no text",
+        Unrecovered,
+        Some(em),
+        0,
+        "recovered no text",
+    );
+    run("step names only", em, Some(em), 0, "names no diagnostic");
+}
 
-        assert_steps(
-            &forge.steps(),
-            &[HandoffLandingStep::Stop { repairable: false }],
-            case,
-        );
-        assert_reason(&forge, case, &[why, "stays in review"]);
-        assert_not_sent(
-            &forge,
-            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-            case,
-        );
-        // Evidence that decides nothing establishes no cause either.
-        assert_eq!(
-            ledger_classes(&forge),
-            [orbit_types::workflow::CiFailureClass::Unknown],
-            "{case}"
-        );
+/// [ORB-15970] A branch update is verified against the freshly fetched landing base it merged.
+fn a_branch_update_is_verified_against_the_base_it_merged() {
+    use UpdateShape::{BaseGone, CleanMerge, Dirty, Foreign, NotAMerge};
+    for shape in [CleanMerge, Foreign, Dirty, NotAMerge, BaseGone] {
+        let lands = matches!(shape, CleanMerge);
+        let (_remote, _sb, forge, cand, base) = published_forge(true, true);
+        let fixed = git_rev(&forge.repo, "main");
+        inherited_jobs(&forge, &cand, &base, &fixed, passed(3, 31));
+        forge.with_state(|s| {
+            s.after_update = Some(passed(4, 41));
+            s.update = shape;
+        });
+
+        let outcome = land_now(&forge);
+        forge.assert_sent("pr.update_branch", 1, "update");
+        let head = head_of(&forge);
+        if lands {
+            assert_landed(outcome, &format!("{shape:?}"));
+            assert_eq!(
+                forge.sent("pr.merge")[0]["reviewed_head_sha"],
+                head.as_str()
+            );
+        } else {
+            outcome.expect_err("an unverified head stops the landing");
+            forge.assert_step(STOP, "unverified");
+            forge.assert_none(&["pr.merge"], "unverified");
+        }
     }
 }
 
-/// [ORB-15970] The provider merges the base as it is when the branch update
-/// runs, which may be past the landing ref the owner fetched when it
-/// classified the failure. A clean two-parent merge of the candidate with
-/// that newer base is verified against a freshly fetched landing ref and
-/// lands; a merge with a commit off the landing branch, one whose tree is
-/// not the clean merge, a head that is not a merge, and a landing branch
-/// that cannot be fetched are still refused.
-#[test]
-fn a_branch_update_is_verified_against_the_base_it_merged() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "a_branch_update_is_verified_against_the_base_it_merged",
-        || {
-            for (shape, lands) in [
-                (UpdateShape::CleanMerge, true),
-                (UpdateShape::Foreign, false),
-                (UpdateShape::Dirty, false),
-                (UpdateShape::NotAMerge, false),
-                (UpdateShape::BaseGone, false),
-            ] {
-                let sandbox = tempdir().unwrap();
-                let remote = tempdir().unwrap();
-                let mut forge = FakeForge::new(sandbox.path(), true);
-                let candidate = forge.context.candidate.candidate.commit.clone();
-                let base = forge.context.candidate.base.commit.clone();
-                let fixed = fix_base(&forge.repo);
-                forge.publish(remote.path());
-                inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state.after_update = Some(passed(4, 41));
-                    state.update = shape;
-                }
-
-                let outcome = land_now(&forge);
-
-                assert_sent_len(&forge, "pr.update_branch", 1, "update");
-                let head = head_of(&forge);
-                if lands {
-                    assert_eq!(
-                        outcome.expect("the verified update lands")["phase"],
-                        "landed",
-                        "{shape:?}"
-                    );
-                    assert_eq!(
-                        forge.sent("pr.merge")[0]["reviewed_head_sha"],
-                        head.as_str()
-                    );
-                } else {
-                    outcome.expect_err("an unverified head stops the landing");
-                    assert_steps(
-                        &forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: false }],
-                        "unverified",
-                    );
-                    assert_not_sent(&forge, &["pr.merge"], "unverified");
-                }
-            }
-        },
-    );
-}
-
-/// [ORB-15976] An earlier provider update and its base are already cached
-/// locally, but origin becomes unreachable before landing starts. Cached
-/// containment cannot authorize adoption: stop without spending recovery.
-/// Restoring origin with the same objects lets the same head land.
+/// [ORB-15976] A cached branch update cannot land if the initial fetch fails; restoring origin lands it.
 fn a_cached_branch_update_requires_a_fresh_landing_base() {
-    let sandbox = tempdir().unwrap();
-    let remote = tempdir().unwrap();
-    let mut forge = FakeForge::new(sandbox.path(), true);
-    let candidate = forge.context.candidate.candidate.commit.clone();
-    forge.publish(remote.path());
-    let head = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
+    let (remote, _sb, forge, cand, _) = published_forge(true, false);
+    let head = provider_update(remote.path(), &cand, UpdateShape::CleanMerge);
     git(&forge.repo, &["fetch", "-q", "origin"]);
-    let base = git(&forge.repo, &["rev-parse", "origin/main"]);
+    let base = git_rev(&forge.repo, "origin/main");
+    let parents = git(&forge.repo, &["rev-list", "--parents", "-n", "1", &head]);
     assert_eq!(
-        git(&forge.repo, &["rev-list", "--parents", "-n", "1", &head]),
-        format!("{head} {candidate} {base}"),
-        "the genuine updated head and its base are cached before fetch fails"
+        parents,
+        format!("{head} {cand} {base}"),
+        "cached before fetch fails"
     );
-    forge.state.lock().unwrap().head = head.clone();
+    forge.with_state(|s| s.head = head.clone());
     forge.job(&head, passed(1, 11));
-    let unreachable = remote.path().join("unreachable.git");
-    let bad_origin = unreachable.to_string_lossy();
-    git(&forge.repo, &["remote", "set-url", "origin", &bad_origin]);
+    let bad = remote
+        .path()
+        .join("unreachable.git")
+        .to_string_lossy()
+        .into_owned();
+    git(&forge.repo, &["remote", "set-url", "origin", &bad]);
 
     land_now(&forge).expect_err("a cached branch update cannot land after the initial fetch fails");
 
-    assert_steps(
-        &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: false }],
-        "cached",
-    );
-    assert_not_sent(
-        &forge,
-        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-        "unreachable origin",
-    );
-    assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
-    assert_eq!(forge.state.lock().unwrap().head, head);
+    forge.assert_step(STOP, "cached");
+    forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, "unreachable origin");
+    assert_eq!(git_rev(&forge.repo, "origin/main"), base);
+    assert_eq!(head_of(&forge), head);
 
-    let good_origin = remote.path().to_string_lossy();
-    git(&forge.repo, &["remote", "set-url", "origin", &good_origin]);
+    git(
+        &forge.repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            &remote.path().to_string_lossy(),
+        ],
+    );
     forge.ops.lock().unwrap().clear();
     forge.updates.lock().unwrap().clear();
 
-    let outcome =
-        land_now(&forge).expect("the identical cached head lands once origin is reachable");
-
-    assert_eq!(outcome["phase"], "landed");
-    assert_sent_len(&forge, "pr.merge", 1, "cached");
-    let merge_head = forge.sent("pr.merge")[0]["reviewed_head_sha"].clone();
-    assert_eq!(merge_head, head.as_str(), "cached");
-    assert_not_sent(&forge, &["ci.rerun_failed", "pr.update_branch"], "cached");
-    assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
-    let evidence = evidence_of(&forge);
-    assert_eq!(evidence["updated_head"], head.as_str());
-    assert!(evidence.get("check_recovery").is_none());
-    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+    assert_landed(
+        land_now(&forge),
+        "the identical cached head lands once origin is reachable",
+    );
+    forge.assert_sent("pr.merge", 1, "cached");
+    assert_eq!(
+        forge.sent("pr.merge")[0]["reviewed_head_sha"],
+        head.as_str(),
+        "cached"
+    );
+    forge.assert_none(NO_RERUN_OR_UPDATE, "cached");
+    assert_eq!(git_rev(&forge.repo, "origin/main"), base);
+    let ev = evidence_of(&forge);
+    assert_eq!(ev["updated_head"], head.as_str());
+    assert!(ev.get("check_recovery").is_none());
+    assert_eq!(forge.steps().last(), Some(&Complete));
 }
 
-/// [ORB-16185] A required aggregate check outside any workflow fails with
-/// source annotations while its job-backed checks pass or fail for their
-/// own reasons. Annotations naming only files the candidate changed return the
-/// candidate to the backlog (noting when the automatic repair is already
-/// spent); annotations on a file it did not change are inconclusive, and they
-/// stop the landing even beside a transient job failure that alone would have
-/// been rerun.
-#[test]
+/// [ORB-16185] Required aggregate annotations classify candidate vs inconclusive without spending recovery.
 fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
-    for (case, clippy, annotated, spent) in [
-        ("candidate", passed(1, 11), "work.txt", false),
-        ("spent", passed(1, 11), "work.txt", true),
-        ("base_file", passed(1, 11), "README.md", false),
-        (
-            "beside_transient",
-            failed(1, 11, NETWORK_FLAKE),
-            "README.md",
-            false,
-        ),
-    ] {
-        let (_sandbox, forge, candidate, _base) = forge_fixture(false, spent);
-        forge.job(&candidate, clippy);
-        forge.state.lock().unwrap().aggregate = Some(annotated);
+    let run = |case: &str, clippy: FakeJob, annotated: &'static str, spent: bool| {
+        let (_sb, forge, cand, _) = forge_fixture(false, spent);
+        forge.job(&cand, clippy);
+        forge.with_state(|s| s.aggregate = Some(annotated));
 
-        let error = land_now(&forge).expect_err("a failed required aggregate stops the landing");
-
-        let step = match case {
-            "candidate" | "spent" => HandoffLandingStep::StopForRequeue,
-            _ => HandoffLandingStep::Stop { repairable: false },
-        };
-        assert_steps(&forge.steps(), &[step], case);
+        let err = land_now(&forge).expect_err("a failed required aggregate stops the landing");
+        let is_cand = matches!(case, "candidate" | "spent");
+        forge.assert_step(pick(is_cand, StopForRequeue, STOP), case);
         let reason = forge.stop_reason();
-        let class = if case == "candidate" || case == "spent" {
-            assert_candidate_requeue_held(&error, &forge, &candidate, case);
+        let class = if is_cand {
+            assert_candidate_requeue_held(&err, &forge, &cand, case);
             assert_eq!(
                 reason.contains("the automatic repair is already spent"),
                 case == "spent",
@@ -4009,51 +2725,42 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         } else {
             "classified `inconclusive`"
         };
-        let annotation = format!("- {annotated}:1 [Uncontrolled data used in path expression]");
-        assert_contains(
-            reason.as_str(),
-            &[class, "check run 7001 of app 57789", &annotation],
-            case,
-        );
-        assert_not_sent(
-            &forge,
-            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
-            case,
-        );
-    }
+        let ann = format!("- {annotated}:1 [Uncontrolled data used in path expression]");
+        assert_contains(&reason, &[class, "check run 7001 of app 57789", &ann], case);
+        forge.assert_none(NO_RERUN_UPDATE_OR_MERGE, case);
+    };
+    run("candidate", passed(1, 11), "work.txt", false);
+    run("spent", passed(1, 11), "work.txt", true);
+    run("base_file", passed(1, 11), "README.md", false);
+    run(
+        "beside_transient",
+        failed(1, 11, NETWORK_FLAKE),
+        "README.md",
+        false,
+    );
 }
 
-/// A completed recovery cannot hide a separately failed required aggregate.
 fn required_aggregate_after_recovery(updated: bool) {
-    let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
+    let (_sb, forge, cand, base) = forge_fixture(true, false);
     if updated {
-        let base = forge.context.candidate.base.commit.clone();
         let fixed = fix_base(&forge.repo);
-        inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
-        forge.state.lock().unwrap().after_update = Some(passed(4, 41));
+        inherited_jobs(&forge, &cand, &base, &fixed, passed(3, 31));
+        forge.set_after_update(passed(4, 41));
     } else {
-        forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
-        forge.state.lock().unwrap().after_rerun = Some(passed(1, 12));
+        forge.job(&cand, failed(1, 11, NETWORK_FLAKE));
+        forge.set_after_rerun(passed(1, 12));
     }
-    forge.state.lock().unwrap().after_recovery_aggregate = Some("work.txt");
+    forge.with_state(|s| s.after_recovery_aggregate = Some("work.txt"));
 
     land_now(&forge).expect_err("the failed aggregate stops for repair without waiting");
 
-    assert_sent_len(&forge, "ci.rerun_failed", usize::from(!updated), "recovery");
-    assert_sent_len(&forge, "pr.update_branch", usize::from(updated), "recovery");
-    assert_sent_len(&forge, "pr.status", 2, "recovery");
-    assert_sent_len(&forge, "ci.check_annotations", 1, "recovery");
-    assert_steps(
-        &forge.steps(),
-        &[HandoffLandingStep::StopForRequeue],
-        "recovery",
-    );
-    assert_reason(
-        &forge,
-        "recovery",
-        &["classified `candidate`", "check run 7001"],
-    );
-    assert_not_sent(&forge, &["pr.merge"], "recovery");
+    forge.assert_sent("ci.rerun_failed", usize::from(!updated), "recovery");
+    forge.assert_sent("pr.update_branch", usize::from(updated), "recovery");
+    forge.assert_sent("pr.status", 2, "recovery");
+    forge.assert_sent("ci.check_annotations", 1, "recovery");
+    forge.assert_step(StopForRequeue, "recovery");
+    forge.assert_reason("recovery", &["classified `candidate`", "check run 7001"]);
+    forge.assert_none(&["pr.merge"], "recovery");
 }
 
 #[allow(clippy::print_stderr)] // Identify each labelled row in isolated child failure output.
@@ -4064,487 +2771,342 @@ fn a_required_aggregate_after_recovery_is_classified_without_waiting() {
     }
 }
 
-/// A stale failure for the rerun job waits until its replacement registers.
 fn a_transient_rerun_waits_for_queued_replacement_jobs() {
-    let sandbox = tempdir().unwrap();
-    let forge = std::rc::Rc::new(FakeForge::new(sandbox.path(), true));
-    let head = forge.context.candidate.candidate.commit.clone();
+    let (_sb, forge, head, _) = forge_fixture(true, false);
+    let forge = Rc::new(forge);
     forge.job(&head, failed(1, 11, NETWORK_FLAKE));
-    {
-        let mut state = forge.state.lock().unwrap();
-        state.after_rerun = Some(passed(1, 12));
-        state.queued_rerun = true;
-    }
-    let waits = std::rc::Rc::new(std::cell::Cell::new(0));
-    let captured_waits = waits.clone();
-    let queued_forge = forge.clone();
-    let result = orbit_engine::test_support::with_vcs_retry_wait(
+    forge.with_state(|s| {
+        s.after_rerun = Some(passed(1, 12));
+        s.queued_rerun = true;
+    });
+    let (waits, q_forge) = (Rc::new(Cell::new(0)), forge.clone());
+    let cap_waits = waits.clone();
+    let res = with_vcs_retry_wait(
         move |_| {
-            let forge = queued_forge.as_ref();
-            captured_waits.set(captured_waits.get() + 1);
+            cap_waits.set(cap_waits.get() + 1);
             assert!(
-                forge.steps().is_empty(),
+                q_forge.steps().is_empty(),
                 "queued work must not stop for repair"
             );
-            assert!(forge.sent("pr.merge").is_empty());
-            assert_eq!(forge.sent("ci.rerun_failed").len(), 1);
-            let mut state = forge.state.lock().unwrap();
-            assert!(
-                !state.jobs.contains_key(&head),
-                "replacement has not registered"
-            );
-            let replacement = state.after_rerun.take().unwrap();
-            state.jobs.insert(head.clone(), replacement);
-            state.queued_rerun = false;
+            q_forge.assert_none(&["pr.merge"], "queued");
+            q_forge.assert_sent("ci.rerun_failed", 1, "queued");
+            q_forge.with_state(|s| {
+                assert!(
+                    !s.jobs.contains_key(&head),
+                    "replacement has not registered"
+                );
+                let rep = s.after_rerun.take().unwrap();
+                s.jobs.insert(head.clone(), rep);
+                s.queued_rerun = false;
+            });
         },
         || {
             land_with(
                 forge.as_ref(),
-                json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+                json!({"max_wait_seconds": 15, "poll_interval_seconds": 5}),
             )
         },
     );
-    assert_eq!(
-        result.expect("the queued rerun eventually passes")["phase"],
-        "landed"
-    );
+    assert_landed(res, "the queued rerun eventually passes");
     assert_eq!(waits.get(), 1, "wait only while the replacement is queued");
-    assert_sent_len(&forge, "pr.merge", 1, "queued rerun");
-    assert_not_sent(&forge, &["pr.update_branch"], "queued rerun");
-    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+    forge.assert_sent("pr.merge", 1, "queued rerun");
+    forge.assert_none(&["pr.update_branch"], "queued rerun");
+    assert_eq!(forge.steps().last(), Some(&Complete));
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = crate::git_test_support::command()
+    let cfg = [
+        "-c",
+        "user.name=Orbit Test",
+        "-c",
+        "user.email=test@orbit.invalid",
+        "-c",
+        "commit.gpgsign=false",
+    ];
+    let out = crate::git_test_support::command()
         .arg("-C")
         .arg(dir)
-        .args([
-            "-c",
-            "user.name=Orbit Test",
-            "-c",
-            "user.email=test@orbit.invalid",
-            "-c",
-            "commit.gpgsign=false",
-        ])
+        .args(cfg)
         .args(args)
         .output()
         .unwrap();
     assert!(
-        output.status.success(),
+        out.status.success(),
         "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&out.stderr)
     );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn handoff_landing_contracts_1() {
-    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_1", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "a_local_candidate_landing_names_its_task_before_the_branch_moves",
-                a_local_candidate_landing_names_its_task_before_the_branch_moves,
-            ),
-            (
-                "owner_local_landing_refuses_and_preserves_cache_shaped_work",
-                owner_local_landing_refuses_and_preserves_cache_shaped_work,
-            ),
-            (
-                "a_candidate_that_cannot_fast_forward_records_no_landing_intent",
-                a_candidate_that_cannot_fast_forward_records_no_landing_intent,
-            ),
-            (
-                "a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts",
-                a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts,
-            ),
-            (
-                "an_already_landed_landing_holds_when_its_evidence_went_stale",
-                an_already_landed_landing_holds_when_its_evidence_went_stale,
-            ),
-        ]);
-    });
+// Behavior-distinct rows share one bounded family process.
+scenario_family! {
+    handoff_landing_contracts_1:
+        a_local_candidate_landing_names_its_task_before_the_branch_moves,
+        owner_local_landing_refuses_and_preserves_cache_shaped_work,
+        a_candidate_that_cannot_fast_forward_records_no_landing_intent,
+        a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts,
+        an_already_landed_landing_holds_when_its_evidence_went_stale,
+        handoff_fake_refuses_unscoped_automation_updates,
 }
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn handoff_landing_contracts_2() {
-    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_2", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "landing_refusals_keep_typed_holds_and_candidate_red_stays_failed",
-                landing_refusals_keep_typed_holds_and_candidate_red_stays_failed,
-            ),
-            (
-                "only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair",
-                only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair,
-            ),
-            (
-                "an_owed_hosted_check_must_pass_before_the_owner_merges",
-                an_owed_hosted_check_must_pass_before_the_owner_merges,
-            ),
-        ]);
-    });
+scenario_family! {
+    handoff_landing_contracts_2:
+        landing_refusals_keep_typed_holds_and_candidate_red_stays_failed,
+        only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair,
+        an_owed_hosted_check_must_pass_before_the_owner_merges,
 }
-
-#[test]
-fn landing_poll_uses_the_completion_clock_for_elapsed_provider_time() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "landing_poll_uses_the_completion_clock_for_elapsed_provider_time",
-        || {
-            let sandbox = tempdir().unwrap();
-            let host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
-            let head = host.forge.context.candidate.candidate.commit.clone();
-            *host.policies.lock().unwrap() = vec![pending_policy(&head, "QUEUED", true)].into();
-            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
-            let now = clock.clone();
-            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-            let recorded = waits.clone();
-            let waited = clock.clone();
-            let result = orbit_engine::test_support::with_prerequisite_clock(
-                move || {
-                    let current = now.get();
-                    // Provider work takes six logical seconds after the budget starts.
-                    if current == 1_000 {
-                        now.set(7_000);
-                    }
-                    current
-                },
-                |_, _| {},
-                || {
-                    orbit_engine::test_support::with_vcs_retry_wait(
-                        move |duration| {
-                            recorded.borrow_mut().push(duration.as_secs());
-                            waited.set(waited.get() + duration.as_secs() * 1_000);
-                        },
-                        || {
-                            land_with(
-                                &host,
-                                json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
-                            )
-                        },
-                    )
-                },
-            );
-            assert!(result.is_err(), "a pending check must stop at the deadline");
-            assert_eq!(
-                *waits.borrow(),
-                [4],
-                "provider time consumes the same budget as waits"
-            );
-            assert_sent_len(&host.forge, "pr.merge", 0, "pending check");
-        },
-    );
+scenario_family! {
+    handoff_landing_contracts_3:
+        owner_landing_waits_for_exact_required_checks_before_one_verified_merge,
+        owner_landing_waits_out_pending_only_block_before_checks_pass,
+        owner_landing_waits_for_required_checks_the_head_has_not_reported,
+        owner_landing_pending_evidence_never_extends_refusal_or_merge_authority,
+        landing_poll_uses_the_completion_clock_for_elapsed_provider_time,
 }
-
-#[test]
-fn handoff_landing_contracts_3() {
-    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_3", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "owner_landing_waits_for_exact_required_checks_before_one_verified_merge",
-                owner_landing_waits_for_exact_required_checks_before_one_verified_merge,
-            ),
-            (
-                "owner_landing_waits_for_required_checks_the_head_has_not_reported",
-                owner_landing_waits_for_required_checks_the_head_has_not_reported,
-            ),
-            (
-                "owner_landing_pending_evidence_never_extends_refusal_or_merge_authority",
-                owner_landing_pending_evidence_never_extends_refusal_or_merge_authority,
-            ),
-        ]);
-    });
+scenario_family! {
+    handoff_landing_contracts_4:
+        a_cached_branch_update_requires_a_fresh_landing_base,
+        a_required_aggregate_after_recovery_is_classified_without_waiting,
+        a_transient_rerun_waits_for_queued_replacement_jobs,
+        owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence,
+        externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref,
+        handoff_merge_in_progress_contracts,
 }
-
-#[test]
-fn handoff_landing_contracts_4() {
-    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_4", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "a_cached_branch_update_requires_a_fresh_landing_base",
-                a_cached_branch_update_requires_a_fresh_landing_base,
-            ),
-            (
-                "a_required_aggregate_after_recovery_is_classified_without_waiting",
-                a_required_aggregate_after_recovery_is_classified_without_waiting,
-            ),
-            (
-                "a_transient_rerun_waits_for_queued_replacement_jobs",
-                a_transient_rerun_waits_for_queued_replacement_jobs,
-            ),
-            (
-                "owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence",
-                owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence,
-            ),
-        ]);
-    });
-}
-
 #[cfg(unix)]
-#[test]
-fn handoff_landing_contracts_5() {
-    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_5", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "adopted_provider_head_accepts_readable_empty_policy",
-                adopted_provider_head_accepts_readable_empty_policy,
-            ),
-            (
-                "adopted_provider_head_accepts_authentic_legacy_success",
-                adopted_provider_head_accepts_authentic_legacy_success,
-            ),
-            (
-                "adopted_provider_head_refuses_unavailable_or_unsatisfied_policy",
-                adopted_provider_head_refuses_unavailable_or_unsatisfied_policy,
-            ),
-        ]);
-    });
+scenario_family! {
+    handoff_landing_contracts_5:
+        adopted_provider_head_accepts_readable_empty_policy,
+        adopted_provider_head_accepts_authentic_legacy_success,
+        adopted_provider_head_refuses_unavailable_or_unsatisfied_policy,
 }
-
-/// The public landing action keeps UNKNOWN/PENDING bounded and never extends
-/// that wait to a real review or administrative refusal.
-fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence() {
-    orbit_engine::test_support::with_vcs_retry_wait(
-        |_| {},
-        || {
-            for (case, states, review) in [
-                ("settles", vec!["UNKNOWN", "PENDING", "CLEAN"], ""),
-                ("expires", vec!["UNKNOWN"], ""),
-                ("review", vec!["BLOCKED"], "REVIEW_REQUIRED"),
-                ("administrative", vec!["BLOCKED"], ""),
-            ] {
-                let sandbox = tempdir().unwrap();
-                let forge = FakeForge::new(sandbox.path(), false);
-                forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state.merge_states = states.into();
-                    state.review_decision = Some(review);
-                }
-                let result = land_with(
-                    &forge,
-                    json!({"max_wait_seconds": if case == "settles" {15} else {0}, "poll_interval_seconds":5}),
-                );
-                if case == "settles" {
-                    assert_eq!(result.unwrap()["phase"], "landed");
-                    assert_eq!(forge.sent("pr.merge").len(), 1);
-                    assert_eq!(
-                        forge.sent("pr.status").len(),
-                        4,
-                        "bounded observations settle and verify the one merge"
-                    );
-                } else {
-                    assert!(result.is_err(), "{case}");
-                    assert_eq!(
-                        forge.sent("pr.status").len(),
-                        1,
-                        "no administrative wait expansion: {case}"
-                    );
-                    assert!(forge.sent("pr.merge").is_empty(), "{case}");
-                    assert_eq!(
-                        forge.steps(),
-                        [HandoffLandingStep::Stop { repairable: false }],
-                        "durable refusal without repair: {case}"
-                    );
-                    assert!(
-                        !forge.last_evidence().is_empty(),
-                        "expired/refused observations retain evidence"
-                    );
-                }
-            }
-        },
-    )
+scenario_family! {
+    handoff_landing_contracts_6:
+        untouched_failure_reruns_once_after_fresh_base_pass,
+        suspicion_only_history_cannot_admit_repair_from_a_non_pr_run,
+        untouched_failure_uses_a_fresh_pass_behind_the_moving_tip,
+        untouched_failure_requires_the_same_signature_unchanged_head_rerun,
+        untouched_failure_escalates_after_configured_base_ci_cycles,
+        base_suspect_failure_on_a_proven_green_base_requeues_the_candidate,
+        untouched_failure_on_a_moved_tip_follows_the_fresh_base_check,
+        a_candidate_caused_check_failure_requeues_the_candidate,
+}
+scenario_family! {
+    handoff_landing_contracts_7:
+        a_check_failure_inherited_from_the_base_updates_the_branch_and_lands,
+        inherited_landing_waits_for_a_later_passing_base_and_updates_again,
+        landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop,
+        an_inherited_failure_that_survives_the_branch_update_gets_one_repair,
+        a_branch_update_is_verified_against_the_base_it_merged,
+}
+scenario_family! {
+    handoff_landing_contracts_8:
+        untouched_failure_with_a_passing_base_repairs_when_its_retry_is_unreadable,
+        unreadable_retry_evidence_stops_the_landing_naming_the_read_failure,
+        an_unreadable_log_and_a_spent_transient_rerun_hold_the_landing,
+        a_transient_check_failure_respects_the_configured_retry_limit,
+        a_check_failure_whose_evidence_cannot_be_read_spends_nothing,
+        a_required_aggregate_failure_is_classified_from_its_source_annotations,
+}
+#[cfg(unix)]
+scenario_family! {
+    handoff_landing_contracts_9:
+        untouched_failure_checks_push_history_through_the_real_adapter,
+        transient_non_pull_request_rerun_is_refused_without_retrying,
 }
 
 #[cfg(unix)]
 fn adopted_provider_head_accepts_readable_empty_policy() {
     crate::pr_landing::adopted_policy_cases(&["empty", "no-rule"]);
 }
-
 #[cfg(unix)]
 fn adopted_provider_head_accepts_authentic_legacy_success() {
     crate::pr_landing::adopted_policy_cases(&["success"]);
 }
-
 #[cfg(unix)]
 fn adopted_provider_head_refuses_unavailable_or_unsatisfied_policy() {
-    crate::pr_landing::adopted_policy_cases(&[
-        "unavailable",
-        "pending",
-        "failed",
-        "wrong-head",
-        "foreign",
-        "wrong-row",
-        "foreign-row",
-        "foreign-host",
-        "shadow-pending",
-        "app-bound",
-    ]);
+    const CASES: &str = "unavailable pending failed wrong-head foreign wrong-row foreign-row foreign-host shadow-pending app-bound";
+    crate::pr_landing::adopted_policy_cases(&CASES.split_whitespace().collect::<Vec<_>>());
 }
 
-/// Refusals cross the public job dispatcher as typed codes; unreadable and
-/// candidate-red observations retain the ordinary failure path.
+fn landing_poll_uses_the_completion_clock_for_elapsed_provider_time() {
+    let (_sb, forge, _) = pending_forge(vec![blocked_aggregate()], |h| {
+        vec![pending_policy(h, "QUEUED", true)]
+    });
+    let clock = Rc::new(Cell::new(1_000_u64));
+    let (now, waited) = (clock.clone(), clock.clone());
+    let waits = Rc::new(RefCell::new(Vec::new()));
+    let rec = waits.clone();
+    let res = with_prerequisite_clock(
+        move || {
+            let cur = now.get();
+            if cur == 1_000 {
+                now.set(7_000);
+            }
+            cur
+        },
+        |_, _| {},
+        || {
+            with_vcs_retry_wait(
+                move |d| {
+                    rec.borrow_mut().push(d.as_secs());
+                    waited.set(waited.get() + d.as_secs() * 1_000);
+                },
+                || {
+                    land_with(
+                        &forge,
+                        json!({"max_wait_seconds": 10, "poll_interval_seconds": 5}),
+                    )
+                },
+            )
+        },
+    );
+    assert!(res.is_err(), "a pending check must stop at the deadline");
+    assert_eq!(
+        *waits.borrow(),
+        [4],
+        "provider time consumes the same budget as waits"
+    );
+    forge.assert_sent("pr.merge", 0, "pending check");
+}
+
+fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence() {
+    with_vcs_retry_wait(
+        |_| {},
+        || {
+            let run = |case: &str, states: &[&'static str], review: &'static str| {
+                let (_sb, forge, head, _) = forge_fixture(false, false);
+                forge.job(&head, passed(1, 11));
+                forge.with_state(|s| {
+                    s.merge_states = states.iter().copied().collect();
+                    s.review_decision = Some(review);
+                });
+                let max = pick(case == "settles", 15, 0);
+                let res = land_with(
+                    &forge,
+                    json!({"max_wait_seconds": max, "poll_interval_seconds": 5}),
+                );
+                if case == "settles" {
+                    assert_landed(res, case);
+                    forge.assert_sent("pr.merge", 1, case);
+                    forge.assert_sent("pr.status", 4, case);
+                } else {
+                    assert!(res.is_err(), "{case}");
+                    forge.assert_sent("pr.status", 1, case);
+                    forge.assert_none(&["pr.merge"], case);
+                    forge.assert_step(STOP, case);
+                    assert!(
+                        !forge.last_evidence().is_empty(),
+                        "retains evidence: {case}"
+                    );
+                }
+            };
+            run("settles", &["UNKNOWN", "PENDING", "CLEAN"], "");
+            run("expires", &["UNKNOWN"], "");
+            run("review", &["BLOCKED"], "REVIEW_REQUIRED");
+            run("administrative", &["BLOCKED"], "");
+        },
+    );
+}
+
 fn landing_refusals_keep_typed_holds_and_candidate_red_stays_failed() {
-    use orbit_types::workflow::{DeliveryRefusal, HeldFailure};
-    for (case, state, review, rollup, refusal) in [
-        (
-            "conflict",
-            "DIRTY",
-            "",
-            json!([]),
-            Some(DeliveryRefusal::LandingConflict),
-        ),
-        (
-            "draft",
-            "DRAFT",
-            "",
-            json!([]),
-            Some(DeliveryRefusal::PullRequestDraft),
-        ),
-        (
-            "review",
-            "BLOCKED",
-            "REVIEW_REQUIRED",
-            json!([]),
-            Some(DeliveryRefusal::RequirementsUnsatisfied),
-        ),
-        (
-            "candidate_red",
-            "BLOCKED",
-            "APPROVED",
-            json!([{"name":"test", "status":"COMPLETED", "conclusion":"FAILURE"}]),
-            None,
-        ),
-        ("unreadable_review", "BLOCKED", "unknown", json!([]), None),
-    ] {
-        let sandbox = tempdir().unwrap();
-        let mut host = OpenPullRequestHost::new(pr_context(sandbox.path()), state, rollup);
-        host.review_decision = review;
-        let job = super::v2_runtime::job_asset(json!([{
-            "id": "land", "spec": {"type":"deterministic", "action":"handoff_land", "config":{}},
-            "default_input": {"handoff_id":"handoff-1", "task_id":TASK_ID, "max_wait_seconds":0},
-        }]));
+    use DeliveryRefusal as DR;
+    let run = |case: &str, st: &'static str, rev: &'static str, rollup: Value, refu: Option<DR>| {
+        let mut host = OpenPullRequestHost::new(st, rollup);
+        host.review_decision = rev;
+        let def = json!([{"id":"land","spec":{"type":"deterministic","action":"handoff_land","config":{}},"default_input":{"handoff_id":"handoff-1","task_id":TASK_ID,"max_wait_seconds":0}}]);
+        let job = super::v2_runtime::job_asset(def);
         let audit = tempdir().unwrap();
         let (writer, _, _) = super::v2_runtime::build_writer_and_sinks(audit.path(), RUN_ID);
-        let error =
-            orbit_engine::execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None)
-                .unwrap_err();
-        assert_eq!(
-            HeldFailure::of(Some(error.failure_code()), Some(&error.to_string())),
-            refusal.map(HeldFailure::DeliveryRefused),
-            "{case}: {error}"
-        );
-        if let Some(refusal) = refusal {
-            assert!(
-                matches!(&error, orbit_engine::DispatchError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
-                "{case}: {error}"
-            );
-            assert_eq!(error.failure_code(), refusal.error_code());
-            assert!(
-                matches!(orbit_engine::dispatch_error_to_orbit(error), OrbitError::DeliveryRefused { refusal: actual, .. } if actual == refusal)
-            );
+        let err =
+            execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None).unwrap_err();
+        let got = HeldFailure::of(Some(err.failure_code()), Some(&err.to_string()));
+        let exp = refu.map(HeldFailure::DeliveryRefused);
+        assert_eq!(got, exp, "{case}: {err}");
+        if let Some(refusal) = refu {
+            let ok =
+                matches!(&err, DispatchError::DeliveryRefused { refusal: a, .. } if *a == refusal);
+            assert!(ok, "{case}: {err}");
+            assert_eq!(err.failure_code(), refusal.error_code());
+            let orb = dispatch_error_to_orbit(err);
+            assert!(matches!(orb, OrbitError::DeliveryRefused { refusal: a, .. } if a == refusal));
         }
         assert!(
-            host.steps()
-                .iter()
-                .any(|step| matches!(step, HandoffLandingStep::Stop { .. })),
+            host.steps().iter().any(|s| matches!(s, Stop { .. })),
             "{case}"
         );
         assert!(!host.sent_ops().iter().any(|op| op == "pr.merge"), "{case}");
-    }
+    };
+    let (e, f) = (
+        json!([]),
+        json!([{"name":"test","status":"COMPLETED","conclusion":"FAILURE"}]),
+    );
+    run(
+        "conflict",
+        "DIRTY",
+        "",
+        e.clone(),
+        Some(DR::LandingConflict),
+    );
+    run("draft", "DRAFT", "", e.clone(), Some(DR::PullRequestDraft));
+    run(
+        "review",
+        "BLOCKED",
+        "REVIEW_REQUIRED",
+        e.clone(),
+        Some(DR::RequirementsUnsatisfied),
+    );
+    run("candidate_red", "BLOCKED", "APPROVED", f, None);
+    run("unreadable_review", "BLOCKED", "unknown", e, None);
 }
 
-/// The active wait also observes an operator merge with its deleted PR head.
-#[test]
 fn externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref",
-        || {
-            let sandbox = tempdir().unwrap();
-            let remote = tempdir().unwrap();
-            let mut forge = FakeForge::new(sandbox.path(), false);
-            forge.publish(remote.path());
-            let candidate = forge.context.candidate.candidate.commit.clone();
-            let first = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
-            let head = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
-            let tree = git(remote.path(), &["rev-parse", &format!("{head}^{{tree}}")]);
-            let merged = git(
-                remote.path(),
-                &[
-                    "commit-tree",
-                    &tree,
-                    "-p",
-                    "main",
-                    "-m",
-                    "external squash merge",
-                ],
-            );
-            git(remote.path(), &["update-ref", "refs/heads/main", &merged]);
-            git(remote.path(), &["update-ref", "refs/pull/42/head", &head]);
-            git(remote.path(), &["update-ref", "-d", "refs/heads/orbit/T1"]);
-            {
-                let mut state = forge.state.lock().unwrap();
-                state.head = head.clone();
-                state.merged = true;
-                state.merge_commit = Some(merged);
-            }
-            assert_eq!(
-                land_now(&forge).expect("a clean externally merged chain completes")["phase"],
-                "landed"
-            );
-            assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], "already merged");
-            assert_eq!(git(&forge.repo, &["rev-parse", "FETCH_HEAD"]), head);
-            let updates = forge.updates.lock().unwrap();
-            let completion = updates
-                .iter()
-                .find(|update| update.step == HandoffLandingStep::Complete)
-                .expect("the landing completes from the external merge");
-            let evidence: Value = serde_json::from_str(&completion.evidence).unwrap();
-            assert_eq!(
-                evidence["external_merge"], true,
-                "the completion history note records the merge as external"
-            );
-        },
+    let (remote, _sb, forge, cand, _) = published_forge(false, false);
+    let first = provider_update(remote.path(), &cand, UpdateShape::CleanMerge);
+    let head = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
+    let tree = git_rev(remote.path(), &format!("{head}^{{tree}}"));
+    let merged = commit_tree(remote.path(), &tree, &["main"], "external squash merge");
+    git(remote.path(), &["update-ref", "refs/heads/main", &merged]);
+    git(remote.path(), &["update-ref", "refs/pull/42/head", &head]);
+    git(remote.path(), &["update-ref", "-d", "refs/heads/orbit/T1"]);
+    forge.with_state(|s| (s.head, s.merged, s.merge_commit) = (head.clone(), true, Some(merged)));
+    assert_landed(
+        land_now(&forge),
+        "a clean externally merged chain completes",
+    );
+    forge.assert_none(NO_MERGE_OR_UPDATE, "already merged");
+    assert_eq!(git_rev(&forge.repo, "FETCH_HEAD"), head);
+    let updates = forge.updates.lock().unwrap();
+    let comp = updates
+        .iter()
+        .find(|u| u.step == Complete)
+        .expect("completes from external merge");
+    let ev: Value = serde_json::from_str(&comp.evidence).unwrap();
+    assert_eq!(
+        ev["external_merge"], true,
+        "completion records external merge"
     );
 }
 
-#[test]
 fn handoff_merge_in_progress_contracts() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "handoff_merge_in_progress_contracts",
-        || {
-            for merged in [true, false] {
-                let sandbox = tempdir().unwrap();
-                let forge = FakeForge::new(sandbox.path(), false);
-                let head = forge.context.candidate.candidate.commit.clone();
-                forge.job(&head, passed(1, 11));
-                forge.state.lock().unwrap().merge_in_progress = Some(merged);
-                let (result, waits) = counted_land(&forge, json!({"max_wait_seconds":30}));
-                if merged {
-                    assert_eq!(result.unwrap()["phase"], "landed");
-                } else {
-                    let error = result.unwrap_err().to_string();
-                    assert!(
-                        error.contains("one re-read did not confirm it merged"),
-                        "{error}"
-                    );
-                    assert!(
-                        forge
-                            .steps()
-                            .contains(&HandoffLandingStep::Stop { repairable: false })
-                    );
-                }
-                assert!(
-                    waits.is_empty(),
-                    "handoff does not enter completion's polling path"
-                );
-                assert_sent_len(&forge, "pr.merge", 1, "no second mutation");
-                assert_sent_len(&forge, "pr.status", 2, "one reconciliation read");
-            }
-        },
-    );
+    for merged in [true, false] {
+        let (_sb, forge, head, _) = forge_fixture(false, false);
+        forge.job(&head, passed(1, 11));
+        forge.with_state(|s| s.merge_in_progress = Some(merged));
+        let (result, waits) = counted_land(&forge, json!({"max_wait_seconds": 30}));
+        if merged {
+            assert_landed(result, "merged");
+        } else {
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("one re-read did not confirm it merged"),
+                "{err}"
+            );
+            assert!(forge.steps().contains(&STOP));
+        }
+        assert!(
+            waits.is_empty(),
+            "handoff does not enter completion's polling path"
+        );
+        forge.assert_sent("pr.merge", 1, "no second mutation");
+        forge.assert_sent("pr.status", 2, "one reconciliation read");
+    }
 }
