@@ -583,6 +583,21 @@ fn job_run_list_filters_body(fixture: &Fixture) {
         run_ids(task),
         "since=all is not a time bound"
     );
+    for since in [
+        "",
+        "all",
+        "7d",
+        "2000-01-01T00:00:00",
+        "2000-01-01T00:00:00Z",
+    ] {
+        let page = get(&server, &query(&format!("task_id=ORB-10001&since={since}")));
+        assert_eq!(run_ids(&page), run_ids(task), "since={since}");
+    }
+    let seconds = get(&server, &query("task_id=ORB-10001&since=3600"));
+    assert_eq!(
+        run_ids(&seconds),
+        id_set(&["jrun-a", "jrun-b", "jrun-d", "jrun-e"])
+    );
     let blank_task = get(&server, &query("task_id=%20&state=failed&since=24h"));
     assert_eq!(blank_task["total"], failed_window["total"]);
     assert_eq!(failed_window["total"], 6);

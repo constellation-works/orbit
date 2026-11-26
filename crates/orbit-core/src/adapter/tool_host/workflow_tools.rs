@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
@@ -218,9 +217,10 @@ fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         .transpose()?;
     let since = optional_string(&input, "since")?
         .map(|value| {
-            DateTime::parse_from_rfc3339(&value)
-                .map(|value| value.with_timezone(&Utc))
-                .map_err(|error| OrbitError::InvalidInput(format!("`since` {error}")))
+            orbit_common::protocol::tool_input::parse_since_with(
+                &value,
+                orbit_common::protocol::tool_input::parse_duration_seconds,
+            )
         })
         .transpose()?;
     let runs = runtime.list_job_runs(JobRunListParams {
