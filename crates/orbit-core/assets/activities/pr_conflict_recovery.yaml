@@ -227,8 +227,9 @@ spec:
          `failed_step_input.authenticated_published_head_sha`. Compare only that
          pin, never `head_sha`, `published_head_sha`, the live branch or the
          remote. A missing pin means stop;
-       - for `pr_complete`: both the retained `completion: done` and
-         `auto_fix: true` authorizations are missing, or `pr_number` is missing.
+       - for `pr_complete`: neither the retained `completion: done` nor the
+         `auto_fix: true` authorization is present (either one alone
+         authorizes conflict recovery), or `pr_number` is missing.
 
     2. Resolve every conflict path. Use the task description, acceptance
        criteria, approved comments, the candidate changes, and both sides as the
