@@ -1,5 +1,5 @@
 //! Durable recovery decisions and retry admission.
-use super::invocation::{RecoveryDispatch, dispatch_recovery};
+use super::invocation::{RecoveryDispatch, RecoveryDispatchError, dispatch_recovery};
 use super::observation::RecoveryObservation;
 use super::*;
 use crate::context::{
@@ -20,6 +20,9 @@ pub(super) enum RecoveryAdmission {
     Original { no_edit_eligible: bool },
     /// Fail the step as the blocker recovery declared [ORB-14268].
     Blocked(AgentBlocker),
+    /// Hold the step without failing or consuming final recovery when
+    /// recovery dispatch expired waiting on a deferred footprint.
+    FootprintUnavailable(DispatchError),
 }
 
 /// Deferred `StepRecoveryAttempted` event so `retry.rs` can settle check-repair
@@ -135,10 +138,17 @@ pub(super) fn attempt_recovery_activity(
         Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {
             dispatch_recovery(step, ctx, recovery, failure, attempt, max_attempts)
         }
-        Ok(StepRecoveryAdmission::Denied { reason }) => Err(("authorization", reason)),
-        Err(error) => Err(("authorization", error.to_string())),
+        Ok(StepRecoveryAdmission::Denied { reason }) => Err(RecoveryDispatchError::Failed {
+            phase: "authorization",
+            message: reason,
+        }),
+        Err(error) => Err(RecoveryDispatchError::Failed {
+            phase: "authorization",
+            message: error.to_string(),
+        }),
     };
 
+    let mut held_footprint: Option<DispatchError> = None;
     let (recovery_succeeded, failure_phase, error_message, output, read, recovery_model) =
         match result {
             Ok(RecoveryDispatch {
@@ -170,7 +180,19 @@ pub(super) fn attempt_recovery_activity(
                     recovery_model,
                 )
             }
-            Err((phase, message)) => (
+            Err(RecoveryDispatchError::FootprintUnavailable(error)) => {
+                let message = error.to_string();
+                held_footprint = Some(error);
+                (
+                    false,
+                    Some("dispatch".to_string()),
+                    Some(redacted_recovery_diagnostic(&message)),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            Err(RecoveryDispatchError::Failed { phase, message }) => (
                 false,
                 Some(phase.to_string()),
                 Some(redacted_recovery_diagnostic(&message)),
@@ -185,16 +207,17 @@ pub(super) fn attempt_recovery_activity(
     };
     // Without a slot (custom or conflict recovery, or a host without the
     // capability) a completed recovery keeps the legacy single re-attempt.
-    let admission = match (&decision, blocker) {
-        _ if !recovery_succeeded => RecoveryAdmission::Original {
+    let admission = match (held_footprint, &decision, blocker) {
+        (Some(error), _, _) => RecoveryAdmission::FootprintUnavailable(error),
+        (_, _, _) if !recovery_succeeded => RecoveryAdmission::Original {
             no_edit_eligible: false,
         },
-        (_, Some(blocker)) => RecoveryAdmission::Blocked(blocker),
-        (None, None) => RecoveryAdmission::Retry(recovery_model),
-        (Some(decision), None) if decision.retry_admitted => {
+        (_, _, Some(blocker)) => RecoveryAdmission::Blocked(blocker),
+        (_, None, None) => RecoveryAdmission::Retry(recovery_model),
+        (_, Some(decision), None) if decision.retry_admitted => {
             RecoveryAdmission::Retry(recovery_model)
         }
-        (Some(decision), None) => RecoveryAdmission::Original {
+        (_, Some(decision), None) => RecoveryAdmission::Original {
             no_edit_eligible: decision.status == "absent"
                 || (decision.status == "verified"
                     && decision.verdict.as_deref()
