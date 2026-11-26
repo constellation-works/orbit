@@ -2,13 +2,10 @@
 # Runs a command with the lint environment of the folded CI test build.
 #
 # The workspace test build (`check-ci-macos.sh --workspace-build`) compiles
-# workspace members through clippy-driver with the all-targets lint flags of
-# `cargo clippy --workspace --all-targets -- -D warnings -A
-# clippy::disallowed_methods` (Makefile `ci-lint`). `-A
-# clippy::disallowed_methods` keeps test-only channels exempt; the
-# crate-root `deny(clippy::disallowed_methods)` attributes still reject
-# them in production code, overriding this `-A`. This is the one lint
-# environment: every Clippy pass and `cargo doc` runs under it.
+# workspace members through clippy-driver. The crate-root disallowed-method
+# denies override the test-only command-line relaxation in production.
+# --check and --check-json enforce the warning gate on Cargo's JSON output.
+# Plain mode lets nextest reuse the artifacts the checked build produced.
 #
 # Cargo fingerprints RUSTC_WORKSPACE_WRAPPER and the CLIPPY_ARGS value that
 # clippy-driver tracks. A later nextest run or nextest listing
@@ -21,7 +18,14 @@
 set -euo pipefail
 
 export RUSTC_WORKSPACE_WRAPPER=clippy-driver
-export CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
+export CLIPPY_ARGS='-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
+if [[ "${1:-}" == --check || "${1:-}" == --check-json ]]; then
+  checker="$(dirname "${BASH_SOURCE[0]}")/check-rust-source-order.py"
+  options=()
+  if [[ "$1" == --check-json ]]; then options+=(--json); fi
+  shift
+  exec python3 "$checker" "${options[@]}" -- "$@"
+fi
 if [ "$#" -eq 0 ]; then
   echo "with-test-build-lint: no command given" >&2
   exit 2

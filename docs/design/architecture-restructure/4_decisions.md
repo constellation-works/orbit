@@ -191,10 +191,76 @@ The order is: ratchets, environment, store, the surface boundary, the inside of 
 - After the surface boundary closes, anything inside `orbit-core` can move without touching a surface.
 - Cost: the runtime, the largest pain, is treated second to last.
 
+## Roll out STD-12 declaration and literal order
+
+**Recorded:** 2026-11-26 · [ORB-28969]
+
+The root and desktop workspaces use the template groups for
+[STD-12@4 §R20 and §R23](../../standards/STD-12-source-style/STD-12.md#rust-profile).
+Clippy checks declarations, tests-last placement and local struct literals.
+The root production and folded test builds reject compiler warnings through
+[the Cargo diagnostic checker](../../../scripts/check-rust-source-order.py).
+Desktop uses the same Clippy configuration with its native Linux and macOS
+`-D warnings` gate.
+
+### Temporary deviation
+
+The Linux root inventory at `85d04297c` plus the dashboard declaration fix
+contains 2,074 declaration and 441 literal findings across 1,420 files.
+It combines distinct diagnostic occurrences from production and all-targets
+Clippy, including two declaration pairs specific to production. The desktop
+inventory found 11 declaration and four literal occurrences on Linux.
+Those were corrected along with the out-of-line desktop test module placement
+and the macOS installer declarations.
+
+The [root baseline](../../../scripts/rust-source-order-baseline.tsv) admits
+only the recorded occurrences. The checker keys them by file, lint and a
+fingerprint of the reported declaration pair or literal fields. Counts permit
+line shifts and reject additional occurrences with the same fingerprint.
+The PR guard rejects baseline growth against the merge base. Module and import
+findings, test-module findings and unrelated warnings remain strict. A child
+module that relies on an earlier lexical macro can use the reasoned, scoped
+`expect` in §R20.
+
+| Cleanup scope | Declarations | Literals | Task |
+| --- | ---: | ---: | --- |
+| Types | 196 | 12 | [ORB-29006] |
+| Common | 129 | 37 | [ORB-29018] |
+| Agent, auth, automation, clock, config, exec, policy, registry and search | 182 | 17 | [ORB-29019] |
+| Command facade, MCP and tools | 169 | 55 | [ORB-29021] |
+| Store and runtime | 216 | 62 | [ORB-29024] |
+| Engine source | 183 | 41 | [ORB-29026] |
+| Engine test and example targets | 113 | 8 | [ORB-29027] |
+| Core application task operations | 114 | 50 | [ORB-29029] |
+| Core application job operations | 97 | 24 | [ORB-29031] |
+| Core application admission through experiment | 177 | 39 | [ORB-29033] |
+| Remaining core application domains | 132 | 43 | [ORB-29035] |
+| Core adapters, app, bootstrap, runtime and tests | 54 | 23 | [ORB-29036] |
+| CLI | 174 | 22 | [ORB-29037] |
+| Web | 138 | 8 | [ORB-29038] |
+
+Remove a row when its occurrence is fixed. Preserve the evaluation order
+of initializer expressions before reordering named fields. Retire the
+baseline once these batches leave it empty.
+
+### Clippy coverage limits
+
+Clippy's tests-last lint sees inline test modules and skips some subsequent
+items, including a subsequent module. The ordering lint skips some items
+such as underscore-prefixed declarations and external macro output.
+The literal lint sees source literals for structs defined in the current
+crate and skips expansions. Root required Clippy sees code selected by its
+Linux build. [ORB-29039] tracks these gaps. [ORB-28985] owns adoption of
+the shared checker, including §R21 impl adjacency and §R22 member order.
+[Clippy module order](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/arbitrary_source_item_ordering.rs),
+[tests-last lint](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/items_after_test_module.rs),
+[struct literal lint](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/inconsistent_struct_constructor.rs).
+
 ## Task References
 
 - [ORB-28318] — carried the proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations this restructure answers.
+- [ORB-28969] — adopted the STD-12 declaration and literal order gate with a shrinking root baseline.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -48,6 +48,7 @@ impl Dashboard {
             review: (0..count).map(task).collect(),
             fail_page: None,
             requests: Vec::new(),
+            paths: Vec::new(),
             hidden_review: HashSet::new(),
             report_review_unavailable: false,
             failed: Vec::new(),
@@ -55,7 +56,6 @@ impl Dashboard {
             drains: Vec::new(),
             hidden_failed: HashSet::new(),
             report_failed_unavailable: false,
-            paths: Vec::new(),
             remote: None,
         }
     }
@@ -202,6 +202,42 @@ impl Dashboard {
     }
 }
 
+#[derive(Default)]
+struct DrainDashboard {
+    routes: HashMap<String, Value>,
+    paths: Vec<String>,
+}
+
+impl DrainDashboard {
+    fn drains(&mut self, prefix: &str, rows: Vec<Value>) {
+        self.routes
+            .insert(format!("{prefix}/fleet/drains"), json!({"items": rows}));
+    }
+
+    fn readiness(&mut self, prefix: &str, workspace: &str, tasks: Vec<Value>) {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("workspace", workspace)
+            .append_pair("limit", "500")
+            .finish();
+        self.routes.insert(
+            format!("{prefix}/workflows/auto/readiness?{query}"),
+            json!({"total": tasks.len(), "tasks": tasks}),
+        );
+    }
+
+    fn poll(&mut self, watcher: &mut Watcher) -> Vec<(String, String)> {
+        let mut notes = Vec::new();
+        watcher.poll(
+            |path| {
+                self.paths.push(path.into());
+                self.routes.get(path).cloned()
+            },
+            |notice| notes.push((notice.title.clone(), notice.body.clone())),
+        );
+        notes
+    }
+}
+
 fn unavailable_entries(workspaces: &HashSet<String>) -> Value {
     let mut ids: Vec<&String> = workspaces.iter().collect();
     ids.sort();
@@ -240,42 +276,6 @@ fn failed_run(run_id: &str, workspace_id: &str, title: &str) -> Value {
         "job_id": "job",
         "tasks": [{"title": title}],
     })
-}
-
-#[derive(Default)]
-struct DrainDashboard {
-    routes: HashMap<String, Value>,
-    paths: Vec<String>,
-}
-
-impl DrainDashboard {
-    fn drains(&mut self, prefix: &str, rows: Vec<Value>) {
-        self.routes
-            .insert(format!("{prefix}/fleet/drains"), json!({"items": rows}));
-    }
-
-    fn readiness(&mut self, prefix: &str, workspace: &str, tasks: Vec<Value>) {
-        let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("workspace", workspace)
-            .append_pair("limit", "500")
-            .finish();
-        self.routes.insert(
-            format!("{prefix}/workflows/auto/readiness?{query}"),
-            json!({"total": tasks.len(), "tasks": tasks}),
-        );
-    }
-
-    fn poll(&mut self, watcher: &mut Watcher) -> Vec<(String, String)> {
-        let mut notes = Vec::new();
-        watcher.poll(
-            |path| {
-                self.paths.push(path.into());
-                self.routes.get(path).cloned()
-            },
-            |notice| notes.push((notice.title.clone(), notice.body.clone())),
-        );
-        notes
-    }
 }
 
 fn drain(workspace: &str, phase: &str, holds: &[&str]) -> Value {

@@ -80,32 +80,6 @@ impl Display for Version {
     }
 }
 
-/// Pick the newest stable release above `current` that carries every desktop
-/// asset this platform needs. `releases` is GitHub's release-list JSON.
-pub(crate) fn newest_update(releases: &Value, current: Version, bundle: &str) -> Option<Version> {
-    releases
-        .as_array()?
-        .iter()
-        .filter(|release| {
-            release["draft"].as_bool() == Some(false)
-                && release["prerelease"].as_bool() == Some(false)
-        })
-        .filter_map(|release| {
-            let version = Version::parse(release["tag_name"].as_str()?)?;
-            let names: Vec<&str> = release["assets"]
-                .as_array()?
-                .iter()
-                .filter_map(|asset| asset["name"].as_str())
-                .collect();
-            [MANIFEST, SIGNATURE, VERSION_FILE, bundle]
-                .iter()
-                .all(|needed| names.contains(needed))
-                .then_some(version)
-        })
-        .filter(|version| *version > current)
-        .max()
-}
-
 /// Why a check found no update to offer.
 #[derive(Debug)]
 pub(crate) enum CheckError {
@@ -285,6 +259,32 @@ impl Releases {
 
 /// Download URL of a release asset. The tag comes from a parsed version, so
 /// the listing's own URLs are never followed.
+/// Pick the newest stable release above `current` that carries every desktop
+/// asset this platform needs. `releases` is GitHub's release-list JSON.
+pub(crate) fn newest_update(releases: &Value, current: Version, bundle: &str) -> Option<Version> {
+    releases
+        .as_array()?
+        .iter()
+        .filter(|release| {
+            release["draft"].as_bool() == Some(false)
+                && release["prerelease"].as_bool() == Some(false)
+        })
+        .filter_map(|release| {
+            let version = Version::parse(release["tag_name"].as_str()?)?;
+            let names: Vec<&str> = release["assets"]
+                .as_array()?
+                .iter()
+                .filter_map(|asset| asset["name"].as_str())
+                .collect();
+            [MANIFEST, SIGNATURE, VERSION_FILE, bundle]
+                .iter()
+                .all(|needed| names.contains(needed))
+                .then_some(version)
+        })
+        .filter(|version| *version > current)
+        .max()
+}
+
 fn asset_url(version: Version, asset: &str) -> String {
     format!("https://github.com/{REPOSITORY}/releases/download/v{version}/{asset}")
 }

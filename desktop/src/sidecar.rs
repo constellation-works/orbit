@@ -37,6 +37,12 @@ const ADDRESS_CAPACITY: usize = 4;
 /// The log is truncated on launch past this size.
 const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
 
+/// The bundled status page, at the address Tauri serves app assets from.
+#[cfg(not(windows))]
+const STATUS_PAGE: &str = "tauri://localhost/index.html";
+#[cfg(windows)]
+const STATUS_PAGE: &str = "http://tauri.localhost/index.html";
+
 /// The window and app paths the supervisor drives.
 pub trait Shell: Send + 'static {
     /// Load `url` in the dashboard window.
@@ -407,12 +413,6 @@ fn set_status(shell: &dyn Shell, sidecar: &Sidecar, status: Value) {
     }
 }
 
-/// The bundled status page, at the address Tauri serves app assets from.
-#[cfg(not(windows))]
-const STATUS_PAGE: &str = "tauri://localhost/index.html";
-#[cfg(windows)]
-const STATUS_PAGE: &str = "http://tauri.localhost/index.html";
-
 fn is_status_page(url: &Url) -> bool {
     match url.scheme() {
         "tauri" => url.host_str() == Some("localhost"),
@@ -512,6 +512,10 @@ fn null_device() -> &'static str {
 /// An app started from the Dock or a desktop launcher gets a minimal `PATH`,
 /// so the installers' default locations are checked as well as `PATH`.
 /// `ORBIT_BIN` overrides the search.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the standalone launcher reads its executable override at resolution"
+)]
 fn resolve_orbit() -> Result<PathBuf, String> {
     if let Some(explicit) = std::env::var_os("ORBIT_BIN") {
         let path = PathBuf::from(explicit);
@@ -532,6 +536,10 @@ fn resolve_orbit() -> Result<PathBuf, String> {
         })
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "executable discovery uses the standalone launcher's installation and search paths"
+)]
 fn candidates() -> Vec<PathBuf> {
     let exe = if cfg!(windows) { "orbit.exe" } else { "orbit" };
     let home = std::env::home_dir();

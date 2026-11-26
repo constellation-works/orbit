@@ -325,6 +325,8 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
         scripts = self.root / "scripts"
         scripts.mkdir(exist_ok=True)
         shutil.copy(ROOT / "scripts/with-test-build-lint.sh", scripts)
+        shutil.copy(ROOT / "scripts/check-rust-source-order.py", scripts)
+        (scripts / "rust-source-order-baseline.tsv").touch()
         env = dict(os.environ, **self.seed["env"], **job.get("env", {}), **step.get("env", {}))
         env.update(PATH=f"{cargo.parent}:{os.environ['PATH']}", FIXTURE_COMMANDS=str(commands),
                    FIXTURE_EXIT=str(failure))
@@ -347,8 +349,8 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
                     self.assertTrue(commands)
                     if role == "seed-check":
                         self.assertEqual([c["argv"] for c in commands], [
-                            ["check", "--locked", "--workspace", "--lib", "--bins"],
-                            ["doc", "--locked", "--no-deps", "--workspace"],
+                            ["check", "--locked", "--workspace", "--lib", "--bins", "--message-format=json"],
+                            ["doc", "--locked", "--no-deps", "--workspace", "--message-format=json"],
                             ["check", "--locked", "--workspace", "--lib", "--bins", "--tests",
                              "--target", "aarch64-apple-darwin"]])
                         self.assertEqual([c["wrapper"] for c in commands],
@@ -360,7 +362,8 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
                     else:
                         self.assertTrue(all(c["wrapper"] == "clippy-driver" for c in commands))
                         self.assertEqual([c["argv"] for c in commands], [
-                            ["test", "--no-run", "--locked", "--workspace", "--lib", "--bins", "--tests", "--examples"]])
+                            ["test", "--no-run", "--locked", "--workspace", "--lib", "--bins",
+                             "--tests", "--examples", "--message-format=json"]])
                         self.assertIn("-A__CLIPPY_HACKERY__clippy::disallowed_methods", commands[0]["lint"])
             # A producer failure is visible and does not run later commands;
             # a subsequent ordinary push can try again, with no hidden retry.

@@ -17,9 +17,6 @@ mod release;
 mod trust;
 mod verified;
 
-#[cfg(test)]
-mod tests;
-
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::time::{Duration, Instant};
 
@@ -56,49 +53,6 @@ pub(crate) struct Requests(SyncSender<Request>);
 impl Requests {
     pub(crate) fn activate(&self) {
         let _ = self.0.try_send(Request::Activate);
-    }
-}
-
-pub(crate) fn channel() -> (Requests, Receiver<Request>) {
-    let (sender, receiver) = mpsc::sync_channel(REQUEST_CAPACITY);
-    (Requests(sender), receiver)
-}
-
-/// Check and install updates until the app exits.
-pub(crate) fn run(app: AppHandle, item: MenuItem<Wry>, requests: Receiver<Request>) {
-    let (Some(current), Some(install)) = (Version::current(), Install::detect()) else {
-        let _ = item.set_text("Updates Unavailable in This Build");
-        let _ = item.set_enabled(false);
-        return;
-    };
-    let Some(asset) = install.asset() else {
-        let _ = item.set_text("Updates Unavailable on This Platform");
-        let _ = item.set_enabled(false);
-        return;
-    };
-    let mut updater = Updater {
-        app,
-        item,
-        releases: Releases::new(),
-        install,
-        asset,
-        current,
-        pending: None,
-        announced: None,
-    };
-    let mut next_check = Instant::now() + FIRST_CHECK_DELAY;
-    loop {
-        match requests.recv_timeout(next_check.saturating_duration_since(Instant::now())) {
-            Ok(Request::Activate) => match updater.pending.clone() {
-                Some(update) => updater.offer(&update),
-                None => updater.check(true),
-            },
-            Err(RecvTimeoutError::Timeout) => {
-                updater.check(false);
-                next_check = Instant::now() + CHECK_INTERVAL;
-            }
-            Err(RecvTimeoutError::Disconnected) => return,
-        }
     }
 }
 
@@ -232,3 +186,49 @@ impl Updater {
         let _ = self.item.set_enabled(true);
     }
 }
+
+pub(crate) fn channel() -> (Requests, Receiver<Request>) {
+    let (sender, receiver) = mpsc::sync_channel(REQUEST_CAPACITY);
+    (Requests(sender), receiver)
+}
+
+/// Check and install updates until the app exits.
+pub(crate) fn run(app: AppHandle, item: MenuItem<Wry>, requests: Receiver<Request>) {
+    let (Some(current), Some(install)) = (Version::current(), Install::detect()) else {
+        let _ = item.set_text("Updates Unavailable in This Build");
+        let _ = item.set_enabled(false);
+        return;
+    };
+    let Some(asset) = install.asset() else {
+        let _ = item.set_text("Updates Unavailable on This Platform");
+        let _ = item.set_enabled(false);
+        return;
+    };
+    let mut updater = Updater {
+        app,
+        item,
+        releases: Releases::new(),
+        install,
+        asset,
+        current,
+        pending: None,
+        announced: None,
+    };
+    let mut next_check = Instant::now() + FIRST_CHECK_DELAY;
+    loop {
+        match requests.recv_timeout(next_check.saturating_duration_since(Instant::now())) {
+            Ok(Request::Activate) => match updater.pending.clone() {
+                Some(update) => updater.offer(&update),
+                None => updater.check(true),
+            },
+            Err(RecvTimeoutError::Timeout) => {
+                updater.check(false);
+                next_check = Instant::now() + CHECK_INTERVAL;
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
