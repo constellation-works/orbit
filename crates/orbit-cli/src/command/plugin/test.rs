@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use clap::Args;
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::adapter::command::{PluginTestOptions, PluginTestValidationGate};
+use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
@@ -47,7 +48,7 @@ pub struct PluginTestArgs {
 }
 
 impl PluginTestArgs {
-    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    pub(super) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         let configuration = self.fixture_config.as_ref().map_or_else(
             || "Configuration: manifest defaults; caller plugin settings excluded.".to_string(),
             |path| format!(
@@ -55,20 +56,26 @@ impl PluginTestArgs {
                 path.display()
             ),
         );
-        let report = runtime.test_plugin_dir(
-            &self.dir,
-            &PluginTestOptions {
-                first_party: self.first_party,
-                grants: self.grants,
-                accept_requested: self.accept_requested,
-                case: self.case,
-                fixture_config: self.fixture_config.clone(),
-                update_goldens: self.update_goldens,
-                validation_gate: validation_gate_from_env(env),
-                require_sandbox_exec: env.orbit_require_sandbox_exec().and_then(OsStr::to_str)
-                    == Some("1"),
+        let Outcome::Tested(report) = exec(
+            core,
+            Command::Test {
+                dir: self.dir,
+                options: PluginTestOptions {
+                    first_party: self.first_party,
+                    grants: self.grants,
+                    accept_requested: self.accept_requested,
+                    case: self.case,
+                    fixture_config: self.fixture_config.clone(),
+                    update_goldens: self.update_goldens,
+                    validation_gate: validation_gate_from_env(env),
+                    require_sandbox_exec: env.orbit_require_sandbox_exec().and_then(OsStr::to_str)
+                        == Some("1"),
+                },
             },
-        )?;
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
 
         use crate::output::table::{Column, Table};
         use comfy_table::Cell;

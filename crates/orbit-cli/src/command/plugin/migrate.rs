@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use orbit_core::OrbitRuntime;
-use orbit_core::adapter::command::{PluginMigrateRequest, migrate_plugin_sidecars};
+use orbit_core::Core;
+use orbit_core::adapter::command::PluginMigrateRequest;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct PluginMigrateArgs {
@@ -26,15 +27,21 @@ pub struct PluginMigrateArgs {
     pub out_dir: Option<PathBuf>,
 }
 
-impl Execute for PluginMigrateArgs {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        let (yaml, path) = migrate_plugin_sidecars(&PluginMigrateRequest {
-            backend_command: self.binary,
-            sidecars: self.sidecars,
-            version: self.version,
-            namespace: self.name,
-            out_dir: self.out_dir,
-        })?;
+impl ExecuteCore for PluginMigrateArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Migrated(yaml, path) = exec(
+            core,
+            Command::Migrate(PluginMigrateRequest {
+                backend_command: self.binary,
+                sidecars: self.sidecars,
+                version: self.version,
+                namespace: self.name,
+                out_dir: self.out_dir,
+            }),
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let text = match &path {
             Some(path) => format!(
                 "Wrote {}\n\nNext steps:\n  orbit plugin validate {}\n  orbit plugin add {}\n\nWarning: migration omits `origin: orbit`; add it only for a source that satisfies the first-party rule.",

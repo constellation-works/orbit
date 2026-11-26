@@ -7,12 +7,12 @@ use orbit_common::OrbitError;
 use orbit_tools::plugin::stale_plugin_callback_session_count;
 use serde_json::Value;
 
-use crate::OrbitRuntime;
-use crate::application::plugin::{
-    self, PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
+use super::{
+    self as plugin, PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginRemoveOptions, PluginSecretStatus, PluginSummary, PluginSyncOutcome, PluginTestOptions,
     PluginTestReport, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
 };
+use crate::OrbitRuntime;
 use crate::runtime::plugin::discovery::{self, PluginCliGroup};
 use crate::runtime::plugin::secrets::PluginSecretValue;
 
@@ -212,8 +212,8 @@ impl OrbitRuntime {
 
     /// The `orbit <ns>` command groups this runtime's active plugins
     /// contribute. The CLI builds its clap tree before a runtime exists and
-    /// uses [`super::host_plugin_cli_groups`]; this is the same projection for a
-    /// caller that already holds one.
+    /// uses host-level discovery. This is the same projection for a caller
+    /// that already holds a workspace runtime.
     pub fn plugin_cli_groups(&self) -> Vec<PluginCliGroup> {
         discovery::plugin_cli_groups(self.plugin_load())
     }

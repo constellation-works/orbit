@@ -1,7 +1,8 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
 use super::support::{host_state, plugin_record, state_reason};
 
@@ -11,9 +12,15 @@ pub struct PluginShowArgs {
     pub name: String,
 }
 
-impl Execute for PluginShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let plugin = runtime.show_plugin(&self.name)?;
+impl ExecuteCore for PluginShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Shown {
+            plugin,
+            state_visible,
+        } = exec(core, Command::Show(self.name))?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
 
         use crate::output::color::{Domain, bold, text};
         let mut header = format!(
@@ -108,7 +115,6 @@ impl Execute for PluginShowArgs {
         if let Some(diagnostic) = &plugin.diagnostic {
             header.push_str(&format!("\n{} {diagnostic}", bold("Diagnostic:")));
         }
-        let state_visible = runtime.ensure_plugin_state_visible().is_ok();
         if !state_visible {
             header.push_str(&format!(
                 "\n{} not visible from an agent sandbox",

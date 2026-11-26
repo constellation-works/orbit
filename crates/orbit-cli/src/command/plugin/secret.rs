@@ -11,10 +11,11 @@ use clap::{Args, Subcommand};
 use orbit_core::adapter::command::{
     MAX_PLUGIN_SECRET_BYTES, PluginSecretStatus, PluginSecretValue,
 };
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::plugin::{Command, Outcome, exec};
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct PluginSecretCommand {
@@ -22,12 +23,12 @@ pub struct PluginSecretCommand {
     pub command: PluginSecretSubcommand,
 }
 
-impl Execute for PluginSecretCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for PluginSecretCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self.command {
-            PluginSecretSubcommand::Set(args) => args.execute(runtime),
-            PluginSecretSubcommand::List(args) => args.execute(runtime),
-            PluginSecretSubcommand::Rm(args) => args.execute(runtime),
+            PluginSecretSubcommand::Set(args) => args.execute(core),
+            PluginSecretSubcommand::List(args) => args.execute(core),
+            PluginSecretSubcommand::Rm(args) => args.execute(core),
         }
     }
 }
@@ -71,21 +72,20 @@ pub struct PluginSecretSetArgs {
     pub rejected: Vec<String>,
 }
 
-impl Execute for PluginSecretSetArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        if !self.rejected.is_empty() {
-            return Err(OrbitError::InvalidInput(format!(
-                "a secret value is never taken from the command line, where other processes and \
-                 shell history can read it; pipe it on stdin (`orbit plugin secret set {} {} < \
-                 file`) or run the command in a terminal to be prompted",
-                self.plugin, self.name
-            )));
-        }
-        // Before the prompt: a value typed into a sandbox that cannot store it
-        // would only be thrown away.
-        runtime.ensure_plugin_state_visible()?;
-        let value = read_secret_value(&self.plugin, &self.name)?;
-        let status = runtime.set_plugin_secret(&self.plugin, &self.name, &value)?;
+impl ExecuteCore for PluginSecretSetArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::SecretSet(status) = exec(
+            core,
+            Command::SetSecret {
+                read: &|| read_secret_value(&self.plugin, &self.name),
+                plugin: self.plugin.clone(),
+                name: self.name.clone(),
+                trailing_args: !self.rejected.is_empty(),
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let text = format!("Set secret '{}' for plugin '{}'.", status.name, self.plugin);
         Ok(Payload::detail(secret_record(&self.plugin, &status), text).into())
     }
@@ -170,12 +170,16 @@ pub struct PluginSecretListArgs {
     pub plugin: String,
 }
 
-impl Execute for PluginSecretListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for PluginSecretListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         use crate::output::table::{Column, Table};
         use comfy_table::Cell;
 
-        let secrets = runtime.list_plugin_secrets(&self.plugin)?;
+        let Outcome::SecretsListed(secrets) =
+            exec(core, Command::ListSecrets(self.plugin.clone()))?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let mut table = Table::new(vec![
             Column::new("SECRET").fixed(),
             Column::new("STATE").fixed(),
@@ -227,9 +231,18 @@ pub struct PluginSecretRmArgs {
     pub name: String,
 }
 
-impl Execute for PluginSecretRmArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let removed = runtime.remove_plugin_secret(&self.plugin, &self.name)?;
+impl ExecuteCore for PluginSecretRmArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::SecretRemoved(removed) = exec(
+            core,
+            Command::RemoveSecret {
+                plugin: self.plugin.clone(),
+                name: self.name.clone(),
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let text = if removed {
             format!(
                 "Removed secret '{}' from plugin '{}'.",

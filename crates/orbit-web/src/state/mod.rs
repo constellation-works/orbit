@@ -80,7 +80,9 @@ pub(crate) use remote_access::{
     ACTIVE_WINDOW_MINUTES, AlreadyRecorded, REFUSAL_WINDOW_HOURS, RefusalReason, RemoteAccess,
     TailscaleReading,
 };
-pub(crate) use request::{ConfigFileWs, Pinned, RefreshFailure, Ws, WsCore, WsRejection};
+pub(crate) use request::{
+    ConfigFileWs, Pinned, PluginPanelWs, RefreshFailure, Ws, WsCore, WsRejection,
+};
 pub(crate) use trusted_hosts::TrustedHosts;
 
 /// Synthetic workspace id used by [`DashboardState::single`].
