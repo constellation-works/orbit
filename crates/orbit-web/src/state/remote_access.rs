@@ -6,7 +6,7 @@
 //! tracker. Memory is bounded: at most [`MAX_DEVICES`] devices and
 //! [`MAX_REFUSAL_KEYS`] refusal keys, each with fixed-size time buckets.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -107,15 +107,22 @@ impl RemoteAccess {
     }
 
     /// Count one open live stream for `device` until the guard drops.
-    pub(crate) fn open_stream(self: &Arc<Self>, device: Option<IpAddr>) -> StreamGuard {
+    /// Returns `None` when every [`MAX_DEVICES`] slot already holds an open
+    /// stream and `device` is not among them.
+    pub(crate) fn open_stream(
+        self: &Arc<Self>,
+        device: Option<IpAddr>,
+        login: &str,
+    ) -> Option<StreamGuard> {
         let key = device_key(device);
-        if let Some(entry) = self.activity().devices.get_mut(&key) {
-            entry.open_streams += 1;
-        }
-        StreamGuard {
+        let generation = self
+            .activity()
+            .open_stream(key.clone(), login, Utc::now())?;
+        Some(StreamGuard {
             access: Arc::clone(self),
             device: key,
-        }
+            generation,
+        })
     }
 
     /// Count one refused trusted-host request. `login` is kept only for an
@@ -205,11 +212,14 @@ struct TailscaleCache {
 pub(crate) struct StreamGuard {
     access: Arc<RemoteAccess>,
     device: String,
+    generation: u64,
 }
 
 impl Drop for StreamGuard {
     fn drop(&mut self) {
-        if let Some(entry) = self.access.activity().devices.get_mut(&self.device) {
+        if let Some(entry) = self.access.activity().devices.get_mut(&self.device)
+            && entry.generation == self.generation
+        {
             entry.open_streams = entry.open_streams.saturating_sub(1);
         }
     }
@@ -223,12 +233,14 @@ fn device_key(device: Option<IpAddr>) -> String {
 
 #[derive(Debug, Default)]
 struct Activity {
+    next_generation: u64,
     devices: HashMap<String, Device>,
     refusals: HashMap<(RefusalReason, Option<String>), Refusals>,
 }
 
 #[derive(Debug)]
 struct Device {
+    generation: u64,
     login: String,
     open_streams: u32,
     /// (minute since epoch, requests) for the last [`ACTIVE_WINDOW_MINUTES`].
@@ -258,12 +270,35 @@ fn prune(buckets: &mut VecDeque<(i64, u64)>, slot: i64, window: i64) {
     }
 }
 
+fn merge_buckets(
+    target: &mut VecDeque<(i64, u64)>,
+    extra: &VecDeque<(i64, u64)>,
+    slot: i64,
+    window: i64,
+) {
+    let merged = target
+        .iter()
+        .chain(extra.iter())
+        .filter(|(at, _)| *at > slot - window)
+        .fold(BTreeMap::new(), |mut acc, (at, count)| {
+            *acc.entry(*at).or_insert(0) += *count;
+            acc
+        });
+    target.clear();
+    target.extend(merged);
+}
+
 fn total(buckets: &VecDeque<(i64, u64)>) -> u64 {
     buckets.iter().map(|(_, count)| count).sum()
 }
 
 impl Activity {
-    fn admit(&mut self, key: String, login: &str, now: DateTime<Utc>) {
+    fn ensure_device(
+        &mut self,
+        key: String,
+        login: &str,
+        now: DateTime<Utc>,
+    ) -> Option<&mut Device> {
         if !self.devices.contains_key(&key) && self.devices.len() >= MAX_DEVICES {
             // Never evict a device with an open stream: its guard still counts it.
             let oldest = self
@@ -271,17 +306,27 @@ impl Activity {
                 .iter()
                 .filter(|(_, device)| device.open_streams == 0)
                 .min_by_key(|(_, device)| device.last_seen)
-                .map(|(key, _)| key.clone());
-            if let Some(oldest) = oldest {
-                self.devices.remove(&oldest);
-            }
+                .map(|(key, _)| key.clone())?;
+            self.devices.remove(&oldest);
         }
-        let device = self.devices.entry(key).or_insert_with(|| Device {
-            login: login.to_string(),
-            open_streams: 0,
-            minutes: VecDeque::new(),
-            last_seen: now,
+        let next_generation = &mut self.next_generation;
+        let device = self.devices.entry(key).or_insert_with(|| {
+            *next_generation += 1;
+            Device {
+                generation: *next_generation,
+                login: login.to_string(),
+                open_streams: 0,
+                minutes: VecDeque::new(),
+                last_seen: now,
+            }
         });
+        Some(device)
+    }
+
+    fn admit(&mut self, key: String, login: &str, now: DateTime<Utc>) {
+        let Some(device) = self.ensure_device(key, login, now) else {
+            return;
+        };
         login.clone_into(&mut device.login);
         device.last_seen = now;
         bump(
@@ -291,21 +336,55 @@ impl Activity {
         );
     }
 
+    fn open_stream(&mut self, key: String, login: &str, now: DateTime<Utc>) -> Option<u64> {
+        let device = self.ensure_device(key, login, now)?;
+        device.open_streams = device.open_streams.checked_add(1)?;
+        device.last_seen = now;
+        Some(device.generation)
+    }
+
     fn refuse(&mut self, reason: RefusalReason, login: Option<String>, now: DateTime<Utc>) {
+        let hour = now.timestamp() / 3600;
         let mut key = (reason, login);
+        let mut merged_hours: Option<VecDeque<(i64, u64)>> = None;
         if !self.refusals.contains_key(&key) && self.refusals.len() >= MAX_REFUSAL_KEYS {
             key.1 = None;
+            if !self.refusals.contains_key(&key) && self.refusals.len() >= MAX_REFUSAL_KEYS {
+                // Evict the oldest login-specific bucket before inserting an
+                // aggregate key so the table never grows past MAX_REFUSAL_KEYS.
+                let oldest = self
+                    .refusals
+                    .iter()
+                    .filter(|((_, login), _)| login.is_some())
+                    .min_by_key(|(_, entry)| entry.last_at)
+                    .or_else(|| self.refusals.iter().min_by_key(|(_, entry)| entry.last_at))
+                    .map(|(k, _)| k.clone());
+                let Some(oldest) = oldest else {
+                    return;
+                };
+                if let Some(evicted) = self.refusals.remove(&oldest) {
+                    if oldest.0 == key.0 {
+                        merged_hours = Some(evicted.hours);
+                    } else if let Some(overflow) = self.refusals.get_mut(&(oldest.0, None)) {
+                        merge_buckets(
+                            &mut overflow.hours,
+                            &evicted.hours,
+                            hour,
+                            REFUSAL_WINDOW_HOURS,
+                        );
+                    }
+                }
+            }
         }
         let entry = self.refusals.entry(key).or_insert_with(|| Refusals {
             hours: VecDeque::new(),
             last_at: now,
         });
+        if let Some(evicted_hours) = merged_hours {
+            merge_buckets(&mut entry.hours, &evicted_hours, hour, REFUSAL_WINDOW_HOURS);
+        }
         entry.last_at = now;
-        bump(
-            &mut entry.hours,
-            now.timestamp() / 3600,
-            REFUSAL_WINDOW_HOURS,
-        );
+        bump(&mut entry.hours, hour, REFUSAL_WINDOW_HOURS);
     }
 
     fn snapshot(&mut self, now: DateTime<Utc>) -> ActivitySnapshot {
