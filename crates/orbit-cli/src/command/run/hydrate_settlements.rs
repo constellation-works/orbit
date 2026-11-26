@@ -3,18 +3,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::Args;
-use orbit_common::Env;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::distributed::{
     FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest,
 };
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use orbit_mcp::federated::FederatedMcpHost;
 use orbit_mcp::{McpHost, McpSessionAuthority};
-use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
-use crate::command::host_route::caller_authority;
 use crate::command::{Block, CommandOut, Payload};
 use crate::parse::parse_since;
 
@@ -67,41 +65,30 @@ pub struct RunHydrateSettlementsArgs {
 }
 
 impl RunHydrateSettlementsArgs {
-    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        if caller_authority(env) != McpSessionAuthority::Operator {
-            return Err(OrbitError::CapabilityRefused(
-                "hydrating settlement evidence reads follower run records and requires the \
-                 operator; an agent or managed scan reads `orbit run settlements --no-reconcile` \
-                 instead"
-                    .into(),
-            ));
-        }
-        let global_root = runtime.global_root();
-        let caller = match inspect_machine_identity(&global_root)? {
-            MachineIdentityState::Present(identity) => identity.id,
-            MachineIdentityState::Absent => {
-                return Err(OrbitError::InvalidInput(
-                    "this machine has no [machine] identity yet; run `orbit init` first".into(),
-                ));
-            }
-        };
-        let request = LeafHydrationRequest {
-            claim_id: self.claim,
-            task_id: self.task,
-            machine: self.machine,
-            since: self.since.as_deref().map(parse_since).transpose()?,
-            recheck: self.recheck,
-            limit: self.limit,
-            after_claim_id: self.after,
-        };
-        let observer = OperatorRunObserver {
-            global_root,
-            caller,
-            workspace: self.follower_workspace,
-            client: RefCell::new(None),
-            selectors: RefCell::new(HashMap::new()),
-        };
-        let report = runtime.hydrate_leaf_run_evidence(&request, &observer)?;
+    pub(super) fn execute(self, core: &Core) -> CommandOut {
+        let report = exec(
+            core,
+            Command::hydrate(move |global_root, caller| {
+                let request = LeafHydrationRequest {
+                    claim_id: self.claim,
+                    task_id: self.task,
+                    machine: self.machine,
+                    since: self.since.as_deref().map(parse_since).transpose()?,
+                    recheck: self.recheck,
+                    limit: self.limit,
+                    after_claim_id: self.after,
+                };
+                let observer = OperatorRunObserver {
+                    global_root,
+                    caller,
+                    workspace: self.follower_workspace,
+                    client: RefCell::new(None),
+                    selectors: RefCell::new(HashMap::new()),
+                };
+                Ok((request, observer))
+            }),
+        )?
+        .value;
 
         use crate::output::table::{Column, Table};
         let mut table = Table::new(vec![

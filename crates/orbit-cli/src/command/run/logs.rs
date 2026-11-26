@@ -1,8 +1,9 @@
 use clap::Args;
 use orbit_common::Env;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::PipelineWorkerLogSnapshot;
 use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
-use orbit_core::{JobRun, OrbitRuntime};
+use orbit_core::{Core, JobRun};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -13,7 +14,8 @@ use std::time::Duration;
 use crate::command::{CommandOut, Payload};
 use crate::output::sink::OutputMode;
 
-use super::steps::{RunRead, resolve_run, resolve_step_filter};
+use super::steps::RunRead;
+use orbit_core::app::run::{LogFollower, LogSnapshot};
 
 #[derive(Args)]
 #[command(
@@ -40,10 +42,10 @@ pub struct RunLogsArgs {
 }
 
 impl RunLogsArgs {
-    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    pub(super) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         if self.follow {
             return follow_logs_payload(
-                runtime,
+                core,
                 env,
                 self.run_id.as_deref(),
                 self.step_id.as_deref(),
@@ -51,7 +53,7 @@ impl RunLogsArgs {
             );
         }
         run_logs_payload(
-            runtime,
+            core,
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             RunRead::from_no_reconcile(self.no_reconcile),
@@ -60,30 +62,19 @@ impl RunLogsArgs {
 }
 
 fn follow_logs_payload(
-    runtime: &OrbitRuntime,
+    core: &Core,
     env: &Env,
     run_id: Option<&str>,
     step_id: Option<&str>,
     read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id, read)?;
-    let steps = runtime.collect_run_audit_steps(&run.run_id)?;
-    let step_filter = resolve_step_filter(&run, &steps, step_id)?;
-    let runtime = runtime.clone();
+    let follower = exec(core, Command::follow_logs(run_id, step_id, read))?.value;
     let log_path = orbit_common::observability::logging::global_jsonl_log_path(env)?;
     Ok(Payload::stream(
-        json!({"run_id": run.run_id, "follow": true}),
+        json!({"run_id": follower.run_id(), "follow": true}),
         Box::new(move |sink, writer| {
             let json = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
-            let result = follow_logs(
-                &runtime,
-                &run.run_id,
-                step_filter.as_deref(),
-                read,
-                &log_path,
-                json,
-                writer,
-            );
+            let result = follow_logs(&follower, &log_path, json, writer);
             match result {
                 Err(FollowError::Io(error)) if crate::output::pipe::is_broken_pipe(&error) => {
                     Ok(())
@@ -101,14 +92,12 @@ fn follow_logs_payload(
 /// writer. Keep only offsets, counts and checksums while following. Durable
 /// captures cover a disabled or rotated trace feed without discarding output.
 fn follow_logs(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    step: Option<&str>,
-    read: RunRead,
+    follower: &LogFollower,
     path: &std::path::Path,
     json: bool,
     writer: &mut dyn Write,
 ) -> Result<(), FollowError> {
+    let run_id = follower.run_id();
     let mut feeds = vec![(path.to_path_buf(), 0)];
     if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
         feeds.push((agent_path, 0));
@@ -118,17 +107,17 @@ fn follow_logs(
     loop {
         // Read state first, then drain output. A terminal record guarantees its
         // invocation captures have already been persisted.
-        let run = read.show(runtime, run_id)?;
-        if step.is_none() {
+        let run = follower.state()?;
+        if !follower.step_filtered() {
             for (path, offset) in &mut feeds {
                 drain_provider_lines(path, run_id, offset, &mut streamed, json, writer)?;
             }
         }
-        if step.is_some() || run.state.is_terminal() {
+        if follower.step_filtered() || run.state.is_terminal() {
             // The step filter and the emitted-invocation set apply before any
             // blob is read, so each capture is loaded once however long the
             // run keeps polling.
-            let records = runtime.collect_new_run_cli_invocations(run_id, step, &completed)?;
+            let records = follower.captures(&completed)?;
             let mut captures = std::collections::BTreeMap::<(String, String), String>::new();
             for record in &records {
                 completed.insert(record.event_id.clone());
@@ -170,8 +159,8 @@ fn follow_logs(
             }
             if run.state.is_terminal() {
                 if records.is_empty()
-                    && step.is_none()
-                    && let Some(snapshot) = runtime.read_pipeline_worker_log(run_id)?
+                    && !follower.step_filtered()
+                    && let Some(snapshot) = follower.worker_log()?
                     && let Some(content) = snapshot.content
                 {
                     emit_follow_record(run_id, "worker", "stderr", &content, json, writer)?;
@@ -288,25 +277,19 @@ fn emit_follow_record(
 }
 
 fn run_logs_payload(
-    runtime: &OrbitRuntime,
+    core: &Core,
     run_id: Option<&str>,
     step_id: Option<&str>,
     read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id, read)?;
-    let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
-    let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
-    // The step filter applies before any blob is read.
-    let records = runtime.collect_new_run_cli_invocations(
-        &run.run_id,
-        step_filter.as_deref(),
-        &HashSet::new(),
-    )?;
-
+    let LogSnapshot {
+        run,
+        records,
+        worker,
+    } = exec(core, Command::logs(run_id, step_id, read))?.value;
     if records.is_empty() {
-        return worker_log_fallback_payload(runtime, &run);
+        return worker_log_fallback_payload(worker, &run);
     }
-
     let doc = json!({
         "run_id": run.run_id,
         "job_id": run.job_id,
@@ -334,8 +317,10 @@ fn run_logs_payload(
 /// invocation to show. That worker still writes its own
 /// `<run_id>.worker.log` directly; fall back to it instead of reporting no
 /// logs when the file is actually sitting on disk.
-fn worker_log_fallback_payload(runtime: &OrbitRuntime, run: &JobRun) -> CommandOut {
-    let worker_log = runtime.read_pipeline_worker_log(&run.run_id)?;
+fn worker_log_fallback_payload(
+    worker_log: Option<PipelineWorkerLogSnapshot>,
+    run: &JobRun,
+) -> CommandOut {
     let doc = json!({
         "run_id": run.run_id,
         "job_id": run.job_id,

@@ -5,14 +5,13 @@
 //! lock projection. Nothing persisted changes: a holder that has since
 //! released simply stops appearing.
 
-use std::collections::BTreeSet;
-
+use crate::{JobRun, OrbitRuntime};
 use orbit_common::fs::lock_mode::FootprintLockModes;
-use orbit_core::{JobRun, OrbitRuntime};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
-use super::format::LockHolders;
+pub type LockHolders = std::collections::BTreeMap<String, Vec<String>>;
 
 /// Holders of every selector a non-terminal run is waiting on. Empty for a
 /// run that waits on no lock, or when the projection cannot be read.

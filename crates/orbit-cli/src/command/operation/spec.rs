@@ -516,7 +516,7 @@ pub(super) fn dispatch_update(command: Commands, context: DispatchContext<'_>) -
 
 pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Run(command) => command.execute_with_env(context.runtime()?, context.env),
+        Commands::Run(command) => command.execute_with_env(context.core()?, context.env),
         _ => dispatch_mismatch("Run"),
     }
 }

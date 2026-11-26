@@ -1,9 +1,10 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::job_catalog_to_json_with_last_run;
 use orbit_types::workflow::JobKind;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::color::Domain;
 
 use super::support::{
@@ -26,10 +27,10 @@ pub struct JobListArgs {
     pub ops: bool,
 }
 
-impl Execute for JobListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for JobListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let filter = job_catalog_filter(self.all, self.kind);
-        let jobs_with_runs = runtime.list_job_catalog_with_last_run(self.all, filter)?;
+        let jobs_with_runs = exec(core, Command::jobs(self.all, filter))?.value;
         // `--ops` picks the narrower record shape; the rows are the same jobs
         // either way, so the renderer still has a table to fall back to.
         let values = if self.ops {

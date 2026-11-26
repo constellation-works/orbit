@@ -33,6 +33,11 @@ impl Pinned {
         self.inner.resolve_runtime(&self.snapshot, id)
     }
 
+    /// The app entry for a workspace from this pinned snapshot.
+    pub(crate) fn core_for(&self, id: &str) -> Result<Arc<Core>, WsRejection> {
+        self.runtime_for(id).map(|runtime| WsCore::over(&runtime).0)
+    }
+
     /// Stale-tolerant resolve for `GET /api/config/file` only; see
     /// [`crate::state::dashboard`] for why aggregates stay strict.
     pub(crate) fn runtime_for_config_file(

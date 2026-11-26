@@ -1,8 +1,9 @@
+use crate::command::ExecuteCore;
 use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
+use crate::command::CommandOut;
 use crate::command::run::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
-use crate::command::{CommandOut, Execute};
 
 use super::list::JobListArgs;
 use super::show::JobShowArgs;
@@ -14,9 +15,9 @@ pub struct JobCommand {
     pub command: JobSubcommand,
 }
 
-impl Execute for JobCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl ExecuteCore for JobCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        self.command.execute(core)
     }
 }
 
@@ -37,15 +38,15 @@ pub enum JobSubcommand {
     RunPipelineWorker(JobRunPipelineWorkerArgs),
 }
 
-impl Execute for JobSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl JobSubcommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self {
-            JobSubcommand::List(args) => args.execute(runtime),
-            JobSubcommand::Show(args) => args.execute(runtime),
-            JobSubcommand::Run(args) => args.execute(runtime),
-            JobSubcommand::Replay(args) => args.execute(runtime),
-            JobSubcommand::Resume(args) => args.execute(runtime),
-            JobSubcommand::RunPipelineWorker(args) => args.execute(runtime),
+            JobSubcommand::List(args) => args.execute(core),
+            JobSubcommand::Show(args) => args.execute(core),
+            JobSubcommand::Run(args) => args.submit(core, orbit_core::app::run::JobEntry::JobRun),
+            JobSubcommand::Replay(args) => args.execute(core),
+            JobSubcommand::Resume(args) => args.execute(core),
+            JobSubcommand::RunPipelineWorker(args) => args.execute(core),
         }
     }
 }

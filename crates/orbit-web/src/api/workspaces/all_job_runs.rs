@@ -1,17 +1,18 @@
 //! `GET /api/job-runs/all`: a bounded job-run list across every workspace.
 
+use orbit_core::app::run::{Command, exec};
 use std::collections::{BTreeMap, HashSet};
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder};
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
+use orbit_core::{JobRun, JobRunState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::jobs::{FAILED_RUN_STATES, JobRunScope, resolve_job_run_scope};
 use super::super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit};
-use super::fan_out::fan_out;
+use super::fan_out::{fan_out, read_opened};
 use super::list::entry_is_owned;
 use crate::state::DashboardState;
 
@@ -93,7 +94,7 @@ pub(in crate::api) async fn list_all_job_runs(
         Err(message) => return bad_request(message),
     };
     match blocking("aggregate job run list", move || {
-        Ok::<_, orbit_core::OrbitError>(all_job_runs_json(&state, limit, state_filter, &scope))
+        all_job_runs_json(&state, limit, state_filter, &scope)
     })
     .await
     {
@@ -107,7 +108,7 @@ pub(super) fn all_job_runs_json(
     limit: usize,
     state_filter: AllJobRunsState,
     scope: &JobRunScope,
-) -> Value {
+) -> Result<Value, orbit_core::OrbitError> {
     let pinned = state.pin();
     let entries: Vec<&crate::state::WsEntry> = pinned
         .entries()
@@ -129,46 +130,30 @@ pub(super) fn all_job_runs_json(
     // Phase tracing on a 13-workspace fixture showed that discarded
     // candidates' state reads, not the index-covered page or count,
     // dominated the failed-runs tail.
-    let selections = fan_out(entries.len(), |index| {
+    let opened = fan_out(entries.len(), |index| {
         let entry = &entries[index];
         if !entry.active {
             return Err("workspace is unavailable".to_string());
         }
-        let runtime = match pinned.runtime_for(&entry.id) {
-            Ok(runtime) => runtime,
-            Err(_) => return Err("failed to open workspace".to_string()),
-        };
-        let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
-            Ok((
-                runs,
-                workspace_job_run_count(&runtime, state_filter, scope)?,
-            ))
-        });
-        match page {
-            Ok((runs, count)) => match super::super::runs::task_titles(&runtime, &runs) {
-                Ok(titles) => Ok((runtime, runs, count, titles)),
-                Err(error) => Err(error.to_string()),
-            },
-            Err(error) => Err(error.to_string()),
-        }
+        pinned
+            .core_for(&entry.id)
+            .map_err(|_| "failed to open workspace".to_string())
     });
+    let params = workspace_job_run_params(scope, state_filter, Some(limit));
+    let selections = read_opened(opened, |first, others| {
+        exec(first, Command::fleet_candidates(params, others)).map(|outcome| outcome.value)
+    })?;
 
     let mut candidates: Vec<(JobRun, usize)> = Vec::new();
-    let mut projections: BTreeMap<
-        usize,
-        (
-            std::sync::Arc<OrbitRuntime>,
-            std::collections::BTreeMap<String, String>,
-        ),
-    > = BTreeMap::new();
+    let mut projections = BTreeMap::new();
     let mut unavailable = Vec::new();
     let mut total = 0_u64;
     for (index, (entry, selection)) in entries.iter().zip(selections).enumerate() {
         match selection {
-            Ok((runtime, runs, count, titles)) => {
-                total = total.saturating_add(count);
-                projections.insert(index, (runtime, titles));
-                candidates.extend(runs.into_iter().map(|run| (run, index)));
+            Ok(page) => {
+                total = total.saturating_add(page.total);
+                projections.insert(index, page.projection);
+                candidates.extend(page.runs.into_iter().map(|run| (run, index)));
             }
             Err(error) => unavailable.push(json!({
                 "workspace_id": entry.id,
@@ -198,14 +183,14 @@ pub(super) fn all_job_runs_json(
             .push(position);
     }
     for (index, positions) in &positions_by_workspace {
-        let Some((runtime, titles)) = projections.get(index) else {
+        let Some(projection) = projections.get(index) else {
             continue;
         };
         let runs = positions
             .iter()
             .map(|position| candidates[*position].0.clone())
             .collect::<Vec<_>>();
-        let rows = super::super::runs::run_list_rows(runtime, &runs, titles);
+        let rows = projection.rows(&runs);
         for (position, value) in positions.iter().zip(rows) {
             values[*position] = Some(value);
         }
@@ -249,32 +234,14 @@ pub(super) fn all_job_runs_json(
         })
         .collect::<Vec<_>>();
 
-    json!({
+    Ok(json!({
         "items": items,
         "limit": limit,
         "state": state_filter.label(),
         "total": total,
         "truncated": truncated,
         "unavailable": unavailable,
-    })
-}
-
-fn workspace_job_runs(
-    runtime: &OrbitRuntime,
-    limit: usize,
-    state_filter: AllJobRunsState,
-    scope: &JobRunScope,
-) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
-    runtime.list_job_runs_observed(workspace_job_run_params(scope, state_filter, Some(limit)))
-}
-
-/// How many runs in one workspace match the filter, independent of `limit`.
-fn workspace_job_run_count(
-    runtime: &OrbitRuntime,
-    state_filter: AllJobRunsState,
-    scope: &JobRunScope,
-) -> Result<u64, orbit_core::OrbitError> {
-    runtime.count_job_runs_observed(workspace_job_run_params(scope, state_filter, None))
+    }))
 }
 
 fn workspace_job_run_params(

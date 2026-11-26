@@ -4,7 +4,7 @@ use orbit_common::governance::task::{TASK, TaskVerb};
 
 use super::super::operation_args::Invocation;
 use crate::command::operation::DispatchContext;
-use crate::command::{CommandOut, Execute, ExecuteCore};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::archive::TaskArchiveArgs;
 use super::export::TaskExportArgs;
@@ -135,7 +135,7 @@ impl TaskInvocation {
     fn execute_in(self, context: &DispatchContext<'_>) -> CommandOut {
         match self {
             Self::Registry(invocation) => super::operation::execute(invocation, context),
-            Self::Contention(args) => Execute::execute(args, context.runtime()?),
+            Self::Contention(args) => ExecuteCore::execute(args, context.core()?),
         }
     }
 }

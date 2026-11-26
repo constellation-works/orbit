@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use serde_json::json;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::parse::parse_since;
 
 use super::format::summarize_error_message;
@@ -28,10 +29,10 @@ pub struct RunSettlementsArgs {
     pub no_reconcile: bool,
 }
 
-impl Execute for RunSettlementsArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for RunSettlementsArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let since = self.since.as_deref().map(parse_since).transpose()?;
-        let settlements = runtime.leaf_settlements(since, !self.no_reconcile)?;
+        let settlements = exec(core, Command::settlements(since, !self.no_reconcile))?.value;
         let doc = json!({ "settlements": settlements });
 
         use crate::output::table::{Column, Table};

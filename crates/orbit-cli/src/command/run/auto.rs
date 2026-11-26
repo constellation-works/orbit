@@ -1,18 +1,16 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::distributed::{
     PULL_START_CONFLICT_ARG_IDS, PULL_START_HOST_REQUIRES_ARG_ID, pull_start_review_refusal,
 };
-use orbit_core::application::job::{
-    AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopOutcome,
-};
+use orbit_core::application::job::{AutoDrainSubmissionProfile, DrainAdmissionsStopOutcome};
 use orbit_core::{
-    AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime,
-    WorkspacePullRequest,
+    AutoDrainRequest, CompletionPolicy, Core, DrainAdmissionsStopRequest, WorkspacePullRequest,
 };
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::parse::parse_duration_seconds;
 
 use super::support::auto_drain_submission_payload;
@@ -89,10 +87,10 @@ pub struct AutoCommand {
     pub stop: bool,
 }
 
-impl Execute for AutoCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AutoCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         if self.stop {
-            return execute_stop(runtime, self.claim_token.as_deref());
+            return execute_stop(core, self.claim_token.as_deref());
         }
         if let Some(selector) = self.pull.as_deref() {
             if let Some(refusal) = pull_start_review_refusal(self.review.is_some()) {
@@ -103,21 +101,21 @@ impl Execute for AutoCommand {
                 .as_deref()
                 .map(parse_duration_seconds)
                 .transpose()?;
-            let invoke = runtime.submit_workspace_pull_run(
-                WorkspacePullRequest {
-                    selector,
-                    for_seconds,
-                    max_active_leaf_runs: self.concurrency,
-                    allowed_crews: &self.allow_crew,
-                    actor: None,
-                },
-                orbit_types::workflow::JobRunTrigger::cli(),
-            )?;
-            let receipt = runtime.auto_drain_submission_receipt(
-                &invoke,
-                AutoDrainSubmissionSource::Pull { selector },
-                AutoDrainSubmissionProfile::Cli,
-            )?;
+            let receipt = exec(
+                core,
+                Command::pull(
+                    WorkspacePullRequest {
+                        selector,
+                        for_seconds,
+                        max_active_leaf_runs: self.concurrency,
+                        allowed_crews: &self.allow_crew,
+                        actor: None,
+                    },
+                    orbit_types::workflow::JobRunTrigger::cli(),
+                    AutoDrainSubmissionProfile::Cli,
+                ),
+            )?
+            .value;
             return auto_drain_submission_payload(&receipt);
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
@@ -136,43 +134,51 @@ impl Execute for AutoCommand {
         } else {
             CompletionPolicy::Review
         };
-        let invoke = runtime.submit_workspace_auto_run(AutoDrainRequest {
-            for_seconds,
-            max_active_leaf_runs: self.concurrency,
-            completion,
-            allowed_crews: &self.allow_crew,
-            complexity_crews,
-            actor: None,
-            claim_token: self.claim_token.as_deref(),
-            trigger: orbit_types::workflow::JobRunTrigger::cli(),
-            strict_containment: self.strict_worker_containment,
-            approve_proposed: self.approve_proposed,
-            auto_fix: self.auto_fix,
-            auto_concurrency: self
-                .auto_concurrency
-                .as_deref()
-                .map(str::parse)
-                .transpose()
-                .map_err(|message: &str| orbit_core::OrbitError::InvalidInput(message.into()))?,
-            review: self.review,
-        })?;
-        let receipt = runtime.auto_drain_submission_receipt(
-            &invoke,
-            AutoDrainSubmissionSource::Local,
-            AutoDrainSubmissionProfile::Cli,
-        )?;
+        let receipt = exec(
+            core,
+            Command::auto(
+                AutoDrainRequest {
+                    for_seconds,
+                    max_active_leaf_runs: self.concurrency,
+                    completion,
+                    allowed_crews: &self.allow_crew,
+                    complexity_crews,
+                    actor: None,
+                    claim_token: self.claim_token.as_deref(),
+                    trigger: orbit_types::workflow::JobRunTrigger::cli(),
+                    strict_containment: self.strict_worker_containment,
+                    approve_proposed: self.approve_proposed,
+                    auto_fix: self.auto_fix,
+                    auto_concurrency: self
+                        .auto_concurrency
+                        .as_deref()
+                        .map(str::parse)
+                        .transpose()
+                        .map_err(|message: &str| {
+                            orbit_core::OrbitError::InvalidInput(message.into())
+                        })?,
+                    review: self.review,
+                },
+                AutoDrainSubmissionProfile::Cli,
+            ),
+        )?
+        .value;
         auto_drain_submission_payload(&receipt)
     }
 }
 
-fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {
-    let result = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
-        actor: "cli",
-        source: "run_auto_stop",
-        reason: None,
-        claim_token,
-        force: false,
-    })?;
+fn execute_stop(core: &Core, claim_token: Option<&str>) -> CommandOut {
+    let result = exec(
+        core,
+        Command::stop(DrainAdmissionsStopRequest {
+            actor: "cli",
+            source: "run_auto_stop",
+            reason: None,
+            claim_token,
+            force: false,
+        }),
+    )?
+    .value;
     let doc = result.to_json();
     let settlement_lines = super::support::pull_settlement_lines(&result.pull_settlements);
     if result.coordinators.is_empty() {

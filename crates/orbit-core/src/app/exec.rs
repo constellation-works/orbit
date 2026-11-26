@@ -19,13 +19,17 @@ use std::ffi::OsStr;
 use std::time::Instant;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::authorization::{
+    AuthorizationDenial, CallerCapabilities, CallerEnvelope, GovernedOperation,
+    authorize as decide_dashboard,
+};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::security::redaction::redact_sensitive_env_text;
 use orbit_store::AuditEventInsertParams;
 use orbit_types::task::TaskWriteSurface;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
 
 use crate::application::task::{TaskMutationAudit, audit_status_for_task_mutation_error};
@@ -78,6 +82,7 @@ pub(crate) struct MutationAudit {
 
 /// One command's identity in the operation registry: the names its governance
 /// rows and its audit row are keyed on.
+#[derive(Clone)]
 pub(crate) struct Operation {
     command: &'static str,
     subcommand: String,
@@ -85,6 +90,8 @@ pub(crate) struct Operation {
     tool_name: Option<&'static str>,
     target_type: Option<&'static str>,
     target_id: Option<String>,
+    job_run_id: Option<String>,
+    native_operator_refusal: Option<&'static str>,
 }
 
 impl Operation {
@@ -95,6 +102,8 @@ impl Operation {
         let noun = V::noun();
         let spec = verb.spec();
         Self {
+            native_operator_refusal: None,
+            job_run_id: None,
             command: noun.cli_name,
             subcommand: spec.cli_path.join("-"),
             tool_name: Some(spec.tool_name),
@@ -111,11 +120,24 @@ impl Operation {
     pub(crate) fn command(command: &'static str, subcommand: impl Into<String>) -> Self {
         Self {
             command,
+            native_operator_refusal: None,
+            job_run_id: None,
             subcommand: subcommand.into(),
             tool_name: None,
             target_type: None,
             target_id: None,
         }
+    }
+
+    pub(crate) fn require_native_operator(mut self, refusal: &'static str) -> Self {
+        self.native_operator_refusal = Some(refusal);
+        self
+    }
+
+    /// Attribute an invocation to its named source run.
+    pub(crate) fn job_run(mut self, id: &str) -> Self {
+        self.job_run_id = Some(id.to_owned());
+        self
     }
 
     /// Name the audit row's target where the noun's own is not the one.
@@ -210,6 +232,17 @@ fn authorize(core: &Core, operation: &Operation) -> Result<(), Error> {
     if core.entry() == Entry::CommandLine {
         runtime.authorize_command_operation(operation.command, &operation.subcommand)?;
     }
+    if let Some(refusal) = operation.native_operator_refusal {
+        let caller =
+            CallerEnvelope::from_process_env(runtime.env(), &ToolSessionContext::default());
+        if caller.agent_declared
+            || !CallerCapabilities::resolve(&caller)
+                .grants()
+                .contains(&McpCapability::Operator)
+        {
+            return Err(OrbitError::CapabilityRefused(refusal.into()));
+        }
+    }
     let Some(tool_name) = operation.tool_name else {
         return Ok(());
     };
@@ -220,7 +253,7 @@ fn authorize(core: &Core, operation: &Operation) -> Result<(), Error> {
 }
 
 /// Writes one command's invocation audit row when dropped, so an early return
-/// or a panic still leaves it. Until [`Self::outcome`] is called the row says
+/// or a panic still leaves it. Until [`Self::finished`] is called the row says
 /// the command failed with exit code -1.
 struct AuditGuard<'a> {
     core: &'a Core,
@@ -325,7 +358,11 @@ impl<'a> AuditGuard<'a> {
             mcp_call_id: None,
             lease_id: None,
             task_id: env_text(env.orbit_task_id()),
-            job_run_id: env_text(env.orbit_run_id()),
+            job_run_id: self
+                .operation
+                .job_run_id
+                .clone()
+                .or_else(|| env_text(env.orbit_run_id())),
             activity_id: env_text(env.orbit_activity_id()),
             step_index: env
                 .orbit_step_index()
@@ -347,4 +384,42 @@ impl Drop for AuditGuard<'_> {
             crate::adapter::command::mark_tool_audit_recorded();
         }
     }
+}
+
+/// Decide a dashboard operation using only its authenticated session grants.
+pub fn dashboard_authorize(
+    operation: &'static GovernedOperation,
+    operator_session: bool,
+) -> Result<CallerCapabilities, AuthorizationDenial> {
+    let caller = dashboard_caller(operator_session);
+    decide_dashboard(operation, &caller)?;
+    Ok(caller)
+}
+
+/// Decide the requested controls against the same authenticated session.
+/// The first refusal is the one reported by the dashboard.
+pub(super) fn dashboard_controls<const N: usize>(
+    operator: bool,
+    controls: [(bool, &'static GovernedOperation); N],
+) -> Result<(), AuthorizationDenial> {
+    let caller = dashboard_caller(operator);
+    controls
+        .into_iter()
+        .filter(|(requested, _)| *requested)
+        .try_for_each(|(_, operation)| decide_dashboard(operation, &caller))
+}
+
+fn dashboard_caller(operator_session: bool) -> CallerCapabilities {
+    let mut session = ToolSessionContext::default();
+    if operator_session {
+        session.effective_capabilities.insert(McpCapability::Agent);
+        session
+            .effective_capabilities
+            .insert(McpCapability::Operator);
+    }
+    // Session state only: the server's own stdin/stderr, `ORBIT_OPERATOR` and
+    // agent envelope never grant here, so a `--no-operator` server on a pty
+    // (an SSH `-tt` tunnel, or a terminal-started `web serve`) stays
+    // read-only, and a granted write is audited as the session [ORB-23047].
+    CallerCapabilities::resolve(&CallerEnvelope::dashboard_session(&session))
 }

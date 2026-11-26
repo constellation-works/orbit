@@ -363,32 +363,20 @@ impl Commands {
             }
             Commands::Script(command) => {
                 use super::super::script::ScriptSubcommand;
-                let (subcommand, target_id, runtime_need, governed) = match &command.command {
-                    ScriptSubcommand::List(_) => ("list", None, RuntimeNeed::ReadOnly, false),
-                    ScriptSubcommand::Show(args) => (
-                        "show",
-                        Some(args.name.as_str()),
-                        RuntimeNeed::ReadOnly,
-                        false,
-                    ),
-                    ScriptSubcommand::Grant(args) => (
-                        "grant",
-                        Some(args.name.as_str()),
-                        RuntimeNeed::Required,
-                        true,
-                    ),
-                    ScriptSubcommand::Revoke(args) => (
-                        "revoke",
-                        Some(args.name.as_str()),
-                        RuntimeNeed::Required,
-                        true,
-                    ),
-                    ScriptSubcommand::History(args) => (
-                        "history",
-                        Some(args.name.as_str()),
-                        RuntimeNeed::ReadOnly,
-                        false,
-                    ),
+                let (subcommand, target_id, runtime_need) = match &command.command {
+                    ScriptSubcommand::List(_) => ("list", None, RuntimeNeed::ReadOnly),
+                    ScriptSubcommand::Show(args) => {
+                        ("show", Some(args.name.as_str()), RuntimeNeed::ReadOnly)
+                    }
+                    ScriptSubcommand::Grant(args) => {
+                        ("grant", Some(args.name.as_str()), RuntimeNeed::Required)
+                    }
+                    ScriptSubcommand::Revoke(args) => {
+                        ("revoke", Some(args.name.as_str()), RuntimeNeed::Required)
+                    }
+                    ScriptSubcommand::History(args) => {
+                        ("history", Some(args.name.as_str()), RuntimeNeed::ReadOnly)
+                    }
                 };
                 CommandOperation::new(
                     runtime_need,
@@ -399,9 +387,8 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    runtime_dispatch!(Script),
+                    core_dispatch!(Script),
                 )
-                .governed_when(governed, "script", subcommand)
             }
             Commands::Task(command) => {
                 use super::super::task::TaskInvocation;
@@ -670,7 +657,7 @@ impl Commands {
                 } else {
                     RuntimeNeed::Required
                 };
-                CommandOperation::new(runtime_need, Some(meta), None, runtime_dispatch!(Job))
+                CommandOperation::new(runtime_need, Some(meta), None, core_dispatch!(Job))
             }
             Commands::Tool(command) => tool_operation(command, env),
             // `orbit <ns> <verb>` is `orbit tool run <ns>.<verb>` in another

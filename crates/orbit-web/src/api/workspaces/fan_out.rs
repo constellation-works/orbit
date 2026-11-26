@@ -53,3 +53,35 @@ where
         results.into_iter().map(|(_, result)| result).collect()
     })
 }
+
+/// Run one app query for the opened workspaces, keeping each open or read
+/// failure in that workspace's original slot.
+pub(in crate::api) fn read_opened<T>(
+    opened: Vec<Result<std::sync::Arc<orbit_core::Core>, String>>,
+    query: impl FnOnce(
+        &orbit_core::Core,
+        &[&orbit_core::Core],
+    ) -> Result<Vec<Result<T, orbit_core::OrbitError>>, orbit_core::OrbitError>,
+) -> Result<Vec<Result<T, String>>, orbit_core::OrbitError> {
+    let cores: Vec<_> = opened
+        .iter()
+        .filter_map(|entry| entry.as_ref().ok().map(AsRef::as_ref))
+        .collect();
+    let mut results = match cores.split_first() {
+        Some((first, others)) => query(first, others)?,
+        None => Vec::new(),
+    }
+    .into_iter();
+    opened
+        .into_iter()
+        .map(|entry| match entry {
+            Err(error) => Ok(Err(error)),
+            Ok(_) => results
+                .next()
+                .map(|value| value.map_err(|error| error.to_string()))
+                .ok_or_else(|| {
+                    orbit_core::OrbitError::Execution("missing workspace query result".into())
+                }),
+        })
+        .collect()
+}

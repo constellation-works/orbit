@@ -2,14 +2,15 @@ use orbit_core::application::job::{
     JobRunProjectionEvidence, JobRunProjectionProfile, ResumeSubmissionProfile,
     ResumeSubmissionReceipt, project_job_run,
 };
-use orbit_core::{JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry};
+use orbit_core::{Core, JobRun, OrbitError, PipelineInvokeResult, PipelineWaitEntry};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
 use clap::Args;
 
-use super::support::{WaitArgs, wait_for_run};
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use super::support::WaitArgs;
+use crate::command::{CommandOut, CommandOutput, ExecuteCore, Payload};
+use orbit_core::app::run::{Command, JobEntry, exec};
 
 #[derive(Args)]
 #[command(
@@ -26,31 +27,26 @@ pub struct JobRunArgs {
     pub(super) wait: WaitArgs,
 }
 
-impl Execute for JobRunArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl JobRunArgs {
+    pub(crate) fn submit(self, core: &Core, entry: JobEntry) -> CommandOut {
         let input = build_job_run_input(&self.input)?;
         let timeout_seconds = self.wait.timeout_seconds()?;
         // Submission failure — an unknown job, an invalid asset, a worker that
         // could not start — is this command's own failure and surfaces as an
         // error. Everything the submitted run does afterwards is reported by
         // `--wait`, so the two outcomes never share an exit path.
-        let invoke = runtime.submit_job_run(&self.job_id, input, None)?;
-        super::support::warn_unset_env_pass(runtime);
-        let Some(timeout_seconds) = timeout_seconds else {
-            return render_submission(&invoke);
-        };
-
-        wait_for_submission(runtime, &invoke, timeout_seconds)
+        let result = exec(
+            core,
+            Command::submit_job(entry, &self.job_id, input, timeout_seconds, |message| {
+                eprintln!("warning: {message}")
+            }),
+        )?
+        .value;
+        match result.waited {
+            Some((entry, expired)) => render_wait(&result.invoke, &entry, expired),
+            None => render_submission(&result.invoke),
+        }
     }
-}
-
-fn wait_for_submission(
-    runtime: &OrbitRuntime,
-    invoke: &PipelineInvokeResult,
-    timeout_seconds: u64,
-) -> CommandOut {
-    let (entry, wait_timeout) = wait_for_run(runtime, &invoke.run_id, timeout_seconds)?;
-    render_wait(invoke, &entry, wait_timeout)
 }
 
 fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
@@ -160,11 +156,14 @@ pub struct JobReplayArgs {
     pub claim_token: Option<String>,
 }
 
-impl Execute for JobReplayArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for JobReplayArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let source_run_id = self.run_id;
-        let result =
-            runtime.replay_job_run_with_claim(&source_run_id, self.claim_token.as_deref())?;
+        let result = exec(
+            core,
+            Command::replay(&source_run_id, self.claim_token.as_deref()),
+        )?
+        .value;
         let doc = json!({
             "run_id": result.run_id,
             "source_run_id": source_run_id,
@@ -204,12 +203,13 @@ pub struct JobResumeArgs {
     pub(super) wait: WaitArgs,
 }
 
-impl Execute for JobResumeArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for JobResumeArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let timeout_seconds = self.wait.timeout_seconds()?;
-        let invoke = runtime.submit_resume_run(&self.run_id, None, None)?;
-        if let Some(timeout_seconds) = timeout_seconds {
-            wait_for_submission(runtime, &invoke, timeout_seconds)
+        let result = exec(core, Command::resume_job(&self.run_id, timeout_seconds))?.value;
+        let invoke = result.invoke;
+        if let Some((entry, expired)) = result.waited {
+            render_wait(&invoke, &entry, expired)
         } else {
             let receipt =
                 ResumeSubmissionReceipt::new(&invoke, &self.run_id, ResumeSubmissionProfile::Cli);
@@ -239,19 +239,16 @@ pub(crate) fn cli_job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -
 /// inspectable; their activity status is explicitly `unavailable` instead of
 /// borrowing the requested run crew as an actual model claim.
 pub(crate) fn cli_job_run_to_json_with_activity_provenance(
-    runtime: &OrbitRuntime,
+    evidence: &[orbit_core::application::job::ActivityInvocationEvidence],
     run: &JobRun,
     state: Option<&PipelineState>,
 ) -> Value {
-    let evidence = runtime
-        .activity_invocation_evidence(&run.run_id)
-        .unwrap_or_default();
     project_job_run(
         run,
         JobRunProjectionProfile::FullDetailStoredSteps,
         JobRunProjectionEvidence {
             state,
-            activity_evidence: Some(&evidence),
+            activity_evidence: Some(evidence),
             ..JobRunProjectionEvidence::default()
         },
     )
@@ -263,12 +260,10 @@ pub struct JobRunPipelineWorkerArgs {
     pub run_id: String,
 }
 
-impl Execute for JobRunPipelineWorkerArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        {
-            runtime.execute_pipeline_run_worker(&self.run_id)?;
-            Ok(CommandOutput::Silent)
-        }
+impl ExecuteCore for JobRunPipelineWorkerArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        exec(core, Command::pipeline_worker(&self.run_id))?;
+        Ok(CommandOutput::Silent)
     }
 }
 

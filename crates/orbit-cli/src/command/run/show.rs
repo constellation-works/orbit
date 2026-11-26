@@ -1,36 +1,29 @@
 use clap::Args;
+use orbit_core::app::run::{Command, exec};
 use std::collections::HashSet;
 
 use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 use orbit_core::application::job::{
-    RunFailureCause, RunFailureContextProfile, RunFailureRead, agent_invoke_result,
-    display_steps_with_agent_execution_to_json, pull_drain_detail,
+    RunFailureCause, agent_invoke_result, display_steps_with_agent_execution_to_json,
 };
 use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
-use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
-use orbit_types::workflow::activity_job::{
-    ACTIVITY_REF_PREFIX, ActivityV2Spec, JobV2Step, JobV2StepBody,
-};
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_core::{CatalogReferenceLayer, Core, JobRun, OrbitError};
+use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
-use super::drain_summary::{
-    held_review_leaf, pass_refusal_line, pass_throttle_line, pass_waiting_lines,
-    summarize_drain_leaves,
-};
+use super::drain_summary::{leaf_lines, pass_refusal_line, pass_throttle_line, pass_waiting_lines};
 use super::format::{
     WaitingTaskFormatter, agent_invocation_lines, catalog_layer_lines,
     format_backlog_exclusion_lines, format_root_cause_lines, live_provider_process_lines,
 };
 use super::job::cli_job_run_to_json_with_activity_provenance;
-use super::lock_holders::waiting_lock_holders;
 use super::steps;
 use super::steps::{
-    RunRead, StepSource, resolve_run, resolve_run_step, run_display_steps,
-    run_header_text_with_lock_holders, step_record_payload, step_summary_table,
+    RunRead, StepSource, run_header_text_with_lock_holders, step_record_payload, step_summary_table,
 };
+use orbit_core::app::run::{RunDetail, ShownRun};
 
 #[derive(Args)]
 #[command(
@@ -57,10 +50,10 @@ pub struct RunShowArgs {
     pub verbose: bool,
 }
 
-impl Execute for RunShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for RunShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         run_show_payload(
-            runtime,
+            core,
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             RunRead::from_no_reconcile(self.no_reconcile),
@@ -70,83 +63,52 @@ impl Execute for RunShowArgs {
 }
 
 pub(crate) fn run_show_payload(
-    runtime: &OrbitRuntime,
+    core: &Core,
     run_id: Option<&str>,
     step_id: Option<&str>,
     read: RunRead,
     verbose: bool,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id, read)?;
-    // An unreadable checkpoint is one section, as on HTTP and MCP. The run
-    // record, steps, and provider processes stay readable; failing the whole
-    // command hid them behind a store error.
-    let (state, checkpoint_unreadable) = match runtime.read_run_state(&run.run_id) {
-        Ok(state) => (state, false),
-        Err(error) => {
-            tracing::warn!(
-                target: "orbit.cli.run",
-                run_id = %run.run_id,
-                %error,
-                "pipeline checkpoint unreadable; run shown without it"
-            );
-            eprintln!(
-                "warning: pipeline checkpoint unreadable for {}; run shown without it: {error}",
-                run.run_id
-            );
-            (None, true)
+    let detail = match exec(
+        core,
+        Command::show(run_id, step_id, read, |message| eprintln!("{message}")),
+    )?
+    .value
+    {
+        ShownRun::Step(step) => {
+            let (run, step, output) = *step;
+            return step_record_payload(&run, &step, output);
         }
+        ShownRun::Full(detail) => detail,
     };
-
-    if let Some(step_id) = step_id {
-        let step = resolve_run_step(runtime, &run, step_id)?;
-        let step_output = state.as_ref().and_then(|state| step.output(state)).cloned();
-        return step_record_payload(&run, &step, step_output);
-    }
-
-    // [ORB-10496] Provider subprocesses spawned by this run's agent steps. A
-    // ship-pipeline implementation agent is a child of the pipeline worker, not
-    // of the Worker daemon, so this is the only place it is observable. The
-    // same scan carries the step history a pipeline run keeps nowhere else
-    // [ORB-12113].
-    let audit = runtime.collect_run_audit_view(&run.run_id)?;
-    let provider_processes = audit.provider_processes;
-    let script_executions = audit.script_executions;
-    let recovery = runtime.collect_run_recovery_attempts(&run.run_id)
-        .unwrap_or_else(|error| {
-            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "recovery attempts unreadable");
-            orbit_core::runtime::audit::run::RunRecoveryAttempts::unavailable()
-        });
-
-    let tag_instructions = runtime
-        .collect_run_tag_instructions(&run.run_id)
-        .unwrap_or_else(|error| {
-            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "tag instructions unreadable");
-            orbit_core::runtime::audit::tag_instructions::RunTagInstructions::unavailable()
-        });
-
-    let display_steps = run_display_steps(&run, audit.steps);
+    let RunDetail {
+        run,
+        state,
+        checkpoint_unreadable,
+        provider_processes,
+        script_executions,
+        recovery,
+        tag_instructions,
+        display_steps,
+        root_causes,
+        lock_holders,
+        drain_summary,
+        catalog_layers,
+        pull,
+        effort_evidence,
+        auto_concurrency,
+        task_titles,
+        resumable_leaf,
+        agent_activity_ids,
+        waiting_tasks,
+        worker_limit,
+    } = *detail;
     let steps_source = display_steps.source;
-    let root_causes = collect_failed_leaf_causes(runtime, &run, state.as_ref(), read)?;
-    // Who holds the locks a waiting run is blocked on, read live: the run
-    // only persists the selectors.
-    let lock_holders = waiting_lock_holders(runtime, &run, state.as_ref());
-    let mut drain_summary = summarize_drain_leaves(
-        &run,
-        state.as_ref(),
-        |child_run_id| read.show(runtime, child_run_id).ok(),
-        |leaf| held_review_leaf(runtime, leaf),
-    );
-    if let Some(summary) = drain_summary.as_mut() {
-        for leaf in &mut summary.failed_leaves {
-            leaf.resume_run_id = leaf_resume_target(runtime, &leaf.run_id, read);
-        }
-    }
-
     let rescue_candidate = state
         .as_ref()
         .and_then(|state| state.pipeline.get("rescue_candidate").cloned());
     let mut run_projection =
-        cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
+        cli_job_run_to_json_with_activity_provenance(&effort_evidence, &run, state.as_ref());
     // [ORB-13899] The same audit scan holds the invocation's child: its live
     // progress, and the output reference a failed step never checkpoints.
     run_projection["agent_invocation"] = serde_json::to_value(agent_invoke_result(
@@ -158,21 +120,6 @@ pub(crate) fn run_show_payload(
     // Which catalog layer answered for each reference this run's job makes,
     // and what that layer shadowed. A plugin activity a workspace file
     // overrides is otherwise invisible (plugins design §8).
-    let catalog_layers = runtime
-        .catalog_reference_layers(&run.job_id)
-        .unwrap_or_default();
-    let pull = pull_drain_detail::read_run_pull_drain_evidence(
-        pull_drain_detail::RunPullDrainSource::Registered(runtime),
-        &run.run_id,
-        state.as_ref(),
-    );
-    for warning in &pull.warnings {
-        tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id,
-            section = warning.section, error = %warning.error, "run detail omitted a section");
-    }
-    let effort_evidence = runtime
-        .activity_invocation_evidence(&run.run_id)
-        .unwrap_or_default();
     let mut doc = json!({
         "run": run_projection,
         "recovery_attempts": recovery.to_json(),
@@ -221,8 +168,7 @@ pub(crate) fn run_show_payload(
             crate::output::color::bold("Warning:"),
         ));
     }
-    if run.job_id == "workspace_auto_pipeline" {
-        let mode = runtime.run_auto_concurrency(&run.run_id)?;
+    if let Some(mode) = auto_concurrency {
         header.push_str(&format!(
             "\nAuto-concurrency: {} ({}; host currently {}).",
             mode["mode"].as_str().unwrap_or("off"),
@@ -366,13 +312,7 @@ pub(crate) fn run_show_payload(
         }
     }
     for id in orbit_core::application::job::job_run_task_ids(&run) {
-        let title = match runtime.get_task(&id) {
-            Ok(task) => Some(task.title),
-            Err(error) => {
-                tracing::debug!(%id, %error, "run task title unavailable");
-                None
-            }
-        };
+        let title = task_titles.get(&id);
         header.push_str(&format!(
             "\n{} {}{}",
             crate::output::color::bold("Task:"),
@@ -385,9 +325,8 @@ pub(crate) fn run_show_payload(
         header.push('\n');
         header.push_str(&cause_lines.join("\n"));
     }
-    if let Some(hint) = resume_hint(runtime, &run, &root_causes, read) {
-        header.push('\n');
-        header.push_str(&hint);
+    if let Some(leaf) = resumable_leaf {
+        header.push_str(&format!("\n{} the failed work ran in {leaf}; `orbit job resume {leaf}` retries it, while resuming this run only re-checks that child's failure", crate::output::color::bold("Resume:")));
     }
     if let Some(state) = &state {
         header.push_str(&format!(
@@ -405,7 +344,6 @@ pub(crate) fn run_show_payload(
             claim.describe()
         ));
     }
-    let agent_activity_ids = agent_activity_ids_for_job(runtime, &run.job_id);
     let provenance_lines =
         steps::activity_provenance_lines(&doc["run"]["activity_provenance"], &agent_activity_ids);
     if !provenance_lines.is_empty() {
@@ -436,16 +374,15 @@ pub(crate) fn run_show_payload(
         header.push_str(&exclusion_lines.join("\n"));
     }
     if let Some(summary) = &drain_summary {
-        let waiting_formatter = WaitingTaskFormatter::new(runtime)
-            .with_host_fleet(runtime, summary.host_os_waiting_task_ids());
+        let waiting_formatter = WaitingTaskFormatter::new(waiting_tasks);
         header.push('\n');
-        header.push_str(&summary.lines(run.state, &waiting_formatter).join("\n"));
+        header.push_str(&leaf_lines(summary, run.state, &waiting_formatter).join("\n"));
     } else if let Some(pass) = state
         .as_ref()
         .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
     {
         // A pull drain records its passes too, without a leaf summary.
-        let waiting_formatter = WaitingTaskFormatter::new(runtime);
+        let waiting_formatter = WaitingTaskFormatter::new(waiting_tasks);
         for line in pass_throttle_line(pass)
             .into_iter()
             .chain(pass_refusal_line(pass))
@@ -471,7 +408,7 @@ pub(crate) fn run_show_payload(
         };
         for line in
             super::admission_forecast::admission_lines(&forecast, &last_forecast, &origin, |id| {
-                runtime.get_task(id).ok().map(|task| task.title)
+                task_titles.get(id).cloned()
             })
         {
             header.push('\n');
@@ -535,7 +472,7 @@ pub(crate) fn run_show_payload(
             crate::output::color::bold("Steps:"),
         ));
     }
-    if let Some(evidence) = runtime.worker_resource_limit_evidence(&run.run_id)? {
+    if let Some(evidence) = worker_limit {
         header.push_str(&format!(
             "\nWorker resource limit (watchdog): {} bytes, {} processes; error=worker_resource_limit",
             evidence.memory_bytes, evidence.process_count,
@@ -562,72 +499,6 @@ pub(crate) fn run_show_payload(
     .into())
 }
 
-/// Activity step ids whose workflow definition invokes an agent. This only
-/// affects human rendering; `activity_provenance` stays complete in JSON.
-fn agent_activity_ids_for_job(runtime: &OrbitRuntime, job_id: &str) -> HashSet<String> {
-    let job = match runtime.show_job_catalog_entry(job_id) {
-        Ok(entry) => entry.spec,
-        Err(error) => {
-            tracing::debug!(%job_id, %error, "run show cannot resolve activity provenance definitions");
-            return HashSet::new();
-        }
-    };
-    let agent_activity_names = runtime
-        .v2_activity_catalog()
-        .ok()
-        .map(|catalog| {
-            catalog
-                .names()
-                .filter(|name| {
-                    catalog.get(name).is_some_and(|activity| {
-                        matches!(&activity.spec, ActivityV2Spec::AgentLoop(_))
-                    })
-                })
-                .map(str::to_string)
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-    let mut ids = HashSet::new();
-    collect_agent_activity_ids(&job.steps, &agent_activity_names, &mut ids);
-    ids
-}
-
-fn collect_agent_activity_ids(
-    steps: &[JobV2Step],
-    agent_activity_names: &HashSet<String>,
-    ids: &mut HashSet<String>,
-) {
-    for step in steps {
-        match &step.body {
-            JobV2StepBody::Target(target) => {
-                if matches!(&target.spec, ActivityV2Spec::AgentLoop(_)) {
-                    ids.insert(step.id.clone());
-                }
-            }
-            JobV2StepBody::TargetRef(target) => {
-                if let Some(name) = target.target.strip_prefix(ACTIVITY_REF_PREFIX)
-                    && agent_activity_names.contains(name)
-                {
-                    ids.insert(step.id.clone());
-                }
-            }
-            JobV2StepBody::Parallel { parallel } => {
-                collect_agent_activity_ids(&parallel.branches, agent_activity_names, ids);
-            }
-            JobV2StepBody::FanOut { fan_out, .. } => {
-                collect_agent_activity_ids(
-                    std::slice::from_ref(fan_out.worker.as_ref()),
-                    agent_activity_names,
-                    ids,
-                );
-            }
-            JobV2StepBody::Loop { loop_ } => {
-                collect_agent_activity_ids(&loop_.steps, agent_activity_names, ids);
-            }
-        }
-    }
-}
-
 /// The `Review:` line: the review layer before landing the run captured and
 /// what decided it [ORB-16572].
 fn review_layer_line(layer: &Value) -> Option<String> {
@@ -641,91 +512,6 @@ fn review_layer_line(layer: &Value) -> Option<String> {
         "{} {timing} ({origin})",
         crate::output::color::bold("Review:")
     ))
-}
-
-/// Where to resume a failed pipeline run whose failure came from a child run.
-///
-/// A coordinating run (a ship or drain wrapper) fails only because its child
-/// did. Resuming the wrapper re-checks that same failed child result and fails
-/// the same way, so the operator needs the run that did the work.
-fn resume_hint(
-    runtime: &OrbitRuntime,
-    run: &JobRun,
-    causes: &[RunFailureCause],
-    read: RunRead,
-) -> Option<String> {
-    if !is_resumable_state(run.state) {
-        return None;
-    }
-    let leaf = causes.iter().find(|cause| {
-        cause.run_id != run.run_id
-            && read
-                .show(runtime, &cause.run_id)
-                .is_ok_and(|leaf| is_resumable_state(leaf.state))
-    })?;
-    Some(format!(
-        "{} the failed work ran in {}; `orbit job resume {}` retries it, while resuming this run only re-checks that child's failure",
-        crate::output::color::bold("Resume:"),
-        leaf.run_id,
-        leaf.run_id,
-    ))
-}
-
-/// The run to resume for a failed leaf: the same choice [`resume_hint`] makes
-/// for a run of its own, so the drain's advice and the leaf's agree.
-fn leaf_resume_target(runtime: &OrbitRuntime, leaf_run_id: &str, read: RunRead) -> Option<String> {
-    let leaf = read.show(runtime, leaf_run_id).ok()?;
-    let state = runtime.read_run_state(&leaf.run_id).ok().flatten();
-    let causes = collect_failed_leaf_causes(runtime, &leaf, state.as_ref(), read).ok()?;
-    if let Some(cause) = causes.iter().find(|cause| {
-        cause.run_id != leaf.run_id
-            && read
-                .show(runtime, &cause.run_id)
-                .is_ok_and(|run| is_resumable_state(run.state))
-    }) {
-        return Some(cause.run_id.clone());
-    }
-    is_resumable_state(leaf.state).then(|| leaf.run_id.clone())
-}
-
-fn is_resumable_state(state: JobRunState) -> bool {
-    matches!(
-        state,
-        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-    )
-}
-
-/// `orbit run show`'s failed terminal leaves, through the shared failure
-/// query. A wrapper's own error stays in its normal run header/steps.
-fn collect_failed_leaf_causes(
-    runtime: &OrbitRuntime,
-    run: &JobRun,
-    state: Option<&PipelineState>,
-    read: RunRead,
-) -> Result<Vec<RunFailureCause>, OrbitError> {
-    let read = match read {
-        RunRead::Reconcile => RunFailureRead::Reconcile,
-        RunRead::Observe => RunFailureRead::Observe,
-    };
-    let context = runtime.run_failure_context(
-        run,
-        state,
-        RunFailureContextProfile::AllFailedLeaves(read),
-        // This profile survives only an unreadable child checkpoint.
-        &mut |warning| {
-            tracing::warn!(
-                target: "orbit.cli.run",
-                run_id = %warning.run_id,
-                error = %warning.error,
-                "pipeline checkpoint unreadable; run shown without it"
-            );
-            eprintln!(
-                "warning: pipeline checkpoint unreadable for {}; run shown without it: {}",
-                warning.run_id, warning.error
-            );
-        },
-    )?;
-    Ok(context.causes)
 }
 
 /// A pull drain's graceful cancel and the claimed leaves it still carries.

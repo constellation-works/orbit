@@ -1,27 +1,19 @@
 //! Ship and auto-drain workflow actions.
 
 use crate::api::helpers;
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, WsCore};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
-    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
-};
 use orbit_common::protocol::tool_input::parse_duration_seconds;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::WorkspacePullRequest;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::distributed::PullStartOptionsSupplied;
-use orbit_core::application::job::{
-    AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopRequest,
-    ShipModeResolutionProfile, ShipSubmissionProfile,
-};
-use orbit_core::{DrainEntryPoint, WorkspacePullRequest};
+use orbit_core::application::job::{AutoDrainSubmissionProfile, ShipSubmissionProfile};
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
 use serde_json::{Value, json};
 
-use super::super::routines::{
-    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-};
+use super::super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
 use super::super::{OptionalJson, bad_request, blocking, validate_id};
 
 /// Request body for `POST /workflows/ship`.
@@ -73,7 +65,7 @@ pub(in crate::api) struct ShipBody {
 /// endpoint's stable 409. Auto (backlog-discovery) mode has no task ids to guard
 /// and is unaffected.
 pub(in crate::api) async fn ship_workflow_action(
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     OptionalJson(body): OptionalJson<ShipBody>,
 ) -> Response {
     let explicit = match body.mode.as_deref() {
@@ -83,39 +75,36 @@ pub(in crate::api) async fn ship_workflow_action(
         },
         None => None,
     };
-    let mode =
-        match runtime.resolve_ship_mode(explicit, ShipModeResolutionProfile::BoundRuntimeOnly) {
-            Ok(mode) => mode,
-            Err(e) => return bad_request(e.to_string()),
-        };
     match blocking("ship workflow", move || {
-        let invoke = runtime.submit_ship_run(orbit_core::ShipRunRequest {
-            mode,
-            base_branch: body.base.as_deref(),
-            task_ids: &body.task_ids,
-            // [ORB-11187] Completion authority is granted per invocation at the CLI
-            // (`orbit run ship --complete`); the dashboard does not offer it, so
-            // this endpoint always ends successful work at `review`.
-            completion: orbit_core::CompletionPolicy::Review,
-            allowed_crews: &[],
-            actor: Some("dashboard"),
-            claim_token: body.claim_token.as_deref(),
-            trigger: JobRunTrigger::dashboard(),
-            // Strict worker containment is a CLI-only flag.
-            strict_containment: false,
-            review: body.review,
-            // The dashboard's Ship is an operator's explicit ship: it
-            // overrides the drain's readiness gates for the named tasks.
-            operator_override: true,
-            ignore_dependency_delivery: false,
-        })?;
-        Ok(runtime
-            .ship_submission_receipt(
-                &invoke,
-                !body.task_ids.is_empty(),
+        let receipt = exec(
+            &core,
+            Command::ship(
+                explicit,
+                orbit_core::ShipRunRequest {
+                    base_branch: body.base.as_deref(),
+                    task_ids: &body.task_ids,
+                    // [ORB-11187] Completion authority is granted per invocation at the CLI
+                    // (`orbit run ship --complete`); the dashboard does not offer it, so
+                    // this endpoint always ends successful work at `review`.
+                    completion: orbit_core::CompletionPolicy::Review,
+                    allowed_crews: &[],
+                    actor: Some("dashboard"),
+                    claim_token: body.claim_token.as_deref(),
+                    trigger: JobRunTrigger::dashboard(),
+                    // Strict worker containment is a CLI-only flag.
+                    strict_containment: false,
+                    review: body.review,
+                    // The dashboard's Ship is an operator's explicit ship: it
+                    // overrides the drain's readiness gates for the named tasks.
+                    operator_override: true,
+                    ignore_dependency_delivery: false,
+                    ..Default::default()
+                },
                 ShipSubmissionProfile::Http,
-            )?
-            .to_json())
+            ),
+        )?
+        .value;
+        Ok(receipt.to_json())
     })
     .await
     {
@@ -318,7 +307,7 @@ fn map_start_refusal(error: orbit_core::OrbitError) -> Response {
 pub(in crate::api) async fn auto_drain_workflow_action(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     OptionalJson(body): OptionalJson<AutoDrainBody>,
 ) -> Response {
     if let Err(rejection) = explicit_workspace(&query) {
@@ -334,64 +323,47 @@ pub(in crate::api) async fn auto_drain_workflow_action(
     if body.pull.is_some() {
         let global_root = state.global_root().to_path_buf();
         return start_blocking("pull-drain workflow", move || {
-            pull_drain_start(&runtime, &global_root, &body, for_seconds)
+            pull_drain_start(&core, &global_root, &body, for_seconds)
         })
         .await;
     }
-    let completion = if body.complete {
-        match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session()) {
-            Ok(_) => orbit_core::CompletionPolicy::Done,
-            Err(denial) => return authorization_denied(denial),
-        }
-    } else {
-        orbit_core::CompletionPolicy::Review
-    };
-    let approve_proposed = body.approve_proposed;
-    if approve_proposed
-        && let Err(denial) = authorized_caller(
-            &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
-            state.operator_session(),
+    let operator = state.operator_session();
+    match helpers::blocking_join("auto-drain workflow", move || {
+        let completion = if body.complete {
+            orbit_core::CompletionPolicy::Done
+        } else {
+            orbit_core::CompletionPolicy::Review
+        };
+        exec(
+            &core,
+            Command::dashboard_auto(
+                orbit_core::AutoDrainRequest {
+                    for_seconds,
+                    max_active_leaf_runs: body.concurrency,
+                    completion,
+                    allowed_crews: &body.allow_crew,
+                    complexity_crews: body.complexity_crews(),
+                    actor: Some("dashboard"),
+                    claim_token: body.claim_token.as_deref(),
+                    trigger: JobRunTrigger::dashboard(),
+                    strict_containment: body.strict_worker_containment,
+                    approve_proposed: body.approve_proposed,
+                    auto_fix: body.auto_fix,
+                    auto_concurrency: body.auto_concurrency,
+                    review: body.review,
+                },
+                operator,
+            ),
         )
-    {
-        return authorization_denied(denial);
-    }
-    let auto_fix = body.auto_fix;
-    if auto_fix
-        && let Err(denial) =
-            authorized_caller(&DASHBOARD_AUTO_DRAIN_AUTO_FIX, state.operator_session())
-    {
-        return authorization_denied(denial);
-    }
-    if body.auto_concurrency.is_some()
-        && let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_MODE, state.operator_session())
-    {
-        return authorization_denied(denial);
-    }
-    start_blocking("auto-drain workflow", move || {
-        let invoke = runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
-            for_seconds,
-            max_active_leaf_runs: body.concurrency,
-            completion,
-            allowed_crews: &body.allow_crew,
-            complexity_crews: body.complexity_crews(),
-            actor: Some("dashboard"),
-            claim_token: body.claim_token.as_deref(),
-            trigger: JobRunTrigger::dashboard(),
-            strict_containment: body.strict_worker_containment,
-            approve_proposed,
-            auto_fix,
-            auto_concurrency: body.auto_concurrency,
-            review: body.review,
-        })?;
-        Ok(runtime
-            .auto_drain_submission_receipt(
-                &invoke,
-                AutoDrainSubmissionSource::Local,
-                AutoDrainSubmissionProfile::Http,
-            )?
-            .to_json())
+        .map(|outcome| outcome.value)
     })
     .await
+    {
+        Ok(Ok(Ok(receipt))) => Json(receipt.to_json()).into_response(),
+        Ok(Ok(Err(denial))) => authorization_denied(denial),
+        Ok(Err(error)) => map_start_refusal(error),
+        Err(response) => *response,
+    }
 }
 
 /// Run a start on the blocking pool, answering with its receipt or with the
@@ -412,32 +384,29 @@ where
 /// window pulls from and, like the CLI, warns when this replica's validation
 /// gates drifted from the owner's.
 fn pull_drain_start(
-    runtime: &OrbitRuntime,
+    core: &Core,
     global_root: &std::path::Path,
     body: &AutoDrainBody,
     for_seconds: Option<u64>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let pull = body.pull.as_deref().unwrap_or_default();
     let selector = orbit_cmd::hosts::pull_selector(global_root, body.host.as_deref(), pull)?;
-    let invoke = runtime.submit_workspace_pull_run(
-        WorkspacePullRequest {
-            selector: &selector,
-            for_seconds,
-            max_active_leaf_runs: body.concurrency,
-            allowed_crews: &body.allow_crew,
-            actor: Some("dashboard"),
-        },
-        JobRunTrigger::dashboard(),
-    )?;
-    Ok(runtime
-        .auto_drain_submission_receipt(
-            &invoke,
-            AutoDrainSubmissionSource::Pull {
+    let receipt = exec(
+        core,
+        Command::pull(
+            WorkspacePullRequest {
                 selector: &selector,
+                for_seconds,
+                max_active_leaf_runs: body.concurrency,
+                allowed_crews: &body.allow_crew,
+                actor: Some("dashboard"),
             },
+            JobRunTrigger::dashboard(),
             AutoDrainSubmissionProfile::Http,
-        )?
-        .to_json())
+        ),
+    )?
+    .value;
+    Ok(receipt.to_json())
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -472,33 +441,28 @@ pub(in crate::api) struct AutoDrainStopBody {
 pub(in crate::api) async fn auto_drain_stop_action(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     body: Result<OptionalJson<AutoDrainStopBody>, Response>,
 ) -> Response {
     if let Err(rejection) = explicit_workspace(&query) {
         return rejection.into_response();
     }
-    if let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, state.operator_session()) {
-        return authorization_denied(denial);
-    }
-    // Stop is always operator-only, including requests with malformed bodies.
-    // Defer the extractor's rejection until after authority is established.
-    let body = match body {
-        Ok(OptionalJson(body)) => body,
-        Err(rejection) => return rejection,
-    };
+    let operator = state.operator_session();
     match blocking("auto-drain stop", move || {
-        runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
-            actor: "dashboard",
-            source: "dashboard",
-            reason: body.reason.as_deref(),
-            claim_token: body.claim_token.as_deref(),
-            force: false,
-        })
+        exec(
+            &core,
+            Command::dashboard_stop(
+                operator,
+                body.map(|OptionalJson(body)| (body.reason, body.claim_token)),
+            ),
+        )
+        .map(|outcome| outcome.value)
     })
     .await
     {
-        Ok(result) => {
+        Ok(Err(denial)) => authorization_denied(denial),
+        Ok(Ok(Err(response))) => response,
+        Ok(Ok(Ok(result))) => {
             let mut stopped = result.to_json();
             stopped["workflow"] = json!("auto");
             Json(stopped).into_response()
@@ -538,7 +502,7 @@ fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
 
 /// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…][&also_task=<id>][&limit=N][&allow_crew=<crew>,…]`
 /// — the read-only eligible/waiting snapshot for backlog-discovery
-/// auto-drain, projected straight from `OrbitRuntime::workspace_auto_readiness`
+/// auto-drain, projected straight from `workspace_auto_readiness`
 /// (the same snapshot `orbit run readiness` prints) rather than a
 /// dashboard-local recomputation of eligibility. `task` explains exactly
 /// those tasks, as `orbit run readiness <id>…` does; an unknown id is a 400.
@@ -548,7 +512,7 @@ fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
 /// and reports its id in `detail_unavailable`.
 pub(in crate::api) async fn auto_drain_readiness(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
     let task_ids = match readiness_task_ids(query.task.as_deref()) {
@@ -566,19 +530,21 @@ pub(in crate::api) async fn auto_drain_readiness(
         .map(orbit_common::protocol::tool_input::split_csv)
         .unwrap_or_default();
     let hosts = state.hosts().snapshot;
+    let operator = state.operator_session();
     match blocking("auto-drain readiness", move || {
-        let mut payload = runtime.workspace_auto_readiness_with_detail(
-            &task_ids,
-            also_task_ids.first().map(String::as_str),
-            query.concurrency,
-            query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
-            &allowed_crews,
-        )?;
-        payload["start_options"] = drain_start_options(
-            &runtime,
-            hosts.as_deref().map(|snapshot| &snapshot.registry),
-        )?;
-        Ok(payload)
+        exec(
+            &core,
+            Command::dashboard_readiness(
+                &task_ids,
+                also_task_ids.first().map(String::as_str),
+                query.concurrency,
+                query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
+                &allowed_crews,
+                hosts.as_deref().map(|snapshot| &snapshot.registry),
+                operator,
+            ),
+        )
+        .map(|outcome| outcome.value)
     })
     .await
     {
@@ -596,106 +562,8 @@ pub(in crate::api) async fn auto_drain_readiness(
                     }
                 }
             }
-            // So the form can hide/disable the `complete` and
-            // `approve_proposed`, `auto_fix` and forecast-mode opt-ins and the stop control before the
-            // operator ever hits the separately-governed 403 at submission.
-            // All five operations admit the same operator capability, so one
-            // flag describes them.
-            if let Some(object) = payload.as_object_mut() {
-                let operator_session = state.operator_session();
-                object.insert(
-                    "controls_authorized".to_string(),
-                    Value::Bool(
-                        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator_session).is_ok()
-                            && authorized_caller(
-                                &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
-                                operator_session,
-                            )
-                            .is_ok()
-                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_AUTO_FIX, operator_session)
-                                .is_ok()
-                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
-                                .is_ok()
-                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_MODE, operator_session)
-                                .is_ok(),
-                    ),
-                );
-            }
             Json(payload).into_response()
         }
         Err(response) => *response,
     }
-}
-
-/// What the Start a window composer offers on this checkout: whether it is
-/// the workspace's owner (a local drain) or a replica (a pull drain from its
-/// owner, with the owner's host name and the selector `--pull` resolves to),
-/// the runtime's own refusal for the source this checkout cannot start, the
-/// configured crews for `--allow-crew`, the workspace pools each
-/// `--<tier>-complexity-crews` override replaces, and the review layer
-/// before landing workspace policy applies (`review`, as a run would capture
-/// it: `{"timing", "source"}`) [ORB-20510]. A pool configuration the
-/// runtime cannot read leaves `complexity_pools` null; submission reports why.
-fn drain_start_options(
-    runtime: &OrbitRuntime,
-    hosts: Option<&orbit_registry::hosts::HostRegistry>,
-) -> Result<Value, orbit_core::OrbitError> {
-    let workspace_id = runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone());
-    let owner = runtime.replica_owner_machine().map(str::to_string);
-    let owner_host = owner.as_deref().and_then(|machine_id| {
-        hosts?
-            .hosts()
-            .entries()
-            .iter()
-            .find(|entry| entry.machine_id == machine_id)
-            .map(|entry| entry.name.clone())
-    });
-    let local_refusal = match owner {
-        Some(_) => runtime
-            .drain_entry_admission(DrainEntryPoint::OwnerDrain, &[])?
-            .into_result()
-            .err()
-            .map(|error| error.to_string()),
-        None => None,
-    };
-    let crews = runtime
-        .configured_crew_registry_projection()
-        .crews
-        .into_iter()
-        .map(|crew| json!({"name": crew.name, "enabled": crew.enabled}))
-        .collect::<Vec<_>>();
-    let complexity_pools = runtime
-        .workspace_complexity_crew_pools()
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "workspace complexity pools unreadable; the composer shows none");
-            Value::Null
-        });
-    let policy = runtime.operation_policy();
-    let review = if policy.review_before_pr.value {
-        json!({"timing": "before-pr", "source": policy.review_before_pr.source.label()})
-    } else if policy.review_before_landing.value {
-        json!({"timing": "before-landing", "source": policy.review_before_landing.source.label()})
-    } else {
-        json!({"timing": "none", "source": policy.review_before_landing.source.label()})
-    };
-    Ok(json!({
-        "checkout": if owner.is_some() { "replica" } else { "owner" },
-        "workspace_id": workspace_id,
-        "this_host": hosts.and_then(|hosts| hosts.local()).map(|local| local.name.clone()),
-        "owner_machine_id": owner,
-        "owner_host": owner_host,
-        "pull_selector": owner
-            .as_deref()
-            .zip(workspace_id.as_deref())
-            .map(|(machine, workspace)| format!("{machine}/{workspace}")),
-        "local_refusal": local_refusal,
-        "pull_refusal": runtime
-            .pull_drain_checkout_refusal()
-            .map(|error| error.to_string()),
-        "crews": crews,
-        "complexity_pools": complexity_pools,
-        "review": review,
-    }))
 }

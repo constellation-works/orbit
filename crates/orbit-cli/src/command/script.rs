@@ -11,12 +11,13 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use orbit_core::Core;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::runtime::scripts::{ScriptGrantOptions, ScriptGrantState, ScriptStatus};
-use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::workflow::activity_job::{ScriptGrant, ScriptNetwork};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::table::{Column, Table};
 
 #[derive(Args)]
@@ -51,14 +52,14 @@ pub enum ScriptSubcommand {
     History(ScriptHistoryArgs),
 }
 
-impl Execute for ScriptCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for ScriptCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self.command {
-            ScriptSubcommand::List(args) => args.execute(runtime),
-            ScriptSubcommand::Show(args) => args.execute(runtime),
-            ScriptSubcommand::Grant(args) => args.execute(runtime),
-            ScriptSubcommand::Revoke(args) => args.execute(runtime),
-            ScriptSubcommand::History(args) => args.execute(runtime),
+            ScriptSubcommand::List(args) => args.execute(core),
+            ScriptSubcommand::Show(args) => args.execute(core),
+            ScriptSubcommand::Grant(args) => args.execute(core),
+            ScriptSubcommand::Revoke(args) => args.execute(core),
+            ScriptSubcommand::History(args) => args.execute(core),
         }
     }
 }
@@ -67,8 +68,8 @@ impl Execute for ScriptCommand {
 pub struct ScriptListArgs {}
 
 impl ScriptListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let statuses = runtime.script_statuses()?;
+    fn execute(self, core: &Core) -> CommandOut {
+        let statuses = exec(core, Command::scripts())?.value;
         let records: Vec<Value> = statuses.iter().map(script_status_json).collect();
         let mut table = Table::new(vec![
             Column::new("NAME").fixed(),
@@ -112,13 +113,8 @@ pub struct ScriptShowArgs {
 }
 
 impl ScriptShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let Some(status) = runtime.script_status(&self.name)? else {
-            return Err(OrbitError::InvalidInput(format!(
-                "no script named '{}' and no grant under that name (see `orbit script list`)",
-                self.name
-            )));
-        };
+    fn execute(self, core: &Core) -> CommandOut {
+        let status = exec(core, Command::script(&self.name))?.value;
         let doc = script_status_json(&status);
         let mut text = format!("script: {}\n", status.name);
         text.push_str(&format!("grant state: {}\n", status.state));
@@ -224,33 +220,34 @@ fn parse_script_network(value: &str) -> Result<ScriptNetwork, String> {
 }
 
 impl ScriptGrantArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let previous = runtime.script_status(&self.name).ok().flatten();
-        let grant = runtime.grant_script(
-            &self.name,
-            &ScriptGrantOptions {
-                network: self.network,
-                read_roots: self.read_roots,
-                write_roots: self.write_roots,
-                env_pass: self.env_pass,
-                follower: self.follower,
-                output_max_files: self.output_max_files,
-                output_max_file_bytes: self.output_max_file_bytes,
-                memory_max_bytes: self.memory_max,
-                tasks_max: self.tasks_max,
-                cpu_quota_percent: self.cpu_quota,
-                ..Default::default()
-            },
-        )?;
-        let status = runtime.script_status(&self.name)?;
+    fn execute(self, core: &Core) -> CommandOut {
+        let result = exec(
+            core,
+            Command::script_grant(
+                &self.name,
+                ScriptGrantOptions {
+                    network: self.network,
+                    read_roots: self.read_roots,
+                    write_roots: self.write_roots,
+                    env_pass: self.env_pass,
+                    follower: self.follower,
+                    output_max_files: self.output_max_files,
+                    output_max_file_bytes: self.output_max_file_bytes,
+                    memory_max_bytes: self.memory_max,
+                    tasks_max: self.tasks_max,
+                    cpu_quota_percent: self.cpu_quota,
+                    ..Default::default()
+                },
+            ),
+        )?
+        .value;
+        let grant = result.grant;
+        let status = result.status;
         let doc = json!({
             "name": grant.name,
             "state": ScriptGrantState::Granted.as_str(),
             "grant": script_grant_json(&grant),
-            "previous_digest": previous
-                .as_ref()
-                .and_then(|status| status.grant.as_ref())
-                .map(|grant| grant.digest.clone()),
+            "previous_digest": result.previous_digest,
         });
         let asset = status.as_ref().and_then(|status| status.asset.as_ref());
         let mut text = format!("granted script: {}\n", grant.name);
@@ -319,10 +316,9 @@ impl ScriptGrantArgs {
                 .collect();
             text.push_str(&format!("interpreter: {}\n", rendered.join(" ")));
         }
-        if let Some(previous_digest) = previous
-            .as_ref()
-            .and_then(|status| status.grant.as_ref())
-            .map(|grant| grant.digest.as_str())
+        if let Some(previous_digest) = result
+            .previous_digest
+            .as_deref()
             .filter(|previous| *previous != grant.digest)
         {
             text.push_str(&format!(
@@ -340,13 +336,8 @@ pub struct ScriptRevokeArgs {
 }
 
 impl ScriptRevokeArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        if !runtime.revoke_script(&self.name)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "no grant recorded for script '{}' on this host",
-                self.name
-            )));
-        }
+    fn execute(self, core: &Core) -> CommandOut {
+        exec(core, Command::script_revoke(&self.name))?;
         let doc = json!({"name": self.name, "revoked": true});
         Ok(Payload::detail(doc, format!("revoked script grant: {}\n", self.name)).into())
     }
@@ -363,8 +354,8 @@ pub struct ScriptHistoryArgs {
 }
 
 impl ScriptHistoryArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let executions = runtime.script_execution_history(&self.name, self.limit)?;
+    fn execute(self, core: &Core) -> CommandOut {
+        let executions = exec(core, Command::script_history(&self.name, self.limit))?.value;
         let records: Vec<Value> = executions
             .iter()
             .map(|execution| execution.to_json())

@@ -332,10 +332,18 @@ fn execute_admitted(
             agent.as_deref(),
             model.as_deref(),
         ),
-        OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
-        OrbitBuiltinAction::Drain(verb) => {
-            super::drain_tools::dispatch(runtime, session_context, verb, input)
-        }
+        OrbitBuiltinAction::CommandExec => super::command_tools::exec(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            input,
+            agent,
+            model,
+        ),
+        OrbitBuiltinAction::Drain(verb) => super::drain_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            session_context,
+            verb,
+            input,
+        ),
         // ADR-0209 bearing 1 [ORB-10358]: the friction handler table is the
         // friction app, keyed by the registry's verb enum. This entry already
         // authorized and audited the call.
@@ -346,16 +354,19 @@ fn execute_admitted(
             model,
         ),
         OrbitBuiltinAction::PipelineInvoke => super::pipeline_tools::invoke(
-            runtime,
+            &crate::Core::within_tool_entry(runtime.clone()),
             input,
             agent,
             model,
             reservation_owner,
             submission_trigger(session_context),
         ),
-        OrbitBuiltinAction::PipelineWait => {
-            super::pipeline_tools::wait(runtime, input, agent, model)
-        }
+        OrbitBuiltinAction::PipelineWait => super::pipeline_tools::wait(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            input,
+            agent,
+            model,
+        ),
         OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Task(verb) => {
             let provenance = session_write_provenance(session_context);
@@ -464,7 +475,7 @@ fn execute_admitted(
             Ok(response)
         }
         OrbitBuiltinAction::Workflow(verb) => super::workflow_tools::dispatch(
-            runtime,
+            &crate::Core::within_tool_entry(runtime.clone()),
             session_context,
             verb,
             input,

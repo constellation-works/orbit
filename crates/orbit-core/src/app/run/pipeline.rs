@@ -1,0 +1,139 @@
+use super::fields::{
+    parse_optional_poll_interval_seconds, parse_optional_timeout_seconds, parse_string_array_field,
+    require_object_field,
+};
+use super::{Command, Operation};
+use crate::OrbitRuntime;
+use crate::app::tool_fields::{parse_task_priority, serialize_error};
+use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
+use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_tools::ReservationOwnerContext;
+use orbit_types::identity::normalize_optional_attribution_label;
+use orbit_types::workflow::JobRunTrigger;
+use serde_json::Value;
+
+fn invoke(
+    runtime: &OrbitRuntime,
+    input: Value,
+    agent: Option<String>,
+    model: Option<String>,
+    reservation_owner: Option<ReservationOwnerContext>,
+    trigger: JobRunTrigger,
+) -> Result<Value, OrbitError> {
+    let job_name = required_string(&input, &["job_name"], "job_name")?;
+    let payload = require_object_field(&input, "input")?.clone();
+    let priority = optional_string(&input, "priority")?
+        .map(|value| parse_task_priority("priority", &value))
+        .transpose()?
+        .map(|value| value.to_string());
+    let actor = Some(
+        normalize_optional_attribution_label(
+            model.as_deref().or(agent.as_deref()),
+            model.as_deref(),
+        )
+        .unwrap_or_else(|| runtime.actor_label().to_string()),
+    )
+    .filter(|value| !value.trim().is_empty());
+    let result = match child_admission(reservation_owner) {
+        Some(admission) => runtime.submit_child_pipeline_run(
+            &job_name,
+            payload,
+            priority.as_deref(),
+            actor.as_deref(),
+            &admission,
+        )?,
+        None => ChildSubmission::Submitted(runtime.submit_pipeline_run_with_trigger(
+            &job_name,
+            payload,
+            priority.as_deref(),
+            actor.as_deref(),
+            trigger,
+        )?),
+    };
+    match result {
+        ChildSubmission::Submitted(result) | ChildSubmission::Resolved(result) => {
+            serde_json::to_value(result).map_err(serialize_error("serialize pipeline invoke"))
+        }
+        ChildSubmission::Skipped(reason) => Ok(serde_json::json!({
+            "skipped": true,
+            "reason": reason,
+            "job_name": job_name,
+        })),
+    }
+}
+
+fn child_admission(
+    reservation_owner: Option<ReservationOwnerContext>,
+) -> Option<ChildPipelineAdmission> {
+    let owner = reservation_owner?;
+    let admission = owner.owner_metadata.as_ref()?.child_admission()?;
+    Some(ChildPipelineAdmission {
+        parent_run_id: owner.owner_run_id,
+        parent_step_id: admission.parent_step_id.clone(),
+        action: admission.action.clone(),
+        blocking: admission.blocking,
+    })
+}
+
+fn wait(
+    runtime: &OrbitRuntime,
+    input: Value,
+    agent: Option<String>,
+    model: Option<String>,
+) -> Result<Value, OrbitError> {
+    let run_ids = parse_string_array_field(&input, "run_ids")?;
+    let timeout_seconds =
+        OrbitRuntime::normalize_pipeline_wait_timeout(parse_optional_timeout_seconds(&input)?)?;
+    let poll_interval_seconds = OrbitRuntime::normalize_pipeline_wait_poll_interval(
+        parse_optional_poll_interval_seconds(&input)?,
+    );
+    let actor = Some(
+        normalize_optional_attribution_label(
+            model.as_deref().or(agent.as_deref()),
+            model.as_deref(),
+        )
+        .unwrap_or_else(|| runtime.actor_label().to_string()),
+    )
+    .filter(|value| !value.trim().is_empty());
+    serde_json::to_value(runtime.wait_pipeline_runs(
+        &run_ids,
+        timeout_seconds,
+        poll_interval_seconds,
+        actor.as_deref(),
+    )?)
+    .map_err(serialize_error("serialize pipeline wait"))
+}
+
+impl<'a> Command<'a, Value> {
+    pub(crate) fn pipeline_invoke(
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+        reservation_owner: Option<ReservationOwnerContext>,
+        trigger: JobRunTrigger,
+    ) -> Self {
+        Self::new(Operation::command("pipeline", "invoke"), move |core| {
+            invoke(
+                core.runtime(),
+                input,
+                agent,
+                model,
+                reservation_owner,
+                trigger,
+            )
+        })
+    }
+}
+
+impl<'a> Command<'a, Value> {
+    pub(crate) fn pipeline_wait(
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Self {
+        Self::new(Operation::command("pipeline", "wait"), move |core| {
+            wait(core.runtime(), input, agent, model)
+        })
+    }
+}

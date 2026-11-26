@@ -2,11 +2,12 @@
 
 use chrono::SecondsFormat;
 use clap::Args;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimitChangeProfile};
-use orbit_core::{DrainWindowExtensionRequest, OrbitRuntime};
+use orbit_core::{Core, DrainWindowExtensionRequest};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::parse::parse_duration_seconds;
 
 #[derive(Args)]
@@ -43,18 +44,22 @@ pub struct RunExtendArgs {
     pub claim_token: Option<String>,
 }
 
-impl Execute for RunExtendArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for RunExtendArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let for_seconds = parse_duration_seconds(&self.for_duration)?;
-        let change = runtime.extend_drain_window(DrainWindowExtensionRequest {
-            run_id: &self.run_id,
-            for_seconds,
-            max_active_leaf_runs: self.concurrency,
-            reason: self.reason.as_deref(),
-            actor: "cli",
-            source: "run_extend",
-            claim_token: self.claim_token.as_deref(),
-        })?;
+        let change = exec(
+            core,
+            Command::extend(DrainWindowExtensionRequest {
+                run_id: &self.run_id,
+                for_seconds,
+                max_active_leaf_runs: self.concurrency,
+                reason: self.reason.as_deref(),
+                actor: "cli",
+                source: "run_extend",
+                claim_token: self.claim_token.as_deref(),
+            }),
+        )?
+        .value;
         let previous = change
             .previous_deadline
             .to_rfc3339_opts(SecondsFormat::Secs, true);

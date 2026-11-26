@@ -1,0 +1,226 @@
+//! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
+//! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
+
+use crate::app::tool_fields::optional_u32;
+use crate::application::job::{
+    AutoDrainSubmissionProfile, DrainWorkerLimitChangeProfile, DrainWorkerLimitRequest,
+};
+use crate::application::workflow::drain_window_input_error;
+use crate::{AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
+use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_types::workflow::JobRunTrigger;
+use serde_json::{Value, json};
+
+/// Inputs only `resize` accepts.
+const RESIZE_ONLY_FIELDS: [&str; 3] = ["id", "if_revision", "reason"];
+
+pub(super) fn control(
+    runtime: &OrbitRuntime,
+    input: Value,
+    trigger: JobRunTrigger,
+    actor: &str,
+) -> Result<Value, OrbitError> {
+    let action = required_string(&input, &["action"], "action")?;
+    if action != "start" && input.get("auto_concurrency").is_some() {
+        return Err(OrbitError::InvalidInput(
+            "auto_concurrency is a start setting".into(),
+        ));
+    }
+    if action != "start" && input.get("review").is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`review` is a start setting; {action} does not accept it"
+        )));
+    }
+    let claim = optional_string(&input, "claim_token")?;
+    let workspace = input["workspace"].clone();
+    if action != "stop" && input.get("force").is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`force` is a stop setting; {action} does not accept it"
+        )));
+    }
+    if action != "resize"
+        && let Some(field) = RESIZE_ONLY_FIELDS
+            .iter()
+            .find(|field| input.get(**field).is_some())
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "`{field}` is a resize setting; {action} does not accept it"
+        )));
+    }
+    let mut result = match action.as_str() {
+        "start" => {
+            let seconds = input
+                .get("for_seconds")
+                .and_then(Value::as_u64)
+                .filter(|seconds| *seconds > 0)
+                .ok_or_else(drain_window_input_error)?;
+            let concurrency = input
+                .get("concurrency")
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput("concurrency must be a positive u32".into())
+                        })
+                })
+                .transpose()?;
+            let complete = input
+                .get("complete")
+                .map(|v| {
+                    v.as_bool().ok_or_else(|| {
+                        OrbitError::InvalidInput("complete must be a boolean".into())
+                    })
+                })
+                .transpose()?
+                .unwrap_or(false);
+            let completion = if complete {
+                CompletionPolicy::Done
+            } else {
+                CompletionPolicy::Review
+            };
+            let approve_proposed = input
+                .get("approve_proposed")
+                .map(|v| {
+                    v.as_bool().ok_or_else(|| {
+                        OrbitError::InvalidInput("approve_proposed must be a boolean".into())
+                    })
+                })
+                .transpose()?
+                .unwrap_or(false);
+            let review = super::workflow::review_layer(&input)?;
+            let receipt = super::submission::submit_auto(
+                runtime,
+                AutoDrainRequest {
+                    for_seconds: Some(seconds),
+                    max_active_leaf_runs: concurrency,
+                    completion,
+                    allowed_crews: &[],
+                    complexity_crews: Default::default(),
+                    actor: Some("desktop"),
+                    claim_token: claim.as_deref(),
+                    trigger,
+                    strict_containment: false,
+                    approve_proposed,
+                    auto_fix: false,
+                    auto_concurrency: input
+                        .get("auto_concurrency")
+                        .map(|value| {
+                            serde_json::from_value(value.clone())
+                                .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+                        })
+                        .transpose()?,
+                    review,
+                },
+                AutoDrainSubmissionProfile::Tool,
+            )?;
+            receipt.to_json()
+        }
+        "stop" => {
+            if ["for_seconds", "concurrency", "complete", "approve_proposed"]
+                .iter()
+                .any(|key| input.get(key).is_some())
+            {
+                return Err(OrbitError::InvalidInput(
+                    "stop accepts no start settings".into(),
+                ));
+            }
+            let force = match input.get("force") {
+                None | Some(Value::Null) => false,
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| OrbitError::InvalidInput("force must be a boolean".into()))?,
+            };
+            // The surface word is the call's own provenance, the same one a
+            // start records (`mcp`, `cli`), never a fixed desktop label.
+            let surface = trigger.kind.as_str();
+            let stopped = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
+                actor: surface,
+                source: surface,
+                reason: None,
+                claim_token: claim.as_deref(),
+                force,
+            })?;
+            // Preserve every unconfirmed stop, including local children,
+            // when the request touches more than one coordinator.
+            let unstopped = stopped
+                .coordinators
+                .iter()
+                .flat_map(|change| {
+                    change
+                        .unstopped_leaves
+                        .iter()
+                        .map(|leaf| leaf.describe())
+                        .chain(
+                            change
+                                .unstopped_children
+                                .iter()
+                                .map(|child| child.describe()),
+                        )
+                })
+                .collect::<Vec<_>>();
+            if !unstopped.is_empty() {
+                return Err(OrbitError::Execution(format!(
+                    "forced stop incomplete: {} run(s) could not be confirmed stopped: {}",
+                    unstopped.len(),
+                    unstopped.join("; ")
+                )));
+            }
+            let mut result = stopped.to_json();
+            result["action"] = json!("stop");
+            result
+        }
+        "resize" => resize(runtime, &input, claim.as_deref(), actor)?,
+        _ => {
+            return Err(OrbitError::InvalidInput(
+                "action must be start, stop or resize".into(),
+            ));
+        }
+    };
+    result["workspace"] = workspace;
+    result["schema_version"] = json!(1);
+    Ok(result)
+}
+
+/// [ORB-11253] Move a live drain's worker ceiling without replacing its run:
+/// the run ID, deadline, completion authorization and dispatched children
+/// stay as they are, and a lower ceiling only stops new admissions. Without
+/// an `id` it targets the workspace's one live auto or pull drain.
+fn resize(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    claim: Option<&str>,
+    actor: &str,
+) -> Result<Value, OrbitError> {
+    if ["for_seconds", "complete", "approve_proposed"]
+        .iter()
+        .any(|key| input.get(key).is_some())
+    {
+        return Err(OrbitError::InvalidInput(
+            "resize accepts no start settings".into(),
+        ));
+    }
+    let concurrency = optional_u32(input, "concurrency")?
+        .ok_or_else(|| OrbitError::InvalidInput("resize requires `concurrency`".into()))?;
+    let expected_revision = optional_u32(input, "if_revision")?;
+    let reason = optional_string(input, "reason")?;
+    let run_id = match optional_string(input, "id")? {
+        Some(id) => id,
+        None => runtime.active_drain_run_id()?,
+    };
+    let change = runtime.set_drain_worker_limit(DrainWorkerLimitRequest {
+        run_id: &run_id,
+        max_active_leaf_runs: concurrency,
+        expected_revision,
+        reason: reason.as_deref(),
+        actor,
+        source: "tool",
+        claim_token: claim,
+    })?;
+    let mut result = change.to_json(DrainWorkerLimitChangeProfile::Standalone);
+    if let Value::Object(map) = &mut result {
+        map.shift_insert(0, "action".to_string(), json!("resize"));
+    }
+    Ok(result)
+}

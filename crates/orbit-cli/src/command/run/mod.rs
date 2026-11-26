@@ -10,7 +10,6 @@ mod format;
 mod history;
 mod hydrate_settlements;
 pub mod job;
-mod lock_holders;
 mod logs;
 mod profiles;
 mod readiness;
