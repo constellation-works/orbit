@@ -1,5 +1,5 @@
 ---
-title: "Scope: the Claude Code mod links task ids and draws nothing else"
+title: "Scope: the Claude Code mod links task and run ids and draws nothing else"
 owner: claude
 created_date: 2026-11-26
 updated_date: 2026-11-26
@@ -10,21 +10,22 @@ next: "Daniel reviews this proposal; no task is filed until he approves it"
 feature: claude-code-mod
 doc_role: scope
 type: design
-summary: "Scope: replace the Orbit plugin's band, status line, toasts, pane, prompt cards and commit trailer with one behaviour, task ids in the transcript drawn as links to the dashboard, with prefixes read from the host registry and a dashboard permalink that resolves the host"
+summary: "Scope: replace the Orbit plugin's band, status line, toasts, pane, prompt cards and commit trailer with one behaviour, task and run ids in the transcript drawn as links to the dashboard, with task prefixes read from the host registry and dashboard permalinks that resolve the host"
 tags: [claude-code-mod, plugin, dashboard, host-registry]
 ---
 
-# Scope: the Claude Code mod links task ids and draws nothing else
+# Scope: the Claude Code mod links task and run ids and draws nothing else
 
 Status: a proposal. Nothing here is built or approved.
 Bearing: the Orbit plugin's hooks module ([`plugin/hooks/mod`](../../../plugin/hooks/mod/README.md),
 built by [ORB-13862]) draws a band, a status line, toasts and a Board / Ship pane in Claude
 Code, adds a task card to prompts and a trailer to commits. The
 [host registry](../host-registry/1_overview.md) ([ORB-14448]) records each machine's
-`task_prefix`, and the dashboard (`orbit web serve`) shows a task at `#tasks/<id>` and
-another host's tasks with `?host=<name>`. Daniel asked for this on 2026-11-26: a personal
-mod that links task ids "improves quality of life", and the existing drawings are to go
-"as I don't find them useful".
+`task_prefix`, and the dashboard (`orbit web serve`) shows a task at `#tasks/<id>`, a run at
+`#runs/<id>` and another host's with `?host=<name>`. Daniel asked for this on 2026-11-26: a
+personal mod that links task ids "improves quality of life", and the existing drawings are
+to go "as I don't find them useful". He then asked for run ids as well
+(`jrun-20261126-0531-c3`).
 
 ## Problem
 
@@ -56,14 +57,15 @@ it cannot ship:
   must say which host serves which prefix. The dashboard already knows that.
 - It links ids in the assistant's text only. Ids in a message another session sent stay
   plain.
+- It links tasks only. A run id, which a failure report usually leads with, stays plain.
 
 Codex loads the plugin's skills and MCP server only. It has no hooks module, so nothing in
 this scope reaches a Codex session.
 
 ## Goal
 
-In Claude Code, a task id in the transcript is a link to that task, with one setting and no
-background work. Everything else the mod draws or injects is removed. The plugin's skills,
+In Claude Code, a task id or a run id in the transcript is a link to its page on the
+dashboard, with one setting and no background work. Everything else the mod draws or injects is removed. The plugin's skills,
 MCP server and the session-start workspace check are unchanged.
 
 ## Shape
@@ -73,6 +75,7 @@ MCP server and the session-start workspace check are unchanged.
 | Part | Decision | Reason |
 |---|---|---|
 | Task id links | **Added**, from the personal mod | The one behaviour in daily use |
+| Run id links | **Added** | Same mechanism; a run id is what a failure report names |
 | Band above the prompt | Removed | The dashboard shows the counts; it is the reason for the poll |
 | Status line entry | Removed | Fed by the same poll |
 | Toasts on blocked, review, done | Removed | Fed by the same poll; attention reports these |
@@ -91,15 +94,15 @@ function.
 The rules of the personal mod carry over unchanged, with its 54 cases:
 
 - An id in a paragraph, heading, list item, quote or table cell is drawn as
-  `[ORB-123](<url>)`.
+  `[ORB-123](<url>)`. A run id is drawn the same way.
 - An id is left alone inside inline code, a fenced or indented code block, an existing
   link or its definition, an HTML tag and a bare URL. An id in a command stays copyable.
 - The stored message is not changed, only its drawing. A reply whose rewritten text would
   pass the engine's 100,000-character limit is drawn as it was.
-- The function is pure (text and prefixes in, text out), so it is tested without Claude
+- The function is pure (text, prefixes and address in, text out), so it is tested without Claude
   Code.
 
-### Which words are task ids
+### Which words are ids
 
 A pattern such as `[A-Z]{2,5}-\d+` would also link `STD-12`, `UTF-8` and `SHA-256`. The mod
 links only the prefixes Orbit knows:
@@ -109,8 +112,13 @@ links only the prefixes Orbit knows:
    contacts no host.
 2. The pattern is built from those prefixes, longest first, so `ORBA-5` is not read as
    `ORB` followed by `A-5`.
-3. When the call fails or `orbit` is not installed, the mod links nothing and says nothing.
+3. When the call fails or `orbit` is not installed, the mod links no task and says nothing.
    A session's prefixes are fixed at its start.
+
+A run id needs no list. Its shape is Orbit's own and matches nothing else:
+`jrun-<YYYYmmdd>-<HHMM>`, then an optional `-<role letter><sequence>` (`workflow/run/id.rs`;
+older ids have a bare stem or a plain number). Run ids are linked even when the host list
+could not be read.
 
 ### Where a link goes
 
@@ -121,13 +129,18 @@ unknown prefix to the dashboard's not-found view for that id. The redirect targe
 dashboard's to change; a link written into a pull request, a mail or a transcript keeps
 working.
 
-The mod's link is then `<dashboardUrl>/t/<id>`.
+A second permalink, `GET /r/<id>`, does the same for a run and redirects to
+`#runs/<id>`. A run id carries no prefix, so it does not say which host ran it. The
+dashboard looks on the serving machine; on a miss it shows not found for that id beside
+the host switch. It does not search the other hosts.
+
+The mod's links are then `<dashboardUrl>/t/<id>` and `<dashboardUrl>/r/<id>`.
 
 ### Configuration
 
 | Option | Default | Meaning |
 |---|---|---|
-| `dashboardUrl` | `http://localhost:7878` | Where the dashboard is reached from this machine: a local `orbit web serve`, an `orbit web connect` tunnel, or a Tailscale Serve name. Empty turns linking off. A value that contains `{id}` is used whole as the link template, for a dashboard older than the permalink. |
+| `dashboardUrl` | `http://localhost:7878` | Where the dashboard is reached from this machine: a local `orbit web serve`, an `orbit web connect` tunnel, or a Tailscale Serve name. Empty turns linking off. A value that contains `{id}` is used whole as the task link template, for a dashboard older than the permalinks; run ids are then not linked. |
 
 Only `http`, `https` and `file` addresses are accepted, as today.
 
@@ -150,8 +163,7 @@ Only `http`, `https` and `file` addresses are accepted, as today.
   this scope removes; the link opens the page that has them.
 - **Actions from the session.** Approve, ship, accept and rescue stay with the MCP tools,
   the CLI and the dashboard.
-- **Run, friction and decision ids.** Only task ids are linked. A run is reached from its
-  task's page.
+- **Friction, decision and notice ids.** Only task and run ids are linked.
 - **Codex.** A skill line telling the model to write ids as links would spend tokens on
   every reply and depend on the model doing it.
 - **Rewriting what the model reads.** The link exists in the drawing only.
@@ -167,15 +179,20 @@ Only `http`, `https` and `file` addresses are accepted, as today.
   parser. Where they could disagree it leaves the id plain: a missed link, never broken
   markdown. The 54 cases are the record of what it handles.
 - **A host registered mid-session is not linked** until the next session.
-- **The permalink trusts the serving machine's registry.** A prefix that machine has not
+- **A run on another host is not found by its link.** The id does not name its host, and
+  `/r/<id>` looks only on the serving machine. The reader picks the host from the switch.
+  Searching the registered hosts on a miss would cost one call per host and is left out
+  until the miss is felt.
+- **The task permalink trusts the serving machine's registry.** A prefix that machine has not
   registered is not found, even when the linking machine knows it.
 
 ## Phasing
 
-1. **Dashboard permalink.** `GET /t/<id>` with the three outcomes above.
+1. **Dashboard permalinks.** `GET /t/<id>` with the three outcomes above, and `GET /r/<id>`.
 2. **Replace the mod.** Move the linking function and its cases into `plugin/hooks/mod`,
-   read the prefixes at session start, add `dashboardUrl`, delete the rest, update the
-   docs. This does not wait for phase 1: a `{id}` template covers the gap.
+   add the run pattern, read the prefixes at session start, add `dashboardUrl`, delete the
+   rest, update the docs. Task links do not wait for phase 1, since a `{id}` template covers
+   the gap. Run links do.
 3. **Messages from other sessions (a trial first).** A peer's message, a task
    notification and hook feedback arrive as user rows, and their ids stay plain. The
    engine documents an assistant message's text as markdown and a user row's as printable
@@ -201,6 +218,9 @@ Only `http`, `https` and `file` addresses are accepted, as today.
   to their own ids, and `STD-12` is not linked.
 - Given `GET /t/<id>` for a registered host's prefix, the dashboard opens that host's view
   of the task; for an unknown prefix it shows not found.
+- Given a reply that names `jrun-20261126-0531-c3`, Claude Code draws it as a link to
+  `<dashboardUrl>/r/jrun-20261126-0531-c3`, and the dashboard opens that run when the
+  serving machine holds it.
 - Given a session with the plugin loaded and idle for an hour, the mod has started one
   process (the host list at session start) and no timer.
 - The plugin has no band, pane, status line entry, toast, prompt card, commit rewrite or
