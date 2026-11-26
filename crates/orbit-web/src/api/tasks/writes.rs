@@ -19,6 +19,11 @@ use orbit_types::identity::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Actor recorded for a dashboard-authored comment when the request supplies no
+/// usable human identity. The dashboard is a human-operated surface, so this is
+/// the floor — never the server process's ambient agent identity.
+const HUMAN_ACTOR_LABEL: &str = "human";
+
 /// Audit and provenance metadata attached to one web task mutation.
 pub(in crate::api) struct WebTaskMutationMeta {
     pub(in crate::api) verb: &'static str,
@@ -46,6 +51,14 @@ impl WebTaskMutationMeta {
             detail,
         }
     }
+}
+
+/// Which half of [`task_mutation_response`] failed, so each keeps the status
+/// mapping it had when these handlers were written inline: a refused mutation
+/// is the caller's problem, a failed render is the server's.
+enum TaskMutationFailure {
+    Mutation(orbit_core::OrbitError),
+    Render(orbit_core::OrbitError),
 }
 
 /// Run one dashboard write on the current blocking worker, through the task
@@ -76,19 +89,6 @@ pub(in crate::api) fn run_audited_web_task_mutation(
             action,
         }),
     )
-}
-
-/// Actor recorded for a dashboard-authored comment when the request supplies no
-/// usable human identity. The dashboard is a human-operated surface, so this is
-/// the floor — never the server process's ambient agent identity.
-const HUMAN_ACTOR_LABEL: &str = "human";
-
-/// Which half of [`task_mutation_response`] failed, so each keeps the status
-/// mapping it had when these handlers were written inline: a refused mutation
-/// is the caller's problem, a failed render is the server's.
-enum TaskMutationFailure {
-    Mutation(orbit_core::OrbitError),
-    Render(orbit_core::OrbitError),
 }
 
 /// Apply a task mutation and render its response payload, both on the blocking

@@ -13,6 +13,9 @@ const FILTER: &str = "status=backlog,proposed&tags=page,release&type=bug&q=needl
 const WORKSPACE: &str = "ws_http_fixture";
 const OTHER: &str = "ws_http_pagination";
 
+/// The dashboard Tasks board's default grouped read.
+const BOARD: &str = "group=status&status=in-progress,review,blocked,proposed,backlog&limit=2&status_limit=backlog:3";
+
 fn add_workspace(fixture: &Fixture) -> OrbitRuntime {
     let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
     let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
@@ -301,9 +304,6 @@ fn invalid_filter_workspace_and_endpoint_cursors_are_refused_without_state_chang
         },
     );
 }
-
-/// The dashboard Tasks board's default grouped read.
-const BOARD: &str = "group=status&status=in-progress,review,blocked,proposed,backlog&limit=2&status_limit=backlog:3";
 
 fn freshness_scans(server: &Server, read: impl FnOnce() -> Value) -> (Value, usize) {
     let before = server.task_query_trace().len();

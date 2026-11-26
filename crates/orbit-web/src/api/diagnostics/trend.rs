@@ -48,72 +48,6 @@ const DAY_SECS: i64 = 86_400;
 /// Window a trend request without `since` or `month` covers.
 const DEFAULT_SINCE: &str = "24h";
 
-/// `since` or `month` as the other diagnostics read them, else the last day.
-pub(super) fn trend_range(
-    q: &DiagnosticsQuery,
-) -> Result<DiagnosticsRange, orbit_core::OrbitError> {
-    let range = if q.since.is_some() || q.month.is_some() {
-        DiagnosticsRange::from_query(q, false)?
-    } else {
-        DiagnosticsRange::from_query(
-            &DiagnosticsQuery {
-                outcome: None,
-                since: Some(DEFAULT_SINCE.to_string()),
-                month: None,
-                limit: None,
-            },
-            false,
-        )?
-    };
-    validate_trend_range(&range)?;
-    Ok(range)
-}
-
-/// Refuse an explicit window the bucket ladder cannot bound, or whose
-/// equally long previous window is not representable. `all` windows have
-/// no previous window and are widened in [`TrendWindow::new`] instead.
-fn validate_trend_range(range: &DiagnosticsRange) -> Result<(), orbit_core::OrbitError> {
-    let Some(since) = range.since else {
-        return Ok(());
-    };
-    let until = range.until.min(Utc::now());
-    let open = since.min(until);
-    let span = (until - open).num_seconds().max(1);
-    let Some(bucket_secs) = BUCKET_LADDER_SECS
-        .iter()
-        .copied()
-        .find(|width| span / width < MAX_BUCKETS)
-    else {
-        return Err(orbit_core::OrbitError::InvalidInput(format!(
-            "trend window '{}' is too large: it would exceed {MAX_BUCKETS} buckets",
-            range.key
-        )));
-    };
-    let start = floor(open, bucket_secs);
-    if start.checked_sub_signed(until - start).is_none() {
-        return Err(orbit_core::OrbitError::InvalidInput(format!(
-            "trend window '{}' is too large: its previous window is not representable",
-            range.key
-        )));
-    }
-    Ok(())
-}
-
-/// Narrowest ladder width splitting `span` into fewer than
-/// [`MAX_BUCKETS`] buckets, or a whole-week multiple past the ladder
-/// that does so for an `all` window's unbounded span.
-fn bucket_secs_for_span(span: i64) -> i64 {
-    if let Some(width) = BUCKET_LADDER_SECS
-        .iter()
-        .copied()
-        .find(|width| span / width < MAX_BUCKETS)
-    {
-        return width;
-    }
-    let weeks = span / (MAX_BUCKETS * WEEK_SECS) + 1;
-    weeks.saturating_mul(WEEK_SECS)
-}
-
 /// The buckets a series is cut into, with the equally long window before it.
 ///
 /// The requested `since` is floored to the bucket width, so every bucket but
@@ -131,6 +65,20 @@ pub(super) struct TrendWindow {
     lead: usize,
     /// An `all` range: no bound, so nothing can be ruled out of the window.
     unbounded: bool,
+}
+
+/// Shared outcome, complexity and tag cohort filters for metrics trend series.
+pub(super) struct CohortFilters {
+    pub(super) done_only: bool,
+    /// `None` draws every complexity present.
+    pub(super) complexities: Option<BTreeSet<&'static str>>,
+    pub(super) tags: Vec<String>,
+}
+
+/// One bucket or series-total cell in a cohort trend series.
+pub(super) trait CohortCell: Default + Clone {
+    fn is_empty(&self) -> bool;
+    fn to_json(&self) -> Value;
 }
 
 impl TrendWindow {
@@ -268,68 +216,6 @@ impl TrendWindow {
     }
 }
 
-fn floor(at: DateTime<Utc>, width: i64) -> DateTime<Utc> {
-    // Whole-week widths (the ladder's widest and its widened multiples)
-    // start on Mondays; narrower widths start on the epoch clock.
-    let offset = if width % WEEK_SECS == 0 {
-        WEEK_OFFSET_SECS
-    } else {
-        0
-    };
-    let floored = (at.timestamp() - offset).div_euclid(width) * width + offset;
-    DateTime::from_timestamp(floored, 0).unwrap_or(at)
-}
-
-/// Split a comma-separated query parameter into trimmed non-empty items.
-pub(super) fn comma_list(raw: Option<&str>) -> Vec<&str> {
-    raw.unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
-/// Trim an optional single-value query filter, returning `None` when empty.
-pub(super) fn trimmed_non_empty(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-/// Parse a comma-separated `complexity` query parameter, mapping `unassessed`
-/// to [`UNSET_BUCKET`].
-pub(super) fn parse_complexities(
-    raw: Option<&str>,
-) -> Result<Option<BTreeSet<&'static str>>, String> {
-    let requested = comma_list(raw);
-    if requested.is_empty() {
-        return Ok(None);
-    }
-    let mut set = BTreeSet::new();
-    for value in requested {
-        let bucket = if value == "unassessed" {
-            UNSET_BUCKET
-        } else {
-            value
-        };
-        let Some(known) = COMPLEXITIES.iter().find(|known| **known == bucket) else {
-            return Err(format!(
-                "unknown complexity '{value}': expected low, medium, hard, xhard or unassessed"
-            ));
-        };
-        set.insert(*known);
-    }
-    Ok(Some(set))
-}
-
-/// Shared outcome, complexity and tag cohort filters for metrics trend series.
-pub(super) struct CohortFilters {
-    pub(super) done_only: bool,
-    /// `None` draws every complexity present.
-    pub(super) complexities: Option<BTreeSet<&'static str>>,
-    pub(super) tags: Vec<String>,
-}
-
 impl CohortFilters {
     pub(super) fn parse(
         outcome: Option<&str>,
@@ -399,77 +285,6 @@ impl CohortFilters {
             "without"
         }
     }
-}
-
-/// Resolve the trend range, key and memoised response for a diagnostics trend
-/// endpoint.
-pub(super) async fn memoized_trend_response<F, KF, CF>(
-    state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
-    endpoint: &'static str,
-    span: (Option<String>, Option<String>),
-    filters: F,
-    build_key: KF,
-    compute: CF,
-) -> Response
-where
-    F: Send + Sync + 'static,
-    KF: FnOnce(&DiagnosticsRange, &F) -> Result<String, serde_json::Error>,
-    CF: FnOnce(&OrbitRuntime, &DiagnosticsRange, &F) -> Result<Value, OrbitError> + Send + 'static,
-{
-    let range = match trend_range(&DiagnosticsQuery {
-        outcome: None,
-        since: span.0,
-        month: span.1,
-        limit: None,
-    }) {
-        Ok(range) => range,
-        Err(error) => return map_runtime_error(error),
-    };
-    let key_payload = match build_key(&range, &filters) {
-        Ok(payload) => payload,
-        Err(error) => {
-            return map_runtime_error(OrbitError::Execution(format!(
-                "failed to serialize {endpoint} memo key: {error}"
-            )));
-        }
-    };
-    let key = (endpoint.to_string(), key_payload);
-    let compute_runtime = Arc::clone(&runtime);
-    match state
-        .metrics_trends_memo()
-        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
-            compute(&compute_runtime, &range, &filters)
-        })
-        .await
-    {
-        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
-        Err(error) => map_runtime_error(error),
-    }
-}
-
-/// Mean and median of `values`, or null when there are none. An even median
-/// is the mean of the two central values.
-pub(super) fn average(values: impl Iterator<Item = u64>) -> (Value, Value) {
-    let mut values: Vec<u64> = values.collect();
-    let n = values.len();
-    if n == 0 {
-        return (Value::Null, Value::Null);
-    }
-    let sum: u128 = values.iter().map(|value| u128::from(*value)).sum();
-    values.sort_unstable();
-    let median = if n % 2 == 1 {
-        values[n / 2] as f64
-    } else {
-        (values[n / 2 - 1] as f64 + values[n / 2] as f64) / 2.0
-    };
-    (json!(sum as f64 / n as f64), json!(median))
-}
-
-/// One bucket or series-total cell in a cohort trend series.
-pub(super) trait CohortCell: Default + Clone {
-    fn is_empty(&self) -> bool;
-    fn to_json(&self) -> Value;
 }
 
 /// Bucketed points, optional lead points, and total cell for one
@@ -673,6 +488,191 @@ impl CohortWindowData {
             .map(|index| self.window.bucket_start(index).to_rfc3339())
             .collect()
     }
+}
+
+/// `since` or `month` as the other diagnostics read them, else the last day.
+pub(super) fn trend_range(
+    q: &DiagnosticsQuery,
+) -> Result<DiagnosticsRange, orbit_core::OrbitError> {
+    let range = if q.since.is_some() || q.month.is_some() {
+        DiagnosticsRange::from_query(q, false)?
+    } else {
+        DiagnosticsRange::from_query(
+            &DiagnosticsQuery {
+                outcome: None,
+                since: Some(DEFAULT_SINCE.to_string()),
+                month: None,
+                limit: None,
+            },
+            false,
+        )?
+    };
+    validate_trend_range(&range)?;
+    Ok(range)
+}
+
+/// Refuse an explicit window the bucket ladder cannot bound, or whose
+/// equally long previous window is not representable. `all` windows have
+/// no previous window and are widened in [`TrendWindow::new`] instead.
+fn validate_trend_range(range: &DiagnosticsRange) -> Result<(), orbit_core::OrbitError> {
+    let Some(since) = range.since else {
+        return Ok(());
+    };
+    let until = range.until.min(Utc::now());
+    let open = since.min(until);
+    let span = (until - open).num_seconds().max(1);
+    let Some(bucket_secs) = BUCKET_LADDER_SECS
+        .iter()
+        .copied()
+        .find(|width| span / width < MAX_BUCKETS)
+    else {
+        return Err(orbit_core::OrbitError::InvalidInput(format!(
+            "trend window '{}' is too large: it would exceed {MAX_BUCKETS} buckets",
+            range.key
+        )));
+    };
+    let start = floor(open, bucket_secs);
+    if start.checked_sub_signed(until - start).is_none() {
+        return Err(orbit_core::OrbitError::InvalidInput(format!(
+            "trend window '{}' is too large: its previous window is not representable",
+            range.key
+        )));
+    }
+    Ok(())
+}
+
+/// Narrowest ladder width splitting `span` into fewer than
+/// [`MAX_BUCKETS`] buckets, or a whole-week multiple past the ladder
+/// that does so for an `all` window's unbounded span.
+fn bucket_secs_for_span(span: i64) -> i64 {
+    if let Some(width) = BUCKET_LADDER_SECS
+        .iter()
+        .copied()
+        .find(|width| span / width < MAX_BUCKETS)
+    {
+        return width;
+    }
+    let weeks = span / (MAX_BUCKETS * WEEK_SECS) + 1;
+    weeks.saturating_mul(WEEK_SECS)
+}
+
+fn floor(at: DateTime<Utc>, width: i64) -> DateTime<Utc> {
+    // Whole-week widths (the ladder's widest and its widened multiples)
+    // start on Mondays; narrower widths start on the epoch clock.
+    let offset = if width % WEEK_SECS == 0 {
+        WEEK_OFFSET_SECS
+    } else {
+        0
+    };
+    let floored = (at.timestamp() - offset).div_euclid(width) * width + offset;
+    DateTime::from_timestamp(floored, 0).unwrap_or(at)
+}
+
+/// Split a comma-separated query parameter into trimmed non-empty items.
+pub(super) fn comma_list(raw: Option<&str>) -> Vec<&str> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Trim an optional single-value query filter, returning `None` when empty.
+pub(super) fn trimmed_non_empty(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Parse a comma-separated `complexity` query parameter, mapping `unassessed`
+/// to [`UNSET_BUCKET`].
+pub(super) fn parse_complexities(
+    raw: Option<&str>,
+) -> Result<Option<BTreeSet<&'static str>>, String> {
+    let requested = comma_list(raw);
+    if requested.is_empty() {
+        return Ok(None);
+    }
+    let mut set = BTreeSet::new();
+    for value in requested {
+        let bucket = if value == "unassessed" {
+            UNSET_BUCKET
+        } else {
+            value
+        };
+        let Some(known) = COMPLEXITIES.iter().find(|known| **known == bucket) else {
+            return Err(format!(
+                "unknown complexity '{value}': expected low, medium, hard, xhard or unassessed"
+            ));
+        };
+        set.insert(*known);
+    }
+    Ok(Some(set))
+}
+
+/// Resolve the trend range, key and memoised response for a diagnostics trend
+/// endpoint.
+pub(super) async fn memoized_trend_response<F, KF, CF>(
+    state: &DashboardState,
+    runtime: Arc<OrbitRuntime>,
+    endpoint: &'static str,
+    span: (Option<String>, Option<String>),
+    filters: F,
+    build_key: KF,
+    compute: CF,
+) -> Response
+where
+    F: Send + Sync + 'static,
+    KF: FnOnce(&DiagnosticsRange, &F) -> Result<String, serde_json::Error>,
+    CF: FnOnce(&OrbitRuntime, &DiagnosticsRange, &F) -> Result<Value, OrbitError> + Send + 'static,
+{
+    let range = match trend_range(&DiagnosticsQuery {
+        outcome: None,
+        since: span.0,
+        month: span.1,
+        limit: None,
+    }) {
+        Ok(range) => range,
+        Err(error) => return map_runtime_error(error),
+    };
+    let key_payload = match build_key(&range, &filters) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return map_runtime_error(OrbitError::Execution(format!(
+                "failed to serialize {endpoint} memo key: {error}"
+            )));
+        }
+    };
+    let key = (endpoint.to_string(), key_payload);
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            compute(&compute_runtime, &range, &filters)
+        })
+        .await
+    {
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
+    }
+}
+
+/// Mean and median of `values`, or null when there are none. An even median
+/// is the mean of the two central values.
+pub(super) fn average(values: impl Iterator<Item = u64>) -> (Value, Value) {
+    let mut values: Vec<u64> = values.collect();
+    let n = values.len();
+    if n == 0 {
+        return (Value::Null, Value::Null);
+    }
+    let sum: u128 = values.iter().map(|value| u128::from(*value)).sum();
+    values.sort_unstable();
+    let median = if n % 2 == 1 {
+        values[n / 2] as f64
+    } else {
+        (values[n / 2 - 1] as f64 + values[n / 2] as f64) / 2.0
+    };
+    (json!(sum as f64 / n as f64), json!(median))
 }
 
 /// Sort `(label, count)` pairs descending by count then ascending by label.

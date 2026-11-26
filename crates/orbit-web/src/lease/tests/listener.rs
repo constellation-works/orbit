@@ -268,13 +268,14 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     std::fs::write(&cert_path, pair.cert.pem()).unwrap();
     std::fs::write(&key_path, pair.signing_key.serialize_pem()).unwrap();
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let intake_socket = Some(socket_path.to_str().unwrap().to_string());
     let settings = crate::lease_listener::LeaseListenerSettings {
         bind: Some("0.0.0.0:0".to_string()),
-        intake_socket: Some(socket_path.to_str().unwrap().to_string()),
         tls: Some(crate::lease_listener::LeaseListenerTlsSettings {
             cert: cert_path.to_str().unwrap().to_string(),
             key: key_path.to_str().unwrap().to_string(),
         }),
+        intake_socket,
         ..crate::lease_listener::LeaseListenerSettings::default()
     };
     let tls_config = LeaseListenerConfig::from_settings(&settings).unwrap();

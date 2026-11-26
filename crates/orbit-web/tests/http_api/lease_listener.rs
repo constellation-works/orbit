@@ -30,96 +30,11 @@ use orbit_web::lease_listener::{LeaseListenerConfig, lease_listener_router};
 
 const PEER: &str = "192.0.2.10:50000";
 
-pub(super) fn provisioned_store(home: &Path) -> LeaseTokenStore {
-    std::fs::create_dir_all(home).unwrap();
-    std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let store = home.join("lease-tokens.db");
-    std::fs::write(&store, b"").unwrap();
-    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o600)).unwrap();
-    LeaseTokenStore::open_in_orbit_home(home).expect("open token store")
-}
-
-pub(super) fn mint(
-    store: &mut LeaseTokenStore,
-    principal: &str,
-    class: PrincipalClass,
-    workspaces: &[&str],
-    verb: LeaseTokenVerb,
-    max_priority: LeasePriorityCeiling,
-    hard: HardLeasePermission,
-) -> (String, String) {
-    let now = Utc::now();
-    let minted = store
-        .mint(
-            LeaseTokenScope {
-                principal: principal.to_string(),
-                principal_class: class,
-                workspaces: workspaces.iter().map(|ws| ws.to_string()).collect(),
-                verbs: verb.granted_by(),
-                max_priority,
-                hard,
-            },
-            now + chrono::Duration::days(1),
-            "test",
-            now,
-        )
-        .expect("mint");
-    (
-        minted.record.token_id,
-        minted.secret.expose_secret().to_string(),
-    )
-}
-
-/// `sun_path` size with the NUL: 104 bytes on macOS, 108 on Linux. A socket
-/// path must be shorter than this.
-#[cfg(target_os = "macos")]
-const SUN_PATH_BYTES: usize = 104;
 #[cfg(not(target_os = "macos"))]
 const SUN_PATH_BYTES: usize = 108;
 
-/// An intake socket path that fits `sun_path`, and the directory that holds
-/// it, which the caller keeps alive. A managed run's TMPDIR can be too long for
-/// that, so the socket takes the first of the process temp dir, `/dev/shm`
-/// (absent on macOS) and `/tmp` that fits. The token store stays under the
-/// fixture's own tempdir.
-pub(super) fn short_intake_socket() -> (tempfile::TempDir, PathBuf) {
-    for parent in [
-        std::env::temp_dir(),
-        PathBuf::from("/dev/shm"),
-        PathBuf::from("/tmp"),
-    ] {
-        let Ok(dir) = tempfile::Builder::new()
-            .prefix("intake")
-            .tempdir_in(&parent)
-        else {
-            continue;
-        };
-        let socket = dir.path().join("intake.sock");
-        if socket.as_os_str().as_encoded_bytes().len() < SUN_PATH_BYTES {
-            return (dir, socket);
-        }
-    }
-    panic!("no directory short enough for an intake socket path");
-}
-
-/// Reads one length-prefixed JSON frame; `None` on EOF, a read error or a
-/// malformed frame, so a handler can stop when the listener goes away.
-pub(super) fn read_frame(stream: &mut UnixStream) -> Option<Value> {
-    let mut header = [0; 4];
-    stream.read_exact(&mut header).ok()?;
-    let mut bytes = vec![0; u32::from_be_bytes(header) as usize];
-    stream.read_exact(&mut bytes).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-/// Writes one length-prefixed JSON frame; `false` when the peer has closed.
-pub(super) fn write_frame(stream: &mut UnixStream, value: &Value) -> bool {
-    let bytes = serde_json::to_vec(value).unwrap();
-    stream
-        .write_all(&(bytes.len() as u32).to_be_bytes())
-        .and_then(|()| stream.write_all(&bytes))
-        .is_ok()
-}
+const UNKNOWN_SECRET: &str =
+    "orbl_0000000000000000000000000000000000000000000000000000000000000000";
 
 /// A scripted intake socket that owns its accept loop and every connection
 /// handler. `serve` runs once per accepted connection on its own thread.
@@ -131,6 +46,16 @@ pub(super) struct ScriptedIntake {
     stop: Arc<AtomicBool>,
     accept: Option<JoinHandle<()>>,
 }
+
+#[derive(Debug)]
+pub(super) struct RefusalAudit {
+    pub(super) key: String,
+    pub(super) reason: String,
+    pub(super) count: u64,
+}
+
+/// A TCP peer, its forwarding headers and the expected status.
+type ProxyCase<'a> = (&'a str, &'a [(&'a str, &'a str)], StatusCode);
 
 impl ScriptedIntake {
     pub(super) fn bind(
@@ -189,6 +114,94 @@ impl Drop for ScriptedIntake {
     }
 }
 
+pub(super) fn provisioned_store(home: &Path) -> LeaseTokenStore {
+    std::fs::create_dir_all(home).unwrap();
+    std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let store = home.join("lease-tokens.db");
+    std::fs::write(&store, b"").unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o600)).unwrap();
+    LeaseTokenStore::open_in_orbit_home(home).expect("open token store")
+}
+
+pub(super) fn mint(
+    store: &mut LeaseTokenStore,
+    principal: &str,
+    class: PrincipalClass,
+    workspaces: &[&str],
+    verb: LeaseTokenVerb,
+    max_priority: LeasePriorityCeiling,
+    hard: HardLeasePermission,
+) -> (String, String) {
+    let now = Utc::now();
+    let minted = store
+        .mint(
+            LeaseTokenScope {
+                principal: principal.to_string(),
+                principal_class: class,
+                workspaces: workspaces.iter().map(|ws| ws.to_string()).collect(),
+                verbs: verb.granted_by(),
+                max_priority,
+                hard,
+            },
+            now + chrono::Duration::days(1),
+            "test",
+            now,
+        )
+        .expect("mint");
+    (
+        minted.record.token_id,
+        minted.secret.expose_secret().to_string(),
+    )
+}
+
+/// `sun_path` size with the NUL: 104 bytes on macOS, 108 on Linux. A socket
+/// path must be shorter than this.
+#[cfg(target_os = "macos")]
+const SUN_PATH_BYTES: usize = 104;
+/// An intake socket path that fits `sun_path`, and the directory that holds
+/// it, which the caller keeps alive. A managed run's TMPDIR can be too long for
+/// that, so the socket takes the first of the process temp dir, `/dev/shm`
+/// (absent on macOS) and `/tmp` that fits. The token store stays under the
+/// fixture's own tempdir.
+pub(super) fn short_intake_socket() -> (tempfile::TempDir, PathBuf) {
+    for parent in [
+        std::env::temp_dir(),
+        PathBuf::from("/dev/shm"),
+        PathBuf::from("/tmp"),
+    ] {
+        let Ok(dir) = tempfile::Builder::new()
+            .prefix("intake")
+            .tempdir_in(&parent)
+        else {
+            continue;
+        };
+        let socket = dir.path().join("intake.sock");
+        if socket.as_os_str().as_encoded_bytes().len() < SUN_PATH_BYTES {
+            return (dir, socket);
+        }
+    }
+    panic!("no directory short enough for an intake socket path");
+}
+
+/// Reads one length-prefixed JSON frame; `None` on EOF, a read error or a
+/// malformed frame, so a handler can stop when the listener goes away.
+pub(super) fn read_frame(stream: &mut UnixStream) -> Option<Value> {
+    let mut header = [0; 4];
+    stream.read_exact(&mut header).ok()?;
+    let mut bytes = vec![0; u32::from_be_bytes(header) as usize];
+    stream.read_exact(&mut bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Writes one length-prefixed JSON frame; `false` when the peer has closed.
+pub(super) fn write_frame(stream: &mut UnixStream, value: &Value) -> bool {
+    let bytes = serde_json::to_vec(value).unwrap();
+    stream
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .and_then(|()| stream.write_all(&bytes))
+        .is_ok()
+}
+
 pub(super) fn config(
     intake_socket: PathBuf,
     client_address: LeaseClientAddressPolicy,
@@ -237,13 +250,6 @@ pub(super) async fn send(
     (status, headers, value)
 }
 
-#[derive(Debug)]
-pub(super) struct RefusalAudit {
-    pub(super) key: String,
-    pub(super) reason: String,
-    pub(super) count: u64,
-}
-
 pub(super) fn audit_rows(home: &Path) -> Vec<RefusalAudit> {
     let connection = rusqlite::Connection::open(home.join("lease-tokens.db")).unwrap();
     let mut statement = connection.prepare(
@@ -265,9 +271,6 @@ pub(super) fn audit_rows(home: &Path) -> Vec<RefusalAudit> {
 pub(super) fn bearer(secret: &str) -> String {
     format!("Bearer {secret}")
 }
-
-const UNKNOWN_SECRET: &str =
-    "orbl_0000000000000000000000000000000000000000000000000000000000000000";
 
 #[tokio::test]
 async fn health_and_unknown_routes_cannot_bypass_address_limits() {
@@ -525,9 +528,6 @@ async fn a_token_sent_in_the_query_or_path_never_reaches_an_audit_row() {
         "a token sent by a client reached the token store"
     );
 }
-
-/// A TCP peer, its forwarding headers and the expected status.
-type ProxyCase<'a> = (&'a str, &'a [(&'a str, &'a str)], StatusCode);
 
 /// The client address decides audit rows and rate limits, so a client must
 /// not be able to choose it (design §7.3 "Client address").

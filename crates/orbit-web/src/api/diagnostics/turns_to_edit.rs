@@ -54,48 +54,6 @@ struct Filters {
     provider: Option<String>,
 }
 
-fn parse_filters(q: &TurnsToEditQuery) -> Result<Filters, orbit_core::OrbitError> {
-    let cohort = CohortFilters::parse(
-        q.outcome.as_deref(),
-        q.complexity.as_deref(),
-        q.tags.as_deref(),
-    )?;
-    let provider = trimmed_non_empty(q.provider.as_deref());
-    Ok(Filters { cohort, provider })
-}
-
-/// `GET /api/diagnostics/turns_to_edit` — turns and result bytes before the
-/// first file edit of each task's first implement invocation.
-pub(in crate::api) async fn diagnostics_turns_to_edit(
-    State(state): State<DashboardState>,
-    Ws(runtime): Ws,
-    Query(q): Query<TurnsToEditQuery>,
-) -> Response {
-    let filters = match parse_filters(&q) {
-        Ok(filters) => filters,
-        Err(error) => return map_runtime_error(error),
-    };
-    memoized_trend_response(
-        &state,
-        runtime,
-        "turns_to_edit",
-        (q.since, q.month),
-        filters,
-        |range, filters| {
-            let complexities = filters.cohort.complexities_key();
-            serde_json::to_string(&(
-                &range.key,
-                filters.cohort.outcome_label(),
-                &complexities,
-                &filters.cohort.tags,
-                &filters.provider,
-            ))
-        },
-        turns_to_edit_trend,
-    )
-    .await
-}
-
 /// What one task adds to the points it falls in.
 #[derive(Clone, Copy)]
 enum Contribution {
@@ -197,6 +155,48 @@ impl CohortCell for Cell {
             "tasks": self.task_count(),
         })
     }
+}
+
+fn parse_filters(q: &TurnsToEditQuery) -> Result<Filters, orbit_core::OrbitError> {
+    let cohort = CohortFilters::parse(
+        q.outcome.as_deref(),
+        q.complexity.as_deref(),
+        q.tags.as_deref(),
+    )?;
+    let provider = trimmed_non_empty(q.provider.as_deref());
+    Ok(Filters { cohort, provider })
+}
+
+/// `GET /api/diagnostics/turns_to_edit` — turns and result bytes before the
+/// first file edit of each task's first implement invocation.
+pub(in crate::api) async fn diagnostics_turns_to_edit(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(q): Query<TurnsToEditQuery>,
+) -> Response {
+    let filters = match parse_filters(&q) {
+        Ok(filters) => filters,
+        Err(error) => return map_runtime_error(error),
+    };
+    memoized_trend_response(
+        &state,
+        runtime,
+        "turns_to_edit",
+        (q.since, q.month),
+        filters,
+        |range, filters| {
+            let complexities = filters.cohort.complexities_key();
+            serde_json::to_string(&(
+                &range.key,
+                filters.cohort.outcome_label(),
+                &complexities,
+                &filters.cohort.tags,
+                &filters.provider,
+            ))
+        },
+        turns_to_edit_trend,
+    )
+    .await
 }
 
 fn turns_to_edit_trend(

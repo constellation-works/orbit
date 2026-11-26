@@ -14,6 +14,14 @@ pub(super) const HISTORY_MAX_LIMIT: usize = 200;
 /// Default time window for header tile counts when `?since=` is omitted.
 pub(super) const DEFAULT_SUMMARY_WINDOW: &str = "24h";
 
+/// Most bytes of one message or stderr field in a dashboard list projection:
+/// Health › Incidents, the Errors feed and the run friction feed. One failed
+/// validation can record a message of a few hundred KB, and these lists copy
+/// it into every row, sample and poll [ORB-15527]. A longer field is cut to
+/// this many bytes and its object carries `truncated: true`; the full text
+/// stays behind the run link or the incident message fetch.
+pub(super) const LIST_MESSAGE_MAX_BYTES: usize = 2048;
+
 #[derive(Deserialize, Default)]
 pub(super) struct LimitQuery {
     #[serde(default)]
@@ -151,6 +159,52 @@ pub(super) struct LogQuery {
     /// Companion agent-feed byte cursor from the snapshot or SSE event ID.
     #[serde(default)]
     pub(super) agent_from: Option<u64>,
+}
+
+/// JSON body that is optional only when it is absent or empty.
+///
+/// `Option<Json<T>>` yields `None` only when the request has no `Content-Type`
+/// and rejects an empty body that does carry one, so it cannot express "empty
+/// body means the default" on its own. On these routes `T::default()` is a real action: an empty ship selection
+/// discovers the whole backlog, and a missing `force` is a graceful cancel.
+/// A zero-length body still becomes [`Default`]. Any non-empty body is parsed
+/// as JSON, and a wrong content type, syntax error, unknown field, or type
+/// mismatch is a 400 whose `error` is the parser's own text.
+pub(super) struct OptionalJson<T>(
+    /// Parsed value, or `T::default()` when the body had no bytes.
+    pub T,
+);
+
+impl<T, S> FromRequest<S> for OptionalJson<T>
+where
+    T: DeserializeOwned + Default,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (parts, body) = req.into_parts();
+        let bytes = Bytes::from_request(Request::from_parts(parts.clone(), body), state)
+            .await
+            .map_err(|rejection| bad_request(rejection.body_text()))?;
+        if bytes.is_empty() {
+            return Ok(OptionalJson(T::default()));
+        }
+        let parsed = axum::Json::<T>::from_request(
+            Request::from_parts(parts, axum::body::Body::from(bytes)),
+            state,
+        )
+        .await
+        .map_err(|rejection| bad_request(rejection.body_text()))?;
+        Ok(OptionalJson(parsed.0))
+    }
+}
+
+/// A message bounded to [`LIST_MESSAGE_MAX_BYTES`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Excerpt {
+    pub(super) text: String,
+    pub(super) truncated: bool,
 }
 
 pub(super) fn current_year_month_utc() -> String {
@@ -493,60 +547,6 @@ fn bad_request_shown(message: String) -> Response {
 fn source_repair_body(message: &str) -> Option<serde_json::Value> {
     let text = orbit_common::source_repair_reader_text(message)?;
     (text.line != text.detail).then(|| json!({ "error": text.line, "detail": text.detail }))
-}
-
-/// JSON body that is optional only when it is absent or empty.
-///
-/// `Option<Json<T>>` yields `None` only when the request has no `Content-Type`
-/// and rejects an empty body that does carry one, so it cannot express "empty
-/// body means the default" on its own. On these routes `T::default()` is a real action: an empty ship selection
-/// discovers the whole backlog, and a missing `force` is a graceful cancel.
-/// A zero-length body still becomes [`Default`]. Any non-empty body is parsed
-/// as JSON, and a wrong content type, syntax error, unknown field, or type
-/// mismatch is a 400 whose `error` is the parser's own text.
-pub(super) struct OptionalJson<T>(
-    /// Parsed value, or `T::default()` when the body had no bytes.
-    pub T,
-);
-
-impl<T, S> FromRequest<S> for OptionalJson<T>
-where
-    T: DeserializeOwned + Default,
-    S: Send + Sync,
-{
-    type Rejection = Response;
-
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let (parts, body) = req.into_parts();
-        let bytes = Bytes::from_request(Request::from_parts(parts.clone(), body), state)
-            .await
-            .map_err(|rejection| bad_request(rejection.body_text()))?;
-        if bytes.is_empty() {
-            return Ok(OptionalJson(T::default()));
-        }
-        let parsed = axum::Json::<T>::from_request(
-            Request::from_parts(parts, axum::body::Body::from(bytes)),
-            state,
-        )
-        .await
-        .map_err(|rejection| bad_request(rejection.body_text()))?;
-        Ok(OptionalJson(parsed.0))
-    }
-}
-
-/// Most bytes of one message or stderr field in a dashboard list projection:
-/// Health › Incidents, the Errors feed and the run friction feed. One failed
-/// validation can record a message of a few hundred KB, and these lists copy
-/// it into every row, sample and poll [ORB-15527]. A longer field is cut to
-/// this many bytes and its object carries `truncated: true`; the full text
-/// stays behind the run link or the incident message fetch.
-pub(super) const LIST_MESSAGE_MAX_BYTES: usize = 2048;
-
-/// A message bounded to [`LIST_MESSAGE_MAX_BYTES`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Excerpt {
-    pub(super) text: String,
-    pub(super) truncated: bool,
 }
 
 /// Redacts `raw`, then bounds it. Redaction runs over the whole text before

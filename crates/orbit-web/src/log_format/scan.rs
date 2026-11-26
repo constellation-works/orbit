@@ -17,6 +17,9 @@ use super::MAX_LOG_RECORD_BYTES;
 /// first record older than its window, and only reaches offset 0 without either.
 const TAIL_READ_BLOCK: usize = REVERSE_READ_BLOCK;
 
+/// Lines a segment's start is looked for in before it counts as unknown.
+const SEGMENT_START_LINES: usize = 64;
+
 /// Newest matching events across the active log and its rotated archives,
 /// oldest first, plus the instant the scan's coverage starts when that is
 /// later than the filter's `since` (or when there is no `since`).
@@ -24,6 +27,103 @@ const TAIL_READ_BLOCK: usize = REVERSE_READ_BLOCK;
 pub(crate) struct SegmentedEvents {
     pub events: Vec<Value>,
     pub coverage_since: Option<DateTime<Utc>>,
+}
+
+/// The fields of a record that decide whether it is wanted, read without
+/// building a [`Value`]: serde skips everything else (an agent line's payload
+/// can be large) without allocating.
+#[derive(Deserialize)]
+struct LineHead<'a> {
+    #[serde(borrow)]
+    timestamp: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    level: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    target: Option<Cow<'a, str>>,
+}
+
+/// The verdict on one log line.
+enum Scanned {
+    Match(Value),
+    /// Well formed or not, not wanted.
+    Skip,
+    /// Stamped before the filter's window, so the rest of an append-ordered
+    /// file read backwards is too.
+    BeforeWindow,
+}
+
+/// Matching events of a backward scan, oldest first.
+struct RecentScan {
+    events: Vec<Value>,
+    /// The scan stopped at a record older than the filter's window rather than
+    /// at `limit` or the start of the reader.
+    reached_window_start: bool,
+}
+
+/// Newest matching events of a snapshot plus the byte cursor that resumes
+/// exactly after the bytes those events were drawn from.
+#[derive(Debug)]
+pub(crate) struct LogTail {
+    pub events: Vec<Value>,
+    pub cursor: u64,
+    pub generation: String,
+}
+
+/// The first `len` bytes of a reader, so a reverse scan starts at a fixed
+/// extent instead of whatever the file has grown to.
+struct Prefix<R> {
+    inner: R,
+    len: u64,
+    pos: u64,
+}
+
+impl<'a> LineHead<'a> {
+    /// `None` unless `raw` is a JSON object whose three fields are strings or
+    /// absent. Anything else (a duplicate key, a number where a string is
+    /// expected, an array) is left to the full [`Value`] parse so it is judged
+    /// exactly as [`Filters::matches`] judges it.
+    fn parse(raw: &'a [u8]) -> Option<Self> {
+        let first = raw.iter().find(|byte| !byte.is_ascii_whitespace())?;
+        if *first != b'{' {
+            return None;
+        }
+        serde_json::from_slice(raw).ok()
+    }
+
+    fn timestamp(&self) -> Option<DateTime<Utc>> {
+        self.timestamp
+            .as_deref()
+            .and_then(log_format::parse_timestamp)
+    }
+}
+
+impl<R> Prefix<R> {
+    fn new(inner: R, len: u64) -> Self {
+        Self { inner, len, pos: 0 }
+    }
+}
+
+impl<R: Read + Seek> Read for Prefix<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.len.saturating_sub(self.pos);
+        let max = usize::try_from(remaining).map_or(buf.len(), |r| r.min(buf.len()));
+        let n = self.inner.read(&mut buf[..max])?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl<R: Read + Seek> Seek for Prefix<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let target = match pos {
+            SeekFrom::Start(offset) => Some(offset),
+            SeekFrom::End(delta) => self.len.checked_add_signed(delta),
+            SeekFrom::Current(delta) => self.pos.checked_add_signed(delta),
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
+        self.pos = self.inner.seek(SeekFrom::Start(target))?;
+        Ok(self.pos)
+    }
 }
 
 /// Newest matching events over `active` and then its rotated archives, newest
@@ -162,9 +262,6 @@ fn log_segments_newest_first(active: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(segments)
 }
 
-/// Lines a segment's start is looked for in before it counts as unknown.
-const SEGMENT_START_LINES: usize = 64;
-
 /// Timestamp of the first timestamped record in a segment, read forward from
 /// its start with a bounded budget; `None` for an empty or unreadable-start
 /// segment.
@@ -187,39 +284,6 @@ fn first_event_timestamp<R: Read + Seek>(reader: &mut R) -> io::Result<Option<Da
     Ok(None)
 }
 
-/// The fields of a record that decide whether it is wanted, read without
-/// building a [`Value`]: serde skips everything else (an agent line's payload
-/// can be large) without allocating.
-#[derive(Deserialize)]
-struct LineHead<'a> {
-    #[serde(borrow)]
-    timestamp: Option<Cow<'a, str>>,
-    #[serde(borrow)]
-    level: Option<Cow<'a, str>>,
-    #[serde(borrow)]
-    target: Option<Cow<'a, str>>,
-}
-
-impl<'a> LineHead<'a> {
-    /// `None` unless `raw` is a JSON object whose three fields are strings or
-    /// absent. Anything else (a duplicate key, a number where a string is
-    /// expected, an array) is left to the full [`Value`] parse so it is judged
-    /// exactly as [`Filters::matches`] judges it.
-    fn parse(raw: &'a [u8]) -> Option<Self> {
-        let first = raw.iter().find(|byte| !byte.is_ascii_whitespace())?;
-        if *first != b'{' {
-            return None;
-        }
-        serde_json::from_slice(raw).ok()
-    }
-
-    fn timestamp(&self) -> Option<DateTime<Utc>> {
-        self.timestamp
-            .as_deref()
-            .and_then(log_format::parse_timestamp)
-    }
-}
-
 #[cfg(test)]
 thread_local! {
     /// Lines [`parse_value`] has built a [`Value`] for on this thread.
@@ -230,16 +294,6 @@ fn parse_value(raw: &str) -> Option<Value> {
     #[cfg(test)]
     VALUE_PARSES.with(|parses| parses.set(parses.get() + 1));
     serde_json::from_str(raw).ok()
-}
-
-/// The verdict on one log line.
-enum Scanned {
-    Match(Value),
-    /// Well formed or not, not wanted.
-    Skip,
-    /// Stamped before the filter's window, so the rest of an append-ordered
-    /// file read backwards is too.
-    BeforeWindow,
 }
 
 /// Judge `raw` against `filters`. A line that is not wanted is rejected from
@@ -297,14 +351,6 @@ fn read_recent_matching_events_from<R: Read + Seek>(
     Ok(scan_recent_matching_events(reader, filters, limit, block_size)?.events)
 }
 
-/// Matching events of a backward scan, oldest first.
-struct RecentScan {
-    events: Vec<Value>,
-    /// The scan stopped at a record older than the filter's window rather than
-    /// at `limit` or the start of the reader.
-    reached_window_start: bool,
-}
-
 /// [`read_recent_matching_events_from`], also saying whether the walk ended at
 /// the window's start. It reads no further back than the first record older
 /// than the window (see [`Filters::window_floor`]).
@@ -356,15 +402,6 @@ fn scan_recent_matching_events<R: Read + Seek>(
         events: newest_first,
         reached_window_start,
     })
-}
-
-/// Newest matching events of a snapshot plus the byte cursor that resumes
-/// exactly after the bytes those events were drawn from.
-#[derive(Debug)]
-pub(crate) struct LogTail {
-    pub events: Vec<Value>,
-    pub cursor: u64,
-    pub generation: String,
 }
 
 /// Snapshot the newest matching events of the log at `path` together with a
@@ -472,43 +509,6 @@ fn complete_records_end<R: Read + Seek>(
         end = start;
     }
     Ok(0)
-}
-
-/// The first `len` bytes of a reader, so a reverse scan starts at a fixed
-/// extent instead of whatever the file has grown to.
-struct Prefix<R> {
-    inner: R,
-    len: u64,
-    pos: u64,
-}
-
-impl<R> Prefix<R> {
-    fn new(inner: R, len: u64) -> Self {
-        Self { inner, len, pos: 0 }
-    }
-}
-
-impl<R: Read + Seek> Read for Prefix<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let remaining = self.len.saturating_sub(self.pos);
-        let max = usize::try_from(remaining).map_or(buf.len(), |r| r.min(buf.len()));
-        let n = self.inner.read(&mut buf[..max])?;
-        self.pos += n as u64;
-        Ok(n)
-    }
-}
-
-impl<R: Read + Seek> Seek for Prefix<R> {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let target = match pos {
-            SeekFrom::Start(offset) => Some(offset),
-            SeekFrom::End(delta) => self.len.checked_add_signed(delta),
-            SeekFrom::Current(delta) => self.pos.checked_add_signed(delta),
-        }
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
-        self.pos = self.inner.seek(SeekFrom::Start(target))?;
-        Ok(self.pos)
-    }
 }
 
 pub(crate) fn parse_matching_event(raw: &str, filters: &Filters) -> Option<Value> {

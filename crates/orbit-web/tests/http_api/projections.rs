@@ -63,6 +63,28 @@ macro_rules! check {
     };
 }
 
+/// Dashboard-only detail extras, stripped before comparing with `orbit.task.show`.
+const DETAIL_EXTRAS: &[&str] = &[
+    "status_transitions",
+    "job_run_navigable",
+    "escalation_triage",
+    "why_stuck",
+    "job_run_worktree",
+    "riskiness",
+];
+
+/// Row: (activity, agent, model, task_ids, tool, result_bytes, input_tokens, output_tokens).
+type InvocationRow<'a> = (
+    &'a str,
+    &'a str,
+    Option<String>,
+    Vec<String>,
+    &'a str,
+    u64,
+    u64,
+    u64,
+);
+
 struct InvocationFixture<'a> {
     run: &'a str,
     activity: &'a str,
@@ -535,16 +557,6 @@ fn add_task(fixture: &Fixture, params: TaskAddParams) -> orbit_types::task::Task
 fn send_ok(server: &Server, method: &str, path: &str, body: Value) -> Value {
     json_ok(server.send(method, path, body))
 }
-/// Dashboard-only detail extras, stripped before comparing with `orbit.task.show`.
-const DETAIL_EXTRAS: &[&str] = &[
-    "status_transitions",
-    "job_run_navigable",
-    "escalation_triage",
-    "why_stuck",
-    "job_run_worktree",
-    "riskiness",
-];
-
 fn seed_cli_failure(fixture: &Fixture, id: &str, ts: DateTime<Utc>, blob_ref: &str) {
     let payload = json!({"event_id": id, "ts": ts.to_rfc3339(), "body_kind": "cli_invocation_finished", "run_id": "jrun-friction-fixture", "step_id": "implement", "provider": id, "exit_code": 1, "stderr_blob_ref": blob_ref});
     let params = V2AuditEventInsertParams {
@@ -713,17 +725,6 @@ fn seed_row(
     place_invocation(fixture, run, at, partition);
 }
 
-/// Row: (activity, agent, model, task_ids, tool, result_bytes, input_tokens, output_tokens).
-type InvocationRow<'a> = (
-    &'a str,
-    &'a str,
-    Option<String>,
-    Vec<String>,
-    &'a str,
-    u64,
-    u64,
-    u64,
-);
 fn insert_invocation(runtime: &orbit_core::OrbitRuntime, run: &str, row: InvocationRow<'_>) {
     let (activity, agent, model, task_ids, tool, result_bytes, input, output) = row;
     runtime

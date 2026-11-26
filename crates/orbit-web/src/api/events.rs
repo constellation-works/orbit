@@ -63,62 +63,8 @@ const HOST_RESOURCES_INTERVAL: StdDuration = StdDuration::from_secs(5);
 /// The drain phase is read after any run changes, and at least this often for
 /// a window deadline that passes with no run changing.
 const DRAIN_RECHECK_INTERVAL: StdDuration = StdDuration::from_secs(15);
-#[cfg(feature = "test-support")]
-fn parse_test_interval(value: Option<&std::ffi::OsStr>) -> Option<StdDuration> {
-    value
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|value| value.parse().ok())
-        .filter(|millis: &u64| *millis > 0)
-        .map(StdDuration::from_millis)
-}
-
-fn scan_interval(env: &orbit_common::Env) -> StdDuration {
-    #[cfg(feature = "test-support")]
-    if let Some(interval) = parse_test_interval(env.orbit_test_events_scan_interval_ms()) {
-        return interval;
-    }
-    #[cfg(not(feature = "test-support"))]
-    let _ = env;
-    SCAN_INTERVAL
-}
-
-fn host_resources_interval(env: &orbit_common::Env) -> StdDuration {
-    #[cfg(feature = "test-support")]
-    if let Some(interval) = parse_test_interval(env.orbit_test_events_host_resources_interval_ms())
-    {
-        return interval;
-    }
-    #[cfg(not(feature = "test-support"))]
-    let _ = env;
-    HOST_RESOURCES_INTERVAL
-}
-
-fn drain_recheck_interval(env: &orbit_common::Env) -> StdDuration {
-    #[cfg(feature = "test-support")]
-    if let Some(interval) = parse_test_interval(env.orbit_test_events_drain_recheck_interval_ms()) {
-        return interval;
-    }
-    #[cfg(not(feature = "test-support"))]
-    let _ = env;
-    DRAIN_RECHECK_INTERVAL
-}
 /// Longest wait between disconnect and shutdown checks.
 const SLEEP_SLICE: StdDuration = StdDuration::from_millis(250);
-/// The browser's reconnect delay after a dropped stream.
-const RECONNECT_DELAY_MS: u32 = 5_000;
-/// A replay reaches this far before the resumed id, for a write stamped
-/// before it committed.
-const RESUME_SLACK_SECONDS: i64 = 60;
-/// More notices than this from one scan or replay become one `resync`.
-const MAX_NOTICES_PER_SCAN: usize = 500;
-/// Each run read overlaps the previous one by this much, for a state change
-/// stamped just before it committed.
-const RUN_READ_OVERLAP_SECONDS: i64 = 10;
-
-fn events_stream_gate() -> &'static Arc<Semaphore> {
-    static GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    GATE.get_or_init(|| Arc::new(Semaphore::new(EVENTS_STREAM_MAX_CONCURRENT)))
-}
 
 /// Set once shutdown begins (a shutdown signal or a lifecycle boundary, both
 /// acted on by `run_server`), so every open stream closes on its next check
@@ -126,195 +72,21 @@ fn events_stream_gate() -> &'static Arc<Semaphore> {
 /// (ORB-11246, as for `/api/log/stream`).
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
-/// Tell every open (and future) change stream to close now.
-pub(super) fn request_shutdown() {
-    SHUTTING_DOWN.store(true, Ordering::Relaxed);
-}
+/// The browser's reconnect delay after a dropped stream.
+const RECONNECT_DELAY_MS: u32 = 5_000;
 
-pub(super) async fn stream_events(
-    State(state): State<DashboardState>,
-    Ws(runtime): Ws,
-    headers: HeaderMap,
-) -> Response {
-    let Ok(permit) = Arc::clone(events_stream_gate()).try_acquire_owned() else {
-        return events_stream_unavailable();
-    };
-    let resume = headers
-        .get("last-event-id")
-        .and_then(|value| value.to_str().ok())
-        .map(parse_event_id);
-    let (tx, rx) = mpsc::channel(EVENTS_STREAM_CHANNEL_DEPTH);
-    let spawned = thread::Builder::new()
-        .name("orbit-web-events".into())
-        .spawn(move || {
-            // Released when the thread exits: within one sleep slice of the
-            // client disconnecting or shutdown, or after a scan in progress.
-            let _permit: OwnedSemaphorePermit = permit;
-            stream_workspace_changes(&runtime, &state, resume, &tx);
-        });
-    if let Err(e) = spawned {
-        return server_error(orbit_core::OrbitError::Execution(format!(
-            "start change stream: {e}"
-        )));
-    }
-    match Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(Body::from_stream(ReceiverSseStream { rx }))
-    {
-        Ok(response) => response,
-        Err(e) => server_error(orbit_core::OrbitError::Execution(format!(
-            "build SSE response: {e}"
-        ))),
-    }
-}
+/// A replay reaches this far before the resumed id, for a write stamped
+/// before it committed.
+const RESUME_SLACK_SECONDS: i64 = 60;
 
-fn events_stream_unavailable() -> Response {
-    let mut response = (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({
-            "error": format!(
-                "change stream concurrency limit reached (max {EVENTS_STREAM_MAX_CONCURRENT}); retry shortly"
-            )
-        })),
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
-    response
-}
+/// More notices than this from one scan or replay become one `resync`.
+const MAX_NOTICES_PER_SCAN: usize = 500;
 
-/// A resumed id is a scan time in milliseconds; `None` when it is not one.
-fn parse_event_id(raw: &str) -> Option<DateTime<Utc>> {
-    let millis = raw.trim().parse::<i64>().ok()?;
-    Utc.timestamp_millis_opt(millis).single()
-}
-
-fn event_id(at: DateTime<Utc>) -> String {
-    at.timestamp_millis().to_string()
-}
-
-/// The stream thread: a first scan (and the replay a reconnect asks for), then
-/// a scan every [`SCAN_INTERVAL`] and a host sample every
-/// [`HOST_RESOURCES_INTERVAL`] until the client leaves or shutdown begins.
-fn stream_workspace_changes(
-    runtime: &OrbitRuntime,
-    state: &DashboardState,
-    resume: Option<Option<DateTime<Utc>>>,
-    tx: &mpsc::Sender<String>,
-) {
-    if tx
-        .blocking_send(format!("retry: {RECONNECT_DELAY_MS}\n\n"))
-        .is_err()
-    {
-        return;
-    }
-    let env = state.env();
-    let scan_every = scan_interval(env);
-    let host_resources_every = host_resources_interval(env);
-    let drain_recheck_every = drain_recheck_interval(env);
-    let mut watch = WorkspaceWatch::default();
-    let mut notices = watch.scan(runtime, drain_recheck_every);
-    if let Some(resume) = resume {
-        notices.extend(watch.replay(runtime, resume));
-    }
-    if !send_notices(tx, watch.scanned_at, notices) {
-        return;
-    }
-    let mut next_host = Instant::now();
-    let mut next_scan = Instant::now() + scan_every;
-    loop {
-        if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
-            return;
-        }
-        if Instant::now() >= next_host {
-            let frame = match host_resources_json(state) {
-                Ok(resources) => notice_frame(
-                    watch.scanned_at,
-                    &json!({"kind": "host.resources", "resources": resources}),
-                ),
-                // A comment keeps the connection's idle timers fed.
-                Err(_) => ": host resources unavailable\n\n".to_owned(),
-            };
-            if tx.blocking_send(frame).is_err() {
-                return;
-            }
-            next_host = Instant::now() + host_resources_every;
-        }
-        if Instant::now() >= next_scan {
-            let notices = watch.scan(runtime, drain_recheck_every);
-            if !send_notices(tx, watch.scanned_at, notices) {
-                return;
-            }
-            next_scan = Instant::now() + scan_every;
-        }
-        thread::sleep(SLEEP_SLICE.min(scan_every));
-    }
-}
-
-fn send_notices(tx: &mpsc::Sender<String>, at: DateTime<Utc>, notices: Vec<Value>) -> bool {
-    let notices = if notices.len() > MAX_NOTICES_PER_SCAN {
-        vec![resync_notice("too_many_changes")]
-    } else {
-        notices
-    };
-    notices
-        .iter()
-        .all(|notice| tx.blocking_send(notice_frame(at, notice)).is_ok())
-}
-
-fn notice_frame(at: DateTime<Utc>, notice: &Value) -> String {
-    format!("id: {}\ndata: {notice}\n\n", event_id(at))
-}
-
-fn resync_notice(reason: &str) -> Value {
-    json!({"kind": "resync", "reason": reason})
-}
-
-fn task_notice(id: &str, status: Option<TaskStatus>, updated_at: Option<DateTime<Utc>>) -> Value {
-    json!({
-        "kind": "task",
-        "id": id,
-        "status": status.map(|status| status.to_string()),
-        "updated_at": updated_at.map(|at| at.to_rfc3339()),
-    })
-}
-
-fn run_notice(stamp: &RunStateStamp) -> Value {
-    json!({
-        "kind": "run",
-        "id": stamp.run_id,
-        "task_id": stamp.task_id,
-        "state": stamp.state.to_string(),
-    })
-}
-
-/// A task in one of these statuses can hold or wait on locks, so its change
-/// may change the workspace's locks.
-fn holds_locks(status: TaskStatus) -> bool {
-    matches!(
-        status,
-        TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Review
-    )
-}
+/// Each run read overlaps the previous one by this much, for a state change
+/// stamped just before it committed.
+const RUN_READ_OVERLAP_SECONDS: i64 = 10;
 
 type TaskStamp = (TaskStatus, DateTime<Utc>);
-
-/// The previous task scan. `snapshot` is the registry's shared stamp list:
-/// the same pointer means the registry has not committed since this baseline.
-struct TaskBaseline {
-    snapshot: Arc<Vec<TaskChangeStamp>>,
-    by_id: BTreeMap<String, TaskStamp>,
-}
-
-fn index_task_stamps(stamps: &[TaskChangeStamp]) -> BTreeMap<String, TaskStamp> {
-    stamps
-        .iter()
-        .map(|stamp| (stamp.id.clone(), (stamp.status, stamp.updated_at)))
-        .collect()
-}
 
 /// What the previous scan read. A source whose first read has not succeeded
 /// yet (`None`) produces no notices; its next successful read is its baseline.
@@ -328,6 +100,13 @@ struct WorkspaceWatch {
     executor_readiness: Option<Vec<String>>,
     drain_read_at: Option<Instant>,
     scanned_at: DateTime<Utc>,
+}
+
+/// The previous task scan. `snapshot` is the registry's shared stamp list:
+/// the same pointer means the registry has not committed since this baseline.
+struct TaskBaseline {
+    snapshot: Arc<Vec<TaskChangeStamp>>,
+    by_id: BTreeMap<String, TaskStamp>,
 }
 
 impl Default for WorkspaceWatch {
@@ -539,4 +318,229 @@ impl Stream for ReceiverSseStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx.poll_recv(cx).map(|item| item.map(Ok))
     }
+}
+
+#[cfg(feature = "test-support")]
+fn parse_test_interval(value: Option<&std::ffi::OsStr>) -> Option<StdDuration> {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|value| value.parse().ok())
+        .filter(|millis: &u64| *millis > 0)
+        .map(StdDuration::from_millis)
+}
+
+fn scan_interval(env: &orbit_common::Env) -> StdDuration {
+    #[cfg(feature = "test-support")]
+    if let Some(interval) = parse_test_interval(env.orbit_test_events_scan_interval_ms()) {
+        return interval;
+    }
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
+    SCAN_INTERVAL
+}
+
+fn host_resources_interval(env: &orbit_common::Env) -> StdDuration {
+    #[cfg(feature = "test-support")]
+    if let Some(interval) = parse_test_interval(env.orbit_test_events_host_resources_interval_ms())
+    {
+        return interval;
+    }
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
+    HOST_RESOURCES_INTERVAL
+}
+
+fn drain_recheck_interval(env: &orbit_common::Env) -> StdDuration {
+    #[cfg(feature = "test-support")]
+    if let Some(interval) = parse_test_interval(env.orbit_test_events_drain_recheck_interval_ms()) {
+        return interval;
+    }
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
+    DRAIN_RECHECK_INTERVAL
+}
+fn events_stream_gate() -> &'static Arc<Semaphore> {
+    static GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    GATE.get_or_init(|| Arc::new(Semaphore::new(EVENTS_STREAM_MAX_CONCURRENT)))
+}
+
+/// Tell every open (and future) change stream to close now.
+pub(super) fn request_shutdown() {
+    SHUTTING_DOWN.store(true, Ordering::Relaxed);
+}
+
+pub(super) async fn stream_events(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    headers: HeaderMap,
+) -> Response {
+    let Ok(permit) = Arc::clone(events_stream_gate()).try_acquire_owned() else {
+        return events_stream_unavailable();
+    };
+    let resume = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .map(parse_event_id);
+    let (tx, rx) = mpsc::channel(EVENTS_STREAM_CHANNEL_DEPTH);
+    let spawned = thread::Builder::new()
+        .name("orbit-web-events".into())
+        .spawn(move || {
+            // Released when the thread exits: within one sleep slice of the
+            // client disconnecting or shutdown, or after a scan in progress.
+            let _permit: OwnedSemaphorePermit = permit;
+            stream_workspace_changes(&runtime, &state, resume, &tx);
+        });
+    if let Err(e) = spawned {
+        return server_error(orbit_core::OrbitError::Execution(format!(
+            "start change stream: {e}"
+        )));
+    }
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(Body::from_stream(ReceiverSseStream { rx }))
+    {
+        Ok(response) => response,
+        Err(e) => server_error(orbit_core::OrbitError::Execution(format!(
+            "build SSE response: {e}"
+        ))),
+    }
+}
+
+fn events_stream_unavailable() -> Response {
+    let mut response = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": format!(
+                "change stream concurrency limit reached (max {EVENTS_STREAM_MAX_CONCURRENT}); retry shortly"
+            )
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+    response
+}
+
+/// A resumed id is a scan time in milliseconds; `None` when it is not one.
+fn parse_event_id(raw: &str) -> Option<DateTime<Utc>> {
+    let millis = raw.trim().parse::<i64>().ok()?;
+    Utc.timestamp_millis_opt(millis).single()
+}
+
+fn event_id(at: DateTime<Utc>) -> String {
+    at.timestamp_millis().to_string()
+}
+
+/// The stream thread: a first scan (and the replay a reconnect asks for), then
+/// a scan every [`SCAN_INTERVAL`] and a host sample every
+/// [`HOST_RESOURCES_INTERVAL`] until the client leaves or shutdown begins.
+fn stream_workspace_changes(
+    runtime: &OrbitRuntime,
+    state: &DashboardState,
+    resume: Option<Option<DateTime<Utc>>>,
+    tx: &mpsc::Sender<String>,
+) {
+    if tx
+        .blocking_send(format!("retry: {RECONNECT_DELAY_MS}\n\n"))
+        .is_err()
+    {
+        return;
+    }
+    let env = state.env();
+    let scan_every = scan_interval(env);
+    let host_resources_every = host_resources_interval(env);
+    let drain_recheck_every = drain_recheck_interval(env);
+    let mut watch = WorkspaceWatch::default();
+    let mut notices = watch.scan(runtime, drain_recheck_every);
+    if let Some(resume) = resume {
+        notices.extend(watch.replay(runtime, resume));
+    }
+    if !send_notices(tx, watch.scanned_at, notices) {
+        return;
+    }
+    let mut next_host = Instant::now();
+    let mut next_scan = Instant::now() + scan_every;
+    loop {
+        if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
+            return;
+        }
+        if Instant::now() >= next_host {
+            let frame = match host_resources_json(state) {
+                Ok(resources) => notice_frame(
+                    watch.scanned_at,
+                    &json!({"kind": "host.resources", "resources": resources}),
+                ),
+                // A comment keeps the connection's idle timers fed.
+                Err(_) => ": host resources unavailable\n\n".to_owned(),
+            };
+            if tx.blocking_send(frame).is_err() {
+                return;
+            }
+            next_host = Instant::now() + host_resources_every;
+        }
+        if Instant::now() >= next_scan {
+            let notices = watch.scan(runtime, drain_recheck_every);
+            if !send_notices(tx, watch.scanned_at, notices) {
+                return;
+            }
+            next_scan = Instant::now() + scan_every;
+        }
+        thread::sleep(SLEEP_SLICE.min(scan_every));
+    }
+}
+
+fn send_notices(tx: &mpsc::Sender<String>, at: DateTime<Utc>, notices: Vec<Value>) -> bool {
+    let notices = if notices.len() > MAX_NOTICES_PER_SCAN {
+        vec![resync_notice("too_many_changes")]
+    } else {
+        notices
+    };
+    notices
+        .iter()
+        .all(|notice| tx.blocking_send(notice_frame(at, notice)).is_ok())
+}
+
+fn notice_frame(at: DateTime<Utc>, notice: &Value) -> String {
+    format!("id: {}\ndata: {notice}\n\n", event_id(at))
+}
+
+fn resync_notice(reason: &str) -> Value {
+    json!({"kind": "resync", "reason": reason})
+}
+
+fn task_notice(id: &str, status: Option<TaskStatus>, updated_at: Option<DateTime<Utc>>) -> Value {
+    json!({
+        "kind": "task",
+        "id": id,
+        "status": status.map(|status| status.to_string()),
+        "updated_at": updated_at.map(|at| at.to_rfc3339()),
+    })
+}
+
+fn run_notice(stamp: &RunStateStamp) -> Value {
+    json!({
+        "kind": "run",
+        "id": stamp.run_id,
+        "task_id": stamp.task_id,
+        "state": stamp.state.to_string(),
+    })
+}
+
+/// A task in one of these statuses can hold or wait on locks, so its change
+/// may change the workspace's locks.
+fn holds_locks(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Review
+    )
+}
+
+fn index_task_stamps(stamps: &[TaskChangeStamp]) -> BTreeMap<String, TaskStamp> {
+    stamps
+        .iter()
+        .map(|stamp| (stamp.id.clone(), (stamp.status, stamp.updated_at)))
+        .collect()
 }

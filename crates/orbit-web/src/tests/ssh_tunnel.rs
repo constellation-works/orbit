@@ -127,6 +127,14 @@ if __name__ == "__main__":
     main()
 "#;
 
+/// Shorter than [`connect::PROBE_IO_TIMEOUT`], so a per-read socket timeout
+/// cannot end a status line this peer keeps feeding.
+const FRAGMENT: Duration = Duration::from_millis(150);
+
+const ATTACH_SLICE: Duration = Duration::from_millis(600);
+
+const READY_SLICE: Duration = Duration::from_millis(600);
+
 /// Snapshot phases and stop logged children before cleaning up a failed fixture.
 struct StubDir(tempfile::TempDir);
 
@@ -273,13 +281,6 @@ fn serve_healthz(listener: TcpListener, hits: Arc<AtomicUsize>) {
         }
     }
 }
-
-/// Shorter than [`connect::PROBE_IO_TIMEOUT`], so a per-read socket timeout
-/// cannot end a status line this peer keeps feeding.
-const FRAGMENT: Duration = Duration::from_millis(150);
-
-const ATTACH_SLICE: Duration = Duration::from_millis(600);
-const READY_SLICE: Duration = Duration::from_millis(600);
 
 #[test]
 fn paced_status_fragments_cannot_outlive_the_readiness_budget() {

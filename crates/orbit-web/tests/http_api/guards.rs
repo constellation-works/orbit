@@ -5,6 +5,29 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated};
 
+/// Ordinary writes intentionally outside the exceptional-operation registry.
+/// New methods/paths default to operator-only, so a new unguarded route fails.
+/// Resume and auto-drain are ordinary only when the request does not ask for completion.
+const ORDINARY_WRITES: &[(&str, &str)] = &[
+    ("POST", "/tasks"),
+    ("PATCH", "/tasks/{id}"),
+    ("POST", "/tasks/{id}/comments"),
+    ("POST", "/tasks/{id}/approve"),
+    ("POST", "/tasks/{id}/reject"),
+    ("POST", "/tasks/{id}/archive"),
+    // A decision answer is the dashboard's human write like approve and
+    // reject: it applies through the same human funnel in core.
+    ("POST", "/decisions/{id}/answer"),
+    ("POST", "/frictions"),
+    ("PATCH", "/frictions/{id}"),
+    ("POST", "/frictions/{id}/resolve"),
+    ("POST", "/job-runs/{id}/resume"),
+    ("POST", "/workflows/auto"),
+    ("POST", "/workflows/ship"),
+    ("POST", "/runs/{id}/cancel"),
+    ("POST", "/metrics/invocations"),
+];
+
 #[test]
 fn task_mutations_redact_prose_before_persistence() {
     isolated(
@@ -95,29 +118,6 @@ fn task_mutations_redact_prose_before_persistence() {
         },
     );
 }
-
-/// Ordinary writes intentionally outside the exceptional-operation registry.
-/// New methods/paths default to operator-only, so a new unguarded route fails.
-/// Resume and auto-drain are ordinary only when the request does not ask for completion.
-const ORDINARY_WRITES: &[(&str, &str)] = &[
-    ("POST", "/tasks"),
-    ("PATCH", "/tasks/{id}"),
-    ("POST", "/tasks/{id}/comments"),
-    ("POST", "/tasks/{id}/approve"),
-    ("POST", "/tasks/{id}/reject"),
-    ("POST", "/tasks/{id}/archive"),
-    // A decision answer is the dashboard's human write like approve and
-    // reject: it applies through the same human funnel in core.
-    ("POST", "/decisions/{id}/answer"),
-    ("POST", "/frictions"),
-    ("PATCH", "/frictions/{id}"),
-    ("POST", "/frictions/{id}/resolve"),
-    ("POST", "/job-runs/{id}/resume"),
-    ("POST", "/workflows/auto"),
-    ("POST", "/workflows/ship"),
-    ("POST", "/runs/{id}/cancel"),
-    ("POST", "/metrics/invocations"),
-];
 
 /// Discover paths from registrations, then ask the real HTTP router for methods.
 /// This source input is only discovery for a security guard, never a text assertion.

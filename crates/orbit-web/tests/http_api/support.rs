@@ -26,72 +26,81 @@ const FIXTURE_ROOT: &str = "ORBIT_HTTP_FIXTURE_ROOT";
 /// Asks the server child to open its workspace with path leases enabled.
 const LEASES_ENABLED: &str = "ORBIT_HTTP_LEASES_ENABLED";
 
-/// The fixed lease policy with path leases enabled.
-pub(super) fn leases_enabled() -> orbit_core::runtime::stored::locks::lease::LeasePolicy {
-    orbit_core::runtime::stored::locks::lease::LeasePolicy {
-        enabled: true,
-        ..orbit_core::runtime::stored::locks::lease::LeasePolicy::FIXED
-    }
-}
-
-pub(super) fn isolated(name: &str, body: impl FnOnce()) {
-    if std::env::var(CHILD_TEST).ok().as_deref() == Some(name) {
-        body();
-        return;
-    }
-    let home = tempfile::tempdir().expect("isolated test home");
-    let mut command = fixture_command(home.path());
-    command
-        // Ignored tests are skipped in the ordinary suite, but a child
-        // re-executed by name must still run them.
-        .args([
-            "--exact",
-            name,
-            "--include-ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD_TEST, name);
-    // The child leads its own process group and servers inherit it, so the
-    // shared hang guard's group kill cannot orphan a server.
-    let logs = tempfile::tempdir().expect("isolated test logs");
-    let output = orbit_common::test_env::run_child_test(&mut command, name, logs.path());
-    orbit_common::test_env::assert_child_test_passed(
-        name,
-        output.status,
-        &output.stdout,
-        &output.stderr,
-    );
-}
-
-fn fixture_command(home: &Path) -> Command {
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    // An explicit agent envelope keeps an inherited TTY from granting operator
-    // authority on surfaces that read the process envelope (the dashboard
-    // itself grants only through `--operator`).
-    command
-        .current_dir(home)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("ORBIT_AGENT_NAME", "http-fixture")
-        .env("ORBIT_AGENT_MODEL", "http-fixture")
-        .env_remove("ORBIT_LOG_PATH")
-        // libtest otherwise prefixes a single-threaded child's first output
-        // line with its test status, hiding the server readiness announcement.
-        .env_remove("RUST_TEST_THREADS");
-    command
-}
-
 struct Process(Child);
+
+/// The fixture features one server child enables.
+struct ServerFeatures {
+    operator: bool,
+    resources: bool,
+    replay_worker: bool,
+}
+
+pub(super) struct Server {
+    process: Process,
+    task_query_log: Option<PathBuf>,
+    log: tempfile::NamedTempFile,
+    client: Client,
+    pub(super) origin: String,
+}
 
 impl Drop for Process {
     fn drop(&mut self) {
         // Also runs on assertion failure or timeout. Always reap the direct child.
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+impl Server {
+    pub(super) fn task_query_trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.task_query_log.as_ref().unwrap())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    pub(super) fn pid(&self) -> u32 {
+        self.process.0.id()
+    }
+
+    /// SIGTERM the server (graceful shutdown) and wait, bounded, for its exit.
+    #[cfg(unix)]
+    pub(super) fn terminate(&mut self) -> std::process::ExitStatus {
+        // SAFETY: signalling this fixture's own direct child.
+        unsafe {
+            libc::kill(self.process.0.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = self.process.0.try_wait().unwrap() {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "server did not exit within 30s of SIGTERM"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    pub(super) fn request(&self, method: &str, path: &str) -> RequestBuilder {
+        self.client
+            .request(method.parse().unwrap(), format!("{}{path}", self.origin))
+    }
+
+    pub(super) fn get(&self, path: &str) -> Response {
+        sent("GET", path, self.request("GET", path))
+    }
+
+    pub(super) fn send(&self, method: &str, path: &str, body: Value) -> Response {
+        sent(
+            method,
+            path,
+            self.request(method, path)
+                .header("origin", &self.origin)
+                .json(&body),
+        )
     }
 }
 
@@ -541,6 +550,65 @@ impl Fixture {
     }
 }
 
+/// The fixed lease policy with path leases enabled.
+pub(super) fn leases_enabled() -> orbit_core::runtime::stored::locks::lease::LeasePolicy {
+    orbit_core::runtime::stored::locks::lease::LeasePolicy {
+        enabled: true,
+        ..orbit_core::runtime::stored::locks::lease::LeasePolicy::FIXED
+    }
+}
+
+pub(super) fn isolated(name: &str, body: impl FnOnce()) {
+    if std::env::var(CHILD_TEST).ok().as_deref() == Some(name) {
+        body();
+        return;
+    }
+    let home = tempfile::tempdir().expect("isolated test home");
+    let mut command = fixture_command(home.path());
+    command
+        // Ignored tests are skipped in the ordinary suite, but a child
+        // re-executed by name must still run them.
+        .args([
+            "--exact",
+            name,
+            "--include-ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD_TEST, name);
+    // The child leads its own process group and servers inherit it, so the
+    // shared hang guard's group kill cannot orphan a server.
+    let logs = tempfile::tempdir().expect("isolated test logs");
+    let output = orbit_common::test_env::run_child_test(&mut command, name, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        name,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+}
+
+fn fixture_command(home: &Path) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    // An explicit agent envelope keeps an inherited TTY from granting operator
+    // authority on surfaces that read the process envelope (the dashboard
+    // itself grants only through `--operator`).
+    command
+        .current_dir(home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("ORBIT_AGENT_NAME", "http-fixture")
+        .env("ORBIT_AGENT_MODEL", "http-fixture")
+        .env_remove("ORBIT_LOG_PATH")
+        // libtest otherwise prefixes a single-threaded child's first output
+        // line with its test status, hiding the server readiness announcement.
+        .env_remove("RUST_TEST_THREADS");
+    command
+}
+
 /// Serve the fixture layout under `root` (`root/global` with a workspace named
 /// `fixture`) from an isolated server child.
 pub(super) fn spawn_server(
@@ -564,13 +632,6 @@ pub(super) fn spawn_server(
         task_query_log,
         env,
     )
-}
-
-/// The fixture features one server child enables.
-struct ServerFeatures {
-    operator: bool,
-    resources: bool,
-    replay_worker: bool,
 }
 
 /// [`spawn_server`] with the server process's working directory at `cwd`.
@@ -611,19 +672,23 @@ fn spawn_server_from(
         command.env("ORBIT_HTTP_TASK_QUERY_TRACE", path);
     }
     command.envs(env.iter().copied());
+    let process = Process(command.spawn().unwrap());
+    let task_query_log = task_query_log.map(Path::to_owned);
+    // A hang guard on each request, including an SSE stream's reads. It
+    // outlasts the dashboard's forward bound, so a forwarded request reports
+    // that typed failure instead of a client timeout.
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
+        .build()
+        .unwrap();
+    let origin = String::new();
     let mut server = Server {
-        process: Process(command.spawn().unwrap()),
-        task_query_log: task_query_log.map(Path::to_owned),
-        // A hang guard on each request, including an SSE stream's reads.
-        // It outlasts the dashboard's own forward bound, so a forwarded
-        // request reports that typed failure instead of a client timeout.
-        client: Client::builder()
-            .no_proxy()
-            .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
-            .build()
-            .unwrap(),
-        origin: String::new(),
+        process,
+        task_query_log,
         log,
+        client,
+        origin,
     };
     let started = Instant::now();
     loop {
@@ -662,67 +727,6 @@ fn spawn_server_from(
             orbit_common::test_env::host_load()
         );
         thread::sleep(Duration::from_millis(20));
-    }
-}
-
-pub(super) struct Server {
-    process: Process,
-    task_query_log: Option<PathBuf>,
-    log: tempfile::NamedTempFile,
-    client: Client,
-    pub(super) origin: String,
-}
-
-impl Server {
-    pub(super) fn task_query_trace(&self) -> Vec<Value> {
-        fs::read_to_string(self.task_query_log.as_ref().unwrap())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-
-    pub(super) fn pid(&self) -> u32 {
-        self.process.0.id()
-    }
-
-    /// SIGTERM the server (graceful shutdown) and wait, bounded, for its exit.
-    #[cfg(unix)]
-    pub(super) fn terminate(&mut self) -> std::process::ExitStatus {
-        // SAFETY: signalling this fixture's own direct child.
-        unsafe {
-            libc::kill(self.process.0.id() as libc::pid_t, libc::SIGTERM);
-        }
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            if let Some(status) = self.process.0.try_wait().unwrap() {
-                return status;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "server did not exit within 30s of SIGTERM"
-            );
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    pub(super) fn request(&self, method: &str, path: &str) -> RequestBuilder {
-        self.client
-            .request(method.parse().unwrap(), format!("{}{path}", self.origin))
-    }
-
-    pub(super) fn get(&self, path: &str) -> Response {
-        sent("GET", path, self.request("GET", path))
-    }
-
-    pub(super) fn send(&self, method: &str, path: &str, body: Value) -> Response {
-        sent(
-            method,
-            path,
-            self.request(method, path)
-                .header("origin", &self.origin)
-                .json(&body),
-        )
     }
 }
 

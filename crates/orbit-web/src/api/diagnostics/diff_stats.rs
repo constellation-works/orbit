@@ -55,6 +55,83 @@ pub(in crate::api) struct DiffStatsQuery {
     complexity: Option<String>,
 }
 
+/// The deliveries one point (or a series' window total) summarizes.
+#[derive(Clone, Default)]
+struct Cell {
+    rows: Vec<[i64; 7]>,
+}
+
+impl Cell {
+    fn to_json(&self) -> Value {
+        let n = self.rows.len();
+        let mut sum = Map::new();
+        let mut mean = Map::new();
+        let mut median = Map::new();
+        for (index, measure) in MEASURES.iter().enumerate() {
+            let mut values: Vec<i64> = self.rows.iter().map(|row| row[index]).collect();
+            values.sort_unstable();
+            let total: i64 = values.iter().sum();
+            sum.insert((*measure).to_string(), json!(total));
+            if n == 0 {
+                mean.insert((*measure).to_string(), Value::Null);
+                median.insert((*measure).to_string(), Value::Null);
+                continue;
+            }
+            let middle = if n % 2 == 1 {
+                values[n / 2] as f64
+            } else {
+                (values[n / 2 - 1] as f64 + values[n / 2] as f64) / 2.0
+            };
+            mean.insert((*measure).to_string(), json!(total as f64 / n as f64));
+            median.insert((*measure).to_string(), json!(middle));
+        }
+        json!({
+            "n": n,
+            "thin": n > 0 && n < MIN_DELIVERIES,
+            "sum": sum,
+            "mean": mean,
+            "median": median,
+        })
+    }
+}
+
+struct Series {
+    points: Vec<Cell>,
+    /// Deliveries in the lead buckets before the window, for the per-day view.
+    lead_points: Vec<Cell>,
+    total: Cell,
+}
+
+impl Series {
+    fn new(buckets: usize, lead: usize) -> Self {
+        Self {
+            points: vec![Cell::default(); buckets],
+            lead_points: vec![Cell::default(); lead],
+            total: Cell::default(),
+        }
+    }
+
+    fn record(&mut self, index: usize, row: [i64; 7]) {
+        self.points[index].rows.push(row);
+        self.total.rows.push(row);
+    }
+
+    fn record_lead(&mut self, index: usize, row: [i64; 7]) {
+        self.lead_points[index].rows.push(row);
+    }
+
+    fn to_json(&self, series_id: &str, key: &str, crews: &[&str]) -> Value {
+        json!({
+            "series_id": series_id,
+            "key": key,
+            "crews": crews,
+            "points": self.points.iter().map(Cell::to_json).collect::<Vec<_>>(),
+            "lead_points": self.lead_points.iter().map(Cell::to_json).collect::<Vec<_>>(),
+            "total": self.total.to_json(),
+        })
+    }
+}
+
 fn parse_complexities(raw: Option<&str>) -> Result<Option<BTreeSet<&'static str>>, String> {
     let requested: Vec<&str> = raw
         .unwrap_or_default()
@@ -136,83 +213,6 @@ fn measures(row: &LandedDiffStats) -> [i64; 7] {
         n(other.deleted),
         n(code.added) + n(tests.added) - n(code.deleted) - n(tests.deleted),
     ]
-}
-
-/// The deliveries one point (or a series' window total) summarizes.
-#[derive(Clone, Default)]
-struct Cell {
-    rows: Vec<[i64; 7]>,
-}
-
-impl Cell {
-    fn to_json(&self) -> Value {
-        let n = self.rows.len();
-        let mut sum = Map::new();
-        let mut mean = Map::new();
-        let mut median = Map::new();
-        for (index, measure) in MEASURES.iter().enumerate() {
-            let mut values: Vec<i64> = self.rows.iter().map(|row| row[index]).collect();
-            values.sort_unstable();
-            let total: i64 = values.iter().sum();
-            sum.insert((*measure).to_string(), json!(total));
-            if n == 0 {
-                mean.insert((*measure).to_string(), Value::Null);
-                median.insert((*measure).to_string(), Value::Null);
-                continue;
-            }
-            let middle = if n % 2 == 1 {
-                values[n / 2] as f64
-            } else {
-                (values[n / 2 - 1] as f64 + values[n / 2] as f64) / 2.0
-            };
-            mean.insert((*measure).to_string(), json!(total as f64 / n as f64));
-            median.insert((*measure).to_string(), json!(middle));
-        }
-        json!({
-            "n": n,
-            "thin": n > 0 && n < MIN_DELIVERIES,
-            "sum": sum,
-            "mean": mean,
-            "median": median,
-        })
-    }
-}
-
-struct Series {
-    points: Vec<Cell>,
-    /// Deliveries in the lead buckets before the window, for the per-day view.
-    lead_points: Vec<Cell>,
-    total: Cell,
-}
-
-impl Series {
-    fn new(buckets: usize, lead: usize) -> Self {
-        Self {
-            points: vec![Cell::default(); buckets],
-            lead_points: vec![Cell::default(); lead],
-            total: Cell::default(),
-        }
-    }
-
-    fn record(&mut self, index: usize, row: [i64; 7]) {
-        self.points[index].rows.push(row);
-        self.total.rows.push(row);
-    }
-
-    fn record_lead(&mut self, index: usize, row: [i64; 7]) {
-        self.lead_points[index].rows.push(row);
-    }
-
-    fn to_json(&self, series_id: &str, key: &str, crews: &[&str]) -> Value {
-        json!({
-            "series_id": series_id,
-            "key": key,
-            "crews": crews,
-            "points": self.points.iter().map(Cell::to_json).collect::<Vec<_>>(),
-            "lead_points": self.lead_points.iter().map(Cell::to_json).collect::<Vec<_>>(),
-            "total": self.total.to_json(),
-        })
-    }
 }
 
 fn diff_stats_trend(

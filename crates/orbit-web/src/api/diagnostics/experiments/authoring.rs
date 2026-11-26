@@ -31,37 +31,6 @@ use crate::state::{DashboardState, Ws};
 /// The actor every dashboard experiment event records, as conclude does.
 const DASHBOARD_ACTOR: &str = "dashboard";
 
-/// What the New experiment form and the draft actions need: whether this
-/// session may create, edit and start, the workspace's `[experiments]`
-/// settings, the metric and complexity names core accepts and the configured
-/// crews a crew pool may name.
-pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: bool) -> Value {
-    let capability = |operation: &'static GovernedOperation| {
-        crate::api::routines::action_capability(operation, operator_session)
-    };
-    let settings = runtime.experiment_settings();
-    let crews = runtime
-        .configured_crew_registry_projection()
-        .crews
-        .into_iter()
-        .map(|crew| json!({ "name": crew.name, "enabled": crew.enabled }))
-        .collect::<Vec<_>>();
-    json!({
-        "create": capability(&DASHBOARD_EXPERIMENT_CREATE),
-        "update": capability(&DASHBOARD_EXPERIMENT_UPDATE),
-        "start": capability(&DASHBOARD_EXPERIMENT_START),
-        "pause": capability(&DASHBOARD_EXPERIMENT_PAUSE),
-        "resume": capability(&DASHBOARD_EXPERIMENT_RESUME),
-        "enabled": settings.enabled,
-        "max_running": orbit_core::application::experiment::EXPERIMENTS_MAX_RUNNING,
-        "config_keys": settings.config_keys,
-        "metrics": experiment_metric_names().collect::<Vec<_>>(),
-        "step_local_metrics": step_local_metric_names().collect::<Vec<_>>(),
-        "complexities": EXPERIMENT_COMPLEXITIES,
-        "crews": crews,
-    })
-}
-
 /// A create or edit body: the fields `orbit.experiment.create` and `update`
 /// take, plus the reason the event records. An absent field is left as it is.
 #[derive(Deserialize)]
@@ -114,6 +83,37 @@ impl ExperimentDefinitionBody {
 pub(in crate::api) struct ExperimentReasonBody {
     #[serde(default)]
     reason: Option<String>,
+}
+
+/// What the New experiment form and the draft actions need: whether this
+/// session may create, edit and start, the workspace's `[experiments]`
+/// settings, the metric and complexity names core accepts and the configured
+/// crews a crew pool may name.
+pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: bool) -> Value {
+    let capability = |operation: &'static GovernedOperation| {
+        crate::api::routines::action_capability(operation, operator_session)
+    };
+    let settings = runtime.experiment_settings();
+    let crews = runtime
+        .configured_crew_registry_projection()
+        .crews
+        .into_iter()
+        .map(|crew| json!({ "name": crew.name, "enabled": crew.enabled }))
+        .collect::<Vec<_>>();
+    json!({
+        "create": capability(&DASHBOARD_EXPERIMENT_CREATE),
+        "update": capability(&DASHBOARD_EXPERIMENT_UPDATE),
+        "start": capability(&DASHBOARD_EXPERIMENT_START),
+        "pause": capability(&DASHBOARD_EXPERIMENT_PAUSE),
+        "resume": capability(&DASHBOARD_EXPERIMENT_RESUME),
+        "enabled": settings.enabled,
+        "max_running": orbit_core::application::experiment::EXPERIMENTS_MAX_RUNNING,
+        "config_keys": settings.config_keys,
+        "metrics": experiment_metric_names().collect::<Vec<_>>(),
+        "step_local_metrics": step_local_metric_names().collect::<Vec<_>>(),
+        "complexities": EXPERIMENT_COMPLEXITIES,
+        "crews": crews,
+    })
 }
 
 fn dashboard_actor(reason: Option<String>) -> ExperimentActor {

@@ -36,6 +36,51 @@ const ORIGINS: [&str; 11] = [
     "other",
 ];
 
+#[derive(Clone)]
+struct Counts {
+    total: u64,
+    lineage: [u64; LINEAGES.len()],
+    origin: [u64; ORIGINS.len()],
+}
+
+impl Default for Counts {
+    fn default() -> Self {
+        Self {
+            total: 0,
+            lineage: [0; LINEAGES.len()],
+            origin: [0; ORIGINS.len()],
+        }
+    }
+}
+
+impl Counts {
+    fn record(&mut self, regression_from_types: &[Option<TaskType>], tags: &[String]) {
+        self.total += 1;
+        let lineage = lineage(regression_from_types);
+        let origin = origin(tags);
+        if let Some(index) = LINEAGES.iter().position(|key| *key == lineage) {
+            self.lineage[index] += 1;
+        }
+        if let Some(index) = ORIGINS.iter().position(|key| *key == origin) {
+            self.origin[index] += 1;
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let series = |keys: &[&str], counts: &[u64]| {
+            keys.iter()
+                .zip(counts)
+                .map(|(key, count)| ((*key).to_string(), json!(count)))
+                .collect::<Map<_, _>>()
+        };
+        json!({
+            "total": self.total,
+            "lineage": series(&LINEAGES, &self.lineage),
+            "origin": series(&ORIGINS, &self.origin),
+        })
+    }
+}
+
 pub(in crate::api) async fn diagnostics_defects(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -100,51 +145,6 @@ fn origin(tags: &[String]) -> &'static str {
         "friction-curation"
     } else {
         "other"
-    }
-}
-
-#[derive(Clone)]
-struct Counts {
-    total: u64,
-    lineage: [u64; LINEAGES.len()],
-    origin: [u64; ORIGINS.len()],
-}
-
-impl Default for Counts {
-    fn default() -> Self {
-        Self {
-            total: 0,
-            lineage: [0; LINEAGES.len()],
-            origin: [0; ORIGINS.len()],
-        }
-    }
-}
-
-impl Counts {
-    fn record(&mut self, regression_from_types: &[Option<TaskType>], tags: &[String]) {
-        self.total += 1;
-        let lineage = lineage(regression_from_types);
-        let origin = origin(tags);
-        if let Some(index) = LINEAGES.iter().position(|key| *key == lineage) {
-            self.lineage[index] += 1;
-        }
-        if let Some(index) = ORIGINS.iter().position(|key| *key == origin) {
-            self.origin[index] += 1;
-        }
-    }
-
-    fn to_json(&self) -> Value {
-        let series = |keys: &[&str], counts: &[u64]| {
-            keys.iter()
-                .zip(counts)
-                .map(|(key, count)| ((*key).to_string(), json!(count)))
-                .collect::<Map<_, _>>()
-        };
-        json!({
-            "total": self.total,
-            "lineage": series(&LINEAGES, &self.lineage),
-            "origin": series(&ORIGINS, &self.origin),
-        })
     }
 }
 
