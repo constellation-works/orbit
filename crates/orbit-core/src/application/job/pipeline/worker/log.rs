@@ -68,6 +68,17 @@ use orbit_common::env_vars;
 
 const PIPELINE_WORKER_LOG_TAIL_BYTES: u64 = 16 * 1024;
 
+#[cfg(unix)]
+struct PipelineWorkerLogDirectory {
+    path: PathBuf,
+    directory: File,
+}
+
+pub(crate) struct PipelineWorkerLog {
+    pub(super) path: PathBuf,
+    pub(super) reader: File,
+}
+
 pub(crate) fn pipeline_worker_log_path(
     logs_dir: &Path,
     run_id: &str,
@@ -131,12 +142,6 @@ fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, Orbit
     }
 
     Ok(canonical_path)
-}
-
-#[cfg(unix)]
-struct PipelineWorkerLogDirectory {
-    path: PathBuf,
-    directory: File,
 }
 
 /// Open the validated authority and create the log directory beneath its fd.
@@ -542,11 +547,6 @@ pub(crate) fn configure_pipeline_worker_stdio(
         path: log_path,
         reader,
     })
-}
-
-pub(crate) struct PipelineWorkerLog {
-    pub(super) path: PathBuf,
-    pub(super) reader: File,
 }
 
 fn write_pipeline_worker_spawn_banner(file: &mut File, command: &Command) {

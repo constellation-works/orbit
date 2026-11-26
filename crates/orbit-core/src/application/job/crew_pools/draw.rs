@@ -17,33 +17,9 @@ use crate::runtime::run_input::singular_task_id_from_input;
 
 use super::types::{COMPLEXITIES, CapturedCrewPools, POOLS_KEY};
 
-pub(super) fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
-    input
-        .get(POOLS_KEY)
-        .map(|value| {
-            serde_json::from_value(value.clone())
-                .map_err(|error| OrbitError::InvalidInput(format!("invalid {POOLS_KEY}: {error}")))
-        })
-        .transpose()
-        .map(Option::unwrap_or_default)
-}
-
-pub(super) fn auto_task_id(input: &Value) -> Option<&str> {
-    singular_task_id_from_input(input)
-}
-
-/// The configuration key of the complexity pool for `complexity`, as an
-/// activity's `crew_config_key` names it [ORB-15663].
-pub(crate) fn complexity_crews_key(complexity: TaskComplexity) -> String {
-    format!("workflow.{complexity}_complexity_crews")
-}
-
-/// The complexity whose pool `key` names, or `None` for any other key.
-pub(crate) fn complexity_of_crews_key(key: &str) -> Option<TaskComplexity> {
-    COMPLEXITIES
-        .into_iter()
-        .find(|complexity| complexity_crews_key(*complexity) == key)
-}
+/// Tickets per unit of configured weight in a weighted draw, so a
+/// weight-1 member at the `1/8` floor keeps 125 tickets [ORB-17770].
+const PRESSURE_TICKET_SCALE: f64 = 1000.0;
 
 impl crate::OrbitRuntime {
     /// Draw after the caller's existing membership filters, using the same
@@ -62,9 +38,10 @@ impl crate::OrbitRuntime {
             || self.usage_pressure_read(chrono::Utc::now()),
         );
         let selected = weighted_draw(&candidates, source, random)?;
+        let crew = selected.crew.clone();
+        let auto_effort = selected.auto_effort.clone();
         Ok(CrewPoolDraw {
-            crew: selected.crew.clone(),
-            auto_effort: selected.auto_effort.clone(),
+            crew,
             source: if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
                 format!("{source}; usage pressure")
             } else {
@@ -84,6 +61,7 @@ impl crate::OrbitRuntime {
                     )
                 })
                 .collect(),
+            auto_effort,
         })
     }
 }
@@ -123,6 +101,75 @@ impl crate::OrbitRuntime {
         }
         Ok((capable, unable))
     }
+}
+
+/// One weighted member: its configured weight and its crew's pressure.
+struct WeightedMember {
+    weight: u32,
+    pressure: UsagePressure,
+}
+
+/// What one weighting did to a draw's members, by crew name: each member's
+/// configured weight and its crew's usage pressure [ORB-17770].
+pub(crate) struct DrawWeighting {
+    members: BTreeMap<String, WeightedMember>,
+}
+
+impl DrawWeighting {
+    /// Whether usage pressure weighed this draw: always, as a weighting
+    /// exists only when pressure applies.
+    pub(crate) fn pressured(&self) -> bool {
+        !self.members.is_empty()
+    }
+
+    /// `crew`'s pressure in this draw.
+    pub(crate) fn pressure(&self, crew: &str) -> Option<&UsagePressure> {
+        self.members.get(crew).map(|member| &member.pressure)
+    }
+
+    /// The `eligible_pool` entry of a weighted member: its configured
+    /// `weight`, raw `pressure` and the `effective_weight` it drew on.
+    pub(crate) fn member(&self, candidate: &CrewCandidate) -> Value {
+        json!(self.pool_member(candidate))
+    }
+
+    fn pool_member(&self, candidate: &CrewCandidate) -> ActivityCrewPoolMember {
+        let member = self.members.get(&candidate.crew.name);
+        ActivityCrewPoolMember {
+            name: candidate.crew.name.clone(),
+            weight: member.map_or(candidate.weight, |member| member.weight),
+            pressure: member.map(|member| member.pressure.pressure),
+            effective_weight: Some(f64::from(candidate.weight) / PRESSURE_TICKET_SCALE),
+        }
+    }
+}
+
+pub(super) fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
+    input
+        .get(POOLS_KEY)
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|error| OrbitError::InvalidInput(format!("invalid {POOLS_KEY}: {error}")))
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+pub(super) fn auto_task_id(input: &Value) -> Option<&str> {
+    singular_task_id_from_input(input)
+}
+
+/// The configuration key of the complexity pool for `complexity`, as an
+/// activity's `crew_config_key` names it [ORB-15663].
+pub(crate) fn complexity_crews_key(complexity: TaskComplexity) -> String {
+    format!("workflow.{complexity}_complexity_crews")
+}
+
+/// The complexity whose pool `key` names, or `None` for any other key.
+pub(crate) fn complexity_of_crews_key(key: &str) -> Option<TaskComplexity> {
+    COMPLEXITIES
+        .into_iter()
+        .find(|complexity| complexity_crews_key(*complexity) == key)
 }
 
 pub(super) fn sole_candidate(crew: Crew) -> CrewCandidate {
@@ -171,51 +218,6 @@ pub(super) fn permitted_candidates(
         )));
     }
     Ok(permitted)
-}
-
-/// Tickets per unit of configured weight in a weighted draw, so a
-/// weight-1 member at the `1/8` floor keeps 125 tickets [ORB-17770].
-const PRESSURE_TICKET_SCALE: f64 = 1000.0;
-
-/// One weighted member: its configured weight and its crew's pressure.
-struct WeightedMember {
-    weight: u32,
-    pressure: UsagePressure,
-}
-
-/// What one weighting did to a draw's members, by crew name: each member's
-/// configured weight and its crew's usage pressure [ORB-17770].
-pub(crate) struct DrawWeighting {
-    members: BTreeMap<String, WeightedMember>,
-}
-
-impl DrawWeighting {
-    /// Whether usage pressure weighed this draw: always, as a weighting
-    /// exists only when pressure applies.
-    pub(crate) fn pressured(&self) -> bool {
-        !self.members.is_empty()
-    }
-
-    /// `crew`'s pressure in this draw.
-    pub(crate) fn pressure(&self, crew: &str) -> Option<&UsagePressure> {
-        self.members.get(crew).map(|member| &member.pressure)
-    }
-
-    /// The `eligible_pool` entry of a weighted member: its configured
-    /// `weight`, raw `pressure` and the `effective_weight` it drew on.
-    pub(crate) fn member(&self, candidate: &CrewCandidate) -> Value {
-        json!(self.pool_member(candidate))
-    }
-
-    fn pool_member(&self, candidate: &CrewCandidate) -> ActivityCrewPoolMember {
-        let member = self.members.get(&candidate.crew.name);
-        ActivityCrewPoolMember {
-            name: candidate.crew.name.clone(),
-            weight: member.map_or(candidate.weight, |member| member.weight),
-            pressure: member.map(|member| member.pressure.pressure),
-            effective_weight: Some(f64::from(candidate.weight) / PRESSURE_TICKET_SCALE),
-        }
-    }
 }
 
 /// The one weighting seam of crew pool draws: scale `candidates`' tickets

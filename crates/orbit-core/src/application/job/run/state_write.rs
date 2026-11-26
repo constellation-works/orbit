@@ -14,12 +14,14 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 
-/// The refusal every live-run control shares: a finished run admits no
-/// further control, whichever surface asked.
-pub(super) fn terminal_run_error(run_id: &str, state: JobRunState) -> OrbitError {
-    OrbitError::JobValidation(format!(
-        "job run '{run_id}' is {state}; a terminal run admits no further work"
-    ))
+// One-shot, thread-local seam at the write boundary: deterministic tests
+// can commit worker progress before the update transaction, or between
+// the `NoState` result and initialisation. No production hook exists, and
+// taking it before invocation permits a follow-up interleaving.
+#[cfg(test)]
+thread_local! {
+    static RUN_STATE_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
 }
 
 /// Whether [`OrbitRuntime::update_or_create_run_state`] initialises a
@@ -82,14 +84,12 @@ impl OrbitRuntime {
     }
 }
 
-// One-shot, thread-local seam at the write boundary: deterministic tests
-// can commit worker progress before the update transaction, or between
-// the `NoState` result and initialisation. No production hook exists, and
-// taking it before invocation permits a follow-up interleaving.
-#[cfg(test)]
-thread_local! {
-    static RUN_STATE_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        std::cell::RefCell::new(None);
+/// The refusal every live-run control shares: a finished run admits no
+/// further control, whichever surface asked.
+pub(super) fn terminal_run_error(run_id: &str, state: JobRunState) -> OrbitError {
+    OrbitError::JobValidation(format!(
+        "job run '{run_id}' is {state}; a terminal run admits no further work"
+    ))
 }
 
 #[cfg(test)]

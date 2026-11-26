@@ -73,6 +73,107 @@ pub(crate) struct PipelineAuditRow<'a> {
     pub(crate) workspace_id: Option<String>,
 }
 
+impl OrbitRuntime {
+    /// [ORB-10002] Record a terminal diagnostic step with an explicit state
+    /// (`failed` for job errors, `interrupted` for orphan reconciliation).
+    pub(crate) fn record_pipeline_diagnostic_step(
+        &self,
+        run: &JobRun,
+        started_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        error_code: Option<&str>,
+        message: &str,
+        state: JobRunState,
+    ) -> Result<(), OrbitError> {
+        diagnostic_step(
+            self.stores().jobs(),
+            run,
+            started_at,
+            finished_at,
+            error_code,
+            message,
+            state,
+        )
+    }
+
+    /// Record one pipeline audit event for a job run.
+    pub(crate) fn record_pipeline_audit(
+        &self,
+        tool_name: &str,
+        target_id: Option<&str>,
+        actor: Option<&str>,
+        status: AuditEventStatus,
+        arguments: Value,
+        error_message: Option<String>,
+    ) -> Result<(), OrbitError> {
+        pipeline_audit(
+            self.stores().host_store(),
+            &self.paths().repo_root,
+            PipelineAuditRow {
+                tool_name,
+                target_id,
+                actor,
+                status,
+                arguments,
+                error_message,
+                workspace_id: None,
+            },
+        )
+    }
+
+    /// Record one pipeline audit event about this workspace as a whole,
+    /// stamped with its logical workspace id so a read can scope to it.
+    pub(crate) fn record_workspace_pipeline_audit(
+        &self,
+        row: PipelineAuditRow<'_>,
+    ) -> Result<(), OrbitError> {
+        let row = PipelineAuditRow {
+            workspace_id: Some(self.workspace_id()?),
+            ..row
+        };
+        pipeline_audit(self.stores().host_store(), &self.paths().repo_root, row)
+    }
+
+    /// Records how one drain control request ended under `event`.
+    ///
+    /// The arguments are the request id, run id, outcome and completion time,
+    /// with `detail` merged in after them. A `rejected` outcome is a failure;
+    /// every other outcome is a success.
+    pub(super) fn record_drain_control_completion(
+        &self,
+        event: &str,
+        run_id: Option<&str>,
+        request_id: &str,
+        outcome: &str,
+        detail: Value,
+        error: Option<String>,
+    ) -> Result<(), OrbitError> {
+        let mut arguments = json!({
+            "request_id": request_id,
+            "run_id": run_id,
+            "outcome": outcome,
+            "completed_at": Utc::now().to_rfc3339(),
+        });
+        if let (Some(target), Some(detail)) = (arguments.as_object_mut(), detail.as_object()) {
+            for (key, value) in detail {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        self.record_pipeline_audit(
+            event,
+            run_id,
+            None,
+            if outcome == "rejected" {
+                AuditEventStatus::Failure
+            } else {
+                AuditEventStatus::Success
+            },
+            arguments,
+            error,
+        )
+    }
+}
+
 pub(crate) fn pipeline_audit(
     store: &Store,
     working_directory: &Path,
@@ -231,105 +332,4 @@ fn write_diagnostic_step(
     };
     let _ = runs.complete_job_run_step(&current.run_id, &params)?;
     Ok(())
-}
-
-impl OrbitRuntime {
-    /// [ORB-10002] Record a terminal diagnostic step with an explicit state
-    /// (`failed` for job errors, `interrupted` for orphan reconciliation).
-    pub(crate) fn record_pipeline_diagnostic_step(
-        &self,
-        run: &JobRun,
-        started_at: DateTime<Utc>,
-        finished_at: DateTime<Utc>,
-        error_code: Option<&str>,
-        message: &str,
-        state: JobRunState,
-    ) -> Result<(), OrbitError> {
-        diagnostic_step(
-            self.stores().jobs(),
-            run,
-            started_at,
-            finished_at,
-            error_code,
-            message,
-            state,
-        )
-    }
-
-    /// Record one pipeline audit event for a job run.
-    pub(crate) fn record_pipeline_audit(
-        &self,
-        tool_name: &str,
-        target_id: Option<&str>,
-        actor: Option<&str>,
-        status: AuditEventStatus,
-        arguments: Value,
-        error_message: Option<String>,
-    ) -> Result<(), OrbitError> {
-        pipeline_audit(
-            self.stores().host_store(),
-            &self.paths().repo_root,
-            PipelineAuditRow {
-                tool_name,
-                target_id,
-                actor,
-                status,
-                arguments,
-                error_message,
-                workspace_id: None,
-            },
-        )
-    }
-
-    /// Record one pipeline audit event about this workspace as a whole,
-    /// stamped with its logical workspace id so a read can scope to it.
-    pub(crate) fn record_workspace_pipeline_audit(
-        &self,
-        row: PipelineAuditRow<'_>,
-    ) -> Result<(), OrbitError> {
-        let row = PipelineAuditRow {
-            workspace_id: Some(self.workspace_id()?),
-            ..row
-        };
-        pipeline_audit(self.stores().host_store(), &self.paths().repo_root, row)
-    }
-
-    /// Records how one drain control request ended under `event`.
-    ///
-    /// The arguments are the request id, run id, outcome and completion time,
-    /// with `detail` merged in after them. A `rejected` outcome is a failure;
-    /// every other outcome is a success.
-    pub(super) fn record_drain_control_completion(
-        &self,
-        event: &str,
-        run_id: Option<&str>,
-        request_id: &str,
-        outcome: &str,
-        detail: Value,
-        error: Option<String>,
-    ) -> Result<(), OrbitError> {
-        let mut arguments = json!({
-            "request_id": request_id,
-            "run_id": run_id,
-            "outcome": outcome,
-            "completed_at": Utc::now().to_rfc3339(),
-        });
-        if let (Some(target), Some(detail)) = (arguments.as_object_mut(), detail.as_object()) {
-            for (key, value) in detail {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self.record_pipeline_audit(
-            event,
-            run_id,
-            None,
-            if outcome == "rejected" {
-                AuditEventStatus::Failure
-            } else {
-                AuditEventStatus::Success
-            },
-            arguments,
-            error,
-        )
-    }
 }

@@ -145,16 +145,6 @@ impl StandingDrainKeeperView {
     }
 }
 
-fn keeper_flags_json(settings: &StandingDrainSettings) -> Value {
-    json!({
-        "window_seconds": settings.window_seconds,
-        "concurrency": settings.concurrency,
-        "complete": settings.complete,
-        "approve_proposed": settings.approve_proposed,
-        "auto_fix": settings.auto_fix,
-    })
-}
-
 impl OrbitRuntime {
     /// One clock tick of the keeper for this workspace. `None` when the keeper
     /// is off: nothing was read, decided or recorded.
@@ -463,4 +453,14 @@ impl OrbitRuntime {
             }),
         );
     }
+}
+
+fn keeper_flags_json(settings: &StandingDrainSettings) -> Value {
+    json!({
+        "window_seconds": settings.window_seconds,
+        "concurrency": settings.concurrency,
+        "complete": settings.complete,
+        "approve_proposed": settings.approve_proposed,
+        "auto_fix": settings.auto_fix,
+    })
 }

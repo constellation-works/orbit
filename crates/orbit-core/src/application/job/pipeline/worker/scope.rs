@@ -169,6 +169,140 @@ impl WorkerLimits {
     }
 }
 
+/// One script step's scope, as [`script_scope_launcher`] found it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ScriptScopeLauncher {
+    /// Run the sandbox under `argv`, which execs it in place.
+    Scoped { unit: String, argv: Vec<String> },
+    /// No scope of its own; the script shares the worker's cgroup.
+    Uncontained { reason: String },
+}
+
+/// A worker scope's recorded limit hits. Only built when at least one counter
+/// is non-zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScopeLimitBreach {
+    unit: String,
+    oom_kills: u64,
+    tasks_refused: u64,
+    memory_max: Option<String>,
+    tasks_max: Option<String>,
+}
+
+impl WorkerScopeCgroup {
+    /// The worker scope `pid` runs in, if it runs in one.
+    pub(crate) fn of_process(pid: u32) -> Option<Self> {
+        Self::read(&format!("/proc/{pid}/cgroup"))
+    }
+
+    /// The worker scope this process runs in, if it runs in one.
+    pub(crate) fn of_current_process() -> Option<Self> {
+        Self::read("/proc/self/cgroup")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read(proc_cgroup: &str) -> Option<Self> {
+        let content = std::fs::read_to_string(proc_cgroup).ok()?;
+        Self::from_proc_cgroup(&content, Path::new("/sys/fs/cgroup"))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn read(_proc_cgroup: &str) -> Option<Self> {
+        None
+    }
+
+    /// Parse `/proc/<pid>/cgroup` (cgroup v2 `0::<path>` line) and keep it
+    /// only when its leaf is a worker scope.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_proc_cgroup(content: &str, cgroup_root: &Path) -> Option<Self> {
+        let path = content.lines().find_map(|line| line.strip_prefix("0::"))?;
+        let unit = path.rsplit('/').next()?;
+        if !(unit.starts_with(SCOPE_UNIT_PREFIX) && unit.ends_with(SCOPE_UNIT_SUFFIX)) {
+            return None;
+        }
+        Some(Self::from_located(
+            unit.to_string(),
+            cgroup_root.join(path.trim_start_matches('/')),
+        ))
+    }
+
+    /// The scope's limit hits so far, or `None` when it hit none (or its
+    /// cgroup is already gone).
+    pub(crate) fn limit_breach(&self) -> Option<ScopeLimitBreach> {
+        let read = |name: &str| std::fs::read_to_string(self.directory().join(name)).ok();
+        let oom_kills = read("memory.events").map_or(0, |events| event_count(&events, "oom_kill"));
+        let tasks_refused = read("pids.events").map_or(0, |events| event_count(&events, "max"));
+        if oom_kills == 0 && tasks_refused == 0 {
+            return None;
+        }
+        let limit = |name: &str| read(name).map(|value| value.trim().to_string());
+        Some(ScopeLimitBreach {
+            unit: self.unit().to_string(),
+            oom_kills,
+            tasks_refused,
+            memory_max: limit("memory.max"),
+            tasks_max: limit("pids.max"),
+        })
+    }
+
+    /// The scope's cumulative CPU time and current non-reclaimable memory, or
+    /// `None` when its cgroup is gone or a counter is unreadable.
+    ///
+    /// Memory is `memory.current - file + shmem` from `memory.stat`:
+    /// `memory.current` also counts page cache charged to the scope, which
+    /// the kernel can drop (25-68% of live dk-server-1 scopes on 2026-10-12).
+    /// `file` includes tmpfs and shared memory, which cannot be dropped, so
+    /// `shmem` is added back.
+    pub(crate) fn usage(&self) -> Option<ScopeUsage> {
+        let read = |name: &str| std::fs::read_to_string(self.directory().join(name)).ok();
+        let cpu_usage_usec = stat_value(&read("cpu.stat")?, "usage_usec")?;
+        let current: u64 = read("memory.current")?.trim().parse().ok()?;
+        let memory_stat = read("memory.stat")?;
+        let file = stat_value(&memory_stat, "file")?;
+        let shmem = stat_value(&memory_stat, "shmem").unwrap_or(0);
+        Some(ScopeUsage {
+            cpu_usage_usec,
+            memory_bytes: current.saturating_sub(file).saturating_add(shmem),
+        })
+    }
+}
+
+/// One reading of a worker scope's resource counters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScopeUsage {
+    /// `cpu.stat` `usage_usec`: CPU time the scope used since it was created.
+    pub(crate) cpu_usage_usec: u64,
+    /// `memory.current - file + shmem`, in bytes.
+    pub(crate) memory_bytes: u64,
+}
+
+impl ScopeLimitBreach {
+    /// The operator-facing cause, naming the limit and how often it was hit.
+    pub(crate) fn describe(&self) -> String {
+        let mut hits = Vec::new();
+        if self.oom_kills > 0 {
+            hits.push(format!(
+                "the kernel OOM-killed {} process(es) at its memory limit (memory.max={})",
+                self.oom_kills,
+                self.memory_max.as_deref().unwrap_or("unknown"),
+            ));
+        }
+        if self.tasks_refused > 0 {
+            hits.push(format!(
+                "{} fork/clone attempt(s) were refused at its task limit (pids.max={})",
+                self.tasks_refused,
+                self.tasks_max.as_deref().unwrap_or("unknown"),
+            ));
+        }
+        format!(
+            "worker scope '{}' hit its resource limits: {}; raise machine.worker_memory_max / \
+             machine.worker_tasks_max only if the run's workload legitimately needs more",
+            self.unit,
+            hits.join("; "),
+        )
+    }
+}
+
 /// Launch `base` inside a fresh worker scope when available. In strict mode,
 /// refuse an unavailable scope before the worker is spawned.
 pub(crate) fn contain_worker_command(
@@ -488,15 +622,6 @@ pub(crate) fn script_containment_is_strict(
     super::start::effective_strict_containment(settings.strict, false, inherited)
 }
 
-/// One script step's scope, as [`script_scope_launcher`] found it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ScriptScopeLauncher {
-    /// Run the sandbox under `argv`, which execs it in place.
-    Scoped { unit: String, argv: Vec<String> },
-    /// No scope of its own; the script shares the worker's cgroup.
-    Uncontained { reason: String },
-}
-
 /// Whether this process can create transient scopes in a user manager, probed
 /// with the same properties a worker scope uses.
 #[cfg(target_os = "linux")]
@@ -643,129 +768,4 @@ fn probe_user_scope(env: &[(OsString, OsString)]) -> Result<(), String> {
     Err(format!(
         "{SYSTEMD_RUN} --user --scope exited with {status}: {detail}"
     ))
-}
-
-/// A worker scope's recorded limit hits. Only built when at least one counter
-/// is non-zero.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ScopeLimitBreach {
-    unit: String,
-    oom_kills: u64,
-    tasks_refused: u64,
-    memory_max: Option<String>,
-    tasks_max: Option<String>,
-}
-
-impl WorkerScopeCgroup {
-    /// The worker scope `pid` runs in, if it runs in one.
-    pub(crate) fn of_process(pid: u32) -> Option<Self> {
-        Self::read(&format!("/proc/{pid}/cgroup"))
-    }
-
-    /// The worker scope this process runs in, if it runs in one.
-    pub(crate) fn of_current_process() -> Option<Self> {
-        Self::read("/proc/self/cgroup")
-    }
-
-    #[cfg(target_os = "linux")]
-    fn read(proc_cgroup: &str) -> Option<Self> {
-        let content = std::fs::read_to_string(proc_cgroup).ok()?;
-        Self::from_proc_cgroup(&content, Path::new("/sys/fs/cgroup"))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn read(_proc_cgroup: &str) -> Option<Self> {
-        None
-    }
-
-    /// Parse `/proc/<pid>/cgroup` (cgroup v2 `0::<path>` line) and keep it
-    /// only when its leaf is a worker scope.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn from_proc_cgroup(content: &str, cgroup_root: &Path) -> Option<Self> {
-        let path = content.lines().find_map(|line| line.strip_prefix("0::"))?;
-        let unit = path.rsplit('/').next()?;
-        if !(unit.starts_with(SCOPE_UNIT_PREFIX) && unit.ends_with(SCOPE_UNIT_SUFFIX)) {
-            return None;
-        }
-        Some(Self::from_located(
-            unit.to_string(),
-            cgroup_root.join(path.trim_start_matches('/')),
-        ))
-    }
-
-    /// The scope's limit hits so far, or `None` when it hit none (or its
-    /// cgroup is already gone).
-    pub(crate) fn limit_breach(&self) -> Option<ScopeLimitBreach> {
-        let read = |name: &str| std::fs::read_to_string(self.directory().join(name)).ok();
-        let oom_kills = read("memory.events").map_or(0, |events| event_count(&events, "oom_kill"));
-        let tasks_refused = read("pids.events").map_or(0, |events| event_count(&events, "max"));
-        if oom_kills == 0 && tasks_refused == 0 {
-            return None;
-        }
-        let limit = |name: &str| read(name).map(|value| value.trim().to_string());
-        Some(ScopeLimitBreach {
-            unit: self.unit().to_string(),
-            oom_kills,
-            tasks_refused,
-            memory_max: limit("memory.max"),
-            tasks_max: limit("pids.max"),
-        })
-    }
-
-    /// The scope's cumulative CPU time and current non-reclaimable memory, or
-    /// `None` when its cgroup is gone or a counter is unreadable.
-    ///
-    /// Memory is `memory.current - file + shmem` from `memory.stat`:
-    /// `memory.current` also counts page cache charged to the scope, which
-    /// the kernel can drop (25-68% of live dk-server-1 scopes on 2026-10-12).
-    /// `file` includes tmpfs and shared memory, which cannot be dropped, so
-    /// `shmem` is added back.
-    pub(crate) fn usage(&self) -> Option<ScopeUsage> {
-        let read = |name: &str| std::fs::read_to_string(self.directory().join(name)).ok();
-        let cpu_usage_usec = stat_value(&read("cpu.stat")?, "usage_usec")?;
-        let current: u64 = read("memory.current")?.trim().parse().ok()?;
-        let memory_stat = read("memory.stat")?;
-        let file = stat_value(&memory_stat, "file")?;
-        let shmem = stat_value(&memory_stat, "shmem").unwrap_or(0);
-        Some(ScopeUsage {
-            cpu_usage_usec,
-            memory_bytes: current.saturating_sub(file).saturating_add(shmem),
-        })
-    }
-}
-
-/// One reading of a worker scope's resource counters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ScopeUsage {
-    /// `cpu.stat` `usage_usec`: CPU time the scope used since it was created.
-    pub(crate) cpu_usage_usec: u64,
-    /// `memory.current - file + shmem`, in bytes.
-    pub(crate) memory_bytes: u64,
-}
-
-impl ScopeLimitBreach {
-    /// The operator-facing cause, naming the limit and how often it was hit.
-    pub(crate) fn describe(&self) -> String {
-        let mut hits = Vec::new();
-        if self.oom_kills > 0 {
-            hits.push(format!(
-                "the kernel OOM-killed {} process(es) at its memory limit (memory.max={})",
-                self.oom_kills,
-                self.memory_max.as_deref().unwrap_or("unknown"),
-            ));
-        }
-        if self.tasks_refused > 0 {
-            hits.push(format!(
-                "{} fork/clone attempt(s) were refused at its task limit (pids.max={})",
-                self.tasks_refused,
-                self.tasks_max.as_deref().unwrap_or("unknown"),
-            ));
-        }
-        format!(
-            "worker scope '{}' hit its resource limits: {}; raise machine.worker_memory_max / \
-             machine.worker_tasks_max only if the run's workload legitimately needs more",
-            self.unit,
-            hits.join("; "),
-        )
-    }
 }

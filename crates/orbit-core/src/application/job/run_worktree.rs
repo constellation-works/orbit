@@ -51,26 +51,6 @@ enum WorktreeRead {
     Unreadable,
 }
 
-/// The run's branch and path from the claim bound to it: what its follower
-/// reported at settlement, else the branch of the candidate the claim kept
-/// from that same run.
-fn claimed_run_worktree(claim: &ClaimInspection, run_id: &str) -> RecordedRunWorktree {
-    let settlement = claim.settlement.as_ref();
-    let kept_branch = claim
-        .preserved_candidate
-        .as_ref()
-        .map(|preserved| &preserved.candidate)
-        .filter(|candidate| candidate.source_run_id.as_deref() == Some(run_id))
-        .map(|candidate| candidate.branch.trim().to_string())
-        .filter(|branch| !branch.is_empty());
-    RecordedRunWorktree {
-        branch: settlement
-            .and_then(|record| record.branch.clone())
-            .or(kept_branch),
-        worktree_path: settlement.and_then(|record| record.worktree_path.clone()),
-    }
-}
-
 impl OrbitRuntime {
     fn read_recorded_run_worktree(&self, run_id: &str) -> WorktreeRead {
         match self.read_run_state(run_id) {
@@ -203,5 +183,25 @@ impl OrbitRuntime {
             "The execution machine reports this when the run settles."
         };
         (claimed_run_worktree(&claim, run_id), missing)
+    }
+}
+
+/// The run's branch and path from the claim bound to it: what its follower
+/// reported at settlement, else the branch of the candidate the claim kept
+/// from that same run.
+fn claimed_run_worktree(claim: &ClaimInspection, run_id: &str) -> RecordedRunWorktree {
+    let settlement = claim.settlement.as_ref();
+    let kept_branch = claim
+        .preserved_candidate
+        .as_ref()
+        .map(|preserved| &preserved.candidate)
+        .filter(|candidate| candidate.source_run_id.as_deref() == Some(run_id))
+        .map(|candidate| candidate.branch.trim().to_string())
+        .filter(|branch| !branch.is_empty());
+    RecordedRunWorktree {
+        branch: settlement
+            .and_then(|record| record.branch.clone())
+            .or(kept_branch),
+        worktree_path: settlement.and_then(|record| record.worktree_path.clone()),
     }
 }

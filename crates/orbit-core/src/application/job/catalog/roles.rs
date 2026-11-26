@@ -11,6 +11,15 @@ use orbit_types::workflow::JobActivityRoles;
 
 use crate::OrbitRuntime;
 
+// Bound workspace churn; eviction affects only parsing cost.
+const MAX_JOB_ROLES_MEMO_WORKSPACES: usize = 128;
+static JOB_ACTIVITY_ROLES_MEMO: Mutex<BTreeMap<PathBuf, JobRolesMemo>> =
+    Mutex::new(BTreeMap::new());
+
+/// Distinct read start points across one request's concurrent snapshots;
+/// matches the fleet read's fan-out bound.
+const MAX_STAGGERED_SNAPSHOTS: usize = 8;
+
 /// Definition files in loader order, each with the bytes it held when read.
 type JobDefinitionSources = Vec<(PathBuf, Arc<[u8]>)>;
 
@@ -20,11 +29,6 @@ struct JobRolesMemo {
     job_ids: Vec<String>,
     roles: JobActivityRoles,
 }
-
-// Bound workspace churn; eviction affects only parsing cost.
-const MAX_JOB_ROLES_MEMO_WORKSPACES: usize = 128;
-static JOB_ACTIVITY_ROLES_MEMO: Mutex<BTreeMap<PathBuf, JobRolesMemo>> =
-    Mutex::new(BTreeMap::new());
 
 /// One fleet request's reads of job definition directories and files.
 ///
@@ -96,10 +100,6 @@ impl JobDefinitionReads {
             .collect()
     }
 }
-
-/// Distinct read start points across one request's concurrent snapshots;
-/// matches the fleet read's fan-out bound.
-const MAX_STAGGERED_SNAPSHOTS: usize = 8;
 
 /// Path-keyed reads that run once: workspaces resolved concurrently wait for
 /// the first reader of a path instead of repeating its read, and all of them

@@ -24,130 +24,19 @@ pub(super) const RUN_OWNER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 #[cfg(unix)]
 pub(super) const RUN_OWNER_TERMINATION_POLL: Duration = Duration::from_millis(50);
 
-/// Attempts to signal (TERM then KILL) the recorded owner process / process group
-/// for a running job, returning a short outcome token for telemetry.
+/// [ORB-10070] Grace window before an unclaimed `pending` run (no recorded
+/// owner pid) may be treated as orphaned. Pipeline workers claim their queued
+/// run within seconds of spawn, so the window only shields (a) a reconcile
+/// racing that claim and (b) still-live queued runs submitted by binaries
+/// predating the pending-owner claim. A claimed pending run needs no grace:
+/// its owner liveness is probed exactly like a running run's.
+pub(super) const PENDING_RUN_UNCLAIMED_GRACE_MINUTES: i64 = 30;
+
+/// A worker can dispatch a child before another process can reliably probe
+/// its newly recorded PID. Give that running owner a short window to settle
+/// before an orphan sweep is allowed to finalize it.
 #[cfg(unix)]
-pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitError> {
-    let Some(pid) = run.pid else {
-        return Ok("no_pid".to_string());
-    };
-    if pid == std::process::id() {
-        return Ok("self_not_signalled".to_string());
-    }
-    // [ORB-10594] Ahead of the liveness check: from another PID namespace the
-    // owner is invisible, and reporting that as `already_exited` would claim a
-    // cancellation that never reached the process.
-    if pid_namespace_scope(run.pid_start_time.as_deref()) == PidNamespaceScope::Foreign {
-        return Ok("foreign_pid_namespace".to_string());
-    }
-    if !process_is_alive(pid) {
-        return Ok("already_exited".to_string());
-    }
-    signal_run_owner_with_binding(run, || classify_run_owner(run), BoundTarget::bind)
-}
-
-// The binding seam forces exit/reuse during initial identity verification without
-// consuming real PIDs or depending on scheduler timing.
-#[cfg(unix)]
-pub(super) fn signal_run_owner_with_binding<T: TeardownTarget>(
-    run: &JobRun,
-    identity: impl FnOnce() -> OwnerIdentity,
-    bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
-) -> Result<String, OrbitError> {
-    let Some(pid) = run.pid else {
-        return Ok("no_pid".into());
-    };
-    // Acquire before verification: start times have finite resolution and
-    // cannot prove that a handle opened after a probe captures that process.
-    // Defer binding errors until authorization, preserving mismatch outcomes.
-    let target = bind(pid, run.pid_start_time.as_deref());
-    if identity() != OwnerIdentity::Verified {
-        return Ok("owner_identity_mismatch".into());
-    }
-    let Some(mut target) = target? else {
-        return Ok("already_exited".into());
-    };
-    target.prepare()?;
-    let grouped = target.pgid().is_some();
-    let killed = terminate_target(&target, pid)?;
-    Ok(match (grouped, killed) {
-        (true, false) => "terminated_process_group",
-        (true, true) => "killed_process_group",
-        (false, false) => "terminated_owner",
-        (false, true) => "killed_owner",
-    }
-    .into())
-}
-
-#[cfg(not(unix))]
-pub(super) fn signal_run_owner_process(_run: &JobRun) -> Result<String, OrbitError> {
-    Ok("unsupported_platform".to_string())
-}
-
-/// Why a running run's worker cannot be stopped and seen gone from here, or
-/// `None` when it can — or is already gone. Asked before anything is decided
-/// on the strength of the stop, such as releasing the claim the run works
-/// for.
-#[cfg(unix)]
-pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
-    let pid = run.pid?;
-    if pid == std::process::id() {
-        return Some("its worker is this process");
-    }
-    match classify_run_owner(run) {
-        OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
-        OwnerIdentity::Verified => match owner_process_group_id(pid) {
-            Some(pgid) if pgid as u32 == pid => {
-                // SAFETY: `getpgrp` takes no pointer arguments and only reads
-                // the calling process's group id, so it cannot invalidate
-                // memory or deliver a signal. The raw value is compared
-                // directly because the safe `ancestry::current_process_group`
-                // helper maps small pgids to `None`, which would change this
-                // equality check.
-                let this_group = unsafe { libc::getpgrp() };
-                if pgid == this_group {
-                    Some("its worker shares this process's group")
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        },
-        OwnerIdentity::LegacyLiveUnverified | OwnerIdentity::ProbeUnavailable => {
-            Some("its worker's process identity cannot be verified")
-        }
-        OwnerIdentity::ForeignPidNamespace => Some("its worker runs in another PID namespace"),
-    }
-}
-
-#[cfg(not(unix))]
-pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
-    run.pid.map(|_| "this platform cannot stop a run's worker")
-}
-
-/// [`signal_run_owner_process`], failing unless the worker is seen gone
-/// afterwards: an outcome that signalled nothing it could verify (another
-/// PID namespace, an unverifiable identity, this process) is an error, so
-/// the cancellation stops before the run is finalized.
-pub(super) fn signal_run_owner_confirmed(run: &JobRun) -> Result<String, OrbitError> {
-    let outcome = signal_run_owner_process(run)?;
-    let stopped = matches!(
-        outcome.as_str(),
-        "terminated_process_group"
-            | "killed_process_group"
-            | "terminated_owner"
-            | "killed_owner"
-            | "already_exited"
-            | "no_pid"
-    );
-    if stopped || run_owner_liveness(run) == RunOwnerLiveness::Stopped {
-        return Ok(outcome);
-    }
-    Err(OrbitError::Execution(format!(
-        "could not confirm that the worker of run {} stopped (signal outcome {outcome})",
-        run.run_id
-    )))
-}
+pub(super) const RUNNING_RUN_STARTUP_GRACE_SECONDS: i64 = 2;
 
 /// What became of one provider child a cancellation went looking for.
 #[cfg(unix)]
@@ -162,95 +51,6 @@ pub(super) enum ProviderStop {
     Unverified,
 }
 
-/// Stop a provider child recorded on a run's audit trail (TERM, then KILL).
-///
-/// Provider CLIs are spawned in their own process group, so signalling the
-/// run owner's group never reaches them; without this a cancelled run leaves
-/// its agent editing the worktree and spending provider budget after its
-/// reservations were released. Only a process whose recorded start token
-/// still matches is signalled, so a recycled pid is never touched.
-#[cfg(unix)]
-pub(super) fn stop_provider_process(
-    pid: u32,
-    pid_start_time: Option<&str>,
-) -> Result<ProviderStop, OrbitError> {
-    stop_provider_process_with_probe(
-        pid,
-        pid_start_time,
-        orbit_common::process::identity::probe_process_liveness,
-        probe_process_start_identity,
-    )
-}
-
-// Separate probe seams let sibling fault-injection tests exercise a live PID
-// whose identity cannot be read, without changing host probing permissions.
-#[cfg(unix)]
-pub(super) fn stop_provider_process_with_probe<L, I>(
-    pid: u32,
-    pid_start_time: Option<&str>,
-    liveness_probe: L,
-    identity_probe: I,
-) -> Result<ProviderStop, OrbitError>
-where
-    L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
-    I: Fn(u32) -> ProbeOutcome,
-{
-    stop_provider_process_with_binding(
-        pid,
-        pid_start_time,
-        liveness_probe,
-        identity_probe,
-        BoundTarget::bind,
-    )
-}
-
-#[cfg(unix)]
-pub(super) fn stop_provider_process_with_binding<L, I, T: TeardownTarget>(
-    pid: u32,
-    pid_start_time: Option<&str>,
-    liveness_probe: L,
-    identity_probe: I,
-    bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
-) -> Result<ProviderStop, OrbitError>
-where
-    L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
-    I: Fn(u32) -> ProbeOutcome,
-{
-    use orbit_common::process::identity::ProcessLiveness;
-
-    if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
-        return Ok(ProviderStop::Unverified);
-    }
-    // Retain the identity before either observational probe can race exit and
-    // reuse. An unverified observation still authorizes no signal or error.
-    let target = bind(pid, pid_start_time);
-    match liveness_probe(pid, pid_start_time) {
-        ProcessLiveness::Exited => return Ok(ProviderStop::NotRunning),
-        ProcessLiveness::Unknown => return Ok(ProviderStop::Unverified),
-        ProcessLiveness::Alive => {}
-    }
-    // An unversioned token cannot prove the pid still names the provider.
-    let Some(persisted) = pid_start_time.filter(|token| is_stable_token(token)) else {
-        return Ok(ProviderStop::Unverified);
-    };
-    // Observational Alive is conservative when identity probing fails. It
-    // cannot authorize signalling: require a positively matching live token.
-    match identity_probe(pid) {
-        ProbeOutcome::Token(current) if stable_tokens_match(persisted, &current) => {}
-        ProbeOutcome::Token(_) => return Ok(ProviderStop::NotRunning),
-        ProbeOutcome::NoProcess | ProbeOutcome::Unavailable => {
-            return Ok(ProviderStop::Unverified);
-        }
-    }
-
-    let Some(mut target) = target? else {
-        return Ok(ProviderStop::NotRunning);
-    };
-    target.prepare()?;
-    terminate_target(&target, pid)?;
-    Ok(ProviderStop::Stopped)
-}
-
 /// One retained cancellation identity set, shared by owner and provider paths.
 #[cfg(unix)]
 pub(super) trait TeardownTarget {
@@ -260,29 +60,6 @@ pub(super) trait TeardownTarget {
     fn signal(&self, signal: libc::c_int) -> Result<(), OrbitError>;
     fn liveness(&self) -> Result<(bool, bool), OrbitError>;
     fn wait(&self, timeout: Duration) -> Result<(), OrbitError>;
-}
-
-#[cfg(unix)]
-fn terminate_target(target: &impl TeardownTarget, pid: u32) -> Result<bool, OrbitError> {
-    target.signal(libc::SIGTERM)?;
-    target.wait(RUN_OWNER_TERMINATION_GRACE)?;
-    if target.liveness()? == (false, false) {
-        return Ok(false);
-    }
-    target.signal(libc::SIGKILL)?;
-    target.wait(RUN_OWNER_TERMINATION_GRACE)?;
-    let (leader_alive, group_alive) = target.liveness()?;
-    if leader_alive || group_alive {
-        return Err(OrbitError::RunCancellationIncomplete {
-            pid,
-            pgid: target.pgid(),
-            term_sent: true,
-            kill_sent: true,
-            leader_alive,
-            group_alive,
-        });
-    }
-    Ok(true)
 }
 
 #[cfg(unix)]
@@ -414,6 +191,324 @@ impl TeardownTarget for BoundTarget {
     }
 }
 
+/// Why a `pending` run is conclusively orphaned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PendingStaleReason {
+    /// A worker claimed the run and that owner process is conclusively gone.
+    #[cfg(unix)]
+    Owner(OwnerIdentity),
+    /// No worker ever claimed the run and the claim window has long passed
+    /// (e.g. the spawned worker died before claiming, or a host reboot killed
+    /// queued workers left by an older binary that never recorded owners).
+    NeverClaimed,
+}
+
+impl PendingStaleReason {
+    /// Stable machine-readable vocabulary persisted in interrupted pipeline
+    /// steps. The diagnostic message may evolve independently of these codes.
+    pub(super) const fn error_code(self) -> &'static str {
+        match self {
+            #[cfg(unix)]
+            Self::Owner(identity) => owner_identity_error_code(Some(identity)),
+            Self::NeverClaimed => "never_claimed",
+        }
+    }
+}
+
+/// Outcome of comparing a persisted owner identity against the live process.
+///
+/// Only `Mismatch` and `Missing` warrant finalizing the run as failed.
+///
+/// - `Verified` — versioned token matches the live process: the worker is the
+///   original owner.
+/// - `Mismatch` — versioned persisted token disagrees with the live process's
+///   current token: a different process is holding the PID. Stale.
+/// - `LegacyLiveUnverified` — an unversioned token was persisted, or no token
+///   was persisted, but `kill(pid, 0)` confirms the PID is still alive. Stays
+///   Running; cancellation still refuses to signal it (PID-reuse protection).
+/// - `ProbeUnavailable` — kernel data could not be read or the fallback
+///   `ps` invocation failed, and `kill(pid, 0)` confirms the PID is still alive.
+///   A transient probe failure must never terminalize a live worker.
+/// - `Missing` — no PID recorded, or both the probe and `kill(pid, 0)`
+///   agree the PID is gone. Stale.
+/// - `ForeignPidNamespace` — the owner was recorded in a different PID
+///   namespace than this observer's [ORB-10594]. The recorded PID names a
+///   different process here, or none; nothing probed from this side is
+///   evidence about the owner. Stays Running, and cancellation refuses to
+///   signal (the number would name the wrong process, if any).
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OwnerIdentity {
+    Verified,
+    Mismatch,
+    LegacyLiveUnverified,
+    ProbeUnavailable,
+    ForeignPidNamespace,
+    Missing,
+}
+
+/// [ORB-10597] Whether a run's recorded owner process is still executing,
+/// asked *independently of the run's persisted state*.
+///
+/// Marking a run `interrupted` attaches no teardown, so a terminal state is not
+/// by itself evidence that the work stopped. Callers that must distinguish
+/// "terminal and stopped" from "terminal and still executing" ask this instead
+/// of reading `JobRunState::is_terminal`.
+///
+/// Deliberately three-valued: `Unknown` is not a synonym for either answer, and
+/// each caller picks its own fail-safe direction for it — releasing an
+/// `overlap:forbid` slot requires `Stopped`, refusing a resume requires `Alive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunOwnerLiveness {
+    /// A process with the recorded identity answers a liveness probe. Work may
+    /// still be in flight no matter what the run record says.
+    Alive,
+    /// Conclusively gone: no PID was ever recorded, the PID is absent, or it
+    /// now names a different process than the one that claimed the run.
+    Stopped,
+    /// Nothing observable from here is evidence either way — the owner was
+    /// recorded in a foreign PID namespace [ORB-10594], or this platform has no
+    /// probe at all.
+    Unknown,
+}
+
+/// Attempts to signal (TERM then KILL) the recorded owner process / process group
+/// for a running job, returning a short outcome token for telemetry.
+#[cfg(unix)]
+pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitError> {
+    let Some(pid) = run.pid else {
+        return Ok("no_pid".to_string());
+    };
+    if pid == std::process::id() {
+        return Ok("self_not_signalled".to_string());
+    }
+    // [ORB-10594] Ahead of the liveness check: from another PID namespace the
+    // owner is invisible, and reporting that as `already_exited` would claim a
+    // cancellation that never reached the process.
+    if pid_namespace_scope(run.pid_start_time.as_deref()) == PidNamespaceScope::Foreign {
+        return Ok("foreign_pid_namespace".to_string());
+    }
+    if !process_is_alive(pid) {
+        return Ok("already_exited".to_string());
+    }
+    signal_run_owner_with_binding(run, || classify_run_owner(run), BoundTarget::bind)
+}
+
+// The binding seam forces exit/reuse during initial identity verification without
+// consuming real PIDs or depending on scheduler timing.
+#[cfg(unix)]
+pub(super) fn signal_run_owner_with_binding<T: TeardownTarget>(
+    run: &JobRun,
+    identity: impl FnOnce() -> OwnerIdentity,
+    bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
+) -> Result<String, OrbitError> {
+    let Some(pid) = run.pid else {
+        return Ok("no_pid".into());
+    };
+    // Acquire before verification: start times have finite resolution and
+    // cannot prove that a handle opened after a probe captures that process.
+    // Defer binding errors until authorization, preserving mismatch outcomes.
+    let target = bind(pid, run.pid_start_time.as_deref());
+    if identity() != OwnerIdentity::Verified {
+        return Ok("owner_identity_mismatch".into());
+    }
+    let Some(mut target) = target? else {
+        return Ok("already_exited".into());
+    };
+    target.prepare()?;
+    let grouped = target.pgid().is_some();
+    let killed = terminate_target(&target, pid)?;
+    Ok(match (grouped, killed) {
+        (true, false) => "terminated_process_group",
+        (true, true) => "killed_process_group",
+        (false, false) => "terminated_owner",
+        (false, true) => "killed_owner",
+    }
+    .into())
+}
+
+#[cfg(not(unix))]
+pub(super) fn signal_run_owner_process(_run: &JobRun) -> Result<String, OrbitError> {
+    Ok("unsupported_platform".to_string())
+}
+
+/// Why a running run's worker cannot be stopped and seen gone from here, or
+/// `None` when it can — or is already gone. Asked before anything is decided
+/// on the strength of the stop, such as releasing the claim the run works
+/// for.
+#[cfg(unix)]
+pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
+    let pid = run.pid?;
+    if pid == std::process::id() {
+        return Some("its worker is this process");
+    }
+    match classify_run_owner(run) {
+        OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
+        OwnerIdentity::Verified => match owner_process_group_id(pid) {
+            Some(pgid) if pgid as u32 == pid => {
+                // SAFETY: `getpgrp` takes no pointer arguments and only reads
+                // the calling process's group id, so it cannot invalidate
+                // memory or deliver a signal. The raw value is compared
+                // directly because the safe `ancestry::current_process_group`
+                // helper maps small pgids to `None`, which would change this
+                // equality check.
+                let this_group = unsafe { libc::getpgrp() };
+                if pgid == this_group {
+                    Some("its worker shares this process's group")
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        OwnerIdentity::LegacyLiveUnverified | OwnerIdentity::ProbeUnavailable => {
+            Some("its worker's process identity cannot be verified")
+        }
+        OwnerIdentity::ForeignPidNamespace => Some("its worker runs in another PID namespace"),
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
+    run.pid.map(|_| "this platform cannot stop a run's worker")
+}
+
+/// [`signal_run_owner_process`], failing unless the worker is seen gone
+/// afterwards: an outcome that signalled nothing it could verify (another
+/// PID namespace, an unverifiable identity, this process) is an error, so
+/// the cancellation stops before the run is finalized.
+pub(super) fn signal_run_owner_confirmed(run: &JobRun) -> Result<String, OrbitError> {
+    let outcome = signal_run_owner_process(run)?;
+    let stopped = matches!(
+        outcome.as_str(),
+        "terminated_process_group"
+            | "killed_process_group"
+            | "terminated_owner"
+            | "killed_owner"
+            | "already_exited"
+            | "no_pid"
+    );
+    if stopped || run_owner_liveness(run) == RunOwnerLiveness::Stopped {
+        return Ok(outcome);
+    }
+    Err(OrbitError::Execution(format!(
+        "could not confirm that the worker of run {} stopped (signal outcome {outcome})",
+        run.run_id
+    )))
+}
+
+/// Stop a provider child recorded on a run's audit trail (TERM, then KILL).
+///
+/// Provider CLIs are spawned in their own process group, so signalling the
+/// run owner's group never reaches them; without this a cancelled run leaves
+/// its agent editing the worktree and spending provider budget after its
+/// reservations were released. Only a process whose recorded start token
+/// still matches is signalled, so a recycled pid is never touched.
+#[cfg(unix)]
+pub(super) fn stop_provider_process(
+    pid: u32,
+    pid_start_time: Option<&str>,
+) -> Result<ProviderStop, OrbitError> {
+    stop_provider_process_with_probe(
+        pid,
+        pid_start_time,
+        orbit_common::process::identity::probe_process_liveness,
+        probe_process_start_identity,
+    )
+}
+
+// Separate probe seams let sibling fault-injection tests exercise a live PID
+// whose identity cannot be read, without changing host probing permissions.
+#[cfg(unix)]
+pub(super) fn stop_provider_process_with_probe<L, I>(
+    pid: u32,
+    pid_start_time: Option<&str>,
+    liveness_probe: L,
+    identity_probe: I,
+) -> Result<ProviderStop, OrbitError>
+where
+    L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+    I: Fn(u32) -> ProbeOutcome,
+{
+    stop_provider_process_with_binding(
+        pid,
+        pid_start_time,
+        liveness_probe,
+        identity_probe,
+        BoundTarget::bind,
+    )
+}
+
+#[cfg(unix)]
+pub(super) fn stop_provider_process_with_binding<L, I, T: TeardownTarget>(
+    pid: u32,
+    pid_start_time: Option<&str>,
+    liveness_probe: L,
+    identity_probe: I,
+    bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
+) -> Result<ProviderStop, OrbitError>
+where
+    L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+    I: Fn(u32) -> ProbeOutcome,
+{
+    use orbit_common::process::identity::ProcessLiveness;
+
+    if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
+        return Ok(ProviderStop::Unverified);
+    }
+    // Retain the identity before either observational probe can race exit and
+    // reuse. An unverified observation still authorizes no signal or error.
+    let target = bind(pid, pid_start_time);
+    match liveness_probe(pid, pid_start_time) {
+        ProcessLiveness::Exited => return Ok(ProviderStop::NotRunning),
+        ProcessLiveness::Unknown => return Ok(ProviderStop::Unverified),
+        ProcessLiveness::Alive => {}
+    }
+    // An unversioned token cannot prove the pid still names the provider.
+    let Some(persisted) = pid_start_time.filter(|token| is_stable_token(token)) else {
+        return Ok(ProviderStop::Unverified);
+    };
+    // Observational Alive is conservative when identity probing fails. It
+    // cannot authorize signalling: require a positively matching live token.
+    match identity_probe(pid) {
+        ProbeOutcome::Token(current) if stable_tokens_match(persisted, &current) => {}
+        ProbeOutcome::Token(_) => return Ok(ProviderStop::NotRunning),
+        ProbeOutcome::NoProcess | ProbeOutcome::Unavailable => {
+            return Ok(ProviderStop::Unverified);
+        }
+    }
+
+    let Some(mut target) = target? else {
+        return Ok(ProviderStop::NotRunning);
+    };
+    target.prepare()?;
+    terminate_target(&target, pid)?;
+    Ok(ProviderStop::Stopped)
+}
+
+#[cfg(unix)]
+fn terminate_target(target: &impl TeardownTarget, pid: u32) -> Result<bool, OrbitError> {
+    target.signal(libc::SIGTERM)?;
+    target.wait(RUN_OWNER_TERMINATION_GRACE)?;
+    if target.liveness()? == (false, false) {
+        return Ok(false);
+    }
+    target.signal(libc::SIGKILL)?;
+    target.wait(RUN_OWNER_TERMINATION_GRACE)?;
+    let (leader_alive, group_alive) = target.liveness()?;
+    if leader_alive || group_alive {
+        return Err(OrbitError::RunCancellationIncomplete {
+            pid,
+            pgid: target.pgid(),
+            term_sent: true,
+            kill_sent: true,
+            leader_alive,
+            group_alive,
+        });
+    }
+    Ok(true)
+}
+
 #[cfg(unix)]
 fn owner_process_group_id(pid: u32) -> Option<libc::pid_t> {
     if pid == 0 || pid > i32::MAX as u32 {
@@ -437,44 +532,6 @@ fn process_group_is_alive(pgid: libc::pid_t) -> bool {
 #[cfg(unix)]
 pub(crate) fn running_run_owner_is_stale(run: &JobRun) -> bool {
     running_run_owner_stale_reason(run).is_some()
-}
-
-/// [ORB-10070] Grace window before an unclaimed `pending` run (no recorded
-/// owner pid) may be treated as orphaned. Pipeline workers claim their queued
-/// run within seconds of spawn, so the window only shields (a) a reconcile
-/// racing that claim and (b) still-live queued runs submitted by binaries
-/// predating the pending-owner claim. A claimed pending run needs no grace:
-/// its owner liveness is probed exactly like a running run's.
-pub(super) const PENDING_RUN_UNCLAIMED_GRACE_MINUTES: i64 = 30;
-
-/// A worker can dispatch a child before another process can reliably probe
-/// its newly recorded PID. Give that running owner a short window to settle
-/// before an orphan sweep is allowed to finalize it.
-#[cfg(unix)]
-pub(super) const RUNNING_RUN_STARTUP_GRACE_SECONDS: i64 = 2;
-
-/// Why a `pending` run is conclusively orphaned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PendingStaleReason {
-    /// A worker claimed the run and that owner process is conclusively gone.
-    #[cfg(unix)]
-    Owner(OwnerIdentity),
-    /// No worker ever claimed the run and the claim window has long passed
-    /// (e.g. the spawned worker died before claiming, or a host reboot killed
-    /// queued workers left by an older binary that never recorded owners).
-    NeverClaimed,
-}
-
-impl PendingStaleReason {
-    /// Stable machine-readable vocabulary persisted in interrupted pipeline
-    /// steps. The diagnostic message may evolve independently of these codes.
-    pub(super) const fn error_code(self) -> &'static str {
-        match self {
-            #[cfg(unix)]
-            Self::Owner(identity) => owner_identity_error_code(Some(identity)),
-            Self::NeverClaimed => "never_claimed",
-        }
-    }
 }
 
 /// Returns `Some(reason)` only when a `pending` run is conclusively orphaned:
@@ -564,38 +621,6 @@ pub(super) fn running_run_owner_stale_reason(run: &JobRun) -> Option<OwnerIdenti
 #[cfg(not(unix))]
 pub(super) fn running_run_owner_stale_reason(_run: &JobRun) -> Option<()> {
     None
-}
-
-/// Outcome of comparing a persisted owner identity against the live process.
-///
-/// Only `Mismatch` and `Missing` warrant finalizing the run as failed.
-///
-/// - `Verified` — versioned token matches the live process: the worker is the
-///   original owner.
-/// - `Mismatch` — versioned persisted token disagrees with the live process's
-///   current token: a different process is holding the PID. Stale.
-/// - `LegacyLiveUnverified` — an unversioned token was persisted, or no token
-///   was persisted, but `kill(pid, 0)` confirms the PID is still alive. Stays
-///   Running; cancellation still refuses to signal it (PID-reuse protection).
-/// - `ProbeUnavailable` — kernel data could not be read or the fallback
-///   `ps` invocation failed, and `kill(pid, 0)` confirms the PID is still alive.
-///   A transient probe failure must never terminalize a live worker.
-/// - `Missing` — no PID recorded, or both the probe and `kill(pid, 0)`
-///   agree the PID is gone. Stale.
-/// - `ForeignPidNamespace` — the owner was recorded in a different PID
-///   namespace than this observer's [ORB-10594]. The recorded PID names a
-///   different process here, or none; nothing probed from this side is
-///   evidence about the owner. Stays Running, and cancellation refuses to
-///   signal (the number would name the wrong process, if any).
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OwnerIdentity {
-    Verified,
-    Mismatch,
-    LegacyLiveUnverified,
-    ProbeUnavailable,
-    ForeignPidNamespace,
-    Missing,
 }
 
 #[cfg(unix)]
@@ -693,31 +718,6 @@ where
     } else {
         OwnerIdentity::Missing
     }
-}
-
-/// [ORB-10597] Whether a run's recorded owner process is still executing,
-/// asked *independently of the run's persisted state*.
-///
-/// Marking a run `interrupted` attaches no teardown, so a terminal state is not
-/// by itself evidence that the work stopped. Callers that must distinguish
-/// "terminal and stopped" from "terminal and still executing" ask this instead
-/// of reading `JobRunState::is_terminal`.
-///
-/// Deliberately three-valued: `Unknown` is not a synonym for either answer, and
-/// each caller picks its own fail-safe direction for it — releasing an
-/// `overlap:forbid` slot requires `Stopped`, refusing a resume requires `Alive`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunOwnerLiveness {
-    /// A process with the recorded identity answers a liveness probe. Work may
-    /// still be in flight no matter what the run record says.
-    Alive,
-    /// Conclusively gone: no PID was ever recorded, the PID is absent, or it
-    /// now names a different process than the one that claimed the run.
-    Stopped,
-    /// Nothing observable from here is evidence either way — the owner was
-    /// recorded in a foreign PID namespace [ORB-10594], or this platform has no
-    /// probe at all.
-    Unknown,
 }
 
 #[cfg(unix)]

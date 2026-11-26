@@ -27,32 +27,6 @@ struct ChaseLink {
     target_base: String,
 }
 
-/// The fields of a payload exactly as `certify_chase` writes it for
-/// `source_id`'s step `step_id`, or `None` for any other shape or run.
-fn chase_link(source_id: &str, step_id: &str, checkpoint: &Value) -> Option<ChaseLink> {
-    let checkpoint_sha = |key: &str| {
-        checkpoint[key]
-            .as_str()
-            .filter(|sha| observation::is_exact_sha(sha))
-            .map(str::to_string)
-    };
-    let target_base = checkpoint_sha("target_base_sha")?;
-    let head = checkpoint_sha("head_sha")?;
-    let shaped = checkpoint["run_id"] == source_id
-        && checkpoint["step_id"] == step_id
-        && checkpoint["base_sha"] == checkpoint["target_base_sha"]
-        && checkpoint_sha("chased_from").is_some()
-        && checkpoint["rewritten"] == true
-        && checkpoint["companion_paths"] == json!([])
-        && checkpoint["recovery_attempt"].as_u64().is_some();
-    shaped.then(|| ChaseLink {
-        head_before: checkpoint_sha("head_sha_before").unwrap_or_default(),
-        remote_before: checkpoint_sha("remote_sha_before"),
-        head,
-        target_base,
-    })
-}
-
 impl OrbitRuntime {
     /// Follow `source_id`'s own host-certified chase checkpoints from the
     /// published head. The first link starts at `published` (its pre-rewrite
@@ -113,4 +87,30 @@ impl OrbitRuntime {
             .filter(|_| head != published)
             .map(|target_base| CertifiedRebaseTip { head, target_base }))
     }
+}
+
+/// The fields of a payload exactly as `certify_chase` writes it for
+/// `source_id`'s step `step_id`, or `None` for any other shape or run.
+fn chase_link(source_id: &str, step_id: &str, checkpoint: &Value) -> Option<ChaseLink> {
+    let checkpoint_sha = |key: &str| {
+        checkpoint[key]
+            .as_str()
+            .filter(|sha| observation::is_exact_sha(sha))
+            .map(str::to_string)
+    };
+    let target_base = checkpoint_sha("target_base_sha")?;
+    let head = checkpoint_sha("head_sha")?;
+    let shaped = checkpoint["run_id"] == source_id
+        && checkpoint["step_id"] == step_id
+        && checkpoint["base_sha"] == checkpoint["target_base_sha"]
+        && checkpoint_sha("chased_from").is_some()
+        && checkpoint["rewritten"] == true
+        && checkpoint["companion_paths"] == json!([])
+        && checkpoint["recovery_attempt"].as_u64().is_some();
+    shaped.then(|| ChaseLink {
+        head_before: checkpoint_sha("head_sha_before").unwrap_or_default(),
+        remote_before: checkpoint_sha("remote_sha_before"),
+        head,
+        target_base,
+    })
 }

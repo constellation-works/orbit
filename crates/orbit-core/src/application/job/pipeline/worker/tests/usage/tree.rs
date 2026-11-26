@@ -285,6 +285,31 @@ use tempfile::TempDir;
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
 use crate::application::job::pipeline::worker::usage::sampler::RunResourceSampler;
 
+struct Fixture {
+    store: Arc<Store>,
+    proc_root: PathBuf,
+    _root: TempDir,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let proc_root = root.path().join("proc");
+        std::fs::create_dir_all(&proc_root).unwrap();
+        let store = Arc::new(Store::open(&root.path().join("orbit.db")).unwrap());
+        Self {
+            store,
+            proc_root,
+            _root: root,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+enum TreeSpawn {
+    Unreadable,
+}
+
 fn start() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 12, 8, 0, 0).unwrap()
 }
@@ -337,26 +362,6 @@ fn alive(processes: &[(u32, u64, u32)]) -> impl FnMut(u32) -> Option<(ProcessSta
                     *ppid,
                 )
             })
-    }
-}
-
-struct Fixture {
-    store: Arc<Store>,
-    proc_root: PathBuf,
-    _root: TempDir,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        let proc_root = root.path().join("proc");
-        std::fs::create_dir_all(&proc_root).unwrap();
-        let store = Arc::new(Store::open(&root.path().join("orbit.db")).unwrap());
-        Self {
-            store,
-            proc_root,
-            _root: root,
-        }
     }
 }
 
@@ -785,11 +790,6 @@ fn defer_unreadable_tree(test: &str) -> bool {
             )
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-enum TreeSpawn {
-    Unreadable,
 }
 
 #[cfg(target_os = "macos")]

@@ -30,20 +30,6 @@ use orbit_types::workflow::activity_job::Provider;
 
 use crate::OrbitRuntime;
 
-fn is_claude(crew: &Crew) -> bool {
-    Provider::parse(&crew.assignment.provider).is_ok_and(|provider| provider == Provider::Claude)
-}
-
-/// A Claude crew that relies on the shared worker credential: one whose
-/// `env` sets neither Claude credential name itself.
-fn uses_shared_claude_credential(crew: &Crew) -> bool {
-    is_claude(crew)
-        && !crew
-            .env
-            .iter()
-            .any(|entry| CLAUDE_CREDENTIAL_ENV.contains(&entry.name.as_str()))
-}
-
 /// Why a crew cannot run on this host.
 enum Unrunnable {
     /// A Claude crew whose composed environment holds no worker credential.
@@ -248,6 +234,20 @@ impl OrbitRuntime {
                 )
             })
     }
+}
+
+fn is_claude(crew: &Crew) -> bool {
+    Provider::parse(&crew.assignment.provider).is_ok_and(|provider| provider == Provider::Claude)
+}
+
+/// A Claude crew that relies on the shared worker credential: one whose
+/// `env` sets neither Claude credential name itself.
+fn uses_shared_claude_credential(crew: &Crew) -> bool {
+    is_claude(crew)
+        && !crew
+            .env
+            .iter()
+            .any(|entry| CLAUDE_CREDENTIAL_ENV.contains(&entry.name.as_str()))
 }
 
 /// One clause per blocked crew; the Claude remediation is named once.

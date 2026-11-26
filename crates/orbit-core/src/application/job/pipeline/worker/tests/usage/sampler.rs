@@ -19,10 +19,6 @@ const CPUS: u64 = 4;
 /// `USER_HZ`: `/proc/stat` ticks per CPU per second.
 const HZ: u64 = 100;
 
-fn start() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 10, 12, 8, 0, 0).unwrap()
-}
-
 struct Fixture {
     root: TempDir,
     database: PathBuf,
@@ -134,6 +130,10 @@ impl Fixture {
         )
         .unwrap();
     }
+}
+
+fn start() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 10, 12, 8, 0, 0).unwrap()
 }
 
 fn at(seconds: i64) -> DateTime<Utc> {

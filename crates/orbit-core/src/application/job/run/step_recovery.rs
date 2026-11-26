@@ -13,17 +13,6 @@ use serde_json::Value;
 
 use crate::runtime::run_input::carried_task_ids;
 
-/// The tasks a run carries, from its persisted input.
-///
-/// Ids are trimmed and empties dropped. A whitespace-only id is gone; a
-/// padded non-empty id is kept in trimmed form.
-fn run_task_ids(run: &JobRun) -> Vec<String> {
-    let Some(input) = run.input.as_ref() else {
-        return Vec::new();
-    };
-    carried_task_ids(input).into_iter().collect()
-}
-
 impl crate::OrbitRuntime {
     /// Authenticate the active run, tasks, and inherited worktree checkpoint
     /// immediately before executor-owned recovery writes Git metadata.
@@ -165,4 +154,15 @@ impl crate::OrbitRuntime {
             run = parent;
         }
     }
+}
+
+/// The tasks a run carries, from its persisted input.
+///
+/// Ids are trimmed and empties dropped. A whitespace-only id is gone; a
+/// padded non-empty id is kept in trimmed form.
+fn run_task_ids(run: &JobRun) -> Vec<String> {
+    let Some(input) = run.input.as_ref() else {
+        return Vec::new();
+    };
+    carried_task_ids(input).into_iter().collect()
 }

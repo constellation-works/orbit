@@ -11,31 +11,6 @@ use orbit_types::workflow::{RESIDENT_SOURCE_REPAIR_PROVENANCE, source_repair_res
 use super::admission::refuse;
 use crate::OrbitRuntime;
 
-fn low_risk(risk: DecisionRiskTier) -> bool {
-    matches!(
-        risk,
-        DecisionRiskTier::Routine | DecisionRiskTier::Reversible
-    )
-}
-
-fn permits_resident_recovery(request: &DecisionRequest) -> bool {
-    request.gate == DecisionGate::BlockTriage
-        && request.raised_by == "final_recovery"
-        && request.human_action.is_none()
-        && !request.answers.is_empty()
-        && low_risk(request.risk_tier)
-        && request.answers.iter().all(|answer| {
-            low_risk(answer.risk_tier)
-                && !matches!(
-                    answer
-                        .option
-                        .as_ref()
-                        .and_then(|option| option.action.as_ref()),
-                    Some(DecisionAction::Archive | DecisionAction::Reject | DecisionAction::Land)
-                )
-        })
-}
-
 impl OrbitRuntime {
     pub(super) fn check_resident_delivery_recovery(
         &self,
@@ -85,4 +60,29 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+}
+
+fn low_risk(risk: DecisionRiskTier) -> bool {
+    matches!(
+        risk,
+        DecisionRiskTier::Routine | DecisionRiskTier::Reversible
+    )
+}
+
+fn permits_resident_recovery(request: &DecisionRequest) -> bool {
+    request.gate == DecisionGate::BlockTriage
+        && request.raised_by == "final_recovery"
+        && request.human_action.is_none()
+        && !request.answers.is_empty()
+        && low_risk(request.risk_tier)
+        && request.answers.iter().all(|answer| {
+            low_risk(answer.risk_tier)
+                && !matches!(
+                    answer
+                        .option
+                        .as_ref()
+                        .and_then(|option| option.action.as_ref()),
+                    Some(DecisionAction::Archive | DecisionAction::Reject | DecisionAction::Land)
+                )
+        })
 }

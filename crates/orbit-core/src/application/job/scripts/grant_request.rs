@@ -40,28 +40,6 @@ use crate::runtime::scripts::ScriptGrantOptions;
 /// The `raised_by` mechanism of a script grant request.
 const SCRIPT_GRANT_MECHANISM: &str = "script_grant";
 
-/// The title of a script's holder task; with the tag it identifies it.
-fn holder_title(script: &str) -> String {
-    format!("Script grant requests: `{script}`")
-}
-
-fn holder_open(task: &Task) -> bool {
-    !matches!(
-        task.status,
-        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-    )
-}
-
-/// The grant provenance an answer surface records: the channel's name for a
-/// decision channel (`decision-channel <name>`), otherwise the surface.
-fn grant_provenance(via: &str) -> String {
-    let mut words = via.split_whitespace();
-    match (words.next(), words.next()) {
-        (Some("decision-channel"), Some(name)) => format!("decision-channel {name}"),
-        _ => via.to_string(),
-    }
-}
-
 /// The request a refusal resolved to.
 #[derive(Debug, Clone)]
 pub struct ScriptGrantRaised {
@@ -472,10 +450,14 @@ impl OrbitRuntime {
                 })
                 .cloned();
             out.push(ScriptGrantOverview {
+                name,
                 state,
                 detail: status.detail.clone(),
                 entry: status.asset.as_ref().map(|asset| asset.spec.entry.clone()),
+                current_digest,
                 granted_digest: status.grant.as_ref().map(|grant| grant.digest.clone()),
+                grant: status.grant.clone(),
+                stale_commit,
                 requested: status
                     .asset
                     .as_ref()
@@ -485,13 +467,9 @@ impl OrbitRuntime {
                     .as_ref()
                     .filter(|_| verified_grant)
                     .map(ScriptGrantCapabilities::of_grant),
-                grant: status.grant.clone(),
-                current_digest,
-                stale_commit,
                 diff,
                 diff_truncated,
                 open_request,
-                name,
             });
         }
         Ok(out)
@@ -593,6 +571,28 @@ impl OrbitRuntime {
         }
         self.verified_script_grant(name)?
             .ok_or_else(|| OrbitError::Execution(format!("script `{name}` grant was not recorded")))
+    }
+}
+
+/// The title of a script's holder task; with the tag it identifies it.
+fn holder_title(script: &str) -> String {
+    format!("Script grant requests: `{script}`")
+}
+
+fn holder_open(task: &Task) -> bool {
+    !matches!(
+        task.status,
+        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
+    )
+}
+
+/// The grant provenance an answer surface records: the channel's name for a
+/// decision channel (`decision-channel <name>`), otherwise the surface.
+fn grant_provenance(via: &str) -> String {
+    let mut words = via.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some("decision-channel"), Some(name)) => format!("decision-channel {name}"),
+        _ => via.to_string(),
     }
 }
 

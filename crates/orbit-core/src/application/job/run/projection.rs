@@ -16,6 +16,11 @@ use crate::runtime::run_input::carried_task_ids;
 
 use super::display_steps::{RunDisplayStep, RunDisplaySteps};
 
+/// Byte cap on a bounded read's agent answer.
+pub const BOUNDED_RUN_ANSWER_MAX_BYTES: usize = 4096;
+/// Step cap on a bounded read's displayed steps.
+pub const BOUNDED_RUN_STEP_LIMIT: usize = 50;
+
 /// Durable provider/model evidence for one completed agent invocation.
 ///
 /// This is intentionally separate from a run's resolved crew: the crew is the
@@ -27,6 +32,123 @@ pub struct ActivityInvocationEvidence {
     pub activity_id: String,
     pub provider: String,
     pub model: Option<String>,
+}
+
+/// Pipeline states for one run-list page, read in one store round-trip.
+///
+/// Every surface that lists runs projects each row with its own state, so a
+/// listing reports the same child dispatches, waiting reasons, trigger and
+/// drain controls as the run itself. The read also covers each listed run's
+/// retry source, whose dispatches a lineage view needs even when that source
+/// is not on the page.
+#[derive(Debug, Default)]
+pub struct JobRunListStates {
+    states: HashMap<String, Option<PipelineState>>,
+}
+
+impl JobRunListStates {
+    /// The persisted state of a run the page read, if it has one.
+    pub fn state(&self, run_id: &str) -> Option<&PipelineState> {
+        self.states.get(run_id).and_then(Option::as_ref)
+    }
+
+    /// Each listed run's state, in listing order.
+    pub fn for_runs<'a>(&'a self, runs: &[JobRun]) -> Vec<Option<&'a PipelineState>> {
+        runs.iter().map(|run| self.state(&run.run_id)).collect()
+    }
+
+    /// The shared row for a listed run, projected with its state.
+    pub fn row(&self, run: &JobRun) -> Value {
+        project_job_run(
+            run,
+            JobRunProjectionProfile::ListRow,
+            JobRunProjectionEvidence {
+                state: self.state(&run.run_id),
+                ..JobRunProjectionEvidence::default()
+            },
+        )
+    }
+}
+
+impl OrbitRuntime {
+    /// Read the pipeline states a run-list page projects: the listed runs'
+    /// and their retry sources'. An empty page reads nothing. A failed read
+    /// is returned, so each surface keeps its own policy for a listing
+    /// without states.
+    pub fn read_job_run_list_states(
+        &self,
+        runs: &[JobRun],
+    ) -> Result<JobRunListStates, OrbitError> {
+        let mut run_ids = runs
+            .iter()
+            .map(|run| run.run_id.clone())
+            .chain(
+                runs.iter()
+                    .filter_map(|run| run.retry_source_run_id.clone()),
+            )
+            .collect::<Vec<_>>();
+        if run_ids.is_empty() {
+            return Ok(JobRunListStates::default());
+        }
+        run_ids.sort_unstable();
+        run_ids.dedup();
+        Ok(JobRunListStates {
+            states: self.read_run_states(&run_ids)?,
+        })
+    }
+}
+
+/// Named wire profiles for run inspection [ORB-24357].
+///
+/// Every profile preserves one established surface shape exactly: which
+/// worker fields ride on the run object, where displayed steps sit, and
+/// which drain/recovery sections the run object carries. Surfaces pick a
+/// profile and keep only input parsing, evidence reads (with their own
+/// degradation/logging) and envelope/text rendering; the JSON policy lives
+/// in [`project_job_run`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobRunProjectionProfile {
+    /// Full detail whose run object keeps its stored `steps`; displayed
+    /// steps are a sibling the caller renders with
+    /// [`display_steps_with_agent_execution_to_json`] (CLI `run show`).
+    FullDetailStoredSteps,
+    /// Full detail whose run object drops `steps`; displayed steps are a
+    /// sibling (HTTP run detail, including the recorded-only variant).
+    FullDetailSiblingSteps,
+    /// Full detail whose run object carries the displayed steps,
+    /// `steps_source`, `drain_last_pass`, `drain_approvals` and
+    /// `recovery_attempts` (workflow tool show/list/observe).
+    FullDetailEmbeddedSteps,
+    /// History list row: provenance sections and `pid` only — no submitted
+    /// input, no `pid_start_time` (CLI `run history`).
+    ListHistory,
+    /// Plain list row: the base projection with no worker fields and no
+    /// provenance sections (HTTP run list via [`JobRunListStates::row`]).
+    ListRow,
+    /// Bounded summary: `id` alias plus `run_id`, core timing/state fields
+    /// and `usage.state = unavailable` (desktop bounded read).
+    BoundedSummary,
+}
+
+/// Evidence a surface gathered for one run, handed to [`project_job_run`].
+///
+/// Gathering stays with the caller because each profile promises a
+/// different read/degradation contract (reconciling vs observed, warn vs
+/// propagate); this struct is the shared input shape so no surface
+/// re-derives the JSON from the pieces.
+#[derive(Clone, Copy, Default)]
+pub struct JobRunProjectionEvidence<'a> {
+    /// The run's persisted pipeline state, when readable.
+    pub state: Option<&'a PipelineState>,
+    /// Activity invocation evidence. `Some` (even empty) renders the
+    /// provenance sections; `None` renders the base projection without them.
+    pub activity_evidence: Option<&'a [ActivityInvocationEvidence]>,
+    /// Displayed steps chosen by `run_display_steps`; required only by
+    /// [`JobRunProjectionProfile::FullDetailEmbeddedSteps`].
+    pub display_steps: Option<&'a RunDisplaySteps>,
+    /// Recovery evidence for the embedded profile; `None` renders the
+    /// explicit `unavailable` shape.
+    pub recovery: Option<&'a RunRecoveryAttempts>,
 }
 
 /// Every activity crew draw the run froze, with the rule that chose it: the
@@ -245,70 +367,6 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     value
 }
 
-/// Pipeline states for one run-list page, read in one store round-trip.
-///
-/// Every surface that lists runs projects each row with its own state, so a
-/// listing reports the same child dispatches, waiting reasons, trigger and
-/// drain controls as the run itself. The read also covers each listed run's
-/// retry source, whose dispatches a lineage view needs even when that source
-/// is not on the page.
-#[derive(Debug, Default)]
-pub struct JobRunListStates {
-    states: HashMap<String, Option<PipelineState>>,
-}
-
-impl JobRunListStates {
-    /// The persisted state of a run the page read, if it has one.
-    pub fn state(&self, run_id: &str) -> Option<&PipelineState> {
-        self.states.get(run_id).and_then(Option::as_ref)
-    }
-
-    /// Each listed run's state, in listing order.
-    pub fn for_runs<'a>(&'a self, runs: &[JobRun]) -> Vec<Option<&'a PipelineState>> {
-        runs.iter().map(|run| self.state(&run.run_id)).collect()
-    }
-
-    /// The shared row for a listed run, projected with its state.
-    pub fn row(&self, run: &JobRun) -> Value {
-        project_job_run(
-            run,
-            JobRunProjectionProfile::ListRow,
-            JobRunProjectionEvidence {
-                state: self.state(&run.run_id),
-                ..JobRunProjectionEvidence::default()
-            },
-        )
-    }
-}
-
-impl OrbitRuntime {
-    /// Read the pipeline states a run-list page projects: the listed runs'
-    /// and their retry sources'. An empty page reads nothing. A failed read
-    /// is returned, so each surface keeps its own policy for a listing
-    /// without states.
-    pub fn read_job_run_list_states(
-        &self,
-        runs: &[JobRun],
-    ) -> Result<JobRunListStates, OrbitError> {
-        let mut run_ids = runs
-            .iter()
-            .map(|run| run.run_id.clone())
-            .chain(
-                runs.iter()
-                    .filter_map(|run| run.retry_source_run_id.clone()),
-            )
-            .collect::<Vec<_>>();
-        if run_ids.is_empty() {
-            return Ok(JobRunListStates::default());
-        }
-        run_ids.sort_unstable();
-        run_ids.dedup();
-        Ok(JobRunListStates {
-            states: self.read_run_states(&run_ids)?,
-        })
-    }
-}
-
 /// Add activity-level provider/model evidence to the stable job-run projection.
 ///
 /// Missing evidence is explicit. It is not filled from the resolved run crew,
@@ -361,59 +419,6 @@ pub fn job_run_to_json_with_activity_provenance(
     })).collect::<Vec<_>>());
     value["activity_provenance"] = Value::Array(activities);
     value
-}
-
-/// Named wire profiles for run inspection [ORB-24357].
-///
-/// Every profile preserves one established surface shape exactly: which
-/// worker fields ride on the run object, where displayed steps sit, and
-/// which drain/recovery sections the run object carries. Surfaces pick a
-/// profile and keep only input parsing, evidence reads (with their own
-/// degradation/logging) and envelope/text rendering; the JSON policy lives
-/// in [`project_job_run`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JobRunProjectionProfile {
-    /// Full detail whose run object keeps its stored `steps`; displayed
-    /// steps are a sibling the caller renders with
-    /// [`display_steps_with_agent_execution_to_json`] (CLI `run show`).
-    FullDetailStoredSteps,
-    /// Full detail whose run object drops `steps`; displayed steps are a
-    /// sibling (HTTP run detail, including the recorded-only variant).
-    FullDetailSiblingSteps,
-    /// Full detail whose run object carries the displayed steps,
-    /// `steps_source`, `drain_last_pass`, `drain_approvals` and
-    /// `recovery_attempts` (workflow tool show/list/observe).
-    FullDetailEmbeddedSteps,
-    /// History list row: provenance sections and `pid` only — no submitted
-    /// input, no `pid_start_time` (CLI `run history`).
-    ListHistory,
-    /// Plain list row: the base projection with no worker fields and no
-    /// provenance sections (HTTP run list via [`JobRunListStates::row`]).
-    ListRow,
-    /// Bounded summary: `id` alias plus `run_id`, core timing/state fields
-    /// and `usage.state = unavailable` (desktop bounded read).
-    BoundedSummary,
-}
-
-/// Evidence a surface gathered for one run, handed to [`project_job_run`].
-///
-/// Gathering stays with the caller because each profile promises a
-/// different read/degradation contract (reconciling vs observed, warn vs
-/// propagate); this struct is the shared input shape so no surface
-/// re-derives the JSON from the pieces.
-#[derive(Clone, Copy, Default)]
-pub struct JobRunProjectionEvidence<'a> {
-    /// The run's persisted pipeline state, when readable.
-    pub state: Option<&'a PipelineState>,
-    /// Activity invocation evidence. `Some` (even empty) renders the
-    /// provenance sections; `None` renders the base projection without them.
-    pub activity_evidence: Option<&'a [ActivityInvocationEvidence]>,
-    /// Displayed steps chosen by `run_display_steps`; required only by
-    /// [`JobRunProjectionProfile::FullDetailEmbeddedSteps`].
-    pub display_steps: Option<&'a RunDisplaySteps>,
-    /// Recovery evidence for the embedded profile; `None` renders the
-    /// explicit `unavailable` shape.
-    pub recovery: Option<&'a RunRecoveryAttempts>,
 }
 
 /// Add the claimed worker's identity and the submitted input a full-detail
@@ -547,11 +552,6 @@ pub fn run_execution_progress_to_json(progress: &RunExecutionProgress) -> Value 
         },
     })
 }
-
-/// Byte cap on a bounded read's agent answer.
-pub const BOUNDED_RUN_ANSWER_MAX_BYTES: usize = 4096;
-/// Step cap on a bounded read's displayed steps.
-pub const BOUNDED_RUN_STEP_LIMIT: usize = 50;
 
 /// Render a bounded read's displayed steps onto its run summary: capped
 /// steps, `steps_source`, `steps_total` (null when the trail is

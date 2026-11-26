@@ -97,6 +97,19 @@ pub(crate) use worker::supervisor::WorkerLaunchError;
 #[cfg(feature = "test-support")]
 pub use worker::supervisor::worker_reap_hook::{WorkerReapPhase, install_worker_reap_hook};
 
+/// [ORB-11998] Run-input field carrying the owning workspace's `.orbit`
+/// directory, as set by routine dispatch (`RuntimeDispatch::submit`). The
+/// executing worker verifies its own resolved workspace against this value
+/// before running any step, so a workspace-routing failure surfaces as a
+/// visibly failed run instead of a silent no-op success.
+pub(crate) const ROUTINE_DISPATCH_ORBIT_DIR_FIELD: &str = "__routine_dispatch_orbit_dir";
+
+/// [ORB-12038] `error_code` recorded on the diagnostic step for a routine-
+/// dispatch workspace mismatch, so `orbit run show` names the cause rather
+/// than an operator finding only a bare `cancelled` state.
+pub(crate) const ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE: &str =
+    "routine_dispatch_workspace_mismatch";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineInvokeResult {
     pub run_id: String,
@@ -124,19 +137,6 @@ pub struct PipelineWorkerLogSnapshot {
     pub path: PathBuf,
     pub content: Option<String>,
 }
-
-/// [ORB-11998] Run-input field carrying the owning workspace's `.orbit`
-/// directory, as set by routine dispatch (`RuntimeDispatch::submit`). The
-/// executing worker verifies its own resolved workspace against this value
-/// before running any step, so a workspace-routing failure surfaces as a
-/// visibly failed run instead of a silent no-op success.
-pub(crate) const ROUTINE_DISPATCH_ORBIT_DIR_FIELD: &str = "__routine_dispatch_orbit_dir";
-
-/// [ORB-12038] `error_code` recorded on the diagnostic step for a routine-
-/// dispatch workspace mismatch, so `orbit run show` names the cause rather
-/// than an operator finding only a bare `cancelled` state.
-pub(crate) const ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE: &str =
-    "routine_dispatch_workspace_mismatch";
 
 /// The refusal for a submission that supplied the reserved trusted-host
 /// admission key it is not entitled to write [ORB-11354].

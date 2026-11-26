@@ -2,6 +2,8 @@ use crate::application::job::pipeline::run_definition_snapshot_path;
 
 use crate::OrbitRuntime;
 
+const SNAPSHOT_YAML: &str = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: snapshot_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: pinned_step\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n";
+
 #[cfg(unix)]
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {
     let root = tempfile::tempdir().expect("create tempdir");
@@ -13,8 +15,6 @@ fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
     (root, runtime)
 }
-
-const SNAPSHOT_YAML: &str = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: snapshot_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: pinned_step\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n";
 
 #[cfg(unix)]
 #[test]

@@ -23,10 +23,6 @@ use orbit_types::workflow::{
 use crate::OrbitRuntime;
 use crate::application::job::JobExperimentPort;
 
-fn refused(message: impl Into<String>) -> OrbitError {
-    OrbitError::PolicyDenied(message.into())
-}
-
 /// One claimed leaf's admission, already checked against the trusted binding.
 pub(crate) struct ClaimedLeaf {
     pub(crate) admission: LocalPullAdmission,
@@ -285,4 +281,8 @@ impl OrbitRuntime {
         }
         Ok(leaf)
     }
+}
+
+fn refused(message: impl Into<String>) -> OrbitError {
+    OrbitError::PolicyDenied(message.into())
 }

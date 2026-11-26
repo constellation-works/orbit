@@ -32,6 +32,18 @@ use crate::application::task::pilot_assessable_status;
 /// always among the newest rows.
 const PILOT_SCAN_LIMIT: usize = 50;
 
+/// Non-JSON plain-string probe used beside the caller's actual string `task_ids`
+/// to distinguish templates that wrap a string input into a JSON array (such as
+/// `["{{ input.task_ids }}"]`) from bare pass-throughs (`{{ input.task_ids }}`)
+/// that only happen to parse when a caller passes JSON text via `--input`.
+const PILOT_TASK_IDS_STRING_PROBE: &str = "__orbit_pilot_task_id_probe__";
+/// JSON-quoted string fragment probe for templates that compose a JSON array
+/// around an unquoted placeholder (such as `[{{ input.task_ids }}]`) when a
+/// caller supplies quoted JSON text via `--input`.
+const PILOT_TASK_IDS_JSON_STRING_PROBE: &str = "\"__orbit_pilot_task_id_probe__\"";
+
+const MAX_JSON_TEMPLATE_DEPTH: usize = 64;
+
 /// Why an explicit pilot submission was refused before any run was created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskPilotRefusal {
@@ -495,210 +507,6 @@ impl OrbitRuntime {
     }
 }
 
-/// Whether admission must ignore this step when looking for a pilot forward.
-///
-/// A missing guard stays active. Anything other than `Ok(true)` does not:
-/// a false guard will not run, and an error cannot be told apart from a
-/// runtime-only `steps`, `item` or `iteration` reference at admission.
-fn pilot_step_when_inactive_at_admission(
-    job_default_input: Option<&Value>,
-    caller_input: &Value,
-    when_expr: Option<&str>,
-) -> bool {
-    let Some(when_expr) = when_expr else {
-        return false;
-    };
-    !matches!(
-        evaluate_job_step_when_at_admission(job_default_input, caller_input, when_expr),
-        Ok(true)
-    )
-}
-
-/// Non-JSON plain-string probe used beside the caller's actual string `task_ids`
-/// to distinguish templates that wrap a string input into a JSON array (such as
-/// `["{{ input.task_ids }}"]`) from bare pass-throughs (`{{ input.task_ids }}`)
-/// that only happen to parse when a caller passes JSON text via `--input`.
-const PILOT_TASK_IDS_STRING_PROBE: &str = "__orbit_pilot_task_id_probe__";
-/// JSON-quoted string fragment probe for templates that compose a JSON array
-/// around an unquoted placeholder (such as `[{{ input.task_ids }}]`) when a
-/// caller supplies quoted JSON text via `--input`.
-const PILOT_TASK_IDS_JSON_STRING_PROBE: &str = "\"__orbit_pilot_task_id_probe__\"";
-
-fn is_prepare_task_pilot_spec(spec: &ActivityV2Spec) -> bool {
-    matches!(
-        spec,
-        ActivityV2Spec::Deterministic(det)
-            if det.action == CoreDeterministicAction::PrepareTaskPilot.name()
-    )
-}
-
-fn default_input_may_use_caller_task_ids(default_input: Option<&Value>) -> bool {
-    match default_input {
-        None => true,
-        Some(Value::String(template)) => {
-            if is_exact_whole_input_template(template) {
-                true
-            } else if let Some(projected_task_ids) =
-                project_json_object_template_field(template, "task_ids")
-            {
-                projected_task_ids
-                    .is_some_and(|raw| template_references_input_field(raw, "task_ids"))
-            } else {
-                template_references_input_field(template, "task_ids")
-            }
-        }
-        Some(Value::Object(map)) => map
-            .get("task_ids")
-            .is_some_and(|entry| value_references_input_field(entry, "task_ids")),
-        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => false,
-    }
-}
-
-fn default_input_renders_invalid_pilot_task_ids(
-    job_default_input: Option<&Value>,
-    caller_input: &Value,
-    step_default_input: Option<&Value>,
-    input_schema: Option<&Value>,
-) -> bool {
-    if !default_input_may_use_caller_task_ids(step_default_input) {
-        return false;
-    }
-    if rendered_step_has_invalid_pilot_task_ids(
-        job_default_input,
-        caller_input,
-        step_default_input,
-        input_schema,
-    ) {
-        return true;
-    }
-    let accepts_string_probe = [
-        PILOT_TASK_IDS_STRING_PROBE,
-        PILOT_TASK_IDS_JSON_STRING_PROBE,
-    ]
-    .into_iter()
-    .any(|probe| {
-        let mut probe_input = caller_input.clone();
-        if let Some(map) = probe_input.as_object_mut() {
-            map.insert("task_ids".to_string(), Value::String(probe.to_string()));
-        }
-        !rendered_step_has_invalid_pilot_task_ids(
-            job_default_input,
-            &probe_input,
-            step_default_input,
-            input_schema,
-        )
-    });
-    !accepts_string_probe
-}
-
-fn rendered_step_has_invalid_pilot_task_ids(
-    job_default_input: Option<&Value>,
-    caller_input: &Value,
-    step_default_input: Option<&Value>,
-    input_schema: Option<&Value>,
-) -> bool {
-    let scoped_object;
-    let candidate = match step_default_input {
-        None => {
-            scoped_object = json!({
-                "task_ids": caller_input.get("task_ids").cloned().unwrap_or(Value::Null)
-            });
-            Some(&scoped_object)
-        }
-        Some(Value::String(template)) => {
-            if let Some(projected_task_ids) =
-                project_json_object_template_field(template, "task_ids")
-            {
-                let Some(raw_task_ids) = projected_task_ids else {
-                    return false;
-                };
-                // Render only `task_ids` so unrelated sibling fields referencing
-                // prior step outputs do not block admission validation.
-                scoped_object = Value::String(format!("{{\"task_ids\":{raw_task_ids}}}"));
-                Some(&scoped_object)
-            } else {
-                step_default_input
-            }
-        }
-        Some(Value::Object(map)) => {
-            let Some(task_ids) = map.get("task_ids") else {
-                return false;
-            };
-            // Render only `task_ids` so unrelated sibling fields referencing
-            // prior step outputs do not block admission validation.
-            scoped_object = json!({ "task_ids": task_ids });
-            Some(&scoped_object)
-        }
-        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => return false,
-    };
-    let Ok(rendered) = render_job_step_input_at_admission(
-        job_default_input,
-        caller_input,
-        candidate,
-        input_schema,
-    ) else {
-        // Templates that depend on runtime-only step/item/iteration outputs
-        // cannot be evaluated at admission; defer to execution rather than
-        // claiming a type mismatch we could not verify.
-        return false;
-    };
-    !rendered_pilot_input_has_valid_task_ids(&rendered)
-}
-
-const MAX_JSON_TEMPLATE_DEPTH: usize = 64;
-
-/// Project the raw value slice of top-level `target_field` from a static-key
-/// JSON-object string template.
-///
-/// Returns `Some(Some(raw_value))` for the final `target_field` entry (matching
-/// `serde_json` last-key-wins semantics), `Some(None)` when the static-key JSON
-/// object has no `target_field` key, and `None` when the template is not a
-/// static-key JSON object (such as `{{ input }}` or dynamic top-level keys) so
-/// callers fall back to rendering the whole template.
-fn project_json_object_template_field<'a>(
-    template: &'a str,
-    target_field: &str,
-) -> Option<Option<&'a str>> {
-    let mut parser = JsonTemplateParser {
-        src: template,
-        pos: 0,
-    };
-    parser.skip_ws();
-    if !parser.eat_byte(b'{') {
-        return None;
-    }
-    parser.skip_ws();
-    let mut projected = None;
-    if !parser.eat_byte(b'}') {
-        loop {
-            parser.skip_ws();
-            let raw_key = parser.parse_template_string()?;
-            if raw_key.contains("{{") {
-                return None;
-            }
-            let key = serde_json::from_str::<String>(raw_key).ok()?;
-            parser.skip_ws();
-            if !parser.eat_byte(b':') {
-                return None;
-            }
-            let value = parser.parse_value(1)?;
-            if key == target_field {
-                projected = Some(value);
-            }
-            parser.skip_ws();
-            if parser.eat_byte(b',') {
-                continue;
-            }
-            if parser.eat_byte(b'}') {
-                break;
-            }
-            return None;
-        }
-    }
-    parser.skip_ws();
-    (parser.pos == template.len()).then_some(projected)
-}
-
 struct JsonTemplateParser<'a> {
     src: &'a str,
     pos: usize,
@@ -877,6 +685,198 @@ impl<'a> JsonTemplateParser<'a> {
         }
         self.pos > start
     }
+}
+
+/// Whether admission must ignore this step when looking for a pilot forward.
+///
+/// A missing guard stays active. Anything other than `Ok(true)` does not:
+/// a false guard will not run, and an error cannot be told apart from a
+/// runtime-only `steps`, `item` or `iteration` reference at admission.
+fn pilot_step_when_inactive_at_admission(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    when_expr: Option<&str>,
+) -> bool {
+    let Some(when_expr) = when_expr else {
+        return false;
+    };
+    !matches!(
+        evaluate_job_step_when_at_admission(job_default_input, caller_input, when_expr),
+        Ok(true)
+    )
+}
+
+fn is_prepare_task_pilot_spec(spec: &ActivityV2Spec) -> bool {
+    matches!(
+        spec,
+        ActivityV2Spec::Deterministic(det)
+            if det.action == CoreDeterministicAction::PrepareTaskPilot.name()
+    )
+}
+
+fn default_input_may_use_caller_task_ids(default_input: Option<&Value>) -> bool {
+    match default_input {
+        None => true,
+        Some(Value::String(template)) => {
+            if is_exact_whole_input_template(template) {
+                true
+            } else if let Some(projected_task_ids) =
+                project_json_object_template_field(template, "task_ids")
+            {
+                projected_task_ids
+                    .is_some_and(|raw| template_references_input_field(raw, "task_ids"))
+            } else {
+                template_references_input_field(template, "task_ids")
+            }
+        }
+        Some(Value::Object(map)) => map
+            .get("task_ids")
+            .is_some_and(|entry| value_references_input_field(entry, "task_ids")),
+        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => false,
+    }
+}
+
+fn default_input_renders_invalid_pilot_task_ids(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    step_default_input: Option<&Value>,
+    input_schema: Option<&Value>,
+) -> bool {
+    if !default_input_may_use_caller_task_ids(step_default_input) {
+        return false;
+    }
+    if rendered_step_has_invalid_pilot_task_ids(
+        job_default_input,
+        caller_input,
+        step_default_input,
+        input_schema,
+    ) {
+        return true;
+    }
+    let accepts_string_probe = [
+        PILOT_TASK_IDS_STRING_PROBE,
+        PILOT_TASK_IDS_JSON_STRING_PROBE,
+    ]
+    .into_iter()
+    .any(|probe| {
+        let mut probe_input = caller_input.clone();
+        if let Some(map) = probe_input.as_object_mut() {
+            map.insert("task_ids".to_string(), Value::String(probe.to_string()));
+        }
+        !rendered_step_has_invalid_pilot_task_ids(
+            job_default_input,
+            &probe_input,
+            step_default_input,
+            input_schema,
+        )
+    });
+    !accepts_string_probe
+}
+
+fn rendered_step_has_invalid_pilot_task_ids(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    step_default_input: Option<&Value>,
+    input_schema: Option<&Value>,
+) -> bool {
+    let scoped_object;
+    let candidate = match step_default_input {
+        None => {
+            scoped_object = json!({
+                "task_ids": caller_input.get("task_ids").cloned().unwrap_or(Value::Null)
+            });
+            Some(&scoped_object)
+        }
+        Some(Value::String(template)) => {
+            if let Some(projected_task_ids) =
+                project_json_object_template_field(template, "task_ids")
+            {
+                let Some(raw_task_ids) = projected_task_ids else {
+                    return false;
+                };
+                // Render only `task_ids` so unrelated sibling fields referencing
+                // prior step outputs do not block admission validation.
+                scoped_object = Value::String(format!("{{\"task_ids\":{raw_task_ids}}}"));
+                Some(&scoped_object)
+            } else {
+                step_default_input
+            }
+        }
+        Some(Value::Object(map)) => {
+            let Some(task_ids) = map.get("task_ids") else {
+                return false;
+            };
+            // Render only `task_ids` so unrelated sibling fields referencing
+            // prior step outputs do not block admission validation.
+            scoped_object = json!({ "task_ids": task_ids });
+            Some(&scoped_object)
+        }
+        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => return false,
+    };
+    let Ok(rendered) = render_job_step_input_at_admission(
+        job_default_input,
+        caller_input,
+        candidate,
+        input_schema,
+    ) else {
+        // Templates that depend on runtime-only step/item/iteration outputs
+        // cannot be evaluated at admission; defer to execution rather than
+        // claiming a type mismatch we could not verify.
+        return false;
+    };
+    !rendered_pilot_input_has_valid_task_ids(&rendered)
+}
+
+/// Project the raw value slice of top-level `target_field` from a static-key
+/// JSON-object string template.
+///
+/// Returns `Some(Some(raw_value))` for the final `target_field` entry (matching
+/// `serde_json` last-key-wins semantics), `Some(None)` when the static-key JSON
+/// object has no `target_field` key, and `None` when the template is not a
+/// static-key JSON object (such as `{{ input }}` or dynamic top-level keys) so
+/// callers fall back to rendering the whole template.
+fn project_json_object_template_field<'a>(
+    template: &'a str,
+    target_field: &str,
+) -> Option<Option<&'a str>> {
+    let mut parser = JsonTemplateParser {
+        src: template,
+        pos: 0,
+    };
+    parser.skip_ws();
+    if !parser.eat_byte(b'{') {
+        return None;
+    }
+    parser.skip_ws();
+    let mut projected = None;
+    if !parser.eat_byte(b'}') {
+        loop {
+            parser.skip_ws();
+            let raw_key = parser.parse_template_string()?;
+            if raw_key.contains("{{") {
+                return None;
+            }
+            let key = serde_json::from_str::<String>(raw_key).ok()?;
+            parser.skip_ws();
+            if !parser.eat_byte(b':') {
+                return None;
+            }
+            let value = parser.parse_value(1)?;
+            if key == target_field {
+                projected = Some(value);
+            }
+            parser.skip_ws();
+            if parser.eat_byte(b',') {
+                continue;
+            }
+            if parser.eat_byte(b'}') {
+                break;
+            }
+            return None;
+        }
+    }
+    parser.skip_ws();
+    (parser.pos == template.len()).then_some(projected)
 }
 
 fn rendered_pilot_input_has_valid_task_ids(rendered: &Value) -> bool {

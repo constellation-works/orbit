@@ -523,13 +523,14 @@ impl OrbitRuntime {
             let (catalog, diagnostics) = self
                 .load_v2_job_catalog_with_diagnostics(dirs.clone())
                 .ok()?;
+            let workspace_index = dirs
+                .iter()
+                .position(|dir| *dir.kind() == V2JobCatalogDirKind::Workspace);
             Some(LoadedV2JobCatalog {
                 catalog,
                 diagnostics,
-                workspace_index: dirs
-                    .iter()
-                    .position(|dir| *dir.kind() == V2JobCatalogDirKind::Workspace),
                 dirs,
+                workspace_index,
             })
         });
         let resolved = match loaded.as_ref().map(|loaded| loaded.resolve(job_id)) {
@@ -581,6 +582,13 @@ impl OrbitRuntime {
         }
         dirs.into_vec()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum V2JobCatalogDirKind {
+    Explicit,
+    Workspace,
+    Global,
 }
 
 /// Remove every job whose auto-task steps fail their load-time checks
@@ -676,13 +684,6 @@ pub(super) fn push_v2_job_env_dirs(
             dirs.push(PathBuf::from(entry), V2JobCatalogDirKind::Explicit);
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum V2JobCatalogDirKind {
-    Explicit,
-    Workspace,
-    Global,
 }
 
 pub(in crate::application::job) fn is_default_job_name(job_id: &str) -> bool {

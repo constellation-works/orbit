@@ -118,19 +118,6 @@ pub(crate) struct RunResourceSampler {
     last_host: Option<(DateTime<Utc>, HostUsageReading)>,
 }
 
-fn positive_usec(duration: TimeDelta) -> Option<u64> {
-    u64::try_from(duration.num_microseconds()?)
-        .ok()
-        .filter(|wall| *wall > 0)
-}
-
-/// Difference of cumulative proportional shares: rounding stays in the interval
-/// and the sum of all segments is exactly the original counter delta.
-fn interval_share(delta: u64, from: u64, to: u64, wall: u64) -> u64 {
-    let scaled = |elapsed| u128::from(delta) * u128::from(elapsed) / u128::from(wall);
-    (scaled(to) - scaled(from)) as u64
-}
-
 impl RunResourceSampler {
     /// A sampler for `run_id` that reads `scope` and `<proc_root>/{stat,meminfo}`.
     /// A run that already has minutes was restarted part way through: it
@@ -580,4 +567,17 @@ impl OrbitRuntime {
             .with_crew_model(run.crew_model.clone()),
         )
     }
+}
+
+fn positive_usec(duration: TimeDelta) -> Option<u64> {
+    u64::try_from(duration.num_microseconds()?)
+        .ok()
+        .filter(|wall| *wall > 0)
+}
+
+/// Difference of cumulative proportional shares: rounding stays in the interval
+/// and the sum of all segments is exactly the original counter delta.
+fn interval_share(delta: u64, from: u64, to: u64, wall: u64) -> u64 {
+    let scaled = |elapsed| u128::from(delta) * u128::from(elapsed) / u128::from(wall);
+    (scaled(to) - scaled(from)) as u64
 }

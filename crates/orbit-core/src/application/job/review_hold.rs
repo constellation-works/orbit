@@ -105,49 +105,6 @@ impl ReviewHold {
     }
 }
 
-fn delivery_run_is_live(run: &JobRun) -> bool {
-    matches!(
-        run.state,
-        JobRunState::Pending | JobRunState::Running | JobRunState::Retrying
-    )
-}
-
-/// The newest `delivery_*` refusal on a held run. `base_chase_exhausted` is a
-/// hold and is not one of these codes.
-fn delivery_refusal_code(run: &JobRun) -> Option<DeliveryRefusal> {
-    if run.state != JobRunState::Held {
-        return None;
-    }
-    run.steps.iter().rev().find_map(|step| {
-        if step.state == JobRunState::Skipped {
-            return None;
-        }
-        let code = step.error_code.as_deref()?;
-        let refusal = DeliveryRefusal::from_error_code(code)?;
-        refusal
-            .error_code()
-            .starts_with("delivery_")
-            .then_some(refusal)
-    })
-}
-
-fn completion_recorded_at(
-    history: &[TaskHistoryEntry],
-    hold: &CompletionHold,
-) -> Option<DateTime<Utc>> {
-    history
-        .iter()
-        .rev()
-        .find_map(|entry| match &entry.decision {
-            Some(TaskDecision::CompletionHeld(recorded))
-                if entry.event == COMPLETION_HELD_EVENT && recorded == hold =>
-            {
-                Some(entry.at)
-            }
-            _ => None,
-        })
-}
-
 impl OrbitRuntime {
     /// The hold keeping `task` in review, if the operator should see one.
     ///
@@ -204,4 +161,47 @@ impl OrbitRuntime {
             next_summary: "Merge the pull request and approve the task".to_string(),
         }))
     }
+}
+
+fn delivery_run_is_live(run: &JobRun) -> bool {
+    matches!(
+        run.state,
+        JobRunState::Pending | JobRunState::Running | JobRunState::Retrying
+    )
+}
+
+/// The newest `delivery_*` refusal on a held run. `base_chase_exhausted` is a
+/// hold and is not one of these codes.
+fn delivery_refusal_code(run: &JobRun) -> Option<DeliveryRefusal> {
+    if run.state != JobRunState::Held {
+        return None;
+    }
+    run.steps.iter().rev().find_map(|step| {
+        if step.state == JobRunState::Skipped {
+            return None;
+        }
+        let code = step.error_code.as_deref()?;
+        let refusal = DeliveryRefusal::from_error_code(code)?;
+        refusal
+            .error_code()
+            .starts_with("delivery_")
+            .then_some(refusal)
+    })
+}
+
+fn completion_recorded_at(
+    history: &[TaskHistoryEntry],
+    hold: &CompletionHold,
+) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.decision {
+            Some(TaskDecision::CompletionHeld(recorded))
+                if entry.event == COMPLETION_HELD_EVENT && recorded == hold =>
+            {
+                Some(entry.at)
+            }
+            _ => None,
+        })
 }

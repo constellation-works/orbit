@@ -6,6 +6,11 @@ use super::{PRESERVED, PreservedPublication};
 use orbit_common::SourceRepairRunStateRefusal;
 use orbit_types::workflow::{self, HeldFailure, JobRunStep};
 
+/// Checkpoints by which a run published to the remote or the forge itself.
+/// A local `commit` is not one: the next adoption re-applies the publication.
+pub(super) const OWN_PUBLICATION_KEYS: [&str; 5] =
+    ["push", "pr_open", "landing_push", "re_push", "re_push_2"];
+
 pub(super) fn preserved_entry(
     record: &PreservedPublication,
 ) -> Result<TaskHistoryEntry, OrbitError> {
@@ -58,11 +63,6 @@ fn repairable_stopped_source(source: &JobRun) -> bool {
     source_owner_is_gone(source)
         && (source.state == JobRunState::Failed || held_for_review_decision(source))
 }
-
-/// Checkpoints by which a run published to the remote or the forge itself.
-/// A local `commit` is not one: the next adoption re-applies the publication.
-pub(super) const OWN_PUBLICATION_KEYS: [&str; 5] =
-    ["push", "pr_open", "landing_push", "re_push", "re_push_2"];
 
 /// `run` stopped `held` because its deferred footprint stayed busy
 /// ([`HeldFailure::FootprintUnavailable`]): no editor started.

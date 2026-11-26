@@ -32,6 +32,54 @@ use crate::application::test_support::{admission_receipt, admission_request};
 use crate::application::tests::run_isolated_test;
 use crate::task_params_test_support::task_create_params;
 
+/// State at the owner transport boundary: a received Release removes the
+/// claim. Retain receipts to exercise an admission whose reply was lost.
+#[derive(Default)]
+struct Owner {
+    receipts: Mutex<BTreeMap<String, AdmissionReceipt>>,
+    claims: Mutex<BTreeSet<String>>,
+}
+
+impl DrainOwnerTransport for Owner {
+    fn call(&self, _selector: &str, name: &str, input: Value) -> Result<Value, OrbitError> {
+        match name {
+            "orbit.drain.receipt.lookup" => {
+                let receipts = self.receipts.lock().unwrap();
+                let receipt = receipts.get(input["request_id"].as_str().unwrap()).unwrap();
+                Ok(json!({"outcome": "found", "receipt": receipt}))
+            }
+            "orbit.drain.claim.settle" => {
+                let settlement: ClaimMutation =
+                    serde_json::from_value(input["settlement"].clone()).unwrap();
+                assert!(matches!(settlement, ClaimMutation::Release(_)), "{input}");
+                assert!(
+                    self.claims
+                        .lock()
+                        .unwrap()
+                        .remove(input["claim_id"].as_str().unwrap()),
+                    "only a live claim can be released: {input}"
+                );
+                Ok(json!({"phase": "revoked"}))
+            }
+            _ => panic!("unexpected owner call: {name}"),
+        }
+    }
+
+    fn show_task(&self, _: &str, _: Value) -> Result<Value, OrbitError> {
+        panic!("cancellation does not read an owner task")
+    }
+
+    fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
+        Arc::new(Self::default())
+    }
+}
+
+impl OwnerCoordinator for Owner {
+    fn call(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        panic!("no worker starts in the stop-time interleaving")
+    }
+}
+
 #[test]
 fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control() {
     if run_isolated_test(std::any::type_name_of_val(
@@ -166,54 +214,6 @@ fn graceful_cancel_initialization_refuses_concurrent_terminalization() {
                 assert_worker_checkpoint_preserved(&state, &checkpoint);
             }
         }
-    }
-}
-
-/// State at the owner transport boundary: a received Release removes the
-/// claim. Retain receipts to exercise an admission whose reply was lost.
-#[derive(Default)]
-struct Owner {
-    receipts: Mutex<BTreeMap<String, AdmissionReceipt>>,
-    claims: Mutex<BTreeSet<String>>,
-}
-
-impl DrainOwnerTransport for Owner {
-    fn call(&self, _selector: &str, name: &str, input: Value) -> Result<Value, OrbitError> {
-        match name {
-            "orbit.drain.receipt.lookup" => {
-                let receipts = self.receipts.lock().unwrap();
-                let receipt = receipts.get(input["request_id"].as_str().unwrap()).unwrap();
-                Ok(json!({"outcome": "found", "receipt": receipt}))
-            }
-            "orbit.drain.claim.settle" => {
-                let settlement: ClaimMutation =
-                    serde_json::from_value(input["settlement"].clone()).unwrap();
-                assert!(matches!(settlement, ClaimMutation::Release(_)), "{input}");
-                assert!(
-                    self.claims
-                        .lock()
-                        .unwrap()
-                        .remove(input["claim_id"].as_str().unwrap()),
-                    "only a live claim can be released: {input}"
-                );
-                Ok(json!({"phase": "revoked"}))
-            }
-            _ => panic!("unexpected owner call: {name}"),
-        }
-    }
-
-    fn show_task(&self, _: &str, _: Value) -> Result<Value, OrbitError> {
-        panic!("cancellation does not read an owner task")
-    }
-
-    fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
-        Arc::new(Self::default())
-    }
-}
-
-impl OwnerCoordinator for Owner {
-    fn call(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
-        panic!("no worker starts in the stop-time interleaving")
     }
 }
 

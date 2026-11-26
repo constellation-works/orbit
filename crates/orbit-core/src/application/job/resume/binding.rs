@@ -8,6 +8,23 @@ use crate::application::task::SYSTEM_ACTOR_LABEL;
 use crate::runtime::run::task_coupling::FINAL_RECOVERY_REQUEUED_EVENT;
 use crate::runtime::run_input::carried_task_ids;
 
+/// The batch/ownership id embedded in the earliest successful checkpoint that
+/// carries one. `worktree_setup` is step 0 of every task pipeline and emits
+/// both `job_run_id` and `batch_id`, so this resolves to the run that actually
+/// owns the reused worktree — which is the id the resumed delivery tail keeps
+/// templating into `git_push` / `pr_open` / `pr_promote`.
+/// Checkpointed output fields that carry the batch/ownership identity a
+/// resumed delivery tail keeps using (`worktree_setup` emits both).
+const OWNERSHIP_ID_FIELDS: [&str; 2] = ["job_run_id", "batch_id"];
+
+/// Fields that name the tasks a reused delivery checkpoint will act on.
+const RESUME_TARGET_ID_FIELDS: &[&str] = &[
+    "task_id",
+    "task_ids",
+    "performed_task_ids",
+    "reused_task_ids",
+];
+
 /// The run a system block attributes itself to, when resume may undo it:
 /// workflow failure or interruption, a final-recovery escalation, or the
 /// run's own failure handoff or expired forge hold, as
@@ -97,15 +114,6 @@ pub(super) fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap
     promoted
 }
 
-/// The batch/ownership id embedded in the earliest successful checkpoint that
-/// carries one. `worktree_setup` is step 0 of every task pipeline and emits
-/// both `job_run_id` and `batch_id`, so this resolves to the run that actually
-/// owns the reused worktree — which is the id the resumed delivery tail keeps
-/// templating into `git_push` / `pr_open` / `pr_promote`.
-/// Checkpointed output fields that carry the batch/ownership identity a
-/// resumed delivery tail keeps using (`worktree_setup` emits both).
-const OWNERSHIP_ID_FIELDS: [&str; 2] = ["job_run_id", "batch_id"];
-
 pub(super) fn checkpoint_ownership_id(state: &PipelineState) -> Option<String> {
     state
         .step_states
@@ -123,14 +131,6 @@ pub(super) fn checkpoint_ownership_id(state: &PipelineState) -> Option<String> {
             })
         })
 }
-
-/// Fields that name the tasks a reused delivery checkpoint will act on.
-const RESUME_TARGET_ID_FIELDS: &[&str] = &[
-    "task_id",
-    "task_ids",
-    "performed_task_ids",
-    "reused_task_ids",
-];
 
 /// Tasks this resume must compare with the lineage binding.
 ///

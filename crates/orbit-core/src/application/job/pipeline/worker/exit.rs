@@ -36,6 +36,47 @@ mod sender_capture {
     const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
     static INSTALL: Once = Once::new();
 
+    struct Line {
+        bytes: [u8; 192],
+        len: usize,
+    }
+
+    impl Default for Line {
+        fn default() -> Self {
+            Self {
+                bytes: [0; 192],
+                len: 0,
+            }
+        }
+    }
+
+    impl Line {
+        fn push(&mut self, bytes: &[u8]) {
+            let room = self.bytes.len() - self.len;
+            let take = bytes.len().min(room);
+            self.bytes[self.len..self.len + take].copy_from_slice(&bytes[..take]);
+            self.len += take;
+        }
+
+        fn push_number(&mut self, mut value: u64) {
+            let mut digits = [0u8; 20];
+            let mut start = digits.len();
+            loop {
+                start -= 1;
+                digits[start] = b'0' + (value % 10) as u8;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            self.push(&digits[start..]);
+        }
+
+        fn bytes(&self) -> &[u8] {
+            &self.bytes[..self.len]
+        }
+    }
+
     pub(super) fn install() {
         INSTALL.call_once(|| {
             for signal in SIGNALS {
@@ -148,47 +189,6 @@ mod sender_capture {
             libc::write(2, line.bytes().as_ptr().cast(), line.bytes().len());
         }
     }
-
-    struct Line {
-        bytes: [u8; 192],
-        len: usize,
-    }
-
-    impl Default for Line {
-        fn default() -> Self {
-            Self {
-                bytes: [0; 192],
-                len: 0,
-            }
-        }
-    }
-
-    impl Line {
-        fn push(&mut self, bytes: &[u8]) {
-            let room = self.bytes.len() - self.len;
-            let take = bytes.len().min(room);
-            self.bytes[self.len..self.len + take].copy_from_slice(&bytes[..take]);
-            self.len += take;
-        }
-
-        fn push_number(&mut self, mut value: u64) {
-            let mut digits = [0u8; 20];
-            let mut start = digits.len();
-            loop {
-                start -= 1;
-                digits[start] = b'0' + (value % 10) as u8;
-                value /= 10;
-                if value == 0 {
-                    break;
-                }
-            }
-            self.push(&digits[start..]);
-        }
-
-        fn bytes(&self) -> &[u8] {
-            &self.bytes[..self.len]
-        }
-    }
 }
 
 use crate::application::job::run::audit_record::SupervisedRuns;
@@ -212,6 +212,10 @@ const OBSERVED_AFTERWARDS: &str = "afterwards its supervisor reaped";
 /// How long a supervisor that lost the race waits for reconciliation's
 /// diagnostic step, which is written just after the interrupted state.
 const RECONCILED_STEP_WAIT: Duration = Duration::from_secs(5);
+
+/// Prefix of the line the worker's handler writes for a signal another
+/// process sent it.
+const SIGNAL_SENDER_MARKER: &str = "orbit pipeline worker terminating signal:";
 
 impl SignalSender {
     /// The sender the worker `worker_pid` wrote to its log, if its last such
@@ -340,10 +344,6 @@ pub(crate) fn note_exit_after_reconciliation(
         return Ok(());
     }
 }
-
-/// Prefix of the line the worker's handler writes for a signal another
-/// process sent it.
-const SIGNAL_SENDER_MARKER: &str = "orbit pipeline worker terminating signal:";
 
 /// Catch SIGTERM, SIGINT and SIGHUP for the rest of this worker process's
 /// life, where each still has its default disposition, to name the sender of

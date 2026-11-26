@@ -103,9 +103,9 @@ fn class_is_captured_once_per_delivery_and_survives_tag_edits() {
     let task = runtime
         .add_task(TaskAddParams {
             title: "Docs audit fixture".into(),
+            tags: tags(&["auto-task:docs-audit", "no-diff-expected"]),
             complexity: TaskComplexity::Medium,
             status: Some(TaskStatus::Backlog),
-            tags: tags(&["auto-task:docs-audit", "no-diff-expected"]),
             ..Default::default()
         })
         .expect("add task");

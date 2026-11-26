@@ -21,6 +21,8 @@
 pub(crate) mod worker_reap_hook {
     use std::sync::{Mutex, PoisonError};
 
+    static HOOK: Mutex<Option<(WorkerReapPhase, Hook)>> = Mutex::new(None);
+
     /// Where the observer stops around reaping its worker.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum WorkerReapPhase {
@@ -33,8 +35,6 @@ pub(crate) mod worker_reap_hook {
     }
 
     type Hook = Box<dyn FnOnce(&str) + Send>;
-
-    static HOOK: Mutex<Option<(WorkerReapPhase, Hook)>> = Mutex::new(None);
 
     /// Run `hook` with the run ID the next time any observer in this process
     /// reaches `phase`. One hook at a time; the last install wins.
@@ -104,27 +104,6 @@ impl WorkerLaunchError {
             Self::NotStarted(error) | Self::Uncertain(error) => error,
         }
     }
-}
-
-/// Transfer ownership to the observer, stopping and reaping an unobserved
-/// child if the channel closed. Even a stopped child may already have run.
-pub(super) fn handoff_worker(
-    sender: mpsc::SyncSender<Child>,
-    child: Child,
-) -> Result<(), WorkerLaunchError> {
-    sender.send(child).map_err(|error| {
-        let cause =
-            OrbitError::Execution(format!("hand pipeline worker to startup observer: {error}"));
-        stop_unobserved_worker(error.0, cause)
-    })
-}
-
-fn stop_unobserved_worker(mut child: Child, error: OrbitError) -> WorkerLaunchError {
-    let stopped = child.kill().and_then(|()| child.wait().map(|_| ()));
-    if let Err(stop_error) = stopped {
-        tracing::error!(worker_pid = child.id(), %stop_error, "could not stop and reap unobserved pipeline worker");
-    }
-    WorkerLaunchError::Uncertain(error)
 }
 
 /// The run-lifecycle steps worker supervision delegates back to its host.
@@ -927,6 +906,27 @@ impl PipelineWorkerSupervisor {
             },
         )
     }
+}
+
+/// Transfer ownership to the observer, stopping and reaping an unobserved
+/// child if the channel closed. Even a stopped child may already have run.
+pub(super) fn handoff_worker(
+    sender: mpsc::SyncSender<Child>,
+    child: Child,
+) -> Result<(), WorkerLaunchError> {
+    sender.send(child).map_err(|error| {
+        let cause =
+            OrbitError::Execution(format!("hand pipeline worker to startup observer: {error}"));
+        stop_unobserved_worker(error.0, cause)
+    })
+}
+
+fn stop_unobserved_worker(mut child: Child, error: OrbitError) -> WorkerLaunchError {
+    let stopped = child.kill().and_then(|()| child.wait().map(|_| ()));
+    if let Err(stop_error) = stopped {
+        tracing::error!(worker_pid = child.id(), %stop_error, "could not stop and reap unobserved pipeline worker");
+    }
+    WorkerLaunchError::Uncertain(error)
 }
 
 #[cfg(unix)]

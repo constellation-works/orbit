@@ -53,13 +53,6 @@ pub(crate) const CANCELLATION_WORKER_EXIT_AUDIT: &str = "pipeline.run.cancel.wor
 #[cfg(unix)]
 const CANCELLATION_SETTLE_GRACE_SECONDS: i64 = 120;
 
-pub(super) fn cancellation_note(actor: &str, reason: Option<&str>) -> String {
-    match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
-        Some(reason) => format!("run cancelled by {actor}: {reason}"),
-        None => format!("run cancelled by {actor}"),
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct CancellationRequest<'a> {
     pub actor: &'a str,
@@ -850,6 +843,19 @@ impl OrbitRuntime {
     }
 }
 
+#[cfg(unix)]
+struct ActiveCancellation {
+    request_id: String,
+    requested_at: Option<DateTime<Utc>>,
+}
+
+pub(super) fn cancellation_note(actor: &str, reason: Option<&str>) -> String {
+    match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        Some(reason) => format!("run cancelled by {actor}: {reason}"),
+        None => format!("run cancelled by {actor}"),
+    }
+}
+
 pub(super) fn cancellation_result(
     run: &JobRun,
     outcome: JobRunCancelOutcome,
@@ -903,12 +909,6 @@ pub(super) fn cancellation_is_settling(store: &Store, run_id: &str) -> Result<bo
     Ok(newest_active_cancellation(store, run_id)?
         .and_then(|active| active.requested_at)
         .is_some_and(|requested_at| Utc::now().signed_duration_since(requested_at) < settle_grace))
-}
-
-#[cfg(unix)]
-struct ActiveCancellation {
-    request_id: String,
-    requested_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(unix)]

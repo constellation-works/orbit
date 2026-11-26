@@ -36,33 +36,6 @@ thread_local! {
     static BACKFILL_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
 }
 
-/// Take and run the backfill hook, if a test installed one [ORB-19623].
-fn notify_backfill_checkpoint() {
-    let hook = BACKFILL_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-/// Run `hook` after the backfill reads a candidate delivery and before it
-/// writes that task's crew, so an explicit crew assignment can land between
-/// the read and the locked write, which must then judge it [ORB-19623].
-#[cfg(feature = "test-support")]
-pub fn with_crew_backfill_checkpoint<T>(
-    hook: impl FnOnce() + 'static,
-    operation: impl FnOnce() -> T,
-) -> T {
-    struct Clear;
-    impl Drop for Clear {
-        fn drop(&mut self) {
-            BACKFILL_HOOK.with(|slot| *slot.borrow_mut() = None);
-        }
-    }
-    BACKFILL_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-    let _guard = Clear;
-    operation()
-}
-
 /// The provenance a crew written back to its task records, and the clause
 /// its history entry explains the change with.
 pub(crate) struct AdmittedCrewSource {
@@ -84,9 +57,10 @@ impl AdmittedCrewSource {
 
     /// Admission drew another crew than the recorded one.
     pub(crate) fn redraw_reason(reason: RedrawReason) -> Self {
+        let cause = format!("at admission ({reason})");
         Self {
-            cause: format!("at admission ({reason})"),
             source: CrewSource::Redraw(reason),
+            cause,
         }
     }
 }
@@ -407,7 +381,6 @@ impl OrbitRuntime {
                         actor: SYSTEM_ACTOR_LABEL.to_string(),
                         crew: Some(Some(crew.to_string())),
                         crew_source: Some(Some(written.source.clone())),
-                        expected_status: Some(vec![current.status]),
                         append_history: vec![TaskHistoryEntry {
                             at: now,
                             by: SYSTEM_ACTOR_LABEL.to_string(),
@@ -437,6 +410,7 @@ impl OrbitRuntime {
                             surface: None,
                             caller: None,
                         }],
+                        expected_status: Some(vec![current.status]),
                         ..Default::default()
                     },
                 )?;
@@ -474,6 +448,33 @@ impl OrbitRuntime {
             .iter()
             .any(|step| step.state == JobRunState::Success && step.target_id.contains("implement")))
     }
+}
+
+/// Take and run the backfill hook, if a test installed one [ORB-19623].
+fn notify_backfill_checkpoint() {
+    let hook = BACKFILL_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// Run `hook` after the backfill reads a candidate delivery and before it
+/// writes that task's crew, so an explicit crew assignment can land between
+/// the read and the locked write, which must then judge it [ORB-19623].
+#[cfg(feature = "test-support")]
+pub fn with_crew_backfill_checkpoint<T>(
+    hook: impl FnOnce() + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            BACKFILL_HOOK.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    BACKFILL_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    let _guard = Clear;
+    operation()
 }
 
 /// The one task a delivery run carries: its selection's task, else the

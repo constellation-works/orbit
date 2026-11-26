@@ -5,100 +5,6 @@ use orbit_types::workflow::SourceRepairSuccessor;
 
 const LINEAGE_WINDOW: usize = 64;
 
-pub(super) fn kept_inline_publication(state: &PipelineState) -> bool {
-    state
-        .failure_activity_checkpoint
-        .as_ref()
-        .is_some_and(|receipt| {
-            matches!(
-                receipt.output["decision"].as_str(),
-                Some("review_completion_failure" | "landing_review_failure")
-            )
-        })
-}
-
-pub(super) fn requires_fresh_rework_authority(source: &JobRun, state: &PipelineState) -> bool {
-    source.state == JobRunState::Success
-        || (source.state == JobRunState::Failed && kept_inline_publication(state))
-}
-
-/// The kept publication's own run applied a final-recovery `resume` in place
-/// and later failed again, after which the final-recovery receipt it inherited
-/// kept the run from settling (`escalated` or `requeued`). Only the host's
-/// receipt on the run's own checkpoints proves this: the decision was applied
-/// to this task by this very run, resumed no host repair commit, and still
-/// stands as that run's one final recovery. Repair of the published head and
-/// its recorded auto-fix chain is then explicit operator work, like any other
-/// kept inline publication; nothing here grants completion or auto-fix.
-pub(super) fn resumed_in_place_publication(
-    source: &JobRun,
-    state: &PipelineState,
-    task_id: &str,
-) -> bool {
-    source.state == JobRunState::Failed
-        && kept_inline_publication(state)
-        && state.run_id == source.run_id
-        && state.final_recovery.as_ref().is_some_and(|checkpoint| {
-            checkpoint.task_id == task_id
-                && checkpoint.key.run_id == source.run_id
-                && matches!(
-                    checkpoint.outcome,
-                    Some(orbit_types::workflow::FinalRecoveryCheckpointOutcome::Resume)
-                )
-                && checkpoint.repair_commit.is_none()
-                && matches!(
-                    checkpoint.decision,
-                    Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
-                )
-        })
-}
-
-/// A kept receipt certifies scope and preservation only. The ordinary host
-/// commit/review/push/PR chain independently authenticates the publication.
-pub(super) fn authenticate_kept_inline_receipt(
-    source: &JobRun,
-    task: &Task,
-    state: &PipelineState,
-    definition: &JobV2,
-) -> Result<(), OrbitError> {
-    let receipt = state
-        .failure_activity_checkpoint
-        .as_ref()
-        .ok_or_else(|| refuse("kept inline publication receipt missing"))?;
-    let output = &receipt.output;
-    let failed = definition
-        .steps
-        .iter()
-        .position(|step| step.id == receipt.failed_step_id)
-        .ok_or_else(|| refuse("kept publication failed step absent from definition"))?;
-    let opened = definition
-        .steps
-        .iter()
-        .position(|step| step.id == "pr_open")
-        .ok_or_else(|| refuse("kept publication lacks original PR step"))?;
-    if definition.failure_activity.as_deref() != Some("pr_failure_handoff")
-        || !definition.resolved_failure_activity.as_ref().is_some_and(|activity|
-            matches!(&activity.spec, ActivityV2Spec::Deterministic(spec) if spec.action == "pr_failure_handoff"))
-        || receipt.activity_name != "pr_failure_handoff"
-        || !kept_inline_publication(state)
-        || field(output, "phase")? != "failure_handoff"
-        || field(output, "failed_step_id")? != receipt.failed_step_id
-        || field(output, "handoff_run_id")? != source.run_id
-        || field(output, "task_id")? != task.id
-        || output["candidate_preserved"] != true
-        || failed <= opened
-        || state.step_states.get(&(failed as u32)) == Some(&JobRunState::Success)
-    {
-        return Err(refuse("kept inline publication ownership or failure proof disagrees"));
-    }
-    if !task.spec_digest_matches(field(output, "task_spec_digest")?) {
-        return Err(refuse(
-            "task specification changed after inline publication",
-        ));
-    }
-    Ok(())
-}
-
 impl OrbitRuntime {
     /// Bind every task delivery since the original publisher, including
     /// retries that reused its checkpoints without rebinding the task. Older
@@ -572,6 +478,100 @@ impl OrbitRuntime {
         }
         Ok(json!({"record":record,"origin":origin,"marker":marker}))
     }
+}
+
+pub(super) fn kept_inline_publication(state: &PipelineState) -> bool {
+    state
+        .failure_activity_checkpoint
+        .as_ref()
+        .is_some_and(|receipt| {
+            matches!(
+                receipt.output["decision"].as_str(),
+                Some("review_completion_failure" | "landing_review_failure")
+            )
+        })
+}
+
+pub(super) fn requires_fresh_rework_authority(source: &JobRun, state: &PipelineState) -> bool {
+    source.state == JobRunState::Success
+        || (source.state == JobRunState::Failed && kept_inline_publication(state))
+}
+
+/// The kept publication's own run applied a final-recovery `resume` in place
+/// and later failed again, after which the final-recovery receipt it inherited
+/// kept the run from settling (`escalated` or `requeued`). Only the host's
+/// receipt on the run's own checkpoints proves this: the decision was applied
+/// to this task by this very run, resumed no host repair commit, and still
+/// stands as that run's one final recovery. Repair of the published head and
+/// its recorded auto-fix chain is then explicit operator work, like any other
+/// kept inline publication; nothing here grants completion or auto-fix.
+pub(super) fn resumed_in_place_publication(
+    source: &JobRun,
+    state: &PipelineState,
+    task_id: &str,
+) -> bool {
+    source.state == JobRunState::Failed
+        && kept_inline_publication(state)
+        && state.run_id == source.run_id
+        && state.final_recovery.as_ref().is_some_and(|checkpoint| {
+            checkpoint.task_id == task_id
+                && checkpoint.key.run_id == source.run_id
+                && matches!(
+                    checkpoint.outcome,
+                    Some(orbit_types::workflow::FinalRecoveryCheckpointOutcome::Resume)
+                )
+                && checkpoint.repair_commit.is_none()
+                && matches!(
+                    checkpoint.decision,
+                    Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+                )
+        })
+}
+
+/// A kept receipt certifies scope and preservation only. The ordinary host
+/// commit/review/push/PR chain independently authenticates the publication.
+pub(super) fn authenticate_kept_inline_receipt(
+    source: &JobRun,
+    task: &Task,
+    state: &PipelineState,
+    definition: &JobV2,
+) -> Result<(), OrbitError> {
+    let receipt = state
+        .failure_activity_checkpoint
+        .as_ref()
+        .ok_or_else(|| refuse("kept inline publication receipt missing"))?;
+    let output = &receipt.output;
+    let failed = definition
+        .steps
+        .iter()
+        .position(|step| step.id == receipt.failed_step_id)
+        .ok_or_else(|| refuse("kept publication failed step absent from definition"))?;
+    let opened = definition
+        .steps
+        .iter()
+        .position(|step| step.id == "pr_open")
+        .ok_or_else(|| refuse("kept publication lacks original PR step"))?;
+    if definition.failure_activity.as_deref() != Some("pr_failure_handoff")
+        || !definition.resolved_failure_activity.as_ref().is_some_and(|activity|
+            matches!(&activity.spec, ActivityV2Spec::Deterministic(spec) if spec.action == "pr_failure_handoff"))
+        || receipt.activity_name != "pr_failure_handoff"
+        || !kept_inline_publication(state)
+        || field(output, "phase")? != "failure_handoff"
+        || field(output, "failed_step_id")? != receipt.failed_step_id
+        || field(output, "handoff_run_id")? != source.run_id
+        || field(output, "task_id")? != task.id
+        || output["candidate_preserved"] != true
+        || failed <= opened
+        || state.step_states.get(&(failed as u32)) == Some(&JobRunState::Success)
+    {
+        return Err(refuse("kept inline publication ownership or failure proof disagrees"));
+    }
+    if !task.spec_digest_matches(field(output, "task_spec_digest")?) {
+        return Err(refuse(
+            "task specification changed after inline publication",
+        ));
+    }
+    Ok(())
 }
 
 /// Whether an out-of-run repair grant names what it resumed delivery for: a

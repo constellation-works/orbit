@@ -92,24 +92,6 @@ impl MuseModelRefusals {
     }
 }
 
-pub(crate) fn is_muse_crew(crew: &Crew) -> bool {
-    Provider::parse(&crew.assignment.provider).is_ok_and(|provider| provider == Provider::Muse)
-}
-
-pub(super) fn model_access_hold(models: &BTreeSet<String>) -> OrbitError {
-    let models = models
-        .iter()
-        .map(|model| format!("`{model}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    OrbitError::ProviderModelAccessHold(format!(
-        "Muse refused access to {models} in this execution context. No eligible configured crew \
-         remains. Select an explicit crew, make an eligible crew available, or run on a host or \
-         provider account with access. A verified successful invocation of the model in this \
-         context clears its refusal."
-    ))
-}
-
 impl OrbitRuntime {
     /// Muse model refusals this follower's own claimed leaves of `task_id`
     /// recorded in the last [`MUSE_MODEL_REFUSAL_WINDOW_HOURS`] hours, net of
@@ -256,4 +238,22 @@ impl OrbitRuntime {
         });
         Ok(MuseModelRefusals(refusals))
     }
+}
+
+pub(crate) fn is_muse_crew(crew: &Crew) -> bool {
+    Provider::parse(&crew.assignment.provider).is_ok_and(|provider| provider == Provider::Muse)
+}
+
+pub(super) fn model_access_hold(models: &BTreeSet<String>) -> OrbitError {
+    let models = models
+        .iter()
+        .map(|model| format!("`{model}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    OrbitError::ProviderModelAccessHold(format!(
+        "Muse refused access to {models} in this execution context. No eligible configured crew \
+         remains. Select an explicit crew, make an eligible crew available, or run on a host or \
+         provider account with access. A verified successful invocation of the model in this \
+         context clears its refusal."
+    ))
 }

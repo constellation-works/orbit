@@ -19,37 +19,6 @@ use crate::application::contracts::{
 };
 use crate::application::task::BASELINE_RED_REPAIR_TAG;
 
-/// The purpose `tags` name for a task's crew: an explicit
-/// `crew-purpose:<purpose>` tag naming a `workflow.purpose_crews` purpose,
-/// else the system tag the task was filed with.
-pub(crate) fn task_crew_purpose(tags: &[String]) -> Option<CrewPurpose> {
-    tags.iter()
-        .filter_map(|tag| tag.strip_prefix(CREW_PURPOSE_TAG_PREFIX))
-        .filter_map(CrewPurpose::parse)
-        .find(|purpose| purpose.has_purpose_key())
-        .or_else(|| tags.iter().find_map(|tag| system_tag_purpose(tag)))
-}
-
-fn system_tag_purpose(tag: &str) -> Option<CrewPurpose> {
-    match tag {
-        BASELINE_RED_REPAIR_TAG => Some(CrewPurpose::BaselineRedRepair),
-        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_SCANNING_TAG => Some(CrewPurpose::SweepTasks),
-        _ if tag.starts_with(RECONCILIATION_FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
-        _ => None,
-    }
-}
-
-/// The complexity pool an activity purpose draws from while its own pool is
-/// unset: the pool its activities named before purposes existed. `None` for
-/// a purpose no activity dispatches under a `workflow.purpose_crews` key.
-pub(super) fn activity_fallback_tier(purpose: CrewPurpose) -> Option<TaskComplexity> {
-    match purpose {
-        CrewPurpose::TaskPilot | CrewPurpose::AutoFix => Some(TaskComplexity::Low),
-        CrewPurpose::FailureRecovery => Some(TaskComplexity::Medium),
-        _ => None,
-    }
-}
-
 impl OrbitRuntime {
     /// The enabled members of `purpose`'s `workflow.purpose_crews` pool, with
     /// the source a draw over them records.
@@ -146,5 +115,36 @@ impl OrbitRuntime {
             return Ok(None);
         };
         self.purpose_pool_candidates(purpose, false)
+    }
+}
+
+/// The purpose `tags` name for a task's crew: an explicit
+/// `crew-purpose:<purpose>` tag naming a `workflow.purpose_crews` purpose,
+/// else the system tag the task was filed with.
+pub(crate) fn task_crew_purpose(tags: &[String]) -> Option<CrewPurpose> {
+    tags.iter()
+        .filter_map(|tag| tag.strip_prefix(CREW_PURPOSE_TAG_PREFIX))
+        .filter_map(CrewPurpose::parse)
+        .find(|purpose| purpose.has_purpose_key())
+        .or_else(|| tags.iter().find_map(|tag| system_tag_purpose(tag)))
+}
+
+fn system_tag_purpose(tag: &str) -> Option<CrewPurpose> {
+    match tag {
+        BASELINE_RED_REPAIR_TAG => Some(CrewPurpose::BaselineRedRepair),
+        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_SCANNING_TAG => Some(CrewPurpose::SweepTasks),
+        _ if tag.starts_with(RECONCILIATION_FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
+        _ => None,
+    }
+}
+
+/// The complexity pool an activity purpose draws from while its own pool is
+/// unset: the pool its activities named before purposes existed. `None` for
+/// a purpose no activity dispatches under a `workflow.purpose_crews` key.
+pub(super) fn activity_fallback_tier(purpose: CrewPurpose) -> Option<TaskComplexity> {
+    match purpose {
+        CrewPurpose::TaskPilot | CrewPurpose::AutoFix => Some(TaskComplexity::Low),
+        CrewPurpose::FailureRecovery => Some(TaskComplexity::Medium),
+        _ => None,
     }
 }

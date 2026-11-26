@@ -78,11 +78,13 @@ impl OrbitRuntime {
         };
 
         let job_layer = self.catalog_layer_of(&job_path);
+        let reference = format!("job:{job_id}");
+        let shadows = shadowed_by(plugin_names.jobs.get(job_id), &job_layer);
         let mut rows = vec![CatalogReferenceLayer {
-            reference: format!("job:{job_id}"),
-            shadows: shadowed_by(plugin_names.jobs.get(job_id), &job_layer),
+            reference,
             layer: job_layer,
             path: Some(job_path),
+            shadows,
         }];
 
         let catalog = self.v2_activity_catalog().ok();
@@ -95,11 +97,13 @@ impl OrbitRuntime {
                 .as_ref()
                 .map(|path| self.catalog_layer_of(path))
                 .unwrap_or_else(|| "unresolved".to_string());
+            let reference = format!("activity:{name}");
+            let shadows = shadowed_by(plugin_names.activities.get(&name), &layer);
             rows.push(CatalogReferenceLayer {
-                reference: format!("activity:{name}"),
-                shadows: shadowed_by(plugin_names.activities.get(&name), &layer),
+                reference,
                 layer,
                 path,
+                shadows,
             });
         }
         Ok(rows)

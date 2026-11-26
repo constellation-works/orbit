@@ -93,14 +93,14 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                     run_id: run.run_id.clone(),
                     job_name: run.job_id.clone(),
                     success: false,
-                    pipeline,
                     evidence_hold: hold,
                     forge_hold: None,
                     child_cancelled: false,
+                    pipeline,
                     message: (!held).then(|| message.into()),
                     failure_code: None,
-                    parked: None,
                     events_emitted: 0,
+                    parked: None,
                 };
                 let database = orbit_config::resolved_audit_db_path(
                     &orbit_common::Env::capture(),
@@ -260,14 +260,14 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
                 run_id: run.run_id.clone(),
                 job_name: run.job_id.clone(),
                 success: false,
-                pipeline: json!({}),
                 evidence_hold: None,
                 forge_hold: None,
                 child_cancelled: false,
+                pipeline: json!({}),
                 message: Some(limit.into()),
                 failure_code: None,
-                parked: None,
                 events_emitted: 0,
+                parked: None,
             };
             let error = crate::OrbitError::Execution(limit.into());
             let outcome = if as_error { Err(&error) } else { Ok(&result) };
@@ -384,14 +384,14 @@ fn code_only_hold_is_audited_held_and_finalizes_held() {
         run_id: run.run_id.clone(),
         job_name: run.job_id.clone(),
         success: false,
-        pipeline: json!({}),
         evidence_hold: None,
         forge_hold: None,
         child_cancelled: false,
+        pipeline: json!({}),
         message: Some(message.into()),
         failure_code: Some(StepFailureCode::OwnerSignoffRequired),
-        parked: None,
         events_emitted: 0,
+        parked: None,
     };
     runtime
         .finalize_v2_pipeline_run(
@@ -478,14 +478,14 @@ fn detached_worker_persists_unrecognized_audit_step_outcomes_as_failed() {
         run_id: run.run_id.clone(),
         job_name: run.job_id.clone(),
         success: true,
-        pipeline: json!({}),
         evidence_hold: None,
         forge_hold: None,
         child_cancelled: false,
+        pipeline: json!({}),
         message: None,
         failure_code: None,
-        parked: None,
         events_emitted: 0,
+        parked: None,
     };
     runtime
         .finalize_v2_pipeline_run(

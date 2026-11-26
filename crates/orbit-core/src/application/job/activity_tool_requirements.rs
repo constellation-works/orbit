@@ -22,6 +22,31 @@ use crate::OrbitRuntime;
 /// The activity whose tool contract `required_tools` and `granted_tools` name.
 pub(crate) const IMPLEMENTING_ACTIVITY: &str = "agent_implement";
 
+#[cfg(test)]
+thread_local! {
+    static GRANT_CLASSIFICATION_OVERRIDE: RefCell<Option<(String, ToolGrantClassification)>> =
+        const { RefCell::new(None) };
+}
+
+/// Shipped agent activities that are not the task's implementer.
+///
+/// These activities still validate every requirement, but a tool their
+/// disallow list covers is omitted. A name absent from this list, including
+/// a custom implementer, keeps fail-closed admission. Add a new shipped
+/// recovery or review activity here when it should start even though the
+/// task requires a tool it disallows.
+const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
+    "agent_review_repair",
+    "final_recovery",
+    "image_input_probe",
+    "pr_conflict_recovery",
+    "resident_cycle",
+    "review_reconciliation_review",
+    "step_failure_recovery",
+    "task_pilot",
+    "triage_escalation",
+];
+
 /// How a disallow entry relates to a grant, using the same order admission uses.
 ///
 /// `NotCovered` and [`DisallowGrant::Liftable`] may be required. The other
@@ -38,6 +63,17 @@ pub(crate) enum DisallowGrant {
     OperatorOnly,
     /// An exact grant would still leave a wildcard entry covering the name.
     Wildcard { entry: String },
+}
+
+/// Clears [`set_grant_classification_override`] on drop.
+#[cfg(test)]
+pub(crate) struct GrantClassificationOverrideGuard;
+
+#[cfg(test)]
+impl Drop for GrantClassificationOverrideGuard {
+    fn drop(&mut self) {
+        GRANT_CLASSIFICATION_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+    }
 }
 
 /// Classify `tool_name` against `disallow_list` the way implementer admission
@@ -82,12 +118,6 @@ pub(crate) fn agent_tool_grant_classification(tool_name: &str) -> ToolGrantClass
     authorization::classify_agent_tool_grant(tool_name)
 }
 
-#[cfg(test)]
-thread_local! {
-    static GRANT_CLASSIFICATION_OVERRIDE: RefCell<Option<(String, ToolGrantClassification)>> =
-        const { RefCell::new(None) };
-}
-
 /// Install a one-tool classification override for the current thread and
 /// clear it when the guard drops, including on panic.
 #[cfg(test)]
@@ -99,17 +129,6 @@ pub(crate) fn set_grant_classification_override(
         *slot.borrow_mut() = Some((tool_name.to_string(), classification));
     });
     GrantClassificationOverrideGuard
-}
-
-/// Clears [`set_grant_classification_override`] on drop.
-#[cfg(test)]
-pub(crate) struct GrantClassificationOverrideGuard;
-
-#[cfg(test)]
-impl Drop for GrantClassificationOverrideGuard {
-    fn drop(&mut self) {
-        GRANT_CLASSIFICATION_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
-    }
 }
 
 /// Why `required_tools` cannot name `tool_name` on `activity`'s disallow list.
@@ -171,25 +190,6 @@ pub(crate) fn implementing_activity_disallow_list(
     };
     Ok(spec.tool_disallow_list.clone())
 }
-
-/// Shipped agent activities that are not the task's implementer.
-///
-/// These activities still validate every requirement, but a tool their
-/// disallow list covers is omitted. A name absent from this list, including
-/// a custom implementer, keeps fail-closed admission. Add a new shipped
-/// recovery or review activity here when it should start even though the
-/// task requires a tool it disallows.
-const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
-    "agent_review_repair",
-    "final_recovery",
-    "image_input_probe",
-    "pr_conflict_recovery",
-    "resident_cycle",
-    "review_reconciliation_review",
-    "step_failure_recovery",
-    "task_pilot",
-    "triage_escalation",
-];
 
 /// Whether a deny-mode activity omits covered task requirements rather than
 /// refusing admission. Implementers retain the fail-closed default.

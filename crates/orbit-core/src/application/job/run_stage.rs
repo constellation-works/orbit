@@ -16,48 +16,6 @@ use crate::application::job::JobDrainPort;
 use crate::application::job::run_display_steps;
 use crate::application::task::{TaskRow, job_run_is_locally_navigable};
 
-fn eligible(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::InProgress | TaskStatus::Review)
-}
-
-/// The stage list for a run whose leaf stage is all the owner knows.
-fn claimed_stage_value(stage: ClaimedLeafStage, run_state: &str) -> Value {
-    let (implementing, reviewing) = match stage {
-        ClaimedLeafStage::Implementing => ("current", "future"),
-        ClaimedLeafStage::Reviewing => ("past", "current"),
-    };
-    json!({
-        "stage": stage.as_str(),
-        "stage_label": stage.display_label(),
-        "step_id": null,
-        "step_state": null,
-        "run_state": run_state,
-        "started_at": null,
-        "step_index": null,
-        "step_count": null,
-        "stages": [
-            { "id": "implementing", "label": "Implementing", "state": implementing },
-            { "id": "reviewing", "label": "Reviewing", "state": reviewing },
-        ],
-    })
-}
-
-/// One stage segment: its state relative to the current step position in
-/// the job's flattened step order. A stage whose steps straddle the
-/// current position (the claimed pipeline validates both before and after
-/// its review) has already been visited, so it reads `past`.
-fn stage_state(positions: &[usize], current: usize) -> &'static str {
-    if positions.contains(&current) {
-        "current"
-    } else if positions.iter().all(|position| *position < current) {
-        "past"
-    } else if positions.iter().all(|position| *position > current) {
-        "future"
-    } else {
-        "past"
-    }
-}
-
 impl OrbitRuntime {
     /// `job_run_stage` for one task row: the current stage, step and run
     /// state, and the ordered stage list with past/current/future states.
@@ -177,5 +135,47 @@ impl OrbitRuntime {
             "step_count": step_count,
             "stages": stages,
         }))
+    }
+}
+
+fn eligible(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::InProgress | TaskStatus::Review)
+}
+
+/// The stage list for a run whose leaf stage is all the owner knows.
+fn claimed_stage_value(stage: ClaimedLeafStage, run_state: &str) -> Value {
+    let (implementing, reviewing) = match stage {
+        ClaimedLeafStage::Implementing => ("current", "future"),
+        ClaimedLeafStage::Reviewing => ("past", "current"),
+    };
+    json!({
+        "stage": stage.as_str(),
+        "stage_label": stage.display_label(),
+        "step_id": null,
+        "step_state": null,
+        "run_state": run_state,
+        "started_at": null,
+        "step_index": null,
+        "step_count": null,
+        "stages": [
+            { "id": "implementing", "label": "Implementing", "state": implementing },
+            { "id": "reviewing", "label": "Reviewing", "state": reviewing },
+        ],
+    })
+}
+
+/// One stage segment: its state relative to the current step position in
+/// the job's flattened step order. A stage whose steps straddle the
+/// current position (the claimed pipeline validates both before and after
+/// its review) has already been visited, so it reads `past`.
+fn stage_state(positions: &[usize], current: usize) -> &'static str {
+    if positions.contains(&current) {
+        "current"
+    } else if positions.iter().all(|position| *position < current) {
+        "past"
+    } else if positions.iter().all(|position| *position > current) {
+        "future"
+    } else {
+        "past"
     }
 }

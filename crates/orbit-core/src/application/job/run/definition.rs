@@ -15,40 +15,6 @@ use orbit_types::workflow::{JobRun, JobV2};
 
 use crate::OrbitRuntime;
 
-/// Turn a persisted run ID into a filename only after rejecting path syntax.
-///
-/// Run IDs normally come from the store, but worker entry points also accept
-/// an ID from a process argument. Keeping this check at the shared filename
-/// boundary prevents either source from steering pipeline artifacts outside
-/// their owning directory.
-pub(in crate::application::job) fn pipeline_worker_file_name(
-    run_id: &str,
-    suffix: &str,
-) -> Result<String, OrbitError> {
-    let safe = !run_id.is_empty()
-        && run_id != "."
-        && run_id != ".."
-        && !run_id.contains(['/', '\\'])
-        && run_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
-    if !safe {
-        return Err(OrbitError::InvalidInput(format!(
-            "job run id must be a safe filename stem: {run_id}"
-        )));
-    }
-
-    Ok(format!("{run_id}{suffix}"))
-}
-
-/// Where a submitted run's pinned job definition lives.
-pub(crate) fn run_definition_snapshot_path(
-    job_runs_dir: &Path,
-    run_id: &str,
-) -> Result<PathBuf, OrbitError> {
-    Ok(job_runs_dir.join(pipeline_worker_file_name(run_id, ".job.yaml")?))
-}
-
 impl OrbitRuntime {
     /// The YAML pinned beside `run_id`, when this run has one.
     ///
@@ -105,4 +71,38 @@ impl OrbitRuntime {
         }
         self.load_v2_job_asset_by_name(&run.job_id)
     }
+}
+
+/// Turn a persisted run ID into a filename only after rejecting path syntax.
+///
+/// Run IDs normally come from the store, but worker entry points also accept
+/// an ID from a process argument. Keeping this check at the shared filename
+/// boundary prevents either source from steering pipeline artifacts outside
+/// their owning directory.
+pub(in crate::application::job) fn pipeline_worker_file_name(
+    run_id: &str,
+    suffix: &str,
+) -> Result<String, OrbitError> {
+    let safe = !run_id.is_empty()
+        && run_id != "."
+        && run_id != ".."
+        && !run_id.contains(['/', '\\'])
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !safe {
+        return Err(OrbitError::InvalidInput(format!(
+            "job run id must be a safe filename stem: {run_id}"
+        )));
+    }
+
+    Ok(format!("{run_id}{suffix}"))
+}
+
+/// Where a submitted run's pinned job definition lives.
+pub(crate) fn run_definition_snapshot_path(
+    job_runs_dir: &Path,
+    run_id: &str,
+) -> Result<PathBuf, OrbitError> {
+    Ok(job_runs_dir.join(pipeline_worker_file_name(run_id, ".job.yaml")?))
 }

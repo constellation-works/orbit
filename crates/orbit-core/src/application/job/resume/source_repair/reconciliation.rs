@@ -2,34 +2,6 @@
 use super::super::plan::RESUME_LINEAGE_SCAN_LIMIT;
 use super::*;
 
-/// Permit only filling the missing lifecycle prerequisite. Reconstruct the
-/// two unauthored plan forms in memory and compare the entire original task
-/// digest; never write the old plan back or ignore any other meaning field.
-pub(super) fn validate_source_repair_plan_correction(
-    task: &Task,
-    original: &SourceRepairAdmission,
-    binding: &SourceRepairBinding,
-) -> Result<(), OrbitError> {
-    crate::application::task::ensure_task_has_execution_plan(&task.id, &task.plan)?;
-    let mut unchanged = binding.clone();
-    unchanged.task_digest = original.binding.task_digest.clone();
-    if unchanged != original.binding {
-        return Err(refuse(
-            "reconciliation cannot change source, PR, head, lease or stopped lineage",
-        ));
-    }
-    let mut before = task.clone();
-    for plan in ["", "To be authored by executing agent at start time."] {
-        before.plan = plan.into();
-        if task_digest(&before)? == original.binding.task_digest {
-            return Ok(());
-        }
-    }
-    Err(refuse(
-        "reconciliation permits only correction of an empty or placeholder plan; unrelated task meaning changed",
-    ))
-}
-
 impl OrbitRuntime {
     pub(super) fn source_repair_reservation_digests(
         &self,
@@ -115,4 +87,32 @@ impl OrbitRuntime {
         }
         Ok(child)
     }
+}
+
+/// Permit only filling the missing lifecycle prerequisite. Reconstruct the
+/// two unauthored plan forms in memory and compare the entire original task
+/// digest; never write the old plan back or ignore any other meaning field.
+pub(super) fn validate_source_repair_plan_correction(
+    task: &Task,
+    original: &SourceRepairAdmission,
+    binding: &SourceRepairBinding,
+) -> Result<(), OrbitError> {
+    crate::application::task::ensure_task_has_execution_plan(&task.id, &task.plan)?;
+    let mut unchanged = binding.clone();
+    unchanged.task_digest = original.binding.task_digest.clone();
+    if unchanged != original.binding {
+        return Err(refuse(
+            "reconciliation cannot change source, PR, head, lease or stopped lineage",
+        ));
+    }
+    let mut before = task.clone();
+    for plan in ["", "To be authored by executing agent at start time."] {
+        before.plan = plan.into();
+        if task_digest(&before)? == original.binding.task_digest {
+            return Ok(());
+        }
+    }
+    Err(refuse(
+        "reconciliation permits only correction of an empty or placeholder plan; unrelated task meaning changed",
+    ))
 }

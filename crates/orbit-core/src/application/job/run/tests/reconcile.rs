@@ -27,6 +27,19 @@ use crate::OrbitRuntime;
 use crate::application::job::run::worker_exit::WORKER_EXIT_AUDIT;
 use crate::application::tests::run_isolated_test;
 
+/// What preservation must not change: the branch, both distinct file versions,
+/// and the status that names them.
+struct CandidateFingerprint {
+    head: String,
+    branch: String,
+    status: Vec<u8>,
+    staged_diff: Vec<u8>,
+    working_diff: Vec<u8>,
+    index_file: Vec<u8>,
+    worktree_file: Vec<u8>,
+    commits: String,
+}
+
 /// A process alone in its own group, as a pipeline worker runs.
 fn spawn_process() -> Child {
     let mut command = Command::new("sleep");
@@ -523,19 +536,6 @@ fn reconciliation_holds_a_worker_the_host_manager_stopped() {
             assert!(counted, "{} must count as a failure", case.label);
         }
     }
-}
-
-/// What preservation must not change: the branch, both distinct file versions,
-/// and the status that names them.
-struct CandidateFingerprint {
-    head: String,
-    branch: String,
-    status: Vec<u8>,
-    staged_diff: Vec<u8>,
-    working_diff: Vec<u8>,
-    index_file: Vec<u8>,
-    worktree_file: Vec<u8>,
-    commits: String,
 }
 
 fn candidate_fingerprint(repo: &std::path::Path) -> CandidateFingerprint {

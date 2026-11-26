@@ -96,6 +96,11 @@ impl Drop for WorkerLifetime {
     }
 }
 
+pub(crate) struct WorkerLogProvenance {
+    pub(crate) description: String,
+    pub(crate) reaped: Option<WorkerExit>,
+}
+
 /// Save a reap before the fallible audit insert, through the retained log FD.
 pub(crate) fn record_worker_reap(file: &mut File, exit: &WorkerExit) {
     write_log_receipt(file, REAPED_MARKER, exit);
@@ -117,11 +122,6 @@ fn bounded_provenance(text: &str) -> String {
     } else {
         text
     }
-}
-
-pub(crate) struct WorkerLogProvenance {
-    pub(crate) description: String,
-    pub(crate) reaped: Option<WorkerExit>,
 }
 
 /// Log receipts are diagnostic only: validate run, PID, start identity and
