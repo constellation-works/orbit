@@ -122,6 +122,11 @@ pub(in crate::application) trait JobPullSettlementPort {
     /// run is not a claimed leaf or its admission no longer holds a slot.
     fn deliver_leaf_settlement(&self, run_id: &str) -> Option<PullSettlementEntry>;
 
+    /// Run terminalization's settlement step: record terminal claimed leaf
+    /// `run_id`'s settlement, and deliver it from the leaf's own bound worker.
+    /// Best effort, so a run always reaches its terminal state.
+    fn settle_terminalized_leaf(&self, run_id: &str, diagnostic: Option<(&str, &str)>);
+
     /// Retry, from the leaf's own worker, a settlement claimed leaf `run_id`
     /// recorded but did not deliver.
     fn retry_leaf_settlement(&self, run_id: &str);

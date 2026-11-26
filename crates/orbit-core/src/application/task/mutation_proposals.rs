@@ -168,7 +168,8 @@ impl OrbitRuntime {
                 "`{call}` is classified read/repeat-safe; its grant makes it callable directly"
             ));
         }
-        self.authorize_registered_tool(
+        ToolInvocationPort::authorize_tool(
+            self,
             &operation,
             &operation_input,
             &agent_tool_context(),

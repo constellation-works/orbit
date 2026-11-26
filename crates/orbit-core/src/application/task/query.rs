@@ -114,13 +114,7 @@ impl OrbitRuntime {
         id: &str,
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
-        orbit_types::task::validate_relative_artifact_path(path)?;
-        let task = self.get_task(id)?;
-        let artifact = self.get_task_artifact(&task.id, path)?;
-        if let Some(artifact) = &artifact {
-            artifact.validate_inline_size(&task.id)?;
-        }
-        Ok(artifact)
+        self.stored().task().artifact_inline(id, path)
     }
 
     pub fn get_task_comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {

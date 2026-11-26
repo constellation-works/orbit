@@ -2,7 +2,7 @@
 title: "Bounded application approvals — Design"
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-14
+updated_date: 2026-11-26
 last_validated: 2026-11-01
 status: Draft
 feature: application-approvals
@@ -74,8 +74,8 @@ Other crates are named explicitly.
    stores it as the redacted `application` JSON column
    (`crates/orbit-store/src/repository/audit/event/insert.rs:224`).
 
-Admission runs before the capability chokepoint in `authorize_registered_tool`
-(`crates/orbit-runtime/src/host/exec/tool_exec.rs:175`), in `run_tool_with_context_and_capability`
+Admission runs before the capability chokepoint, in `admit_registered_tool`
+(`crates/orbit-runtime/src/host/exec/tool_exec.rs`), in `run_tool_with_context_and_capability`
 (`crates/orbit-core/src/adapter/tool_execution.rs:122-135`) and on every plugin callback
 (`crates/orbit-core/src/adapter/command/dispatch/execute/runtime.rs:513-520`).
 App-bound completion callbacks are sent to the host, because the witness is hidden from
@@ -314,7 +314,7 @@ application write never forces a transition.
 
 **Always refused**, whatever the consent says: every operation or input that carries an
 Operator floor in the governed-operation catalogue, including the input-dependent floors
-in `authorize_registered_tool` (`crates/orbit-runtime/src/host/exec/tool_exec.rs:163-227`).
+in `authorize_admitted_tool` (`crates/orbit-runtime/src/host/exec/tool_exec.rs`).
 Consent-time validation derives this from the catalogue, not from a list
 (`application_operator_floored`): a built-in whose governed row admits `Operator`, or an
 input field listed in `INPUT_DEPENDENT_OPERATION_FLOORS` whose operation does. Today that
@@ -481,9 +481,9 @@ check(artifact_json A, v): v == json_pointer(artifact(ctx.bound_task, A.path), A
                      and that artifact's digest == the entry binding
 ```
 
-The evaluator reads state through `ApplicationPort`: `get_task` and, from slice 2,
-`task_artifact_sha256`. The kernel never reaches into `orbit-core`
-directly (`crates/orbit-runtime/AGENTS.md`). Predicate reads and the write are not one
+The evaluator reads state through the kernel's own task access (`Stored::task`): `get` and,
+from slice 2, `artifact_sha256`. The kernel never reaches into `orbit-core`
+(`crates/orbit-runtime/AGENTS.md`). Predicate reads and the write are not one
 transaction. Lifecycle preconditions on the write (the atomic start, `transition.from`
 rechecked by the update itself) close the race for status. The digest recheck closes
 it for payloads.
@@ -613,7 +613,7 @@ restriction.
    slice 2. Tests: consent refusals for each
    invalid constraint, ceiling breach and always-refused tool, at the `orbit application
    consent` CLI boundary.
-2. **Constrained entry admission.** Add the evaluator (§5.1), scope rate-limit enforcement, `ApplicationPort` reads for
+2. **Constrained entry admission.** Add the evaluator (§5.1), scope rate-limit enforcement, task-access reads for
    the task and artifact digest, invocation `bindings` and `text_digests`, the field-level
    refusal, executor support for `plan`, `execution_summary` and `note`, and the
    `transition` and `backlog` rules. Tests: dismiss and send-back admitted on matching

@@ -46,7 +46,7 @@ use crate::application::contracts::PublishedDelivery;
 use crate::application::job::JobRunListParams;
 use crate::runtime::stored::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, parse_task_ids,
-    reserve_deferred_footprint, reserve_with_index, runs_holding_file_reservations,
+    prepare_reserve_with_index, reserve_deferred_footprint, runs_holding_file_reservations,
 };
 
 /// The run input key the gate sets when it deferred the leaf's footprint.
@@ -167,7 +167,7 @@ impl OrbitRuntime {
         loop {
             let index = TaskLockIndex::load(self, &task_ids)?
                 .without_status_holders(&self.unacquired_deferred_waiters(run_id)?, &task_ids);
-            let output = reserve_with_index(
+            let output = self.grant_after_stale_owner_reconcile(prepare_reserve_with_index(
                 self,
                 json!({"task_ids": task_ids, "ttl_seconds": FOOTPRINT_TTL_SECONDS}),
                 None,
@@ -175,7 +175,7 @@ impl OrbitRuntime {
                 Some(owner.clone()),
                 &index,
                 EmptyTaskSurfacePolicy::Admit,
-            )?;
+            )?)?;
             let conflicts = match output {
                 ReservationOutcome::Granted { .. } => return Ok(()),
                 ReservationOutcome::Denied { conflicts } => conflicts,

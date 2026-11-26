@@ -2,7 +2,7 @@
 title: Orbit Core — Overview
 owner: codex
 created_date: 2026-07-04
-updated_date: 2026-11-20
+updated_date: 2026-11-26
 last_validated: 2026-11-14
 status: Implemented
 stage: shipped
@@ -37,9 +37,10 @@ Bootstrap depends on application because it seeds through application-owned
 definitions, and it opens the runtime too. Neither application nor the adapter names bootstrap or
 composition; they reach them through application-owned ports [ORB-22005].
 `orbit-runtime` never depends on `orbit-core`,
-so kernel code cannot import application or adapter code. Where a kernel
-mechanism finishes through a use case, it calls the `ApplicationPort` trait
-that composition supplies when it builds the kernel.
+so kernel code cannot import application or adapter code, and it does not
+call back into them either. A kernel mechanism that needs a use case's answer
+takes it as an argument, and a flow that needs both lives in `orbit-core`
+[ORB-28395].
 
 `orbit_core::OrbitRuntime` stays the public runtime type. It owns a
 `RuntimeKernel` and dereferences to it, so callers reach kernel methods
@@ -81,11 +82,6 @@ source scan, enforces the runtime direction.
   handles, event bus, audit, claims, reservations, process/tool execution
   mechanisms, and construction from an already-resolved config value. The
   actor context, root paths and cost types live there too.
-- **Application port** — `orbit_runtime::ApplicationPort`, the operations
-  the kernel calls back into (task reads, automation updates, audit records,
-  run reconciliation, crew redraws). `orbit-core`'s `composition` module
-  implements it on `CoreApplicationPort`, which hands each call the
-  `OrbitRuntime` that owns the kernel.
 - **Application operations** — use-case DTOs and coordinated task, job,
   workflow, search, and health behavior. Store-coordinated
   lifecycle transitions live here; pure invariants live in `orbit-types`.
@@ -129,7 +125,6 @@ source scan, enforces the runtime direction.
 |---|---|---|
 | Runtime mechanisms | `crates/orbit-runtime/src/` | [ORB-10886], [ORB-17906] |
 | Kernel re-export and `OrbitRuntime` wrapper | `crates/orbit-core/src/runtime/` | [ORB-17906] |
-| Kernel application port implementation | `crates/orbit-core/src/composition/application_port.rs` | — |
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Clock settings and schedule display state below `routines` | `crates/orbit-clock/src/clock_settings.rs` (re-exported from `contracts`), `crates/orbit-core/src/application/contracts/schedule_display.rs` | [ORB-22623], [ORB-22688] |
@@ -139,7 +134,7 @@ source scan, enforces the runtime direction.
 | Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `notice/close.rs` | [ORB-23017] |
 | Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `evolution/operations.rs` | [ORB-23018] |
 | Task-owned corpus appends and digest | `crates/orbit-core/src/application/task/corpus_port.rs` (`TaskCorpusPort`), implemented in `agent_corpus.rs` | [ORB-23421] |
-| Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
+| Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the declared hosts and per-crew limits are read in `crates/orbit-runtime/src/run/engine/crew/host_os.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289], [ORB-28395] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `BacklogForecastHistory` at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` | [ORB-22287], [ORB-24548] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |

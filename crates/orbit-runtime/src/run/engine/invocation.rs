@@ -697,7 +697,9 @@ impl RuntimeKernel {
                 until: effective_until,
             })?;
         let task_orchestrators = self
-            .task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .stored()
+            .task()
+            .candidates(&TaskListFilter::default(), usize::MAX)?
             .items
             .into_iter()
             .map(|task| (task.id, task.orchestrator))

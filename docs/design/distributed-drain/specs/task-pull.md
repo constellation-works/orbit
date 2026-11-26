@@ -338,7 +338,7 @@ for a pull drain as for a local one.
    record its execution machine and drain context, transition `backlog → in-progress`, append a
    `pulled_by { machine_id, run_context, claim_id, request_id }` history record, and persist the
    response receipt atomically. The pulled path passes this TTL explicitly rather than inheriting
-   `reserve_with_index`'s 1,800-second fallback.
+   `prepare_reserve_with_index`'s 1,800-second fallback.
    No local leaf run, branch, or worktree is created by this transaction.
 5. If none is eligible, persist an `idle` receipt with diagnostics. This changes receipt state but
    creates no task transition, claim, or reservation. End this refill pass on the first idle

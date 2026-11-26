@@ -157,14 +157,14 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
             ..Default::default()
         })
         .expect("coupled task");
-    let reserved = orbit_core::runtime::stored::locks::reserve(
-        &runtime,
-        json!({"task_ids": [coupled.id.to_string()], "ttl_seconds": 600}),
-        None,
-        None,
-        None,
-    )
-    .expect("reserve coupled task");
+    let reserved = runtime
+        .reserve_task_locks(
+            json!({"task_ids": [coupled.id.to_string()], "ttl_seconds": 600}),
+            None,
+            None,
+            None,
+        )
+        .expect("reserve coupled task");
     assert_eq!(reserved["reserved"], true, "{reserved}");
     let query = |rollup: &str| {
         runtime

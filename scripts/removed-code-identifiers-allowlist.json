@@ -168,5 +168,30 @@
     "identifier": "audit_events",
     "doc": "docs/runbooks/state-and-backup.md",
     "reason": "Names the unchanged `audit_events` SQLite table, rather than the removed `OrbitStores::audit_events` accessor."
+  },
+  {
+    "identifier": "ApplicationPort",
+    "doc": "docs/design/architecture-restructure/1_overview.md",
+    "reason": "The architecture-restructure overview names the removed ApplicationPort trait as the before-state its problem table measured and in the task that deleted it."
+  },
+  {
+    "identifier": "ApplicationPort",
+    "doc": "docs/design/architecture-restructure/2_design.md",
+    "reason": "The architecture-restructure design doc names the removed ApplicationPort trait as the before-state of the runtime section and in the record of its deletion."
+  },
+  {
+    "identifier": "ApplicationPort",
+    "doc": "docs/design/architecture-restructure/3_vision.md",
+    "reason": "The architecture-restructure vision names the removed ApplicationPort trait in the open question the deleting task answered."
+  },
+  {
+    "identifier": "from_kernel_ref",
+    "doc": "docs/design/architecture-restructure/1_overview.md",
+    "reason": "The architecture-restructure overview names the removed from_kernel_ref cast as the before-state its problem table measured."
+  },
+  {
+    "identifier": "from_kernel_ref",
+    "doc": "docs/design/architecture-restructure/2_design.md",
+    "reason": "The architecture-restructure design doc names the removed from_kernel_ref cast as the before-state of the runtime section and in the record of its deletion."
   }
 ]

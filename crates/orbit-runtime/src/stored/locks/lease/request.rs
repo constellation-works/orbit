@@ -15,6 +15,7 @@ use super::super::command::{
     parse_ttl_seconds, reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
 };
 use super::super::index::{TaskLockIndex, task_lock_conflicts_bounded};
+use super::super::prepared::PreparedGrant;
 use super::admission::{
     LEASE_INTAKE_ACTOR, LeaseTokenGrant, TOKEN_MAX_ACTIVE_LEASES, ensure_token_selector_count,
 };
@@ -40,12 +41,14 @@ const REQUEST_TOOL: &str = "orbit.lease.request";
 /// them. A hard request from a class the policy allows no hard leases is
 /// granted advisory instead, and the answer says so. A priority above the
 /// class's policy ceiling is refused.
-pub fn request(
-    runtime: &RuntimeKernel,
+///
+/// The request is prepared here and holds nothing until the caller grants it.
+pub fn prepare_request<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
-) -> Result<Value, OrbitError> {
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     runtime.lease_policy().ensure_enabled()?;
     let principal = required_non_empty(&input, "principal")?;
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
@@ -63,7 +66,7 @@ pub fn request(
 
 /// Request a lease for an authenticated lease token.
 ///
-/// The same operation as [`request`], with the token's principal and class
+/// The same operation as [`prepare_request`], with the token's principal and class
 /// instead of the caller's declared principal and process class, and with the
 /// stricter of the token's scope and the workspace's class policy: the lower
 /// of the two priority ceilings, and hard only when both allow it. The lease
@@ -71,11 +74,11 @@ pub fn request(
 /// token is also held to `TOKEN_MAX_ACTIVE_LEASES` per principal, to
 /// `TOKEN_MAX_LEASE_SELECTORS` per lease, and to answers that fit
 /// [`LeaseTokenGrant::max_response_bytes`], each checked before any write.
-pub fn request_with_token(
-    runtime: &RuntimeKernel,
+pub fn prepare_request_with_token<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
-    grant: &LeaseTokenGrant,
-) -> Result<Value, OrbitError> {
+    grant: &'a LeaseTokenGrant,
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     request_as(
         runtime,
         input,
@@ -95,11 +98,11 @@ struct LeaseRequester<'a> {
     token: Option<&'a LeaseTokenGrant>,
 }
 
-fn request_as(
-    runtime: &RuntimeKernel,
+fn request_as<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
-    requester: LeaseRequester<'_>,
-) -> Result<Value, OrbitError> {
+    requester: LeaseRequester<'a>,
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     let policy = runtime.lease_policy();
     policy.ensure_enabled()?;
     let LeaseRequester {
@@ -253,151 +256,153 @@ fn request_as(
         }
     };
     let index = TaskLockIndex::load(runtime, &[])?;
-    let task_conflicts = if mode == LeaseMode::Hard {
-        runtime.reconcile_stale_owned_reservations_for_files(&stored_selectors, 32)?;
-        task_lock_conflicts_bounded(
-            &index,
-            &stored_selectors,
-            repo_root,
-            budget.conflicts_shown(),
-        )
-    } else {
-        Vec::new()
-    };
+    let stale_owner_surface = (mode == LeaseMode::Hard).then(|| stored_selectors.clone());
+    Ok(PreparedGrant::new(stale_owner_surface, move || {
+        let task_conflicts = if mode == LeaseMode::Hard {
+            task_lock_conflicts_bounded(
+                &index,
+                &stored_selectors,
+                repo_root,
+                budget.conflicts_shown(),
+            )
+        } else {
+            Vec::new()
+        };
 
-    let result = runtime
-        .stores()
-        .task_reservations()
-        .insert_lease(LeaseInsertParams {
-            workspace_orbit_dir: workspace_orbit_dir(runtime),
-            workspace_id,
-            selectors: stored_selectors.clone(),
-            mode,
-            priority,
-            tags,
-            principal: principal.clone(),
-            principal_class,
-            machine_id,
-            base_branch,
-            bound_branch,
-            actor: actor.clone(),
-            ttl_seconds,
-            token_id: token.map(|grant| grant.token_id.clone()),
-            wait,
-            task_conflicts,
-            aging_minutes: policy.aging_minutes,
-            holder_list_bytes: budget.holder_list_bytes(),
-            active_lease_limit: token.map(|_| TOKEN_MAX_ACTIVE_LEASES),
-        })?;
-    emit_expired_lease_events(runtime, REQUEST_TOOL, &result.expired_leases)?;
-    if !result.expired_leases.is_empty() {
-        queue::grant_queued(runtime, REQUEST_TOOL)?;
-    }
-    if let Some(active) = result.active_lease_limit_reached {
-        return refuse_over_active_limit(runtime, audit_request, active);
-    }
-    let conflicts = budget.take(result.conflicts);
-    let queued_ahead = budget.take(result.queued_ahead);
-    budget.truncated |= result.holders_truncated;
-    let Some(lease) = result.lease else {
-        return refuse(
-            runtime,
-            audit_request,
-            &stored_selectors,
-            conflicts,
-            &queued_ahead,
-            budget.truncated,
-        );
-    };
+        let result = runtime
+            .stores()
+            .task_reservations()
+            .insert_lease(LeaseInsertParams {
+                workspace_orbit_dir: workspace_orbit_dir(runtime),
+                workspace_id,
+                selectors: stored_selectors.clone(),
+                mode,
+                priority,
+                tags,
+                principal: principal.clone(),
+                principal_class,
+                machine_id,
+                base_branch,
+                bound_branch,
+                actor: actor.clone(),
+                ttl_seconds,
+                token_id: token.map(|grant| grant.token_id.clone()),
+                wait,
+                task_conflicts,
+                aging_minutes: policy.aging_minutes,
+                holder_list_bytes: budget.holder_list_bytes(),
+                active_lease_limit: token.map(|_| TOKEN_MAX_ACTIVE_LEASES),
+            })?;
+        emit_expired_lease_events(runtime, REQUEST_TOOL, &result.expired_leases)?;
+        if !result.expired_leases.is_empty() {
+            queue::grant_queued(runtime, REQUEST_TOOL)?;
+        }
+        if let Some(active) = result.active_lease_limit_reached {
+            return refuse_over_active_limit(runtime, audit_request, active);
+        }
+        let conflicts = budget.take(result.conflicts);
+        let queued_ahead = budget.take(result.queued_ahead);
+        budget.truncated |= result.holders_truncated;
+        let Some(lease) = result.lease else {
+            return refuse(
+                runtime,
+                audit_request,
+                &stored_selectors,
+                conflicts,
+                &queued_ahead,
+                budget.truncated,
+            );
+        };
 
-    if lease.queue_kind == Some(LeaseQueueKind::Request) {
-        let mut payload = audit_request;
-        payload["lease_id"] = json!(lease.lease_id);
-        payload["mode"] = json!(lease.mode);
-        payload["hard_surface"] = json!(stored_selectors);
-        payload["conflicts"] = json!(conflicts);
-        payload["queued_ahead"] = json!(queued_ahead);
-        payload["queue_position"] = json!(result.queue_position);
+        if lease.queue_kind == Some(LeaseQueueKind::Request) {
+            let mut payload = audit_request;
+            payload["lease_id"] = json!(lease.lease_id);
+            payload["mode"] = json!(lease.mode);
+            payload["hard_surface"] = json!(stored_selectors);
+            payload["conflicts"] = json!(conflicts);
+            payload["queued_ahead"] = json!(queued_ahead);
+            payload["queue_position"] = json!(result.queue_position);
+            record_lease_audit_event(
+                runtime,
+                "lease.request.queued",
+                REQUEST_TOOL,
+                Some(lease.lease_id.as_str()),
+                AuditEventStatus::Success,
+                payload,
+            )?;
+            return Ok(json!({
+                "granted": false,
+                "queued": true,
+                "queue_position": result.queue_position,
+                "conflicts": conflicts,
+                "queued_ahead": queued_ahead,
+                "truncated": budget.truncated,
+                "requested_mode": requested_mode,
+                "downgraded": false,
+                "unlocked_selectors": unlocked_selectors,
+                "lease": lease_json(&lease),
+            }));
+        }
+
+        let overlaps = if mode == LeaseMode::Advisory {
+            PathHolders::load(runtime, &index, Some(&lease.lease_id))?.overlapping(
+                &lease.selectors,
+                repo_root,
+                &mut budget,
+            )
+        } else {
+            Vec::new()
+        };
+        let notice = downgraded.then(|| {
+            if class_allows_hard {
+                "granted as advisory: the lease token does not allow hard leases".to_string()
+            } else {
+                format!(
+                    "granted as advisory: the lease policy allows no hard leases for the {} \
+                 principal class",
+                    principal_class.as_str()
+                )
+            }
+        });
+        let mut granted_payload = json!({
+                "lease_id": lease.lease_id,
+                "actor": actor,
+                "principal": lease.principal,
+                "principal_class": lease.principal_class,
+                "selectors": lease.selectors,
+                "unlocked_selectors": unlocked_selectors,
+                "requested_mode": requested_mode,
+                "mode": lease.mode,
+                "downgraded": downgraded,
+                "priority": lease.priority,
+                "expires_at": lease.expires_at,
+        });
+        if let Some(grant) = token {
+            granted_payload["token_id"] = json!(grant.token_id);
+            granted_payload["client_address"] = json!(grant.client_address);
+        }
         record_lease_audit_event(
             runtime,
-            "lease.request.queued",
+            "lease.request.granted",
             REQUEST_TOOL,
             Some(lease.lease_id.as_str()),
             AuditEventStatus::Success,
-            payload,
+            granted_payload,
         )?;
-        return Ok(json!({
-            "granted": false,
-            "queued": true,
-            "queue_position": result.queue_position,
-            "conflicts": conflicts,
-            "queued_ahead": queued_ahead,
-            "truncated": budget.truncated,
+        let mut output = json!({
+            "granted": true,
             "requested_mode": requested_mode,
-            "downgraded": false,
-            "unlocked_selectors": unlocked_selectors,
-            "lease": lease_json(&lease),
-        }));
-    }
-
-    let overlaps = if mode == LeaseMode::Advisory {
-        PathHolders::load(runtime, &index, Some(&lease.lease_id))?.overlapping(
-            &lease.selectors,
-            repo_root,
-            &mut budget,
-        )
-    } else {
-        Vec::new()
-    };
-    let notice = downgraded.then(|| {
-        if class_allows_hard {
-            "granted as advisory: the lease token does not allow hard leases".to_string()
-        } else {
-            format!(
-                "granted as advisory: the lease policy allows no hard leases for the {} \
-                 principal class",
-                principal_class.as_str()
-            )
-        }
-    });
-    let mut granted_payload = json!({
-            "lease_id": lease.lease_id,
-            "actor": actor,
-            "principal": lease.principal,
-            "principal_class": lease.principal_class,
-            "selectors": lease.selectors,
-            "unlocked_selectors": unlocked_selectors,
-            "requested_mode": requested_mode,
-            "mode": lease.mode,
             "downgraded": downgraded,
-            "priority": lease.priority,
-            "expires_at": lease.expires_at,
-    });
-    if let Some(grant) = token {
-        granted_payload["token_id"] = json!(grant.token_id);
-        granted_payload["client_address"] = json!(grant.client_address);
-    }
-    record_lease_audit_event(
-        runtime,
-        "lease.request.granted",
-        REQUEST_TOOL,
-        Some(lease.lease_id.as_str()),
-        AuditEventStatus::Success,
-        granted_payload,
-    )?;
-    let mut output = json!({
-        "granted": true,
-        "requested_mode": requested_mode,
-        "downgraded": downgraded,
-        "unlocked_selectors": unlocked_selectors,
-        "overlaps": overlaps,
-        "truncated": budget.truncated,
-        "lease": lease_json(&lease),
-    });
-    if let Some(notice) = notice {
-        output["notice"] = json!(notice);
-    }
-    Ok(output)
+            "unlocked_selectors": unlocked_selectors,
+            "overlaps": overlaps,
+            "truncated": budget.truncated,
+            "lease": lease_json(&lease),
+        });
+        if let Some(notice) = notice {
+            output["notice"] = json!(notice);
+        }
+        Ok(output)
+    }))
 }
 
 fn refuse(

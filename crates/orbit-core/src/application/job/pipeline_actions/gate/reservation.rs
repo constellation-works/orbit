@@ -20,8 +20,8 @@ use crate::OrbitRuntime;
 use crate::application::job::JobAdmissionPort;
 use crate::runtime::stored::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, emit_expired_reservation_events,
-    merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed,
-    reserve_deferred_footprint, reserve_with_index, task_lock_conflicts_indexed,
+    merge_task_lock_conflicts, parse_task_ids, prepare_reserve_with_index,
+    requested_task_files_indexed, reserve_deferred_footprint, task_lock_conflicts_indexed,
     workspace_orbit_dir, workspace_task_reservation_id,
 };
 
@@ -116,7 +116,7 @@ pub(crate) fn reserve_locks(
         .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
     let lock_index = TaskLockIndex::load(runtime, &task_ids)
         .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
-    let mut output = reserve_with_index(
+    let mut output = prepare_reserve_with_index(
         runtime,
         input.clone(),
         tool_context.agent_name.clone(),
@@ -125,6 +125,7 @@ pub(crate) fn reserve_locks(
         &lock_index,
         EmptyTaskSurfacePolicy::Admit,
     )
+    .and_then(|prepared| runtime.grant_after_stale_owner_reconcile(prepared))
     .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
     // A resumed published delivery adopts before it edits, so its
     // gate does not wait on the holders that refused it; the leaf

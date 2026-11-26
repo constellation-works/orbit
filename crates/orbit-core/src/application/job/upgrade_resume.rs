@@ -27,16 +27,27 @@
 //! decision, resume or skip, leaves an [`UPGRADE_RESUME_AUDIT`] record naming
 //! its reason, and a later tick does not reconsider a decided run.
 
+use std::ffi::OsStr;
+
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contract::{AuditEventFilter, JobRunOrder, JobRunQuery};
+use orbit_common::fs::generation::{
+    ParticipantRole, PendingSwitch, RESUME_DRAIN_ADOPT, handover_target, process_participation,
+    reexec,
+};
+use orbit_store::contract::{
+    AuditEventFilter, JobRunOrder, JobRunQuery, TaskReservationReleaseReason,
+};
+use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{DRAIN_JOBS, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::{ReviewAdmissionHook, RunOwnerLiveness, run_owner_liveness};
-use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
+use crate::runtime::upgrade_handover::{
+    ADOPT_RUN_ENV, UPGRADE_QUIESCE_ERROR_CODE, bound_worker_run, pending_switch_for_worker,
+};
 
 /// Audit tool name of every auto-resume decision about an interrupted run.
 pub(crate) const UPGRADE_RESUME_AUDIT: &str = "pipeline.run.upgrade_resume";
@@ -69,6 +80,179 @@ impl Skip {
         Some(Self {
             reason,
             detail: detail.into(),
+        })
+    }
+}
+
+/// The worker's side of an upgrade: yielding the run it owns to a pending
+/// generation switch, and handing a drain over to a replaced installation.
+///
+/// - **Yield.** At every top-level step boundary, and at every admission
+///   pass of a drain coordinator, the worker asks whether a newer,
+///   incompatible generation is pending on its authority. When one is, the
+///   run it owns is recorded `interrupted` under
+///   [`UPGRADE_QUIESCE_ERROR_CODE`] and the process exits, releasing its
+///   share of the generation.
+/// - **Hand over.** A drain coordinator whose installed executable was
+///   replaced by a build that can adopt its run execs that executable in
+///   place with the same arguments and [`ADOPT_RUN_ENV`] naming the run.
+impl OrbitRuntime {
+    /// Step-boundary check: yield this worker's run to a pending switch.
+    /// Returns only when there is nothing to yield to.
+    pub fn yield_run_at_step_boundary(&self, run_id: &str) {
+        if let Some((owned, switch)) = pending_switch_for_worker()
+            && owned == run_id
+        {
+            self.yield_to_pending_switch(owned, &switch);
+        }
+    }
+
+    /// Admission-pass check for a drain coordinator: yield to a pending
+    /// switch, or hand over to a replaced installation that can adopt the
+    /// run. Neither returns; a failed handover is logged and the drain keeps
+    /// running the replaced image.
+    pub fn drain_upgrade_boundary(&self, args: impl FnOnce() -> Vec<std::ffi::OsString>) {
+        let Some(run_id) = bound_worker_run() else {
+            return;
+        };
+        if !matches!(process_participation(), Some((_, ParticipantRole::Drain))) {
+            return;
+        }
+        if let Some((owned, switch)) = pending_switch_for_worker() {
+            self.yield_to_pending_switch(owned, &switch);
+        }
+        let Some(installed) = handover_target(self.env(), Some(RESUME_DRAIN_ADOPT)) else {
+            return;
+        };
+        tracing::info!(
+            target: "orbit.generation",
+            run_id,
+            installed = %installed.display(),
+            "the installed Orbit executable was replaced; handing this drain over to it",
+        );
+        let error = reexec(&installed, &args(), &[(ADOPT_RUN_ENV, OsStr::new(run_id))]);
+        tracing::warn!(
+            target: "orbit.generation",
+            run_id,
+            %error,
+            "drain handover failed; this drain keeps running the replaced image",
+        );
+    }
+
+    /// Record `run_id` interrupted for `switch` and exit the process.
+    fn yield_to_pending_switch(&self, run_id: &str, switch: &PendingSwitch) -> ! {
+        self.record_upgrade_interruption(run_id, switch.pid, switch.role);
+        orbit_common::observability::logging::exit(0)
+    }
+
+    /// Record `run_id` interrupted so the process `pid` can switch the store
+    /// generation. A failure to record is logged and otherwise ignored:
+    /// reconciliation records a run whose owner is gone as interrupted all the
+    /// same.
+    pub(crate) fn record_upgrade_interruption(
+        &self,
+        run_id: &str,
+        pid: u32,
+        role: ParticipantRole,
+    ) {
+        let message = self.upgrade_interruption_message(run_id, pid, role);
+        tracing::warn!(target: "orbit.generation", run_id, "{message}");
+        if let Err(error) = self.interrupt_worker_run(run_id, &message) {
+            tracing::warn!(
+                target: "orbit.generation",
+                run_id,
+                %error,
+                "could not record the upgrade interruption",
+            );
+        }
+    }
+
+    /// [`Self::record_upgrade_interruption`] for a fixture, which has no worker
+    /// process to yield and exit.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_upgrade_interruption_for_test(
+        &self,
+        run_id: &str,
+        pid: u32,
+        role: ParticipantRole,
+    ) {
+        self.record_upgrade_interruption(run_id, pid, role);
+    }
+
+    /// The diagnostic recorded on an upgrade-interrupted run.
+    ///
+    /// A claimed leaf is refused by generic resume, so it must not be pointed
+    /// at `orbit job resume`: its recovery is on the owner, which re-admits it
+    /// through a later drain. When the store cannot say whether the run is a
+    /// claimed leaf, the wording stays neutral instead of guessing a command
+    /// that may be refused.
+    fn upgrade_interruption_message(
+        &self,
+        run_id: &str,
+        pid: u32,
+        role: ParticipantRole,
+    ) -> String {
+        let claimed = self
+            .stores()
+            .jobs()
+            .local_pull_for_run(run_id)
+            .map(|admission| admission.is_some());
+        let next = match claimed {
+            Ok(false) => {
+                format!("resume it with `orbit job resume {run_id}` once the upgrade completes")
+            }
+            Ok(true) => {
+                "this claimed leaf cannot be resumed directly; once the upgrade completes, \
+                 recover the claim on the owner and let a drain re-admit it"
+                    .to_string()
+            }
+            Err(_) => {
+                "once the upgrade completes, inspect the run before choosing how to recover it"
+                    .to_string()
+            }
+        };
+        format!(
+            "interrupted at a step boundary by an Orbit upgrade so a newer Orbit (pid {pid}, {role}) \
+             can switch the store generation; {next}"
+        )
+    }
+
+    fn interrupt_worker_run(&self, run_id: &str, message: &str) -> Result<(), OrbitError> {
+        let Some(run) = self.stores().jobs().get_job_run(run_id)? else {
+            return Ok(());
+        };
+        let finished_at = Utc::now();
+        let started_at = run.started_at.unwrap_or(run.scheduled_at);
+        let duration_ms = u64::try_from(
+            finished_at
+                .signed_duration_since(started_at)
+                .num_milliseconds()
+                .max(0),
+        )
+        .ok();
+        let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
+            run_id,
+            JobRunState::Interrupted,
+            finished_at,
+            duration_ms,
+            TaskReservationReleaseReason::RunTerminal,
+            Some((UPGRADE_QUIESCE_ERROR_CODE, message)),
+        )?;
+        if !changed {
+            return Ok(());
+        }
+        self.record_pipeline_diagnostic_step(
+            &run,
+            started_at,
+            finished_at,
+            Some(UPGRADE_QUIESCE_ERROR_CODE),
+            message,
+            JobRunState::Interrupted,
+        )?;
+        self.record_event(OrbitEvent::JobRunCompleted {
+            job_id: run.job_id.clone(),
+            run_id: run.run_id.clone(),
+            state: JobRunState::Interrupted.to_string(),
         })
     }
 }

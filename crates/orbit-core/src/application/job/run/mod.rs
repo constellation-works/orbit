@@ -7,7 +7,9 @@
 //! - `owner` — process signalling, owner identity classification, liveness probes (Unix + shims).
 //! - `delivery` — the bounded public commit/landing observation for one task.
 //! - `display_steps` — the one rule for which steps a run view renders and how an audit step reads.
-//! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
+//! - `conflict` — a run's terminal write, the cleanup it owes, and recording a terminal outcome
+//!   that contradicts the one already persisted.
+//! - `block_on_run_failure` — blocking, holding or requeueing the tasks coupled to a run that ended.
 //! - `deferral` — recording a run that deferred its work instead of failing, for Incidents.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
@@ -17,13 +19,13 @@
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `rescue_candidate` — keeping a stopped run's candidate under a rescue ref.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
-//! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
 //! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
 //!   run-failure observation query run views share.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `state_write` — the one create-or-update run-state write and terminal-run refusal the run controls share.
 //! - `audit_record` — the job-run audit writers (`record_pipeline_audit`,
-//!   `record_pipeline_diagnostic_step`) every module that audits a run shares.
+//!   `record_pipeline_diagnostic_step`) every module that audits a run shares, and the completion
+//!   audit the stop, worker-ceiling and extension controls share.
 //! - `worker_exit` — the persisted worker-exit record format and the reads reconciliation makes of it.
 //! - `worker_scope` — the read side of a worker's containment scope, which `worker_exit` reads.
 //! - `definition` — the definition snapshot a run pinned, and the reads that resolve it.
@@ -35,9 +37,9 @@
 mod actions;
 mod admissions_stop;
 pub(super) mod audit_record;
+mod block_on_run_failure;
 mod build_budget;
 mod child_timeout;
-mod completion_audit;
 mod conflict;
 mod deferral;
 pub(super) mod definition;

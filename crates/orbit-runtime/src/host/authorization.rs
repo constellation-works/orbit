@@ -81,7 +81,7 @@ impl RuntimeKernel {
 
     /// Keep activity-policy refusals queryable through the same authorization
     /// predicate as capability refusals, including tools with no governed row.
-    pub(crate) fn record_activity_tool_policy_denial(
+    pub fn record_activity_tool_policy_denial(
         &self,
         name: &str,
         reason: &str,

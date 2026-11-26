@@ -2,7 +2,7 @@
 title: Distributed Drain — Design
 owner: claude
 created_date: 2026-09-18
-updated_date: 2026-11-16
+updated_date: 2026-11-26
 last_validated: 2026-11-16
 status: Draft
 feature: distributed-drain
@@ -725,7 +725,7 @@ recovery. TTL is not settlement.
 **Settlement ownership** ([ORB-13663]). The admission record is the outbox, and no single process
 owns delivery:
 
-- *Recording.* Run finalization (`RuntimeKernel::finalize_job_run_with_reservation_cleanup_and_diagnostic`), in whichever
+- *Recording.* Run finalization (`OrbitRuntime::finalize_job_run_with_reservation_cleanup_and_diagnostic`), in whichever
   process terminalizes a claimed leaf — its worker, a cancel, orphan reconciliation — records the
   settlement a terminal leaf implies: a `Launching` or `Launched` leaf ran and failed; a `Bound`
   leaf never launched, so its claim is released (below). Success already recorded its handoff. A
@@ -1643,7 +1643,7 @@ manually before treating a workspace as migrated (see the runbook checklist in
 **Enforcement.** `orbit_types::task::inherited_only_epic_roots` is the one definition of the
 withheld population: `backlog_snapshot` excludes such roots (`inherited_only_epic_root`, naming
 descendants and repair), `list_backlog_tasks` applies it to explicit ship overrides, and
-`reserve_with_index` in `crates/orbit-runtime/src/stored/locks/command.rs` refuses them before the
+`prepare_reserve_with_index` in `crates/orbit-runtime/src/stored/locks/command.rs` refuses them before the
 `EmptyTaskSurfacePolicy` compatibility `Admit`.
 
 ### 7.2 Failed-run triage

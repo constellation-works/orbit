@@ -57,7 +57,7 @@
 //! Some failures are the host's, not the task's: dispatch could not find the
 //! provider launcher. That error is permanent for its run, but installing the
 //! launcher clears it, and nothing else would ever re-evaluate the block.
-//! `OrbitRuntime::infra_blocked_tasks` in `orbit-core` classifies those blocks from the
+//! `OrbitRuntime::infra_blocked_tasks` classifies those blocks from the
 //! failure note and re-resolves the launcher now, so `orbit doctor` can report
 //! cleared ones and `orbit task recheck-blocked --confirm` can return them to
 //! backlog. Every other block keeps the human decision described above.
@@ -67,27 +67,28 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::{
-    TaskAutomationUpdate, baseline_red_hold_update, blocked_workflow_failure_update,
+    RuntimeHost, TaskAutomationUpdate, baseline_red_hold_update, blocked_workflow_failure_update,
     blocked_workflow_interruption_update, blocked_workflow_owner_signoff_update,
 };
-use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{TaskDecision, TaskStatus};
 use orbit_types::workflow::{
     AgentBlocker, BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass,
     ReviewGateHistoryEvent, ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT,
     is_baseline_red_failure, is_footprint_unavailable, is_operator_stopped, is_upgrade_pending,
 };
 
-use crate::RuntimeKernel;
+use crate::OrbitRuntime;
+use crate::runtime::run::task_coupling::provider_hold::{
+    held_by_run, provider_failure_hold_update,
+};
+use crate::runtime::run::task_coupling::{FINAL_RECOVERY_REQUEUED_EVENT, resumed_task_run_id};
 
-use super::FINAL_RECOVERY_REQUEUED_EVENT;
-use super::provider_hold::{held_by_run, provider_failure_hold_update};
-
-pub(crate) const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
+const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
 
 /// A resumed published delivery whose deferred footprint stayed held past
 /// its wait returns to the backlog under this event; a later admission
 /// retries the footprint once the holders release it.
-pub(crate) const FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT: &str = "footprint_unavailable_requeued";
+const FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT: &str = "footprint_unavailable_requeued";
 
 /// Terminal run states that strand a coupled task and therefore trigger task
 /// cleanup. `Interrupted` is included [ORB-12969]: the run is
@@ -99,7 +100,7 @@ pub(crate) const FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT: &str = "footprint_unavail
 /// [ORB-15202] (see [`HeldFailure`]): its tasks get the disposition the
 /// failure always had. A run held for review evidence, the forge, or a typed
 /// delivery refusal leaves the refusing action's task state alone.
-pub(crate) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
+pub(super) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
     matches!(
         state,
         JobRunState::Failed
@@ -135,34 +136,11 @@ fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
     )
 }
 
-/// The latest resume's cleanup owner, only while its recorded batch binding
-/// still matches the task. A later restamp invalidates the old coupling.
-pub fn resumed_task_run_id<'a>(
-    history: &'a [TaskHistoryEntry],
-    owner_run_id: &str,
-) -> Option<&'a str> {
-    let entry = history.iter().rev().find(|entry| {
-        entry.by == "system"
-            && matches!(
-                entry.event.as_str(),
-                "resume_readmitted" | "resume_review_restored"
-            )
-    })?;
-    let note = entry.note.as_deref()?;
-    let (note, owner) = note.rsplit_once("; owner_run_id=")?;
-    if owner != owner_run_id {
-        return None;
-    }
-    note.strip_prefix("resume lineage reconciliation: run '")?
-        .split_once("' resumes '")
-        .map(|(run, _)| run)
-}
-
 /// Extract `(error_code, error_message)` for the failure note from the run's
 /// most recent errored step. The pipeline records a single job-level
 /// diagnostic step whose message already names the failing step, so surfacing
 /// it verbatim keeps the note actionable.
-pub(crate) fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<String>) {
+fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<String>) {
     run.steps
         .iter()
         .rev()
@@ -178,7 +156,7 @@ pub(crate) fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<
         .unwrap_or((None, None))
 }
 
-impl RuntimeKernel {
+impl OrbitRuntime {
     /// Best-effort variant used from run terminalization: a status-write
     /// failure is logged and swallowed so the run still reaches its terminal
     /// state and releases its reservations/file locks.
@@ -187,7 +165,7 @@ impl RuntimeKernel {
     /// diagnostic step is durable — orphan reconciliation records that step
     /// only after the terminal write wins. Without it the note falls back to
     /// the run's most recent errored step.
-    pub(crate) fn best_effort_block_tasks_for_terminal_run(
+    pub(super) fn best_effort_block_tasks_for_terminal_run(
         &self,
         run_id: &str,
         state: JobRunState,
@@ -416,7 +394,8 @@ impl RuntimeKernel {
                         return Ok(());
                     }
                     if footprint_unavailable && hold.is_none() && provider_failure.is_none() {
-                        return self.apply_task_automation_update(
+                        return RuntimeHost::apply_task_automation_update(
+                            self,
                             &task.id,
                             TaskAutomationUpdate {
                                 status: Some(TaskStatus::Backlog),
@@ -439,7 +418,8 @@ impl RuntimeKernel {
                         );
                     }
                     if upgrade_pending && hold.is_none() && provider_failure.is_none() {
-                        return self.apply_task_automation_update(
+                        return RuntimeHost::apply_task_automation_update(
+                            self,
                             &task.id,
                             TaskAutomationUpdate {
                                 status: Some(TaskStatus::Backlog),
@@ -501,7 +481,7 @@ impl RuntimeKernel {
                             ),
                         }
                     };
-                    self.apply_task_automation_update(&task.id, update)
+                    RuntimeHost::apply_task_automation_update(self, &task.id, update)
                 });
             // Per-task best-effort: one task's write failure must not strand the
             // rest of the bundle.

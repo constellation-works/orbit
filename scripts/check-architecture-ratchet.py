@@ -327,7 +327,11 @@ def runtime_host_required(by_path):
 
 
 def application_port_methods(by_path):
-    port = _source(by_path, APPLICATION_PORT)
+    # The port is deleted, so its file is normally absent and the count is
+    # zero. A port that comes back is counted again, and the ratchet refuses it.
+    port = by_path.get(APPLICATION_PORT)
+    if port is None:
+        return []
     start, end = _trait_body(port.masked, "ApplicationPort")
     return [port.location(decl.offset, decl.name) for decl in fn_decls(port.masked, start, end)]
 

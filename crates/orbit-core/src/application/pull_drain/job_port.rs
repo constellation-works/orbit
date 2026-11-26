@@ -29,6 +29,10 @@ impl JobPullSettlementPort for OrbitRuntime {
         self.deliver_claimed_leaf_settlement(run_id)
     }
 
+    fn settle_terminalized_leaf(&self, run_id: &str, diagnostic: Option<(&str, &str)>) {
+        self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
+    }
+
     fn retry_leaf_settlement(&self, run_id: &str) {
         self.retry_own_claimed_leaf_settlement(run_id);
     }

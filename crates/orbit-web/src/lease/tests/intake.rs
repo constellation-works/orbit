@@ -207,16 +207,17 @@ fn oversized_read_responses_are_bounded_errors_and_other_connections_still_work(
         return;
     }
     let fixture = FrameLimitFixture::start();
-    let granted = lease::request(
-        &fixture.runtime,
-        json!({
-            "principal": "alice", "selectors": ["dir:src"],
-            "tags": ["x".repeat(LEASE_INTAKE_MAX_FRAME_BYTES as usize)]
-        }),
-        None,
-        None,
-    )
-    .expect("seed a large lease through the runtime API");
+    let granted = fixture
+        .runtime
+        .request_lease(
+            json!({
+                "principal": "alice", "selectors": ["dir:src"],
+                "tags": ["x".repeat(LEASE_INTAKE_MAX_FRAME_BYTES as usize)]
+            }),
+            None,
+            None,
+        )
+        .expect("seed a large lease through the runtime API");
     let lease_id = granted["lease"]["lease_id"].as_str().expect("lease id");
     let paths = oversized_response_paths();
     for (operation, input, result) in [
@@ -294,13 +295,14 @@ fn oversized_token_request_is_refused_before_any_grant_or_notice() {
         return;
     }
     let fixture = FrameLimitFixture::start();
-    let held = lease::request(
-        &fixture.runtime,
-        json!({"principal": "alice", "selectors": ["dir:src"]}),
-        None,
-        None,
-    )
-    .expect("seed an overlapping lease");
+    let held = fixture
+        .runtime
+        .request_lease(
+            json!({"principal": "alice", "selectors": ["dir:src"]}),
+            None,
+            None,
+        )
+        .expect("seed an overlapping lease");
     let notices_before = all_notices(&fixture.runtime);
     let mut client = fixture.connect();
     for _ in 0..2 {
@@ -377,13 +379,14 @@ fn token_queued_selector_expansion_retries_do_not_double_count() {
     std::fs::write(fixture._tmp.path().join("ws_frame_limit/free/carol.rs"), "")
         .expect("create Carol selector file");
 
-    lease::request(
-        &fixture.runtime,
-        json!({"principal": "alice", "selectors": ["dir:blocked"], "mode": "hard"}),
-        None,
-        None,
-    )
-    .expect("Alice holds the blocked directory");
+    fixture
+        .runtime
+        .request_lease(
+            json!({"principal": "alice", "selectors": ["dir:blocked"], "mode": "hard"}),
+            None,
+            None,
+        )
+        .expect("Alice holds the blocked directory");
     let mut client = fixture.connect();
     let bob = ok(call_scoped(
         &mut client,
@@ -565,16 +568,17 @@ fn token_grant_answers_fit_the_frame_without_compensating_release() {
     let fixture = FrameLimitFixture::start_with(limits);
     let held: Vec<String> = (0..40)
         .map(|index| {
-            let granted = lease::request(
-                &fixture.runtime,
-                json!({
-                    "principal": "alice",
-                    "selectors": [format!("file:src/{index:02}-{}.rs", "h".repeat(120))],
-                }),
-                None,
-                None,
-            )
-            .expect("seed a disjoint advisory lease");
+            let granted = fixture
+                .runtime
+                .request_lease(
+                    json!({
+                        "principal": "alice",
+                        "selectors": [format!("file:src/{index:02}-{}.rs", "h".repeat(120))],
+                    }),
+                    None,
+                    None,
+                )
+                .expect("seed a disjoint advisory lease");
             granted["lease"]["lease_id"].as_str().unwrap().to_string()
         })
         .collect();
@@ -662,17 +666,18 @@ fn token_hard_holder_lists_are_bounded_while_every_holder_still_blocks() {
     std::fs::write(repo.join("own/carol.rs"), "").expect("create Carol's file");
     let mut held: Vec<String> = (0..HOLDERS)
         .map(|index| {
-            let granted = lease::request(
-                &fixture.runtime,
-                json!({
-                    "principal": "alice",
-                    "selectors": [format!("file:src/{index:02}.rs")],
-                    "mode": "hard",
-                }),
-                None,
-                None,
-            )
-            .expect("seed a disjoint hard lease");
+            let granted = fixture
+                .runtime
+                .request_lease(
+                    json!({
+                        "principal": "alice",
+                        "selectors": [format!("file:src/{index:02}.rs")],
+                        "mode": "hard",
+                    }),
+                    None,
+                    None,
+                )
+                .expect("seed a disjoint hard lease");
             assert_eq!(granted["lease"]["mode"], "hard", "{granted}");
             granted["lease"]["lease_id"].as_str().unwrap().to_string()
         })
@@ -836,18 +841,19 @@ fn token_task_holder_prebound_reports_truncation_for_requests_and_expansions() {
     // The operator path remains unbounded and confirms all three tasks block
     // this selector. Its first conflict also sizes a budget that fits exactly
     // one conflict while leaving room for the runtime's omission witness.
-    let unbounded = lease::request(
-        &fixture.runtime,
-        json!({
-            "principal": "operator",
-            "selectors": [BLOCKED],
-            "mode": "hard",
-            "wait": false,
-        }),
-        None,
-        None,
-    )
-    .expect("operator request against task holders");
+    let unbounded = fixture
+        .runtime
+        .request_lease(
+            json!({
+                "principal": "operator",
+                "selectors": [BLOCKED],
+                "mode": "hard",
+                "wait": false,
+            }),
+            None,
+            None,
+        )
+        .expect("operator request against task holders");
     assert_eq!(unbounded["granted"], false, "{unbounded}");
     assert_eq!(unbounded["queued"], false, "{unbounded}");
     assert_eq!(unbounded["truncated"], false, "{unbounded}");
@@ -891,16 +897,17 @@ fn token_task_holder_prebound_reports_truncation_for_requests_and_expansions() {
         client_address: "192.0.2.7".to_string(),
         max_response_bytes: FRAME,
     };
-    let request_probe = lease::request_with_token(
-        &fixture.runtime,
-        json!({
-            "selectors": ["file:src/new.rs"],
-            "mode": "hard",
-            "tags": ["x".repeat(FRAME)],
-        }),
-        &grant,
-    )
-    .expect_err("the fixed request answer with a maximum tag exceeds the frame");
+    let request_probe = fixture
+        .runtime
+        .request_lease_with_token(
+            json!({
+                "selectors": ["file:src/new.rs"],
+                "mode": "hard",
+                "tags": ["x".repeat(FRAME)],
+            }),
+            &grant,
+        )
+        .expect_err("the fixed request answer with a maximum tag exceeds the frame");
     let request_needed = preflight_needed_bytes(&request_probe.to_string());
     let request_tag_len = 2 * FRAME - holder_slack - request_needed;
     assert!((1..FRAME).contains(&request_tag_len), "{request_tag_len}");
@@ -959,18 +966,19 @@ fn token_task_holder_prebound_reports_truncation_for_requests_and_expansions() {
     // different set of fields and the existing lease record. The oversized
     // operator-created lease is only a fixture for the public token preflight;
     // that refusal occurs before it can change the lease.
-    let expansion_probe = lease::request(
-        &fixture.runtime,
-        json!({
-            "principal": "carol",
-            "selectors": ["file:src/new.rs"],
-            "mode": "hard",
-            "tags": ["x".repeat(FRAME)],
-        }),
-        None,
-        None,
-    )
-    .expect("create expansion budget probe");
+    let expansion_probe = fixture
+        .runtime
+        .request_lease(
+            json!({
+                "principal": "carol",
+                "selectors": ["file:src/new.rs"],
+                "mode": "hard",
+                "tags": ["x".repeat(FRAME)],
+            }),
+            None,
+            None,
+        )
+        .expect("create expansion budget probe");
     let expansion_probe_id = expansion_probe["lease"]["lease_id"].as_str().unwrap();
     let expansion_error = refusal(call(
         &mut client,
@@ -993,18 +1001,19 @@ fn token_task_holder_prebound_reports_truncation_for_requests_and_expansions() {
     )
     .expect("release expansion budget probe");
 
-    let expandable = lease::request(
-        &fixture.runtime,
-        json!({
-            "principal": "carol",
-            "selectors": ["file:src/new.rs"],
-            "mode": "hard",
-            "tags": ["x".repeat(expansion_tag_len)],
-        }),
-        None,
-        None,
-    )
-    .expect("create lease for token expansion");
+    let expandable = fixture
+        .runtime
+        .request_lease(
+            json!({
+                "principal": "carol",
+                "selectors": ["file:src/new.rs"],
+                "mode": "hard",
+                "tags": ["x".repeat(expansion_tag_len)],
+            }),
+            None,
+            None,
+        )
+        .expect("create lease for token expansion");
     let expandable_id = expandable["lease"]["lease_id"].as_str().unwrap();
     let expanded = ok(call(
         &mut client,
@@ -1570,13 +1579,14 @@ fn notice_pages_over_the_frame_limit_are_shortened_without_skipping_a_notice() {
         let selectors: Vec<String> = (0..90)
             .map(|index| format!("file:src/{lease}-{index:03}-{}.rs", "x".repeat(180)))
             .collect();
-        lease::request(
-            &fixture.runtime,
-            json!({"principal": "alice", "selectors": selectors}),
-            None,
-            None,
-        )
-        .expect("seed a lease with a large granted notice");
+        fixture
+            .runtime
+            .request_lease(
+                json!({"principal": "alice", "selectors": selectors}),
+                None,
+                None,
+            )
+            .expect("seed a lease with a large granted notice");
     }
     let expected = lease::notices(&fixture.runtime, json!({"after": 0})).unwrap();
     let expected = expected["notices"].as_array().unwrap().clone();
@@ -1723,7 +1733,10 @@ fn token_expansion_accounts_for_a_near_limit_deadlock_cycle() {
         if let Some(tag) = tag {
             input["tags"] = json!([tag]);
         }
-        let granted = lease::request(&fixture.runtime, input, None, None).expect("seed hard lease");
+        let granted = fixture
+            .runtime
+            .request_lease(input, None, None)
+            .expect("seed hard lease");
         assert_eq!(granted["granted"], true, "{granted}");
         assert_eq!(granted["lease"]["mode"], "hard", "{granted}");
         granted["lease"]["lease_id"]
@@ -1732,13 +1745,14 @@ fn token_expansion_accounts_for_a_near_limit_deadlock_cycle() {
             .to_string()
     };
     let expand_operator = |lease_id: &str, selector: &str| {
-        lease::expand(
-            &fixture.runtime,
-            json!({"lease_id": lease_id, "selectors": [selector]}),
-            None,
-            None,
-        )
-        .expect("operator expand")
+        fixture
+            .runtime
+            .expand_lease(
+                json!({"lease_id": lease_id, "selectors": [selector]}),
+                None,
+                None,
+            )
+            .expect("operator expand")
     };
 
     // A small cycle still returns the full deadlock and keeps the older waiter.

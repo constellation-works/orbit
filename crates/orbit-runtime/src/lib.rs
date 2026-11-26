@@ -49,7 +49,6 @@
     deny(clippy::disallowed_methods)
 )]
 
-mod application_port;
 pub mod base;
 pub mod builder;
 pub mod host;
@@ -99,7 +98,6 @@ pub use stored::audit;
 pub use stored::recovery_authority;
 pub use stored::workspace;
 
-pub use application_port::ApplicationPort;
 pub use base::Base;
 pub use base::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 pub use base::config::{CONFIG_TOML_FILE, existing_config_file_path};

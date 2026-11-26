@@ -1,5 +1,6 @@
 //! Task reservation commands and input validation.
 
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -21,6 +22,7 @@ use super::index::{
     TaskLockIndex, context_lock_exempt, invalid_declared_selectors, merge_task_lock_conflicts,
     requested_task_files_indexed, task_lock_conflicts_indexed,
 };
+use super::prepared::PreparedGrant;
 use crate::RuntimeKernel;
 
 /// The in-process reservation answer. JSON is produced only for a tool or
@@ -214,28 +216,30 @@ fn validate_reservation_id_form(reservation_id: &str) -> Result<(), OrbitError> 
     )))
 }
 
-pub fn reserve(
-    runtime: &RuntimeKernel,
+/// Prepare a task-lock reservation for the scope in `input`, loading the task
+/// index it is judged against. Nothing is reserved until the caller grants it.
+pub fn prepare_reserve<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
-) -> Result<Value, OrbitError> {
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     let requested_task_ids = match parse_task_lock_reservation_scope(&input)? {
         TaskLockReservationScope::TaskIds(task_ids) => task_ids,
         TaskLockReservationScope::Files(_) => Vec::new(),
     };
     let index = TaskLockIndex::load(runtime, &requested_task_ids)?;
-    reserve_with_index(
+    Ok(prepare_reserve_with(
         runtime,
         input,
         agent,
         model,
         reservation_owner,
-        &index,
+        index,
         EmptyTaskSurfacePolicy::Refuse,
-    )
-    .map(ReservationOutcome::into_tool_output)
+    )?
+    .map(ReservationOutcome::into_tool_output))
 }
 
 /// Whether a task-scope reservation that resolves to zero files is a mistake
@@ -259,21 +263,45 @@ pub enum EmptyTaskSurfacePolicy {
     Admit,
 }
 
-/// Reserve a task-lock scope using an index loaded by the calling operation.
+/// Prepare a task-lock reservation using an index loaded by the calling
+/// operation.
 ///
 /// The v2 `reserve_locks` action needs the same task index for its one-poll
 /// admission path and its reservation check. Keeping the actual reservation
 /// behavior here gives both callers one canonical implementation while letting
 /// that action avoid reloading every task bundle.
-pub fn reserve_with_index(
-    runtime: &RuntimeKernel,
+pub fn prepare_reserve_with_index<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
-    index: &TaskLockIndex,
+    index: &'a TaskLockIndex,
     empty_task_surface_policy: EmptyTaskSurfacePolicy,
-) -> Result<ReservationOutcome, OrbitError> {
+) -> Result<PreparedGrant<'a, ReservationOutcome>, OrbitError> {
+    prepare_reserve_with(
+        runtime,
+        input,
+        agent,
+        model,
+        reservation_owner,
+        index,
+        empty_task_surface_policy,
+    )
+}
+
+/// The one reservation path: everything up to the conflict judgement runs
+/// here, and the returned grant judges and writes.
+fn prepare_reserve_with<'a>(
+    runtime: &'a RuntimeKernel,
+    input: Value,
+    agent: Option<String>,
+    model: Option<String>,
+    reservation_owner: Option<ReservationOwnerContext>,
+    held_index: impl Borrow<TaskLockIndex> + 'a,
+    empty_task_surface_policy: EmptyTaskSurfacePolicy,
+) -> Result<PreparedGrant<'a, ReservationOutcome>, OrbitError> {
+    let index = held_index.borrow();
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
     let ttl_seconds = parse_ttl_seconds(&input)?;
 
@@ -323,130 +351,140 @@ pub fn reserve_with_index(
             canonicalize_file_lock_selectors(files, "files", repo_root)?,
         ),
     };
-    runtime.reconcile_stale_owned_reservations_for_files(&requested_files, 32)?;
-    let mut conflicts = task_lock_conflicts_indexed(index, &task_ids, &requested_files, repo_root);
-    // A `no-diff-expected` scope still checks its original footprint against
-    // persistent holders atomically at the store boundary. The grant holds
-    // no files: `release_locks` keeps a
-    // reservation id, and the row cannot block a later overlapping task
-    // [ORB-14247].
-    let stored_files =
-        if conflicts.is_empty() && reservation_context_lock_exempt(index, &reservation_scope) {
-            Vec::new()
-        } else {
-            requested_files.clone()
-        };
+    Ok(PreparedGrant::new(
+        Some(requested_files.clone()),
+        move || {
+            let index = held_index.borrow();
+            let mut conflicts =
+                task_lock_conflicts_indexed(index, &task_ids, &requested_files, repo_root);
+            // A `no-diff-expected` scope still checks its original footprint against
+            // persistent holders atomically at the store boundary. The grant holds
+            // no files: `release_locks` keeps a
+            // reservation id, and the row cannot block a later overlapping task
+            // [ORB-14247].
+            let stored_files = if conflicts.is_empty()
+                && reservation_context_lock_exempt(index, &reservation_scope)
+            {
+                Vec::new()
+            } else {
+                requested_files.clone()
+            };
 
-    record_task_lock_audit_event(
-        runtime,
-        "task.locks.reserve.requested",
-        "orbit.task.locks.reserve",
-        None,
-        first_task_id(&task_ids),
-        AuditEventStatus::Success,
-        json!({
-            "actor": actor.clone(),
-            "task_ids": task_ids.clone(),
-            "files": requested_files.clone(),
-            "ttl_seconds": ttl_seconds,
-            "owner_run_id": reservation_owner
-                .as_ref()
-                .map(|owner| owner.owner_run_id.clone()),
-        }),
-    )?;
+            record_task_lock_audit_event(
+                runtime,
+                "task.locks.reserve.requested",
+                "orbit.task.locks.reserve",
+                None,
+                first_task_id(&task_ids),
+                AuditEventStatus::Success,
+                json!({
+                    "actor": actor.clone(),
+                    "task_ids": task_ids.clone(),
+                    "files": requested_files.clone(),
+                    "ttl_seconds": ttl_seconds,
+                    "owner_run_id": reservation_owner
+                        .as_ref()
+                        .map(|owner| owner.owner_run_id.clone()),
+                }),
+            )?;
 
-    let reservation_result = if conflicts.is_empty() {
-        runtime
-            .stores()
-            .task_reservations()
-            .reserve_task_reservation(TaskReservationReserveParams {
-                workspace_orbit_dir: workspace_orbit_dir(runtime),
-                workspace_id: workspace_id.clone(),
-                task_ids: task_ids.clone(),
-                requested_files: requested_files.clone(),
-                stored_files,
-                actor: actor.clone(),
-                ttl_seconds,
-                owner_run_id: reservation_owner
-                    .as_ref()
-                    .map(|owner| owner.owner_run_id.clone()),
-                owner_metadata: reservation_owner
-                    .as_ref()
-                    .and_then(|owner| owner.owner_metadata.clone()),
-            })?
-    } else {
-        let check = runtime
-            .stores()
-            .task_reservations()
-            .check_task_reservation_conflicts(TaskReservationCheckParams {
-                workspace_orbit_dir: workspace_orbit_dir(runtime),
-                workspace_id: workspace_id.clone(),
-                requested_files: requested_files.clone(),
-            })?;
-        conflicts = merge_task_lock_conflicts(conflicts, check.conflicts);
-        emit_expired_reservation_events(runtime, &check.expired_reservations)?;
-        orbit_store::contract::TaskReservationReserveResult {
-            reserved: false,
-            reservation_id: None,
-            expires_at: None,
-            reserved_files: Vec::new(),
-            conflicts: conflicts.clone(),
-            expired_reservations: Vec::new(),
-        }
-    };
+            let reservation_result = if conflicts.is_empty() {
+                runtime
+                    .stores()
+                    .task_reservations()
+                    .reserve_task_reservation(TaskReservationReserveParams {
+                        workspace_orbit_dir: workspace_orbit_dir(runtime),
+                        workspace_id: workspace_id.clone(),
+                        task_ids: task_ids.clone(),
+                        requested_files: requested_files.clone(),
+                        stored_files,
+                        actor: actor.clone(),
+                        ttl_seconds,
+                        owner_run_id: reservation_owner
+                            .as_ref()
+                            .map(|owner| owner.owner_run_id.clone()),
+                        owner_metadata: reservation_owner
+                            .as_ref()
+                            .and_then(|owner| owner.owner_metadata.clone()),
+                    })?
+            } else {
+                let check = runtime
+                    .stores()
+                    .task_reservations()
+                    .check_task_reservation_conflicts(TaskReservationCheckParams {
+                        workspace_orbit_dir: workspace_orbit_dir(runtime),
+                        workspace_id: workspace_id.clone(),
+                        requested_files: requested_files.clone(),
+                    })?;
+                conflicts = merge_task_lock_conflicts(conflicts, check.conflicts);
+                emit_expired_reservation_events(runtime, &check.expired_reservations)?;
+                orbit_store::contract::TaskReservationReserveResult {
+                    reserved: false,
+                    reservation_id: None,
+                    expires_at: None,
+                    reserved_files: Vec::new(),
+                    conflicts: conflicts.clone(),
+                    expired_reservations: Vec::new(),
+                }
+            };
 
-    emit_expired_reservation_events(runtime, &reservation_result.expired_reservations)?;
+            emit_expired_reservation_events(runtime, &reservation_result.expired_reservations)?;
 
-    if reservation_result.reserved {
-        let reservation_id = reservation_result.reservation_id.clone().ok_or_else(|| {
-            OrbitError::Execution("reservation grant is missing reservation_id".to_string())
-        })?;
-        record_task_lock_audit_event(
-            runtime,
-            "task.locks.reserve.granted",
-            "orbit.task.locks.reserve",
-            Some(reservation_id.as_str()),
-            first_task_id(&task_ids),
-            AuditEventStatus::Success,
-            json!({
-                "reservation_id": reservation_id,
-                "files": reservation_result.reserved_files.clone(),
-                "expires_at": reservation_result.expires_at.clone(),
-                "actor": actor,
-                "task_ids": task_ids.clone(),
-                "owner_run_id": reservation_owner
-                    .as_ref()
-                    .map(|owner| owner.owner_run_id.clone()),
-            }),
-        )?;
-        Ok(ReservationOutcome::Granted {
-            reservation_id,
-            expires_at: reservation_result.expires_at,
-            reserved_files: reservation_result.reserved_files,
-            footprint_deferred: false,
-            deferred_conflicts: Vec::new(),
-        })
-    } else {
-        let conflicts = merge_task_lock_conflicts(conflicts, reservation_result.conflicts);
-        record_task_lock_audit_event(
-            runtime,
-            "task.locks.reserve.denied",
-            "orbit.task.locks.reserve",
-            None,
-            first_task_id(&task_ids),
-            AuditEventStatus::Denied,
-            json!({
-                "actor": actor,
-                "task_ids": task_ids.clone(),
-                "files": requested_files.clone(),
-                "conflicts": conflicts.clone(),
-                "owner_run_id": reservation_owner
-                    .as_ref()
-                    .map(|owner| owner.owner_run_id.clone()),
-            }),
-        )?;
-        Ok(ReservationOutcome::Denied { conflicts })
-    }
+            if reservation_result.reserved {
+                let reservation_id =
+                    reservation_result.reservation_id.clone().ok_or_else(|| {
+                        OrbitError::Execution(
+                            "reservation grant is missing reservation_id".to_string(),
+                        )
+                    })?;
+                record_task_lock_audit_event(
+                    runtime,
+                    "task.locks.reserve.granted",
+                    "orbit.task.locks.reserve",
+                    Some(reservation_id.as_str()),
+                    first_task_id(&task_ids),
+                    AuditEventStatus::Success,
+                    json!({
+                        "reservation_id": reservation_id,
+                        "files": reservation_result.reserved_files.clone(),
+                        "expires_at": reservation_result.expires_at.clone(),
+                        "actor": actor,
+                        "task_ids": task_ids.clone(),
+                        "owner_run_id": reservation_owner
+                            .as_ref()
+                            .map(|owner| owner.owner_run_id.clone()),
+                    }),
+                )?;
+                Ok(ReservationOutcome::Granted {
+                    reservation_id,
+                    expires_at: reservation_result.expires_at,
+                    reserved_files: reservation_result.reserved_files,
+                    footprint_deferred: false,
+                    deferred_conflicts: Vec::new(),
+                })
+            } else {
+                let conflicts = merge_task_lock_conflicts(conflicts, reservation_result.conflicts);
+                record_task_lock_audit_event(
+                    runtime,
+                    "task.locks.reserve.denied",
+                    "orbit.task.locks.reserve",
+                    None,
+                    first_task_id(&task_ids),
+                    AuditEventStatus::Denied,
+                    json!({
+                        "actor": actor,
+                        "task_ids": task_ids.clone(),
+                        "files": requested_files.clone(),
+                        "conflicts": conflicts.clone(),
+                        "owner_run_id": reservation_owner
+                            .as_ref()
+                            .map(|owner| owner.owner_run_id.clone()),
+                    }),
+                )?;
+                Ok(ReservationOutcome::Denied { conflicts })
+            }
+        },
+    ))
 }
 
 /// Grant `task_ids` a reservation that holds no files, for a delivery that

@@ -72,7 +72,9 @@ fn enabled_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
 }
 
 fn request(runtime: &OrbitRuntime, input: Value) -> Value {
-    lease::request(runtime, input, None, Some("codex".into())).expect("lease request")
+    runtime
+        .request_lease(input, None, Some("codex".into()))
+        .expect("lease request")
 }
 
 fn holder_ids(conflicts: &Value) -> Vec<(String, String)> {
@@ -514,9 +516,7 @@ fn principal_class_policy_downgrades_hard_and_caps_priority() {
             "{downgraded}"
         );
 
-        let message = invalid_input_message(lease::request(
-            &agent,
-            json!({"principal": "alice/claude-code", "selectors": ["file:src/lib.rs"], "priority": "high"}),
+        let message = invalid_input_message(agent.request_lease(json!({"principal": "alice/claude-code", "selectors": ["file:src/lib.rs"], "priority": "high"}),
             None,
             Some("codex".into()),
         ));
@@ -726,7 +726,7 @@ fn disabled_leases_refuse_every_operation() {
         let lease_id = json!({"lease_id": "lease-1"});
         let selectors = json!({"principal": "alice", "selectors": ["file:src/lib.rs"]});
         let results = [
-            lease::request(&runtime, selectors, None, None),
+            runtime.request_lease(selectors, None, None),
             lease::renew(&runtime, lease_id.clone()),
             lease::release(&runtime, lease_id.clone(), None, None),
             lease::show(&runtime, lease_id),
@@ -967,13 +967,13 @@ fn expand_adds_free_paths_queues_blocked_ones_and_refuses_a_deadlock() {
     );
     let second_id = lease_id(&second);
     let expand = |lease_id: &str, selectors: Value| {
-        lease::expand(
-            &runtime,
-            json!({"lease_id": lease_id, "selectors": selectors}),
-            None,
-            Some("codex".into()),
-        )
-        .expect("expand lease")
+        runtime
+            .expand_lease(
+                json!({"lease_id": lease_id, "selectors": selectors}),
+                None,
+                Some("codex".into()),
+            )
+            .expect("expand lease")
     };
 
     let widened = expand(&first_id, json!(["file:src/other.rs", "file:lib/core.rs"]));
@@ -1067,13 +1067,13 @@ fn grant_that_closes_a_lease_cycle_refuses_the_ranked_last_expansion() {
     );
     let ahead_id = lease_id(&ahead);
     let expand = |lease_id: &str, selectors: Value| {
-        lease::expand(
-            &runtime,
-            json!({"lease_id": lease_id, "selectors": selectors}),
-            None,
-            Some("codex".into()),
-        )
-        .expect("expand lease")
+        runtime
+            .expand_lease(
+                json!({"lease_id": lease_id, "selectors": selectors}),
+                None,
+                Some("codex".into()),
+            )
+            .expect("expand lease")
     };
 
     // The higher-priority lease waits on the task's path and on the path the

@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "counts": {
-    "application_port_methods": 20,
+    "application_port_methods": 0,
     "env_global_accessor_calls": 55,
     "env_process_env_method_calls": 511,
-    "from_kernel_ref_uses": 21,
+    "from_kernel_ref_uses": 0,
     "impl_orbit_runtime_files": 337,
     "orbit_runtime_naming_files.orbit-cli": 62,
     "orbit_runtime_naming_files.orbit-cmd": 30,
     "orbit_runtime_naming_files.orbit-web": 37,
     "orbit_runtime_ref_param_fns": 1257,
     "runtime_host_required_methods": 153,
-    "runtime_top_level_modules_outside_layers": 3,
+    "runtime_top_level_modules_outside_layers": 2,
     "worker_or_owner_reads": 92
   }
 }

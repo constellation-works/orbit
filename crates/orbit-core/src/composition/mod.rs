@@ -1,6 +1,5 @@
 //! Composition root joining resolved configuration, the runtime kernel, and adapters.
 
-mod application_port;
 mod core;
 mod runtime;
 mod services;

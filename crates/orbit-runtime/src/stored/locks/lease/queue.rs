@@ -27,6 +27,7 @@ use super::super::command::{
 use super::super::index::{
     TaskLockIndex, task_lock_conflicts_bounded, task_lock_conflicts_indexed,
 };
+use super::super::prepared::PreparedGrant;
 use super::admission::{
     LEASE_INTAKE_ACTOR, LeaseTokenGrant, TOKEN_MAX_LEASE_SELECTORS, ensure_token_covers_lease,
     ensure_token_selector_count,
@@ -47,12 +48,15 @@ const EXPAND_TOOL: &str = "orbit.lease.expand";
 /// closes a cycle of leases each waiting on another's held paths, the owner
 /// refuses the expansion ranked last (lowest priority, then youngest) with a
 /// `deadlock` notice; `deadlock` in the answer is set when that is this one.
-pub fn expand(
-    runtime: &RuntimeKernel,
+///
+/// The expansion is prepared here and changes nothing until the caller grants
+/// it.
+pub fn prepare_expand<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
-) -> Result<Value, OrbitError> {
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     runtime.lease_policy().ensure_enabled()?;
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     expand_as(runtime, input, actor, None)
@@ -62,33 +66,29 @@ pub fn expand(
 /// when the lease's mode or priority exceeds the token or its class policy,
 /// when the lease would hold and wait for more than the token selector limit
 /// together, or when its answer could not fit the token transport.
-pub fn expand_with_token(
-    runtime: &RuntimeKernel,
+pub fn prepare_expand_with_token<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
-    grant: &LeaseTokenGrant,
-) -> Result<Value, OrbitError> {
+    grant: &'a LeaseTokenGrant,
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     runtime.lease_policy().ensure_enabled()?;
     ensure_token_covers_lease(runtime, &input, grant)?;
     expand_as(runtime, input, LEASE_INTAKE_ACTOR.to_string(), Some(grant))
 }
 
-fn expand_as(
-    runtime: &RuntimeKernel,
+fn expand_as<'a>(
+    runtime: &'a RuntimeKernel,
     input: Value,
     actor: String,
-    token: Option<&LeaseTokenGrant>,
-) -> Result<Value, OrbitError> {
+    token: Option<&'a LeaseTokenGrant>,
+) -> Result<PreparedGrant<'a, Value>, OrbitError> {
     let lease_id = required_lease_id(&input)?;
     let repo_root = runtime.paths().repo_root.as_path();
     let selectors = parse_selectors(&input, &["selectors", "files"], "selectors", repo_root)?;
     let orbit_dir = workspace_orbit_dir(runtime);
     let workspace_id = workspace_task_reservation_id(runtime)?;
     let store = runtime.stores().task_reservations();
-    let not_active = || {
-        OrbitError::InvalidInput(format!(
-            "lease `{lease_id}` is not active (unknown, released or expired); request a new lease"
-        ))
-    };
+    let not_active = || lease_not_active(&lease_id);
     let current = store
         .get_lease(&orbit_dir, workspace_id.as_deref(), &lease_id)?
         .filter(lease_active)
@@ -171,89 +171,99 @@ fn expand_as(
         None => None,
     };
     let index = TaskLockIndex::load(runtime, &[])?;
-    let task_conflicts = if current.mode == LeaseMode::Hard && !surface.is_empty() {
-        runtime.reconcile_stale_owned_reservations_for_files(&surface, 32)?;
-        task_lock_conflicts_bounded(&index, &surface, repo_root, budget.conflicts_shown())
-    } else {
-        Vec::new()
-    };
-    let result = store.expand_lease(LeaseExpandParams {
-        workspace_orbit_dir: orbit_dir,
-        workspace_id,
-        lease_id: lease_id.clone(),
-        selectors: surface,
-        task_conflicts,
-        aging_minutes: runtime.lease_policy().aging_minutes,
-        holder_list_bytes: budget.holder_list_bytes(),
-        max_selectors: token.map(|_| TOKEN_MAX_LEASE_SELECTORS as u32),
-        deadlock_budget_bytes,
-    })?;
-    emit_expired_lease_events(runtime, EXPAND_TOOL, &result.expired_leases)?;
-    if !result.expired_leases.is_empty() {
-        grant_queued(runtime, EXPAND_TOOL)?;
-    }
-    if result.selector_limit_exceeded {
-        // Checked above too; the store's check holds against a concurrent
-        // expansion of the same lease.
-        return Err(OrbitError::InvalidInput(format!(
-            "lease `{lease_id}` would have more than the lease token limit of \
+    let stale_owner_surface =
+        (current.mode == LeaseMode::Hard && !surface.is_empty()).then(|| surface.clone());
+    Ok(PreparedGrant::new(stale_owner_surface, move || {
+        let not_active = || lease_not_active(&lease_id);
+        let task_conflicts = if current.mode == LeaseMode::Hard && !surface.is_empty() {
+            task_lock_conflicts_bounded(&index, &surface, repo_root, budget.conflicts_shown())
+        } else {
+            Vec::new()
+        };
+        let result = store.expand_lease(LeaseExpandParams {
+            workspace_orbit_dir: orbit_dir,
+            workspace_id,
+            lease_id: lease_id.clone(),
+            selectors: surface,
+            task_conflicts,
+            aging_minutes: runtime.lease_policy().aging_minutes,
+            holder_list_bytes: budget.holder_list_bytes(),
+            max_selectors: token.map(|_| TOKEN_MAX_LEASE_SELECTORS as u32),
+            deadlock_budget_bytes,
+        })?;
+        emit_expired_lease_events(runtime, EXPAND_TOOL, &result.expired_leases)?;
+        if !result.expired_leases.is_empty() {
+            grant_queued(runtime, EXPAND_TOOL)?;
+        }
+        if result.selector_limit_exceeded {
+            // Checked above too; the store's check holds against a concurrent
+            // expansion of the same lease.
+            return Err(OrbitError::InvalidInput(format!(
+                "lease `{lease_id}` would have more than the lease token limit of \
              {TOKEN_MAX_LEASE_SELECTORS} selectors; it is unchanged"
-        )));
-    }
-    let lease = result.lease.ok_or_else(not_active)?;
-    let conflicts = budget.take(result.conflicts);
-    budget.truncated |= result.holders_truncated;
-    let deadlock = result
-        .deadlocks
-        .iter()
-        .find(|deadlock| deadlock.lease_id == lease_id);
-    let overlaps = if lease.mode == LeaseMode::Advisory {
-        PathHolders::load(runtime, &index, Some(&lease_id))?.overlapping(
-            &result.added,
-            repo_root,
-            &mut budget,
-        )
-    } else {
-        Vec::new()
-    };
-    record_lease_audit_event(
-        runtime,
-        "lease.expanded",
-        EXPAND_TOOL,
-        Some(lease_id.as_str()),
-        AuditEventStatus::Success,
-        json!({
-            "lease_id": lease_id,
-            "actor": actor,
-            "added": result.added,
-            "queued": result.queued,
-            "unlocked_selectors": unlocked_selectors,
-            "conflicts": conflicts,
-            "queue_position": result.queue_position,
-            "deadlocks": result.deadlocks,
-        }),
-    )?;
-    for refused in &result.deadlocks {
+            )));
+        }
+        let lease = result.lease.ok_or_else(not_active)?;
+        let conflicts = budget.take(result.conflicts);
+        budget.truncated |= result.holders_truncated;
+        let deadlock = result
+            .deadlocks
+            .iter()
+            .find(|deadlock| deadlock.lease_id == lease_id);
+        let overlaps = if lease.mode == LeaseMode::Advisory {
+            PathHolders::load(runtime, &index, Some(&lease_id))?.overlapping(
+                &result.added,
+                repo_root,
+                &mut budget,
+            )
+        } else {
+            Vec::new()
+        };
         record_lease_audit_event(
             runtime,
-            "lease.expand.deadlock",
+            "lease.expanded",
             EXPAND_TOOL,
-            Some(refused.lease_id.as_str()),
-            AuditEventStatus::Denied,
-            json!(refused),
+            Some(lease_id.as_str()),
+            AuditEventStatus::Success,
+            json!({
+                "lease_id": lease_id,
+                "actor": actor,
+                "added": result.added,
+                "queued": result.queued,
+                "unlocked_selectors": unlocked_selectors,
+                "conflicts": conflicts,
+                "queue_position": result.queue_position,
+                "deadlocks": result.deadlocks,
+            }),
         )?;
-    }
-    Ok(json!({
-        "added": result.added,
-        "queued": result.queued,
-        "queue_position": result.queue_position,
-        "conflicts": conflicts,
-        "deadlock": deadlock,
-        "unlocked_selectors": unlocked_selectors,
-        "overlaps": overlaps,
-        "truncated": budget.truncated,
-        "lease": lease_json(&lease),
+        for refused in &result.deadlocks {
+            record_lease_audit_event(
+                runtime,
+                "lease.expand.deadlock",
+                EXPAND_TOOL,
+                Some(refused.lease_id.as_str()),
+                AuditEventStatus::Denied,
+                json!(refused),
+            )?;
+        }
+        Ok(json!({
+            "added": result.added,
+            "queued": result.queued,
+            "queue_position": result.queue_position,
+            "conflicts": conflicts,
+            "deadlock": deadlock,
+            "unlocked_selectors": unlocked_selectors,
+            "overlaps": overlaps,
+            "truncated": budget.truncated,
+            "lease": lease_json(&lease),
+        }))
     }))
+}
+
+fn lease_not_active(lease_id: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "lease `{lease_id}` is not active (unknown, released or expired); request a new lease"
+    ))
 }
 
 /// Grant every waiting request and expansion whose paths are now free, in

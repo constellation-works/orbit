@@ -92,7 +92,7 @@ The File column is where each concern lives after the restructure. The Task colu
 | The opened workspace and the store | `crates/orbit-runtime/src/stored/` | [ORB-28388] laid it out (done) |
 | This machine as a place work runs | `crates/orbit-runtime/src/host/` | [ORB-28389] laid it out (done) |
 | The run a process carries | `crates/orbit-runtime/src/run/` | [ORB-28389] laid it out (done) |
-| Port bindings between apps | crates/orbit-core/src/app/port.rs | [ORB-28395] empties the kernel port (backlog) |
+| Port bindings between apps | crates/orbit-core/src/app/port.rs | [ORB-28395] emptied and deleted the kernel port (done) |
 | Engine host, as five traits | `crates/orbit-engine/src/context/hosts/`, implemented in `crates/orbit-core/src/adapter/engine_host/` | [ORB-28408] splits `RuntimeHost` (proposed) |
 | Opening a `Core` for a registered workspace | `crates/orbit-cmd/src/registry/` | [ORB-28416] reduces `orbit-cmd` to this (backlog) |
 | Record shapes | `crates/orbit-store/src/contract/` | [ORB-28386] deleted the backend traits and closed the store (done) |
@@ -127,7 +127,7 @@ The File column is where each concern lives after the restructure. The Task colu
 - [ORB-28386] — deleted the store's backend traits and closed it.
 - [ORB-28388] — laid out the base and stored layers of `orbit-runtime`.
 - [ORB-28389] — laid out its host and run layers.
-- [ORB-28395] — will empty the kernel's `ApplicationPort`.
+- [ORB-28395] — emptied and deleted the kernel's `ApplicationPort`.
 - [ORB-28396] — added `Core`, `exec` and the friction app.
 - [ORB-28397] — routed task commands through `app::task::exec`.
 - [ORB-28398] — routed run and job commands through `app::run`.
