@@ -82,20 +82,11 @@ impl OrbitRuntime {
                     task.id
                 ))
             })?;
-        let status = self
-            .activate_resident_assignment(&task.id)
-            .map_or(task.status, |activated| activated.status);
-        let cycle_routine_disabled = self.resident_cycle_routine_disabled();
+        let (activated, attachment) = self.finish_resident_mandate_attachment(&task.id);
+        let status = activated.map_or(task.status, |task| task.status);
         let mut result = json!({"task_id": task.id, "status": status, "mandate": mandate});
-        result["cycle_routine_disabled"] = json!(cycle_routine_disabled.is_some());
-        result["cycle_routine_name"] = json!(cycle_routine_disabled);
-        if let Some(routine_name) = &cycle_routine_disabled {
-            result["warning"] = json!(format!(
-                "Created mandate {}, but {}. Enable the routine to let it act.",
-                task.id,
-                super::resident_cycle_routine_disabled_reason(routine_name)
-            ));
-        }
+        attachment
+            .insert_cycle_routine_fields(&mut result, format_args!("Created mandate {}", task.id));
         Ok(result)
     }
 }

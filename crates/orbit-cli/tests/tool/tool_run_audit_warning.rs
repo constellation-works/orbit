@@ -225,11 +225,26 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
                 "explicit fields stay filtered: {result}"
             );
         } else {
+            assert_eq!(result["status"], "in-progress", "{result}");
             assert_eq!(result["cycle_routine_disabled"], true, "{result}");
-            assert!(result["cycle_routine_name"].as_str().is_some(), "{result}");
-            assert!(result["warning"].as_str().is_some(), "{result}");
+            let routine_name = result["cycle_routine_name"].as_str().expect("routine name");
+            let disabled = format!("`{routine_name}` is disabled");
             assert!(
-                !result["warnings"].as_array().unwrap().is_empty(),
+                result["warning"].as_str().is_some_and(|text| {
+                    text.starts_with("Mandate stored, but ") && text.contains(&disabled)
+                }),
+                "{result}"
+            );
+            assert!(
+                result["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|warning| {
+                        warning
+                            .as_str()
+                            .is_some_and(|text| text.contains(&disabled))
+                    }),
                 "{result}"
             );
             assert_eq!(result["redactions_applied"], false, "{result}");
@@ -241,6 +256,37 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
             );
         }
     }
+
+    let native_output = fixture_orbit(&work, &home)
+        .args([
+            "task",
+            "artifact",
+            "put",
+            &task_id,
+            source_path.to_str().expect("UTF-8 fixture path"),
+            "--path",
+            "resident/mandate.json",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let native: Value = serde_json::from_slice(&native_output).expect("native artifact put JSON");
+    assert_eq!(native["status"], "in-progress", "{native}");
+    assert!(
+        native["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning.as_str().is_some_and(|text| {
+                    text.contains("resident cycle routine") && text.contains("` is disabled")
+                })
+            }),
+        "{native}"
+    );
 
     let get_input =
         json!({"action": "get", "id": task_id, "path": "audit-warning.txt"}).to_string();

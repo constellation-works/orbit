@@ -1959,6 +1959,7 @@ fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
                 "explicit fields stay filtered: {result}"
             );
         } else {
+            assert_eq!(result["status"], "in-progress", "{result}");
             assert_eq!(result["cycle_routine_disabled"], true, "{result}");
             assert!(result["cycle_routine_name"].as_str().is_some(), "{result}");
             assert!(result["warning"].as_str().is_some(), "{result}");
@@ -1980,7 +1981,9 @@ fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
     let mut mcp_input: Value = serde_json::from_str(&input).unwrap();
     mcp_input["workspace"] = json!(routed.bravo_selector());
     let mcp = client.call_ok("orbit_task_artifact", mcp_input);
+    assert_eq!(mcp["status"], "in-progress", "{mcp}");
     assert_eq!(mcp["cycle_routine_disabled"], true, "{mcp}");
+    assert!(mcp["cycle_routine_name"].as_str().is_some(), "{mcp}");
     assert!(
         mcp.get("description").is_some(),
         "MCP keeps the complete response: {mcp}"

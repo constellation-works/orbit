@@ -66,9 +66,10 @@ session cannot write, or hand the filing to a session with that surface.
    (`prefer` or `off`). See "Cadence: floor and heartbeat" below.
 3. Submit the authority grant with the human's words verbatim (next section).
 4. The mandate becomes active when it has a valid mandate artifact and its
-   assignment is open (tagged `resident`, control active): a grant is not an
-   activation prerequisite. Without granted rights it still runs observe-only
-   cycles; granted rights authorize action, not activation.
+   assignment is open (tagged `resident`, control active). Attachment updates
+   the assignment's crew and moves an active mandate's proposed or backlog
+   assignment to `in-progress`. Without granted rights it runs observe-only
+   cycles.
 
 After attaching a mandate, inspect `cycle_routine_disabled`,
 `cycle_routine_name` and the returned warnings. A disabled cycle routine leaves
@@ -77,6 +78,11 @@ signals are present in MCP and in the compact default `orbit tool run` output,
 including calls routed with `--host`. `--full` returns the complete tool
 response; an explicit `--fields` filter keeps only the requested fields and
 any `audit_warning`.
+
+From the terminal, `orbit task artifact put` and
+`orbit task update --artifact 'resident/mandate.json=<JSON>'` apply the same
+crew and activation rules. Their task write `warnings` also name a disabled
+cycle routine.
 
 Editing the mandate is an ordinary task write (`orbit.task.update`) and needs
 the `tasks-write` toolset, but it is not otherwise gated: an edit cannot

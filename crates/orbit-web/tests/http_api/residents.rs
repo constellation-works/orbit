@@ -222,6 +222,19 @@ fn dashboard_assignment_preserves_mandate_fields() {
                 json!({"mandate": mandate(goal)}),
             ));
             let id = created["task_id"].as_str().unwrap();
+            assert_eq!(created["status"], "in_progress", "{created}");
+            assert_eq!(created["cycle_routine_disabled"], true, "{created}");
+            assert_eq!(
+                created["cycle_routine_name"], "resident-cycle-fixture",
+                "{created}"
+            );
+            assert!(
+                created["warning"].as_str().is_some_and(|warning| {
+                    warning.starts_with(&format!("Created mandate {id}, but "))
+                        && warning.contains("`resident-cycle-fixture` is disabled")
+                }),
+                "{created}"
+            );
             let task = fixture.runtime.get_task(id).unwrap();
             assert_eq!(task.crew.as_deref(), Some("sol"));
             assert_eq!(
