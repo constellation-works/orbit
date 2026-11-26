@@ -414,7 +414,7 @@ pub struct ExecutionLocation {
 pub fn normalize_task_dependencies(
     raw_dependencies: Vec<String>,
 ) -> Result<Vec<OrbitId>, TaskError> {
-    let mut normalized = Vec::with_capacity(raw_dependencies.len());
+    let mut normalized = Vec::new();
     let mut seen = BTreeSet::new();
     for raw in raw_dependencies {
         let dependency = raw.trim();
@@ -431,7 +431,7 @@ pub fn normalize_task_dependencies(
 }
 
 pub fn normalize_task_tags(raw_tags: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::with_capacity(raw_tags.len());
+    let mut normalized = Vec::new();
     let mut seen = BTreeSet::new();
     for raw in raw_tags {
         let tag = raw.trim().to_lowercase();
