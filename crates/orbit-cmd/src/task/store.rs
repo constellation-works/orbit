@@ -69,8 +69,8 @@ pub struct UnreachablePartition {
 /// Unclaimed partitions are split into confirmed-dead checkout bindings, empty
 /// residue, populated partitions with no binding, and populated partitions
 /// whose checkout could not be reached. Deleting task bundles requires
-/// evidence from a populated, readable immediate parent: a confirmed-absent
-/// checkout [ORB-12143, ORB-14516]. Anything else populated stays recoverable with
+/// evidence from the nearest readable existing ancestor: a confirmed-absent
+/// checkout [ORB-12143, ORB-29113]. Anything else populated stays recoverable with
 /// `orbit task reindex` [ORB-12131].
 #[derive(Debug, Clone)]
 pub struct TaskStorePartitions {
@@ -85,9 +85,10 @@ pub struct TaskStorePartitions {
     /// Unclaimed but still holding task bundles, which `orbit task reindex`
     /// can rebind from the bundles themselves. Never deleted automatically.
     pub unowned: Vec<UnclaimedPartition>,
-    /// Populated partitions whose bound checkout could not be resolved — an
-    /// empty or missing mount point, an unsearchable parent, an offline share.
-    /// Never deleted automatically: the checkout may be intact behind the failure.
+    /// Populated partitions whose bound checkout could not be confirmed
+    /// absent — a permission or I/O error, an unreadable or missing mount, a
+    /// dangling parent. Never deleted automatically: the checkout may be
+    /// intact behind the failure.
     pub unreachable: Vec<UnreachablePartition>,
 }
 
@@ -177,16 +178,18 @@ impl RemovedTaskStores {
 /// Delete every empty unclaimed partition and every partition whose bound
 /// checkout is confirmed gone, retiring any registry rows that name it.
 ///
-/// A partition that still holds bundles is deleted only when its checkout is
-/// absent beneath a populated, readable immediate parent. An unclaimed populated
-/// partition is exactly the state a lost or rebuilt `tasks/index.sqlite`
-/// produces for every checkout other than the one the command runs from, and
-/// deleting it would destroy task data that `orbit task reindex` can otherwise
-/// recover from the bundles [ORB-12131]. A populated partition whose checkout
-/// merely failed to stat, or has an empty or missing parent that may be an
-/// unmounted volume, is kept for the same reason [ORB-12143, ORB-14516]. Bindings
-/// store no mount identity, so this cannot detect a mount point that exposes
-/// other entries after unmounting; restore mounted checkouts before repair.
+/// A partition that still holds bundles is deleted only when its checkout
+/// stats as plain absent and the nearest existing ancestor is a readable
+/// directory. An unclaimed populated partition is exactly the state a lost or
+/// rebuilt `tasks/index.sqlite` produces for every checkout other than the
+/// one the command runs from, and deleting it would destroy task data that
+/// `orbit task reindex` can otherwise recover from the bundles [ORB-12131].
+/// A populated partition whose checkout stat fails any other way — a
+/// permission or I/O error — or whose ancestors supply no readable directory
+/// (an unreadable or missing mount, a dangling parent) is kept for the same
+/// reason [ORB-12143]. Bindings store no mount identity, so this cannot
+/// detect a mount point that exposes other entries after unmounting; restore
+/// mounted checkouts before repair.
 /// Reclaiming such a partition stays a deliberate manual step, or
 /// `orbit workspace teardown` while the checkout still exists.
 pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<RemovedTaskStores, OrbitError> {
@@ -491,8 +494,8 @@ fn record_catalog_checkout_evidence(
 enum CheckoutEvidence {
     /// The bound checkout root is there: the binding is a live claim.
     Present,
-    /// The bound checkout root is absent from its populated, readable
-    /// immediate parent directory.
+    /// The bound checkout root stats as plain absent, and the nearest
+    /// existing ancestor is a directory whose listing can be read.
     Gone,
     /// Neither answer was available, naming the path and the failure.
     Unreachable(String),
@@ -518,50 +521,60 @@ fn checkout_evidence(repo_root: &Path) -> CheckoutEvidence {
     }
 }
 
-/// Confirm absence only beneath a populated, readable immediate parent.
+/// Confirm a plain-absent checkout by walking up past missing ancestors to
+/// the nearest one that exists. Only a `NotFound` chain keeps the walk alive:
+/// a permission, I/O or mount failure on any ancestor is not absence, and
+/// neither is a checkout entry the confirming listing still names (a dangling
+/// entry or a concurrent recreation) [ORB-29113].
 ///
-/// An empty parent may be the directory exposed by an unmounted volume. A
-/// missing parent may be a removed mount point, so walking farther up cannot
-/// strengthen the evidence. Both stay unreachable [ORB-14516]. A listed
-/// checkout entry (for example a dangling symlink or a concurrent recreation)
-/// and any listing failure also prevent destructive repair. Without persisted
-/// mount identity, a populated parent is still not proof that a volume is mounted.
+/// The first existing ancestor must be a directory whose listing can be read;
+/// its word that the next path component down toward the checkout is absent
+/// is the confirmation. An empty listing still confirms: bindings store no
+/// mount identity, so an emptied parent cannot be told apart from a deleted
+/// checkout, and a genuinely missing checkout must stay reclaimable.
+/// Restore mounted checkouts before repair.
 fn confirm_absence(repo_root: &Path) -> CheckoutEvidence {
-    let Some(parent) = repo_root.parent() else {
-        return CheckoutEvidence::Unreachable(format!(
-            "{}: no immediate parent directory could confirm it is absent",
-            repo_root.display()
-        ));
-    };
-    if let Err(error) = std::fs::symlink_metadata(parent) {
-        return CheckoutEvidence::Unreachable(filesystem_failure(parent, &error));
-    }
-    let entries = match std::fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(error) => return CheckoutEvidence::Unreachable(filesystem_failure(parent, &error)),
-    };
-    let mut populated = false;
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => return CheckoutEvidence::Unreachable(filesystem_failure(parent, &error)),
-        };
-        if Some(entry.file_name().as_os_str()) == repo_root.file_name() {
-            return CheckoutEvidence::Unreachable(format!(
-                "{}: checkout entry exists but could not be resolved",
-                repo_root.display()
-            ));
+    let mut child = repo_root;
+    for ancestor in repo_root.ancestors().skip(1) {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                let entries = match std::fs::read_dir(ancestor) {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        return CheckoutEvidence::Unreachable(filesystem_failure(ancestor, &error));
+                    }
+                };
+                let name = child.file_name();
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(entry) => entry,
+                        Err(error) => {
+                            return CheckoutEvidence::Unreachable(filesystem_failure(
+                                ancestor, &error,
+                            ));
+                        }
+                    };
+                    if Some(entry.file_name().as_os_str()) == name {
+                        return CheckoutEvidence::Unreachable(format!(
+                            "{}: checkout entry exists but could not be resolved",
+                            child.display()
+                        ));
+                    }
+                }
+                return CheckoutEvidence::Gone;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                child = ancestor;
+            }
+            Err(error) => {
+                return CheckoutEvidence::Unreachable(filesystem_failure(ancestor, &error));
+            }
         }
-        populated = true;
     }
-    if populated {
-        CheckoutEvidence::Gone
-    } else {
-        CheckoutEvidence::Unreachable(format!(
-            "{}: empty checkout parent may be an unmounted volume",
-            parent.display()
-        ))
-    }
+    CheckoutEvidence::Unreachable(format!(
+        "{}: no readable ancestor directory could confirm it is absent",
+        repo_root.display()
+    ))
 }
 
 fn filesystem_failure(path: &Path, error: &std::io::Error) -> String {
