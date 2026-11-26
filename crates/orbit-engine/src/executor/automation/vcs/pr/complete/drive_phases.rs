@@ -119,6 +119,12 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
 }
 
 impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
+    /// Whether this completion invocation already sent a merge or auto-merge
+    /// request to the forge (distinct from local rebases/branch refreshes).
+    pub(super) fn merge_mutated(&self) -> bool {
+        self.merge_requested || self.auto_merge_requested
+    }
+
     /// Re-evaluate `completion.hold` against the actual candidate that
     /// would reach a merge request [ORB-23445]. Repairs adopted or
     /// published before the loop, local repairs, base/conflict refreshes
@@ -277,13 +283,14 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         // Every flag is set immediately before a `continue` or at the end of
         // an iteration, so this covers every read made in the iteration.
         // Durable write-ahead provenance covers mutations inside it.
-        let mutated = self.merge_requested
-            || self.auto_merge_requested
+        let merge_mutated = self.merge_mutated();
+        let mutated = merge_mutated
             || self.conflict_refresh_attempted
             || self.landed_refresh_attempted
             || self.inherited_refresh_attempted;
         self.mutated = mutated;
-        let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
+        let observed =
+            |error| observation_failure(host, input, merge_mutated, observation_budget, error);
         let status = if max_wait_seconds == 0 {
             read_pr_status(host, Path::new(workspace_path), pr_number)
         } else {
@@ -417,7 +424,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 checked_required_check_observation_failure(
                     host,
                     input,
-                    mutated,
+                    merge_mutated,
                     observation_budget,
                     error,
                 )
@@ -517,8 +524,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let auto_fix = self.auto_fix;
         let completion_deadline_ms = self.completion_deadline_ms;
         let observation_budget = self.observation_budget;
-        let mutated = self.mutated;
-        let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
+        let merge_mutated = self.merge_mutated();
+        let observed =
+            |error| observation_failure(host, input, merge_mutated, observation_budget, error);
         let status = &observed_poll.status;
         let pending_required = observed_poll.pending_required;
         let base_refresh_wait = observed_poll.infrastructure_wait;

@@ -1443,9 +1443,12 @@ evidence. Permanent forge-read failures at other boundaries and unlisted
 refusals remain failures. A candidate-caused required-check failure holds as
 `delivery_landing_repair_requeue`: the claim ends, the task returns to the
 backlog with the candidate kept (or blocks once the landing repair budget is
-spent), and the held run is not resumed. Transport failures after a merge,
-auto-merge or rebase request (in that run or recorded in the task's history)
-also remain failures, except that a narrowly classified synchronous HTTP
+spent), and the held run is not resumed. Transport failures after a merge or
+auto-merge request (in that run or recorded in the task's history)
+also remain failures, while a read-only PR status or merge-capability
+transport failure after a completion rebase without a merge request holds as
+`delivery_forge_observation_unavailable` (still refusing the unchanged-publication
+retry), and a narrowly classified synchronous HTTP
 500/502/503/504 merge server error, or a merge response that ends before it
 decodes (`unexpected end of JSON input` with an empty or truncated body),
 permits one read-only reconciliation within the original deadline. Only
