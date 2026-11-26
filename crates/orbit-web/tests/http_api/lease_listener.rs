@@ -52,16 +52,6 @@ pub(super) struct ScriptedIntake {
     accept: Option<JoinHandle<()>>,
 }
 
-#[derive(Debug)]
-pub(super) struct RefusalAudit {
-    pub(super) key: String,
-    pub(super) reason: String,
-    pub(super) count: u64,
-}
-
-/// A TCP peer, its forwarding headers and the expected status.
-type ProxyCase<'a> = (&'a str, &'a [(&'a str, &'a str)], StatusCode);
-
 impl ScriptedIntake {
     pub(super) fn bind(
         path: &Path,
@@ -118,6 +108,16 @@ impl Drop for ScriptedIntake {
         }
     }
 }
+
+#[derive(Debug)]
+pub(super) struct RefusalAudit {
+    pub(super) key: String,
+    pub(super) reason: String,
+    pub(super) count: u64,
+}
+
+/// A TCP peer, its forwarding headers and the expected status.
+type ProxyCase<'a> = (&'a str, &'a [(&'a str, &'a str)], StatusCode);
 
 pub(super) fn provisioned_store(home: &Path) -> LeaseTokenStore {
     std::fs::create_dir_all(home).unwrap();

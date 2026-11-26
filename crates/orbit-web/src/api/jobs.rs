@@ -60,25 +60,6 @@ enum JobRunListState {
     Terminal,
 }
 
-/// [ORB-10709] Optional body carrying the workspace claim token, for a resume
-/// submitted while another operator holds the claim.
-#[derive(Debug, Default, serde::Deserialize)]
-pub(super) struct ResumeBody {
-    #[serde(default)]
-    claim_token: Option<String>,
-}
-
-/// Parsed run-list filters shared by the workspace list and the aggregate list.
-///
-/// `since` is already resolved to one cutoff. `None` means the list is not
-/// time-bounded, which is what the dashboard's `all` window asks for.
-#[derive(Clone, Default)]
-pub(super) struct JobRunScope {
-    pub(super) job_id: Option<String>,
-    pub(super) task_id: Option<String>,
-    pub(super) since: Option<DateTime<Utc>>,
-}
-
 impl JobRunListState {
     fn parse(value: Option<&str>) -> Result<Self, String> {
         match value {
@@ -106,6 +87,25 @@ impl JobRunListState {
             Self::Terminal => "terminal",
         }
     }
+}
+
+/// [ORB-10709] Optional body carrying the workspace claim token, for a resume
+/// submitted while another operator holds the claim.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(super) struct ResumeBody {
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+/// Parsed run-list filters shared by the workspace list and the aggregate list.
+///
+/// `since` is already resolved to one cutoff. `None` means the list is not
+/// time-bounded, which is what the dashboard's `all` window asks for.
+#[derive(Clone, Default)]
+pub(super) struct JobRunScope {
+    pub(super) job_id: Option<String>,
+    pub(super) task_id: Option<String>,
+    pub(super) since: Option<DateTime<Utc>>,
 }
 
 /// Submit a catalog job in the selected workspace.

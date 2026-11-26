@@ -42,26 +42,6 @@ struct ScanLinks<'a> {
 
 struct LenientVisitor<'de>(PhantomData<&'de ()>);
 
-/// The envelope links a step attribution walk reads, from the friction
-/// scan's or the Errors feed's compact view of an event.
-pub(super) trait EnvelopeLinks {
-    fn step_id(&self) -> Option<&str>;
-    fn parent_event_id(&self) -> Option<&str>;
-    fn body_kind(&self) -> Option<&str>;
-}
-
-/// The outcome fields deciding whether a finished invocation or step is
-/// friction, each as the matching `Value` accessor would read it.
-#[derive(Deserialize)]
-struct OutcomeFields<'a> {
-    #[serde(default, deserialize_with = "lenient_i64")]
-    exit_code: Option<i64>,
-    #[serde(default, deserialize_with = "lenient_bool")]
-    timed_out: Option<bool>,
-    #[serde(borrow, default, deserialize_with = "lenient_str")]
-    outcome: Option<Cow<'a, str>>,
-}
-
 impl<'de> Visitor<'de> for LenientVisitor<'de> {
     type Value = Option<Cow<'de, str>>;
 
@@ -114,6 +94,26 @@ impl<'de> Visitor<'de> for LenientVisitor<'de> {
         while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
         Ok(None)
     }
+}
+
+/// The envelope links a step attribution walk reads, from the friction
+/// scan's or the Errors feed's compact view of an event.
+pub(super) trait EnvelopeLinks {
+    fn step_id(&self) -> Option<&str>;
+    fn parent_event_id(&self) -> Option<&str>;
+    fn body_kind(&self) -> Option<&str>;
+}
+
+/// The outcome fields deciding whether a finished invocation or step is
+/// friction, each as the matching `Value` accessor would read it.
+#[derive(Deserialize)]
+struct OutcomeFields<'a> {
+    #[serde(default, deserialize_with = "lenient_i64")]
+    exit_code: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_bool")]
+    timed_out: Option<bool>,
+    #[serde(borrow, default, deserialize_with = "lenient_str")]
+    outcome: Option<Cow<'a, str>>,
 }
 
 impl EnvelopeLinks for ScanLinks<'_> {

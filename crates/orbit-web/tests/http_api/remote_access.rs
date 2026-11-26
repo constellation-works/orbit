@@ -18,15 +18,6 @@ struct SshStubCleanup {
     log: std::path::PathBuf,
 }
 
-struct PendingUpstream {
-    release: mpsc::Sender<()>,
-    stream_rx: mpsc::Receiver<TcpStream>,
-}
-
-/// Releases the `serve status` probes a [`gated_tailscale_stub`] holds. Dropping
-/// it releases any probe a failed test left blocked, so no stub outlives it.
-struct Gate(std::path::PathBuf);
-
 impl Drop for SshStubCleanup {
     fn drop(&mut self) {
         let Ok(text) = fs::read_to_string(&self.log) else {
@@ -53,12 +44,14 @@ impl Drop for SshStubCleanup {
     }
 }
 
-struct FakeRemote {
-    port: u16,
-    pending_rx: mpsc::Receiver<PendingUpstream>,
-    immediate_rx: mpsc::Receiver<TcpStream>,
-    hold_releases: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
+struct PendingUpstream {
+    release: mpsc::Sender<()>,
+    stream_rx: mpsc::Receiver<TcpStream>,
 }
+
+/// Releases the `serve status` probes a [`gated_tailscale_stub`] holds. Dropping
+/// it releases any probe a failed test left blocked, so no stub outlives it.
+struct Gate(std::path::PathBuf);
 
 impl Gate {
     /// Lets every probe waiting at the gate finish. Fails when none is waiting,
@@ -70,6 +63,19 @@ impl Gate {
             .open(&self.0)?;
         gate.write_all(&[b'\n'; 16])
     }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
+struct FakeRemote {
+    port: u16,
+    pending_rx: mpsc::Receiver<PendingUpstream>,
+    immediate_rx: mpsc::Receiver<TcpStream>,
+    hold_releases: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
 }
 
 impl FakeRemote {
@@ -105,12 +111,6 @@ impl FakeRemote {
             immediate_rx,
             hold_releases,
         }
-    }
-}
-
-impl Drop for Gate {
-    fn drop(&mut self) {
-        let _ = self.release();
     }
 }
 

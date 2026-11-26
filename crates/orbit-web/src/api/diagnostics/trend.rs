@@ -67,20 +67,6 @@ pub(super) struct TrendWindow {
     unbounded: bool,
 }
 
-/// Shared outcome, complexity and tag cohort filters for metrics trend series.
-pub(super) struct CohortFilters {
-    pub(super) done_only: bool,
-    /// `None` draws every complexity present.
-    pub(super) complexities: Option<BTreeSet<&'static str>>,
-    pub(super) tags: Vec<String>,
-}
-
-/// One bucket or series-total cell in a cohort trend series.
-pub(super) trait CohortCell: Default + Clone {
-    fn is_empty(&self) -> bool;
-    fn to_json(&self) -> Value;
-}
-
 impl TrendWindow {
     /// An `all` range (no `since`) opens at `earliest`, the oldest sample the
     /// caller read, or at `until` when there is none.
@@ -216,6 +202,14 @@ impl TrendWindow {
     }
 }
 
+/// Shared outcome, complexity and tag cohort filters for metrics trend series.
+pub(super) struct CohortFilters {
+    pub(super) done_only: bool,
+    /// `None` draws every complexity present.
+    pub(super) complexities: Option<BTreeSet<&'static str>>,
+    pub(super) tags: Vec<String>,
+}
+
 impl CohortFilters {
     pub(super) fn parse(
         outcome: Option<&str>,
@@ -285,6 +279,12 @@ impl CohortFilters {
             "without"
         }
     }
+}
+
+/// One bucket or series-total cell in a cohort trend series.
+pub(super) trait CohortCell: Default + Clone {
+    fn is_empty(&self) -> bool;
+    fn to_json(&self) -> Value;
 }
 
 /// Bucketed points, optional lead points, and total cell for one

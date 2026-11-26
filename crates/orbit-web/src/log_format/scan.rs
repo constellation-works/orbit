@@ -42,6 +42,26 @@ struct LineHead<'a> {
     target: Option<Cow<'a, str>>,
 }
 
+impl<'a> LineHead<'a> {
+    /// `None` unless `raw` is a JSON object whose three fields are strings or
+    /// absent. Anything else (a duplicate key, a number where a string is
+    /// expected, an array) is left to the full [`Value`] parse so it is judged
+    /// exactly as [`Filters::matches`] judges it.
+    fn parse(raw: &'a [u8]) -> Option<Self> {
+        let first = raw.iter().find(|byte| !byte.is_ascii_whitespace())?;
+        if *first != b'{' {
+            return None;
+        }
+        serde_json::from_slice(raw).ok()
+    }
+
+    fn timestamp(&self) -> Option<DateTime<Utc>> {
+        self.timestamp
+            .as_deref()
+            .and_then(log_format::parse_timestamp)
+    }
+}
+
 /// The verdict on one log line.
 enum Scanned {
     Match(Value),
@@ -75,26 +95,6 @@ struct Prefix<R> {
     inner: R,
     len: u64,
     pos: u64,
-}
-
-impl<'a> LineHead<'a> {
-    /// `None` unless `raw` is a JSON object whose three fields are strings or
-    /// absent. Anything else (a duplicate key, a number where a string is
-    /// expected, an array) is left to the full [`Value`] parse so it is judged
-    /// exactly as [`Filters::matches`] judges it.
-    fn parse(raw: &'a [u8]) -> Option<Self> {
-        let first = raw.iter().find(|byte| !byte.is_ascii_whitespace())?;
-        if *first != b'{' {
-            return None;
-        }
-        serde_json::from_slice(raw).ok()
-    }
-
-    fn timestamp(&self) -> Option<DateTime<Utc>> {
-        self.timestamp
-            .as_deref()
-            .and_then(log_format::parse_timestamp)
-    }
 }
 
 impl<R> Prefix<R> {

@@ -126,19 +126,6 @@ pub(super) struct OperationAudit<'a> {
     arguments: Value,
 }
 
-#[derive(Debug, Deserialize)]
-pub(super) struct RoutineToggleRequest {
-    name: String,
-    source: String,
-    target: String,
-    /// The machine the browser acted from. Recorded in the audit event;
-    /// routine definitions are machine-independent [ORB-12236], so it selects
-    /// nothing.
-    machine_name: String,
-    expected_enabled: bool,
-    enabled: bool,
-}
-
 impl<'a> OperationAudit<'a> {
     pub(super) fn new(
         runtime: &'a Arc<OrbitRuntime>,
@@ -274,6 +261,19 @@ impl<'a> OperationAudit<'a> {
         };
         tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RoutineToggleRequest {
+    name: String,
+    source: String,
+    target: String,
+    /// The machine the browser acted from. Recorded in the audit event;
+    /// routine definitions are machine-independent [ORB-12236], so it selects
+    /// nothing.
+    machine_name: String,
+    expected_enabled: bool,
+    enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]

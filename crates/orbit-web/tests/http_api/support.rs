@@ -28,6 +28,14 @@ const LEASES_ENABLED: &str = "ORBIT_HTTP_LEASES_ENABLED";
 
 struct Process(Child);
 
+impl Drop for Process {
+    fn drop(&mut self) {
+        // Also runs on assertion failure or timeout. Always reap the direct child.
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// The fixture features one server child enables.
 struct ServerFeatures {
     operator: bool,
@@ -41,14 +49,6 @@ pub(super) struct Server {
     log: tempfile::NamedTempFile,
     client: Client,
     pub(super) origin: String,
-}
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        // Also runs on assertion failure or timeout. Always reap the direct child.
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 impl Server {
