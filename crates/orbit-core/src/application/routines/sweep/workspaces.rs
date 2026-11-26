@@ -77,14 +77,10 @@ pub(super) fn each_workspace_in_tick<'a, T>(
     deadline: Instant,
     skipped: &mut BTreeSet<String>,
     failed_event: Option<&'static str>,
-    mut on_deadline: Option<&mut dyn FnMut(&Workspace)>,
     mut phase: impl FnMut(&Workspace, &OrbitRuntime) -> Result<T, OrbitError>,
 ) {
     for (workspace, runtime) in workspaces {
         if !tick_allows_workspace(deadline, workspace, skipped) {
-            if let Some(on_deadline) = &mut on_deadline {
-                on_deadline(workspace);
-            }
             continue;
         }
 
