@@ -65,7 +65,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `claude-worker-token` | macOS only, when a routed crew uses `claude`: the workspace's effective `execution.env.pass` names `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`), and, with the sweep clock installed, `~/.orbit/clock.env` holds one that the same `pass` names. A `clock.env` holding only a name the `pass` omits warns as a mismatch. A routed Claude crew whose `env` maps its own credential needs neither; the row checks that `clock.env` holds its source instead. Names only, never values | `warning` naming what is missing; `skipped` off macOS or with no routed Claude crew; otherwise `ok`. Without the token `claude` falls back to the Claude Desktop login, which the Desktop revokes mid-run, and Orbit refuses such activities; a drain started without the token excludes the Claude crews from its window rather than claim them. Add the name to `pass` and to `clock.env` (mode 600); see the orbit-setup macOS reference. |
 | `validation-env` | Required-validation PATH source, login-shell probe mode/fallback, `python3`/`git`/`make` locations and shadowing, and any of `python3`/`git`/`make`/`cargo` that implementer and reviewer agent sessions resolve to a different executable | `skipped` when `workflow.required_validation_commands` is empty; `warning` for probe/preflight/fallback, shadowing or agent-session resolution concerns; otherwise `ok`. Correct shell startup or `workflow.validation_env` as advised. A listed missing tool alone does not change the status, and this row does not execute validation commands. |
 | `mid-run-steering` | The resolved `workflow.mid_run_steering.enabled` and `max_rounds` ([mid-run steering](../CONFIG.md#workflowmid_run_steering--operator-comments-after-dispatch)) | Always `ok`; the row reports the values, including the default off. Enable steering with `orbit config set workflow.mid_run_steering.enabled true`. |
-| `orphan-task-stores` | Host-global task-store partitions and their live, missing, unreachable, or absent checkout claims | `skipped` when no partitions exist; `warning` for findings or inspection failure; otherwise `ok`. Reindex unowned populated stores, restore unreachable checkouts, or use the confirmed repair only for removable partitions; see below. |
+| `orphan-task-stores` | Host-global task-store partitions and their live, missing, unreachable, or absent checkout claims | `skipped` when no partitions exist; `warning` for findings or inspection failure; otherwise `ok`. Reindex unowned populated stores, restore unreachable checkouts, or use the confirmed repair for empty and confirmed-absent partitions; see below. |
 | `tracked-orbit-files` | Git-tracked paths under `.orbit/` | `warning` when tracked (`git rm -r --cached .orbit`); `ok` when none; `skipped` outside Git or when Git cannot answer. |
 | `plugin-builds` | Host source-built plugin provenance and build drift | `skipped` when no plugin was built from source; `ok` for healthy or intentional findings; `warning` for actionable drift or inspection failure. Follow the plugin row's step and rerun `orbit plugin doctor`. |
 | `browser-kit`, `browser-kit-libraries`, `browser-kit-node`, `browser-kit-backlog` | The host's headless browser kit for UI checks, the Linux libraries Chromium needs, `node` on the login-shell and scheduler PATH, and `ui` backlog tasks waiting for a verified kit this host lacks | `info` when no kit is installed (many hosts never run UI checks); `ok` when the kit, its libraries and `node` resolve; `warning` for a kit or library problem, a missing `node`, or `ui` backlog tasks this host could otherwise start that wait only for its kit. Run `orbit config browser-kit install` on this host, or leave those tasks to a pull-drain follower that has a verified kit. |
@@ -297,20 +297,23 @@ workspace-registry id in `~/.orbit/workspaces.json`: `orbit workspace init` pass
 all. Partition ownership is therefore always resolved through the task registry. A task-registry checkout claim is live while its recorded `repo_root`
 is present on disk; a catalog checkout supplies the same per-checkout evidence when `workspace init`
 has only a path-free task-registry registration. The shared external Orbit root (`--root
-<data-dir>`) is not used as checkout evidence because several checkouts may share it. A missing
-checkout beneath a populated, readable immediate parent is reported as stale. An unreadable path,
-an empty parent, or a missing parent is reported as unreachable. Checkoutless
+<data-dir>`) is not used as checkout evidence because several checkouts may share it. A checkout
+that stats as plain absent (`ENOENT`) beneath a nearest existing ancestor that is a readable
+directory is reported as stale — including when an intermediate parent is missing or the parent
+is empty. A checkout whose stat fails any other way, or whose ancestors supply no readable
+directory, is reported as unreachable. Checkoutless
 catalog entries and the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
 lands in remain claims. `orphan-task-stores` names each
 reported workspace id, its partition path, and its task-bundle count.
 
 **Evidence rule for deleting task bundles.** A partition that holds task bundles is deleted by the
-repair only when its bound checkout is *confirmed gone*: `repo_root` stats as absent, and the
-immediate parent directory can be fully listed, contains other entries, and has no entry for the
-checkout. An empty parent may be the directory exposed by an unmounted volume; a missing parent
-may be a removed mount point. Neither confirms deletion, and doctor never walks farther up to
-infer absence from a different ancestor. Any other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
-`ENOTCONN` from a dropped mount, a path that resolves through a non-directory — classifies the
+repair only when its bound checkout is *confirmed gone*: `repo_root` stats as plain absent, and
+walking up past the missing ancestors reaches a readable directory whose listing names no entry
+for the next path component down toward the checkout. A still-listed entry (for example a
+dangling symlink or a concurrent recreation) and any listing failure prevent the repair. Any
+other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
+`ENOTCONN` from a dropped mount, a path that resolves through a non-directory, a dangling or
+otherwise unreadable parent — classifies the
 binding as **unreachable**: the checkout may be intact behind the failure, so the partition is
 retained, reported with the failing path and error, and never deleted by
 `--fix-orphan-task-stores`. A partition with **no task bundles** carries nothing to recover, so the
@@ -333,11 +336,11 @@ it must be run once per affected checkout.
 
 For an **unreachable** partition, restore access first — remount the volume, repair the directory
 permissions that hide the checkout — and re-run `orbit doctor`. A reachable checkout becomes a live
-claim again and the row clears itself. A checkout that is genuinely gone beneath a populated,
-readable immediate parent becomes a confirmed-stale binding, which the repair can then remove.
-A deleted checkout whose parent is empty or also deleted stays unreachable; reclaim its task
-partition only as a deliberate manual step, or use `orbit workspace teardown` before deleting
-the checkout.
+claim again and the row clears itself. A checkout that stats as plain absent beneath a readable
+ancestor directory becomes a confirmed-stale binding, which the repair can then remove — including
+when an intermediate parent is missing or the parent is empty. Because bindings store no mount
+identity, restore mounted checkouts before running the repair: an unmounted volume's checkout is
+indistinguishable from a deleted one once a readable ancestor confirms the absence.
 
 For a partition whose binding is confirmed stale, the missing `repo_root` is the evidence that the
 checkout is gone. The confirmed repair removes that partition, including its task bundles, and
@@ -366,7 +369,7 @@ then the same repair. Skipping the repair after `workspace remove` leaves the bu
 and unreachable through workspace selectors.
 
 Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
-first. Empty and removed mount points are preserved, but bindings contain paths rather than a
+first. Unreadable and missing mounts are preserved, but bindings contain paths rather than a
 persisted mount identity. A mount point that exposes other entries after unmounting can still be
 mistaken for a populated checkout parent. Remount before running the repair on a host with
 removable or network-mounted checkouts; directory contents alone cannot prove a volume is mounted.

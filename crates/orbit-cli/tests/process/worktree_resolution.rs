@@ -1133,13 +1133,14 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
     fixture.json(&linked_worktree, &["doctor", "--remove-graph", "--json"]);
 }
 
-/// [ORB-12131, ORB-12143] `--fix-orphan-task-stores` deletes task data. It
+/// [ORB-12131, ORB-12143, ORB-29113] `--fix-orphan-task-stores` deletes task data. It
 /// refuses without `--confirm`. Once confirmed it removes only an empty
-/// partition and a populated one whose checkout is confirmed absent. The
-/// partitions of a live checkout, of a checkout that fails to stat for any
-/// reason other than absence, and with no binding at all keep their bundles.
-/// [ORB-14516] Empty and removed mount points are ambiguous absence and must
-/// keep their partitions too; a dangling parent symlink forces read_dir to fail.
+/// partition and a populated one whose checkout stats as plain absent beneath a
+/// readable ancestor — including an emptied or removed parent directory. The
+/// partitions of a live checkout, of a checkout hidden behind a permission or
+/// I/O failure, of a checkout behind a dangling or non-directory parent, and
+/// with no binding at all keep their bundles. [ORB-14516] A dangling parent
+/// symlink still keeps its partition because the confirming listing itself fails.
 #[test]
 fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     const TEST: &str = "worktree_resolution::doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts";
@@ -1242,19 +1243,26 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     let classified = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
         .expect("inspect partition classifications")
         .expect("partitions exist");
+    let mut stale: Vec<_> = classified
+        .stale
+        .iter()
+        .map(|partition| partition.path.clone())
+        .collect();
+    stale.sort();
+    let mut expected_stale = vec![
+        partitions.join(&partition_of["gone"]),
+        partitions.join(&partition_of["empty-mount"]),
+        partitions.join(&partition_of["removed-mount"]),
+    ];
+    expected_stale.sort();
     assert_eq!(
-        classified
-            .stale
-            .iter()
-            .map(|p| p.path.clone())
-            .collect::<Vec<_>>(),
-        vec![partitions.join(&partition_of["gone"])],
-        "ORB-14516: only absence beneath a populated immediate parent is stale"
+        stale, expected_stale,
+        "ORB-29113: plain absence beneath a readable ancestor is stale: {classified:?}"
     );
     let unreachable_names = partition_of
         .keys()
         .copied()
-        .filter(|name| !matches!(*name, "live" | "gone"))
+        .filter(|name| !matches!(*name, "live" | "gone" | "empty-mount" | "removed-mount"))
         .collect::<Vec<_>>();
     for name in &unreachable_names {
         assert!(
@@ -1262,7 +1270,7 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
                 .unreachable
                 .iter()
                 .any(|p| p.partition.path == partitions.join(&partition_of[name])),
-            "ORB-14516: {name} must be unreachable: {classified:?}"
+            "ORB-29113: {name} must stay unreachable: {classified:?}"
         );
     }
     let before = task_store_partitions(&partitions);
@@ -1297,6 +1305,8 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     );
     let mut expected = before;
     expected.remove(&partition_of["gone"]);
+    expected.remove(&partition_of["empty-mount"]);
+    expected.remove(&partition_of["removed-mount"]);
     expected.remove("ws_residue");
     assert_eq!(
         task_store_partitions(&partitions),
@@ -1307,24 +1317,150 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         assert!(
             orbit_cmd::task_store::partition_is_bound(&global_root, &partition_of[name])
                 .expect("check retained binding"),
-            "ORB-14516: repair must retain {name}'s binding"
+            "ORB-29113: repair must retain {name}'s binding"
         );
     }
-    for mount in [&empty_mount, &removed_mount] {
-        mkdir(&mount.join("proj"));
+    for name in ["gone", "empty-mount", "removed-mount"] {
+        assert!(
+            !orbit_cmd::task_store::partition_is_bound(&global_root, &partition_of[name])
+                .expect("check retired binding"),
+            "ORB-29113: repair must retire {name}'s binding"
+        );
     }
-    let restored = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
-        .expect("inspect restored checkouts")
-        .expect("partitions exist");
-    for name in ["empty-mount", "removed-mount"] {
+    #[cfg(unix)]
+    {
+        // Restoring access behind a dangling parent clears the row: the
+        // checkout becomes a live claim again instead of unreachable.
+        let target = fixture.temp.path().join("offline-volume");
+        mkdir(&target.join("proj"));
+        fs::remove_file(&dangling_parent).expect("remove dangling parent symlink");
+        std::os::unix::fs::symlink(&target, &dangling_parent)
+            .expect("restore parent behind a live directory");
+        let restored = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
+            .expect("inspect restored checkout")
+            .expect("partitions exist");
         assert!(
             restored
                 .unreachable
                 .iter()
-                .all(|p| p.partition.path != partitions.join(&partition_of[name])),
-            "ORB-14516: remounted {name} must become a live claim"
+                .all(|p| p.partition.path != partitions.join(&partition_of["dangling-parent"])),
+            "ORB-29113: restored dangling-parent must become a live claim"
         );
     }
+}
+
+/// [ORB-29113] A checkout hidden behind a permission failure stays
+/// unreachable and keeps its partition through the confirmed repair, while a
+/// plain-absent sibling in the same run is still reclaimed.
+#[cfg(unix)]
+#[test]
+fn doctor_orphan_store_perm_denied_keeps_partition() {
+    isolated!("worktree_resolution::doctor_orphan_store_perm_denied_keeps_partition");
+    // Root reads through any mode bits, so an access refusal needs an ordinary user.
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        #[allow(
+            clippy::print_stderr,
+            reason = "the test gate must see when this host runs as root and the case is skipped"
+        )]
+        {
+            eprintln!("SKIP: permission-denied check requires a non-root user");
+        }
+        return;
+    }
+    let fixture = Fixture::new("live");
+    let home = fixture.home.as_path();
+    write_machine_identity(home);
+    plant_agent_cli_stub(home, "claude");
+    let partitions = home.join(".orbit/tasks/workspaces");
+    let locked_volume = fixture.temp.path().join("locked-volume");
+    let mut partition_of = std::collections::BTreeMap::new();
+    for (name, repo) in [
+        ("live", fixture.temp.path().join("live")),
+        ("gone", fixture.temp.path().join("deleted").join("gone")),
+        ("locked", locked_volume.join("proj")),
+    ] {
+        Fixture::seed_repo(&repo);
+        let before = task_store_partitions(&partitions);
+        fixture.success(&repo, &["workspace", "init", "--name", name]);
+        fixture.success(
+            &repo,
+            &[
+                "task",
+                "add",
+                "--title",
+                &format!("{name} task"),
+                "--description",
+                "seed a task bundle",
+                "--complexity",
+                "low",
+            ],
+        );
+        let created: Vec<_> = task_store_partitions(&partitions)
+            .into_keys()
+            .filter(|partition| !before.contains_key(partition))
+            .collect();
+        let [partition] = created.as_slice() else {
+            panic!("{name} must create exactly one partition: {created:?}");
+        };
+        partition_of.insert(name, partition.clone());
+    }
+    fs::remove_dir_all(fixture.temp.path().join("deleted").join("gone")).expect("delete checkout");
+    write(
+        &fixture.temp.path().join("deleted").join("sibling"),
+        b"still mounted",
+    );
+    let _restore = RestorePermissions::set_mode(&locked_volume, 0o000);
+    assert_eq!(
+        fs::metadata(locked_volume.join("proj"))
+            .expect_err("checkout stat must refuse")
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    let global_root = home.join(".orbit");
+    let classified = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
+        .expect("inspect partition classifications")
+        .expect("partitions exist");
+    assert_eq!(
+        classified
+            .stale
+            .iter()
+            .map(|partition| partition.path.clone())
+            .collect::<Vec<_>>(),
+        vec![partitions.join(&partition_of["gone"])],
+        "ORB-29113: the plain-absent checkout is stale: {classified:?}"
+    );
+    assert!(
+        classified
+            .unreachable
+            .iter()
+            .any(|partition| partition.partition.path == partitions.join(&partition_of["locked"])),
+        "ORB-29113: the permission-denied checkout must stay unreachable: {classified:?}"
+    );
+    let live = fixture.temp.path().join("live");
+    let repaired = fixture.json(
+        &live,
+        &["doctor", "--fix-orphan-task-stores", "--confirm", "--json"],
+    );
+    assert!(
+        json_rows(&repaired)
+            .iter()
+            .any(|row| row["check"] == "fix-orphan-task-stores" && row["status"] == "ok"),
+        "confirmed repair reports outcome: {repaired}"
+    );
+    assert!(
+        !partitions.join(&partition_of["gone"]).exists(),
+        "the confirmed-absent partition must go"
+    );
+    assert!(
+        partitions.join(&partition_of["locked"]).is_dir(),
+        "the unreachable partition must stay"
+    );
+    assert!(
+        orbit_cmd::task_store::partition_is_bound(&global_root, &partition_of["locked"])
+            .expect("check retained binding"),
+        "ORB-29113: repair must retain the locked checkout's binding"
+    );
 }
 
 /// `--fix-stale-locks` clears a dead holder record while preserving its file.

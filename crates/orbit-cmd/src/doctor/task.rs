@@ -68,7 +68,7 @@ pub(super) fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> Workspa
         steps.push(
             "Restore access to the unreachable checkouts (remount the volume, repair directory \
              permissions) and re-run `orbit doctor`; a populated partition is never deleted while \
-             its checkout cannot be stat-ed."
+             a permission, I/O, or mount failure stops its checkout from being confirmed absent."
                 .to_string(),
         );
     }
