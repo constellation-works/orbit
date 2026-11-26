@@ -1,16 +1,14 @@
 use clap::Args;
-use orbit_common::Env;
-use orbit_config::{EffectiveConfigValue, load_effective_config};
-use orbit_core::OrbitRuntime;
+use orbit_config::EffectiveConfigValue;
+use orbit_core::Core;
+use orbit_core::app::config::{Command, ConfigShowData, ConfigShowRoots, Outcome, exec};
 use serde_json::{Map, Value as JsonValue, json};
 
-use crate::command::{Block, CommandOut, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::output::config::ConfigShow;
 
 use super::render;
-use super::support::{
-    ConfigScopeArg, global_config_path, open_store_for_scope, runtime_config_roots,
-};
+use super::support::ConfigScopeArg;
 
 #[derive(Args)]
 pub struct ConfigShowArgs {
@@ -25,41 +23,58 @@ pub struct ConfigShowArgs {
     pub all: bool,
 }
 
-impl ConfigShowArgs {
-    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        if self.scope == ConfigScopeArg::Effective {
-            let effective = load_effective_config(env, &runtime_config_roots(runtime))?;
-            let review = review_switches(runtime);
-            let mut json = effective_json(runtime, effective.values());
-            json["review"] = review.json;
-            let purposes = orbit_core::application::config::crew_purposes_view(effective.values());
-            let review_skip = review_skip_view(runtime);
-            json["review_skip_tags"] = review_skip.json;
-            let mut text = effective_text(runtime, effective.values(), self.all);
-            if self.all || !review_skip.text.is_empty() {
-                text.push_str(&review_skip.text);
+impl ExecuteCore for ConfigShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Shown(shown) = exec(
+            core,
+            Command::Show {
+                scope: self.scope.into(),
+            },
+        )?
+        else {
+            unreachable!("config show returned an unrelated outcome");
+        };
+        match *shown {
+            ConfigShowData::Effective {
+                values,
+                review,
+                crew_purposes,
+                review_skip_tags,
+                roots,
+            } => {
+                let review = review_switches(review);
+                let mut json = effective_json(&roots, &values);
+                json["review"] = review.json;
+                let review_skip = review_skip_view(&review_skip_tags);
+                json["review_skip_tags"] = review_skip.json;
+                let mut text = effective_text(&roots, &values, self.all);
+                if self.all || !review_skip.text.is_empty() {
+                    text.push_str(&review_skip.text);
+                }
+                // Crew purposes and Review restate rows the sections above already
+                // print. The default view omits them; `--all` and `--json` keep them.
+                if self.all {
+                    text.push_str(&crew_purposes_text(&crew_purposes));
+                    text.push_str(&review.text);
+                }
+                json["crew_purposes"] = crew_purposes;
+                Ok(Payload::blocks(json, vec![Block::config_show(text)]).into())
             }
-            // Crew purposes and Review restate rows the sections above already
-            // print. The default view omits them; `--all` and `--json` keep them.
-            if self.all {
-                text.push_str(&crew_purposes_text(&purposes));
-                text.push_str(&review.text);
+            ConfigShowData::Scoped {
+                store,
+                snapshot,
+                roots,
+            } => {
+                let settings = snapshot.all_values();
+                Ok(Payload::blocks(
+                    scoped_json(&roots, &store, &snapshot, &settings),
+                    vec![Block::config_show(scoped_text(
+                        &roots, &store, &snapshot, &settings, self.all,
+                    ))],
+                )
+                .into())
             }
-            json["crew_purposes"] = purposes;
-            return Ok(Payload::blocks(json, vec![Block::config_show(text)]).into());
         }
-
-        let store = open_store_for_scope(runtime, self.scope, env)?;
-        let snapshot = store.snapshot_with_global(&runtime.global_root())?;
-        let settings = snapshot.all_values();
-
-        Ok(Payload::blocks(
-            scoped_json(runtime, &store, &snapshot, &settings),
-            vec![Block::config_show(scoped_text(
-                runtime, &store, &snapshot, &settings, self.all,
-            ))],
-        )
-        .into())
     }
 }
 
@@ -74,12 +89,15 @@ struct ReviewView {
     text: String,
 }
 
-fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
-    let json = orbit_core::application::review::review_switches_view(
-        runtime,
-        runtime.operation_policy(),
-        chrono::Utc::now(),
-    );
+/// The effective `[workflow.review_skip_tags]` mappings: each tag's
+/// `paths` and optional `guard`. Empty text when none is mapped (the
+/// JSON still carries an empty object).
+struct ReviewSkipView {
+    json: JsonValue,
+    text: String,
+}
+
+fn review_switches(json: JsonValue) -> ReviewView {
     let text = match json["error"].as_str() {
         Some(error) => format!("\nReview: {error}\n"),
         None => format!(
@@ -92,29 +110,17 @@ fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
     ReviewView { json, text }
 }
 
-/// The effective `[workflow.review_skip_tags]` mappings: each tag's
-/// `paths` and optional `guard`. Empty text when none is mapped (the
-/// JSON still carries an empty object).
-struct ReviewSkipView {
-    json: JsonValue,
-    text: String,
-}
-
-fn review_skip_view(runtime: &OrbitRuntime) -> ReviewSkipView {
-    let settings = runtime.review_skip_settings();
+fn review_skip_view(entries: &[(String, Vec<String>, Option<String>)]) -> ReviewSkipView {
     let mut map = Map::new();
     let mut text = String::new();
-    if !settings.is_empty() {
+    if !entries.is_empty() {
         text.push_str("\nReview skip tags:\n");
-        for (tag, profile) in settings.entries() {
-            map.insert(
-                tag.to_string(),
-                json!({"paths": profile.paths, "guard": profile.guard}),
-            );
-            let guard = profile.guard.as_deref().unwrap_or("none");
+        for (tag, paths, guard) in entries {
+            map.insert(tag.clone(), json!({"paths": paths, "guard": guard}));
+            let guard = guard.as_deref().unwrap_or("none");
             text.push_str(&format!(
                 "  {tag}: paths=[{}] guard={guard}\n",
-                profile.paths.join(", ")
+                paths.join(", ")
             ));
         }
     }
@@ -159,7 +165,7 @@ fn crew_purposes_text(view: &JsonValue) -> String {
     text
 }
 
-fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> JsonValue {
+fn effective_json(roots: &ConfigShowRoots, values: &[EffectiveConfigValue]) -> JsonValue {
     let mut settings = Map::new();
     let mut provenance = Map::new();
     for entry in values {
@@ -170,11 +176,10 @@ fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Js
         // alongside them rather than in a parallel map.
         provenance.insert(entry.key.clone(), render::effective_provenance_json(entry));
     }
-    let global_path = global_config_path(runtime);
-    let workspace_path = runtime.shared_root().join("config.toml");
+    let global_path = roots.global_root.join("config.toml");
+    let workspace_path = roots.shared_root.join("config.toml");
     let global_exists = global_path.exists();
-    let workspace_exists =
-        workspace_path.exists() && runtime_config_roots(runtime).has_workspace_layer();
+    let workspace_exists = workspace_path.exists() && roots.has_workspace_layer;
     let config_path = if workspace_exists {
         &workspace_path
     } else {
@@ -192,26 +197,26 @@ fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Js
         "shadowed_global_path": JsonValue::Null,
         "settings": settings,
         "provenance": provenance,
-        "workspace_binding": render::workspace_binding_json(runtime),
+        "workspace_binding": render::workspace_binding_json(roots),
         "execution_env_inherit": false,
-        "global_root": runtime.global_root().to_string_lossy(),
-        "shared_root": runtime.shared_root().to_string_lossy(),
-        "local_root": runtime.local_root().to_string_lossy(),
+        "global_root": roots.global_root.to_string_lossy(),
+        "shared_root": roots.shared_root.to_string_lossy(),
+        "local_root": roots.local_root.to_string_lossy(),
         "config_path": config_path.to_string_lossy(),
-        "persistence": runtime.persistence_config_json(),
+        "persistence": roots.persistence,
     })
 }
 
 pub(super) fn effective_text(
-    runtime: &OrbitRuntime,
+    roots: &ConfigShowRoots,
     values: &[EffectiveConfigValue],
     all: bool,
 ) -> ConfigShow {
-    render::effective_text(runtime, values, all)
+    render::effective_text(roots, values, all)
 }
 
 fn scoped_json(
-    runtime: &OrbitRuntime,
+    roots: &ConfigShowRoots,
     store: &orbit_config::ConfigStore,
     snapshot: &orbit_config::ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
@@ -243,22 +248,22 @@ fn scoped_json(
         "shadowed_global_path": JsonValue::Null,
         "settings": settings_obj,
         "provenance": provenance,
-        "workspace_binding": render::workspace_binding_json(runtime),
+        "workspace_binding": render::workspace_binding_json(roots),
         "execution_env_inherit": snapshot.execution_env_inherit,
-        "global_root": runtime.global_root().to_string_lossy(),
-        "shared_root": runtime.shared_root().to_string_lossy(),
-        "local_root": runtime.local_root().to_string_lossy(),
+        "global_root": roots.global_root.to_string_lossy(),
+        "shared_root": roots.shared_root.to_string_lossy(),
+        "local_root": roots.local_root.to_string_lossy(),
         "config_path": store.path().to_string_lossy(),
-        "persistence": runtime.persistence_config_json(),
+        "persistence": roots.persistence,
     })
 }
 
 pub(super) fn scoped_text(
-    runtime: &OrbitRuntime,
+    roots: &ConfigShowRoots,
     store: &orbit_config::ConfigStore,
     snapshot: &orbit_config::ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
     all: bool,
 ) -> ConfigShow {
-    render::scoped_text(runtime, store, snapshot, settings, all)
+    render::scoped_text(roots, store, snapshot, settings, all)
 }

@@ -2,12 +2,13 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use clap::{Args, Subcommand};
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
+use orbit_core::OrbitError;
 use orbit_core::application::routines::{
     ClockHealth, ClockStatus, ClockUnitInspection, ClockUnitVerdict, clock_status,
     inspect_clock_unit, set_clock_cadence, set_clock_enabled,
 };
-use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 use super::ClockTickArgs;
@@ -231,7 +232,7 @@ fn selected_global_root(
         .is_some_and(|root| !root.trim().is_empty());
     if root_override.is_some() || has_env_override {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)
+        return RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, root_override)
             .map(|roots| roots.global_root);
     }
     resolved.global_orbit_dir().map(Path::to_path_buf)

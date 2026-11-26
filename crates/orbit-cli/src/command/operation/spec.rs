@@ -526,6 +526,13 @@ pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> C
     }
 }
 
+pub(super) fn dispatch_config(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::Config(command) => command.execute_with_env(context.core()?, context.env),
+        _ => dispatch_mismatch("Config"),
+    }
+}
+
 pub(super) fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Sweep(command) => command.execute_without_runtime(

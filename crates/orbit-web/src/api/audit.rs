@@ -3,26 +3,24 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::state::{DashboardState, Ws};
+use crate::state::{AuditSummaryWs, DashboardState, WsCore};
 use axum::extract::{Query, State};
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::audit_event::{
+use orbit_core::app::audit::{
     AuditListingColumns, AuditListingExactIds, AuditListingHttpWindow, AuditListingPredicates,
-    AuditListingProfile,
+    AuditListingProfile, AuditSummary, Command, Outcome, exec,
 };
-use orbit_core::application::job::JobRunListParams;
 use orbit_core::{
     AuditEventStatus, AuditToolAggregate, AuditToolModelAggregate, FailureClass,
-    FailureIncidentQuery, FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, JobRunState,
-    LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError, OrbitRuntime, is_failure_only_diagnostic_surface,
+    FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError,
+    is_failure_only_diagnostic_surface,
 };
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
 use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
-use super::jobs::FAILED_RUN_STATES;
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, bad_request, blocking,
     map_runtime_error, server_error, truncate_to_hour,
@@ -44,7 +42,55 @@ const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
 /// the truncated start hour. [`build_sparkline`] never emits more than this.
 const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
-pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
+/// Response header carrying the `?before=` value that resumes the listing
+/// just past this page. Absent once the window is exhausted. A bare array body
+/// cannot say whether a short page is the end or a capped scan, so the server
+/// states it.
+pub(super) const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
+
+struct AuditSummaryBundle {
+    total: i64,
+    sql_denied: i64,
+    v2_denials: i64,
+    failed_events: u64,
+    failure_incidents: u64,
+    failure_incidents_truncated: bool,
+    failure_incidents_by_class: BTreeMap<String, u64>,
+    failed_events_by_class: BTreeMap<String, u64>,
+    affected_runs_by_class: BTreeMap<String, u64>,
+    failure_categories: Value,
+    affected_run_count: u64,
+    job_run_lifecycle_failures: u64,
+    job_run_lifecycle_incidents: u64,
+    lifecycle_diagnostic_events: u64,
+    lifecycle_diagnostic_incidents: u64,
+    lifecycle_diagnostic_affected_run_count: u64,
+    failed_runs: i64,
+    active_long_runs: i64,
+    buckets: Vec<(String, i64)>,
+    failures_by_tool: Vec<Value>,
+    duration_by_tool: Vec<Value>,
+    failure_rate_by_tool: Vec<Value>,
+    /// Raw `status=failure` over callable tool calls (`run` + `run-mcp`).
+    /// Distinct from `failure_rate_by_tool`, which is unexpected-only with a
+    /// successful + unexpected-failed denominator and a sample-size floor.
+    tool_call_failure_rate: Value,
+    tool_call_failures_by_tool: Vec<Value>,
+    /// Same callable population as `tool_call_failures_by_tool`, split by the
+    /// server-derived session model (with a role-derived fallback).
+    tool_call_failures_by_model: Vec<Value>,
+    /// Canonical per-actor split [ORB-10888]. One agent appears once
+    /// regardless of the granularity its label was recorded at, and `kind`
+    /// says whether a row is a real agent at all.
+    actor_split: Vec<Value>,
+    /// Tool calls split by how each row's identity was established
+    /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
+    /// cannot render a self-reported count as an authenticated one; the
+    /// buckets are disjoint, so summing them is the combined denominator.
+    attribution_split: Vec<Value>,
+}
+
+pub(super) async fn list_audit(WsCore(core): WsCore, Query(q): Query<AuditQuery>) -> Response {
     let exact_ids = match q.ids.as_deref() {
         Some(raw) => match AuditListingExactIds::parse_comma_separated(raw) {
             Ok(ids) => Some(ids),
@@ -133,11 +179,17 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     };
 
     match blocking("audit list", move || {
-        runtime.audit_listing_page(columns, profile)
+        exec(
+            &core,
+            Command::List {
+                columns: Box::new(columns),
+                profile,
+            },
+        )
     })
     .await
     {
-        Ok(page) => {
+        Ok(Outcome::Listed(page)) => {
             let rows: Vec<Value> = page.events.iter().map(audit_event_to_json).collect();
             let mut response = Json(Value::Array(rows)).into_response();
             if let Some(next_before) = page.next_before {
@@ -147,19 +199,14 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
             }
             response
         }
+        Ok(_) => unreachable!("audit list returned an unrelated outcome"),
         Err(response) => *response,
     }
 }
 
-/// Response header carrying the `?before=` value that resumes the listing
-/// just past this page. Absent once the window is exhausted. A bare array body
-/// cannot say whether a short page is the end or a capped scan, so the server
-/// states it.
-pub(super) const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
-
 pub(super) async fn audit_summary(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    workspace: AuditSummaryWs,
     Query(q): Query<AuditSummaryQuery>,
 ) -> Response {
     let raw_since = q.since.as_deref().unwrap_or(DEFAULT_SUMMARY_WINDOW);
@@ -178,16 +225,25 @@ pub(super) async fn audit_summary(
     }
     let denial_threshold = q.denial_threshold.unwrap_or(DEFAULT_DENIAL_THRESHOLD);
     let window_json = raw_since.to_string();
-    let runtime_for_compute = runtime.clone();
+    let core = workspace.core.clone();
 
-    let served = match state
-        .audit_summary_memo()
-        .get_or_compute(
-            &runtime,
+    let served = match workspace
+        .read_cached(
+            &state,
             raw_since.to_string(),
             DASHBOARD_POLL_MEMO_TTL,
             move || {
-                let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
+                let Outcome::Summary(summary) = exec(
+                    &core,
+                    Command::Summary {
+                        since,
+                        incident_scan_limit: ROLLUP_SCAN_LIMIT,
+                    },
+                )?
+                else {
+                    unreachable!("audit summary returned an unrelated outcome");
+                };
+                let bundle = build_audit_summary_bundle(*summary);
                 Ok(summary_payload(&bundle, since, now, &window_json))
             },
         )
@@ -202,48 +258,6 @@ pub(super) async fn audit_summary(
         obj.insert("denial_threshold".to_string(), json!(denial_threshold));
     }
     (served.age_header(), Json(body)).into_response()
-}
-
-struct AuditSummaryBundle {
-    total: i64,
-    sql_denied: i64,
-    v2_denials: i64,
-    failed_events: u64,
-    failure_incidents: u64,
-    failure_incidents_truncated: bool,
-    failure_incidents_by_class: BTreeMap<String, u64>,
-    failed_events_by_class: BTreeMap<String, u64>,
-    affected_runs_by_class: BTreeMap<String, u64>,
-    failure_categories: Value,
-    affected_run_count: u64,
-    job_run_lifecycle_failures: u64,
-    job_run_lifecycle_incidents: u64,
-    lifecycle_diagnostic_events: u64,
-    lifecycle_diagnostic_incidents: u64,
-    lifecycle_diagnostic_affected_run_count: u64,
-    failed_runs: i64,
-    active_long_runs: i64,
-    buckets: Vec<(String, i64)>,
-    failures_by_tool: Vec<Value>,
-    duration_by_tool: Vec<Value>,
-    failure_rate_by_tool: Vec<Value>,
-    /// Raw `status=failure` over callable tool calls (`run` + `run-mcp`).
-    /// Distinct from `failure_rate_by_tool`, which is unexpected-only with a
-    /// successful + unexpected-failed denominator and a sample-size floor.
-    tool_call_failure_rate: Value,
-    tool_call_failures_by_tool: Vec<Value>,
-    /// Same callable population as `tool_call_failures_by_tool`, split by the
-    /// server-derived session model (with a role-derived fallback).
-    tool_call_failures_by_model: Vec<Value>,
-    /// Canonical per-actor split [ORB-10888]. One agent appears once
-    /// regardless of the granularity its label was recorded at, and `kind`
-    /// says whether a row is a real agent at all.
-    actor_split: Vec<Value>,
-    /// Tool calls split by how each row's identity was established
-    /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
-    /// cannot render a self-reported count as an authenticated one; the
-    /// buckets are disjoint, so summing them is the combined denominator.
-    attribution_split: Vec<Value>,
 }
 
 /// Stable JSON fields for a computed bundle. `denial_threshold` is request
@@ -299,34 +313,23 @@ fn summary_payload(
     })
 }
 
-/// Heavy synchronous portion of `audit_summary`. Bundled into a single
-/// function so the caller can move it onto a `spawn_blocking` thread —
-/// every dependency below issues sync SQLite I/O.
-fn compute_audit_summary_bundle(
-    runtime: &OrbitRuntime,
-    since: DateTime<Utc>,
-) -> Result<AuditSummaryBundle, OrbitError> {
-    let stats = runtime.audit_event_stats(Some(since), None)?;
-    let total = stats.total;
-    let policy = runtime.audit_policy_denial_stats(Some(&since))?;
+/// Project the `app::audit` summary read model into the dashboard bundle.
+fn build_audit_summary_bundle(summary: AuditSummary) -> AuditSummaryBundle {
+    let AuditSummary {
+        total,
+        policy,
+        incidents,
+        failed_runs,
+        active_long_runs,
+        buckets,
+        tool_aggs,
+        tool_model_aggs,
+        actor_aggs,
+        attribution_aggs,
+        duration_by_tool,
+    } = summary;
     let sql_denied = policy.sql_denied;
     let v2_denials = policy.v2_denied;
-
-    // ORB-10871: the same window, grouped. Reported next to `total` so the
-    // header tiles can state both counts with their denominators.
-    let incidents = runtime.audit_failure_incidents(&FailureIncidentQuery {
-        since: Some(since),
-        max_events: ROLLUP_SCAN_LIMIT,
-        ..Default::default()
-    })?;
-
-    let failed_runs = count_failed_runs(runtime, since)?;
-    let active_long_runs = count_active_long_runs(runtime, since)?;
-    let buckets = runtime.audit_event_hourly_buckets(&since)?;
-
-    let tool_aggs = runtime.audit_event_aggregates_by_tool(&since)?;
-    let tool_model_aggs = runtime.audit_event_aggregates_by_tool_model(&since)?;
-    let actor_aggs = runtime.audit_event_aggregates_by_actor(&since)?;
 
     let unexpected_by_tool = raw_failure_counts_by_tool(&incidents, FailureClass::Unexpected);
     let mut failures_vec: Vec<_> = unexpected_by_tool
@@ -342,28 +345,17 @@ fn compute_audit_summary_bundle(
     failures_vec.sort_by_key(|v| std::cmp::Reverse(v["count"].as_i64().unwrap_or(0)));
     failures_vec.truncate(8);
 
-    let mut by_avg: Vec<&AuditToolAggregate> = tool_aggs
-        .iter()
-        .filter(|tool| is_named_tool(&tool.tool_name))
+    let duration_vec = duration_by_tool
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "tool": entry.tool,
+                "count": entry.count,
+                "avg": entry.avg,
+                "p95": entry.p95,
+            })
+        })
         .collect();
-    by_avg.sort_by(|a, b| {
-        b.avg_duration_ms
-            .partial_cmp(&a.avg_duration_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let mut duration_vec = Vec::with_capacity(8);
-    for t in by_avg.iter().take(8) {
-        let p95 = runtime
-            .audit_event_stats(Some(since), Some(t.tool_name.clone()))
-            .map(|s| s.p95_duration_ms)
-            .unwrap_or(0);
-        duration_vec.push(json!({
-            "tool": t.tool_name,
-            "count": t.total,
-            "avg": t.avg_duration_ms,
-            "p95": p95,
-        }));
-    }
 
     let mut rate_vec: Vec<_> = tool_aggs
         .iter()
@@ -419,8 +411,7 @@ fn compute_audit_summary_bundle(
         })
         .collect();
 
-    let attribution_vec: Vec<_> = runtime
-        .audit_tool_call_counts_by_attribution(Some(&since))?
+    let attribution_vec: Vec<_> = attribution_aggs
         .iter()
         .map(|a| {
             json!({
@@ -439,7 +430,7 @@ fn compute_audit_summary_bundle(
 
     let failure_categories = failure_category_summaries(&incidents);
 
-    Ok(AuditSummaryBundle {
+    AuditSummaryBundle {
         total,
         sql_denied,
         v2_denials,
@@ -467,7 +458,7 @@ fn compute_audit_summary_bundle(
         tool_call_failures_by_model,
         actor_split: actor_vec,
         attribution_split: attribution_vec,
-    })
+    }
 }
 
 /// Counts raw incident evidence by tool for one class. This deliberately uses
@@ -569,78 +560,6 @@ fn build_sparkline(
         out.insert(0, json!({ "ts": key, "count": 0 }));
     }
     out
-}
-
-fn count_failed_runs(
-    runtime: &OrbitRuntime,
-    since: DateTime<Utc>,
-) -> Result<i64, orbit_core::OrbitError> {
-    let mut total: u64 = 0;
-    for state in FAILED_RUN_STATES {
-        total = total.saturating_add(runtime.count_job_runs(JobRunListParams {
-            job_id: None,
-            state: Some(state),
-            terminal_only: false,
-            since: Some(since),
-            limit: None,
-            ..Default::default()
-        })?);
-    }
-    Ok(i64::try_from(total).unwrap_or(i64::MAX))
-}
-
-/// Counts running runs whose start time is older than the 95th percentile of
-/// finished-run wall-clock durations within the same window. We use run-level
-/// `duration_ms` as a proxy for the AC's "finished step" series — load-bearing
-/// the same per-run signal without paying the O(steps) file-read cost. Faithful
-/// to the spec's intent (flag stuck activity) and within the 500ms budget.
-fn count_active_long_runs(
-    runtime: &OrbitRuntime,
-    since: DateTime<Utc>,
-) -> Result<i64, orbit_core::OrbitError> {
-    // Every finished run in the window, as durations only: the baseline is
-    // a percentile, so a capped page of hydrated rows would both drift low
-    // and cost the step reads it never looks at.
-    let mut finished_durations: Vec<i64> = runtime
-        .list_job_run_durations(JobRunListParams {
-            job_id: None,
-            state: None,
-            terminal_only: true,
-            since: Some(since),
-            limit: None,
-            ..Default::default()
-        })?
-        .into_iter()
-        .map(|d| i64::try_from(d).unwrap_or(i64::MAX))
-        .collect();
-
-    if finished_durations.is_empty() {
-        return Ok(0);
-    }
-    finished_durations.sort_unstable();
-    let idx = ((finished_durations.len() as f64) * 0.95).ceil() as usize;
-    let idx = idx.min(finished_durations.len()).saturating_sub(1);
-    let p95_ms = finished_durations[idx];
-
-    let running = runtime.list_job_runs(JobRunListParams {
-        job_id: None,
-        state: Some(JobRunState::Running),
-        terminal_only: false,
-        since: None,
-        limit: None,
-        ..Default::default()
-    })?;
-
-    let now = Utc::now();
-    let mut count: i64 = 0;
-    for r in running {
-        let started = r.started_at.unwrap_or(r.created_at);
-        let elapsed = now.signed_duration_since(started).num_milliseconds().max(0);
-        if elapsed > p95_ms {
-            count += 1;
-        }
-    }
-    Ok(count)
 }
 
 /// SQL aggregates fold NULL `tool_name` into `"unknown"`. That bucket is not

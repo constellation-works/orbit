@@ -106,7 +106,7 @@ impl Commands {
                     RuntimeNeed::Required,
                     Some(admin_meta("config", Some(subcommand), Some("config"), None)),
                     None,
-                    runtime_env_dispatch!(Config),
+                    dispatch_config,
                 )
             }
             Commands::Host(command) => {
@@ -479,15 +479,12 @@ impl Commands {
             Commands::Decision(command) => {
                 registry_operation(&command.command, core_dispatch!(Decision))
             }
-            Commands::Audit(command) => {
-                use super::super::audit::AuditSubcommand;
+            Commands::Audit(_) => {
                 // `audit` emits no command-level audit row (it would audit
-                // reads of the audit log), so a denial here is recorded only by
+                // reads of the audit log); `app::audit::exec` authorizes
+                // `audit prune --confirm`, so a denial is recorded only by
                 // the authorization row the decision itself writes.
-                let prunes =
-                    matches!(&command.command, AuditSubcommand::Prune(args) if args.confirm);
-                CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
-                    .governed_when(prunes, "audit", "prune")
+                CommandOperation::new(RuntimeNeed::Required, None, None, core_dispatch!(Audit))
             }
             // Fleet notices are registry-driven like friction.
             Commands::Notice(command) => {
@@ -561,7 +558,7 @@ impl Commands {
                 RuntimeNeed::Required,
                 Some(admin_meta("log", Some("tail"), Some("log_feed"), None)),
                 None,
-                runtime_env_dispatch!(Log),
+                core_dispatch!(Log),
             ),
             Commands::Doctor(command) => {
                 use super::super::doctor::DoctorSubcommand;
@@ -805,7 +802,7 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    runtime_dispatch!(Skill),
+                    core_dispatch!(Skill),
                 )
             }
         }

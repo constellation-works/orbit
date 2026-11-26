@@ -262,13 +262,49 @@ impl FromRequestParts<DashboardState> for PluginPanelWs {
     }
 }
 
+/// An audit-summary request's opaque [`Core`] and the cache identity of its
+/// selected runtime.
+pub(crate) struct AuditSummaryWs {
+    pub(crate) core: Arc<Core>,
+    runtime: Arc<OrbitRuntime>,
+}
+
+impl AuditSummaryWs {
+    /// Reuse a cached audit summary payload for this runtime generation.
+    pub(crate) async fn read_cached(
+        &self,
+        state: &DashboardState,
+        key: String,
+        ttl: std::time::Duration,
+        read: impl FnOnce() -> Result<serde_json::Value, orbit_core::Error> + Send + 'static,
+    ) -> Result<crate::runtime_memo::Served<serde_json::Value>, orbit_core::Error> {
+        state
+            .audit_summary_memo()
+            .get_or_compute(&self.runtime, key, ttl, read)
+            .await
+    }
+}
+
+impl FromRequestParts<DashboardState> for AuditSummaryWs {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
+        let WsCore(core) = WsCore::over(&runtime);
+        Ok(Self { core, runtime })
+    }
+}
+
 /// Stale-tolerant workspace extractor for `GET /api/config/file` only.
 ///
 /// A broken layered config must stay repairable through the file view (400
 /// with the file path), while every other endpoint — including fleet and
 /// aggregate rows — reports the same breakage as an error/`unavailable`.
-/// Handlers destructure it as `ConfigFileWs(runtime)`.
-pub(crate) struct ConfigFileWs(pub(crate) Arc<OrbitRuntime>);
+/// Handlers destructure it as `ConfigFileWs(core)`.
+pub(crate) struct ConfigFileWs(pub(crate) Arc<Core>);
 
 impl FromRequestParts<DashboardState> for ConfigFileWs {
     type Rejection = WsRejection;
@@ -282,7 +318,7 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
         // its cached first step, and everything past it (a rebuild, the
         // stale-runtime fallback) stays on the blocking path below.
         if let Some(resolved) = state.try_resolve_cached(requested.as_deref()) {
-            return resolved.map(ConfigFileWs);
+            return resolved.map(|runtime| ConfigFileWs(WsCore::over(&runtime).0));
         }
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
@@ -294,7 +330,9 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
                     .map(str::to_string)
                     .ok_or_else(WsRejection::no_default)?,
             };
-            Ok(ConfigFileWs(pinned.runtime_for_config_file(&id)?))
+            Ok(ConfigFileWs(
+                WsCore::over(&pinned.runtime_for_config_file(&id)?).0,
+            ))
         })
         .await
         .map_err(|error| WsRejection {

@@ -1,16 +1,20 @@
 use clap::Args;
 use orbit_config::CONFIG_KEY_REGISTRY;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::config::{Command, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::common::table::{Column, Table};
 
 #[derive(Args)]
 pub struct ConfigKeysArgs {}
 
-impl Execute for ConfigKeysArgs {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for ConfigKeysArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Keys(_) = exec(core, Command::Keys)? else {
+            unreachable!("config keys returned an unrelated outcome");
+        };
         let keys: Vec<_> = CONFIG_KEY_REGISTRY
             .iter()
             .map(|entry| {

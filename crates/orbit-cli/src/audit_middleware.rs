@@ -6,6 +6,7 @@ use std::time::Instant;
 use orbit_common::Env;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::adapter::command::take_tool_audit_recorded;
+use orbit_core::app::InvocationAuditScope;
 use orbit_core::{
     AuditEventInsertParams, AuditEventStatus, OrbitError, OrbitRuntime, redact_sensitive_env_text,
 };
@@ -37,6 +38,7 @@ pub struct AuditGuard<'a> {
     status: AuditEventStatus,
     exit_code: i32,
     error_message: Option<String>,
+    app_audit: Option<InvocationAuditScope>,
 }
 
 impl<'a> AuditGuard<'a> {
@@ -50,10 +52,14 @@ impl<'a> AuditGuard<'a> {
             status: AuditEventStatus::Failure,
             exit_code: -1,
             error_message: None,
+            app_audit: Some(InvocationAuditScope::enter()),
         }
     }
 
     pub fn mark_success(&mut self) {
+        if let Some(scope) = self.app_audit.take() {
+            scope.settle(Ok(()), 0, None);
+        }
         self.status = AuditEventStatus::Success;
         self.exit_code = 0;
         self.error_message = None;
@@ -67,6 +73,9 @@ impl<'a> AuditGuard<'a> {
         exit_code: i32,
         audit_message: Option<&str>,
     ) {
+        if let Some(scope) = self.app_audit.take() {
+            scope.settle(result.as_ref().copied(), exit_code, audit_message);
+        }
         match result {
             Ok(()) if exit_code != 0 => {
                 self.status = AuditEventStatus::Failure;
@@ -88,12 +97,19 @@ impl<'a> AuditGuard<'a> {
     }
 
     pub fn mark_failure(&mut self, error: &OrbitError) {
+        if let Some(scope) = self.app_audit.take() {
+            scope.settle(Err(error), 1, None);
+        }
         self.status = AuditEventStatus::Failure;
         self.exit_code = 1;
         self.error_message = Some(redact_sensitive_env_text(&error.to_string()));
     }
 
     pub fn mark_denied(&mut self, msg: &str) {
+        if let Some(scope) = self.app_audit.take() {
+            let error = OrbitError::CapabilityDenied(msg.to_string());
+            scope.settle(Err(&error), 1, None);
+        }
         self.status = AuditEventStatus::Denied;
         self.exit_code = 1;
         self.error_message = Some(redact_sensitive_env_text(msg));
@@ -102,6 +118,12 @@ impl<'a> AuditGuard<'a> {
 
 impl Drop for AuditGuard<'_> {
     fn drop(&mut self) {
+        // Flush any unsettled app invocation guard before checking
+        // `take_tool_audit_recorded()`, so an early drop or panic unwind
+        // during output rendering persists the app guard's `Failure / -1` row
+        // and suppresses a duplicate emission here.
+        drop(self.app_audit.take());
+
         // If `OrbitRuntime::execute_tool_command_dispatch` already persisted an
         // audit row for this thread (the runtime now owns tool-invocation audit
         // for both CLI and MCP entry points), suppress the guard's own emission

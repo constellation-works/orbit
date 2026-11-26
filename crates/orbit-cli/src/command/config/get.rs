@@ -1,12 +1,11 @@
 use clap::Args;
-use orbit_common::Env;
-use orbit_config::{admit_config_key, load_effective_config};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::config::{Command, ConfigGetResult, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
-use super::support::{ConfigScopeArg, open_store_for_scope, runtime_config_roots};
+use super::support::ConfigScopeArg;
 
 #[derive(Args)]
 pub struct ConfigGetArgs {
@@ -18,48 +17,55 @@ pub struct ConfigGetArgs {
     pub scope: ConfigScopeArg,
 }
 
-impl ConfigGetArgs {
-    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        if self.scope == ConfigScopeArg::Effective {
-            admit_config_key(&self.key)?;
-            let effective = load_effective_config(env, &runtime_config_roots(runtime))?;
-            let value = effective
-                .value_for(&self.key)
-                .unwrap_or(serde_json::Value::Null);
-            let text = format_value_for_display(&value);
-            return Ok(Payload::detail(
-                json!({
-                    "key": self.key,
-                    "scope": "effective",
-                    "value": value,
-                }),
-                text,
-            )
-            .into());
-        }
-
-        let store = open_store_for_scope(runtime, self.scope, env)?;
-        admit_config_key(&self.key)?;
-        let file_exists = store.exists_on_disk();
-        let value = store.effective_value(&self.key)?;
-        let exists = store.is_key_set(&self.key);
-        let path = if file_exists {
-            serde_json::Value::String(store.path().to_string_lossy().into_owned())
-        } else {
-            serde_json::Value::Null
+impl ExecuteCore for ConfigGetArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Got(result) = exec(
+            core,
+            Command::Get {
+                key: self.key.clone(),
+                scope: self.scope.into(),
+            },
+        )?
+        else {
+            unreachable!("config get returned an unrelated outcome");
         };
-        let text = format_value_for_display(&value);
-        Ok(Payload::detail(
-            json!({
-                "key": self.key,
-                "scope": store.scope().label(),
-                "path": path,
-                "value": value,
-                "exists": exists,
-            }),
-            text,
-        )
-        .into())
+        match result {
+            ConfigGetResult::Effective { value } => {
+                let text = format_value_for_display(&value);
+                Ok(Payload::detail(
+                    json!({
+                        "key": self.key,
+                        "scope": "effective",
+                        "value": value,
+                    }),
+                    text,
+                )
+                .into())
+            }
+            ConfigGetResult::Scoped {
+                scope,
+                path,
+                value,
+                exists,
+            } => {
+                let path = match path {
+                    Some(path) => serde_json::Value::String(path.to_string_lossy().into_owned()),
+                    None => serde_json::Value::Null,
+                };
+                let text = format_value_for_display(&value);
+                Ok(Payload::detail(
+                    json!({
+                        "key": self.key,
+                        "scope": scope,
+                        "path": path,
+                        "value": value,
+                        "exists": exists,
+                    }),
+                    text,
+                )
+                .into())
+            }
+        }
     }
 }
 

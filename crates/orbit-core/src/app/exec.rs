@@ -6,8 +6,10 @@
 //!
 //! - From a command-line process, the chokepoint authorizes the command and
 //!   writes its invocation audit row, the row the CLI's own audit guard wrote
-//!   before the command went through an app. It then marks the row as
-//!   recorded, so that guard writes no second one.
+//!   before the command went through an app. When the CLI entry scopes
+//!   settlement with [`InvocationAuditScope`], a successful `exec` defers that
+//!   write until output rendering finishes (or unwinds), then marks the row as
+//!   recorded so the entry's legacy guard writes no second one.
 //! - From a long-lived server, the chokepoint authorizes the command. No
 //!   invocation row is written for one today; a task write records the
 //!   owner-side mutation row the dashboard wrote itself before.
@@ -15,6 +17,7 @@
 //!   call before the handler ran, so the chokepoint only runs it. This case
 //!   ends when the tool entry itself is converted to call the apps.
 
+use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::time::Instant;
 
@@ -36,6 +39,14 @@ use crate::application::task::{TaskMutationAudit, audit_status_for_task_mutation
 use crate::composition::Entry;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 use crate::{Core, Error};
+
+thread_local! {
+    /// Active CLI invocation audit settlement scope. `Some(None)` means the
+    /// CLI entry is ready to settle one deferred `AuditGuard` after output
+    /// rendering completes; `Some(Some(_))` holds the unsettled guard.
+    static DEFERRED_INVOCATION_AUDIT: RefCell<Option<Option<Box<DeferredAudit>>>> =
+        const { RefCell::new(None) };
+}
 
 /// What an app supplies to the chokepoint: its types, the operation a command
 /// performs, and how to run it.
@@ -95,6 +106,8 @@ pub(crate) struct Operation {
     audit_role: Option<&'static str>,
     /// Whether a command-line caller is held to the command's governance row.
     command_row: bool,
+    /// Whether a command-line caller writes an invocation audit row.
+    invocation_audit: bool,
 }
 
 impl Operation {
@@ -105,10 +118,6 @@ impl Operation {
         let noun = V::noun();
         let spec = verb.spec();
         Self {
-            native_operator_refusal: None,
-            audit_role: None,
-            job_run_id: None,
-            command_row: true,
             command: noun.cli_name,
             subcommand: spec.cli_path.join("-"),
             tool_name: Some(spec.tool_name),
@@ -117,6 +126,11 @@ impl Operation {
                 .get(noun.audit_target_param)
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
+            job_run_id: None,
+            native_operator_refusal: None,
+            audit_role: None,
+            command_row: true,
+            invocation_audit: true,
         }
     }
 
@@ -125,14 +139,15 @@ impl Operation {
     pub(crate) fn command(command: &'static str, subcommand: impl Into<String>) -> Self {
         Self {
             command,
-            native_operator_refusal: None,
-            audit_role: None,
-            job_run_id: None,
-            command_row: true,
             subcommand: subcommand.into(),
             tool_name: None,
             target_type: None,
             target_id: None,
+            job_run_id: None,
+            native_operator_refusal: None,
+            audit_role: None,
+            command_row: true,
+            invocation_audit: true,
         }
     }
 
@@ -178,6 +193,263 @@ impl Operation {
         self.tool_name = None;
         self
     }
+
+    /// Write no command-line invocation audit row: used by `orbit audit`
+    /// itself so reading or pruning the audit log does not emit a command row
+    /// (authorization refusals still record their own decision row).
+    pub(crate) fn without_invocation_audit(mut self) -> Self {
+        self.invocation_audit = false;
+        self
+    }
+}
+
+/// An invocation audit guard held across a streaming command until the stream
+/// terminates. Dropping it without calling [`Self::finish`] still writes a
+/// failure row (`exit_code = -1`).
+pub(super) struct StreamAudit(Option<AuditGuard>);
+
+impl StreamAudit {
+    /// Settle the stream's final outcome and write its invocation audit row.
+    pub(super) fn finish(mut self, result: &Result<(), Error>) {
+        if let Some(guard) = self.0.as_mut() {
+            match result {
+                Ok(()) => guard.finished(0),
+                Err(error) => guard.failed(error),
+            }
+        }
+    }
+}
+
+/// Scopes command-line invocation audit settlement across command dispatch and
+/// CLI output rendering.
+///
+/// While active on the current thread, a command-line app `exec` that succeeds
+/// defers its invocation audit guard here instead of writing `success` before
+/// stdout rendering completes. [`Self::settle`] records the final render
+/// result, exit code and optional audit message and flushes the audit row
+/// before process exit; dropping the scope without settling (for example, on
+/// panic unwind when stdout fails) drops the guard unsettled so it persists
+/// `failure` with `exit_code = -1`.
+pub struct InvocationAuditScope {
+    active: bool,
+}
+
+impl InvocationAuditScope {
+    /// Begin deferring command-line invocation audit settlement on this thread
+    /// until [`Self::settle`] or drop.
+    pub fn enter() -> Self {
+        let active = DEFERRED_INVOCATION_AUDIT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_some() {
+                return false;
+            }
+            *slot = Some(None);
+            true
+        });
+        Self { active }
+    }
+
+    /// Settle any deferred command-line invocation audit with the complete
+    /// dispatch and rendering outcome, flushing its row before returning.
+    ///
+    /// Rendering errors take precedence over the command's or payload's
+    /// declared exit code and audit message.
+    pub fn settle(
+        mut self,
+        result: Result<(), &Error>,
+        exit_code: i32,
+        audit_message: Option<&str>,
+    ) {
+        if let Some(mut deferred) = self.take_deferred() {
+            match result {
+                Ok(()) => {
+                    let effective_exit_code = if exit_code != 0 {
+                        exit_code
+                    } else {
+                        deferred.exit_code
+                    };
+                    deferred
+                        .guard
+                        .finished_with_message(effective_exit_code, audit_message);
+                }
+                Err(error) => deferred.guard.failed(error),
+            }
+        }
+    }
+
+    fn take_deferred(&mut self) -> Option<Box<DeferredAudit>> {
+        if !self.active {
+            return None;
+        }
+        self.active = false;
+        DEFERRED_INVOCATION_AUDIT.with(|slot| slot.borrow_mut().take().flatten())
+    }
+}
+
+impl Drop for InvocationAuditScope {
+    fn drop(&mut self) {
+        let _ = self.take_deferred();
+    }
+}
+
+struct DeferredAudit {
+    guard: AuditGuard,
+    exit_code: i32,
+}
+
+/// Writes one command's invocation audit row when dropped, so an early return
+/// or a panic still leaves it. Until [`Self::finished`] is called the row says
+/// the command failed with exit code -1.
+struct AuditGuard {
+    runtime: crate::OrbitRuntime,
+    operation: Operation,
+    execution_id: String,
+    start: Instant,
+    status: AuditEventStatus,
+    exit_code: i32,
+    error_message: Option<String>,
+}
+
+impl AuditGuard {
+    fn start(core: &Core, operation: Operation) -> Self {
+        Self {
+            runtime: core.runtime().clone(),
+            operation,
+            execution_id: audit_execution_id("exec"),
+            start: Instant::now(),
+            status: AuditEventStatus::Failure,
+            exit_code: -1,
+            error_message: None,
+        }
+    }
+
+    /// Record that the command ran and answers `exit_code`.
+    fn finished(&mut self, exit_code: i32) {
+        self.finished_with_message(exit_code, None);
+    }
+
+    /// Record that the command ran and answers `exit_code`, optionally carrying
+    /// a redacted audit message when `exit_code != 0`.
+    fn finished_with_message(&mut self, exit_code: i32, audit_message: Option<&str>) {
+        self.status = match exit_code {
+            0 => AuditEventStatus::Success,
+            _ => AuditEventStatus::Failure,
+        };
+        self.exit_code = exit_code;
+        self.error_message = (exit_code != 0)
+            .then_some(audit_message)
+            .flatten()
+            .map(redact_sensitive_env_text);
+    }
+
+    /// Record the error the command ended with.
+    fn failed(&mut self, error: &Error) {
+        let denial = match error {
+            OrbitError::PolicyDenied(message) | OrbitError::CapabilityDenied(message) => {
+                Some(message.clone())
+            }
+            OrbitError::DecisionRefused { code, .. } if code.is_policy_denial() => {
+                Some(error.to_string())
+            }
+            OrbitError::NoticeRefused { code, .. } if code.is_policy_denial() => {
+                Some(error.to_string())
+            }
+            _ => None,
+        };
+        self.status = match denial {
+            Some(_) => AuditEventStatus::Denied,
+            None => AuditEventStatus::Failure,
+        };
+        self.exit_code = 1;
+        self.error_message = Some(redact_sensitive_env_text(
+            &denial.unwrap_or_else(|| error.to_string()),
+        ));
+    }
+
+    fn row(&self) -> AuditEventInsertParams {
+        let runtime = &self.runtime;
+        let env = runtime.env();
+        let env_text = |value: Option<&OsStr>| {
+            value
+                .and_then(OsStr::to_str)
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        AuditEventInsertParams {
+            execution_id: self.execution_id.clone(),
+            command: self.operation.command.to_string(),
+            subcommand: Some(self.operation.subcommand.clone()),
+            tool_name: None,
+            target_type: self.operation.target_type.map(ToOwned::to_owned),
+            target_id: self.operation.target_id.clone(),
+            role: self
+                .operation
+                .audit_role
+                .map_or_else(|| runtime.actor().audit_role().to_string(), str::to_owned),
+            status: self.status,
+            exit_code: self.exit_code,
+            duration_ms: self.start.elapsed().as_millis() as i64,
+            working_directory: std::env::current_dir()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            arguments_json: None,
+            stdout_truncated: None,
+            stderr_truncated: None,
+            error_message: self.error_message.clone(),
+            host: env
+                .hostname()
+                .and_then(OsStr::to_str)
+                .map(ToOwned::to_owned),
+            pid: std::process::id(),
+            session_id: None,
+            workspace_id: runtime
+                .workspace_runtime_binding()
+                .map(|binding| binding.task_partition_id.clone()),
+            caller_machine_id: None,
+            caller_machine_name: None,
+            process_machine_id: None,
+            process_machine_name: None,
+            transport: None,
+            effective_capabilities: Default::default(),
+            origin_session_id: None,
+            mcp_call_id: None,
+            lease_id: None,
+            task_id: env_text(env.orbit_task_id()),
+            job_run_id: self
+                .operation
+                .job_run_id
+                .clone()
+                .or_else(|| env_text(env.orbit_run_id())),
+            activity_id: env_text(env.orbit_activity_id()),
+            step_index: env
+                .orbit_step_index()
+                .and_then(OsStr::to_str)
+                .and_then(|text| text.parse().ok()),
+        }
+    }
+}
+
+impl Drop for AuditGuard {
+    fn drop(&mut self) {
+        let row = self.row();
+        let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.runtime.record_audit_event(&row)
+        }));
+        // A row that was not written stays owed: the command-line entry's own
+        // guard then writes it, and reports the failure if it fails again.
+        if matches!(written, Ok(Ok(()))) {
+            crate::adapter::command::mark_tool_audit_recorded();
+        }
+    }
+}
+
+/// The arguments and authenticated session of a governed dashboard write.
+pub(super) struct DashboardOperation<'a> {
+    pub(super) operation: &'static GovernedOperation,
+    pub(super) target: &'a str,
+    pub(super) arguments: Value,
+    pub(super) operator_session: bool,
+    pub(super) host: Option<String>,
 }
 
 /// Run one command of app `A`: authorize it, audit it, run it.
@@ -188,15 +460,16 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
     };
     match core.entry() {
         Entry::Tool => A::run(core, command).map_err(Into::into),
-        Entry::CommandLine => {
-            let mut guard = AuditGuard::start(core, &operation);
+        Entry::CommandLine if operation.invocation_audit => {
+            let mut guard = AuditGuard::start(core, operation.clone());
             let result = admitted(command);
             match &result {
-                Ok(outcome) => guard.finished(A::exit_code(outcome)),
+                Ok(outcome) => defer_or_finish_invocation_audit(guard, A::exit_code(outcome)),
                 Err(error) => guard.failed(error),
             }
             result
         }
+        Entry::CommandLine => admitted(command),
         Entry::Service => {
             let Some(audit) = A::mutation_audit(&command) else {
                 return admitted(command);
@@ -206,6 +479,25 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
             record_mutation(core, audit, started, result.as_ref().map(A::written_id));
             result
         }
+    }
+}
+
+/// Hand a succeeded command-line invocation's `AuditGuard` to the active
+/// [`InvocationAuditScope`] on this thread, or settle it immediately when no
+/// CLI settlement scope is open (for example, direct in-process `exec` calls).
+fn defer_or_finish_invocation_audit(guard: AuditGuard, exit_code: i32) {
+    let deferred = DEFERRED_INVOCATION_AUDIT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        match slot.as_mut() {
+            Some(pending) if pending.is_none() => {
+                *pending = Some(Box::new(DeferredAudit { guard, exit_code }));
+                None
+            }
+            _ => Some(guard),
+        }
+    });
+    if let Some(mut guard) = deferred {
+        guard.finished(exit_code);
     }
 }
 
@@ -272,139 +564,29 @@ fn authorize(core: &Core, operation: &Operation) -> Result<(), Error> {
     runtime.authorize_tool_operation(tool_name, &session, CapabilityEnforcement::Enforce)
 }
 
-/// Writes one command's invocation audit row when dropped, so an early return
-/// or a panic still leaves it. Until [`Self::finished`] is called the row says
-/// the command failed with exit code -1.
-struct AuditGuard<'a> {
-    core: &'a Core,
-    operation: &'a Operation,
-    execution_id: String,
-    start: Instant,
-    status: AuditEventStatus,
-    exit_code: i32,
-    error_message: Option<String>,
-}
-
-impl<'a> AuditGuard<'a> {
-    fn start(core: &'a Core, operation: &'a Operation) -> Self {
-        Self {
-            core,
-            operation,
-            execution_id: audit_execution_id("exec"),
-            start: Instant::now(),
-            status: AuditEventStatus::Failure,
-            exit_code: -1,
-            error_message: None,
-        }
+/// Authorize a streaming command and return an invocation audit guard that
+/// stays open until the stream itself finishes.
+///
+/// If authorization or setup fails, the guard records that failure at once so
+/// no row is lost; otherwise the caller holds the guard for the stream's life
+/// and settles it with [`StreamAudit::finish`].
+pub(super) fn start_stream<T>(
+    core: &Core,
+    operation: Operation,
+    setup: impl FnOnce() -> Result<T, Error>,
+) -> Result<(T, StreamAudit), Error> {
+    if core.entry() == Entry::Tool {
+        return setup().map(|value| (value, StreamAudit(None)));
     }
-
-    /// Record that the command ran and answers `exit_code`.
-    fn finished(&mut self, exit_code: i32) {
-        self.status = match exit_code {
-            0 => AuditEventStatus::Success,
-            _ => AuditEventStatus::Failure,
-        };
-        self.exit_code = exit_code;
-        self.error_message = None;
-    }
-
-    /// Record the error the command ended with.
-    fn failed(&mut self, error: &Error) {
-        let denial = match error {
-            OrbitError::PolicyDenied(message) | OrbitError::CapabilityDenied(message) => {
-                Some(message.clone())
+    let mut guard = (core.entry() == Entry::CommandLine && operation.invocation_audit)
+        .then(|| AuditGuard::start(core, operation.clone()));
+    match authorize(core, &operation).and_then(|()| setup()) {
+        Ok(value) => Ok((value, StreamAudit(guard))),
+        Err(error) => {
+            if let Some(guard) = guard.as_mut() {
+                guard.failed(&error);
             }
-            OrbitError::DecisionRefused { code, .. } if code.is_policy_denial() => {
-                Some(error.to_string())
-            }
-            OrbitError::NoticeRefused { code, .. } if code.is_policy_denial() => {
-                Some(error.to_string())
-            }
-            _ => None,
-        };
-        self.status = match denial {
-            Some(_) => AuditEventStatus::Denied,
-            None => AuditEventStatus::Failure,
-        };
-        self.exit_code = 1;
-        self.error_message = Some(redact_sensitive_env_text(
-            &denial.unwrap_or_else(|| error.to_string()),
-        ));
-    }
-
-    fn row(&self) -> AuditEventInsertParams {
-        let runtime = self.core.runtime();
-        let env = runtime.env();
-        let env_text = |value: Option<&OsStr>| {
-            value
-                .and_then(OsStr::to_str)
-                .filter(|text| !text.is_empty())
-                .map(ToOwned::to_owned)
-        };
-        AuditEventInsertParams {
-            execution_id: self.execution_id.clone(),
-            command: self.operation.command.to_string(),
-            subcommand: Some(self.operation.subcommand.clone()),
-            tool_name: None,
-            target_type: self.operation.target_type.map(ToOwned::to_owned),
-            target_id: self.operation.target_id.clone(),
-            role: self
-                .operation
-                .audit_role
-                .map_or_else(|| runtime.actor().audit_role().to_string(), str::to_owned),
-            status: self.status,
-            exit_code: self.exit_code,
-            duration_ms: self.start.elapsed().as_millis() as i64,
-            working_directory: std::env::current_dir()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            arguments_json: None,
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: self.error_message.clone(),
-            host: env
-                .hostname()
-                .and_then(OsStr::to_str)
-                .map(ToOwned::to_owned),
-            pid: std::process::id(),
-            session_id: None,
-            workspace_id: runtime
-                .workspace_runtime_binding()
-                .map(|binding| binding.task_partition_id.clone()),
-            caller_machine_id: None,
-            caller_machine_name: None,
-            process_machine_id: None,
-            process_machine_name: None,
-            transport: None,
-            effective_capabilities: Default::default(),
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
-            task_id: env_text(env.orbit_task_id()),
-            job_run_id: self
-                .operation
-                .job_run_id
-                .clone()
-                .or_else(|| env_text(env.orbit_run_id())),
-            activity_id: env_text(env.orbit_activity_id()),
-            step_index: env
-                .orbit_step_index()
-                .and_then(OsStr::to_str)
-                .and_then(|text| text.parse().ok()),
-        }
-    }
-}
-
-impl Drop for AuditGuard<'_> {
-    fn drop(&mut self) {
-        let row = self.row();
-        let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.core.runtime().record_audit_event(&row)
-        }));
-        // A row that was not written stays owed: the command-line entry's own
-        // guard then writes it, and reports the failure if it fails again.
-        if matches!(written, Ok(Ok(()))) {
-            crate::adapter::command::mark_tool_audit_recorded();
+            Err(error)
         }
     }
 }
@@ -447,15 +629,6 @@ fn dashboard_caller(operator_session: bool) -> CallerCapabilities {
     CallerCapabilities::resolve(&CallerEnvelope::dashboard_session(&session))
 }
 
-/// The arguments and authenticated session of a governed dashboard write.
-pub(super) struct DashboardOperation<'a> {
-    pub(super) operation: &'static GovernedOperation,
-    pub(super) target: &'a str,
-    pub(super) arguments: Value,
-    pub(super) operator_session: bool,
-    pub(super) host: Option<String>,
-}
-
 /// Run a dashboard operation and record its one dashboard audit row.
 /// A missing target carries the same message as the dashboard response.
 pub(super) fn run_dashboard<T>(
@@ -464,18 +637,33 @@ pub(super) fn run_dashboard<T>(
     run: impl FnOnce() -> Result<T, Error>,
     failure: impl FnOnce(&T) -> Option<String>,
 ) -> Result<Result<T, AuthorizationDenial>, Error> {
+    run_dashboard_with_arguments(core, operation, run, failure, |_, arguments| arguments)
+}
+
+/// Run a dashboard operation and record its one dashboard audit row, letting a
+/// succeeded outcome enrich the recorded `arguments_json`.
+pub(super) fn run_dashboard_with_arguments<T>(
+    core: &Core,
+    operation: DashboardOperation<'_>,
+    run: impl FnOnce() -> Result<T, Error>,
+    failure: impl FnOnce(&T) -> Option<String>,
+    applied_arguments: impl FnOnce(&T, Value) -> Value,
+) -> Result<Result<T, AuthorizationDenial>, Error> {
     let started = Instant::now();
     let runtime = core.runtime();
     let workspace = runtime
         .workspace_id()
         .unwrap_or_else(|_| runtime.shared_root().display().to_string());
-    let (result, status, provenance, capabilities, error_message) =
+    let (result, status, provenance, capabilities, error_message, recorded_arguments) =
         match dashboard_authorize(operation.operation, operation.operator_session) {
             Ok(caller) => {
                 let result = run();
-                let message = match &result {
-                    Ok(value) => failure(value),
-                    Err(error) => Some(error.to_string()),
+                let (message, arguments) = match &result {
+                    Ok(value) => match failure(value) {
+                        Some(message) => (Some(message), operation.arguments),
+                        None => (None, applied_arguments(value, operation.arguments)),
+                    },
+                    Err(error) => (Some(error.to_string()), operation.arguments),
                 };
                 (
                     result.map(Ok),
@@ -487,6 +675,7 @@ pub(super) fn run_dashboard<T>(
                     caller.provenance(),
                     caller.grants().clone(),
                     message,
+                    arguments,
                 )
             }
             Err(denial) => {
@@ -498,6 +687,7 @@ pub(super) fn run_dashboard<T>(
                     provenance,
                     Default::default(),
                     Some(message),
+                    operation.arguments,
                 )
             }
         };
@@ -516,7 +706,7 @@ pub(super) fn run_dashboard<T>(
             .workspace_runtime_binding()
             .map(|binding| binding.repo_root.display().to_string())
             .unwrap_or_else(|| runtime.shared_root().display().to_string()),
-        arguments_json: serde_json::to_string(&operation.arguments).ok(),
+        arguments_json: serde_json::to_string(&recorded_arguments).ok(),
         stdout_truncated: None,
         stderr_truncated: None,
         error_message,

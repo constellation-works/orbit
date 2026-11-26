@@ -1,9 +1,9 @@
 use clap::{Args, Subcommand};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
 use crate::command::browser_kit::BrowserKitCommand;
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::get::ConfigGetArgs;
 use super::keys::ConfigKeysArgs;
@@ -19,8 +19,8 @@ pub struct ConfigCommand {
 }
 
 impl ConfigCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        self.command.execute_with_env(runtime, env)
+    pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
+        self.command.execute_with_env(core, env)
     }
 }
 
@@ -42,13 +42,13 @@ pub enum ConfigSubcommand {
 }
 
 impl ConfigSubcommand {
-    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         match self {
-            ConfigSubcommand::Show(args) => args.execute_with_env(runtime, env),
-            ConfigSubcommand::Get(args) => args.execute_with_env(runtime, env),
-            ConfigSubcommand::Set(args) => args.execute_with_env(runtime, env),
-            ConfigSubcommand::Keys(args) => args.execute(runtime),
-            ConfigSubcommand::Path(args) => args.execute(runtime),
+            ConfigSubcommand::Show(args) => args.execute(core),
+            ConfigSubcommand::Get(args) => args.execute(core),
+            ConfigSubcommand::Set(args) => args.execute_with_env(core, env),
+            ConfigSubcommand::Keys(args) => args.execute(core),
+            ConfigSubcommand::Path(args) => args.execute(core),
             ConfigSubcommand::BrowserKit(command) => command.execute_without_runtime(env),
         }
     }

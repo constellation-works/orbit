@@ -3,13 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::state::Ws;
+use crate::state::WsCore;
 use axum::extract::Query;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::{AuditEventStatus, OrbitRuntime, V2AuditEventFilter};
+use orbit_core::app::audit::{AuditDenialsData, Command, Outcome, V2AuditEventRow, exec};
 use orbit_types::workflow::activity_job::{
-    V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
+    V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
 };
 use serde_json::{Value, json};
 
@@ -56,91 +56,75 @@ impl Default for DenialDiagnostics {
     }
 }
 
-/// Reads SQLite v2 audit rows and returns FsCallDenied / ToolDenied rows
-/// matching the supplied filters.
-pub(super) fn scan_v2_loop_denials(
-    runtime: &OrbitRuntime,
-    since: Option<DateTime<Utc>>,
+/// Projects SQLite v2 audit rows into FsCallDenied / ToolDenied rows matching
+/// the supplied filters.
+fn project_v2_loop_denials(
+    events: &[V2AuditEventRow],
     profile_filter: Option<&str>,
     agent_filter: Option<&str>,
-) -> Result<Vec<DenialRow>, orbit_core::OrbitError> {
+) -> Vec<DenialRow> {
     let mut rows = Vec::new();
-    for event_type in v2_denial_event_types() {
-        let events = OrbitRuntime::list_v2_audit_events(
-            runtime,
-            V2AuditEventFilter {
-                workspace_id: String::new(),
-                since,
-                event_type: Some((*event_type).to_string()),
-                limit: Some(SQLITE_DENIAL_SCAN_LIMIT),
-                ..Default::default()
-            },
-        )?;
-        for event in events {
-            let value: Value = match serde_json::from_str(&event.payload_json) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            let kind = v2_denial_kind(&event.event_type);
-            let (profile, target) = match kind {
-                "fs" => (
-                    value
-                        .get("profile")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    value
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                ),
-                _ if event.event_type == V2_EVENT_TYPE_STEP_DENIED => (
-                    "tool".to_string(),
-                    value
-                        .get("step_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                ),
-                _ => (
-                    "tool".to_string(),
-                    value
-                        .get("tool_name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                ),
-            };
-            if let Some(want) = profile_filter
-                && !want.is_empty()
-                && profile != want
-            {
-                continue;
-            }
-            if let Some(want) = agent_filter
-                && !want.is_empty()
-                && event.agent_identity != want
-            {
-                continue;
-            }
-            rows.push(DenialRow {
-                kind,
-                diagnostics: v2_denial_diagnostics(kind, &profile, &target),
-                profile,
-                target,
-                job_run_id: Some(event.run_id).filter(|value| !value.is_empty()),
-                execution_id: None,
-                agent: event.agent_identity,
-                timestamp: Some(event.ts),
-            });
+    for event in events {
+        let value: Value = match serde_json::from_str(&event.payload_json) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let kind = v2_denial_kind(&event.event_type);
+        let (profile, target) = match kind {
+            "fs" => (
+                value
+                    .get("profile")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                value
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+            _ if event.event_type == V2_EVENT_TYPE_STEP_DENIED => (
+                "tool".to_string(),
+                value
+                    .get("step_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+            _ => (
+                "tool".to_string(),
+                value
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+        };
+        if let Some(want) = profile_filter
+            && !want.is_empty()
+            && profile != want
+        {
+            continue;
         }
+        if let Some(want) = agent_filter
+            && !want.is_empty()
+            && event.agent_identity != want
+        {
+            continue;
+        }
+        let diagnostics = v2_denial_diagnostics(kind, &profile, &target);
+        rows.push(DenialRow {
+            kind,
+            profile,
+            target,
+            job_run_id: Some(event.run_id.clone()).filter(|value| !value.is_empty()),
+            execution_id: None,
+            agent: event.agent_identity.clone(),
+            timestamp: Some(event.ts),
+            diagnostics,
+        });
     }
-    Ok(rows)
-}
-
-pub(super) fn v2_denial_event_types() -> &'static [&'static str] {
-    V2_DENIAL_EVENT_TYPES
+    rows
 }
 
 fn v2_denial_kind(event_type: &str) -> &'static str {
@@ -151,47 +135,23 @@ fn v2_denial_kind(event_type: &str) -> &'static str {
     }
 }
 
-pub(super) fn collect_denial_rows(
-    runtime: &OrbitRuntime,
-    since: Option<DateTime<Utc>>,
+fn collect_denial_rows(
+    data: &AuditDenialsData,
     profile_filter: Option<&str>,
     agent_filter: Option<&str>,
-) -> Result<Vec<DenialRow>, orbit_core::OrbitError> {
-    let mut rows = scan_v2_loop_denials(runtime, since, profile_filter, agent_filter)?;
-    rows.extend(scan_sqlite_denials(
-        runtime,
-        since,
-        profile_filter,
-        agent_filter,
-    )?);
-    Ok(rows)
-}
-
-fn scan_sqlite_denials(
-    runtime: &OrbitRuntime,
-    since: Option<DateTime<Utc>>,
-    profile_filter: Option<&str>,
-    agent_filter: Option<&str>,
-) -> Result<Vec<DenialRow>, orbit_core::OrbitError> {
-    let events = OrbitRuntime::list_audit_events(
-        runtime,
-        since,
-        None,
-        Some(AuditEventStatus::Denied),
-        agent_filter.map(ToOwned::to_owned),
-        SQLITE_DENIAL_SCAN_LIMIT,
-    )?;
-
-    let rows = events
-        .into_iter()
-        .map(|event| sqlite_denial_row(&event))
-        .filter(|row| {
-            profile_filter
-                .map(|want| want.is_empty() || row.profile == want)
-                .unwrap_or(true)
-        })
-        .collect();
-    Ok(rows)
+) -> Vec<DenialRow> {
+    let mut rows = project_v2_loop_denials(&data.v2_events, profile_filter, agent_filter);
+    rows.extend(
+        data.sqlite_events
+            .iter()
+            .map(sqlite_denial_row)
+            .filter(|row| {
+                profile_filter
+                    .map(|want| want.is_empty() || row.profile == want)
+                    .unwrap_or(true)
+            }),
+    );
+    rows
 }
 
 fn sqlite_denial_row(event: &orbit_core::AuditEvent) -> DenialRow {
@@ -476,7 +436,7 @@ fn extract_after_prefix(message: &str, prefix: &str) -> Option<String> {
     }
 }
 
-pub(super) async fn list_denials(Ws(runtime): Ws, Query(q): Query<DenialsQuery>) -> Response {
+pub(super) async fn list_denials(WsCore(core): WsCore, Query(q): Query<DenialsQuery>) -> Response {
     let raw_since = q.since.as_deref().unwrap_or(DEFAULT_SUMMARY_WINDOW);
     let since = match parse_since(raw_since) {
         Ok(ts) => Some(ts),
@@ -509,24 +469,29 @@ pub(super) async fn list_denials(Ws(runtime): Ws, Query(q): Query<DenialsQuery>)
 
     // One SQLite scan per denial event type plus a v2 loop scan: blocking
     // pool, not the worker serving the request (see `blocking`).
-    let (rows, decisions) = match super::blocking("denials listing", move || {
-        let rows = collect_denial_rows(
-            &runtime,
-            since,
-            profile_filter.as_deref(),
-            agent_filter.as_deref(),
-        )?;
-        // Match the KPI population and cutoff, independently of evidence filters
-        // and scan limits. Raw rows also retain duplicate and protocol evidence.
-        let decisions = runtime.audit_policy_denial_stats(since.as_ref())?;
-        Ok((rows, decisions))
+    let agent_for_query = agent_filter.clone();
+    let data = match super::blocking("denials listing", move || {
+        let Outcome::Denials(data) = exec(
+            &core,
+            Command::Denials {
+                since,
+                agent_filter: agent_for_query,
+                scan_limit: SQLITE_DENIAL_SCAN_LIMIT,
+            },
+        )?
+        else {
+            unreachable!("audit denials returned an unrelated outcome");
+        };
+        Ok(data)
     })
     .await
     {
-        Ok(rows) => rows,
+        Ok(data) => data,
         Err(response) => return *response,
     };
 
+    let rows = collect_denial_rows(&data, profile_filter.as_deref(), agent_filter.as_deref());
+    let decisions = data.policy_decisions;
     let mut payload = denials_payload(&rows, kind.as_deref(), since);
     payload["policy_decisions"] = json!({
         "total": decisions.sql_denied + decisions.v2_denied,

@@ -1,10 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
-
+use orbit_core::Core;
+use orbit_core::app::audit::{Command, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload, require_confirmation};
-use crate::parse::parse_since;
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct AuditPruneArgs {
@@ -16,13 +15,18 @@ pub struct AuditPruneArgs {
     pub confirm: bool,
 }
 
-impl Execute for AuditPruneArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        // Validate the duration first so a typo is reported as a typo rather
-        // than hidden behind the confirmation prompt.
-        let cutoff = parse_since(&self.older_than)?;
-        require_confirmation(self.confirm, "audit pruning")?;
-        let pruned = runtime.prune_audit_events(&cutoff)?;
+impl ExecuteCore for AuditPruneArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Pruned(pruned) = exec(
+            core,
+            Command::Prune {
+                older_than: self.older_than,
+                confirm: self.confirm,
+            },
+        )?
+        else {
+            unreachable!("audit prune returned an unrelated outcome");
+        };
         Ok(Payload::detail(
             json!({ "pruned": pruned }),
             format!("Pruned {pruned} audit events"),

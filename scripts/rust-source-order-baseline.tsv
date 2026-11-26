@@ -86,7 +86,6 @@ crates/orbit-cli/src/command/config/render.rs	literal	0e1a395e9e41f396a767cf39	1
 crates/orbit-cli/src/command/config/render.rs	literal	506edfad8798c3e7476e238f	1
 crates/orbit-cli/src/command/config/render.rs	literal	606ab5b57bfc2259e3c171dd	1
 crates/orbit-cli/src/command/config/set.rs	declaration	9e836b9300bfe5e608179d35	1
-crates/orbit-cli/src/command/config/show.rs	declaration	5ef9b2de54496a3bfbab3603	1
 crates/orbit-cli/src/command/host/support.rs	declaration	e266e06d59a2462861a3bce3	1
 crates/orbit-cli/src/command/host_route.rs	declaration	6babe44b90508f165ca478e1	1
 crates/orbit-cli/src/command/host_route.rs	declaration	c32d49fb80fcc88f77b27043	1
@@ -484,10 +483,6 @@ crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs	declaration	f39494542
 crates/orbit-core/src/adapter/tool_host/desktop/automation.rs	declaration	cd34ee2bb23df9f882bd45e3	1
 crates/orbit-core/src/adapter/tool_host/host.rs	declaration	0d60718fff7b0ac48c71ecf0	1
 crates/orbit-core/src/adapter/tool_host/host.rs	literal	9bd7e8d72d666d314e57f655	1
-crates/orbit-core/src/app/exec.rs	declaration	3b1baa7e4f6137180ae76d7b	1
-crates/orbit-core/src/app/exec.rs	declaration	590db6d2c7cd8b1e3f4add38	1
-crates/orbit-core/src/app/exec.rs	literal	800d006ddfee095b806c51a4	1
-crates/orbit-core/src/app/exec.rs	literal	9f71fc387c9b53b5323b3152	1
 crates/orbit-core/src/app/friction/mod.rs	declaration	1db1d20ea8263fca3ac8ec6a	1
 crates/orbit-core/src/app/plugin/mod.rs	declaration	a9f4354ef70f6e04f478b470	1
 crates/orbit-core/src/app/task/listing.rs	literal	72d0da0eb68ff1b9c7afe8a1	1
@@ -1602,11 +1597,8 @@ crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs	declaration	7f2ee9bbc42cce
 crates/orbit-tools/tests/tools/public_tool_surface.rs	declaration	ddf831162fe56b7e2eb8eba4	1
 crates/orbit-web/src/api/agents.rs	declaration	a9809419ed2e1793e8c9c24a	1
 crates/orbit-web/src/api/agents.rs	declaration	bd459bd631925f9bf68c0dfe	1
-crates/orbit-web/src/api/audit.rs	declaration	3c7038bf22ede3bd635c274b	1
-crates/orbit-web/src/api/audit.rs	declaration	6507020fbe22fc63fb3397d8	1
 crates/orbit-web/src/api/automation.rs	declaration	39197dfac218f1902a179e69	1
 crates/orbit-web/src/api/denials.rs	declaration	177c7ee4b99d0594715c2cb7	1
-crates/orbit-web/src/api/denials.rs	literal	24f76c4348adee494c270a0c	1
 crates/orbit-web/src/api/diagnostics/completions.rs	declaration	b60fd80a48e9ad5edec9f21a	1
 crates/orbit-web/src/api/diagnostics/defects.rs	declaration	832951a5135f42e1f4f759bc	1
 crates/orbit-web/src/api/diagnostics/delivery_friction.rs	declaration	24bcdb3d38d1bba9a97bf9cf	1

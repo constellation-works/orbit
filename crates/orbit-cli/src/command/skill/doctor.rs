@@ -1,9 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
-use orbit_core::application::skill::{SkillDoctorResult, SkillDoctorStatus};
+use orbit_core::Core;
+use orbit_core::app::skill::{Command, Outcome, SkillDoctorResult, SkillDoctorStatus, exec};
 use serde_json::{Value, json};
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::output::common::color::{Domain, Role};
 
 #[derive(Args)]
@@ -12,27 +12,23 @@ pub struct SkillDoctorArgs {
     pub name: Option<String>,
 }
 
-impl Execute for SkillDoctorArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let rows = runtime.doctor_file_skills()?;
+impl ExecuteCore for SkillDoctorArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Diagnosed(rows) = exec(
+            core,
+            Command::Doctor {
+                name: self.name.clone(),
+            },
+        )?
+        else {
+            unreachable!("skill doctor returned an unrelated outcome");
+        };
         if let Some(name) = self.name {
             // The catalog and several client link directories can each report
             // the same skill. Preserve every finding for the selected skill.
-            let selected = rows
-                .iter()
-                .filter(|row| row.skill_name == name)
-                .collect::<Vec<_>>();
-            if selected.is_empty() {
-                return Err(orbit_core::OrbitError::InvalidInput(format!(
-                    "no skill diagnostic named '{name}'"
-                )));
-            }
-            let findings = selected
-                .iter()
-                .map(|row| doctor_row_json(row))
-                .collect::<Vec<_>>();
+            let findings = rows.iter().map(doctor_row_json).collect::<Vec<_>>();
             let mut detail = format!("Skill: {name}");
-            for row in &selected {
+            for row in &rows {
                 detail.push_str(&format!(
                     "\nStatus: {}\nDetails: {}",
                     skill_doctor_status_label(&row.status),

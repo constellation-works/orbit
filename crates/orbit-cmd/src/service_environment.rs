@@ -4,7 +4,6 @@
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-#[cfg(target_os = "linux")]
 use std::path::Path;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
@@ -28,6 +27,17 @@ pub fn crew_env_config_write_warnings(
     value: &serde_json::Value,
     env: &Env,
 ) -> Vec<String> {
+    crew_env_config_write_warnings_for_root(&runtime.global_root(), key, value, env)
+}
+
+/// Diagnose a successful `crews.<crew>.env` write against the host's global
+/// Orbit root, without holding a runtime handle.
+pub fn crew_env_config_write_warnings_for_root(
+    global_root: &Path,
+    key: &str,
+    value: &serde_json::Value,
+    env: &Env,
+) -> Vec<String> {
     let Some(name) = key
         .strip_prefix("crews.")
         .and_then(|key| key.strip_suffix(".env"))
@@ -41,7 +51,7 @@ pub fn crew_env_config_write_warnings(
         .filter_map(serde_json::Value::as_str)
         .filter_map(|entry| CrewEnvVar::parse(entry).ok())
         .collect();
-    crew_source_environment_warnings(runtime, &[(name.to_string(), entries)], env)
+    crew_source_environment_warnings_for_root(global_root, &[(name.to_string(), entries)], env)
 }
 
 /// Warnings for declared crew sources missing from the current shell or a
@@ -53,11 +63,19 @@ pub fn crew_source_environment_warnings(
     crews: &[(String, Vec<CrewEnvVar>)],
     env: &Env,
 ) -> Vec<String> {
+    crew_source_environment_warnings_for_root(&runtime.global_root(), crews, env)
+}
+
+fn crew_source_environment_warnings_for_root(
+    global_root: &Path,
+    crews: &[(String, Vec<CrewEnvVar>)],
+    env: &Env,
+) -> Vec<String> {
     if crews.iter().all(|(_, entries)| entries.is_empty()) {
         return Vec::new();
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let _ = runtime;
+    let _ = global_root;
     let mut warnings = Vec::new();
     for (crew, entries) in crews {
         for entry in entries {
@@ -110,7 +128,7 @@ pub fn crew_source_environment_warnings(
             path.display()
         );
         let clock = if unit == "orbit-sweep.service" {
-            clock_source_names(runtime, crews, &mut warnings)
+            clock_source_names(global_root, crews, &mut warnings)
         } else {
             BTreeSet::new()
         };
@@ -145,7 +163,7 @@ pub fn crew_source_environment_warnings(
             continue;
         }
         let clock = if label == "com.orbit.sweep" {
-            clock_source_names(runtime, crews, &mut warnings)
+            clock_source_names(global_root, crews, &mut warnings)
         } else {
             BTreeSet::new()
         };
@@ -162,11 +180,11 @@ pub fn crew_source_environment_warnings(
             Some(held) => for (crew, entries) in crews {
                 for source in entries.iter().filter_map(|entry| entry.source.variable()) {
                     if !held.contains(source) {
-                        warnings.push(format!("crew `{crew}` env source {source} is unset or empty in the managed service environment: {label} (launchd, {} EnvironmentVariables; clock runs also read {}/clock.env); provide the source there and reload the LaunchAgent before starting a new drain", path.display(), runtime.global_root().display()));
+                        warnings.push(format!("crew `{crew}` env source {source} is unset or empty in the managed service environment: {label} (launchd, {} EnvironmentVariables; clock runs also read {}/clock.env); provide the source there and reload the LaunchAgent before starting a new drain", path.display(), global_root.display()));
                     }
                 }
             },
-            None => warnings.push(format!("cannot verify crew env sources {} in {label}'s managed launchd environment ({} EnvironmentVariables; clock runs also read {}/clock.env); a login shell export does not supply a LaunchAgent", sources.join(", "), path.display(), runtime.global_root().display())),
+            None => warnings.push(format!("cannot verify crew env sources {} in {label}'s managed launchd environment ({} EnvironmentVariables; clock runs also read {}/clock.env); a login shell export does not supply a LaunchAgent", sources.join(", "), path.display(), global_root.display())),
         }
     }
     warnings
@@ -233,17 +251,17 @@ fn linux_service_names(unit: &str, path: &Path) -> Option<BTreeSet<String>> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn clock_source_names(
-    runtime: &OrbitRuntime,
+    global_root: &Path,
     crews: &[(String, Vec<CrewEnvVar>)],
     warnings: &mut Vec<String>,
 ) -> BTreeSet<String> {
     match orbit_common::security::operator_env::clock_env_file_names(
-        &runtime.global_root(),
+        global_root,
         &source_names(crews),
     ) {
         Ok(names) => names.unwrap_or_default().into_iter().collect(),
         Err(_) => {
-            warnings.push(format!("cannot verify crew sources in {}/clock.env: the file is unreadable or fails owner-only checks; run `orbit doctor` for clock environment diagnostics", runtime.global_root().display()));
+            warnings.push(format!("cannot verify crew sources in {}/clock.env: the file is unreadable or fails owner-only checks; run `orbit doctor` for clock environment diagnostics", global_root.display()));
             BTreeSet::new()
         }
     }

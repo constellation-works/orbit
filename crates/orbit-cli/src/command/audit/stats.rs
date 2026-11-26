@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::{AuditStats, OrbitRuntime};
+use orbit_core::app::audit::{Command, Outcome, exec};
+use orbit_core::{AuditStats, Core};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::parse::parse_since;
 
 #[derive(Args)]
@@ -15,17 +16,24 @@ pub struct AuditStatsArgs {
     pub tool: Option<String>,
 }
 
-impl Execute for AuditStatsArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AuditStatsArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
         let tool = super::support::audit_tool_filter(self.tool);
-        let stats = runtime.audit_event_stats(since, tool.clone())?;
-        let denied_by_operation = scoped_to_tool(
-            runtime
-                .audit_policy_denial_stats(since.as_ref())?
-                .by_operation,
-            tool.as_deref(),
-        );
+        let Outcome::Stats {
+            stats,
+            policy_denials,
+        } = exec(
+            core,
+            Command::Stats {
+                since,
+                tool: tool.clone(),
+            },
+        )?
+        else {
+            unreachable!("audit stats returned an unrelated outcome");
+        };
+        let denied_by_operation = scoped_to_tool(policy_denials.by_operation, tool.as_deref());
 
         let text = format!(
             "Total:             {}\nSuccess:           {}\nFailure:           {}\nDenied:            {}\nAvg duration (ms): {:.1}\nP95 duration (ms): {}\nMax duration (ms): {}{}",

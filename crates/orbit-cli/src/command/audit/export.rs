@@ -1,10 +1,11 @@
 use std::io::Write;
 
 use clap::{Args, ValueEnum};
-use orbit_core::{AuditEvent, OrbitError, OrbitRuntime};
+use orbit_core::app::audit::{Command, Outcome, exec};
+use orbit_core::{AuditEvent, Core, OrbitError};
 use serde_json::Value;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::parse::parse_since;
 
 use super::support::audit_event_to_json;
@@ -34,11 +35,19 @@ pub struct AuditExportArgs {
     pub tool: Option<String>,
 }
 
-impl Execute for AuditExportArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AuditExportArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
-        let events =
-            runtime.export_audit_events(since, super::support::audit_tool_filter(self.tool))?;
+        let Outcome::Exported(events) = exec(
+            core,
+            Command::Export {
+                since,
+                tool: super::support::audit_tool_filter(self.tool),
+            },
+        )?
+        else {
+            unreachable!("audit export returned an unrelated outcome");
+        };
 
         let format = match self.format {
             ExportFormat::Json => {

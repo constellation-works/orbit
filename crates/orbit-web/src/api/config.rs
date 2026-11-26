@@ -1,36 +1,30 @@
 //! Configuration inspection and editing for the dashboard's Config tab
 //! [ORB-12724].
 //!
-//! Reads project `orbit_core::application::config`, which in turn projects
-//! what `orbit-config` resolved: these handlers never re-derive a value's
-//! layer, section, or description. Writes go through the same admission path
-//! as `orbit config set`, so a refused value comes back with the CLI's own
-//! message for the row to render verbatim, and every accepted write records a
-//! `config.set` audit event naming the key, both values, and the file.
+//! Reads and writes route through `orbit_core::app::config::exec`: these
+//! handlers parse HTTP inputs, invoke one `exec` per request, and render HTTP
+//! responses.
 
-use crate::api::helpers;
+use std::ffi::OsStr;
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
 
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_CONFIG_SET;
-use orbit_core::OrbitRuntime;
-use orbit_core::application::config::{
-    ConfigScope, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset, delete_crew,
-    effective_view, file_view, key_catalog, parse_config_scope, set_crew, set_key, unset_key,
-    unset_key_preserving_effective,
+use orbit_core::Core;
+use orbit_core::app::config::{
+    Command, ConfigScope, ConfigWriteInit, DashboardConfigWrite, DashboardConfigWriteKind,
+    DashboardConfigWriteResult, Outcome, exec, parse_config_scope,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
-use super::{bad_request, blocking, map_runtime_error, workspace_label};
-use crate::state::{ConfigFileWs, DashboardState, Ws};
+use crate::api::helpers;
+use crate::state::{ConfigFileWs, DashboardState, WsCore};
 
-/// Audit operation name for every config write, accepted or refused.
-const CONFIG_AUDIT_OPERATION: &str = "config.set";
+use super::routines::{action_capability, authorization_denied};
+use super::{bad_request, blocking, map_runtime_error};
 
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct ConfigFileQuery {
@@ -79,14 +73,15 @@ pub(super) struct ConfigKeyDeleteQuery {
 /// `GET /api/config/effective` — the layered view for the selected workspace.
 pub(super) async fn get_effective_config(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
 ) -> Response {
     let operator = state.operator_session();
     match blocking("config effective", move || {
-        effective_view(&runtime).map(|mut view| {
-            annotate_capability(&mut view, operator);
-            view
-        })
+        let Outcome::View(mut view) = exec(&core, Command::EffectiveView)? else {
+            unreachable!("config effective returned an unrelated outcome");
+        };
+        annotate_capability(&mut view, operator);
+        Ok(view)
     })
     .await
     {
@@ -103,7 +98,7 @@ pub(super) async fn get_effective_config(
 /// resolver.
 pub(super) async fn get_config_file(
     State(state): State<DashboardState>,
-    ConfigFileWs(runtime): ConfigFileWs,
+    ConfigFileWs(core): ConfigFileWs,
     Query(query): Query<ConfigFileQuery>,
 ) -> Response {
     let scope = match query.scope.as_deref() {
@@ -115,10 +110,11 @@ pub(super) async fn get_config_file(
     };
     let operator = state.operator_session();
     match blocking("config file", move || {
-        file_view(&runtime, scope).map(|mut view| {
-            annotate_capability(&mut view, operator);
-            view
-        })
+        let Outcome::View(mut view) = exec(&core, Command::FileView { scope })? else {
+            unreachable!("config file returned an unrelated outcome");
+        };
+        annotate_capability(&mut view, operator);
+        Ok(view)
     })
     .await
     {
@@ -131,19 +127,24 @@ pub(super) async fn get_config_file(
 ///
 /// Workspace-scoped like the rest of the API so `?workspace=` selection keeps
 /// working, even though the registry itself is machine-wide.
-pub(super) async fn get_config_keys(Ws(_runtime): Ws) -> Response {
+pub(super) async fn get_config_keys(WsCore(core): WsCore) -> Response {
+    let catalog = match exec(&core, Command::Keys) {
+        Ok(Outcome::Keys(catalog)) => catalog,
+        Ok(_) => unreachable!("config keys returned an unrelated outcome"),
+        Err(error) => return map_runtime_error(error),
+    };
     // The catalog is built once per process, so its serialized bytes are
     // too; a `serde_json::Value` tree always serializes, hence the empty
     // fallback is unreachable.
     static BODY: OnceLock<Vec<u8>> = OnceLock::new();
-    let body = BODY.get_or_init(|| serde_json::to_vec(key_catalog()).unwrap_or_default());
+    let body = BODY.get_or_init(|| serde_json::to_vec(catalog).unwrap_or_default());
     ([(header::CONTENT_TYPE, "application/json")], body.clone()).into_response()
 }
 
 /// `PUT /api/config/keys/:key` — admit and write one key.
 pub(super) async fn put_config_key(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     UrlPath(key): UrlPath<String>,
     Json(body): Json<ConfigKeyWrite>,
 ) -> Response {
@@ -151,16 +152,16 @@ pub(super) async fn put_config_key(
         Ok(target) => target,
         Err(message) => return bad_request(message),
     };
-    let arguments = json!({
-        "key": key,
-        "value": body.value,
-        "scope": scope.label(),
-    });
-    let value = body.value.clone();
-    let write_key = key.clone();
-    perform_write(state, runtime, key, arguments, move |runtime| {
-        set_key(runtime, &write_key, &value, scope, init)
-    })
+    apply_dashboard_write(
+        state,
+        core,
+        DashboardConfigWriteKind::SetKey {
+            key,
+            value: body.value,
+            scope,
+            init,
+        },
+    )
     .await
 }
 
@@ -172,7 +173,7 @@ pub(super) async fn put_config_key(
 /// effective value no longer matches an admitted removal fallback.
 pub(super) async fn delete_config_key(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     UrlPath(key): UrlPath<String>,
     Query(query): Query<ConfigKeyDeleteQuery>,
 ) -> Response {
@@ -180,38 +181,18 @@ pub(super) async fn delete_config_key(
         Ok(target) => target,
         Err(message) => return bad_request(message),
     };
-    let arguments = if query.preserve_effective {
-        json!({
-            "key": key,
-            "value": Value::Null,
-            "scope": scope.label(),
-            "preserve_effective": true,
-        })
+    let kind = if query.preserve_effective {
+        DashboardConfigWriteKind::UnsetKeyPreservingEffective { key, scope }
     } else {
-        json!({
-            "key": key,
-            "value": Value::Null,
-            "scope": scope.label(),
-        })
+        DashboardConfigWriteKind::UnsetKey { key, scope }
     };
-    let write_key = key.clone();
-    if query.preserve_effective {
-        perform_guarded_unset(state, runtime, key, arguments, move |runtime| {
-            unset_key_preserving_effective(runtime, &write_key, scope)
-        })
-        .await
-    } else {
-        perform_write(state, runtime, key, arguments, move |runtime| {
-            unset_key(runtime, &write_key, scope)
-        })
-        .await
-    }
+    apply_dashboard_write(state, core, kind).await
 }
 
 /// `PUT /api/config/crews/:name` — create or edit one crew table.
 pub(super) async fn put_config_crew(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     UrlPath(name): UrlPath<String>,
     Json(body): Json<ConfigCrewWrite>,
 ) -> Response {
@@ -219,19 +200,15 @@ pub(super) async fn put_config_crew(
         Ok(target) => target,
         Err(message) => return bad_request(message),
     };
-    let arguments = json!({
-        "key": format!("crews.{name}"),
-        "value": Value::Object(body.fields.clone()),
-        "scope": scope.label(),
-    });
-    let fields = body.fields.clone();
-    let crew = name.clone();
-    perform_write(
+    apply_dashboard_write(
         state,
-        runtime,
-        format!("crews.{name}"),
-        arguments,
-        move |runtime| set_crew(runtime, &crew, &fields, scope, init),
+        core,
+        DashboardConfigWriteKind::SetCrew {
+            name,
+            fields: body.fields,
+            scope,
+            init,
+        },
     )
     .await
 }
@@ -239,7 +216,7 @@ pub(super) async fn put_config_crew(
 /// `DELETE /api/config/crews/:name` — remove one crew table.
 pub(super) async fn delete_config_crew(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     UrlPath(name): UrlPath<String>,
     Query(query): Query<ConfigScopeQuery>,
 ) -> Response {
@@ -247,160 +224,59 @@ pub(super) async fn delete_config_crew(
         Ok(target) => target,
         Err(message) => return bad_request(message),
     };
-    let arguments = json!({
-        "key": format!("crews.{name}"),
-        "value": Value::Null,
-        "scope": scope.label(),
-    });
-    let crew = name.clone();
-    perform_write(
+    apply_dashboard_write(
         state,
-        runtime,
-        format!("crews.{name}"),
-        arguments,
-        move |runtime| delete_crew(runtime, &crew, scope),
+        core,
+        DashboardConfigWriteKind::DeleteCrew { name, scope },
     )
     .await
 }
 
-/// Authorize, apply, and audit one config write.
-///
-/// The three outcomes are audited alike — denied, failed, and applied — so a
-/// refused edit is as visible in the audit trail as an accepted one.
-async fn perform_write<F>(
+/// Authorize, apply, and audit one config write through `app::config::exec`.
+async fn apply_dashboard_write(
     state: DashboardState,
-    runtime: Arc<OrbitRuntime>,
-    target: String,
-    arguments: Value,
-    write: F,
-) -> Response
-where
-    F: FnOnce(&OrbitRuntime) -> Result<ConfigWriteOutcome, orbit_core::OrbitError> + Send + 'static,
-{
-    let workspace = workspace_label(&runtime).await;
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        CONFIG_AUDIT_OPERATION,
-        target.as_str(),
-        arguments.clone(),
-    );
-    let caller = match authorized_caller(&DASHBOARD_CONFIG_SET, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
-        }
+    core: Arc<Core>,
+    kind: DashboardConfigWriteKind,
+) -> Response {
+    let write = DashboardConfigWrite {
+        kind,
+        operator_session: state.operator_session(),
+        host: state
+            .env()
+            .hostname()
+            .and_then(OsStr::to_str)
+            .map(str::to_string),
     };
-    let started = Instant::now();
-    // Not `blocking`: an admission refusal is the payload the row renders, so
-    // the typed error has to survive long enough to be audited before it is
-    // mapped to its HTTP shape.
-    let applied = {
-        let runtime = runtime.clone();
-        helpers::blocking_join("config write", move || write(&runtime)).await
-    };
-    let outcome = match applied {
-        Ok(Ok(outcome)) => outcome,
-        Ok(Err(error)) => {
-            let failure = error.to_string();
-            audit.failed(&caller, &failure, started).await;
-            return map_runtime_error(error);
-        }
-        Err(response) => return *response,
-    };
-    let mut applied = arguments.clone();
-    if let Some(object) = applied.as_object_mut() {
-        object.insert("old_value".to_string(), outcome.old_value.clone());
-        object.insert("new_value".to_string(), outcome.new_value.clone());
+    let applied = helpers::blocking_join("config write", move || {
+        exec(&core, Command::DashboardWrite(write))
+    })
+    .await;
+    match applied {
+        Ok(Ok(Outcome::DashboardWritten(Ok(DashboardConfigWriteResult::Applied {
+            target,
+            outcome,
+        })))) => Json(json!({
+            "key": target,
+            "scope": outcome.scope,
+            "path": outcome.path.display().to_string(),
+            "old_value": outcome.old_value,
+            "new_value": outcome.new_value,
+            "rows": outcome.rows,
+        }))
+        .into_response(),
+        Ok(Ok(Outcome::DashboardWritten(Ok(DashboardConfigWriteResult::Refused(refusal))))) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": refusal.message,
+                "code": refusal.code,
+            })),
+        )
+            .into_response(),
+        Ok(Ok(Outcome::DashboardWritten(Err(denial)))) => authorization_denied(denial),
+        Ok(Ok(_)) => unreachable!("dashboard config write returned an unrelated outcome"),
+        Ok(Err(error)) => map_runtime_error(error),
+        Err(response) => *response,
     }
-    audit
-        .with_arguments(applied)
-        .succeeded(&caller, started)
-        .await;
-    Json(json!({
-        "key": target,
-        "scope": outcome.scope,
-        "path": outcome.path.display().to_string(),
-        "old_value": outcome.old_value,
-        "new_value": outcome.new_value,
-        "rows": outcome.rows,
-    }))
-    .into_response()
-}
-
-/// Authorize, apply, and audit a guarded config unset that refuses with 409
-/// when the current effective value no longer matches its removal fallback.
-async fn perform_guarded_unset<F>(
-    state: DashboardState,
-    runtime: Arc<OrbitRuntime>,
-    target: String,
-    arguments: Value,
-    write: F,
-) -> Response
-where
-    F: FnOnce(&OrbitRuntime) -> Result<GuardedConfigUnset, orbit_core::OrbitError> + Send + 'static,
-{
-    let workspace = workspace_label(&runtime).await;
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        CONFIG_AUDIT_OPERATION,
-        target.as_str(),
-        arguments.clone(),
-    );
-    let caller = match authorized_caller(&DASHBOARD_CONFIG_SET, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
-        }
-    };
-    let started = Instant::now();
-    let applied = {
-        let runtime = runtime.clone();
-        helpers::blocking_join("config guarded unset", move || write(&runtime)).await
-    };
-    let outcome = match applied {
-        Ok(Ok(GuardedConfigUnset::Unset(outcome))) => outcome,
-        Ok(Ok(GuardedConfigUnset::Refused(refusal))) => {
-            audit.failed(&caller, &refusal.message, started).await;
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": refusal.message,
-                    "code": refusal.code,
-                })),
-            )
-                .into_response();
-        }
-        Ok(Err(error)) => {
-            let failure = error.to_string();
-            audit.failed(&caller, &failure, started).await;
-            return map_runtime_error(error);
-        }
-        Err(response) => return *response,
-    };
-    let mut applied = arguments.clone();
-    if let Some(object) = applied.as_object_mut() {
-        object.insert("old_value".to_string(), outcome.old_value.clone());
-        object.insert("new_value".to_string(), outcome.new_value.clone());
-    }
-    audit
-        .with_arguments(applied)
-        .succeeded(&caller, started)
-        .await;
-    Json(json!({
-        "key": target,
-        "scope": outcome.scope,
-        "path": outcome.path.display().to_string(),
-        "old_value": outcome.old_value,
-        "new_value": outcome.new_value,
-        "rows": outcome.rows,
-    }))
-    .into_response()
 }
 
 /// Resolve the target file and its first-write policy.

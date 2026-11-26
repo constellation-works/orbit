@@ -1,16 +1,18 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
-use orbit_core::bootstrap::init::UnlinkResult;
+use orbit_core::Core;
+use orbit_core::app::skill::{Command, Outcome, UnlinkResult, exec};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct SkillUnlinkArgs {}
 
-impl Execute for SkillUnlinkArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = orbit_core::bootstrap::init::unlink_skills(&runtime.global_root())?;
+impl ExecuteCore for SkillUnlinkArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Unlinked(result) = exec(core, Command::Unlink)? else {
+            unreachable!("skill unlink returned an unrelated outcome");
+        };
         let mut lines = Vec::new();
         if result.removed_count == 0 {
             lines.push("No skill symlinks found to remove.".to_string());

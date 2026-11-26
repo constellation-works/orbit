@@ -1,13 +1,15 @@
+use std::collections::BTreeMap;
+
 use clap::Args;
-use orbit_core::{AuditEvent, AuditEventFilter, OrbitRuntime};
+use orbit_core::app::audit::{Command, Outcome, exec};
+use orbit_core::{AuditEvent, Core};
 use orbit_types::tool::{
     ApplicationAdmissionMatch, ApplicationArtifactEvidence, ApplicationAuditRefusal,
     ApplicationInvocation, ApplicationPredicateEvidence, ApplicationTextDigest,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::support::audit_event_to_json;
 
@@ -17,10 +19,20 @@ pub struct AuditShowArgs {
     pub id: i64,
 }
 
-impl Execute for AuditShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let event = runtime.show_audit_event(self.id)?;
-        let doc = audit_event_to_json(&event);
+impl ExecuteCore for AuditShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Shown(detail) = exec(
+            core,
+            Command::Show {
+                id: self.id,
+                callback_limit: CALLBACK_DISPLAY_LIMIT,
+            },
+        )?
+        else {
+            unreachable!("audit show returned an unrelated outcome");
+        };
+        let event = &detail.event;
+        let doc = audit_event_to_json(event);
 
         use std::fmt::Write as _;
         let mut out = String::new();
@@ -137,7 +149,11 @@ impl Execute for AuditShowArgs {
         if let Some(application) = &event.application {
             write_application_audit(&mut out, application);
             if !application.callback {
-                write_application_callbacks(&mut out, runtime, &event)?;
+                write_application_callbacks(
+                    &mut out,
+                    &detail.callbacks,
+                    detail.callbacks_incomplete,
+                );
             }
         }
         Ok(Payload::detail(doc, out).into())
@@ -185,26 +201,12 @@ const CALLBACK_DISPLAY_LIMIT: usize = 100;
 
 /// Callback rows of this entry, oldest first. An empty page is omitted. The
 /// newest `CALLBACK_DISPLAY_LIMIT` rows are listed; when there are more, the
-/// heading says the list is incomplete. One row past the limit is fetched only
-/// to tell those two cases apart.
-fn write_application_callbacks(
-    out: &mut String,
-    runtime: &OrbitRuntime,
-    event: &AuditEvent,
-) -> Result<(), orbit_common::OrbitError> {
+/// heading says the list is incomplete.
+fn write_application_callbacks(out: &mut String, callbacks: &[AuditEvent], incomplete: bool) {
     use std::fmt::Write as _;
-    let mut callbacks = runtime.list_audit_events_filtered(&AuditEventFilter {
-        application_entry_execution_id: Some(event.execution_id.clone()),
-        limit: CALLBACK_DISPLAY_LIMIT + 1,
-        ..AuditEventFilter::default()
-    })?;
     if callbacks.is_empty() {
-        return Ok(());
+        return;
     }
-    let incomplete = callbacks.len() > CALLBACK_DISPLAY_LIMIT;
-    // The store returns newest first, so truncation drops the oldest rows.
-    callbacks.truncate(CALLBACK_DISPLAY_LIMIT);
-    callbacks.reverse();
     if incomplete {
         let _ = writeln!(
             out,
@@ -217,7 +219,6 @@ fn write_application_callbacks(
         let tool = callback.tool_name.as_deref().unwrap_or("-");
         let _ = writeln!(out, "  {} {tool} {}", callback.id, callback.status);
     }
-    Ok(())
 }
 
 fn scope_label(application: &ApplicationInvocation) -> String {
