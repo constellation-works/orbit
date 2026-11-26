@@ -23,6 +23,7 @@
 //! `change_stamps` reuses task change stamps until a registry commit invalidates them.
 //! `tests` contains the registry unit tests, split to mirror the source modules.
 
+mod action;
 mod allocator;
 mod binding;
 mod change_stamps;
@@ -49,5 +50,3 @@ pub use store::TaskRegistryStore;
 
 #[cfg(test)]
 mod tests;
-
-mod action;

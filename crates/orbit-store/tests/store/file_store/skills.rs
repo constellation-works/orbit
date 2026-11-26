@@ -1,12 +1,11 @@
 // Migrated from file/skill_store.rs per ORB-00231
-use std::fs;
-use std::path::Path;
 
 use orbit_common::OrbitError;
-use tempfile::tempdir;
-
 use orbit_store::FileStore;
 use orbit_store::skill_store::SkillDirs;
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
 
 #[test]
 fn load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog() {
@@ -23,7 +22,9 @@ fn load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog() {
     let catalog = FileStore::new(SkillDirs::single(catalog_root));
 
     let traversal = catalog
-        .read().skill().get("../escape")
+        .read()
+        .skill()
+        .get("../escape")
         .expect_err("relative traversal must fail");
     assert!(
         matches!(traversal, OrbitError::InvalidInput(_)),
@@ -31,7 +32,9 @@ fn load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog() {
     );
 
     let absolute = catalog
-        .read().skill().get("/etc")
+        .read()
+        .skill()
+        .get("/etc")
         .expect_err("absolute skill id must fail");
     assert!(
         matches!(absolute, OrbitError::InvalidInput(_)),
@@ -41,7 +44,9 @@ fn load_rejects_traversal_and_absolute_skill_ids_without_leaving_catalog() {
     let decoy = FileStore::new(SkillDirs::single(parent.path().to_path_buf()));
     assert_eq!(
         decoy
-            .read().skill().get("escape")
+            .read()
+            .skill()
+            .get("escape")
             .expect("decoy skill must be loadable from its own root")
             .sections
             .purpose,

@@ -18,19 +18,46 @@
 //! ([`AdmissionOrdering::repairs_only`]). That pull is admitted here like any
 //! other, with the same crew, OS, browser-kit and capacity screens, under the
 //! owner's local identity.
-use std::collections::BTreeSet;
-use std::path::Path;
+/// Treat [`REPAIR_OWNER_FALLBACK_SECONDS`] as already passed on one thread,
+/// so a test of the owner's fallback need not wait half an hour.
+#[cfg(feature = "test-support")]
+pub(crate) mod fallback_hook {
+    use std::cell::Cell;
 
-use chrono::Utc;
-use orbit_common::OrbitError;
-use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
-use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingStopEvidence};
+    thread_local! {
+        static ELAPSED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn elapsed() -> bool {
+        ELAPSED.with(Cell::get)
+    }
+
+    /// Run `operation` with every pending repair's owner fallback window
+    /// passed on this thread, restoring the previous setting on return or
+    /// unwind. Other threads keep the production window.
+    pub fn with_repair_owner_fallback_elapsed<T>(operation: impl FnOnce() -> T) -> T {
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ELAPSED.with(|elapsed| elapsed.set(self.0));
+            }
+        }
+        let _restore = Restore(ELAPSED.with(|elapsed| elapsed.replace(true)));
+        operation()
+    }
+}
 
 use super::TaskCommitBoundary;
 use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
 use super::selection::{DependencyReach, Screen};
 use crate::contract::*;
+use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
+use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingStopEvidence};
+use std::collections::BTreeSet;
+use std::path::Path;
 
 /// How long a pending repair waits for its original executor before the
 /// owner's local drain may take it.
@@ -434,35 +461,6 @@ fn repair_executor_wait(identity: &AdmissionIdentity, state: &ClaimInspection) -
         "a repair of its stopped landing is reserved for its original executor {executor}; \
          {fallback}"
     ))
-}
-
-/// Treat [`REPAIR_OWNER_FALLBACK_SECONDS`] as already passed on one thread,
-/// so a test of the owner's fallback need not wait half an hour.
-#[cfg(feature = "test-support")]
-pub(crate) mod fallback_hook {
-    use std::cell::Cell;
-
-    thread_local! {
-        static ELAPSED: Cell<bool> = const { Cell::new(false) };
-    }
-
-    pub(super) fn elapsed() -> bool {
-        ELAPSED.with(Cell::get)
-    }
-
-    /// Run `operation` with every pending repair's owner fallback window
-    /// passed on this thread, restoring the previous setting on return or
-    /// unwind. Other threads keep the production window.
-    pub fn with_repair_owner_fallback_elapsed<T>(operation: impl FnOnce() -> T) -> T {
-        struct Restore(bool);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                ELAPSED.with(|elapsed| elapsed.set(self.0));
-            }
-        }
-        let _restore = Restore(ELAPSED.with(|elapsed| elapsed.replace(true)));
-        operation()
-    }
 }
 
 /// Why this pull's ship contract cannot carry the preserved candidate, or

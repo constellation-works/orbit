@@ -12,10 +12,6 @@
     deny(clippy::disallowed_methods)
 )]
 
-#[cfg(test)]
-#[path = "../tests/store/support/git.rs"]
-mod git_test_support;
-
 mod boundary;
 pub mod compose;
 pub mod contract;
@@ -26,11 +22,9 @@ pub(crate) mod json_schema;
 pub mod migrate;
 mod repository;
 mod store;
-
 /// Operator-only SQLite and coordination-registry access. Ordinary consumers
 /// should depend on [`contract`] and obtain implementations from composition.
 pub mod maintenance {
-    pub use crate::driver::sqlite::host::schema as migration;
     pub mod task_registry {
         pub use crate::contract::WorkspaceConfig;
         pub use crate::driver::file::workspace_binding::{
@@ -39,20 +33,19 @@ pub mod maintenance {
         };
         pub use crate::repository::task_index::*;
     }
-}
 
+    pub use crate::driver::sqlite::host::schema as migration;
+}
 pub mod skill_store {
     pub use crate::driver::file::skill_store::*;
     pub use crate::repository::skill::SkillRepository;
 }
-
 /// Workspace configuration for friction tags.
 pub mod friction_taxonomy {
     pub use crate::repository::friction::taxonomy::{
         ensure_default_tag_taxonomy, load_tag_taxonomy, load_tag_taxonomy_with_descriptions,
     };
 }
-
 /// Host-only recovery authority persistence (`authority.db`).
 pub mod recovery_authority {
     pub use crate::driver::sqlite::authority::FILE_NAME;
@@ -61,11 +54,34 @@ pub mod recovery_authority {
         RecoveryAuthorityStore, RecoveryAuthorityTx, RecoveryCertificateRecord,
     };
 }
+/// Hooks for tests in crates that depend on `orbit-store`, behind the
+/// `test-support` feature. Enable it only from `[dev-dependencies]`.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    pub use crate::boundary::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
+    pub use crate::boundary::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
+    pub use crate::boundary::coordination::task_write_hold_hook::with_task_commit_write_hold;
+    pub use crate::repository::recovery_authority::seed_legacy_authority_certificate;
 
-use chrono::{DateTime, Utc};
+    /// Canonical (artifact-hashing) task-bundle reads on this thread.
+    pub fn canonical_bundle_reads() -> u64 {
+        crate::boundary::v2_bundle::CANONICAL_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+
+    /// Lightweight task-bundle reads on this thread, listing or by id.
+    pub fn lightweight_bundle_reads() -> u64 {
+        crate::boundary::v2_bundle::LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+
+    /// Listing-path task-bundle reads on this thread.
+    pub fn listing_bundle_reads() -> u64 {
+        crate::boundary::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+}
 
 pub use boundary::TaskV2Store;
 pub use boundary::{TaskCommitBoundary, TaskCoordination, admission_refusal};
+use chrono::{DateTime, Utc};
 pub use contract::incident::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
     FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,
@@ -139,30 +155,9 @@ pub use repository::{
 };
 pub use store::{Snapshot, Tx};
 
-/// Hooks for tests in crates that depend on `orbit-store`, behind the
-/// `test-support` feature. Enable it only from `[dev-dependencies]`.
-#[cfg(feature = "test-support")]
-pub mod test_support {
-    pub use crate::boundary::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
-    pub use crate::boundary::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
-    pub use crate::boundary::coordination::task_write_hold_hook::with_task_commit_write_hold;
-    pub use crate::repository::recovery_authority::seed_legacy_authority_certificate;
-
-    /// Canonical (artifact-hashing) task-bundle reads on this thread.
-    pub fn canonical_bundle_reads() -> u64 {
-        crate::boundary::v2_bundle::CANONICAL_BUNDLE_READS.with(std::cell::Cell::get)
-    }
-
-    /// Lightweight task-bundle reads on this thread, listing or by id.
-    pub fn lightweight_bundle_reads() -> u64 {
-        crate::boundary::v2_bundle::LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get)
-    }
-
-    /// Listing-path task-bundle reads on this thread.
-    pub fn listing_bundle_reads() -> u64 {
-        crate::boundary::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
-    }
-}
+#[cfg(test)]
+#[path = "../tests/store/support/git.rs"]
+mod git_test_support;
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)

@@ -1,11 +1,9 @@
 //! Concrete repository for host automation records.
 
-use crate::store::{Snapshot, Tx};
-use rusqlite::Connection;
-use std::marker::PhantomData;
 mod checkpoint;
 pub(super) mod codec;
 
+use crate::store::{Snapshot, Tx};
 use codec::{decode, encode};
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
@@ -14,7 +12,10 @@ use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState, BatchAttempt, BatchWaiver, Delivery,
     recovery::RecoveryRecord,
 };
+use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
+use std::marker::PhantomData;
+
 /// Host automation records scoped to a snapshot or write transaction.
 pub struct AutomationRepository<'a, Access> {
     conn: &'a Connection,

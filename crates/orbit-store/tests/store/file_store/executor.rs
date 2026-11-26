@@ -46,7 +46,9 @@ fn rejects_traversal_executor_name_without_external_write() {
     assert!(!dir.path().join("x.yaml").exists());
 
     let err = store
-        .read().executor_def().get("../x")
+        .read()
+        .executor_def()
+        .get("../x")
         .expect_err("traversal lookup must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
 }
@@ -68,7 +70,9 @@ fn rejects_traversal_executor_metadata_name_when_loading() {
 
     let store = global_executor_def_store(executors_dir);
     let err = store
-        .read().executor_def().list()
+        .read()
+        .executor_def()
+        .list()
         .expect_err("traversal metadata name must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
     assert!(!dir.path().join("x.yaml").exists());
@@ -91,7 +95,9 @@ fn omitted_host_os_is_not_serialized_and_a_declared_set_round_trips() {
     assert!(!yaml.contains("host_os"), "omission stays omitted: {yaml}");
     assert!(
         store
-            .read().executor_def().get("codex")
+            .read()
+            .executor_def()
+            .get("codex")
             .expect("get")
             .expect("codex")
             .host_os
@@ -100,10 +106,14 @@ fn omitted_host_os_is_not_serialized_and_a_declared_set_round_trips() {
 
     let mut muse = baseline_def("muse");
     muse.host_os = Some(BTreeSet::from([HostOs::Macos]));
-    store.write(|tx| tx.executor_def().put(&muse)).expect("macos executor");
+    store
+        .write(|tx| tx.executor_def().put(&muse))
+        .expect("macos executor");
     assert_eq!(
         store
-            .read().executor_def().get("muse")
+            .read()
+            .executor_def()
+            .get("muse")
             .expect("get")
             .expect("muse")
             .host_os,
@@ -135,7 +145,9 @@ fn empty_or_unknown_host_os_is_refused_at_load_and_names_the_asset() {
         )
         .expect("seed");
         let error = global_executor_def_store(executors)
-            .read().executor_def().list()
+            .read()
+            .executor_def()
+            .list()
             .expect_err("bad host_os must fail the load");
         let message = error.to_string();
         assert!(message.contains(&path.display().to_string()), "{message}");

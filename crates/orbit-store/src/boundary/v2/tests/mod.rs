@@ -1,10 +1,13 @@
-use chrono::{TimeZone, Utc};
-use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, TaskType};
-use tempfile::TempDir;
+mod concurrency;
+mod listing;
+mod repair_gate;
 
 use super::*;
 use crate::contract::TaskCreateParams;
 use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
+use chrono::{TimeZone, Utc};
+use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, TaskType};
+use tempfile::TempDir;
 
 pub(super) fn store(temp: &TempDir) -> TaskV2Store {
     let registry =
@@ -23,7 +26,6 @@ pub(super) fn bound_store(
 ) -> TaskV2Store {
     bound_store_at(registry, temp.path(), partition_id, checkout)
 }
-
 /// [`bound_store`] with the checkout under an explicit `root`, for fixtures
 /// that need a root other than a temp directory's own path.
 pub(super) fn bound_store_at(
@@ -47,7 +49,6 @@ pub(super) fn bound_store_at(
         .expect("bind workspace");
     TaskV2Store::new(registry.clone(), binding.partition_id)
 }
-
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskCreateParams {
@@ -100,7 +101,3 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         not_before: None,
     }
 }
-
-mod concurrency;
-mod listing;
-mod repair_gate;

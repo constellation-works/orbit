@@ -1,21 +1,19 @@
 //! Workspace-partitioned friction records and their legacy import codec.
 
-use std::collections::BTreeMap;
-
-use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::sqlite_store_error;
-use orbit_types::record::FrictionRecord;
-use rusqlite::Connection;
-
-use crate::contract::{FrictionListFilter, FrictionReportedCount, StoredFrictionRecord};
-use crate::{Snapshot, Tx};
-
 pub(crate) mod legacy;
 mod queries;
 mod sql_write;
 mod stats;
 pub(crate) mod taxonomy;
+
+use crate::contract::{FrictionListFilter, FrictionReportedCount, StoredFrictionRecord};
+use crate::{Snapshot, Tx};
+use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
+use orbit_types::record::FrictionRecord;
+use rusqlite::Connection;
+use std::collections::BTreeMap;
 
 /// Friction records in one host-store snapshot or write transaction. Each
 /// query is explicitly scoped to a workspace because IDs are workspace-local.

@@ -12,20 +12,17 @@
 //! Legacy files are never modified or deleted: after the marker commits they
 //! are read-only rollback evidence.
 
-use std::collections::BTreeSet;
-use std::io;
-use std::path::{Path, PathBuf};
-
-use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
-use orbit_common::{OrbitError, StorageLayer};
-use rusqlite::Connection;
+mod submission;
 
 use crate::FileStore;
 use crate::driver::file::friction_store::LegacyFrictionDir;
 use crate::{Store, Tx};
-
-mod submission;
-
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer};
+use rusqlite::Connection;
+use std::collections::BTreeSet;
+use std::io;
+use std::path::{Path, PathBuf};
 pub use submission::{add, add_or_reuse, next_friction_sequence, submit};
 pub(crate) use submission::{allocate, project_committed_friction};
 

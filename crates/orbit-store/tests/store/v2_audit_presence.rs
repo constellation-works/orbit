@@ -1,5 +1,3 @@
-use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
-
 #[test]
 fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {
     let store = Store::open_in_memory().unwrap();

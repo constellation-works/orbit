@@ -10,14 +10,13 @@
 //! These registries never grow: the next change to a feature table is a
 //! store ledger entry.
 
-use orbit_common::OrbitError;
-use rusqlite::Connection;
-
-use super::feature_schema_meta::{FeatureMigration, apply_feature_registry};
-
 mod automation;
 mod local_pull;
 mod review;
+
+use super::feature_schema_meta::{FeatureMigration, apply_feature_registry};
+use orbit_common::OrbitError;
+use rusqlite::Connection;
 
 /// Every frozen feature registry, by its `feature_schema_meta` name.
 pub(super) const FEATURE_REGISTRIES: &[(&str, &[FeatureMigration])] = &[

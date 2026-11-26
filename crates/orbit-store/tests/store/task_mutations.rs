@@ -1,11 +1,6 @@
 //  Existing task mutation cases through exported workspace backends.
 
-#[path = "task_mutations/concurrency.rs"]
-mod concurrency;
-#[path = "task_mutations/creation_grant.rs"]
-mod creation_grant;
-#[path = "task_mutations/jsonl.rs"]
-mod jsonl;
+
 
 fn store(temp: &TempDir) -> WorkspaceTaskBackends {
     let registry =
@@ -25,7 +20,6 @@ fn store(temp: &TempDir) -> WorkspaceTaskBackends {
         .unwrap();
     workspace_task_backends(registry, binding.partition_id)
 }
-
 // Disk snapshots are fixture evidence, not a copy of the bundle reader.
 fn bundle_path(id: &str) -> std::path::PathBuf {
     let registry =
@@ -36,6 +30,7 @@ fn bundle_path(id: &str) -> std::path::PathBuf {
         .unwrap()
         .canonical_path
 }
+
 struct Snapshot {
     envelope: TaskEnvelopeV2,
     events: Vec<TaskEventRowV2>,
@@ -54,8 +49,3 @@ fn snapshot(id: &str) -> Snapshot {
             .collect(),
     }
 }
-
-#[path = "task_mutations/repair_gate.rs"]
-mod repair_gate;
-#[path = "task_mutations/row_cache.rs"]
-mod row_cache;

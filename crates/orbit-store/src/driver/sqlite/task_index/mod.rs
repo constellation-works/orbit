@@ -2,14 +2,13 @@
 //! path, connection pragmas, read pool and frozen schema steps. The SQL that
 //! reads and writes its rows lives in `crate::repository::task_index`.
 
-use std::path::{Path, PathBuf};
-
 mod connection;
 pub(crate) mod schema;
 
 pub(crate) use connection::TaskIndexDb;
 pub(crate) use schema::open::HIGH_WATER_UNKNOWN_AUTHORITY;
 pub(crate) use schema::registry_compatibility;
+use std::path::{Path, PathBuf};
 
 /// File name of the task index database inside `<global_root>/tasks/`.
 pub const FILE_NAME: &str = "index.sqlite";

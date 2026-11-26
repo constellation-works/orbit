@@ -95,17 +95,41 @@
 //! read (it does not expire rows) so `orbit doctor` stays strictly
 //! read-only, and it therefore stays outside the boundary.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use orbit_common::OrbitError;
-use orbit_types::task::{TaskEnvelopeV2, TaskEventRowV2};
-use serde::{Deserialize, Serialize};
+mod admission;
+mod apply;
+mod boundary;
+mod branch_observation;
+mod commit;
+mod handoff;
+mod journal_commit;
+mod landing;
+mod lease_notices;
+mod lifecycle;
+mod owner_wave;
+mod perf_lane;
+mod repair;
+mod selection;
 
 use crate::Store;
 use crate::boundary::v2_bundle::TaskBundleStoreV2;
 use crate::contract::{ClaimInspection, ClaimInvocation, OwnerWaveAdmission, OwnerWaveCandidate};
 use crate::repository::task_index::TaskRegistryStore;
+use orbit_common::OrbitError;
+use orbit_types::task::{TaskEnvelopeV2, TaskEventRowV2};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+// Shared with sibling modules through `super::`.
+use boundary::{BoundaryDepth, Section};
+
+pub use admission::admission_refusal;
+#[cfg(feature = "test-support")]
+pub(crate) use boundary::lock_timeout_hook;
+#[cfg(feature = "test-support")]
+pub(crate) use boundary::task_write_hold_hook;
+#[cfg(feature = "test-support")]
+pub(crate) use repair::fallback_hook;
 
 /// Lock target for one task-store partition. The advisory lock is its
 /// dot-prefixed sibling, so this name is never itself created or removed.
@@ -117,6 +141,9 @@ const COORDINATION_LOCK_LABEL: &str = "task commit boundary";
 const PENDING_MARKER_FILE: &str = ".task-commit-pending";
 const REQUIRED_MARKER_FILE: &str = ".task-commit-required";
 const COMMIT_INTENT_SCHEMA_VERSION: u32 = 2;
+
+#[cfg(test)]
+mod tests;
 
 /// The bundle-side half of a commit, replayed verbatim by recovery.
 ///
@@ -149,14 +176,12 @@ pub struct TaskCommitBoundary {
     /// Deadlines and holder diagnostics for the host and partition locks.
     lock_options: orbit_common::fs::io::FileLockOptions,
 }
-
 /// A workspace's task coordination, including legacy composition without a
 /// commit boundary.
 #[derive(Clone, Default)]
 pub struct TaskCoordination {
     boundary: Option<Arc<TaskCommitBoundary>>,
 }
-
 impl TaskCoordination {
     pub(crate) fn new(boundary: Arc<TaskCommitBoundary>) -> Self {
         Self {
@@ -190,38 +215,8 @@ impl TaskCoordination {
         require_claim_boundary(self.boundary.as_deref())?.verify_worker_claim(invocation)
     }
 }
-
 pub(in crate::boundary) fn require_claim_boundary(
     boundary: Option<&TaskCommitBoundary>,
 ) -> Result<&TaskCommitBoundary, OrbitError> {
     boundary.ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
 }
-
-mod admission;
-mod apply;
-mod boundary;
-mod branch_observation;
-mod commit;
-mod handoff;
-mod journal_commit;
-mod landing;
-mod lease_notices;
-mod lifecycle;
-mod owner_wave;
-mod perf_lane;
-mod repair;
-mod selection;
-
-#[cfg(test)]
-mod tests;
-
-// Shared with sibling modules through `super::`.
-use boundary::{BoundaryDepth, Section};
-
-pub use admission::admission_refusal;
-#[cfg(feature = "test-support")]
-pub(crate) use boundary::lock_timeout_hook;
-#[cfg(feature = "test-support")]
-pub(crate) use boundary::task_write_hold_hook;
-#[cfg(feature = "test-support")]
-pub(crate) use repair::fallback_hook;
