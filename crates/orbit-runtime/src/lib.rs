@@ -25,17 +25,16 @@
 //! runs) and [`Run`] (the run this process carries). [`RuntimeKernel`] holds
 //! the top one.
 //!
-//! The `resolve` sub-module implements root discovery. The `builder` sub-module
-//! wires together stores, policy, tool registry, and event bus into a complete
-//! [`RuntimeKernel`], whose `orbit_runtime` module separates construction,
-//! identity, host probes, persistence, configuration, and internal accessors.
-//! The `engine`, `audit`,
-//! `mutation`, and `tool_exec` sub-modules provide the high-level operations
-//! exposed to command handlers; `plugin` and `workspace` own host plugins and
-//! the workspace binding, catalog, and claim; `host_signal` probes host
-//! lifecycle signals, such as a scheduled reboot, that hold new admissions;
-//! `task::pr_forge` is the forge a task's terminal decision closes its
-//! Orbit-authored PRs through.
+//! The `base::path::resolve` sub-module implements root discovery. The `builder`
+//! sub-module wires together stores, policy, tools, plugins, and event bus into a
+//! complete [`RuntimeKernel`], whose `orbit_runtime` module separates construction
+//! and host probes while `base` and `stored` hold the two lower layers.
+//! The `engine`, `stored::audit`, `mutation`, and `tool_exec` sub-modules provide
+//! the high-level operations exposed to command handlers; `plugin` and
+//! `stored::workspace` own host plugins and the workspace catalog and claim;
+//! `host_signal` probes host lifecycle signals, such as a scheduled reboot, that
+//! hold new admissions; `task::pr_forge` is the forge a task's terminal decision
+//! closes its Orbit-authored PRs through.
 
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Legacy runtime command surfaces still need a focused documentation pass.
@@ -59,17 +58,11 @@ pub mod application_authority {
 mod application_consent;
 mod application_port;
 pub mod assets;
-pub mod audit;
-pub mod authorization;
 pub mod base;
 pub mod builder;
 pub mod command_exec;
-mod config_path;
-pub mod context;
 pub mod cost;
-pub(crate) mod cwd;
 pub mod engine;
-pub mod event_bus;
 pub mod friction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod git_sandbox;
@@ -78,11 +71,8 @@ pub mod host_resource;
 pub mod host_signal;
 pub mod mutation;
 mod orbit_runtime;
-pub mod paths;
 pub mod plugin;
-pub mod recovery_authority;
 pub mod recovery_decision;
-mod resolve;
 pub mod run;
 pub mod run_input;
 pub mod scripts;
@@ -102,14 +92,32 @@ pub use worker_coordination::pipeline_poll_wait_override;
 pub use worker_coordination::{
     with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
 };
-pub mod workspace;
+
+// Compatibility module re-exports so callers outside this crate keep their
+// public paths until the wrapper is deleted.
+pub use base::event as event_bus;
+pub use base::path::paths;
+pub use base::policy as authorization;
+pub use stored::audit;
+pub use stored::recovery_authority;
+pub use stored::workspace;
+
+/// Compatibility re-exports for actor identity, admitted settings and stores.
+pub mod context {
+    pub use crate::base::actor::{
+        ActorIdentity, ActorKind, resolve_write_actor_label, trusted_write_identity,
+    };
+    pub use crate::base::config::OrbitRuntimeSettings;
+    pub use crate::stored::stores::OrbitStores;
+}
 
 #[cfg(test)]
 mod tests;
 
 pub use application_port::ApplicationPort;
 pub use base::Base;
-pub use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
+pub use base::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
+pub use base::config::{CONFIG_TOML_FILE, existing_config_file_path};
 pub use host::Host;
 pub use orbit_runtime::{
     AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
@@ -117,22 +125,21 @@ pub use orbit_runtime::{
 pub use run::Run;
 pub use stored::Stored;
 pub use stored::job_runs::JobRuns;
-pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
-pub use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
+pub use base::path::resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
 pub use worker_coordination::{
     check_worker_host_input, check_worker_search_scope, is_coordination_tool,
 };
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
-pub use resolve::{
+pub use base::path::resolve::{
     ResolvedOrbitRoots, WorkspaceRootHint, initialized_explicit_workspace_root,
     resolve_bootstrap_roots_with_hint, resolve_initialize_roots_with_hint,
     try_resolve_initialized_cwd_roots_with_hint, try_resolve_initialized_roots_with_hint,
 };
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
-pub use resolve::{
+pub use base::path::resolve::{
     is_global_orbit_root, refuse_indirect_uninitialized_caller_orbit,
     resolve_existing_root_traversal, resolve_generation_root, resolve_global_root,
     resolve_process_generation_root, resolve_root_path_value, try_resolve_initialized_roots,

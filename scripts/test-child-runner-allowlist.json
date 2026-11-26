@@ -364,21 +364,21 @@
     "reason": "Supervisor helper stays alive until a marker, then the parent sends SIGTERM. run_child_test would own that wait."
   },
   {
-    "path": "crates/orbit-runtime/src/recovery_authority/tests/worker.rs",
+    "path": "crates/orbit-runtime/src/stored/recovery_authority/tests/worker.rs",
     "function": "worker_process_binding_survives_descendants_and_forged_environment",
     "call": ".output()",
     "ordinal": 0,
     "reason": "Grandchild re-exec with a forged run id, waited with .output() and assert_child_test_passed."
   },
   {
-    "path": "crates/orbit-runtime/src/recovery_authority/tests/worker.rs",
+    "path": "crates/orbit-runtime/src/stored/recovery_authority/tests/worker.rs",
     "function": "worker_process_binding_survives_descendants_and_forged_environment",
     "call": ".spawn()",
     "ordinal": 0,
     "reason": "Live child with piped stdio so the parent can bind the worker pid before the child exits."
   },
   {
-    "path": "crates/orbit-runtime/src/recovery_authority/tests/worker.rs",
+    "path": "crates/orbit-runtime/src/stored/recovery_authority/tests/worker.rs",
     "function": "worker_process_binding_survives_descendants_and_forged_environment",
     "call": ".output()",
     "ordinal": 1,

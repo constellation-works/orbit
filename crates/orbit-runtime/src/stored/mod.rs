@@ -1,13 +1,20 @@
 //! [`Stored`]: [`Base`] plus the opened stores — what an operation that reads
 //! or writes a record needs.
 
+mod accessors;
+pub mod audit;
+mod authorization;
 pub mod job_runs;
+mod persistence;
+pub mod recovery_authority;
+pub mod stores;
+pub mod workspace;
 
 use std::sync::Arc;
 
+use self::stores::OrbitStores;
+use self::workspace::catalog;
 use crate::base::Base;
-use crate::context::OrbitStores;
-use crate::workspace::catalog;
 
 /// The layer an operation that reads or writes a record runs against.
 #[derive(Clone)]

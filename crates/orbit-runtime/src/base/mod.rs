@@ -5,6 +5,15 @@
 //! The lowest of the four runtime layers. It holds no store and nothing that
 //! belongs to one machine's work or one run.
 
+mod accessors;
+pub mod actor;
+pub mod binding;
+pub mod config;
+pub mod event;
+mod identity;
+pub mod path;
+pub mod policy;
+
 use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
@@ -13,10 +22,11 @@ use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy, PersistenceConfig};
 use orbit_policy::PolicyEngine;
 use orbit_types::workspace::WorkspacePaths;
 
+use self::actor::ActorIdentity;
+use self::binding::WorkspaceRuntimeBinding;
+use self::config::OrbitRuntimeSettings;
+use self::policy::OrbitPolicyContext;
 use crate::builder;
-use crate::context::{ActorIdentity, OrbitPolicyContext, OrbitRuntimeSettings};
-use crate::event_bus;
-use crate::workspace::binding::WorkspaceRuntimeBinding;
 
 /// Configuration reload supplied by the composition root. Runtime policy
 /// refreshes may call it after config files change, but runtime never opens
@@ -32,7 +42,7 @@ pub struct Base {
     /// The admitted settings, which carry the actor.
     pub(crate) settings: OrbitRuntimeSettings,
     pub(crate) config_loader: RuntimeConfigLoader,
-    pub(crate) event_log: event_bus::EventLog,
+    pub(crate) event_log: event::EventLog,
     /// The operating system admission matches a task's `os:` tags against.
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
@@ -84,7 +94,7 @@ impl Base {
             policy,
             settings,
             config_loader,
-            event_log: event_bus::EventLog::default(),
+            event_log: event::EventLog::default(),
             host_os: orbit_types::task::HostOs::current(),
             registered_host_oses: Vec::new(),
             workspace_binding,

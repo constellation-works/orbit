@@ -2349,6 +2349,20 @@ for module in mcp plugin; do
   fi
 done
 
+# [ORB-28388] orbit-runtime layers: `base` names none of `stored`, `host` or
+# `run` (or their crate-root re-exports); `stored` names only `base` among the
+# four layers and never `host` or `run`. Missing layer directories fail closed.
+runtime_src="$repo_root/crates/orbit-runtime/src"
+if ! super_chains_into "$runtime_src" base \
+  'stored|host|run|Stored|Host|Run|JobRuns|audit|workspace|recovery_authority|context' crate-root; then
+  echo "orbit-runtime base must not name stored, host or run"
+  fail=1
+fi
+if ! super_chains_into "$runtime_src" stored 'host|run|Host|Run' crate-root; then
+  echo "orbit-runtime stored must not name host or run"
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi

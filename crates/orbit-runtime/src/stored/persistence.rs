@@ -12,14 +12,14 @@ use orbit_types::record::{Audit, OrbitEvent};
 use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
-use super::RuntimeKernel;
+use crate::RuntimeKernel;
+use crate::base::binding::WorkspaceRuntimeBinding;
+use crate::base::config::validated_runtime_config_path;
 use crate::builder;
-use crate::config_path::validated_runtime_config_path;
-use crate::workspace::binding::WorkspaceRuntimeBinding;
 
 impl RuntimeKernel {
     /// Returns at most `limit` recent in-process session events, newest first.
-    /// The log retains only the newest [`event_bus::SESSION_EVENT_CAPACITY`](crate::event_bus::SESSION_EVENT_CAPACITY) events;
+    /// The log retains only the newest [`event::SESSION_EVENT_CAPACITY`](crate::base::event::SESSION_EVENT_CAPACITY) events;
     /// session IDs remain stable when older events are discarded. Only returned events are cloned.
     /// The log is empty at startup and discarded on exit. For the persistent CLI audit log,
     /// see `OrbitRuntime::list_audit_events`.

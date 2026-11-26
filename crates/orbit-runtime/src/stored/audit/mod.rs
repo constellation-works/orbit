@@ -4,7 +4,7 @@
 //! audit events built on it, and the tag instructions and experiment arms a
 //! run's activities received.
 
-pub(super) mod coordination;
+pub(crate) mod coordination;
 pub mod run;
 pub mod system;
 pub mod tag_instructions;

@@ -1,6 +1,8 @@
 //! [`Run`]: [`Host`] plus the run this process carries — the worker
 //! invocation, the owner it coordinates through and where automation executes.
 
+mod identity;
+
 use std::sync::Arc;
 
 use crate::base::Base;

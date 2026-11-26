@@ -14,7 +14,7 @@ use orbit_config::{
 use orbit_types::identity::{Crew, HumanCrew};
 
 use super::RuntimeKernel;
-use crate::config_path::{CONFIG_TOML_FILE, validated_existing_config_root};
+use crate::base::config::{CONFIG_TOML_FILE, validated_existing_config_root};
 
 /// Last-known-good crew registry, routing pools and auto-effort policy for
 /// admission and crew resolution.
@@ -162,7 +162,13 @@ impl RuntimeKernel {
         policy
     }
 
-    pub(super) fn current_mid_run_steering(&self) -> MidRunSteeringSettings {
+    /// The current last-known-good `[workflow.mid_run_steering]` settings,
+    /// refreshed at prompt and gate checkpoints. Steering defaults off.
+    pub fn mid_run_steering(&self) -> MidRunSteeringSettings {
+        self.current_mid_run_steering()
+    }
+
+    fn current_mid_run_steering(&self) -> MidRunSteeringSettings {
         // Unlike admission decisions, enablement applies to runs already in
         // flight. Do not pin it to a drain pass's admission snapshot.
         self.refresh_workflow_policy().mid_run_steering

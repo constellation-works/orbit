@@ -2,6 +2,10 @@
 //! forge, the host signals, the load and resource probes, the admission
 //! policy and the execution assets.
 
+mod accessors;
+mod authorization;
+pub(crate) mod context;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -12,7 +16,6 @@ use orbit_store::skill_store::SkillDirs;
 use orbit_tools::ToolRegistry;
 
 use crate::base::Base;
-use crate::context::OrbitExecutionAssets;
 use crate::host_resource::HostResourceMonitor;
 use crate::host_resource::forecast::HostLoadProbe;
 use crate::host_resource::profile::ResourceProfileCache;
@@ -21,6 +24,30 @@ use crate::orbit_runtime::admission_policy::{AdmissionPolicy, CachedPolicy};
 use crate::plugin::host::PluginHostLoad;
 use crate::stored::Stored;
 use crate::task_pr_forge::TaskPrForge;
+
+#[derive(Clone)]
+pub(crate) struct OrbitExecutionAssets {
+    pub(crate) registry: Arc<ToolRegistry>,
+    pub(crate) skill_catalog: FileStore<SkillDirs>,
+    /// What the host plugin load pass registered and refused, kept so
+    /// `orbit plugin list`/`show`/`doctor` report the same facts the tool
+    /// surface was built from rather than re-deriving them.
+    pub(crate) plugins: Arc<PluginHostLoad>,
+}
+
+impl OrbitExecutionAssets {
+    pub(crate) fn new(
+        registry: Arc<ToolRegistry>,
+        skill_catalog: FileStore<SkillDirs>,
+        plugins: PluginHostLoad,
+    ) -> Self {
+        Self {
+            registry,
+            skill_catalog,
+            plugins: Arc::new(plugins),
+        }
+    }
+}
 
 /// The last tree each run passed full required validation on, by run id.
 pub(crate) type ValidatedTrees = Arc<Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>>;

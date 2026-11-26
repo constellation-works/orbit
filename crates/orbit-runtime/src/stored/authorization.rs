@@ -17,162 +17,21 @@
 //! [`AuditEventStatus::Denied`]; the two rows answer different questions
 //! ("what was refused" versus "what call failed").
 
-use std::collections::BTreeSet;
-
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, OperationSurface,
-    TASK_GRANT_TOOLS_OPERATION_ID, authorize, governed_command, governed_plugin_tool,
-    governed_tool,
+    CallerCapabilities, CallerEnvelope, GovernedOperation, OperationSurface,
+    TASK_GRANT_TOOLS_OPERATION_ID, authorize, governed_command, governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contract::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::RESIDENT_CYCLE_JOB;
 
 use crate::RuntimeKernel;
-use crate::tool_exec::CapabilityEnforcement;
-
-/// Canonical tool name of the delegated-human decision submission, named once for its admission.
-pub(crate) const DECISION_SUBMIT_OPERATION_ID: &str = "orbit.decision.submit";
-
-/// Canonical tool name of the decision digest. It shares the submission's
-/// callback admission: the row exists for the registered channel's plugin,
-/// which holds a callback session rather than a capability.
-pub(crate) const DECISION_DIGEST_OPERATION_ID: &str = "orbit.decision.digest";
-
-/// Canonical tool name of the explicit ship submission, named once for its admission.
-pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
-
-/// Canonical tool name of a delivery pull request's landing.
-pub(crate) const WORKFLOW_LAND_OPERATION_ID: &str = "orbit.workflow.land";
-
-/// Canonical tool name of a delivery pull request's base-branch refresh.
-pub(crate) const WORKFLOW_REFRESH_OPERATION_ID: &str = "orbit.workflow.refresh";
-
-/// Canonical tool name of `orbit.task.recover` action `repilot`.
-pub(crate) const TASK_REPILOT_OPERATION_ID: &str = "orbit.task.repilot";
-
-/// Canonical tool name of `orbit.task.recover` action `requeue`.
-pub(crate) const TASK_REQUEUE_OPERATION_ID: &str = "orbit.task.requeue";
-
-/// Canonical tool name of `orbit.task.recover` action `resume_delivery`.
-pub(crate) const TASK_RESUME_DELIVERY_OPERATION_ID: &str = "orbit.task.resume_delivery";
-
-/// The operator-row tools a resident cycle reaches through its mandate's
-/// rights instead: ship, re-pilot and requeue under `dispatch`, land under
-/// `merge`, refresh under `refresh`, and delivery recovery under `recover`. Every other operator row, the other
-/// recover actions included, holds a cycle to the operator capability.
-const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 6] = [
-    WORKFLOW_SHIP_OPERATION_ID,
-    WORKFLOW_LAND_OPERATION_ID,
-    WORKFLOW_REFRESH_OPERATION_ID,
-    TASK_REPILOT_OPERATION_ID,
-    TASK_REQUEUE_OPERATION_ID,
-    TASK_RESUME_DELIVERY_OPERATION_ID,
-];
-
-/// Whether `tool` is an operator-row tool a resident cycle reaches through
-/// its mandate's rights rather than the operator capability.
-pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
-    RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS.contains(&tool)
-}
-
-/// The read-only workflow status call a live resident may use in scope.
-pub fn is_resident_drain_status_call(tool: &str, input: &serde_json::Value) -> bool {
-    tool == "orbit.workflow.auto"
-        && input
-            .get("action")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|action| action.trim() == "status")
-}
-
-/// Routing hint for a nested client. The resident broker authenticates the
-/// caller and resolves the target workspace against the live cycle's grant.
-pub fn route_resident_delivery_recovery_to_broker(env: &orbit_common::Env, tool: &str) -> bool {
-    tool == TASK_RESUME_DELIVERY_OPERATION_ID
-        && env.orbit_plugin_broker().is_some()
-        && crate::run_input::managed_run_context_run_id_from_env(env).is_some()
-}
-
-/// Identity facts retained after operator admission.
-#[derive(Debug)]
-pub struct OperatorAuthorizer {
-    pub provenance: CallerProvenance,
-    /// Caller label an SSH-originated MCP session forwarded, for attribution
-    /// in the durable admission. Never a grant [ORB-12564].
-    pub remote_caller_machine_id: Option<String>,
-}
+use crate::base::policy::{OperatorAuthorizer, TASK_REQUEUE_OPERATION_ID};
 
 impl RuntimeKernel {
-    /// Authorize a governed tool call.
-    ///
-    /// Called from `run_tool_with_context`, which every tool caller
-    /// traverses: CLI `tool run`, the CLI's admin `run_tool` bypass, MCP
-    /// `tools/call`, the dashboard, the v2 deterministic dispatcher, and agent
-    /// loops. There is deliberately no second tool-side guard anywhere.
-    ///
-    /// An ungoverned tool has no operation-specific check, on any transport. A
-    /// session that arrived over SSH is not a special case: it holds what its
-    /// argv asked for, which is at least `agent` [ORB-12564].
-    pub fn authorize_tool_operation(
-        &self,
-        tool_name: &str,
-        session_context: &ToolSessionContext,
-        capability_enforcement: CapabilityEnforcement,
-    ) -> Result<(), OrbitError> {
-        // A plugin tool is authorized by the generic row for its manifest's
-        // execution kind; every other tool by its own row, if it has one.
-        let operation = match self.tool_registry().plugin_binding(tool_name) {
-            Some(binding) => governed_plugin_tool(
-                binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
-                binding.agent_callable,
-            ),
-            None => match governed_tool(tool_name) {
-                Some(operation) => operation,
-                None => return Ok(()),
-            },
-        };
-        // The broker executes an authenticated resident's right-gated operations
-        // directly on the tool host. Every caller here must satisfy the row.
-        // The decision channel's submission and digest (design
-        // `docs/design/human-decision-channel/2_design.md` §3.3, §7):
-        // their governed rows are operator-only, but the caller the rows
-        // exist for — a registered channel plugin's backend — holds no
-        // capability, only a host-issued callback session. An *identified*
-        // callback passes this row and is decided by the checks that can
-        // actually judge it: the callback allowlist at the tool entry (the
-        // plugin must be granted this tool, under its session ceiling) and
-        // the handler's registration binding (and, for submission, token
-        // verification). Every other caller, agent sessions included, is
-        // held to the row.
-        if (tool_name == DECISION_SUBMIT_OPERATION_ID || tool_name == DECISION_DIGEST_OPERATION_ID)
-            && session_context.worker_invocation.is_none()
-            && matches!(
-                orbit_tools::plugin::resolve_plugin_callback_session(
-                    self.env(),
-                    &self.global_root()
-                )?,
-                orbit_tools::plugin::CallbackResolution::Identified(_)
-            )
-        {
-            return Ok(());
-        }
-        let capability_enforcement = if session_context.worker_invocation.is_some() {
-            CapabilityEnforcement::McpSessionOnly
-        } else {
-            capability_enforcement
-        };
-        let envelope = match capability_enforcement {
-            CapabilityEnforcement::Enforce => {
-                CallerEnvelope::from_process_env(self.env(), session_context)
-            }
-            CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),
-        };
-        self.decide_with_envelope(operation, envelope)
-    }
-
     /// Routing hint for the nested client. Only the broker authenticates the run.
     pub fn env_names_resident_cycle(&self, env: &orbit_common::Env) -> bool {
         crate::run_input::managed_run_context_run_id_from_env(env)
@@ -239,7 +98,7 @@ impl RuntimeKernel {
         )
     }
 
-    fn decide_with_envelope(
+    pub(crate) fn decide_with_envelope(
         &self,
         operation: &'static GovernedOperation,
         envelope: CallerEnvelope,
@@ -313,31 +172,6 @@ impl RuntimeKernel {
         }
     }
 
-    /// Keep activity-policy refusals queryable through the same authorization
-    /// predicate as capability refusals, including tools with no governed row.
-    pub(crate) fn record_activity_tool_policy_denial(
-        &self,
-        name: &str,
-        reason: &str,
-        session: &ToolSessionContext,
-        enforcement: CapabilityEnforcement,
-    ) {
-        let envelope = match enforcement {
-            CapabilityEnforcement::Enforce if session.worker_invocation.is_none() => {
-                CallerEnvelope::from_process_env(self.env(), session)
-            }
-            _ => CallerEnvelope::mcp_session(session),
-        };
-        self.record_authorization_event(
-            name,
-            OperationSurface::Tool,
-            &CallerCapabilities::resolve(&envelope),
-            AuditEventStatus::Denied,
-            Some(reason.to_string()),
-            session.trace_id.as_deref(),
-        );
-    }
-
     /// Persist the authorization decision.
     ///
     /// A failed write is logged and swallowed rather than converted into the
@@ -348,7 +182,7 @@ impl RuntimeKernel {
     /// in `finalize_successful_dispatch`: the call stays a success and names
     /// the committed object in `audit_warning`, because an error would not
     /// roll the mutation back.
-    fn record_authorization_event(
+    pub(crate) fn record_authorization_event(
         &self,
         operation_id: &str,
         surface: OperationSurface,
@@ -442,28 +276,4 @@ impl RuntimeKernel {
             );
         }
     }
-}
-
-/// What a caller the chokepoint has already admitted actually holds.
-///
-/// A handler that has to draw one more distinction *inside* an authorized call
-/// asks here instead of reading `effective_capabilities` off the session. A
-/// session's asserted set is not where every surface keeps its authority:
-/// `orbit tool run` builds a session with no capabilities at all and expresses
-/// the caller's authority in the process envelope, so a raw session read
-/// refuses the owner on the owner's own machine [ORB-12582].
-///
-/// The resolution is the shared one, in the shared order: a session that
-/// asserts grants is taken at its word, and the process envelope is consulted
-/// only for a session that asserts nothing. An MCP session is therefore never
-/// widened by whatever process happens to host its server — and a session that
-/// asserts nothing does not reach a handler that calls this, because the
-/// governed floor on that handler's tool refused it first.
-pub fn resolved_caller_capabilities(
-    env: &orbit_common::Env,
-    session: &ToolSessionContext,
-) -> BTreeSet<McpCapability> {
-    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(env, session))
-        .grants()
-        .clone()
 }

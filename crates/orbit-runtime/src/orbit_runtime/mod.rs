@@ -1,14 +1,10 @@
 //! [`RuntimeKernel`]: shared runtime types and method groups for construction,
 //! identity, host probes, persistence, configuration, and internal accessors.
 
-mod accessors;
 pub(crate) mod admission_policy;
 pub use admission_policy::AdmissionCrewSettings;
 mod build;
-mod config;
 mod host;
-mod identity;
-mod persistence;
 mod validation_warning;
 
 use std::path::PathBuf;
@@ -17,7 +13,10 @@ use std::sync::{Arc, Mutex};
 pub use crate::base::RuntimeConfigLoader;
 
 use crate::application_port::ApplicationPort;
+use crate::base::Base;
+use crate::host::Host;
 use crate::run::Run;
+use crate::stored::Stored;
 
 /// One-shot callback for the next orphaned-leaf reconciliation on a runtime.
 type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
@@ -49,6 +48,46 @@ pub struct RuntimeKernel {
     /// observe the lost race. Instance-scoped like the read hook above.
     #[cfg(any(test, feature = "test-support"))]
     transition_run_hook: Arc<Mutex<Option<String>>>,
+}
+
+/// The four layers. Each is reached by its accessor; none dereferences to
+/// another.
+impl RuntimeKernel {
+    /// The top layer: the run this process carries.
+    pub fn run(&self) -> &Run {
+        &self.run
+    }
+
+    /// This machine as a place work runs.
+    pub fn host(&self) -> &Host {
+        self.run.host()
+    }
+
+    /// The opened stores.
+    pub fn stored(&self) -> &Stored {
+        self.run.stored()
+    }
+
+    /// What every operation has.
+    pub fn base(&self) -> &Base {
+        self.run.base()
+    }
+
+    pub(crate) fn run_mut(&mut self) -> &mut Run {
+        &mut self.run
+    }
+
+    pub(crate) fn host_mut(&mut self) -> &mut Host {
+        self.run.host_mut()
+    }
+
+    pub(crate) fn stored_mut(&mut self) -> &mut Stored {
+        self.run.host_mut().stored_mut()
+    }
+
+    pub(crate) fn base_mut(&mut self) -> &mut Base {
+        self.run.host_mut().stored_mut().base_mut()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -75,7 +75,7 @@ pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitErr
 /// Resolve the runtime-selected `.orbit` directory before appending the fixed
 /// pin filename. The leaf is opened with no-follow semantics by the caller.
 fn validated_pin_file_path(orbit_dir: &Path) -> std::io::Result<PathBuf> {
-    let root = crate::config_path::validated_existing_config_root(orbit_dir)
+    let root = crate::base::config::validated_existing_config_root(orbit_dir)
         .map_err(|error| std::io::Error::other(error.to_string()))?
         .ok_or_else(|| {
             std::io::Error::new(

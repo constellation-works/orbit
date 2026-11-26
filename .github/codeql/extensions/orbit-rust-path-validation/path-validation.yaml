@@ -20,13 +20,13 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_runtime::config_path::validated_existing_config_root",
+          "orbit_runtime::base::config::path::validated_existing_config_root",
           "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_runtime::config_path::validated_runtime_config_path",
+          "orbit_runtime::base::config::path::validated_runtime_config_path",
           "ReturnValue",
           "path-injection",
           "manual",
@@ -178,7 +178,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_runtime::recovery_authority::root::validated_authority_global_root",
+          "orbit_runtime::stored::recovery_authority::root::validated_authority_global_root",
           "ReturnValue",
           "path-injection",
           "manual",

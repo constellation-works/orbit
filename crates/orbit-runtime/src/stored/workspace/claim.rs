@@ -37,7 +37,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
 use crate::RuntimeKernel;
-use crate::audit::coordination::{CoordinationAuditEvent, record_coordination_audit_event};
+use crate::stored::audit::coordination::{CoordinationAuditEvent, record_coordination_audit_event};
 use crate::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
 /// Environment fallback for the holder's token, so an operator shell does not
