@@ -276,10 +276,9 @@ fn every_worker_launch_outranks_the_user_manager_as_an_oom_victim() {
             "run-1",
             limits,
             false,
-            Some(availability),
+            availability,
             true,
             &std::sync::Once::new(),
-            &orbit_common::Env::capture(),
         )
         .expect("non-strict launch never refuses");
         if launch == "scoped" {

@@ -398,10 +398,9 @@ impl WorkerCommandConfig {
             run_id,
             self.containment.as_ref(),
             self.strict_containment,
-            Some(availability),
+            availability,
             true,
             &std::sync::Once::new(),
-            &self.env,
         )
     }
 

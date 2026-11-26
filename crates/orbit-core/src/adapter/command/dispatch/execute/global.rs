@@ -68,7 +68,10 @@ where
 /// audit store across dispatches instead of opening it per call. The writer
 /// is invoked with the same params and invocation fields, and its result
 /// goes through the same fail-closed finalization as the open-per-call path.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This adapter keeps runtime, dispatch, audit-writer, and callback inputs explicit."
+)]
 pub fn execute_global_in_process_tool_dispatch_with_audit_writer<F, S>(
     env: &orbit_common::Env,
     global_root: &Path,

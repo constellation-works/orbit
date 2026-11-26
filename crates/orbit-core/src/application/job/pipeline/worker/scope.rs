@@ -179,7 +179,9 @@ pub(crate) fn contain_worker_command(
     env: &orbit_common::Env,
 ) -> Result<Command, orbit_common::OrbitError> {
     static WARNED: Once = Once::new();
-    let availability = limits.map(|_| user_scope_availability(env));
+    let availability = limits
+        .map(|_| user_scope_availability(env))
+        .unwrap_or(Ok(()));
     contain_worker_command_with_availability(
         base,
         run_id,
@@ -190,20 +192,17 @@ pub(crate) fn contain_worker_command(
         // in-worker watchdog; other platforms are uncontained.
         cfg!(target_os = "linux"),
         &WARNED,
-        env,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn contain_worker_command_with_availability(
     base: Command,
     run_id: &str,
     limits: Option<&WorkerLimits>,
     strict: bool,
-    availability: Option<Result<(), String>>,
+    availability: Result<(), String>,
     systemd_expected: bool,
     warned: &Once,
-    env: &orbit_common::Env,
 ) -> Result<Command, orbit_common::OrbitError> {
     let Some(limits) = limits else {
         if strict {
@@ -216,7 +215,7 @@ pub(crate) fn contain_worker_command_with_availability(
         }
         return Ok(prefer_as_oom_victim(base));
     };
-    let command = match availability.unwrap_or_else(|| user_scope_availability(env)) {
+    let command = match availability {
         Ok(()) => scoped_worker_command(&base, &scope_unit_name(run_id), limits),
         Err(reason) => {
             if strict {
