@@ -497,6 +497,20 @@ pub(crate) fn transient_required_check_and_merge_capability_reads_resume_complet
     }
 }
 
+pub(crate) fn managed_rebase_required_check_outage_retries_completion() {
+    let (mut f, checkout) = fixture();
+    configure_review(&mut f, &checkout);
+    insert_managed_sync_recovery(&f);
+    let before = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let calls = observation_forge(&f, "required", "tls");
+    assert_resumed_merge(&f, &checkout, calls, "isRequired(pullRequestNumber", false);
+    let after = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    assert_eq!(
+        after.rebase_recovery_checkpoints,
+        before.rebase_recovery_checkpoints
+    );
+}
+
 /// Auth, permission, permanent 4xx answers, and malformed provider bodies stay
 /// terminal on both prerequisite reads. None resumes completion or merges.
 pub(crate) fn permanent_required_check_and_merge_capability_answers_do_not_resume() {

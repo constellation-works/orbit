@@ -81,6 +81,7 @@ use completion::policy::{
 };
 use completion::prerequisite::{
     later_prerequisite_read_failure_resumes_only_completion,
+    managed_rebase_required_check_outage_retries_completion,
     permanent_required_check_and_merge_capability_answers_do_not_resume,
     prerequisite_read_after_mutation_provenance_never_resumes,
     transient_required_check_and_merge_capability_reads_resume_completion,
@@ -90,6 +91,7 @@ use completion::{
     completion_reuse_refuses_drift, concurrent_and_lost_admission_keep_one_completion_budget,
     configured_review_requires_unchanged_host_certificate,
     empty_requirements_still_bind_completion_policy,
+    managed_sync_recovery_refuses_unproven_or_changed_evidence,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     refreshed_preparation_retry_admits_unchanged_and_refuses_drift,
     refused_receipts_stop_before_agent_or_republication,
@@ -1040,6 +1042,7 @@ crate::scenario_table!(
 
 crate::scenario_table!(
     published_completion_scenarios_retry,
+    managed_sync_recovery_refuses_unproven_or_changed_evidence,
     repeated_observation_failure_holds_after_one_retry,
     refreshed_preparation_retry_admits_unchanged_and_refuses_drift,
     changed_base_gets_fresh_native_validation,
@@ -1067,6 +1070,7 @@ crate::scenario_table!(
 
 crate::scenario_table!(
     published_completion_scenarios_prerequisites,
+    managed_rebase_required_check_outage_retries_completion,
     later_prerequisite_read_failure_resumes_only_completion,
     prerequisite_read_after_mutation_provenance_never_resumes,
     transient_required_check_and_merge_capability_reads_resume_completion,
