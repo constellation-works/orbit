@@ -494,6 +494,93 @@ fn an_already_landed_hold_is_a_holding_finding() {
     assert!(audit["assessment"]["already_landed"].is_null(), "{audit}");
 }
 
+/// [ORB-28832] A prior assessment's verified evidence drop already narrowed
+/// the stored footprint, so a re-check must not replay it as a new drop:
+/// the verdict-only result applies, the original receipt keeps the verified
+/// record, and a fresh invalid drop is still rejected.
+fn a_recheck_does_not_replay_a_prior_evidence_drop() {
+    use orbit_core::application::task::TaskAddParams;
+
+    let workspace = Workspace::new();
+    workspace.commit_file("guide.md", "fixture guide\n", "add guide");
+    let task = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "evidence drop recheck".into(),
+            description: "Update the fixture readme.".into(),
+            acceptance_criteria: vec!["The readme names the fixture.".into()],
+            plan: "Inspect README.md.".into(),
+            status: Some(TaskStatus::Proposed),
+            tags: vec!["code-review".into()],
+            context_files: vec!["file:README.md".into(), "file:guide.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    // The first assessment keeps the edit target and drops verified
+    // read-only evidence with an explicit inspection reason.
+    let prepared = workspace.prepare_with(&task.id, json!({}));
+    let drop = json!([{"selector": "file:guide.md", "reason": "Verified guide.md is read-only evidence; the fix lands in README.md."}]);
+    let mut first = assessment(&task.id);
+    first["context_evidence_dropped"] = drop.clone();
+    let applied = workspace.apply_tasks(&prepared, vec![first]);
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().context_files,
+        ["file:README.md"]
+    );
+    let (_, first_audit) = workspace.latest_receipt(&task.id);
+    assert_eq!(
+        first_audit["assessment"]["context_evidence_dropped"], drop,
+        "the original receipt keeps the verified drop record"
+    );
+
+    // An authorized edit within the bounded scope makes the task re-checkable.
+    workspace.update(
+        &task.id,
+        TaskUpdateParams {
+            acceptance_criteria: Some(vec![
+                "The readme names the fixture.".into(),
+                "The readme links the guide.".into(),
+            ]),
+            ..Default::default()
+        },
+    );
+    let prepared = workspace.prepare_with(&task.id, json!({}));
+    assert_eq!(prepared["tasks"][0]["pilot_mode"], "recheck", "{prepared}");
+
+    // A fresh drop naming a proposed change target is still rejected.
+    let mut invalid = recheck_result(&task.id, "still_holds");
+    invalid["context_evidence_dropped"] =
+        json!([{"selector": "file:README.md", "reason": "Attempt to drop the edit target."}]);
+    let refused = workspace.apply_tasks(&prepared, vec![invalid]);
+    assert_eq!(refused["applied_count"], 0, "{refused}");
+    assert_eq!(refused["repair_count"], 1, "{refused}");
+
+    // The verdict-only re-check applies without replaying the prior drop.
+    let applied = workspace.apply_tasks(&prepared, vec![recheck_result(&task.id, "still_holds")]);
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    let (_, audit) = workspace.latest_receipt(&task.id);
+    assert_eq!(audit["assessment"]["mode"], "recheck", "{audit}");
+    assert!(
+        audit["assessment"]
+            .get("context_evidence_dropped")
+            .is_none(),
+        "a re-check proposes only fresh drops: {audit}"
+    );
+    assert!(
+        !audit["assessment"]["recheck_kept_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("context_evidence_dropped")),
+        "{audit}"
+    );
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().context_files,
+        ["file:README.md"]
+    );
+}
+
 crate::scenario_table!(
     recheck_scenarios,
     an_already_landed_hold_is_a_holding_finding,
@@ -501,5 +588,6 @@ crate::scenario_table!(
     a_recheck_keeps_untouched_fields_and_records_its_verdicts,
     a_recheck_without_a_verdict_per_holding_finding_is_sent_to_repair,
     a_recheck_is_held_to_the_same_revision_proof,
+    a_recheck_does_not_replay_a_prior_evidence_drop,
     each_fallback_runs_a_full_pilot_and_records_why
 );

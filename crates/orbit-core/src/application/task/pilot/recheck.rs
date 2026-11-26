@@ -37,7 +37,10 @@ use serde_json::{Map, Value, json};
 
 use super::admission::OPERATOR_TOOL_CLASSIFICATIONS;
 use super::promotion::{WARNING_FIELDS, finding_holds_promotion, warning_text};
-use super::{CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, VALIDATION_TOOL_WARNINGS};
+use super::{
+    CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_DROPPED, CONTEXT_EVIDENCE_RETAINED,
+    VALIDATION_TOOL_WARNINGS,
+};
 use crate::OrbitRuntime;
 
 /// Prepared-snapshot fields: the mode prepare chose, why a full pilot was
@@ -81,7 +84,13 @@ const VERDICTS: [&str; 3] = ["resolved", "still_holds", "changed"];
 /// an edited criterion that now requires invoking the tool. The pilot
 /// must re-classify every current mention; a mention it leaves
 /// unclassified fails safe to an operator hold.
-const HOST_FIELDS: [&str; 15] = [
+/// `context_evidence_dropped` is here too: a prior drop already narrowed
+/// the stored footprint, so replaying it names a selector that is no
+/// longer an omitted, resolving review evidence selector. The prior
+/// receipt keeps the verified record; a re-check proposes only fresh
+/// drops, which apply validates against the currently prepared
+/// footprint.
+const HOST_FIELDS: [&str; 16] = [
     "task_id",
     "context_files_before",
     VALIDATION_TOOL_WARNINGS,
@@ -91,6 +100,7 @@ const HOST_FIELDS: [&str; 15] = [
     CONTEXT_CREATION_RETAINED,
     "context_reauthorization_required",
     CONTEXT_EVIDENCE_RETAINED,
+    CONTEXT_EVIDENCE_DROPPED,
     "explore_brief",
     OPERATOR_TOOL_CLASSIFICATIONS,
     MODE,
