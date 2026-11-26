@@ -4,16 +4,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The task outcome reason apply and prepare record for a task the branch
+/// made stale under its claim; the member settles superseded, not failed.
+pub(in crate::application) const SUPERSEDED_BY_SOURCE: &str = "superseded_by_source";
+
 /// The atomic pilot reservation decision, or an acquisition refusal before
 /// the reservation operation ran. Operation errors remain errors.
 pub(crate) enum PilotTaskReservation {
     Reserved(BTreeMap<String, BTreeSet<String>>),
     Deferred { reason: String },
 }
-
-/// The task outcome reason apply and prepare record for a task the branch
-/// made stale under its claim; the member settles superseded, not failed.
-pub(in crate::application) const SUPERSEDED_BY_SOURCE: &str = "superseded_by_source";
 
 /// Both task-pilot hashes and the per-field digests behind a `material_changed`
 /// refusal, from one instruction and dependency read. The hashes differ only

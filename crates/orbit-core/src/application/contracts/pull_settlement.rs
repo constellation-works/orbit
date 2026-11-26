@@ -4,6 +4,13 @@
 
 use serde::Serialize;
 
+/// What an operator does about a settlement the owner keeps refusing.
+pub(in crate::application) const SETTLEMENT_REFUSAL_REMEDY: &str = "the owner refuses this recorded outcome while it \
+     holds the claim; fix the condition its reason names on the owner. Automatic passes \
+     retry with backoff, at most every 15 minutes, and settle it once the owner accepts; \
+     `orbit run auto --stop` retries it at once. Recovering the claim on the owner's \
+     dashboard closes it instead";
+
 /// Result of a settle-only pass for one admission.
 ///
 /// Serialized as the existing snake_case response tokens. Unknown response
@@ -158,10 +165,3 @@ fn outcome_guidance(outcome: PullSettlementOutcome) -> Option<&'static str> {
         | PullSettlementOutcome::Refused => None,
     }
 }
-
-/// What an operator does about a settlement the owner keeps refusing.
-pub(in crate::application) const SETTLEMENT_REFUSAL_REMEDY: &str = "the owner refuses this recorded outcome while it \
-     holds the claim; fix the condition its reason names on the owner. Automatic passes \
-     retry with backoff, at most every 15 minutes, and settle it once the owner accepts; \
-     `orbit run auto --stop` retries it at once. Recovering the claim on the owner's \
-     dashboard closes it instead";

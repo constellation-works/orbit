@@ -68,11 +68,104 @@ pub(super) const REVIEW_TERM_UNITS: &[(&str, &str)] = &[
     ("reviewer_repairs", "reviewed deliveries"),
 ];
 
+/// The scored escaped-regression term, also read by the diff context.
+pub(super) const ESCAPED_REGRESSIONS: &str = "escaped_regressions";
+
+/// Minimum fleet row-task observations before a tier supplies reference evidence.
+pub(super) const MIN_TIER_TASKS: usize = 30;
+
+pub(super) type Key = ModelEffortKey;
+
+/// One implemented task's expected count per scored term, as its row's
+/// expectation sums them: tier rates for every term but escaped
+/// regressions, which take the size-adjusted expectation. A review term's
+/// expectation is zero for a task without a review of the row's candidate.
+pub(super) struct TaskExpectation<'a> {
+    pub(super) task: &'a TaskFacts,
+    pub(super) reviewed: bool,
+    pub(super) expected: BTreeMap<&'static str, f64>,
+}
+
+/// The implementer rows and, per row in the same order, each task's
+/// expectations: the scorecard reads the rows, the model ranking the tasks.
+pub(super) struct Evaluated<'a> {
+    pub(super) rows: Vec<RowInput<'a>>,
+    pub(super) tasks: Vec<Vec<TaskExpectation<'a>>>,
+}
+
+/// The location evidence retained by a regression site or review citation.
+struct DefectLocation<'a> {
+    path: &'a str,
+    scope: DefectScope<'a>,
+}
+
+impl<'a> DefectLocation<'a> {
+    fn parse(value: &'a str) -> Option<Self> {
+        let (path, scope) = if let Some(symbol) = value.strip_prefix("symbol:") {
+            let (path, identity) = symbol.split_once('#')?;
+            let (name, kind) = identity.rsplit_once(':')?;
+            if name.is_empty() || kind.is_empty() {
+                return None;
+            }
+            (path, DefectScope::Symbol(identity))
+        } else if let Some(path) = value.strip_prefix("dir:") {
+            (path.trim_end_matches('/'), DefectScope::Directory)
+        } else {
+            let path = selector_path(value)?;
+            if let Some((path, lines)) = path.rsplit_once(':') {
+                let (start, end) = lines.split_once('-').unwrap_or((lines, lines));
+                let (start, end) = (start.parse::<u32>().ok()?, end.parse::<u32>().ok()?);
+                if start == 0 || end < start {
+                    return None;
+                }
+                (path, DefectScope::Lines(start, end))
+            } else {
+                (path, DefectScope::File)
+            }
+        };
+        (!path.is_empty()).then_some(Self { path, scope })
+    }
+
+    /// A coarse site intentionally covers its file/directory. Precise sites
+    /// require comparable evidence; file equality cannot map a symbol to lines.
+    fn covers_citation(&self, cited: &Self) -> bool {
+        if matches!(self.scope, DefectScope::Directory) {
+            return self.path == cited.path
+                || (self.path == "." && !cited.path.starts_with('/'))
+                || cited
+                    .path
+                    .strip_prefix(self.path)
+                    .is_some_and(|rest| rest.starts_with('/'));
+        }
+        self.path == cited.path
+            && match (&self.scope, &cited.scope) {
+                (DefectScope::File, _) => true,
+                (DefectScope::Symbol(site), DefectScope::Symbol(cited)) => site == cited,
+                (DefectScope::Lines(start, end), DefectScope::Lines(other_start, other_end)) => {
+                    start <= other_end && other_start <= end
+                }
+                _ => false,
+            }
+    }
+}
+
+enum DefectScope<'a> {
+    File,
+    Directory,
+    Symbol(&'a str),
+    Lines(u32, u32),
+}
+
+#[derive(Default)]
+pub(super) struct Fleet {
+    pub(super) units: usize,
+    pub(super) reviewed_units: usize,
+    pub(super) counts: BTreeMap<&'static str, f64>,
+}
+
 pub(super) fn is_implementer_review_term(key: &str) -> bool {
     REVIEW_TERM_UNITS.iter().any(|(term, _)| *term == key)
 }
-
-pub(super) type Key = ModelEffortKey;
 
 /// An attempt's row: its model and the recorded effort of its run's main
 /// implementing invocation for `task`.
@@ -191,23 +284,6 @@ pub(super) fn implementer_rows(
     execution: ExecutionScope,
 ) -> Vec<RowInput<'_>> {
     evaluate_implementers(facts, window, execution).rows
-}
-
-/// One implemented task's expected count per scored term, as its row's
-/// expectation sums them: tier rates for every term but escaped
-/// regressions, which take the size-adjusted expectation. A review term's
-/// expectation is zero for a task without a review of the row's candidate.
-pub(super) struct TaskExpectation<'a> {
-    pub(super) task: &'a TaskFacts,
-    pub(super) reviewed: bool,
-    pub(super) expected: BTreeMap<&'static str, f64>,
-}
-
-/// The implementer rows and, per row in the same order, each task's
-/// expectations: the scorecard reads the rows, the model ranking the tasks.
-pub(super) struct Evaluated<'a> {
-    pub(super) rows: Vec<RowInput<'a>>,
-    pub(super) tasks: Vec<Vec<TaskExpectation<'a>>>,
 }
 
 pub(super) fn evaluate_implementers(
@@ -443,69 +519,6 @@ pub(super) fn first_implementer_review<'a>(
     })
 }
 
-/// The location evidence retained by a regression site or review citation.
-struct DefectLocation<'a> {
-    path: &'a str,
-    scope: DefectScope<'a>,
-}
-
-enum DefectScope<'a> {
-    File,
-    Directory,
-    Symbol(&'a str),
-    Lines(u32, u32),
-}
-
-impl<'a> DefectLocation<'a> {
-    fn parse(value: &'a str) -> Option<Self> {
-        let (path, scope) = if let Some(symbol) = value.strip_prefix("symbol:") {
-            let (path, identity) = symbol.split_once('#')?;
-            let (name, kind) = identity.rsplit_once(':')?;
-            if name.is_empty() || kind.is_empty() {
-                return None;
-            }
-            (path, DefectScope::Symbol(identity))
-        } else if let Some(path) = value.strip_prefix("dir:") {
-            (path.trim_end_matches('/'), DefectScope::Directory)
-        } else {
-            let path = selector_path(value)?;
-            if let Some((path, lines)) = path.rsplit_once(':') {
-                let (start, end) = lines.split_once('-').unwrap_or((lines, lines));
-                let (start, end) = (start.parse::<u32>().ok()?, end.parse::<u32>().ok()?);
-                if start == 0 || end < start {
-                    return None;
-                }
-                (path, DefectScope::Lines(start, end))
-            } else {
-                (path, DefectScope::File)
-            }
-        };
-        (!path.is_empty()).then_some(Self { path, scope })
-    }
-
-    /// A coarse site intentionally covers its file/directory. Precise sites
-    /// require comparable evidence; file equality cannot map a symbol to lines.
-    fn covers_citation(&self, cited: &Self) -> bool {
-        if matches!(self.scope, DefectScope::Directory) {
-            return self.path == cited.path
-                || (self.path == "." && !cited.path.starts_with('/'))
-                || cited
-                    .path
-                    .strip_prefix(self.path)
-                    .is_some_and(|rest| rest.starts_with('/'));
-        }
-        self.path == cited.path
-            && match (&self.scope, &cited.scope) {
-                (DefectScope::File, _) => true,
-                (DefectScope::Symbol(site), DefectScope::Symbol(cited)) => site == cited,
-                (DefectScope::Lines(start, end), DefectScope::Lines(other_start, other_end)) => {
-                    start <= other_end && other_start <= end
-                }
-                _ => false,
-            }
-    }
-}
-
 /// Whether a pre-landing review already charged the row for the defect a
 /// regression link names: a `reject` or `accept_with_fixes` on the row's
 /// candidate with a finding that cites or changed one of the link's sites.
@@ -542,19 +555,6 @@ fn charged_by_pre_landing_review(
         .flat_map(|finding| &finding.paths)
         .filter_map(|cited| DefectLocation::parse(cited))
         .any(|cited| sites.iter().any(|site| site.covers_citation(&cited)))
-}
-
-/// The scored escaped-regression term, also read by the diff context.
-pub(super) const ESCAPED_REGRESSIONS: &str = "escaped_regressions";
-
-/// Minimum fleet row-task observations before a tier supplies reference evidence.
-pub(super) const MIN_TIER_TASKS: usize = 30;
-
-#[derive(Default)]
-pub(super) struct Fleet {
-    pub(super) units: usize,
-    pub(super) reviewed_units: usize,
-    pub(super) counts: BTreeMap<&'static str, f64>,
 }
 
 /// The scored term tallies of one row (or one cell's task subset).
@@ -713,44 +713,42 @@ fn row_input<'a>(
         })
     };
     let median = statistics::median(&mut durations);
-    RowInput {
-        escaped_regressions_fallback: None,
-        denominators: REVIEW_TERM_UNITS
-            .iter()
-            .map(|(key, _)| {
-                (
-                    *key,
-                    Denominator {
-                        units: reviewed_units,
-                        // Zero reviews is unmeasured, not a provisional estimate or
-                        // a measured zero. Fewer than the minimum support is
-                        // provisional: rated and shown, left out of the raw score.
-                        min_support: if reviewed_units > 0 {
-                            REVIEW_MIN_SUPPORT
-                        } else {
-                            0
-                        },
+    let denominators = REVIEW_TERM_UNITS
+        .iter()
+        .map(|(key, _)| {
+            (
+                *key,
+                Denominator {
+                    units: reviewed_units,
+                    // Zero reviews is unmeasured, not a provisional estimate or
+                    // a measured zero. Fewer than the minimum support is
+                    // provisional: rated and shown, left out of the raw score.
+                    min_support: if reviewed_units > 0 {
+                        REVIEW_MIN_SUPPORT
+                    } else {
+                        0
                     },
-                )
-            })
-            .collect(),
-        reviewed_units: Some(reviewed_units),
-        unjudged: false,
-        sample_units: Vec::new(),
-        exposure_units: Vec::new(),
-        crew: crews_of(facts, window, &row, tasks)
-            .first()
-            .cloned()
-            .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
-        crews: crews_of(facts, window, &row, tasks),
-        effort_sources: effort_sources_of(facts, window, &row, tasks),
+                },
+            )
+        })
+        .collect();
+    let crew = crews_of(facts, window, &row, tasks)
+        .first()
+        .cloned()
+        .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string());
+    let crews = crews_of(facts, window, &row, tasks);
+    let effort_sources = effort_sources_of(facts, window, &row, tasks);
+
+    RowInput {
+        crew,
+        crews,
         model: row.0,
         effort: row.1,
         units: tasks.len(),
+        effort_sources,
         runs_without_model,
         provisional: None,
         tallies,
-        expected: None,
         stats: vec![
             stat(
                 "cost_per_weighted_landed",
@@ -803,6 +801,13 @@ fn row_input<'a>(
                 ),
             ),
         ],
+        escaped_regressions_fallback: None,
+        expected: None,
+        denominators,
+        sample_units: Vec::new(),
+        exposure_units: Vec::new(),
+        reviewed_units: Some(reviewed_units),
+        unjudged: false,
     }
 }
 

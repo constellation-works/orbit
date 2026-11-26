@@ -8,6 +8,29 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::runtime::{CONFIG_TOML_FILE, OrbitRuntime, existing_config_file_path};
 
+/// One physical `config.toml` layer: the path a caller sees and whether a
+/// regular file is there.
+///
+/// Existence is probed through the runtime's validated config-root boundary
+/// rather than a bare `Path::exists` on the joined path, so a root selected by
+/// `?workspace=` never reaches a filesystem probe unvalidated (CodeQL
+/// `rust/path-injection`). The displayed path stays the caller's spelling of
+/// the root, not the canonical one, so it matches what `orbit config path`
+/// prints.
+pub(super) struct ConfigLayerFile {
+    pub(super) path: PathBuf,
+    pub(super) exists: bool,
+}
+
+impl ConfigLayerFile {
+    pub(super) fn json(&self) -> JsonValue {
+        json!({
+            "path": path_cell(&self.path),
+            "exists": self.exists,
+        })
+    }
+}
+
 /// The resolved roots and store locations `orbit config show` prints under
 /// `Paths`, as `(label, value)` rows in rendering order.
 ///
@@ -131,29 +154,6 @@ pub(super) fn global_config_path(runtime: &OrbitRuntime) -> PathBuf {
 
 pub(super) fn workspace_config_path(runtime: &OrbitRuntime) -> PathBuf {
     runtime.shared_root().join(CONFIG_TOML_FILE)
-}
-
-/// One physical `config.toml` layer: the path a caller sees and whether a
-/// regular file is there.
-///
-/// Existence is probed through the runtime's validated config-root boundary
-/// rather than a bare `Path::exists` on the joined path, so a root selected by
-/// `?workspace=` never reaches a filesystem probe unvalidated (CodeQL
-/// `rust/path-injection`). The displayed path stays the caller's spelling of
-/// the root, not the canonical one, so it matches what `orbit config path`
-/// prints.
-pub(super) struct ConfigLayerFile {
-    pub(super) path: PathBuf,
-    pub(super) exists: bool,
-}
-
-impl ConfigLayerFile {
-    pub(super) fn json(&self) -> JsonValue {
-        json!({
-            "path": path_cell(&self.path),
-            "exists": self.exists,
-        })
-    }
 }
 
 pub(super) fn config_layer_file(root: &Path) -> Result<ConfigLayerFile, OrbitError> {

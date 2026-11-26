@@ -25,6 +25,33 @@ pub(super) struct Scales {
     source: &'static str,
 }
 
+impl OrbitRuntime {
+    /// Scan, then rank implementer models for `query` with the workspace's
+    /// current season, with a cache period of zero.
+    pub fn agent_rank(&self, query: &RankQuery) -> Result<Value, OrbitError> {
+        let seasons = self.agent_rank_seasons()?;
+        Ok(agent_rank(
+            &self.agent_scan()?,
+            query,
+            &seasons,
+            Duration::ZERO,
+        ))
+    }
+
+    /// Calibrate a new season's noise scales on the settled window of
+    /// `query` and store it after the seasons on file. Returns the season.
+    pub fn agent_rank_calibrate(&self, query: &RankQuery) -> Result<Value, OrbitError> {
+        let seasons =
+            agent_rank_calibration(&self.agent_scan()?, query, &self.agent_rank_seasons()?)?;
+        self.write_agent_rank_seasons(&seasons)?;
+        Ok(json!({
+            "season": seasons.newest().map(Season::json),
+            "seasons_on_file": seasons.len(),
+            "definition": DEFINITION_VERSION,
+        }))
+    }
+}
+
 /// The reference sample size: the median eligible model's tasks, or the
 /// median model's when none is eligible yet.
 fn reference_size(rows: &[ModelRow]) -> usize {
@@ -200,31 +227,4 @@ pub(crate) fn agent_rank_calibration(
         execution.as_str(),
     ));
     Ok(seasons)
-}
-
-impl OrbitRuntime {
-    /// Scan, then rank implementer models for `query` with the workspace's
-    /// current season, with a cache period of zero.
-    pub fn agent_rank(&self, query: &RankQuery) -> Result<Value, OrbitError> {
-        let seasons = self.agent_rank_seasons()?;
-        Ok(agent_rank(
-            &self.agent_scan()?,
-            query,
-            &seasons,
-            Duration::ZERO,
-        ))
-    }
-
-    /// Calibrate a new season's noise scales on the settled window of
-    /// `query` and store it after the seasons on file. Returns the season.
-    pub fn agent_rank_calibrate(&self, query: &RankQuery) -> Result<Value, OrbitError> {
-        let seasons =
-            agent_rank_calibration(&self.agent_scan()?, query, &self.agent_rank_seasons()?)?;
-        self.write_agent_rank_seasons(&seasons)?;
-        Ok(json!({
-            "season": seasons.newest().map(Season::json),
-            "seasons_on_file": seasons.len(),
-            "definition": DEFINITION_VERSION,
-        }))
-    }
 }

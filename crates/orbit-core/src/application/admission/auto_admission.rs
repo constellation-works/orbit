@@ -344,20 +344,20 @@ impl AdmissionHolders {
     }
 }
 
-fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<String>> {
-    let mut index = OverlapIndex::new();
-    for (selector, task_ids) in holders {
-        index.insert(selector, task_ids.clone());
-    }
-    index
-}
-
 /// The borrowed lock-resolution inputs one admission wave reads: where the
 /// workspace lives, which paths count as unlocked, and the pre-wave holders.
 pub(crate) struct SelectionContext<'a> {
     pub(crate) workspace_root: &'a Path,
     pub(crate) unlocked: &'a UnlockedContextPaths,
     pub(crate) holders: &'a AdmissionHolders,
+}
+
+fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<String>> {
+    let mut index = OverlapIndex::new();
+    for (selector, task_ids) in holders {
+        index.insert(selector, task_ids.clone());
+    }
+    index
 }
 
 /// Fill the free slots with a pairwise non-conflicting set, preserving the

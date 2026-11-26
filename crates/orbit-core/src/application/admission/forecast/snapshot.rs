@@ -16,17 +16,6 @@ use crate::runtime::stored::locks::{
 use super::model::ForecastAdmission;
 use super::task_set::ForecastTaskSet;
 
-/// FNV-1a over the canonical selectors: a stable footprint digest for
-/// stored per-task predictions.
-fn surface_digest(selectors: &[String]) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in selectors.join("\n").bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{hash:016x}")
-}
-
 impl OrbitRuntime {
     /// Freeze the admission inputs for `tasks` (the forecast's initial and
     /// proposed tasks) at `now`. `workspace` is every workspace task, for
@@ -173,25 +162,30 @@ impl OrbitRuntime {
                 no_footprint_set.insert(index);
             }
         }
+        let lookup = tasks
+            .iter()
+            .map(|task| (task.id.clone(), task.clone()))
+            .collect();
+        let edits = surfaces
+            .iter()
+            .map(|selectors| !selectors.is_empty())
+            .collect();
+        let reserves = tasks.iter().map(reserves_surface).collect();
+
         ForecastAdmission {
-            exclusive_waits,
-            no_footprint_set,
-            lookup: tasks
-                .iter()
-                .map(|task| (task.id.clone(), task.clone()))
-                .collect(),
+            tasks,
+            lookup,
             order,
             held,
             surface,
-            edits: surfaces
-                .iter()
-                .map(|selectors| !selectors.is_empty())
-                .collect(),
+            edits,
             no_footprint,
             footprint_deadline,
-            roots: root_ids.len(),
+            exclusive_waits,
+            no_footprint_set,
             root,
-            reserves: tasks.iter().map(reserves_surface).collect(),
+            roots: root_ids.len(),
+            reserves,
             expiring,
             forecast_at: now,
             surface_hash: surfaces
@@ -200,7 +194,17 @@ impl OrbitRuntime {
                 .collect(),
             review_lock_overlaps,
             resource_fit: None,
-            tasks,
         }
     }
+}
+
+/// FNV-1a over the canonical selectors: a stable footprint digest for
+/// stored per-task predictions.
+fn surface_digest(selectors: &[String]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in selectors.join("\n").bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }

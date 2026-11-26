@@ -30,6 +30,9 @@ use super::model::{
 };
 use super::{metrics, stats, verdict};
 
+/// The label of the per-protocol view.
+const PER_PROTOCOL_LABEL: &str = "per-protocol (delivered runs only)";
+
 /// The dreaming cost a readout added, and where.
 struct DreamingAttribution {
     arms: BTreeSet<String>,
@@ -38,12 +41,273 @@ struct DreamingAttribution {
     summary: DreamingOverhead,
 }
 
-/// The label of the per-protocol view.
-const PER_PROTOCOL_LABEL: &str = "per-protocol (delivered runs only)";
-
 struct TreatmentRequirements {
     roles: BTreeSet<TagInstructionRole>,
     crew: bool,
+}
+
+impl OrbitRuntime {
+    /// The readout of the experiment whose id, or else whose name, is
+    /// `id_or_name`; `metric` narrows the metric list to one.
+    pub fn experiment_readout(
+        &self,
+        id_or_name: &str,
+        metric: Option<&str>,
+    ) -> Result<ExperimentReadout, OrbitError> {
+        if let Some(metric) = metric {
+            validate_metric("metric", metric)?;
+        }
+        let workspace = self.workspace_id()?;
+        let store = self.sqlite_store()?;
+        let snapshot = store.read()?;
+        let record = snapshot
+            .experiment()
+            .get(&workspace, id_or_name)?
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!("no experiment `{id_or_name}` in this workspace"))
+            })?;
+        let rows = snapshot
+            .experiment_assignment()
+            .list_for_experiment(&workspace, &record.experiment.id)?;
+        drop(snapshot);
+        let now = Utc::now();
+        let enrolled: Vec<_> = rows
+            .iter()
+            .filter(|row| row.arm.is_some() && !row.forced)
+            .collect();
+        let mut observed = self.experiment_outcomes(
+            &record.experiment.id,
+            record.experiment.created_at,
+            &enrolled,
+            now,
+            record.experiment.mode == "shadow",
+        )?;
+        let dreaming = self.attribute_dreaming_cost(&record, &mut observed.tasks, now)?;
+        let excluded = |reason: &str| {
+            rows.iter()
+                .filter(|row| row.arm.is_none() && row.exclusion_reason.as_deref() == Some(reason))
+                .count()
+        };
+        let enrollment = ReadoutEnrollment {
+            analysed: observed.tasks.len(),
+            forced_excluded: rows.iter().filter(|row| row.forced).count(),
+            surface_conflict_excluded: excluded(SURFACE_CONFLICT_EXCLUSION),
+            explicit_crew_excluded: excluded(EXPLICIT_CREW_EXCLUSION),
+            interactive_excluded: observed.interactive_excluded,
+            unreadable: enrolled.len() - observed.tasks.len() - observed.interactive_excluded,
+        };
+        let min_delivered_rate = super::super::EXPERIMENTS_MIN_DELIVERED_RATE;
+        let mut readout = build_readout(
+            &record,
+            enrollment,
+            &observed,
+            metric,
+            min_delivered_rate,
+            now,
+        )?;
+        let facts = self
+            .stores()
+            .host_store()
+            .read()?
+            .invocation()
+            .list_accounting_facts(&orbit_store::contract::InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
+                since: Some(record.experiment.created_at),
+                until: now,
+            })?;
+        if let Some(overhead) = &dreaming {
+            for arm in readout
+                .arms
+                .iter_mut()
+                .filter(|arm| overhead.arms.contains(&arm.name))
+            {
+                arm.dreaming_overhead = Some(DreamingOverhead {
+                    spread_over: observed
+                        .tasks
+                        .iter()
+                        .filter(|task| {
+                            task.arm == arm.name && overhead.measured.contains(&task.task_id)
+                        })
+                        .count(),
+                    ..overhead.summary.clone()
+                });
+            }
+            if overhead.summary.cost_usd > 0.0 && overhead.summary.per_task_usd.is_none() {
+                readout.warnings.push(ReadoutWarning {
+                    kind: "dreaming_cost_unattributed",
+                    message: format!(
+                        "crew memory dreaming cost ${:.4} could not be added to the memory arm's cost_usd yet: none of its tasks has a measured cost",
+                        overhead.summary.cost_usd
+                    ),
+                });
+            }
+            if overhead.summary.unpriced_tasks > 0 {
+                readout.warnings.push(ReadoutWarning {
+                    kind: "dreaming_cost_unpriced",
+                    message: format!(
+                        "{} crew memory dreaming task(s) have an unpriced invocation, so the dreaming cost added to the memory arm's cost_usd is a lower bound",
+                        overhead.summary.unpriced_tasks
+                    ),
+                });
+            }
+        }
+        for arm in &mut readout.arms {
+            let assigned = observed
+                .tasks
+                .iter()
+                .filter(|task| task.arm == arm.name)
+                .map(|task| (task.task_id.as_str(), task.assigned_at))
+                .collect::<BTreeMap<_, _>>();
+            arm.effort_breakdown =
+                orbit_runtime::engine::agent_effort_usage(facts.iter().filter(|fact| {
+                    fact.task_ids.iter().any(|id| {
+                        assigned
+                            .get(id.as_str())
+                            .is_some_and(|assigned_at| fact.ts >= *assigned_at)
+                    })
+                }));
+        }
+        readout
+            .warnings
+            .extend(self.crew_pool_mismatches(&record, &observed.tasks)?);
+        Ok(readout)
+    }
+
+    /// Add the crew memory dreaming cost (design §6.4) to the memory arms'
+    /// `cost_usd`: every task tagged `crew-memory-dream` created between the
+    /// experiment's start and its end (or now), its complete cost spread
+    /// evenly over the memory arms' tasks with a measured cost. `None` for an
+    /// experiment without a memory arm, which carries no dreaming cost.
+    fn attribute_dreaming_cost(
+        &self,
+        record: &ExperimentRecord,
+        tasks: &mut [TaskOutcome],
+        now: DateTime<Utc>,
+    ) -> Result<Option<DreamingAttribution>, OrbitError> {
+        let arms = memory_arm_names(record)?;
+        if arms.is_empty() {
+            return Ok(None);
+        }
+        let started = record
+            .events
+            .iter()
+            .find(|event| event.kind == "started")
+            .map_or(record.experiment.created_at, |event| event.at);
+        let ended = record
+            .events
+            .iter()
+            .rev()
+            .find(|event| matches!(event.kind.as_str(), "concluded" | "abandoned"))
+            .map_or(now, |event| event.at);
+        let ids: BTreeSet<String> = self
+            .list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?
+            .into_iter()
+            .filter(|task| task.created_at >= started && task.created_at < ended)
+            .map(|task| task.id)
+            .collect();
+        let (cost_usd, unpriced_tasks) = self.dreaming_spend(&ids, started)?;
+        let measured: BTreeSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                arms.contains(&task.arm)
+                    && matches!(task.values.get("cost_usd"), Some(Outcome::Value(_)))
+            })
+            .map(|task| task.task_id.clone())
+            .collect();
+        let per_task_usd = (!measured.is_empty()).then(|| cost_usd / measured.len() as f64);
+        if let Some(share) = per_task_usd {
+            for task in tasks
+                .iter_mut()
+                .filter(|task| measured.contains(&task.task_id))
+            {
+                if let Some(Outcome::Value(cost)) = task.values.get_mut("cost_usd") {
+                    *cost += share;
+                }
+            }
+        }
+        Ok(Some(DreamingAttribution {
+            arms,
+            measured,
+            summary: DreamingOverhead {
+                dreaming_tasks: ids.len(),
+                unpriced_tasks,
+                cost_usd,
+                spread_over: 0,
+                per_task_usd,
+            },
+        }))
+    }
+
+    /// One `crew_mismatch` warning per analysed task whose crew is outside
+    /// its arm's crew pool, for an experiment whose arms overlay the crew
+    /// surface. An arm without a crew overlay, such as control, is checked
+    /// against the pool recorded at admission for the task's delivery
+    /// [ORB-19487], not today's workspace pool or the task's current tier:
+    /// later pool, override or complexity changes neither invent nor erase
+    /// a historical mismatch. When no admission pool was recorded, the
+    /// task is reported `crew_mismatch_unavailable` instead.
+    fn crew_pool_mismatches(
+        &self,
+        record: &ExperimentRecord,
+        tasks: &[TaskOutcome],
+    ) -> Result<Vec<ReadoutWarning>, OrbitError> {
+        let mut arm_pools: BTreeMap<&str, Option<BTreeSet<String>>> = BTreeMap::new();
+        for arm in &record.arms {
+            let overlay = ExperimentOverlay::parse(
+                &arm.name,
+                serde_json::from_str(&arm.overlay_json).map_err(|error| {
+                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
+                })?,
+            )?;
+            arm_pools.insert(
+                arm.name.as_str(),
+                overlay
+                    .crew
+                    .map(|crew| crew.pool.into_iter().map(|member| member.crew).collect()),
+            );
+        }
+        if arm_pools.values().all(Option::is_none) {
+            return Ok(Vec::new());
+        }
+        let mut warnings = Vec::new();
+        for task in tasks {
+            let (pool, which) = match arm_pools.get(task.arm.as_str()) {
+                Some(Some(pool)) => (pool.clone(), "crew pool".to_string()),
+                _ => {
+                    let Some(pool) = &task.admitted_pool else {
+                        warnings.push(ReadoutWarning {
+                            kind: "crew_mismatch_unavailable",
+                            message: format!(
+                                "task {} in arm `{}` ran crew `{}`, but the recorded admission pool for its delivery is unavailable, so a crew mismatch cannot be confirmed",
+                                task.task_id, task.arm, task.crew
+                            ),
+                        });
+                        continue;
+                    };
+                    (
+                        pool.clone(),
+                        task.admitted_pool_label
+                            .clone()
+                            .unwrap_or_else(|| "recorded admission pool".to_string()),
+                    )
+                }
+            };
+            if pool.contains(&task.crew) {
+                continue;
+            }
+            warnings.push(ReadoutWarning {
+                kind: "crew_mismatch",
+                message: format!(
+                    "task {} in arm `{}` ran crew `{}`, outside the arm's {which} ({})",
+                    task.task_id,
+                    task.arm,
+                    task.crew,
+                    pool.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+            });
+        }
+        Ok(warnings)
+    }
 }
 
 /// Each non-control arm's dispatch roles, from its overlay definition: the
@@ -459,12 +723,11 @@ fn arm_readout(
     } else {
         Vec::new()
     };
+    let memory_strata = memory_strata(&mine);
+    let task_ids = mine.iter().map(|task| task.task_id.clone()).collect();
+    let drifted = assignment_digests.len() > 1 || run_digests.len() > 1;
+
     ReadoutArm {
-        memory_strata: memory_strata(&mine),
-        memory_captures,
-        memory_capture_strata,
-        task_ids: mine.iter().map(|task| task.task_id.clone()).collect(),
-        dreaming_overhead: None,
         effort_breakdown: Vec::new(),
         name: arm.name.clone(),
         control: arm.control,
@@ -478,10 +741,15 @@ fn arm_readout(
             .map(|(segment, n)| SegmentCount { segment, n })
             .collect(),
         crew_mix,
-        drifted: assignment_digests.len() > 1 || run_digests.len() > 1,
         assignment_digests: assignment_digests.into_iter().collect(),
         run_digests,
+        drifted,
         delivery,
+        memory_strata,
+        dreaming_overhead: None,
+        task_ids,
+        memory_captures,
+        memory_capture_strata,
     }
 }
 
@@ -598,269 +866,5 @@ pub(super) fn sample_ratio(record: &ExperimentRecord, tasks: &[TaskOutcome]) -> 
         alpha: SAMPLE_RATIO_ALPHA,
         mismatch: p_value.is_some_and(|p| p < SAMPLE_RATIO_ALPHA),
         segments,
-    }
-}
-
-impl OrbitRuntime {
-    /// The readout of the experiment whose id, or else whose name, is
-    /// `id_or_name`; `metric` narrows the metric list to one.
-    pub fn experiment_readout(
-        &self,
-        id_or_name: &str,
-        metric: Option<&str>,
-    ) -> Result<ExperimentReadout, OrbitError> {
-        if let Some(metric) = metric {
-            validate_metric("metric", metric)?;
-        }
-        let workspace = self.workspace_id()?;
-        let store = self.sqlite_store()?;
-        let snapshot = store.read()?;
-        let record = snapshot
-            .experiment()
-            .get(&workspace, id_or_name)?
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!("no experiment `{id_or_name}` in this workspace"))
-            })?;
-        let rows = snapshot
-            .experiment_assignment()
-            .list_for_experiment(&workspace, &record.experiment.id)?;
-        drop(snapshot);
-        let now = Utc::now();
-        let enrolled: Vec<_> = rows
-            .iter()
-            .filter(|row| row.arm.is_some() && !row.forced)
-            .collect();
-        let mut observed = self.experiment_outcomes(
-            &record.experiment.id,
-            record.experiment.created_at,
-            &enrolled,
-            now,
-            record.experiment.mode == "shadow",
-        )?;
-        let dreaming = self.attribute_dreaming_cost(&record, &mut observed.tasks, now)?;
-        let excluded = |reason: &str| {
-            rows.iter()
-                .filter(|row| row.arm.is_none() && row.exclusion_reason.as_deref() == Some(reason))
-                .count()
-        };
-        let enrollment = ReadoutEnrollment {
-            analysed: observed.tasks.len(),
-            forced_excluded: rows.iter().filter(|row| row.forced).count(),
-            surface_conflict_excluded: excluded(SURFACE_CONFLICT_EXCLUSION),
-            explicit_crew_excluded: excluded(EXPLICIT_CREW_EXCLUSION),
-            interactive_excluded: observed.interactive_excluded,
-            unreadable: enrolled.len() - observed.tasks.len() - observed.interactive_excluded,
-        };
-        let min_delivered_rate = super::super::EXPERIMENTS_MIN_DELIVERED_RATE;
-        let mut readout = build_readout(
-            &record,
-            enrollment,
-            &observed,
-            metric,
-            min_delivered_rate,
-            now,
-        )?;
-        let facts = self
-            .stores()
-            .host_store()
-            .read()?
-            .invocation()
-            .list_accounting_facts(&orbit_store::contract::InvocationAccountingQuery {
-                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
-                since: Some(record.experiment.created_at),
-                until: now,
-            })?;
-        if let Some(overhead) = &dreaming {
-            for arm in readout
-                .arms
-                .iter_mut()
-                .filter(|arm| overhead.arms.contains(&arm.name))
-            {
-                arm.dreaming_overhead = Some(DreamingOverhead {
-                    spread_over: observed
-                        .tasks
-                        .iter()
-                        .filter(|task| {
-                            task.arm == arm.name && overhead.measured.contains(&task.task_id)
-                        })
-                        .count(),
-                    ..overhead.summary.clone()
-                });
-            }
-            if overhead.summary.cost_usd > 0.0 && overhead.summary.per_task_usd.is_none() {
-                readout.warnings.push(ReadoutWarning {
-                    kind: "dreaming_cost_unattributed",
-                    message: format!(
-                        "crew memory dreaming cost ${:.4} could not be added to the memory arm's cost_usd yet: none of its tasks has a measured cost",
-                        overhead.summary.cost_usd
-                    ),
-                });
-            }
-            if overhead.summary.unpriced_tasks > 0 {
-                readout.warnings.push(ReadoutWarning {
-                    kind: "dreaming_cost_unpriced",
-                    message: format!(
-                        "{} crew memory dreaming task(s) have an unpriced invocation, so the dreaming cost added to the memory arm's cost_usd is a lower bound",
-                        overhead.summary.unpriced_tasks
-                    ),
-                });
-            }
-        }
-        for arm in &mut readout.arms {
-            let assigned = observed
-                .tasks
-                .iter()
-                .filter(|task| task.arm == arm.name)
-                .map(|task| (task.task_id.as_str(), task.assigned_at))
-                .collect::<BTreeMap<_, _>>();
-            arm.effort_breakdown =
-                orbit_runtime::engine::agent_effort_usage(facts.iter().filter(|fact| {
-                    fact.task_ids.iter().any(|id| {
-                        assigned
-                            .get(id.as_str())
-                            .is_some_and(|assigned_at| fact.ts >= *assigned_at)
-                    })
-                }));
-        }
-        readout
-            .warnings
-            .extend(self.crew_pool_mismatches(&record, &observed.tasks)?);
-        Ok(readout)
-    }
-
-    /// Add the crew memory dreaming cost (design §6.4) to the memory arms'
-    /// `cost_usd`: every task tagged `crew-memory-dream` created between the
-    /// experiment's start and its end (or now), its complete cost spread
-    /// evenly over the memory arms' tasks with a measured cost. `None` for an
-    /// experiment without a memory arm, which carries no dreaming cost.
-    fn attribute_dreaming_cost(
-        &self,
-        record: &ExperimentRecord,
-        tasks: &mut [TaskOutcome],
-        now: DateTime<Utc>,
-    ) -> Result<Option<DreamingAttribution>, OrbitError> {
-        let arms = memory_arm_names(record)?;
-        if arms.is_empty() {
-            return Ok(None);
-        }
-        let started = record
-            .events
-            .iter()
-            .find(|event| event.kind == "started")
-            .map_or(record.experiment.created_at, |event| event.at);
-        let ended = record
-            .events
-            .iter()
-            .rev()
-            .find(|event| matches!(event.kind.as_str(), "concluded" | "abandoned"))
-            .map_or(now, |event| event.at);
-        let ids: BTreeSet<String> = self
-            .list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?
-            .into_iter()
-            .filter(|task| task.created_at >= started && task.created_at < ended)
-            .map(|task| task.id)
-            .collect();
-        let (cost_usd, unpriced_tasks) = self.dreaming_spend(&ids, started)?;
-        let measured: BTreeSet<String> = tasks
-            .iter()
-            .filter(|task| {
-                arms.contains(&task.arm)
-                    && matches!(task.values.get("cost_usd"), Some(Outcome::Value(_)))
-            })
-            .map(|task| task.task_id.clone())
-            .collect();
-        let per_task_usd = (!measured.is_empty()).then(|| cost_usd / measured.len() as f64);
-        if let Some(share) = per_task_usd {
-            for task in tasks
-                .iter_mut()
-                .filter(|task| measured.contains(&task.task_id))
-            {
-                if let Some(Outcome::Value(cost)) = task.values.get_mut("cost_usd") {
-                    *cost += share;
-                }
-            }
-        }
-        Ok(Some(DreamingAttribution {
-            arms,
-            measured,
-            summary: DreamingOverhead {
-                dreaming_tasks: ids.len(),
-                unpriced_tasks,
-                cost_usd,
-                spread_over: 0,
-                per_task_usd,
-            },
-        }))
-    }
-
-    /// One `crew_mismatch` warning per analysed task whose crew is outside
-    /// its arm's crew pool, for an experiment whose arms overlay the crew
-    /// surface. An arm without a crew overlay, such as control, is checked
-    /// against the pool recorded at admission for the task's delivery
-    /// [ORB-19487], not today's workspace pool or the task's current tier:
-    /// later pool, override or complexity changes neither invent nor erase
-    /// a historical mismatch. When no admission pool was recorded, the
-    /// task is reported `crew_mismatch_unavailable` instead.
-    fn crew_pool_mismatches(
-        &self,
-        record: &ExperimentRecord,
-        tasks: &[TaskOutcome],
-    ) -> Result<Vec<ReadoutWarning>, OrbitError> {
-        let mut arm_pools: BTreeMap<&str, Option<BTreeSet<String>>> = BTreeMap::new();
-        for arm in &record.arms {
-            let overlay = ExperimentOverlay::parse(
-                &arm.name,
-                serde_json::from_str(&arm.overlay_json).map_err(|error| {
-                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
-                })?,
-            )?;
-            arm_pools.insert(
-                arm.name.as_str(),
-                overlay
-                    .crew
-                    .map(|crew| crew.pool.into_iter().map(|member| member.crew).collect()),
-            );
-        }
-        if arm_pools.values().all(Option::is_none) {
-            return Ok(Vec::new());
-        }
-        let mut warnings = Vec::new();
-        for task in tasks {
-            let (pool, which) = match arm_pools.get(task.arm.as_str()) {
-                Some(Some(pool)) => (pool.clone(), "crew pool".to_string()),
-                _ => {
-                    let Some(pool) = &task.admitted_pool else {
-                        warnings.push(ReadoutWarning {
-                            kind: "crew_mismatch_unavailable",
-                            message: format!(
-                                "task {} in arm `{}` ran crew `{}`, but the recorded admission pool for its delivery is unavailable, so a crew mismatch cannot be confirmed",
-                                task.task_id, task.arm, task.crew
-                            ),
-                        });
-                        continue;
-                    };
-                    (
-                        pool.clone(),
-                        task.admitted_pool_label
-                            .clone()
-                            .unwrap_or_else(|| "recorded admission pool".to_string()),
-                    )
-                }
-            };
-            if pool.contains(&task.crew) {
-                continue;
-            }
-            warnings.push(ReadoutWarning {
-                kind: "crew_mismatch",
-                message: format!(
-                    "task {} in arm `{}` ran crew `{}`, outside the arm's {which} ({})",
-                    task.task_id,
-                    task.arm,
-                    task.crew,
-                    pool.into_iter().collect::<Vec<_>>().join(", ")
-                ),
-            });
-        }
-        Ok(warnings)
     }
 }

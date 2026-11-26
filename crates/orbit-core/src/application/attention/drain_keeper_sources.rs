@@ -19,6 +19,15 @@ use serde_json::{Value, json};
 /// How long a pause must last, with work waiting, before it is reported.
 const PAUSED_ATTENTION_AFTER: TimeDelta = TimeDelta::hours(12);
 
+struct KeeperItem {
+    kind: AttentionKind,
+    severity: AttentionSeverity,
+    since: DateTime<Utc>,
+    reason: String,
+    detail: Value,
+    summary: &'static str,
+}
+
 pub(super) fn drain_keeper_items(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -98,15 +107,6 @@ pub(super) fn drain_keeper_items(
         }
     }
     Ok(items)
-}
-
-struct KeeperItem {
-    kind: AttentionKind,
-    severity: AttentionSeverity,
-    since: DateTime<Utc>,
-    reason: String,
-    detail: Value,
-    summary: &'static str,
 }
 
 fn keeper_item(

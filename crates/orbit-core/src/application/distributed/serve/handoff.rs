@@ -9,18 +9,6 @@ use crate::application::automation::source::Source;
 
 use super::refusal;
 
-/// Acceptance and landing retry refuse a stale pinned report as the plain
-/// execution failure they always raised; only the landing completion parks.
-fn plain_stale_evidence_refusal(error: OrbitError) -> OrbitError {
-    match error {
-        OrbitError::DeliveryRefused {
-            refusal: DeliveryRefusal::EvidenceStale,
-            message,
-        } => OrbitError::Execution(message),
-        other => other,
-    }
-}
-
 impl OrbitRuntime {
     /// The owner's own reading of the candidate a claim is settling.
     ///
@@ -193,5 +181,17 @@ impl OrbitRuntime {
             )?,
             repository,
         }))
+    }
+}
+
+/// Acceptance and landing retry refuse a stale pinned report as the plain
+/// execution failure they always raised; only the landing completion parks.
+fn plain_stale_evidence_refusal(error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::EvidenceStale,
+            message,
+        } => OrbitError::Execution(message),
+        other => other,
     }
 }

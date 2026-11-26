@@ -237,10 +237,10 @@ pub(in crate::application::agents) fn scan(
         charges,
         run_costs,
         credits,
-        pilots,
         regressions,
         landed_lines,
         performance_types: runtime.task_types().to_vec(),
+        pilots,
     })
 }
 

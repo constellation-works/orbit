@@ -36,14 +36,16 @@ pub(in crate::application::agents) fn task_facts(
         .iter()
         .map(|span| {
             let matched = runner(runs, span.start, span.end.or(Some(now)));
+            let local = matched.is_some();
+            let job = local || opened_by_claim(history, span.start);
             Attempt {
                 start: span.start,
                 end: span.end,
-                job: matched.is_some() || opened_by_claim(history, span.start),
-                local: matched.is_some(),
-                implementer: true,
                 runner: matched
                     .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
+                job,
+                local,
+                implementer: true,
                 tags: tags_at(history, &task.tags, span.start),
             }
         })

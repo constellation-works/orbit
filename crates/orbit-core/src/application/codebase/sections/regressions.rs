@@ -34,12 +34,6 @@ impl<'a> RegressionRow<'a> {
     }
 }
 
-pub(in crate::application::codebase) fn crew_of(task: &TaskFacts) -> String {
-    task.crew
-        .clone()
-        .unwrap_or_else(|| "unassigned".to_string())
-}
-
 /// The Regressions ranking's rows, the done tasks of the window, and the
 /// regressed tasks and links the filter keeps that record no site.
 pub(in crate::application::codebase) struct RegressionRows<'a> {
@@ -47,6 +41,12 @@ pub(in crate::application::codebase) struct RegressionRows<'a> {
     population: usize,
     unsited_tasks: usize,
     unsited_links: usize,
+}
+
+pub(in crate::application::codebase) fn crew_of(task: &TaskFacts) -> String {
+    task.crew
+        .clone()
+        .unwrap_or_else(|| "unassigned".to_string())
 }
 
 /// The sites a link records, each with the path it names; a site that names

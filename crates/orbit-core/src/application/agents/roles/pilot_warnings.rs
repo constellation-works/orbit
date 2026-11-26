@@ -76,6 +76,13 @@ const EXCLUDED_REASONS: &[&str] = &[
     EXCLUDED_ARCHIVED,
 ];
 
+/// The assessment field naming the mode a receipt was produced in.
+const PILOT_MODE_FIELD: &str = "mode";
+const MODE_FULL: &str = "full";
+const MODE_RECHECK: &str = "recheck";
+/// The mode reason of a full assessment a re-checked task escalated to.
+const RECHECK_ESCALATED: &str = "recheck_escalated";
+
 /// How an assessment settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::application::agents) enum Outcome {
@@ -88,16 +95,6 @@ pub(in crate::application::agents) enum Outcome {
     /// Neither credited nor charged, and why.
     Excluded(&'static str),
     /// Proposed, or its delivery not finished.
-    Pending,
-}
-
-#[derive(Serialize, Deserialize)]
-enum StoredOutcome {
-    Confirmed,
-    Dismissed,
-    Missed,
-    Clean,
-    Excluded(String),
     Pending,
 }
 
@@ -135,6 +132,16 @@ impl<'de> Deserialize<'de> for Outcome {
             StoredOutcome::Pending => Self::Pending,
         })
     }
+}
+
+#[derive(Serialize, Deserialize)]
+enum StoredOutcome {
+    Confirmed,
+    Dismissed,
+    Missed,
+    Clean,
+    Excluded(String),
+    Pending,
 }
 
 /// One task-pilot assessment and how it settled.
@@ -202,6 +209,111 @@ pub(in crate::application::agents) struct Warnings {
     pub(in crate::application::agents) triaged: Vec<DateTime<Utc>>,
 }
 
+/// One mode's pilot runs in the window: assessments, distinct runs, and
+/// those runs' durations and tokens.
+#[derive(Default)]
+struct ModeTally {
+    assessments: usize,
+    runs: BTreeMap<String, (Option<f64>, Option<u64>)>,
+}
+
+impl ModeTally {
+    fn json(&self) -> Value {
+        let mut seconds: Vec<f64> = self.runs.values().filter_map(|(s, _)| *s).collect();
+        let tokens: Vec<u64> = self.runs.values().filter_map(|(_, t)| *t).collect();
+        let total_seconds = (!seconds.is_empty()).then(|| seconds.iter().sum::<f64>());
+        let median_seconds = statistics::median(&mut seconds);
+        json!({
+            "assessments": self.assessments,
+            "runs": self.runs.len(),
+            "median_seconds": median_seconds.map(number),
+            "total_seconds": total_seconds.map(number),
+            "total_tokens": (!tokens.is_empty()).then(|| tokens.iter().sum::<u64>()),
+            "runs_with_tokens": tokens.len(),
+        })
+    }
+}
+
+type Settled = (Outcome, Option<(DateTime<Utc>, String)>);
+
+/// One pilot row's warning tallies in the window.
+#[derive(Default)]
+pub(super) struct WarningRow<'a> {
+    pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
+    /// Crews whose assessments this row groups.
+    pub(super) crews: BTreeSet<String>,
+    /// Settled assessments counted on each task unit for warning terms.
+    pub(super) settled_units: BTreeMap<String, usize>,
+    /// Assessments whose outcome settled in the window.
+    settled: usize,
+    /// Assessments written in the window that are excluded or pending.
+    excluded: usize,
+    /// Assessments written in the window, and those that held.
+    written: usize,
+    held: usize,
+    confirmed: usize,
+    dismissed: usize,
+    missed: usize,
+}
+
+impl WarningRow<'_> {
+    /// The warning terms' shared denominator.
+    pub(super) fn denominators(&self) -> BTreeMap<&'static str, Denominator> {
+        [CONFIRMED, DISMISSED, MISSED]
+            .into_iter()
+            .map(|key| {
+                (
+                    key,
+                    Denominator {
+                        units: self.settled,
+                        min_support: MIN_SETTLED,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Shown, not scored: precision, hold rate and the settlement counts.
+    pub(super) fn stats(&self) -> Vec<Stat> {
+        let decided = self.confirmed + self.dismissed;
+        vec![
+            Stat {
+                key: "warning_precision_percent",
+                label: "Warning precision (%)",
+                value: if decided == 0 {
+                    Value::Null
+                } else {
+                    number(self.confirmed as f64 * 100.0 / decided as f64)
+                },
+            },
+            Stat {
+                key: "holds_per_100_assessments",
+                label: "Holds per 100 assessments",
+                value: if self.written == 0 {
+                    Value::Null
+                } else {
+                    number(self.held as f64 * 100.0 / self.written as f64)
+                },
+            },
+            Stat {
+                key: "settled_assessments",
+                label: "Settled assessments",
+                value: json!(self.settled),
+            },
+            Stat {
+                key: "excluded_assessments",
+                label: "Excluded or pending assessments",
+                value: json!(self.excluded),
+            },
+            Stat {
+                key: "missed_scope_block_count",
+                label: "Missed scope blocks",
+                value: json!(self.missed),
+            },
+        ]
+    }
+}
+
 /// Settle every task-pilot assessment of `task`.
 pub(in crate::application::agents) fn settle(
     task: &Task,
@@ -259,38 +371,6 @@ pub(in crate::application::agents) fn settle(
             .filter(|entry| entry.event == BLOCKED_TASK_TRIAGED_EVENT)
             .map(|entry| entry.at)
             .collect(),
-    }
-}
-
-/// The assessment field naming the mode a receipt was produced in.
-const PILOT_MODE_FIELD: &str = "mode";
-const MODE_FULL: &str = "full";
-const MODE_RECHECK: &str = "recheck";
-/// The mode reason of a full assessment a re-checked task escalated to.
-const RECHECK_ESCALATED: &str = "recheck_escalated";
-
-/// One mode's pilot runs in the window: assessments, distinct runs, and
-/// those runs' durations and tokens.
-#[derive(Default)]
-struct ModeTally {
-    assessments: usize,
-    runs: BTreeMap<String, (Option<f64>, Option<u64>)>,
-}
-
-impl ModeTally {
-    fn json(&self) -> Value {
-        let mut seconds: Vec<f64> = self.runs.values().filter_map(|(s, _)| *s).collect();
-        let tokens: Vec<u64> = self.runs.values().filter_map(|(_, t)| *t).collect();
-        let total_seconds = (!seconds.is_empty()).then(|| seconds.iter().sum::<f64>());
-        let median_seconds = statistics::median(&mut seconds);
-        json!({
-            "assessments": self.assessments,
-            "runs": self.runs.len(),
-            "median_seconds": median_seconds.map(number),
-            "total_seconds": total_seconds.map(number),
-            "total_tokens": (!tokens.is_empty()).then(|| tokens.iter().sum::<u64>()),
-            "runs_with_tokens": tokens.len(),
-        })
     }
 }
 
@@ -358,8 +438,6 @@ fn decision_triage(
         && blocked_recovery::decode_blocked_task_triaged(entry, history, comments)
             .is_some_and(|record| record.disposition == LegacyBlockedTriageDisposition::Decision)
 }
-
-type Settled = (Outcome, Option<(DateTime<Utc>, String)>);
 
 /// How the assessment written at `at` settled, given the next one at `next`.
 fn outcome(
@@ -476,84 +554,6 @@ fn outcome(
         }
     }
     (Outcome::Pending, None)
-}
-
-/// One pilot row's warning tallies in the window.
-#[derive(Default)]
-pub(super) struct WarningRow<'a> {
-    pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
-    /// Crews whose assessments this row groups.
-    pub(super) crews: BTreeSet<String>,
-    /// Settled assessments counted on each task unit for warning terms.
-    pub(super) settled_units: BTreeMap<String, usize>,
-    /// Assessments whose outcome settled in the window.
-    settled: usize,
-    /// Assessments written in the window that are excluded or pending.
-    excluded: usize,
-    /// Assessments written in the window, and those that held.
-    written: usize,
-    held: usize,
-    confirmed: usize,
-    dismissed: usize,
-    missed: usize,
-}
-
-impl WarningRow<'_> {
-    /// The warning terms' shared denominator.
-    pub(super) fn denominators(&self) -> BTreeMap<&'static str, Denominator> {
-        [CONFIRMED, DISMISSED, MISSED]
-            .into_iter()
-            .map(|key| {
-                (
-                    key,
-                    Denominator {
-                        units: self.settled,
-                        min_support: MIN_SETTLED,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Shown, not scored: precision, hold rate and the settlement counts.
-    pub(super) fn stats(&self) -> Vec<Stat> {
-        let decided = self.confirmed + self.dismissed;
-        vec![
-            Stat {
-                key: "warning_precision_percent",
-                label: "Warning precision (%)",
-                value: if decided == 0 {
-                    Value::Null
-                } else {
-                    number(self.confirmed as f64 * 100.0 / decided as f64)
-                },
-            },
-            Stat {
-                key: "holds_per_100_assessments",
-                label: "Holds per 100 assessments",
-                value: if self.written == 0 {
-                    Value::Null
-                } else {
-                    number(self.held as f64 * 100.0 / self.written as f64)
-                },
-            },
-            Stat {
-                key: "settled_assessments",
-                label: "Settled assessments",
-                value: json!(self.settled),
-            },
-            Stat {
-                key: "excluded_assessments",
-                label: "Excluded or pending assessments",
-                value: json!(self.excluded),
-            },
-            Stat {
-                key: "missed_scope_block_count",
-                label: "Missed scope blocks",
-                value: json!(self.missed),
-            },
-        ]
-    }
 }
 
 /// Each pilot row's warning tallies: assessments that settled in the window

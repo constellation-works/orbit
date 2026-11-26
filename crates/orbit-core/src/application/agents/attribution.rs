@@ -96,87 +96,6 @@ pub struct Credit {
     pub(super) reported_effort: Option<Option<String>>,
 }
 
-/// Every problem in `tasks`, every regression against them and every pilot
-/// problem of their graded assessments, each with one owner, and the landed
-/// credit of each task's final run.
-pub(super) fn attribute(
-    tasks: &[TaskFacts],
-    regressions: &[RegressionLink],
-    pilots: &[Graded],
-) -> (Vec<Charge>, Vec<Credit>) {
-    let mut charges = Vec::new();
-    let mut credits = Vec::new();
-    for task in tasks {
-        for record in &task.records {
-            charges.push(record_charge(task, record));
-        }
-        for review in &task.reviews {
-            charges.extend(review_charge(task, review));
-            for finding in review.disposed() {
-                let charge = Draft {
-                    task,
-                    problem: Problem::DisposedFinding,
-                    at: review.at,
-                    detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
-                    severity: None,
-                };
-                charges.push(charge.reviewer(Some(review)));
-            }
-        }
-        if task.landed
-            && let Some(attempt) = task
-                .final_attempt
-                .and_then(|index| task.attempts.get(index))
-                .filter(|attempt| !attempt.no_diff())
-        {
-            credits.push(Credit {
-                task_id: task.id.clone(),
-                crew: attempt.runner.crew.clone(),
-                model: attempt.runner.model.clone(),
-                run_id: attempt.runner.run_id.clone(),
-                weight: 1,
-                at: task.landed_at,
-                anchor: attempt.start,
-                reported_effort: attempt.runner.reported_effort.clone(),
-            });
-        }
-    }
-
-    let by_id: HashMap<&str, &TaskFacts> =
-        tasks.iter().map(|task| (task.id.as_str(), task)).collect();
-    for link in regressions {
-        // A culprit outside the scan has no work in any window.
-        let Some(task) = by_id.get(link.culprit.as_str()) else {
-            continue;
-        };
-        charges.push(regression_charge(task, link));
-    }
-    for task in tasks {
-        let Some((FindingVerdict::Rejected, at, _)) =
-            task.filed.as_ref().and_then(|filed| filed.verdict)
-        else {
-            continue;
-        };
-        let draft = Draft {
-            task,
-            problem: Problem::RejectedFinding,
-            at,
-            detail: "finding verification REJECTED this review-filed finding".to_string(),
-            severity: None,
-        };
-        charges.push(draft.review_job(filing_attempt(&by_id, task)));
-    }
-    for graded in pilots {
-        charges.extend(pilot_charges(graded));
-    }
-    charges.sort_by(|left, right| {
-        left.at
-            .cmp(&right.at)
-            .then(left.task_id.cmp(&right.task_id))
-    });
-    (charges, credits)
-}
-
 /// A problem on `task` before its owner is decided.
 struct Draft<'a> {
     task: &'a TaskFacts,
@@ -298,6 +217,87 @@ impl Draft<'_> {
         charge.after = after;
         charge
     }
+}
+
+/// Every problem in `tasks`, every regression against them and every pilot
+/// problem of their graded assessments, each with one owner, and the landed
+/// credit of each task's final run.
+pub(super) fn attribute(
+    tasks: &[TaskFacts],
+    regressions: &[RegressionLink],
+    pilots: &[Graded],
+) -> (Vec<Charge>, Vec<Credit>) {
+    let mut charges = Vec::new();
+    let mut credits = Vec::new();
+    for task in tasks {
+        for record in &task.records {
+            charges.push(record_charge(task, record));
+        }
+        for review in &task.reviews {
+            charges.extend(review_charge(task, review));
+            for finding in review.disposed() {
+                let charge = Draft {
+                    task,
+                    problem: Problem::DisposedFinding,
+                    at: review.at,
+                    detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
+                    severity: None,
+                };
+                charges.push(charge.reviewer(Some(review)));
+            }
+        }
+        if task.landed
+            && let Some(attempt) = task
+                .final_attempt
+                .and_then(|index| task.attempts.get(index))
+                .filter(|attempt| !attempt.no_diff())
+        {
+            credits.push(Credit {
+                task_id: task.id.clone(),
+                crew: attempt.runner.crew.clone(),
+                model: attempt.runner.model.clone(),
+                run_id: attempt.runner.run_id.clone(),
+                weight: 1,
+                at: task.landed_at,
+                anchor: attempt.start,
+                reported_effort: attempt.runner.reported_effort.clone(),
+            });
+        }
+    }
+
+    let by_id: HashMap<&str, &TaskFacts> =
+        tasks.iter().map(|task| (task.id.as_str(), task)).collect();
+    for link in regressions {
+        // A culprit outside the scan has no work in any window.
+        let Some(task) = by_id.get(link.culprit.as_str()) else {
+            continue;
+        };
+        charges.push(regression_charge(task, link));
+    }
+    for task in tasks {
+        let Some((FindingVerdict::Rejected, at, _)) =
+            task.filed.as_ref().and_then(|filed| filed.verdict)
+        else {
+            continue;
+        };
+        let draft = Draft {
+            task,
+            problem: Problem::RejectedFinding,
+            at,
+            detail: "finding verification REJECTED this review-filed finding".to_string(),
+            severity: None,
+        };
+        charges.push(draft.review_job(filing_attempt(&by_id, task)));
+    }
+    for graded in pilots {
+        charges.extend(pilot_charges(graded));
+    }
+    charges.sort_by(|left, right| {
+        left.at
+            .cmp(&right.at)
+            .then(left.task_id.cmp(&right.task_id))
+    });
+    (charges, credits)
 }
 
 /// The owner of a problem the task's history or comments record.

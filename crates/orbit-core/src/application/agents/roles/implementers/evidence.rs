@@ -12,6 +12,9 @@ use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{REVIEW_MIN_SUPPORT, Tally, number};
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 
+/// Shrinkage strength of the by-type matrix, at both levels.
+const CELL_SHRINKAGE: f64 = 30.0;
+
 /// One row per implemented task and the row (crew, model) that worked it:
 /// the task's configured type, its tags as admitted, its context-file
 /// selectors and top-level path prefixes, its reviewed population (0 or 1),
@@ -77,9 +80,6 @@ pub(in crate::application::agents::roles) fn per_task_rows(
     });
     rows
 }
-
-/// Shrinkage strength of the by-type matrix, at both levels.
-const CELL_SHRINKAGE: f64 = 30.0;
 
 /// The raw score of one task subset against `fleet` rates: 100 plus the
 /// weighted actual-minus-expected rates. `None` for an empty subset.

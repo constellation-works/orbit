@@ -64,21 +64,6 @@ impl Drop for RecordedWriteActor {
     }
 }
 
-/// Record `actor` as the auto-task write label on this thread until the
-/// guard drops. Application consent runs the ordinary handlers, which
-/// otherwise stamp the process actor.
-pub(crate) fn record_write_actor(actor: String) -> RecordedWriteActor {
-    let previous = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow_mut().replace(actor));
-    RecordedWriteActor { previous }
-}
-
-fn write_actor(runtime: &OrbitRuntime) -> Result<String, OrbitError> {
-    if let Some(actor) = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow().clone()) {
-        return Ok(actor);
-    }
-    runtime.actor().resolve_write_label(None, None)
-}
-
 /// Parameters for creating a definition.
 #[derive(Debug, Clone)]
 pub struct AutoTaskAddParams {
@@ -184,56 +169,6 @@ impl From<AutoTaskTemplate> for AutoTaskTemplatePatch {
             status: Some(template.status),
         }
     }
-}
-
-/// A lookup may name only one definition stem. Absolute paths, `..`, and
-/// extra components are rejected before they can be joined onto `auto_tasks`.
-fn in_scope_lookup_name(name: &str) -> bool {
-    if !is_valid_auto_task_name(name) {
-        return false;
-    }
-    let path = Path::new(name);
-    if path.is_absolute() {
-        return false;
-    }
-    let mut components = path.components();
-    match (components.next(), components.next()) {
-        (Some(Component::Normal(stem)), None) => stem.to_str() == Some(name),
-        _ => false,
-    }
-}
-
-/// The fail-closed rule for one discovery pass: an error only when nothing
-/// loaded, each skipped file logged either way.
-pub(crate) fn require_loaded(collection: &AutoTaskCollection) -> Result<(), OrbitError> {
-    for error in &collection.errors {
-        tracing::warn!(
-            target: "orbit.core.auto_tasks",
-            path = %error.path.as_ref().map_or_else(
-                || "<auto_tasks dir>".to_string(),
-                |path| path.display().to_string()
-            ),
-            reason = error.message.as_str(),
-            "auto-task definition failed to load and is treated as absent"
-        );
-    }
-    if collection.definitions.is_empty() && !collection.errors.is_empty() {
-        let detail = collection
-            .errors
-            .iter()
-            .map(|error| {
-                error.path.as_ref().map_or_else(
-                    || error.message.clone(),
-                    |path| format!("{}: {}", path.display(), error.message),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(OrbitError::InvalidInput(format!(
-            "no auto-task definition could be loaded; every definition failed fail-closed: {detail}"
-        )));
-    }
-    Ok(())
 }
 
 impl OrbitRuntime {
@@ -830,4 +765,69 @@ impl OrbitRuntime {
             ))
         })
     }
+}
+
+/// Record `actor` as the auto-task write label on this thread until the
+/// guard drops. Application consent runs the ordinary handlers, which
+/// otherwise stamp the process actor.
+pub(crate) fn record_write_actor(actor: String) -> RecordedWriteActor {
+    let previous = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow_mut().replace(actor));
+    RecordedWriteActor { previous }
+}
+
+fn write_actor(runtime: &OrbitRuntime) -> Result<String, OrbitError> {
+    if let Some(actor) = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow().clone()) {
+        return Ok(actor);
+    }
+    runtime.actor().resolve_write_label(None, None)
+}
+
+/// A lookup may name only one definition stem. Absolute paths, `..`, and
+/// extra components are rejected before they can be joined onto `auto_tasks`.
+fn in_scope_lookup_name(name: &str) -> bool {
+    if !is_valid_auto_task_name(name) {
+        return false;
+    }
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return false;
+    }
+    let mut components = path.components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(stem)), None) => stem.to_str() == Some(name),
+        _ => false,
+    }
+}
+
+/// The fail-closed rule for one discovery pass: an error only when nothing
+/// loaded, each skipped file logged either way.
+pub(crate) fn require_loaded(collection: &AutoTaskCollection) -> Result<(), OrbitError> {
+    for error in &collection.errors {
+        tracing::warn!(
+            target: "orbit.core.auto_tasks",
+            path = %error.path.as_ref().map_or_else(
+                || "<auto_tasks dir>".to_string(),
+                |path| path.display().to_string()
+            ),
+            reason = error.message.as_str(),
+            "auto-task definition failed to load and is treated as absent"
+        );
+    }
+    if collection.definitions.is_empty() && !collection.errors.is_empty() {
+        let detail = collection
+            .errors
+            .iter()
+            .map(|error| {
+                error.path.as_ref().map_or_else(
+                    || error.message.clone(),
+                    |path| format!("{}: {}", path.display(), error.message),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(OrbitError::InvalidInput(format!(
+            "no auto-task definition could be loaded; every definition failed fail-closed: {detail}"
+        )));
+    }
+    Ok(())
 }

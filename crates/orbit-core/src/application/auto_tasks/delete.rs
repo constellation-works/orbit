@@ -82,32 +82,6 @@ pub enum AutoTaskDeleteProfile {
     Http,
 }
 
-/// Project a completed delete without changing lifecycle or audit behavior.
-/// The HTTP profile never serializes the report's forensic fields.
-pub fn project_auto_task_delete_receipt(
-    report: &AutoTaskDeleteReport,
-    profile: AutoTaskDeleteProfile,
-) -> Result<Value, OrbitError> {
-    match profile {
-        AutoTaskDeleteProfile::Tool => serde_json::to_value(report)
-            .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}"))),
-        AutoTaskDeleteProfile::Http => {
-            let mut message = format!("Deleted auto-task {}.", report.name);
-            if report.opted_out {
-                message.push_str(" The shipped default will not be reseeded.");
-            }
-            Ok(json!({
-                "name": report.name,
-                "deleted": true,
-                "opted_out": report.opted_out,
-                "open_tasks": report.open_tasks,
-                "reason": report.reason,
-                "message": message,
-            }))
-        }
-    }
-}
-
 /// A delete refused before anything was removed, stated structurally so a
 /// transport picks its response from the variant, never from message text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,17 +409,43 @@ impl OrbitRuntime {
     }
 }
 
-fn is_shipped_default(name: &str) -> bool {
-    DEFAULT_AUTO_TASK_FILES
-        .iter()
-        .any(|(shipped, _)| *shipped == name)
-}
-
 /// The state a delete removed alongside the definition file.
 struct RemovedState {
     opted_out: bool,
     cursor_removed: bool,
     consumer: Option<ConsumerTeardown>,
+}
+
+/// Project a completed delete without changing lifecycle or audit behavior.
+/// The HTTP profile never serializes the report's forensic fields.
+pub fn project_auto_task_delete_receipt(
+    report: &AutoTaskDeleteReport,
+    profile: AutoTaskDeleteProfile,
+) -> Result<Value, OrbitError> {
+    match profile {
+        AutoTaskDeleteProfile::Tool => serde_json::to_value(report)
+            .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}"))),
+        AutoTaskDeleteProfile::Http => {
+            let mut message = format!("Deleted auto-task {}.", report.name);
+            if report.opted_out {
+                message.push_str(" The shipped default will not be reseeded.");
+            }
+            Ok(json!({
+                "name": report.name,
+                "deleted": true,
+                "opted_out": report.opted_out,
+                "open_tasks": report.open_tasks,
+                "reason": report.reason,
+                "message": message,
+            }))
+        }
+    }
+}
+
+fn is_shipped_default(name: &str) -> bool {
+    DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .any(|(shipped, _)| *shipped == name)
 }
 
 /// Remove what a deleted definition leaves behind, once its file is gone.

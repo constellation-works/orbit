@@ -23,19 +23,6 @@ use crate::application::managed_assets::{
 
 use super::settings::{AUTO_TASK_ASSET_KIND, classify_bundled_file};
 
-/// A shipped auto-task default this Orbit no longer seeds.
-pub(crate) struct RetiredAutoTask {
-    /// The definition name, and its file stem.
-    pub name: &'static str,
-    /// The last template a release shipped for it.
-    pub template: &'static str,
-    /// The seeded routine (its file stem under `.orbit/routines/`) that
-    /// replaces it, or `None` when nothing opt-in does.
-    pub replaced_by: Option<&'static str>,
-    /// What replaced it when no routine did.
-    pub superseded_by: &'static str,
-}
-
 /// Retiring a default: drop it from `DEFAULT_AUTO_TASK_FILES`, keep its
 /// last shipped template in place and list it here in the same change.
 pub(crate) const RETIRED_AUTO_TASK_FILES: &[RetiredAutoTask] = &[
@@ -54,6 +41,19 @@ pub(crate) const RETIRED_AUTO_TASK_FILES: &[RetiredAutoTask] = &[
         superseded_by: "no replacement: the crew ladder it reviewed was removed",
     },
 ];
+
+/// A shipped auto-task default this Orbit no longer seeds.
+pub(crate) struct RetiredAutoTask {
+    /// The definition name, and its file stem.
+    pub name: &'static str,
+    /// The last template a release shipped for it.
+    pub template: &'static str,
+    /// The seeded routine (its file stem under `.orbit/routines/`) that
+    /// replaces it, or `None` when nothing opt-in does.
+    pub replaced_by: Option<&'static str>,
+    /// What replaced it when no routine did.
+    pub superseded_by: &'static str,
+}
 
 /// What retiring the replaced defaults found in one auto-task directory.
 #[derive(Debug, Default)]

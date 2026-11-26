@@ -38,6 +38,16 @@ use super::{DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_a
 /// The `assetKind` of the auto-task managed manifest.
 pub(crate) const AUTO_TASK_ASSET_KIND: &str = "auto_task";
 
+/// The shipped definition whose follower deduplication is host-aware.
+pub(crate) const RUN_FAILURE_PATTERNS_NAME: &str = "run-failure-patterns";
+
+/// The contract the bundled `run-failure-patterns` body carries [ORB-19433].
+pub const RUN_FAILURE_DEDUP_CONTRACT: &str =
+    "run-failure follower deduplication by machine_id, leaf_run_id and task_id";
+
+/// The bundled deduplication rule, appended verbatim by reconciliation.
+pub const RUN_FAILURE_DEDUP_PARAGRAPH: &str = "A follower settlement duplicates an owner history run only when all three match: the settlement's `machine_id` equals the history row's `executed_on.machine_id`, the settlement's `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists the settlement's `task_id`. A bare `leaf_run_id` match without the machine and task match is an id collision across hosts, not a duplicate: count it. A history row with null `executed_on` cannot match on machine id, so it never dedupes a settlement.";
+
 /// Where a definition's body comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,254 +95,11 @@ pub struct StaleAutoTaskContract {
     pub remediation: String,
 }
 
-/// The shipped definition whose follower deduplication is host-aware.
-pub(crate) const RUN_FAILURE_PATTERNS_NAME: &str = "run-failure-patterns";
-
-/// The contract the bundled `run-failure-patterns` body carries [ORB-19433].
-pub const RUN_FAILURE_DEDUP_CONTRACT: &str =
-    "run-failure follower deduplication by machine_id, leaf_run_id and task_id";
-
-fn normalized_contract_text(text: &str) -> String {
-    let mut normalized = String::with_capacity(text.len());
-    let mut last_was_space = true;
-    for ch in text.chars() {
-        if ch.is_alphanumeric() {
-            normalized.extend(ch.to_lowercase());
-            last_was_space = false;
-        } else if !last_was_space {
-            normalized.push(' ');
-            last_was_space = true;
-        }
-    }
-    normalized.trim_end().to_string()
-}
-
-/// `(machine/host, leaf run, task)` stated by one paragraph or criterion.
-fn contract_categories(text: &str) -> (bool, bool, bool) {
-    let normalized = normalized_contract_text(text);
-    (
-        normalized.contains("machine id") || normalized.contains("host"),
-        normalized.contains("leaf run id")
-            || normalized.contains("leaf id")
-            || normalized.contains("run id"),
-        normalized.contains("task id"),
-    )
-}
-
-fn contract_units(definition: &AutoTaskDefinition) -> Vec<&str> {
-    let mut units: Vec<&str> = definition
-        .template
-        .description
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|unit| !unit.is_empty())
-        .collect();
-    units.extend(
-        definition
-            .template
-            .acceptance_criteria
-            .iter()
-            .map(String::as_str),
-    );
-    units
-}
-
-fn definition_has_dedup_contract(definition: &AutoTaskDefinition) -> bool {
-    contract_units(definition)
-        .into_iter()
-        .any(|unit| contract_categories(unit) == (true, true, true))
-}
-
-fn dedup_contract_missing(definition: &AutoTaskDefinition) -> Vec<&'static str> {
-    let mut best = (false, false, false);
-    let mut best_count = 0;
-    for unit in contract_units(definition) {
-        let categories = contract_categories(unit);
-        let count = [categories.0, categories.1, categories.2]
-            .into_iter()
-            .filter(|present| *present)
-            .count();
-        if count > best_count {
-            best = categories;
-            best_count = count;
-        }
-    }
-    let mut missing = Vec::new();
-    if !best.0 {
-        missing.push("machine_id/host");
-    }
-    if !best.1 {
-        missing.push("leaf_run_id");
-    }
-    if !best.2 {
-        missing.push("task_id");
-    }
-    missing
-}
-
-/// The bundled `run-failure-patterns` definition, when Orbit ships one.
-pub(crate) fn bundled_run_failure_definition(base_branch: &str) -> Option<AutoTaskDefinition> {
-    let rendered = rendered_bundled_body(RUN_FAILURE_PATTERNS_NAME, base_branch)?;
-    parse_auto_task_yaml(&rendered).ok()
-}
-
-/// Whether `effective` is a `run-failure-patterns` body that omits the
-/// bundled host-aware deduplication contract. A body that states the
-/// machine/leaf/task rule in its own wording, in any one paragraph or
-/// criterion, is not stale.
-pub fn stale_run_failure_contract(
-    effective: &AutoTaskDefinition,
-    bundled: &AutoTaskDefinition,
-) -> Option<StaleAutoTaskContract> {
-    if effective.name != RUN_FAILURE_PATTERNS_NAME
-        || !definition_has_dedup_contract(bundled)
-        || definition_has_dedup_contract(effective)
-    {
-        return None;
-    }
-    Some(StaleAutoTaskContract {
-        contract: RUN_FAILURE_DEDUP_CONTRACT,
-        missing: dedup_contract_missing(effective),
-        remediation: format!(
-            "reconcile with `orbit auto-task update {RUN_FAILURE_PATTERNS_NAME} \
-             --adopt-bundled-contract` to append the bundled host-aware \
-             deduplication rule while preserving the rest of this body, or edit \
-             the body so one paragraph or criterion states the machine-id, \
-             leaf-run-id and task-id rule; minting is held until then"
-        ),
-    })
-}
-
-/// The bundled deduplication rule, appended verbatim by reconciliation.
-pub const RUN_FAILURE_DEDUP_PARAGRAPH: &str = "A follower settlement duplicates an owner history run only when all three match: the settlement's `machine_id` equals the history row's `executed_on.machine_id`, the settlement's `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists the settlement's `task_id`. A bare `leaf_run_id` match without the machine and task match is an id collision across hosts, not a duplicate: count it. A history row with null `executed_on` cannot match on machine id, so it never dedupes a settlement.";
-
-/// Append the bundled deduplication paragraph and criterion to `effective`,
-/// leaving every other field and paragraph untouched. Returns whether the
-/// body changed.
-pub fn adopt_bundled_run_failure_contract(
-    effective: &mut AutoTaskDefinition,
-    bundled: &AutoTaskDefinition,
-) -> bool {
-    let mut changed = false;
-    if !definition_has_dedup_contract(effective) {
-        if !effective.template.description.trim().is_empty() {
-            effective.template.description.push_str("\n\n");
-        }
-        effective
-            .template
-            .description
-            .push_str(RUN_FAILURE_DEDUP_PARAGRAPH);
-        changed = true;
-        if let Some(criterion) = bundled
-            .template
-            .acceptance_criteria
-            .iter()
-            .find(|unit| contract_categories(unit) == (true, true, true))
-            && !effective
-                .template
-                .acceptance_criteria
-                .iter()
-                .any(|existing| existing == criterion)
-        {
-            effective
-                .template
-                .acceptance_criteria
-                .push(criterion.clone());
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// The rendered bundled body of shipped default `name`, or of a demoted default
-/// whose reference copy Orbit still carries, if Orbit bundles one.
-pub(crate) fn rendered_bundled_body(name: &str, base_branch: &str) -> Option<String> {
-    DEFAULT_AUTO_TASK_FILES
-        .iter()
-        .chain(REFERENCE_AUTO_TASK_FILES)
-        .find(|(shipped, _)| *shipped == name)
-        .map(|(_, content)| render_default_auto_task(content, base_branch).into_owned())
-}
-
 /// Differences from a shipped body, with stale historical copies distinguished
 /// from settings-only edits of the current template.
 pub(crate) struct BundledFileOverrides {
     pub overrides: AutoTaskOverrides,
     pub stale_shipped_body: bool,
-}
-
-/// `None` means the manifest proves Orbit wrote these exact bytes, or they
-/// equal the current bundle. Other files are compared with the current body
-/// first, then with shipped history if their body differs.
-pub(crate) fn classify_bundled_file(
-    rendered: &str,
-    on_disk: &str,
-    tracked: Option<&String>,
-    settings: Option<&AutoTaskSettings>,
-    base_branch: &str,
-) -> Result<Option<BundledFileOverrides>, OrbitError> {
-    let digest = sha256_hex(on_disk.as_bytes());
-    if tracked == Some(&digest) || digest == sha256_hex(rendered.as_bytes()) {
-        return Ok(None);
-    }
-    let definition = parse_auto_task_yaml(on_disk)?;
-    let body = parse_auto_task_yaml(rendered)?;
-    let mut effective = definition.clone();
-    if let Some(settings) = settings {
-        settings.apply(&mut effective);
-    }
-    let mut overrides = split_overrides(&body, &effective);
-    // A YAML comment is body content no settings entry can hold: an operator's
-    // note keeps the file a fork rather than being dropped by migration.
-    if has_added_comment(rendered, on_disk) {
-        overrides.body_fields.push("comments");
-    }
-    if !overrides.body_fields.is_empty()
-        && definition.name == body.name
-        && let Some(overrides) =
-            historical_overrides(&body, &definition, on_disk, base_branch, settings)?
-    {
-        return Ok(Some(BundledFileOverrides {
-            overrides,
-            stale_shipped_body: true,
-        }));
-    }
-    Ok(Some(BundledFileOverrides {
-        overrides,
-        stale_shipped_body: false,
-    }))
-}
-
-/// Whether `on_disk` carries a `#` line the bundled body lacks. Lines inside
-/// block scalars (Markdown headings) match their bundled counterparts, and a
-/// definition Orbit re-serialized carries no comments at all.
-fn has_added_comment(rendered: &str, on_disk: &str) -> bool {
-    let bundled: std::collections::BTreeSet<&str> = rendered
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with('#'))
-        .collect();
-    on_disk
-        .lines()
-        .map(str::trim)
-        .any(|line| line.starts_with('#') && !bundled.contains(line))
-}
-
-fn settings_error(error: String) -> OrbitError {
-    OrbitError::InvalidInput(error)
-}
-
-fn definition_file(dir: &Path, name: &str) -> std::path::PathBuf {
-    dir.join(ManagedAssetLayout::YamlStem.relative_path(name))
-}
-
-fn manifest_digest(dir: &Path, name: &str) -> Result<Option<String>, OrbitError> {
-    Ok(load_managed_asset_manifest(
-        &dir.join(MANAGED_ASSET_MANIFEST_FILE),
-        AUTO_TASK_ASSET_KIND,
-        ManagedAssetLayout::YamlStem,
-    )?
-    .and_then(|manifest| manifest.assets.get(name).cloned()))
 }
 
 impl OrbitRuntime {
@@ -453,11 +220,12 @@ impl OrbitRuntime {
                         bundled_run_failure_definition(self.workspace_base_branch())
                             .and_then(|bundled| stale_run_failure_contract(&effective, &bundled))
                     });
+                let settings_fields = classified.overrides.settings.field_names();
                 AutoTaskLayering {
                     body: AutoTaskBody::Forked,
                     settings,
-                    settings_fields: classified.overrides.settings.field_names(),
                     forked_fields: classified.overrides.body_fields,
+                    settings_fields,
                     stale_contract,
                 }
             }
@@ -494,6 +262,239 @@ impl OrbitRuntime {
             stale.remediation
         )))
     }
+}
+
+fn normalized_contract_text(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut last_was_space = true;
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            normalized.extend(ch.to_lowercase());
+            last_was_space = false;
+        } else if !last_was_space {
+            normalized.push(' ');
+            last_was_space = true;
+        }
+    }
+    normalized.trim_end().to_string()
+}
+
+/// `(machine/host, leaf run, task)` stated by one paragraph or criterion.
+fn contract_categories(text: &str) -> (bool, bool, bool) {
+    let normalized = normalized_contract_text(text);
+    (
+        normalized.contains("machine id") || normalized.contains("host"),
+        normalized.contains("leaf run id")
+            || normalized.contains("leaf id")
+            || normalized.contains("run id"),
+        normalized.contains("task id"),
+    )
+}
+
+fn contract_units(definition: &AutoTaskDefinition) -> Vec<&str> {
+    let mut units: Vec<&str> = definition
+        .template
+        .description
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|unit| !unit.is_empty())
+        .collect();
+    units.extend(
+        definition
+            .template
+            .acceptance_criteria
+            .iter()
+            .map(String::as_str),
+    );
+    units
+}
+
+fn definition_has_dedup_contract(definition: &AutoTaskDefinition) -> bool {
+    contract_units(definition)
+        .into_iter()
+        .any(|unit| contract_categories(unit) == (true, true, true))
+}
+
+fn dedup_contract_missing(definition: &AutoTaskDefinition) -> Vec<&'static str> {
+    let mut best = (false, false, false);
+    let mut best_count = 0;
+    for unit in contract_units(definition) {
+        let categories = contract_categories(unit);
+        let count = [categories.0, categories.1, categories.2]
+            .into_iter()
+            .filter(|present| *present)
+            .count();
+        if count > best_count {
+            best = categories;
+            best_count = count;
+        }
+    }
+    let mut missing = Vec::new();
+    if !best.0 {
+        missing.push("machine_id/host");
+    }
+    if !best.1 {
+        missing.push("leaf_run_id");
+    }
+    if !best.2 {
+        missing.push("task_id");
+    }
+    missing
+}
+
+/// The bundled `run-failure-patterns` definition, when Orbit ships one.
+pub(crate) fn bundled_run_failure_definition(base_branch: &str) -> Option<AutoTaskDefinition> {
+    let rendered = rendered_bundled_body(RUN_FAILURE_PATTERNS_NAME, base_branch)?;
+    parse_auto_task_yaml(&rendered).ok()
+}
+
+/// Whether `effective` is a `run-failure-patterns` body that omits the
+/// bundled host-aware deduplication contract. A body that states the
+/// machine/leaf/task rule in its own wording, in any one paragraph or
+/// criterion, is not stale.
+pub fn stale_run_failure_contract(
+    effective: &AutoTaskDefinition,
+    bundled: &AutoTaskDefinition,
+) -> Option<StaleAutoTaskContract> {
+    if effective.name != RUN_FAILURE_PATTERNS_NAME
+        || !definition_has_dedup_contract(bundled)
+        || definition_has_dedup_contract(effective)
+    {
+        return None;
+    }
+    Some(StaleAutoTaskContract {
+        contract: RUN_FAILURE_DEDUP_CONTRACT,
+        missing: dedup_contract_missing(effective),
+        remediation: format!(
+            "reconcile with `orbit auto-task update {RUN_FAILURE_PATTERNS_NAME} \
+             --adopt-bundled-contract` to append the bundled host-aware \
+             deduplication rule while preserving the rest of this body, or edit \
+             the body so one paragraph or criterion states the machine-id, \
+             leaf-run-id and task-id rule; minting is held until then"
+        ),
+    })
+}
+
+/// Append the bundled deduplication paragraph and criterion to `effective`,
+/// leaving every other field and paragraph untouched. Returns whether the
+/// body changed.
+pub fn adopt_bundled_run_failure_contract(
+    effective: &mut AutoTaskDefinition,
+    bundled: &AutoTaskDefinition,
+) -> bool {
+    let mut changed = false;
+    if !definition_has_dedup_contract(effective) {
+        if !effective.template.description.trim().is_empty() {
+            effective.template.description.push_str("\n\n");
+        }
+        effective
+            .template
+            .description
+            .push_str(RUN_FAILURE_DEDUP_PARAGRAPH);
+        changed = true;
+        if let Some(criterion) = bundled
+            .template
+            .acceptance_criteria
+            .iter()
+            .find(|unit| contract_categories(unit) == (true, true, true))
+            && !effective
+                .template
+                .acceptance_criteria
+                .iter()
+                .any(|existing| existing == criterion)
+        {
+            effective
+                .template
+                .acceptance_criteria
+                .push(criterion.clone());
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// The rendered bundled body of shipped default `name`, or of a demoted default
+/// whose reference copy Orbit still carries, if Orbit bundles one.
+pub(crate) fn rendered_bundled_body(name: &str, base_branch: &str) -> Option<String> {
+    DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .chain(REFERENCE_AUTO_TASK_FILES)
+        .find(|(shipped, _)| *shipped == name)
+        .map(|(_, content)| render_default_auto_task(content, base_branch).into_owned())
+}
+
+/// `None` means the manifest proves Orbit wrote these exact bytes, or they
+/// equal the current bundle. Other files are compared with the current body
+/// first, then with shipped history if their body differs.
+pub(crate) fn classify_bundled_file(
+    rendered: &str,
+    on_disk: &str,
+    tracked: Option<&String>,
+    settings: Option<&AutoTaskSettings>,
+    base_branch: &str,
+) -> Result<Option<BundledFileOverrides>, OrbitError> {
+    let digest = sha256_hex(on_disk.as_bytes());
+    if tracked == Some(&digest) || digest == sha256_hex(rendered.as_bytes()) {
+        return Ok(None);
+    }
+    let definition = parse_auto_task_yaml(on_disk)?;
+    let body = parse_auto_task_yaml(rendered)?;
+    let mut effective = definition.clone();
+    if let Some(settings) = settings {
+        settings.apply(&mut effective);
+    }
+    let mut overrides = split_overrides(&body, &effective);
+    // A YAML comment is body content no settings entry can hold: an operator's
+    // note keeps the file a fork rather than being dropped by migration.
+    if has_added_comment(rendered, on_disk) {
+        overrides.body_fields.push("comments");
+    }
+    if !overrides.body_fields.is_empty()
+        && definition.name == body.name
+        && let Some(overrides) =
+            historical_overrides(&body, &definition, on_disk, base_branch, settings)?
+    {
+        return Ok(Some(BundledFileOverrides {
+            overrides,
+            stale_shipped_body: true,
+        }));
+    }
+    Ok(Some(BundledFileOverrides {
+        overrides,
+        stale_shipped_body: false,
+    }))
+}
+
+/// Whether `on_disk` carries a `#` line the bundled body lacks. Lines inside
+/// block scalars (Markdown headings) match their bundled counterparts, and a
+/// definition Orbit re-serialized carries no comments at all.
+fn has_added_comment(rendered: &str, on_disk: &str) -> bool {
+    let bundled: std::collections::BTreeSet<&str> = rendered
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('#'))
+        .collect();
+    on_disk
+        .lines()
+        .map(str::trim)
+        .any(|line| line.starts_with('#') && !bundled.contains(line))
+}
+
+fn settings_error(error: String) -> OrbitError {
+    OrbitError::InvalidInput(error)
+}
+
+fn definition_file(dir: &Path, name: &str) -> std::path::PathBuf {
+    dir.join(ManagedAssetLayout::YamlStem.relative_path(name))
+}
+
+fn manifest_digest(dir: &Path, name: &str) -> Result<Option<String>, OrbitError> {
+    Ok(load_managed_asset_manifest(
+        &dir.join(MANAGED_ASSET_MANIFEST_FILE),
+        AUTO_TASK_ASSET_KIND,
+        ManagedAssetLayout::YamlStem,
+    )?
+    .and_then(|manifest| manifest.assets.get(name).cloned()))
 }
 
 /// Move every settings-only fork of a shipped default back under management:

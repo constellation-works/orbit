@@ -318,47 +318,6 @@ impl OrbitRuntime {
     }
 }
 
-pub(crate) fn bounded_query(
-    state: JobRunState,
-    since: DateTime<Utc>,
-    include_steps: bool,
-) -> JobRunQuery {
-    JobRunQuery {
-        state: Some(state),
-        created_since: Some(since),
-        limit: Some(SCAN_LIMIT),
-        order_by: JobRunOrder::Recency,
-        include_steps,
-        ..JobRunQuery::default()
-    }
-}
-
-/// When a success shows that the provider works. A run that started before a
-/// failure used the credentials that failed, even if it finished after it.
-pub(crate) fn clearing_at(run: &JobRun) -> DateTime<Utc> {
-    run.started_at.unwrap_or(run.created_at)
-}
-
-pub(crate) fn host_of(run: &JobRun, fallback: &str) -> String {
-    run.executed_on
-        .as_ref()
-        .and_then(|location| {
-            named(&location.machine_name).or_else(|| {
-                let id = location.machine_id.trim();
-                (!id.is_empty()).then(|| id.to_string())
-            })
-        })
-        .unwrap_or_else(|| fallback.to_string())
-}
-
-fn named(value: &Option<String>) -> Option<String> {
-    value
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-}
-
 /// Recorded agent assignments for jobs whose task crew is not their agent crew.
 /// Readiness, routine holds and pilot scorecards use this lookup, including failure-to-partition
 /// attribution for finding verification.
@@ -438,6 +397,47 @@ impl RunCrewLookup {
         }
         crews.into_iter().collect()
     }
+}
+
+pub(crate) fn bounded_query(
+    state: JobRunState,
+    since: DateTime<Utc>,
+    include_steps: bool,
+) -> JobRunQuery {
+    JobRunQuery {
+        state: Some(state),
+        created_since: Some(since),
+        limit: Some(SCAN_LIMIT),
+        order_by: JobRunOrder::Recency,
+        include_steps,
+        ..JobRunQuery::default()
+    }
+}
+
+/// When a success shows that the provider works. A run that started before a
+/// failure used the credentials that failed, even if it finished after it.
+pub(crate) fn clearing_at(run: &JobRun) -> DateTime<Utc> {
+    run.started_at.unwrap_or(run.created_at)
+}
+
+pub(crate) fn host_of(run: &JobRun, fallback: &str) -> String {
+    run.executed_on
+        .as_ref()
+        .and_then(|location| {
+            named(&location.machine_name).or_else(|| {
+                let id = location.machine_id.trim();
+                (!id.is_empty()).then(|| id.to_string())
+            })
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn named(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 fn uses_recorded_crews(job: &str) -> bool {

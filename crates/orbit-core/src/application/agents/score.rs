@@ -189,6 +189,22 @@ pub(super) struct RowInput<'a> {
     pub(super) unjudged: bool,
 }
 
+impl RowInput<'_> {
+    /// The units `key` is rated per 100 of.
+    fn units_of(&self, key: &str) -> usize {
+        self.denominators
+            .get(key)
+            .map_or(self.units, |denominator| denominator.units)
+    }
+
+    /// Whether `key` is below its own minimum support.
+    fn provisional_term(&self, key: &str) -> bool {
+        self.denominators
+            .get(key)
+            .is_some_and(Denominator::provisional)
+    }
+}
+
 /// One row unit's contribution to the bootstrap sample.
 #[derive(Default)]
 pub(super) struct SampleUnit {
@@ -196,6 +212,180 @@ pub(super) struct SampleUnit {
     counts: BTreeMap<&'static str, f64>,
     pub(super) expected: BTreeMap<&'static str, f64>,
     pub(super) denominator_terms: BTreeMap<&'static str, usize>,
+}
+
+/// A row with its rates and scores.
+pub(super) struct Scored<'a> {
+    pub(super) input: RowInput<'a>,
+    per_100: BTreeMap<&'static str, f64>,
+    raw: f64,
+    score: f64,
+    below_support: bool,
+    rank: Option<usize>,
+    /// The 10th and 90th percentiles of the row's resampled score; set only
+    /// on ranked rows.
+    interval: Option<(f64, f64)>,
+}
+
+impl Scored<'_> {
+    /// Whether `crew` contributed units to this row.
+    pub(super) fn has_crew(&self, crew: &str) -> bool {
+        self.input.crew == crew || self.input.crews.iter().any(|name| name == crew)
+    }
+
+    /// The row's `model @ effort` label.
+    pub(super) fn label(&self) -> String {
+        super::effort::row_label(&self.input.model, &self.input.effort)
+    }
+
+    /// The ranking row. An unjudged row's `raw` and `score` are null.
+    pub(super) fn row(&self, terms: &[Term]) -> Value {
+        let counts: serde_json::Map<String, Value> = terms
+            .iter()
+            .map(|term| (term.key.to_string(), number(self.count(term.key))))
+            .collect();
+        let per_100: serde_json::Map<String, Value> = self
+            .per_100
+            .iter()
+            .map(|(key, rate)| ((*key).to_string(), self.measured_rate(key, *rate)))
+            .collect();
+        let mut payload = json!({
+            "crew": self.input.crew,
+            "crews": self.input.crews,
+            "model": self.input.model,
+            "reasoning_effort": self.input.effort,
+            "effort_label": super::effort::effort_label(&self.input.effort),
+            "label": self.label(),
+            "units": self.input.units,
+            "effort_sources": self.input.effort_sources,
+            "below_support": self.below_support,
+            "unjudged": self.input.unjudged,
+            "rank": self.rank,
+            "counts": counts,
+            "per_100": per_100,
+            "raw": (!self.input.unjudged).then(|| number(self.raw)),
+            "score": (!self.input.unjudged).then(|| number(self.score)),
+            "interval": self.interval.map(|(low, high)| json!({
+                "p10": number(low),
+                "p90": number(high),
+            })),
+            "runs_without_model": self.input.runs_without_model,
+            "provisional": self.input.provisional,
+            "stats": self.input.stats.iter().map(|stat| json!({
+                "key": stat.key,
+                "label": stat.label,
+                "value": stat.value,
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(fallback) = self.input.escaped_regressions_fallback {
+            payload["escaped_regressions_fallback"] = json!(fallback);
+        }
+        if !self.input.denominators.is_empty() {
+            payload["term_units"] = json!(
+                self.input
+                    .denominators
+                    .iter()
+                    .map(|(key, denominator)| ((*key).to_string(), json!(denominator.units)))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+            payload["provisional_terms"] = json!(
+                self.input
+                    .denominators
+                    .iter()
+                    .filter(|(_, denominator)| denominator.provisional())
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+            );
+        }
+        if let Some(reviewed) = self.input.reviewed_units {
+            payload["reviewed_units"] = json!(reviewed);
+        }
+        if let Some(expected) = &self.input.expected {
+            payload["expected"] = json!(
+                expected
+                    .iter()
+                    .map(|(key, count)| ((*key).to_string(), number(*count)))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+            payload["score_base"] = json!(100);
+            // The rounded `expected` and `per_100` fields stay the display
+            // contract. The chart and score breakdown need the same full-
+            // precision signed excess the raw score sums, including a term
+            // whose displayed expected count rounds to zero or is below 1e-9.
+            payload["contributions"] = json!(
+                terms
+                    .iter()
+                    .map(|term| (term.key.to_string(), json!(self.contribution(term))))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+        }
+        payload
+    }
+
+    fn contribution(&self, term: &Term) -> f64 {
+        contribution(&self.input, &self.per_100, term)
+    }
+
+    /// Each term's count, rate and contribution to the raw score, with the
+    /// tasks behind the count, largest first.
+    pub(super) fn terms(&self, terms: &[Term]) -> Vec<Value> {
+        terms
+            .iter()
+            .map(|term| {
+                let mut tasks: Vec<&TaskTally<'_>> = self
+                    .input
+                    .tallies
+                    .get(term.key)
+                    .map(|tally| tally.tasks.values().collect())
+                    .unwrap_or_default();
+                tasks.sort_by(|left, right| {
+                    right
+                        .count
+                        .abs()
+                        .partial_cmp(&left.count.abs())
+                        .unwrap_or(Ordering::Equal)
+                        .then(right.task.created_at.cmp(&left.task.created_at))
+                });
+                let mut payload = json!({
+                    "key": term.key,
+                    "label": term.label,
+                    "weight": term.weight,
+                    "group": term.group,
+                    "count": number(self.count(term.key)),
+                    "per_100": self.measured_rate(term.key, self.per_100[term.key]),
+                    "contribution": number(self.contribution(term)),
+                    "tasks": tasks.iter().map(|tally| json!({
+                        "task_id": tally.task.id,
+                        "title": tally.task.title,
+                        "status": tally.task.status.to_string(),
+                        "count": number(tally.count),
+                        "occurrences": tally.occurrences.iter().map(|occurrence| json!({
+                            "at": occurrence.at.to_rfc3339(),
+                            "detail": occurrence.detail,
+                            "run_id": occurrence.run_id,
+                        })).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                });
+                if let Some(denominator) = self.input.denominators.get(term.key) {
+                    payload["units"] = json!(denominator.units);
+                    payload["provisional"] = json!(denominator.provisional());
+                }
+                payload
+            })
+            .collect()
+    }
+
+    fn measured_rate(&self, key: &str, rate: f64) -> Value {
+        if self.input.reviewed_units == Some(0) && self.input.denominators.contains_key(key) {
+            Value::Null
+        } else {
+            number(rate)
+        }
+    }
+
+    fn count(&self, key: &str) -> f64 {
+        self.input.tallies.get(key).map_or(0.0, |tally| tally.count)
+    }
 }
 
 /// Build one sample unit for each unit in the row and attach its observed
@@ -229,35 +419,6 @@ pub(super) fn sample_units<'a>(
     units.into_values().collect()
 }
 
-impl RowInput<'_> {
-    /// The units `key` is rated per 100 of.
-    fn units_of(&self, key: &str) -> usize {
-        self.denominators
-            .get(key)
-            .map_or(self.units, |denominator| denominator.units)
-    }
-
-    /// Whether `key` is below its own minimum support.
-    fn provisional_term(&self, key: &str) -> bool {
-        self.denominators
-            .get(key)
-            .is_some_and(Denominator::provisional)
-    }
-}
-
-/// A row with its rates and scores.
-pub(super) struct Scored<'a> {
-    pub(super) input: RowInput<'a>,
-    per_100: BTreeMap<&'static str, f64>,
-    raw: f64,
-    score: f64,
-    below_support: bool,
-    rank: Option<usize>,
-    /// The 10th and 90th percentiles of the row's resampled score; set only
-    /// on ranked rows.
-    interval: Option<(f64, f64)>,
-}
-
 /// Score and order `rows`: rows meeting `min_support` first, best score
 /// first, each ranked; then the rest without a rank, and unjudged rows last.
 /// Also returns the fleet average, the units-weighted mean raw score of the
@@ -285,12 +446,13 @@ pub(super) fn score<'a>(
                     .iter()
                     .map(|term| contribution(&input, &per_100, term))
                     .sum::<f64>();
+            let below_support = input.units < min_support;
             Scored {
-                below_support: input.units < min_support,
                 input,
                 per_100,
                 raw,
                 score: raw,
+                below_support,
                 rank: None,
                 interval: None,
             }
@@ -461,167 +623,6 @@ fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, ter
     }
     let excess = term.weight * (observed_rate - expected_rate);
     if excess == 0.0 { 0.0 } else { excess }
-}
-
-impl Scored<'_> {
-    /// Whether `crew` contributed units to this row.
-    pub(super) fn has_crew(&self, crew: &str) -> bool {
-        self.input.crew == crew || self.input.crews.iter().any(|name| name == crew)
-    }
-
-    /// The row's `model @ effort` label.
-    pub(super) fn label(&self) -> String {
-        super::effort::row_label(&self.input.model, &self.input.effort)
-    }
-
-    /// The ranking row. An unjudged row's `raw` and `score` are null.
-    pub(super) fn row(&self, terms: &[Term]) -> Value {
-        let counts: serde_json::Map<String, Value> = terms
-            .iter()
-            .map(|term| (term.key.to_string(), number(self.count(term.key))))
-            .collect();
-        let per_100: serde_json::Map<String, Value> = self
-            .per_100
-            .iter()
-            .map(|(key, rate)| ((*key).to_string(), self.measured_rate(key, *rate)))
-            .collect();
-        let mut payload = json!({
-            "crew": self.input.crew,
-            "crews": self.input.crews,
-            "model": self.input.model,
-            "reasoning_effort": self.input.effort,
-            "effort_label": super::effort::effort_label(&self.input.effort),
-            "label": self.label(),
-            "units": self.input.units,
-            "effort_sources": self.input.effort_sources,
-            "below_support": self.below_support,
-            "unjudged": self.input.unjudged,
-            "rank": self.rank,
-            "counts": counts,
-            "per_100": per_100,
-            "raw": (!self.input.unjudged).then(|| number(self.raw)),
-            "score": (!self.input.unjudged).then(|| number(self.score)),
-            "interval": self.interval.map(|(low, high)| json!({
-                "p10": number(low),
-                "p90": number(high),
-            })),
-            "runs_without_model": self.input.runs_without_model,
-            "provisional": self.input.provisional,
-            "stats": self.input.stats.iter().map(|stat| json!({
-                "key": stat.key,
-                "label": stat.label,
-                "value": stat.value,
-            })).collect::<Vec<_>>(),
-        });
-        if let Some(fallback) = self.input.escaped_regressions_fallback {
-            payload["escaped_regressions_fallback"] = json!(fallback);
-        }
-        if !self.input.denominators.is_empty() {
-            payload["term_units"] = json!(
-                self.input
-                    .denominators
-                    .iter()
-                    .map(|(key, denominator)| ((*key).to_string(), json!(denominator.units)))
-                    .collect::<serde_json::Map<String, Value>>()
-            );
-            payload["provisional_terms"] = json!(
-                self.input
-                    .denominators
-                    .iter()
-                    .filter(|(_, denominator)| denominator.provisional())
-                    .map(|(key, _)| *key)
-                    .collect::<Vec<_>>()
-            );
-        }
-        if let Some(reviewed) = self.input.reviewed_units {
-            payload["reviewed_units"] = json!(reviewed);
-        }
-        if let Some(expected) = &self.input.expected {
-            payload["expected"] = json!(
-                expected
-                    .iter()
-                    .map(|(key, count)| ((*key).to_string(), number(*count)))
-                    .collect::<serde_json::Map<String, Value>>()
-            );
-            payload["score_base"] = json!(100);
-            // The rounded `expected` and `per_100` fields stay the display
-            // contract. The chart and score breakdown need the same full-
-            // precision signed excess the raw score sums, including a term
-            // whose displayed expected count rounds to zero or is below 1e-9.
-            payload["contributions"] = json!(
-                terms
-                    .iter()
-                    .map(|term| (term.key.to_string(), json!(self.contribution(term))))
-                    .collect::<serde_json::Map<String, Value>>()
-            );
-        }
-        payload
-    }
-
-    fn contribution(&self, term: &Term) -> f64 {
-        contribution(&self.input, &self.per_100, term)
-    }
-
-    /// Each term's count, rate and contribution to the raw score, with the
-    /// tasks behind the count, largest first.
-    pub(super) fn terms(&self, terms: &[Term]) -> Vec<Value> {
-        terms
-            .iter()
-            .map(|term| {
-                let mut tasks: Vec<&TaskTally<'_>> = self
-                    .input
-                    .tallies
-                    .get(term.key)
-                    .map(|tally| tally.tasks.values().collect())
-                    .unwrap_or_default();
-                tasks.sort_by(|left, right| {
-                    right
-                        .count
-                        .abs()
-                        .partial_cmp(&left.count.abs())
-                        .unwrap_or(Ordering::Equal)
-                        .then(right.task.created_at.cmp(&left.task.created_at))
-                });
-                let mut payload = json!({
-                    "key": term.key,
-                    "label": term.label,
-                    "weight": term.weight,
-                    "group": term.group,
-                    "count": number(self.count(term.key)),
-                    "per_100": self.measured_rate(term.key, self.per_100[term.key]),
-                    "contribution": number(self.contribution(term)),
-                    "tasks": tasks.iter().map(|tally| json!({
-                        "task_id": tally.task.id,
-                        "title": tally.task.title,
-                        "status": tally.task.status.to_string(),
-                        "count": number(tally.count),
-                        "occurrences": tally.occurrences.iter().map(|occurrence| json!({
-                            "at": occurrence.at.to_rfc3339(),
-                            "detail": occurrence.detail,
-                            "run_id": occurrence.run_id,
-                        })).collect::<Vec<_>>(),
-                    })).collect::<Vec<_>>(),
-                });
-                if let Some(denominator) = self.input.denominators.get(term.key) {
-                    payload["units"] = json!(denominator.units);
-                    payload["provisional"] = json!(denominator.provisional());
-                }
-                payload
-            })
-            .collect()
-    }
-
-    fn measured_rate(&self, key: &str, rate: f64) -> Value {
-        if self.input.reviewed_units == Some(0) && self.input.denominators.contains_key(key) {
-            Value::Null
-        } else {
-            number(rate)
-        }
-    }
-
-    fn count(&self, key: &str) -> f64 {
-        self.input.tallies.get(key).map_or(0.0, |tally| tally.count)
-    }
 }
 
 /// The window's provisional units, the sum of the rows' counts. Only

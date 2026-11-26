@@ -71,51 +71,6 @@ impl FootprintWait {
     }
 }
 
-/// Classify every task among `tasks` that declares no footprint.
-///
-/// Pilots are read once, and only when such a task exists; a task's comments
-/// only when a pilot would still prepare it.
-pub(crate) fn footprint_waits<'a>(
-    runtime: &OrbitRuntime,
-    action: &str,
-    tasks: impl IntoIterator<Item = &'a Task>,
-    now: DateTime<Utc>,
-) -> Result<BTreeMap<String, FootprintWait>, DispatchError> {
-    let mut pilots: Option<FootprintPilots> = None;
-    let mut waits = BTreeMap::new();
-    for task in tasks {
-        if !footprint_rule_applies(&task.tags, &task.context_files) {
-            continue;
-        }
-        let pilots = pilots.get_or_insert_with(|| FootprintPilots::load(runtime));
-        let wait = match pilots.prepares_until(task).filter(|until| *until > now) {
-            Some(until) => {
-                let assessed = runtime.task_pilot_assessed(&task.id).map_err(|error| {
-                    DispatchError::action_failed(
-                        action,
-                        format!("read task-pilot assessment of {}: {error}", task.id),
-                    )
-                })?;
-                if assessed {
-                    FootprintWait::Exclusive
-                } else {
-                    FootprintWait::AwaitingFootprint { until }
-                }
-            }
-            None => FootprintWait::Exclusive,
-        };
-        waits.insert(task.id.clone(), wait);
-    }
-    Ok(waits)
-}
-
-/// A task with no footprint whose rule an operator waived: it locks nothing,
-/// but it may edit anything, so the wave treats it as editing work.
-fn waived_without_footprint(task: &Task) -> bool {
-    declares_no_footprint(&task.tags, &task.context_files)
-        && !footprint_rule_applies(&task.tags, &task.context_files)
-}
-
 /// What one wave knows about unknown footprints before it selects anything.
 pub(crate) struct FootprintGuard<'a> {
     /// Off for a single-slot run, which applies none of this.
@@ -126,18 +81,6 @@ pub(crate) struct FootprintGuard<'a> {
     pub(crate) whole_tree_holder: Option<String>,
     /// The candidates with no footprint, from [`footprint_waits`].
     pub(crate) waits: &'a BTreeMap<String, FootprintWait>,
-}
-
-/// The first live-leaf task, in ID order, that declares no footprint.
-pub(crate) fn whole_tree_holder(
-    live_task_ids: &BTreeSet<String>,
-    task_lookup: &BTreeMap<String, Task>,
-) -> Option<String> {
-    live_task_ids
-        .iter()
-        .filter_map(|task_id| task_lookup.get(task_id))
-        .find(|task| footprint_rule_applies(&task.tags, &task.context_files))
-        .map(|task| task.id.clone())
 }
 
 /// Which footprint rule keeps a candidate out of a free slot.
@@ -273,4 +216,61 @@ impl<'a> FootprintWave<'a> {
             self.busy = true;
         }
     }
+}
+
+/// Classify every task among `tasks` that declares no footprint.
+///
+/// Pilots are read once, and only when such a task exists; a task's comments
+/// only when a pilot would still prepare it.
+pub(crate) fn footprint_waits<'a>(
+    runtime: &OrbitRuntime,
+    action: &str,
+    tasks: impl IntoIterator<Item = &'a Task>,
+    now: DateTime<Utc>,
+) -> Result<BTreeMap<String, FootprintWait>, DispatchError> {
+    let mut pilots: Option<FootprintPilots> = None;
+    let mut waits = BTreeMap::new();
+    for task in tasks {
+        if !footprint_rule_applies(&task.tags, &task.context_files) {
+            continue;
+        }
+        let pilots = pilots.get_or_insert_with(|| FootprintPilots::load(runtime));
+        let wait = match pilots.prepares_until(task).filter(|until| *until > now) {
+            Some(until) => {
+                let assessed = runtime.task_pilot_assessed(&task.id).map_err(|error| {
+                    DispatchError::action_failed(
+                        action,
+                        format!("read task-pilot assessment of {}: {error}", task.id),
+                    )
+                })?;
+                if assessed {
+                    FootprintWait::Exclusive
+                } else {
+                    FootprintWait::AwaitingFootprint { until }
+                }
+            }
+            None => FootprintWait::Exclusive,
+        };
+        waits.insert(task.id.clone(), wait);
+    }
+    Ok(waits)
+}
+
+/// A task with no footprint whose rule an operator waived: it locks nothing,
+/// but it may edit anything, so the wave treats it as editing work.
+fn waived_without_footprint(task: &Task) -> bool {
+    declares_no_footprint(&task.tags, &task.context_files)
+        && !footprint_rule_applies(&task.tags, &task.context_files)
+}
+
+/// The first live-leaf task, in ID order, that declares no footprint.
+pub(crate) fn whole_tree_holder(
+    live_task_ids: &BTreeSet<String>,
+    task_lookup: &BTreeMap<String, Task>,
+) -> Option<String> {
+    live_task_ids
+        .iter()
+        .filter_map(|task_id| task_lookup.get(task_id))
+        .find(|task| footprint_rule_applies(&task.tags, &task.context_files))
+        .map(|task| task.id.clone())
 }

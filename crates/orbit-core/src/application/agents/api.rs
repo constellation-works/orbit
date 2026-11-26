@@ -106,6 +106,13 @@ impl AgentDetailSurface {
     }
 }
 
+/// The crew, model and effort that pick one row of an agent detail request.
+struct DetailRowSelector<'a> {
+    crew: &'a str,
+    model: Option<&'a str>,
+    effort: Option<&'a str>,
+}
+
 /// A role's scorecard header: selection, unit, terms and status.
 pub(super) fn role_header(
     facts: &AgentFacts,
@@ -325,13 +332,6 @@ pub fn agent_detail_with_effort(
         cache_ttl,
         AgentDetailSurface::Dashboard,
     )
-}
-
-/// The crew, model and effort that pick one row of an agent detail request.
-struct DetailRowSelector<'a> {
-    crew: &'a str,
-    model: Option<&'a str>,
-    effort: Option<&'a str>,
 }
 
 fn agent_detail_for_surface(

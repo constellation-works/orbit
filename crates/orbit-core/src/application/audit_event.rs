@@ -259,38 +259,6 @@ impl AuditPostFilter {
     }
 }
 
-/// Maps a free-form audit `role` onto a canonical agent family.
-fn audit_agent_family_key(role: &str) -> String {
-    let normalized = normalize_attribution_label(role, None);
-    infer_agent_family_from_model(&normalized).unwrap_or(normalized)
-}
-
-/// Best-effort match of a stringified `arguments_json` payload against a
-/// requested fsProfile name. Looks for any of the conventional keys
-/// (`fsProfile`, `fs_profile`, `profile`) at the top level of the parsed
-/// object. Returns `false` for malformed or empty payloads — the SQLite schema
-/// has no profile column, so absence cannot be distinguished from mismatch.
-fn arguments_json_matches_profile(raw: Option<&str>, expected: &str) -> bool {
-    let Some(raw) = raw else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return false;
-    };
-    const KEYS: &[&str] = &["fsProfile", "fs_profile", "profile"];
-    let Some(obj) = value.as_object() else {
-        return false;
-    };
-    for key in KEYS {
-        if let Some(Value::String(found)) = obj.get(*key)
-            && found == expected
-        {
-            return true;
-        }
-    }
-    false
-}
-
 impl OrbitRuntime {
     /// Returns persistent audit events recorded by the CLI middleware across all invocations.
     /// Backed by SQLite; survives process restarts. For in-process session events only, see
@@ -755,6 +723,48 @@ impl OrbitRuntime {
     }
 }
 
+/// Decision counts shared by the audit CLI and dashboard KPI.
+pub struct AuditPolicyDenialStats {
+    /// Canonical SQLite capability and policy decisions.
+    pub sql_denied: i64,
+    /// Policy decisions in the workspace's v2 audit envelope.
+    pub v2_denied: i64,
+    /// Combined decisions by operation.
+    pub by_operation: Vec<(String, i64)>,
+}
+
+/// Maps a free-form audit `role` onto a canonical agent family.
+fn audit_agent_family_key(role: &str) -> String {
+    let normalized = normalize_attribution_label(role, None);
+    infer_agent_family_from_model(&normalized).unwrap_or(normalized)
+}
+
+/// Best-effort match of a stringified `arguments_json` payload against a
+/// requested fsProfile name. Looks for any of the conventional keys
+/// (`fsProfile`, `fs_profile`, `profile`) at the top level of the parsed
+/// object. Returns `false` for malformed or empty payloads — the SQLite schema
+/// has no profile column, so absence cannot be distinguished from mismatch.
+fn arguments_json_matches_profile(raw: Option<&str>, expected: &str) -> bool {
+    let Some(raw) = raw else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    const KEYS: &[&str] = &["fsProfile", "fs_profile", "profile"];
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    for key in KEYS {
+        if let Some(Value::String(found)) = obj.get(*key)
+            && found == expected
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Nearest-rank p95 over a slice of `duration_ms` values that the caller has
 /// already sorted ascending. Returns 0 for an empty slice.
 pub fn compute_p95(sorted_durations: &[i64]) -> i64 {
@@ -764,14 +774,4 @@ pub fn compute_p95(sorted_durations: &[i64]) -> i64 {
     let idx = ((sorted_durations.len() as f64) * 0.95).ceil() as usize;
     let idx = idx.min(sorted_durations.len()) - 1;
     sorted_durations[idx]
-}
-
-/// Decision counts shared by the audit CLI and dashboard KPI.
-pub struct AuditPolicyDenialStats {
-    /// Canonical SQLite capability and policy decisions.
-    pub sql_denied: i64,
-    /// Policy decisions in the workspace's v2 audit envelope.
-    pub v2_denied: i64,
-    /// Combined decisions by operation.
-    pub by_operation: Vec<(String, i64)>,
 }

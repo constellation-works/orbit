@@ -421,9 +421,8 @@ fn work_fit(
                 .push(base.as_str().to_string());
         }
     }
+    let accuracy = forecast.accuracy_points();
     Some(PullWorkFit {
-        accuracy: forecast.accuracy_points(),
-        pending,
         fit,
         record: PullAdmissionFit {
             mode: mode.to_string(),
@@ -432,5 +431,7 @@ fn work_fit(
             admissible,
             unfit,
         },
+        accuracy,
+        pending,
     })
 }

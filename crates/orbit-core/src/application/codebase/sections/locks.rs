@@ -13,14 +13,14 @@ pub(in crate::application::codebase) struct LockRow {
     pub(in crate::application::codebase) waits: Vec<WaitEpisode>,
 }
 
-pub(in crate::application::codebase) fn total_wait_ms(row: &LockRow) -> i64 {
-    row.waits.iter().map(WaitEpisode::wait_ms).sum()
-}
-
 pub(in crate::application::codebase) struct LockRows {
     pub(in crate::application::codebase) rows: BTreeMap<String, LockRow>,
     reservations: usize,
     denials: usize,
+}
+
+pub(in crate::application::codebase) fn total_wait_ms(row: &LockRow) -> i64 {
+    row.waits.iter().map(WaitEpisode::wait_ms).sum()
 }
 
 /// Distinct requesters that waited on a path because of a lock conflict ÷

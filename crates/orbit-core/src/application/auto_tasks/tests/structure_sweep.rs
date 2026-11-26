@@ -15,8 +15,8 @@ fn split_task_params() -> TaskAddParams {
         title: "Split execute into its own module".to_string(),
         description: "Move the execute concern into execute/mod.rs.".to_string(),
         acceptance_criteria: vec!["execute/mod.rs exists at its destination.".to_string()],
-        status: Some(TaskStatus::Proposed),
         context_files: vec![NEW_MODULE.to_string()],
+        status: Some(TaskStatus::Proposed),
         ..Default::default()
     }
 }

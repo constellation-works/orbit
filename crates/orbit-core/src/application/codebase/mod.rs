@@ -36,9 +36,6 @@ mod riskiness;
 mod sections;
 mod stored;
 
-#[cfg(test)]
-mod tests;
-
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -262,6 +259,25 @@ impl OrbitRuntime {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckoutPresence {
+    File,
+    Absent,
+    Indeterminate,
+}
+
+impl OrbitRuntime {
+    /// Scan and rank files that changed alongside one repository file.
+    pub fn codebase_related(
+        &self,
+        query: &CodebaseQuery,
+        path: &str,
+        top: usize,
+    ) -> Result<Value, OrbitError> {
+        codebase_related(&self.codebase_related_scan(query)?, query, path, top)
+    }
+}
+
 /// The six path rankings and the paths several of them share (`overlap`),
 /// with the selection and scan facts. `cache_ttl` is how long the caller keeps
 /// `facts`, reported as `cache_ttl_seconds`.
@@ -342,13 +358,6 @@ fn mark_absent_row(
     cache: &mut std::collections::BTreeMap<String, CheckoutPresence>,
 ) {
     mark_absent_row_with_lookup(row, cache, |path| checkout_file(root, path));
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CheckoutPresence {
-    File,
-    Absent,
-    Indeterminate,
 }
 
 fn mark_absent_row_with_lookup(
@@ -449,14 +458,5 @@ pub fn codebase_related(
     Ok(sections::merge(query.header(facts, params.since), payload))
 }
 
-impl OrbitRuntime {
-    /// Scan and rank files that changed alongside one repository file.
-    pub fn codebase_related(
-        &self,
-        query: &CodebaseQuery,
-        path: &str,
-        top: usize,
-    ) -> Result<Value, OrbitError> {
-        codebase_related(&self.codebase_related_scan(query)?, query, path, top)
-    }
-}
+#[cfg(test)]
+mod tests;

@@ -41,19 +41,6 @@ const CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 /// The `step_finished` outcome of a step that completed.
 const STEP_SUCCESS: &str = "success";
 
-/// Whether `name` is an explorer delegation, including the tool's own name
-/// on the tail of an MCP identifier (`mcp__orbit__orbit_agent_invoke`).
-fn is_explorer_delegation(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    let tail = match lower.rsplit_once("__") {
-        Some((_, tail)) => tail,
-        None => lower.as_str(),
-    };
-    EXPLORER_DELEGATION
-        .iter()
-        .any(|known| *known == tail || *known == lower.as_str())
-}
-
 /// Which analysed tasks the implement invocations' tool calls show delegating
 /// to an explorer.
 struct ExplorerObservations {
@@ -80,27 +67,6 @@ impl Spend {
     fn complete_cost(&self) -> Option<f64> {
         self.cost.filter(|cost| !self.unpriced && cost.is_finite())
     }
-}
-
-fn crew_names_from_entries(entries: Option<&Value>) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    if let Some(Value::Array(items)) = entries {
-        for item in items {
-            if let Some(name) = item.as_str() {
-                names.insert(name.to_string());
-            } else if let Some(name) = item.get("name").and_then(Value::as_str) {
-                names.insert(name.to_string());
-            }
-        }
-    }
-    names
-}
-
-fn captured_pool_for_tier(pools: Option<&Value>, tier: &str) -> BTreeSet<String> {
-    let Some(pool) = pools.and_then(|pools| pools.get(tier)) else {
-        return BTreeSet::new();
-    };
-    crew_names_from_entries(pool.get("crews").or_else(|| pool.as_array().map(|_| pool)))
 }
 
 /// What a readout reads from its tasks' run audit trails.
@@ -907,4 +873,38 @@ impl OrbitRuntime {
         }
         Ok(outcomes)
     }
+}
+
+/// Whether `name` is an explorer delegation, including the tool's own name
+/// on the tail of an MCP identifier (`mcp__orbit__orbit_agent_invoke`).
+fn is_explorer_delegation(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let tail = match lower.rsplit_once("__") {
+        Some((_, tail)) => tail,
+        None => lower.as_str(),
+    };
+    EXPLORER_DELEGATION
+        .iter()
+        .any(|known| *known == tail || *known == lower.as_str())
+}
+
+fn crew_names_from_entries(entries: Option<&Value>) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    if let Some(Value::Array(items)) = entries {
+        for item in items {
+            if let Some(name) = item.as_str() {
+                names.insert(name.to_string());
+            } else if let Some(name) = item.get("name").and_then(Value::as_str) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn captured_pool_for_tier(pools: Option<&Value>, tier: &str) -> BTreeSet<String> {
+    let Some(pool) = pools.and_then(|pools| pools.get(tier)) else {
+        return BTreeSet::new();
+    };
+    crew_names_from_entries(pool.get("crews").or_else(|| pool.as_array().map(|_| pool)))
 }

@@ -47,10 +47,10 @@ impl OrbitRuntime {
                 let definition = parse_routine_yaml(&std::fs::read_to_string(&path).ok()?).ok()?;
                 let trigger = definition.trigger.state.as_ref()?;
                 (trigger.kind == StateTriggerKind::PreparationEligible).then(|| PilotRoutine {
-                    owned_here: trigger.owner_machine == machine_id,
                     name: definition.name,
                     path,
                     enabled: definition.enabled,
+                    owned_here: trigger.owner_machine == machine_id,
                 })
             })
             .collect::<Vec<_>>();

@@ -62,6 +62,9 @@ const SHELL_FENCES: &[&str] = &[
     "terminal",
 ];
 
+/// Replacement for a token [`strip_score_blind_tokens`] removes.
+const STRIPPED: &str = "[…]";
+
 /// One of the five write rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +133,15 @@ pub struct MemoryWriteContext<'a> {
     /// The writing run's evidence pack task ids: a dreaming run may cite
     /// only these. `None` for an operator write.
     pub evidence_pack: Option<&'a BTreeSet<String>>,
+}
+
+/// One token [`strip_score_blind_tokens`] removes: its ASCII-lowercase
+/// text, whether a match extends over a suffix, and what counts as a word
+/// character at its boundaries.
+struct StripToken {
+    token: String,
+    allow_suffix: bool,
+    word: fn(char) -> bool,
 }
 
 /// Check `write` against every rule, in order: rewrite-whole, caps,
@@ -333,9 +345,6 @@ fn score_blind(
     Ok(())
 }
 
-/// Replacement for a token [`strip_score_blind_tokens`] removes.
-const STRIPPED: &str = "[…]";
-
 /// `text` with every token the score-blind lint would refuse replaced by
 /// `[…]`: scorecard words (with any suffix for the stems), scorecard term
 /// keys and labels, and other crews' and models' names. Whitespace runs
@@ -381,15 +390,6 @@ pub(crate) fn strip_score_blind_tokens(text: &str, vocabulary: &MemoryLintVocabu
         text = strip_word(&text, &token.token, token.allow_suffix, token.word);
     }
     text
-}
-
-/// One token [`strip_score_blind_tokens`] removes: its ASCII-lowercase
-/// text, whether a match extends over a suffix, and what counts as a word
-/// character at its boundaries.
-struct StripToken {
-    token: String,
-    allow_suffix: bool,
-    word: fn(char) -> bool,
 }
 
 /// Replace each bounded occurrence of `token` (ASCII lowercase) in `text`,

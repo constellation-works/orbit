@@ -10,6 +10,23 @@ use serde_json::Value;
 use super::PILOT_ACTOR;
 use crate::OrbitRuntime;
 
+/// What a task's task-pilot receipts record, before the newest one is
+/// attributed to a run: kept with the task's stored facts, since only its
+/// comments change it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(in crate::application::codebase) struct PilotInputs {
+    /// The newest assessment's final selectors.
+    pub(super) after: Vec<String>,
+    /// The filer's selectors before any pilot ran.
+    pub(super) author: Vec<String>,
+    /// The pilot run the newest assessment names, when it names one.
+    pub(super) run_id: Option<String>,
+    /// When the newest assessment was written, and its operation id: what a
+    /// receipt without a run id is matched by.
+    pub(super) at: DateTime<Utc>,
+    pub(super) operation_id: String,
+}
+
 /// Apply step ids paired with their pilot worker ids, in pipeline order.
 /// Read the job definition so renaming a worker or apply step preserves attribution.
 pub(super) fn pilot_steps(runtime: &OrbitRuntime) -> Vec<(String, String)> {
@@ -59,23 +76,6 @@ fn strings(value: &Value) -> Option<Vec<String>> {
             .map(str::to_string)
             .collect()
     })
-}
-
-/// What a task's task-pilot receipts record, before the newest one is
-/// attributed to a run: kept with the task's stored facts, since only its
-/// comments change it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(in crate::application::codebase) struct PilotInputs {
-    /// The newest assessment's final selectors.
-    pub(super) after: Vec<String>,
-    /// The filer's selectors before any pilot ran.
-    pub(super) author: Vec<String>,
-    /// The pilot run the newest assessment names, when it names one.
-    pub(super) run_id: Option<String>,
-    /// When the newest assessment was written, and its operation id: what a
-    /// receipt without a run id is matched by.
-    pub(super) at: DateTime<Utc>,
-    pub(super) operation_id: String,
 }
 
 /// Read a task's task-pilot receipts: `None` when no receipt carries the

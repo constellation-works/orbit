@@ -14,6 +14,13 @@ pub use orbit_store::migrate::dispatch_effort::DispatchEffortBackfill;
 
 use crate::OrbitRuntime;
 
+/// The owner tool a follower reports a settled leaf's effort through.
+const CLAIM_EFFORT_TOOL: &str = "orbit.drain.claim.effort";
+
+/// The refusal an owner whose build predates the report answers on its
+/// internal drain route for a tool it does not know.
+const UNKNOWN_DRAIN_TOOL_REFUSAL: &str = "requires the internal runtime route";
+
 impl OrbitRuntime {
     /// Record a dispatch identity, with the effort its launch argv rendered,
     /// for every invocation of this workspace that has none, marked as
@@ -127,13 +134,6 @@ impl ClaimedEffortBackfill {
         self.rows.push(row);
     }
 }
-
-/// The owner tool a follower reports a settled leaf's effort through.
-const CLAIM_EFFORT_TOOL: &str = "orbit.drain.claim.effort";
-
-/// The refusal an owner whose build predates the report answers on its
-/// internal drain route for a tool it does not know.
-const UNKNOWN_DRAIN_TOOL_REFUSAL: &str = "requires the internal runtime route";
 
 impl OrbitRuntime {
     /// Report to each owner the reasoning effort of every leaf this follower

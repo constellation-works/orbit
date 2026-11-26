@@ -15,6 +15,13 @@ use super::super::step_observation::StepContext;
 use super::{adapter, contract, trust};
 use crate::OrbitRuntime;
 
+enum BoundCompletion {
+    /// Neither the step nor the definition declares a contract.
+    Ordinary,
+    Accepted(Box<AutoTaskCompletionReceipt>),
+    Held(String),
+}
+
 /// Judge the bound task's completion and put the outcome on the observation:
 /// an accepted receipt carries the typed result, anything else holds the step.
 /// Runs the adapter, so only the engine's own pass calls this; the admission
@@ -43,13 +50,6 @@ pub(in crate::application::auto_tasks) fn bind_completion_result(
         }
         BoundCompletion::Accepted(result) => receipt.result = Some(*result),
     }
-}
-
-enum BoundCompletion {
-    /// Neither the step nor the definition declares a contract.
-    Ordinary,
-    Accepted(Box<AutoTaskCompletionReceipt>),
-    Held(String),
 }
 
 fn bound_completion_outcome(

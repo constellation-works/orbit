@@ -30,23 +30,6 @@ pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_MAX_GENERATED as MAX_GENERAT
 /// Bound generated nodes independently of the event bound.
 pub(super) const MAX_GENERATED: usize = 10_000;
 
-/// The generation bound: [`MAX_GENERATED`] unless a test fixture
-/// substituted another through [`MAX_GENERATED_ENV`].
-pub(super) fn max_generated(env: &Env) -> usize {
-    #[cfg(not(feature = "test-support"))]
-    let _ = env;
-    #[cfg(feature = "test-support")]
-    if let Some(count) = env
-        .orbit_test_forecast_max_generated()
-        .and_then(OsStr::to_str)
-        .and_then(|value| value.parse().ok())
-        .filter(|count: &usize| *count > 0)
-    {
-        return count;
-    }
-    MAX_GENERATED
-}
-
 /// The tag a fix record carries when its repair ran inside its origin's own
 /// delivery (typically that origin's landing review) rather than as a
 /// separate delivery.
@@ -132,30 +115,6 @@ enum OriginEvidence {
     /// The record never completed. The model only draws regressions of
     /// completed work, so neither this nor an absent origin is a sample.
     NotCompleted,
-}
-
-fn origin_evidence(
-    target: &str,
-    tasks: &HashMap<String, Task>,
-    done_at: &HashMap<String, DateTime<Utc>>,
-) -> OriginEvidence {
-    if done_at.contains_key(target) {
-        return OriginEvidence::Completed;
-    }
-    match tasks.get(target) {
-        None => OriginEvidence::Absent,
-        Some(task) if task.status == TaskStatus::Done => OriginEvidence::CompletionMissing,
-        Some(_) => OriginEvidence::NotCompleted,
-    }
-}
-
-/// An origin's bundle joins `item`'s complexity × crew pool.
-fn origin_in_cell(origin: &Task, item: &Item) -> bool {
-    origin.complexity.map(|c| c.as_str()) == Some(item.complexity.as_str())
-        && origin
-            .crew
-            .as_ref()
-            .is_some_and(|crew| item.crews.contains(crew))
 }
 
 pub(super) struct RegressionRework {
@@ -457,6 +416,135 @@ pub(super) struct ForecastGeneratedNode {
     pub(super) hours: f64,
 }
 
+/// Exogenous filings, drawn on demand up to the horizon. The event loop stops
+/// consuming them at its first full drain (not during a detection gap), so
+/// filings past that point are never generated.
+pub(super) struct ForecastArrivalStream<'a> {
+    rework: &'a RegressionRework,
+    items: usize,
+    rates: &'a BTreeMap<&'static str, f64>,
+    pools: &'a ArrivalPools,
+    total: f64,
+    /// When the next undrawn filing arrives.
+    next_at: f64,
+}
+
+impl<'a> ForecastArrivalStream<'a> {
+    /// `None`, with no draw, when nothing arrives or no donor can stand in.
+    pub(super) fn start(
+        rework: &'a RegressionRework,
+        items: usize,
+        rates: &'a BTreeMap<&'static str, f64>,
+        pools: &'a ArrivalPools,
+        rng: &mut SplitMix64,
+    ) -> Option<Self> {
+        let total: f64 = rates.values().sum();
+        if total <= 0.0 || rework.donors.is_empty() {
+            return None;
+        }
+        Some(Self {
+            rework,
+            items,
+            rates,
+            pools,
+            total,
+            next_at: -rng.unit().ln() / (total / 24.0),
+        })
+    }
+
+    /// Simulated hours up to which `nodes` holds every filing; unbounded once
+    /// the stream has passed the horizon.
+    pub(super) fn known_until(&self) -> f64 {
+        if self.next_at <= HORIZON_HOURS {
+            self.next_at
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    /// Draw filings until `nodes` holds `limit` nodes or the horizon passes.
+    pub(super) fn extend_forecast_arrivals(
+        &mut self,
+        limit: usize,
+        episodes: &[Episode],
+        rng: &mut SplitMix64,
+        correction: &Correction,
+        nodes: &mut Vec<ForecastGeneratedNode>,
+        deadline: Option<Instant>,
+    ) {
+        while self.next_at <= HORIZON_HOURS
+            && nodes.len() < limit
+            && deadline.is_none_or(|deadline| Instant::now() < deadline)
+        {
+            let pick = rng.unit() * self.total;
+            let mut accumulated = 0.0;
+            let class = self
+                .rates
+                .iter()
+                .find_map(|(class, rate)| {
+                    accumulated += rate;
+                    (pick <= accumulated).then_some(*class)
+                })
+                .unwrap_or("filing");
+            let donor = match self.pools.get(class) {
+                Some(pool) if pool.len() >= model::MIN_CELL_SAMPLES => pool[rng.index(pool.len())],
+                _ => rng.index(self.rework.donors.len()),
+            };
+            nodes.push(generated_node(
+                &self.rework.donors[donor],
+                self.items + donor,
+                None,
+                self.next_at,
+                episodes,
+                rng,
+                correction,
+            ));
+            self.next_at -= rng.unit().ln() / (self.total / 24.0);
+        }
+    }
+}
+
+/// The generation bound: [`MAX_GENERATED`] unless a test fixture
+/// substituted another through [`MAX_GENERATED_ENV`].
+pub(super) fn max_generated(env: &Env) -> usize {
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
+    #[cfg(feature = "test-support")]
+    if let Some(count) = env
+        .orbit_test_forecast_max_generated()
+        .and_then(OsStr::to_str)
+        .and_then(|value| value.parse().ok())
+        .filter(|count: &usize| *count > 0)
+    {
+        return count;
+    }
+    MAX_GENERATED
+}
+
+fn origin_evidence(
+    target: &str,
+    tasks: &HashMap<String, Task>,
+    done_at: &HashMap<String, DateTime<Utc>>,
+) -> OriginEvidence {
+    if done_at.contains_key(target) {
+        return OriginEvidence::Completed;
+    }
+    match tasks.get(target) {
+        None => OriginEvidence::Absent,
+        Some(task) if task.status == TaskStatus::Done => OriginEvidence::CompletionMissing,
+        Some(_) => OriginEvidence::NotCompleted,
+    }
+}
+
+/// An origin's bundle joins `item`'s complexity × crew pool.
+fn origin_in_cell(origin: &Task, item: &Item) -> bool {
+    origin.complexity.map(|c| c.as_str()) == Some(item.complexity.as_str())
+        && origin
+            .crew
+            .as_ref()
+            .is_some_and(|crew| item.crews.contains(crew))
+}
+
 /// An unmeasured `defect-record` fix whose repair ran inside its origin's
 /// delivery: every simulating origin is the task it was spawned from, and
 /// each has a measured delivery, so the repair's spend is already inside
@@ -707,92 +795,4 @@ pub(super) fn forecast_arrival_pools(rework: &RegressionRework) -> ArrivalPools 
             .push(index);
     }
     pools
-}
-
-/// Exogenous filings, drawn on demand up to the horizon. The event loop stops
-/// consuming them at its first full drain (not during a detection gap), so
-/// filings past that point are never generated.
-pub(super) struct ForecastArrivalStream<'a> {
-    rework: &'a RegressionRework,
-    items: usize,
-    rates: &'a BTreeMap<&'static str, f64>,
-    pools: &'a ArrivalPools,
-    total: f64,
-    /// When the next undrawn filing arrives.
-    next_at: f64,
-}
-
-impl<'a> ForecastArrivalStream<'a> {
-    /// `None`, with no draw, when nothing arrives or no donor can stand in.
-    pub(super) fn start(
-        rework: &'a RegressionRework,
-        items: usize,
-        rates: &'a BTreeMap<&'static str, f64>,
-        pools: &'a ArrivalPools,
-        rng: &mut SplitMix64,
-    ) -> Option<Self> {
-        let total: f64 = rates.values().sum();
-        if total <= 0.0 || rework.donors.is_empty() {
-            return None;
-        }
-        Some(Self {
-            rework,
-            items,
-            rates,
-            pools,
-            total,
-            next_at: -rng.unit().ln() / (total / 24.0),
-        })
-    }
-
-    /// Simulated hours up to which `nodes` holds every filing; unbounded once
-    /// the stream has passed the horizon.
-    pub(super) fn known_until(&self) -> f64 {
-        if self.next_at <= HORIZON_HOURS {
-            self.next_at
-        } else {
-            f64::INFINITY
-        }
-    }
-
-    /// Draw filings until `nodes` holds `limit` nodes or the horizon passes.
-    pub(super) fn extend_forecast_arrivals(
-        &mut self,
-        limit: usize,
-        episodes: &[Episode],
-        rng: &mut SplitMix64,
-        correction: &Correction,
-        nodes: &mut Vec<ForecastGeneratedNode>,
-        deadline: Option<Instant>,
-    ) {
-        while self.next_at <= HORIZON_HOURS
-            && nodes.len() < limit
-            && deadline.is_none_or(|deadline| Instant::now() < deadline)
-        {
-            let pick = rng.unit() * self.total;
-            let mut accumulated = 0.0;
-            let class = self
-                .rates
-                .iter()
-                .find_map(|(class, rate)| {
-                    accumulated += rate;
-                    (pick <= accumulated).then_some(*class)
-                })
-                .unwrap_or("filing");
-            let donor = match self.pools.get(class) {
-                Some(pool) if pool.len() >= model::MIN_CELL_SAMPLES => pool[rng.index(pool.len())],
-                _ => rng.index(self.rework.donors.len()),
-            };
-            nodes.push(generated_node(
-                &self.rework.donors[donor],
-                self.items + donor,
-                None,
-                self.next_at,
-                episodes,
-                rng,
-                correction,
-            ));
-            self.next_at -= rng.unit().ln() / (self.total / 24.0);
-        }
-    }
 }

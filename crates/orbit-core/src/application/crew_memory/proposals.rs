@@ -11,6 +11,13 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
+/// How many closed proposals the read returns after merging
+/// virtual expiries and decisions by effective close time.
+const RECENTLY_CLOSED_LIMIT: usize = 20;
+
+/// The weeks a proposal stays open before it expires.
+const PROPOSAL_OPEN_WEEKS: i64 = 4;
+
 impl OrbitRuntime {
     /// The read of the proposals, which writes nothing: the open ones with
     /// their similarity counts, and the most recently closed ones with their
@@ -94,10 +101,6 @@ impl OrbitRuntime {
     }
 }
 
-/// How many closed proposals the read returns after merging
-/// virtual expiries and decisions by effective close time.
-const RECENTLY_CLOSED_LIMIT: usize = 20;
-
 /// One recently closed board row before the limit is applied.
 struct ClosedBoardEntry {
     /// `expires_at` for a still-open lapsed proposal, `decided_at` for a
@@ -116,9 +119,6 @@ fn recently_closed_order(left: &ClosedBoardEntry, right: &ClosedBoardEntry) -> s
         .cmp(&left.closed_at)
         .then_with(|| right.id.cmp(&left.id))
 }
-
-/// The weeks a proposal stays open before it expires.
-const PROPOSAL_OPEN_WEEKS: i64 = 4;
 
 fn proposal_lapsed(row: &CrewMemoryProposalRow, now: chrono::DateTime<Utc>) -> bool {
     row.created_at < now - Duration::weeks(PROPOSAL_OPEN_WEEKS)

@@ -63,14 +63,18 @@ impl OrbitRuntime {
                         }
                     })
                     .collect();
+                let forced = rows.iter().filter(|row| row.forced).count();
+                let excluded = rows
+                    .iter()
+                    .filter(|row| row.arm.is_none() && row.exclusion_reason.is_some())
+                    .count();
+                let experiment = ExperimentView::from_record(record)?;
+
                 Ok(ExperimentProgress {
+                    experiment,
                     enrollment,
-                    forced: rows.iter().filter(|row| row.forced).count(),
-                    excluded: rows
-                        .iter()
-                        .filter(|row| row.arm.is_none() && row.exclusion_reason.is_some())
-                        .count(),
-                    experiment: ExperimentView::from_record(record)?,
+                    forced,
+                    excluded,
                 })
             })
             .collect()

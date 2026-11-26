@@ -69,11 +69,15 @@ impl ForecastAdmission {
                 no_footprint_set.insert(index)
             }
         }
+        let lookup = tasks
+            .iter()
+            .map(|task| (task.id.clone(), task.clone()))
+            .collect();
+
         Self {
-            lookup: tasks
-                .iter()
-                .map(|task| (task.id.clone(), task.clone()))
-                .collect(),
+            tasks,
+            lookup,
+            order,
             held: rows(&self.held, true),
             surface: rows(&self.surface, false),
             edits: copy(&self.edits),
@@ -115,8 +119,6 @@ impl ForecastAdmission {
                 .resource_fit
                 .as_ref()
                 .map(|fit| fit.with_forecast_generated_nodes(templates)),
-            tasks,
-            order,
         }
     }
 }

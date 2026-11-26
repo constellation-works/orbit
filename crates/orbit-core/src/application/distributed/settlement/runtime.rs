@@ -18,19 +18,6 @@ use super::crew_window::{
 use super::entries::{PullLeafClaim, RefusedPullSettlement};
 use crate::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 
-/// A raw weekly pressure as milli-units for the pull capability
-/// [ORB-17773]. Non-finite or negative readings read neutral; the clamp
-/// keeps the conversion exact and the ordering key bounded.
-fn pressure_milli(pressure: f64) -> u64 {
-    if !pressure.is_finite() || pressure < 0.0 {
-        return orbit_types::task::NEUTRAL_PRESSURE_MILLI;
-    }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        (pressure * 1000.0).round().clamp(0.0, 1.0e12) as u64
-    }
-}
-
 impl crate::OrbitRuntime {
     /// The admissions a pull drain carries that still hold a slot: every one
     /// it made itself and, while it is live, those for its owner whose own
@@ -525,14 +512,14 @@ impl crate::OrbitRuntime {
                     .map(ToOwned::to_owned)
                     .collect()
             }),
-            reviewable,
-            permitted,
             default_crew,
             excluded,
             auth_exclusions,
             host_suppressed,
             host_suppressed_by_busy_owner,
             owner_busy_backoff,
+            reviewable,
+            permitted,
             usage_pressure,
         })
     }
@@ -623,26 +610,47 @@ impl crate::OrbitRuntime {
             .and_then(|receipt| receipt.claim.as_ref());
         let settlement_phase = phase_name(admission.phase);
         let settlement_refusal = RefusedPullSettlement::of(&admission);
+        let task_id = claim.map(|claim| claim.task_id.clone());
+        let claim_id = claim.map(|claim| claim.claim_id.clone());
+        let owner = admission.destination.selector.clone();
+        let drain_run_id = admission.request.run_context.run_id.clone();
+        let failure_class = match &admission.settlement {
+            Some(ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)) => {
+                evidence.failure.as_ref().map(|failure| failure.class)
+            }
+            _ => None,
+        };
+        let refusal = admission.refusal.clone();
+        let guidance = phase_guidance(
+            admission.phase,
+            admission.refusal.as_deref(),
+            settlement_refusal.as_ref(),
+        );
+
         Ok(Some(PullLeafClaim {
-            task_id: claim.map(|claim| claim.task_id.clone()),
-            claim_id: claim.map(|claim| claim.claim_id.clone()),
-            owner: admission.destination.selector.clone(),
-            drain_run_id: admission.request.run_context.run_id.clone(),
+            task_id,
+            claim_id,
+            owner,
+            drain_run_id,
             settlement_phase,
-            failure_class: match &admission.settlement {
-                Some(ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)) => {
-                    evidence.failure.as_ref().map(|failure| failure.class)
-                }
-                _ => None,
-            },
-            refusal: admission.refusal.clone(),
-            guidance: phase_guidance(
-                admission.phase,
-                admission.refusal.as_deref(),
-                settlement_refusal.as_ref(),
-            ),
+            refusal,
             settlement_refusal,
+            failure_class,
+            guidance,
         }))
+    }
+}
+
+/// A raw weekly pressure as milli-units for the pull capability
+/// [ORB-17773]. Non-finite or negative readings read neutral; the clamp
+/// keeps the conversion exact and the ordering key bounded.
+fn pressure_milli(pressure: f64) -> u64 {
+    if !pressure.is_finite() || pressure < 0.0 {
+        return orbit_types::task::NEUTRAL_PRESSURE_MILLI;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (pressure * 1000.0).round().clamp(0.0, 1.0e12) as u64
     }
 }
 

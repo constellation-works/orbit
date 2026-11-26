@@ -108,25 +108,6 @@ const NATURE: usize = 0;
 const ESCAPE: usize = 1;
 const LAYER: usize = 2;
 
-/// Every value a dimension takes, in breakdown order; a layer is one of
-/// `layers`, in table order, then `other` and `unknown`.
-fn values(dimension: usize, layers: &[RegressionLayerDefinition]) -> Vec<&str> {
-    match dimension {
-        NATURE => NATURES.to_vec(),
-        ESCAPE => ESCAPES.to_vec(),
-        LAYER => layers
-            .iter()
-            .map(|layer| layer.name.as_str())
-            .chain([OTHER_LAYER, UNKNOWN_LAYER])
-            .collect(),
-        _ => DETECTOR_TABLE
-            .iter()
-            .map(|(detector, _)| *detector)
-            .chain([OPERATOR_DETECTOR, OTHER_DETECTOR])
-            .collect(),
-    }
-}
-
 /// Crews and complexities ranked beside the paths: `crew` (else the
 /// implementer) and `complexity` of the regressed task.
 const SLICES: [&str; 2] = ["crew", "complexity"];
@@ -229,6 +210,96 @@ impl PendingLink {
             severity: self.severity,
             sites: self.sites,
         }
+    }
+}
+
+/// A selection of regressions: at most one value per dimension.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegressionFilter {
+    dims: [Option<String>; 4],
+}
+
+impl RegressionFilter {
+    /// Validate a filter. Each value must be one its dimension takes,
+    /// `absent` and `unclassified` included for nature and escape, and for a
+    /// layer a name of `layers` (the workspace's `workflow.regression_layers`),
+    /// `other` or `unknown`.
+    pub fn parse(
+        nature: Option<&str>,
+        escape: Option<&str>,
+        layer: Option<&str>,
+        detected_by: Option<&str>,
+        layers: &[RegressionLayerDefinition],
+    ) -> Result<Self, OrbitError> {
+        let mut dims: [Option<String>; 4] = Default::default();
+        for (index, raw) in [nature, escape, layer, detected_by].into_iter().enumerate() {
+            let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+                continue;
+            };
+            let known = values(index, layers);
+            let Some(value) = known.iter().find(|value| **value == raw) else {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{} must be one of {}; got '{raw}'",
+                    DIMENSIONS[index],
+                    known.join(", ")
+                )));
+            };
+            dims[index] = Some((*value).to_string());
+        }
+        Ok(Self { dims })
+    }
+
+    /// Whether `link` matches every dimension except `skip`.
+    fn admits(&self, link: &RegressionLink, skip: Option<usize>) -> bool {
+        self.dims
+            .iter()
+            .zip(&link.dims)
+            .enumerate()
+            .all(|(index, (wanted, value))| {
+                Some(index) == skip || wanted.as_ref().is_none_or(|wanted| wanted == value)
+            })
+    }
+
+    /// The links of `task` the filter keeps.
+    pub(super) fn links<'a>(&self, task: &'a TaskFacts) -> Vec<&'a RegressionLink> {
+        task.regressions
+            .iter()
+            .filter(|link| self.admits(link, None))
+            .collect()
+    }
+
+    /// Whether any link of `task` matches.
+    pub(super) fn regressed(&self, task: &TaskFacts) -> bool {
+        task.regressions.iter().any(|link| self.admits(link, None))
+    }
+
+    pub(super) fn json(&self) -> Value {
+        Value::Object(
+            DIMENSIONS
+                .iter()
+                .zip(&self.dims)
+                .map(|(dimension, value)| (dimension.to_string(), json!(value)))
+                .collect(),
+        )
+    }
+}
+
+/// Every value a dimension takes, in breakdown order; a layer is one of
+/// `layers`, in table order, then `other` and `unknown`.
+fn values(dimension: usize, layers: &[RegressionLayerDefinition]) -> Vec<&str> {
+    match dimension {
+        NATURE => NATURES.to_vec(),
+        ESCAPE => ESCAPES.to_vec(),
+        LAYER => layers
+            .iter()
+            .map(|layer| layer.name.as_str())
+            .chain([OTHER_LAYER, UNKNOWN_LAYER])
+            .collect(),
+        _ => DETECTOR_TABLE
+            .iter()
+            .map(|(detector, _)| *detector)
+            .chain([OPERATOR_DETECTOR, OTHER_DETECTOR])
+            .collect(),
     }
 }
 
@@ -336,77 +407,6 @@ fn anchor_path(anchor: &Anchor) -> String {
         format!("{}/", anchor.path)
     } else {
         anchor.path.clone()
-    }
-}
-
-/// A selection of regressions: at most one value per dimension.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RegressionFilter {
-    dims: [Option<String>; 4],
-}
-
-impl RegressionFilter {
-    /// Validate a filter. Each value must be one its dimension takes,
-    /// `absent` and `unclassified` included for nature and escape, and for a
-    /// layer a name of `layers` (the workspace's `workflow.regression_layers`),
-    /// `other` or `unknown`.
-    pub fn parse(
-        nature: Option<&str>,
-        escape: Option<&str>,
-        layer: Option<&str>,
-        detected_by: Option<&str>,
-        layers: &[RegressionLayerDefinition],
-    ) -> Result<Self, OrbitError> {
-        let mut dims: [Option<String>; 4] = Default::default();
-        for (index, raw) in [nature, escape, layer, detected_by].into_iter().enumerate() {
-            let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
-                continue;
-            };
-            let known = values(index, layers);
-            let Some(value) = known.iter().find(|value| **value == raw) else {
-                return Err(OrbitError::InvalidInput(format!(
-                    "{} must be one of {}; got '{raw}'",
-                    DIMENSIONS[index],
-                    known.join(", ")
-                )));
-            };
-            dims[index] = Some((*value).to_string());
-        }
-        Ok(Self { dims })
-    }
-
-    /// Whether `link` matches every dimension except `skip`.
-    fn admits(&self, link: &RegressionLink, skip: Option<usize>) -> bool {
-        self.dims
-            .iter()
-            .zip(&link.dims)
-            .enumerate()
-            .all(|(index, (wanted, value))| {
-                Some(index) == skip || wanted.as_ref().is_none_or(|wanted| wanted == value)
-            })
-    }
-
-    /// The links of `task` the filter keeps.
-    pub(super) fn links<'a>(&self, task: &'a TaskFacts) -> Vec<&'a RegressionLink> {
-        task.regressions
-            .iter()
-            .filter(|link| self.admits(link, None))
-            .collect()
-    }
-
-    /// Whether any link of `task` matches.
-    pub(super) fn regressed(&self, task: &TaskFacts) -> bool {
-        task.regressions.iter().any(|link| self.admits(link, None))
-    }
-
-    pub(super) fn json(&self) -> Value {
-        Value::Object(
-            DIMENSIONS
-                .iter()
-                .zip(&self.dims)
-                .map(|(dimension, value)| (dimension.to_string(), json!(value)))
-                .collect(),
-        )
     }
 }
 

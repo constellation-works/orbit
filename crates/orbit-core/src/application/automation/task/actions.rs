@@ -21,6 +21,12 @@ use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
+/// [ORB-15186] Settlement reason for a review task that closed while its
+/// agent had persisted no execution summary of its own.
+const REVIEW_WITHOUT_EXECUTION_SUMMARY: &str = "review_closed_without_execution_summary";
+
+const RECEIPT_LIMIT: usize = 100;
+
 pub(in crate::application::automation) fn mint(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
@@ -73,10 +79,6 @@ pub(in crate::application::automation) fn mint(
         .add_task_admitted(params, None, None, Some(&attempt.action_key))
         .map(|task| task.id)
 }
-
-/// [ORB-15186] Settlement reason for a review task that closed while its
-/// agent had persisted no execution summary of its own.
-const REVIEW_WITHOUT_EXECUTION_SUMMARY: &str = "review_closed_without_execution_summary";
 
 /// The admitted task's outcome as settlement sees it.
 pub(in crate::application::automation) fn outcome(
@@ -226,8 +228,6 @@ pub(in crate::application::automation) fn blocked_by_failed_run(
                     .is_some_and(|note| note.contains(&format!("run_id={run_id},")))
         })
 }
-
-const RECEIPT_LIMIT: usize = 100;
 
 /// [ORB-14837] The coverage evidence task `task_id` submitted as a delivery
 /// automation action, when settlement accepts or would accept it: a stored

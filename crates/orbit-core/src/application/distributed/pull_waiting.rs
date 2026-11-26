@@ -138,12 +138,14 @@ impl PullWaiting {
                 waiting_task(diagnostic, code)
             })
             .collect::<Vec<_>>();
+        let deferred_total = deferred_all.len() as u64;
+        let excluded_total = excluded_all.len() as u64;
         Self {
             queued: receipt.queue_depth as u64,
-            deferred_total: deferred_all.len() as u64,
-            excluded_total: excluded_all.len() as u64,
             deferred: deferred_all.into_iter().take(LISTED).collect(),
+            deferred_total,
             excluded: excluded_all.into_iter().take(LISTED).collect(),
+            excluded_total,
             by_reason,
         }
     }

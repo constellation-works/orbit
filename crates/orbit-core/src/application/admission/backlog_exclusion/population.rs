@@ -14,6 +14,30 @@ use super::ordering::MAX_TASK_PARENT_CHAIN_DEPTH;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskListFilter, metadata_task};
 
+impl BacklogSnapshot {
+    /// Add the tasks in `ids` that the snapshot's population left out, at any
+    /// status: a live leaf can still carry a task that has since closed, and
+    /// an explicit readiness request may name one. An id no task in this
+    /// workspace has, malformed ones included, stays absent.
+    pub(crate) fn include_tasks<'a>(
+        &mut self,
+        runtime: &OrbitRuntime,
+        ids: impl IntoIterator<Item = &'a String>,
+    ) -> Result<(), OrbitError> {
+        let missing = ids
+            .into_iter()
+            .filter(|id| !self.task_lookup.contains_key(*id) && validate_orb_task_id(id).is_ok())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if missing.is_empty() || !runtime.stored().task().reads_visible() {
+            return Ok(());
+        }
+        let envelopes = runtime.stores().tasks().task_envelopes_for_ids(&missing)?;
+        self.task_lookup.extend(into_lookup(envelopes));
+        Ok(())
+    }
+}
+
 /// Every task not in a terminal status, as envelope metadata, plus the closed
 /// tasks the snapshot's tree rules read:
 ///
@@ -85,30 +109,6 @@ pub(super) fn admission_population(
 
     include_ancestors(store, &mut lookup)?;
     Ok(lookup)
-}
-
-impl BacklogSnapshot {
-    /// Add the tasks in `ids` that the snapshot's population left out, at any
-    /// status: a live leaf can still carry a task that has since closed, and
-    /// an explicit readiness request may name one. An id no task in this
-    /// workspace has, malformed ones included, stays absent.
-    pub(crate) fn include_tasks<'a>(
-        &mut self,
-        runtime: &OrbitRuntime,
-        ids: impl IntoIterator<Item = &'a String>,
-    ) -> Result<(), OrbitError> {
-        let missing = ids
-            .into_iter()
-            .filter(|id| !self.task_lookup.contains_key(*id) && validate_orb_task_id(id).is_ok())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if missing.is_empty() || !runtime.stored().task().reads_visible() {
-            return Ok(());
-        }
-        let envelopes = runtime.stores().tasks().task_envelopes_for_ids(&missing)?;
-        self.task_lookup.extend(into_lookup(envelopes));
-        Ok(())
-    }
 }
 
 /// Load the missing ancestors of every task in `lookup`, one level per read.

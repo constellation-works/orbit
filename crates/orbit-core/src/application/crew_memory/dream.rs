@@ -59,46 +59,6 @@ const REVISION_WRITTEN: &str = "revision_written";
 /// The routine's audit actor.
 const ROUTINE_ACTOR: &str = "crew_memory_dream";
 
-/// The model key a dreaming task reflects on: its one `crew-memory-key`
-/// reference, on a task tagged `crew-memory-dream`. `None` for every other
-/// task.
-pub(crate) fn dreaming_task_key(task: &Task) -> Option<MemoryKey> {
-    if !task.tags.iter().any(|tag| tag == CREW_MEMORY_DREAM_TAG) {
-        return None;
-    }
-    let mut refs = task
-        .external_refs
-        .iter()
-        .filter(|reference| reference.system == CREW_MEMORY_KEY_REF_SYSTEM);
-    let reference = refs.next()?;
-    if refs.next().is_some() {
-        return None;
-    }
-    memory_key(Some(&reference.id))
-}
-
-/// The open (non-terminal) dreaming task for `key` among `dreaming_tasks`,
-/// if any.
-fn open_dreaming_task<'a>(dreaming_tasks: &'a [Task], key: &MemoryKey) -> Option<&'a Task> {
-    dreaming_tasks
-        .iter()
-        .find(|task| !task.status.is_terminal() && dreaming_task_key(task).as_ref() == Some(key))
-}
-
-/// `2026-W45`: the ISO week a mint belongs to.
-fn iso_week(at: DateTime<Utc>) -> String {
-    let week = at.iso_week();
-    format!("{}-W{:02}", week.year(), week.week())
-}
-
-fn key_reference(key: &MemoryKey) -> ExternalRef {
-    ExternalRef {
-        system: CREW_MEMORY_KEY_REF_SYSTEM.to_string(),
-        id: key.to_string(),
-        url: None,
-    }
-}
-
 impl OrbitRuntime {
     /// One pass of the `crew_memory_dream` routine. Returns what it minted,
     /// skipped and settled; the gate's reason when it did nothing.
@@ -374,6 +334,55 @@ impl OrbitRuntime {
     }
 }
 
+/// An evidence pack rendered for the artifact.
+pub(super) struct RenderedPack {
+    pub(super) bytes: Vec<u8>,
+    pub(super) digest: String,
+    pub(super) evidence_ids: Vec<String>,
+    pub(super) dropped_tasks: usize,
+    pub(super) dropped_occurrences: usize,
+}
+
+/// The model key a dreaming task reflects on: its one `crew-memory-key`
+/// reference, on a task tagged `crew-memory-dream`. `None` for every other
+/// task.
+pub(crate) fn dreaming_task_key(task: &Task) -> Option<MemoryKey> {
+    if !task.tags.iter().any(|tag| tag == CREW_MEMORY_DREAM_TAG) {
+        return None;
+    }
+    let mut refs = task
+        .external_refs
+        .iter()
+        .filter(|reference| reference.system == CREW_MEMORY_KEY_REF_SYSTEM);
+    let reference = refs.next()?;
+    if refs.next().is_some() {
+        return None;
+    }
+    memory_key(Some(&reference.id))
+}
+
+/// The open (non-terminal) dreaming task for `key` among `dreaming_tasks`,
+/// if any.
+fn open_dreaming_task<'a>(dreaming_tasks: &'a [Task], key: &MemoryKey) -> Option<&'a Task> {
+    dreaming_tasks
+        .iter()
+        .find(|task| !task.status.is_terminal() && dreaming_task_key(task).as_ref() == Some(key))
+}
+
+/// `2026-W45`: the ISO week a mint belongs to.
+fn iso_week(at: DateTime<Utc>) -> String {
+    let week = at.iso_week();
+    format!("{}-W{:02}", week.year(), week.week())
+}
+
+fn key_reference(key: &MemoryKey) -> ExternalRef {
+    ExternalRef {
+        system: CREW_MEMORY_KEY_REF_SYSTEM.to_string(),
+        id: key.to_string(),
+        url: None,
+    }
+}
+
 fn dreaming_description(key: &MemoryKey) -> String {
     format!(
         "Reflect on the work model `{key}` did in this repository in the past week, and keep \
@@ -396,15 +405,6 @@ fn dreaming_description(key: &MemoryKey) -> String {
          The revision and proposal rows are this task's output: there is no code change, and \
          the final message is advisory."
     )
-}
-
-/// An evidence pack rendered for the artifact.
-pub(super) struct RenderedPack {
-    pub(super) bytes: Vec<u8>,
-    pub(super) digest: String,
-    pub(super) evidence_ids: Vec<String>,
-    pub(super) dropped_tasks: usize,
-    pub(super) dropped_occurrences: usize,
 }
 
 /// Render `evidence` as the pack (design §6.2): free text stripped of the

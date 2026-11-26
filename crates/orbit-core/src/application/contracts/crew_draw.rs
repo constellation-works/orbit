@@ -17,14 +17,6 @@ pub(crate) const INSPECTION_CREW_UNAVAILABLE: &str = "inspection_crew_unavailabl
 /// an auto-task's explicit crew [ORB-17638].
 pub(crate) const PROVIDER_LIMIT_REASSIGNMENT_PREFIX: &str = "Provider-limit reassignment:";
 
-/// Whether `tags` mark a task minted by an auto-task (`auto-task:<name>`).
-pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
-    tags.iter().any(|tag| {
-        tag.strip_prefix("auto-task:")
-            .is_some_and(|name| !name.is_empty())
-    })
-}
-
 /// Crew chosen for a task at creation, with the provenance its history entry
 /// records [ORB-12717].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +82,14 @@ pub(crate) struct InspectionPool {
     /// Enabled members passed over, in this tier and the ones below it,
     /// because their provider has no native inspection surface.
     pub(crate) skipped: Vec<String>,
+}
+
+/// Whether `tags` mark a task minted by an auto-task (`auto-task:<name>`).
+pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
+    tags.iter().any(|tag| {
+        tag.strip_prefix("auto-task:")
+            .is_some_and(|name| !name.is_empty())
+    })
 }
 
 /// The provenance note a draw's source carries for an `@auto` member:

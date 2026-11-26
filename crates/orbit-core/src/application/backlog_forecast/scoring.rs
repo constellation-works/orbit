@@ -67,6 +67,36 @@ use super::ForecastRun;
 use super::history::{CompletionRoute, LoadedForecastHistory};
 use super::outcomes::{self, EpisodeOutcome, TaskEpisodes};
 
+/// The forecasts task-level calibration and the residual correction read:
+/// per task, the first stored forecast taken while it had not started.
+pub(super) const TASK_POPULATION: &str = "first_not_started_forecast_per_task";
+
+const METRICS: [&str; 3] = ["hours", "tokens", "usd"];
+/// The first model version that samples abandoned work.
+const ABANDONED_OUTCOME_VERSION: u32 = 5;
+/// The first model version whose stored task forecast covers every
+/// simulated attempt, under `work_hours` rather than `hours`.
+pub(super) const ATTEMPT_USAGE_VERSION: u32 = 10;
+const TOTALS: [&str; 3] = ["time_to_drain_hours", "tokens", "usd"];
+
+/// The whole-forecast series calibration scores, and what each measures.
+/// The baseline series can mature from snapshots whose adjusted totals were
+/// withheld, so forecast accuracy stays measurable while they are.
+const FORECAST_SERIES: [(&str, &str); 2] = [
+    (
+        "adjusted",
+        "regression-adjusted drain hours, tokens and USD; a snapshot that withheld them is unscored here",
+    ),
+    (
+        "pre_regression_baseline",
+        "drain hours, tokens and USD without simulated regression follow-up, stored whenever adjusted totals are withheld; scored against the same observed outcome, filed fixes included",
+    ),
+];
+
+/// The first model version that recovers a `defect-record` fix repaired
+/// inside its origin's measured delivery instead of counting it as a gap.
+const IN_ORIGIN_REPAIR_VERSION: u32 = 21;
+
 /// One task as a stored forecast recorded it.
 #[derive(Deserialize)]
 struct StoredTask {
@@ -80,91 +110,12 @@ struct StoredTask {
     drain_hold: Option<Value>,
 }
 
-/// The forecasts task-level calibration and the residual correction read:
-/// per task, the first stored forecast taken while it had not started.
-pub(super) const TASK_POPULATION: &str = "first_not_started_forecast_per_task";
-
 /// One task's scored forecast: when it was taken, its complexity, and per
 /// metric the actual and the quantiles it was scored against.
 struct TaskScore {
     forecast_at: DateTime<Utc>,
     complexity: String,
     scored: [Option<(f64, Value)>; 3],
-}
-
-const METRICS: [&str; 3] = ["hours", "tokens", "usd"];
-/// The first model version that samples abandoned work.
-const ABANDONED_OUTCOME_VERSION: u32 = 5;
-/// The first model version whose stored task forecast covers every
-/// simulated attempt, under `work_hours` rather than `hours`.
-pub(super) const ATTEMPT_USAGE_VERSION: u32 = 10;
-const TOTALS: [&str; 3] = ["time_to_drain_hours", "tokens", "usd"];
-
-/// A stored row's `result_json` without the served response snapshot beside
-/// its quantiles, which scoring never reads; skipping it keeps scoring 60+
-/// rows from materializing every snapshot. Unreadable JSON scores as null.
-fn stored_quantiles(result_json: &str) -> Value {
-    #[derive(Deserialize)]
-    struct StoredResult {
-        #[serde(default, rename = "snapshot")]
-        _snapshot: serde::de::IgnoredAny,
-        #[serde(flatten)]
-        quantiles: serde_json::Map<String, Value>,
-    }
-    serde_json::from_str::<StoredResult>(result_json)
-        .map_or(Value::Null, |result| Value::Object(result.quantiles))
-}
-
-/// What a stored task's hour quantiles measure in `version`.
-fn task_hours_measure(version: u32) -> &'static str {
-    if version >= ATTEMPT_USAGE_VERSION {
-        "attempt_work_hours"
-    } else {
-        "delivery_hours"
-    }
-}
-
-/// A done task's slot work after `after`, as model 10 simulates it: each
-/// attempt that settled without delivering holds its slot from admission
-/// (or `after`) to settlement, and the delivery counts its invocation hours
-/// since the last such settlement. Without readable status history every
-/// post-forecast invocation counts as the delivery.
-pub(super) fn attempt_work_hours(
-    runs: &[ForecastRun],
-    episodes: Option<&TaskEpisodes>,
-    after: DateTime<Utc>,
-    done: Option<DateTime<Utc>>,
-) -> f64 {
-    let Some(episodes) = episodes else {
-        return super::forecast_usage(runs, Some(after)).hours;
-    };
-    let setbacks: f64 = episodes
-        .settled
-        .iter()
-        .filter(|(_, settled, outcome)| {
-            *outcome != EpisodeOutcome::Delivered
-                && *settled > after
-                && done.is_none_or(|done| *settled <= done)
-        })
-        .map(|(admitted, settled, _)| outcomes::hours_between((*admitted).max(after), *settled))
-        .sum();
-    let since = episodes
-        .last_setback(done)
-        .map_or(after, |setback| setback.max(after));
-    setbacks + super::forecast_usage(runs, Some(since)).hours
-}
-
-/// `ln(actual / p50)` for one scored actual: positive when the work took
-/// longer or cost more than the forecast's median, negative when less. Not
-/// defined (so not plotted) when either side is not positive.
-fn log_residual(actual: f64, quantiles: &Value) -> Option<f64> {
-    let p50 = quantiles.get("p50").and_then(Value::as_f64)?;
-    (actual > 0.0 && p50 > 0.0).then(|| (actual / p50).ln())
-}
-
-/// The median of `values`, rounded to three places; `None` when empty.
-fn median_residual(values: &mut [f64]) -> Option<f64> {
-    statistics::median(values).map(|median| (median * 1000.0).round() / 1000.0)
 }
 
 /// How many actuals fell at or under p50 and p90.
@@ -260,10 +211,6 @@ impl Excluded {
     }
 }
 
-fn round(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
-}
-
 /// One model version's hit rates.
 #[derive(Default)]
 struct VersionHits {
@@ -342,19 +289,76 @@ impl VersionHits {
     }
 }
 
-/// The whole-forecast series calibration scores, and what each measures.
-/// The baseline series can mature from snapshots whose adjusted totals were
-/// withheld, so forecast accuracy stays measurable while they are.
-const FORECAST_SERIES: [(&str, &str); 2] = [
-    (
-        "adjusted",
-        "regression-adjusted drain hours, tokens and USD; a snapshot that withheld them is unscored here",
-    ),
-    (
-        "pre_regression_baseline",
-        "drain hours, tokens and USD without simulated regression follow-up, stored whenever adjusted totals are withheld; scored against the same observed outcome, filed fixes included",
-    ),
-];
+/// A stored row's `result_json` without the served response snapshot beside
+/// its quantiles, which scoring never reads; skipping it keeps scoring 60+
+/// rows from materializing every snapshot. Unreadable JSON scores as null.
+fn stored_quantiles(result_json: &str) -> Value {
+    #[derive(Deserialize)]
+    struct StoredResult {
+        #[serde(default, rename = "snapshot")]
+        _snapshot: serde::de::IgnoredAny,
+        #[serde(flatten)]
+        quantiles: serde_json::Map<String, Value>,
+    }
+    serde_json::from_str::<StoredResult>(result_json)
+        .map_or(Value::Null, |result| Value::Object(result.quantiles))
+}
+
+/// What a stored task's hour quantiles measure in `version`.
+fn task_hours_measure(version: u32) -> &'static str {
+    if version >= ATTEMPT_USAGE_VERSION {
+        "attempt_work_hours"
+    } else {
+        "delivery_hours"
+    }
+}
+
+/// A done task's slot work after `after`, as model 10 simulates it: each
+/// attempt that settled without delivering holds its slot from admission
+/// (or `after`) to settlement, and the delivery counts its invocation hours
+/// since the last such settlement. Without readable status history every
+/// post-forecast invocation counts as the delivery.
+pub(super) fn attempt_work_hours(
+    runs: &[ForecastRun],
+    episodes: Option<&TaskEpisodes>,
+    after: DateTime<Utc>,
+    done: Option<DateTime<Utc>>,
+) -> f64 {
+    let Some(episodes) = episodes else {
+        return super::forecast_usage(runs, Some(after)).hours;
+    };
+    let setbacks: f64 = episodes
+        .settled
+        .iter()
+        .filter(|(_, settled, outcome)| {
+            *outcome != EpisodeOutcome::Delivered
+                && *settled > after
+                && done.is_none_or(|done| *settled <= done)
+        })
+        .map(|(admitted, settled, _)| outcomes::hours_between((*admitted).max(after), *settled))
+        .sum();
+    let since = episodes
+        .last_setback(done)
+        .map_or(after, |setback| setback.max(after));
+    setbacks + super::forecast_usage(runs, Some(since)).hours
+}
+
+/// `ln(actual / p50)` for one scored actual: positive when the work took
+/// longer or cost more than the forecast's median, negative when less. Not
+/// defined (so not plotted) when either side is not positive.
+fn log_residual(actual: f64, quantiles: &Value) -> Option<f64> {
+    let p50 = quantiles.get("p50").and_then(Value::as_f64)?;
+    (actual > 0.0 && p50 > 0.0).then(|| (actual / p50).ln())
+}
+
+/// The median of `values`, rounded to three places; `None` when empty.
+fn median_residual(values: &mut [f64]) -> Option<f64> {
+    statistics::median(values).map(|median| (median * 1000.0).round() / 1000.0)
+}
+
+fn round(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
 
 /// The series whose stored quantiles `result` carries for at least one metric.
 fn scorable_forecast_series(result: &Value) -> Vec<&'static str> {
@@ -630,10 +634,6 @@ pub(super) fn score_backlog_forecasts(
         "excluded": all_excluded.to_json(),
     })
 }
-
-/// The first model version that recovers a `defect-record` fix repaired
-/// inside its origin's measured delivery instead of counting it as a gap.
-const IN_ORIGIN_REPAIR_VERSION: u32 = 21;
 
 /// Whether `fix_id` is a `defect-record` fix spawned from every origin it
 /// regresses, each of which has measured invocations after the forecast.

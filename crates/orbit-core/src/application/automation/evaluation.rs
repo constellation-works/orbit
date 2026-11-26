@@ -14,163 +14,6 @@ use super::{
     stall, task,
 };
 
-pub fn evaluate_auto_task(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-    dry_run: bool,
-    now: DateTime<Utc>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    evaluate_auto_task_with_cache(runtime, definition, dry_run, now, None)
-}
-
-pub(crate) fn evaluate_auto_task_with_cache(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-    dry_run: bool,
-    now: DateTime<Utc>,
-    cache: Option<&SourceCache>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
-
-    evaluate(
-        runtime,
-        Action::Task(definition),
-        ownership,
-        cache,
-        delivery::Evaluation {
-            consumer: &consumer_key(runtime, "auto-task", &definition.name)?,
-            epoch: &epoch,
-            trigger: &trigger,
-            enabled: runtime.auto_task_enabled(definition),
-            dry_run,
-            now,
-        },
-    )
-}
-
-pub fn evaluate_routine(
-    runtime: &OrbitRuntime,
-    definition: &RoutineDefinition,
-    dry_run: bool,
-    now: DateTime<Utc>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    evaluate_routine_with_cache(runtime, definition, dry_run, now, None)
-}
-
-pub(crate) fn evaluate_routine_with_cache(
-    runtime: &OrbitRuntime,
-    definition: &RoutineDefinition,
-    dry_run: bool,
-    now: DateTime<Utc>,
-    cache: Option<&SourceCache>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    if definition.trigger.state.is_some() {
-        return members::evaluate(runtime, definition, dry_run, now);
-    }
-
-    let (ownership, effective_trigger, epoch) =
-        ownership::resolve_delivery_routine(runtime, definition)?;
-
-    evaluate(
-        runtime,
-        Action::Job(definition),
-        ownership,
-        cache,
-        delivery::Evaluation {
-            consumer: &consumer_key(runtime, "routine", &definition.name)?,
-            epoch: &epoch,
-            trigger: &effective_trigger,
-            enabled: definition.enabled,
-            dry_run,
-            now,
-        },
-    )
-}
-
-fn evaluate(
-    runtime: &OrbitRuntime,
-    action: Action<'_>,
-    ownership: DeliveryOwnership,
-    cache: Option<&SourceCache>,
-    mut request: delivery::Evaluation<'_>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    let configured_enabled = request.enabled;
-    // Only the owner admits new work; any other host still reconciles what it
-    // already admitted. Preview remains read-only and exposes the actual
-    // consumer/baseline.
-    request.enabled &= ownership.owned_here;
-
-    let store = runtime.sqlite_store()?;
-    let host = Host {
-        runtime,
-        action,
-        dry_run: request.dry_run,
-        source: match cache {
-            Some(cache) => source::Source::with_cache(
-                &runtime.paths().repo_root,
-                cache,
-                request.now,
-                runtime.execution_env_policy().process_env(),
-            ),
-            None => source::Source::at(
-                &runtime.paths().repo_root,
-                request.now,
-                runtime.execution_env_policy().process_env(),
-            ),
-        },
-    };
-
-    let mut diagnostic =
-        delivery::evaluate(&store, &host, request).map_err(automation_error_to_orbit)?;
-
-    // An enabled definition this host cannot admit for reports why, so
-    // `disabled` keeps meaning the operator disabled it. Preview reports the
-    // same refusal rather than promising an admission that cannot happen.
-    if configured_enabled
-        && diagnostic.reason != delivery::DEFINITION_CHANGED
-        && let Some(refusal) = ownership.refusal()
-    {
-        diagnostic.reason = refusal.into();
-    }
-    diagnostic.ownership = Some(ownership);
-
-    Ok(diagnostic)
-}
-
-/// Liveness and evidence facts for a claimed or admitted delivery auto-task action, as
-/// used by reset, recovery and `orbit doctor`. A consumer without state has
-/// no action. An unreadable outcome stays unknown, so `--force` remains the
-/// only way past an action whose liveness cannot be proved. Inspection verifies
-/// evidence against existing refs and never fetches from origin.
-pub(super) fn auto_task_action_liveness(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-    state: Option<&AutomationState>,
-    now: DateTime<Utc>,
-) -> orbit_automation::delivery::ActionLiveness {
-    let Some(state) = state else {
-        return orbit_automation::delivery::ActionLiveness::default();
-    };
-    let host = Host {
-        runtime,
-        action: Action::Task(definition),
-        dry_run: true,
-        source: source::Source::read_only(
-            &runtime.paths().repo_root,
-            runtime.execution_env_policy().process_env(),
-        ),
-    };
-
-    delivery::action_liveness(&host, state, now).unwrap_or_else(|error| {
-        tracing::warn!(
-            consumer = state.consumer,
-            %error,
-            "cannot read the action's outcome; treating it as executing"
-        );
-        orbit_automation::delivery::ActionLiveness::default()
-    })
-}
-
 enum Action<'a> {
     Task(&'a AutoTaskDefinition),
     Job(&'a RoutineDefinition),
@@ -371,6 +214,163 @@ impl DeliveryHost for Host<'_> {
                 .map_err(Into::into),
         }
     }
+}
+
+pub fn evaluate_auto_task(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    evaluate_auto_task_with_cache(runtime, definition, dry_run, now, None)
+}
+
+pub(crate) fn evaluate_auto_task_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    cache: Option<&SourceCache>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
+
+    evaluate(
+        runtime,
+        Action::Task(definition),
+        ownership,
+        cache,
+        delivery::Evaluation {
+            consumer: &consumer_key(runtime, "auto-task", &definition.name)?,
+            epoch: &epoch,
+            trigger: &trigger,
+            enabled: runtime.auto_task_enabled(definition),
+            dry_run,
+            now,
+        },
+    )
+}
+
+pub fn evaluate_routine(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    evaluate_routine_with_cache(runtime, definition, dry_run, now, None)
+}
+
+pub(crate) fn evaluate_routine_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    cache: Option<&SourceCache>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    if definition.trigger.state.is_some() {
+        return members::evaluate(runtime, definition, dry_run, now);
+    }
+
+    let (ownership, effective_trigger, epoch) =
+        ownership::resolve_delivery_routine(runtime, definition)?;
+
+    evaluate(
+        runtime,
+        Action::Job(definition),
+        ownership,
+        cache,
+        delivery::Evaluation {
+            consumer: &consumer_key(runtime, "routine", &definition.name)?,
+            epoch: &epoch,
+            trigger: &effective_trigger,
+            enabled: definition.enabled,
+            dry_run,
+            now,
+        },
+    )
+}
+
+fn evaluate(
+    runtime: &OrbitRuntime,
+    action: Action<'_>,
+    ownership: DeliveryOwnership,
+    cache: Option<&SourceCache>,
+    mut request: delivery::Evaluation<'_>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    let configured_enabled = request.enabled;
+    // Only the owner admits new work; any other host still reconciles what it
+    // already admitted. Preview remains read-only and exposes the actual
+    // consumer/baseline.
+    request.enabled &= ownership.owned_here;
+
+    let store = runtime.sqlite_store()?;
+    let host = Host {
+        runtime,
+        action,
+        dry_run: request.dry_run,
+        source: match cache {
+            Some(cache) => source::Source::with_cache(
+                &runtime.paths().repo_root,
+                cache,
+                request.now,
+                runtime.execution_env_policy().process_env(),
+            ),
+            None => source::Source::at(
+                &runtime.paths().repo_root,
+                request.now,
+                runtime.execution_env_policy().process_env(),
+            ),
+        },
+    };
+
+    let mut diagnostic =
+        delivery::evaluate(&store, &host, request).map_err(automation_error_to_orbit)?;
+
+    // An enabled definition this host cannot admit for reports why, so
+    // `disabled` keeps meaning the operator disabled it. Preview reports the
+    // same refusal rather than promising an admission that cannot happen.
+    if configured_enabled
+        && diagnostic.reason != delivery::DEFINITION_CHANGED
+        && let Some(refusal) = ownership.refusal()
+    {
+        diagnostic.reason = refusal.into();
+    }
+    diagnostic.ownership = Some(ownership);
+
+    Ok(diagnostic)
+}
+
+/// Liveness and evidence facts for a claimed or admitted delivery auto-task action, as
+/// used by reset, recovery and `orbit doctor`. A consumer without state has
+/// no action. An unreadable outcome stays unknown, so `--force` remains the
+/// only way past an action whose liveness cannot be proved. Inspection verifies
+/// evidence against existing refs and never fetches from origin.
+pub(super) fn auto_task_action_liveness(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    state: Option<&AutomationState>,
+    now: DateTime<Utc>,
+) -> orbit_automation::delivery::ActionLiveness {
+    let Some(state) = state else {
+        return orbit_automation::delivery::ActionLiveness::default();
+    };
+    let host = Host {
+        runtime,
+        action: Action::Task(definition),
+        dry_run: true,
+        source: source::Source::read_only(
+            &runtime.paths().repo_root,
+            runtime.execution_env_policy().process_env(),
+        ),
+    };
+
+    delivery::action_liveness(&host, state, now).unwrap_or_else(|error| {
+        tracing::warn!(
+            consumer = state.consumer,
+            %error,
+            "cannot read the action's outcome; treating it as executing"
+        );
+        orbit_automation::delivery::ActionLiveness::default()
+    })
 }
 
 pub(super) fn auto_task_admission_deferral(

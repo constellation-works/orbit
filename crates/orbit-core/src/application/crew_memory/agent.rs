@@ -65,10 +65,6 @@ struct DreamingScope {
     evidence: BTreeSet<String>,
 }
 
-fn refused(message: impl Into<String>) -> OrbitError {
-    OrbitError::PolicyDenied(message.into())
-}
-
 impl OrbitRuntime {
     fn resolve_memory_caller(
         &self,
@@ -454,6 +450,10 @@ impl OrbitRuntime {
             .map(|tool| (*tool).to_string())
             .collect())
     }
+}
+
+fn refused(message: impl Into<String>) -> OrbitError {
+    OrbitError::PolicyDenied(message.into())
 }
 
 /// `cmp-<12 hex>` over the proposal's identity.

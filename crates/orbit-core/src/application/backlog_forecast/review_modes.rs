@@ -17,6 +17,9 @@ use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskReviewPort};
 use crate::runtime::run::cost::InvocationSpend;
 
+/// Coverage key for a historical checkpoint the strict decoder refused.
+pub(super) const REVIEW_CHECKPOINT_UNREADABLE: &str = "review_checkpoint_unreadable";
+
 /// Historical enforced layer, or the layer assumed for the next work.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,9 +50,6 @@ impl ReviewMode {
         }
     }
 }
-
-/// Coverage key for a historical checkpoint the strict decoder refused.
-pub(super) const REVIEW_CHECKPOINT_UNREADABLE: &str = "review_checkpoint_unreadable";
 
 /// One historical run whose review checkpoint could not be read. Missing
 /// evidence is not a gap: only bytes the strict decoder rejected are.
@@ -206,16 +206,16 @@ struct EnforcedReview {
     gap: Option<ReviewEvidenceGap>,
 }
 
-fn decided(mode: ReviewMode) -> EnforcedReview {
-    EnforcedReview { mode, gap: None }
-}
-
 /// A historical checkpoint as the forecast may use it. Invalid JSON stays
 /// in the store; only this read classifies it, and only as unknown evidence.
 enum ForecastCheckpoint {
     Missing,
     Readable(Box<PipelineState>),
     Unreadable { reason: String },
+}
+
+fn decided(mode: ReviewMode) -> EnforcedReview {
+    EnforcedReview { mode, gap: None }
 }
 
 fn forecast_checkpoint(

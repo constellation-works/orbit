@@ -310,17 +310,18 @@ fn list_backlog_tasks_impl(
                 continue;
             }
             if claimed_tasks.contains(&task.id) {
+                let conflicts = task
+                    .context_files
+                    .iter()
+                    .map(|requested_file| BacklogTaskConflict {
+                        requested_file: requested_file.clone(),
+                        locking_task_id: task.id.clone(),
+                    })
+                    .collect();
                 excluded.push(BacklogTaskExclusion {
-                    conflicts: task
-                        .context_files
-                        .iter()
-                        .map(|requested_file| BacklogTaskConflict {
-                            requested_file: requested_file.clone(),
-                            locking_task_id: task.id.clone(),
-                        })
-                        .collect(),
                     id: task.id,
                     reason: BacklogTaskExclusionReason::ContextLockConflict,
+                    conflicts,
                     crew: None,
                     detail: Some(
                         "A live execution claim holds this task. It settles or is deliberately \

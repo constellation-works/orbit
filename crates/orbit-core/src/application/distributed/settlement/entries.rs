@@ -21,15 +21,6 @@ pub(crate) const SETTLEMENT_REFUSAL_FIRST_BACKOFF: std::time::Duration =
 pub(crate) const SETTLEMENT_REFUSAL_MAX_BACKOFF: std::time::Duration =
     std::time::Duration::from_secs(15 * 60);
 
-/// How long automatic passes wait after the owner refused a settlement
-/// `refusals` times in a row.
-pub(crate) fn settlement_refusal_backoff(refusals: u32) -> std::time::Duration {
-    let doublings = refusals.saturating_sub(1).min(16);
-    SETTLEMENT_REFUSAL_FIRST_BACKOFF
-        .saturating_mul(1 << doublings)
-        .min(SETTLEMENT_REFUSAL_MAX_BACKOFF)
-}
-
 impl RefusedPullSettlement {
     /// The refusal `record` is held on, when it is a `settling` admission
     /// the owner refused.
@@ -133,4 +124,13 @@ impl PullLeafClaim {
             self.guidance
         )
     }
+}
+
+/// How long automatic passes wait after the owner refused a settlement
+/// `refusals` times in a row.
+pub(crate) fn settlement_refusal_backoff(refusals: u32) -> std::time::Duration {
+    let doublings = refusals.saturating_sub(1).min(16);
+    SETTLEMENT_REFUSAL_FIRST_BACKOFF
+        .saturating_mul(1 << doublings)
+        .min(SETTLEMENT_REFUSAL_MAX_BACKOFF)
 }

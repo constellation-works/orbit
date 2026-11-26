@@ -107,10 +107,6 @@ impl RankSeasons {
     }
 }
 
-fn path(runtime: &OrbitRuntime) -> PathBuf {
-    runtime.paths().state_dir.join(SEASONS_FILE)
-}
-
 impl OrbitRuntime {
     /// The workspace's calibrated ranking seasons; none before the first
     /// `orbit agents rank calibrate`. An unreadable file is an error rather
@@ -139,4 +135,8 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::Store(format!("serialize ranking seasons: {error}")))?;
         atomic_write_text(&path, &text).map_err(|error| OrbitError::from_write_io(&path, error))
     }
+}
+
+fn path(runtime: &OrbitRuntime) -> PathBuf {
+    runtime.paths().state_dir.join(SEASONS_FILE)
 }

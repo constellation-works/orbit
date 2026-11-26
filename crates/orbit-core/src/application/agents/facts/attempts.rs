@@ -13,6 +13,59 @@ use crate::OrbitRuntime;
 /// another machine.
 const PULLED_BY_EVENT: &str = "pulled_by";
 
+/// What the claims other machines pulled record of who ran them, read once
+/// per scan.
+#[derive(Debug, Default)]
+pub(in crate::application::agents) struct PulledClaimRunners<'a> {
+    /// The crew, model and reported effort of each settled claim, by claim.
+    pub(super) by_claim: HashMap<&'a str, Runner>,
+    /// Each task's settled claims, so a stored row's freshness depends on
+    /// the claims its own task was pulled under, not every claim's.
+    pub(super) by_task: HashMap<&'a str, Vec<&'a str>>,
+    /// The models each crew is known to have run.
+    pub(super) crew_models: KnownCrewModels,
+}
+
+/// The models each crew is known to have run: every crew and model one record
+/// names together, which is a local implementation run, a claim settlement or
+/// a follower's late report that names its crew. The crew and the model of
+/// such a record describe one leaf, so the pair is what actually ran.
+///
+/// The crew definitions are not used. They say what a crew resolves to on
+/// this host now, and a follower's configuration, or an earlier one of this
+/// host, can resolve the same crew to another model; the records keep what
+/// each crew ran when it ran. A crew no record pairs with a model has no
+/// known model.
+#[derive(Debug, Default)]
+pub(in crate::application::agents) struct KnownCrewModels(BTreeMap<String, BTreeSet<String>>);
+
+impl KnownCrewModels {
+    /// Note the pair a record names, when it names both.
+    pub(super) fn note_recorded_pair(&mut self, runner: &Runner) {
+        if let (Some(crew), Some(model)) = (&runner.crew, &runner.model) {
+            self.0
+                .entry(crew.clone())
+                .or_default()
+                .insert(model.clone());
+        }
+    }
+
+    /// Whether a record shows `crew` running `model`.
+    fn ran(&self, crew: &str, model: &str) -> bool {
+        self.0
+            .get(crew)
+            .is_some_and(|models| models.contains(model))
+    }
+
+    /// Whether the records show `crew` running models and `model` is none of
+    /// them. False for a crew with no known model.
+    fn contradicts(&self, crew: &str, model: &str) -> bool {
+        self.0
+            .get(crew)
+            .is_some_and(|models| !models.contains(model))
+    }
+}
+
 /// The implementation job runs active since `horizon`, by the task their
 /// input names, oldest first. Read without their steps, one query per
 /// delivery leaf on its own thread: each leaf's history is an independent
@@ -113,59 +166,6 @@ pub(super) fn runner(
                 .find(|run| run.started_at >= start && end.is_none_or(|end| run.started_at <= end))
         })
         .map(|run| run.runner.clone())
-}
-
-/// What the claims other machines pulled record of who ran them, read once
-/// per scan.
-#[derive(Debug, Default)]
-pub(in crate::application::agents) struct PulledClaimRunners<'a> {
-    /// The crew, model and reported effort of each settled claim, by claim.
-    pub(super) by_claim: HashMap<&'a str, Runner>,
-    /// Each task's settled claims, so a stored row's freshness depends on
-    /// the claims its own task was pulled under, not every claim's.
-    pub(super) by_task: HashMap<&'a str, Vec<&'a str>>,
-    /// The models each crew is known to have run.
-    pub(super) crew_models: KnownCrewModels,
-}
-
-/// The models each crew is known to have run: every crew and model one record
-/// names together, which is a local implementation run, a claim settlement or
-/// a follower's late report that names its crew. The crew and the model of
-/// such a record describe one leaf, so the pair is what actually ran.
-///
-/// The crew definitions are not used. They say what a crew resolves to on
-/// this host now, and a follower's configuration, or an earlier one of this
-/// host, can resolve the same crew to another model; the records keep what
-/// each crew ran when it ran. A crew no record pairs with a model has no
-/// known model.
-#[derive(Debug, Default)]
-pub(in crate::application::agents) struct KnownCrewModels(BTreeMap<String, BTreeSet<String>>);
-
-impl KnownCrewModels {
-    /// Note the pair a record names, when it names both.
-    pub(super) fn note_recorded_pair(&mut self, runner: &Runner) {
-        if let (Some(crew), Some(model)) = (&runner.crew, &runner.model) {
-            self.0
-                .entry(crew.clone())
-                .or_default()
-                .insert(model.clone());
-        }
-    }
-
-    /// Whether a record shows `crew` running `model`.
-    fn ran(&self, crew: &str, model: &str) -> bool {
-        self.0
-            .get(crew)
-            .is_some_and(|models| models.contains(model))
-    }
-
-    /// Whether the records show `crew` running models and `model` is none of
-    /// them. False for a crew with no known model.
-    fn contradicts(&self, crew: &str, model: &str) -> bool {
-        self.0
-            .get(crew)
-            .is_some_and(|models| !models.contains(model))
-    }
 }
 
 /// Who worked an attempt with no local job run, as a pull from another

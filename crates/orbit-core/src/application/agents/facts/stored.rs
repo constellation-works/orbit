@@ -246,10 +246,6 @@ impl StoredFacts {
     }
 }
 
-fn has_no_open_span(facts: &TaskFacts) -> bool {
-    facts.attempts.iter().all(|attempt| attempt.end.is_some())
-}
-
 impl StoredFacts {
     /// A value that changes with the runners of this task's own pulled
     /// claims and with the crews' known models, which decide a pulled
@@ -270,6 +266,10 @@ impl StoredFacts {
         entries.sort_by_key(|(id, _)| *id);
         sha256_hex(format!("{entries:?}|{}", self.crew_models_digest).as_bytes())
     }
+}
+
+fn has_no_open_span(facts: &TaskFacts) -> bool {
+    facts.attempts.iter().all(|attempt| attempt.end.is_some())
 }
 
 /// The non-history inputs to [`task_facts`], as one value that changes with

@@ -8,6 +8,14 @@ thread_local! {
     static CLOCK: RefCell<Option<Clock>> = const { RefCell::new(None) };
 }
 
+struct Restore(Option<Clock>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        CLOCK.with(|slot| slot.replace(self.0.take()));
+    }
+}
+
 /// Use a monotonic clock for all source budgets on this thread during `operation`.
 /// Size limits and child completion checks still apply. Restore the previous
 /// clock on return or unwind; other threads and production builds are unaffected.
@@ -17,14 +25,6 @@ pub fn with_delivery_source_clock<T>(
 ) -> T {
     let _restore = Restore(CLOCK.with(|slot| slot.replace(Some(Rc::new(clock)))));
     operation()
-}
-
-struct Restore(Option<Clock>);
-
-impl Drop for Restore {
-    fn drop(&mut self) {
-        CLOCK.with(|slot| slot.replace(self.0.take()));
-    }
 }
 
 pub(super) fn now() -> Option<Instant> {

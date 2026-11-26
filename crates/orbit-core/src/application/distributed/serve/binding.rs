@@ -5,14 +5,6 @@ use orbit_types::tool::ToolSessionContext;
 use crate::OrbitRuntime;
 use crate::application::distributed::ensure_distributed_mutation_available;
 
-/// The mutation ids a follower's retries replay under. One per claim and
-/// operation, so a lost answer retried with the same claim returns the
-/// recorded outcome instead of performing the write again, and a second,
-/// different run can never be bound to the same claim.
-fn bind_mutation_id(claim_id: &str) -> String {
-    format!("pull-bind:{claim_id}")
-}
-
 impl OrbitRuntime {
     /// Bind the follower's one local leaf run to its claim, `claimed → running`.
     ///
@@ -55,4 +47,12 @@ impl OrbitRuntime {
             },
         )
     }
+}
+
+/// The mutation ids a follower's retries replay under. One per claim and
+/// operation, so a lost answer retried with the same claim returns the
+/// recorded outcome instead of performing the write again, and a second,
+/// different run can never be bound to the same claim.
+fn bind_mutation_id(claim_id: &str) -> String {
+    format!("pull-bind:{claim_id}")
 }

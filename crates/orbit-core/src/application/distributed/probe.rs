@@ -163,17 +163,25 @@ impl crate::OrbitRuntime {
         let ship = self.owner_ship_contract_for(session_machine_id(session).as_deref());
         let mut diagnostics = Vec::new();
         let refusal = self.declared_contract_refusal(session, declared, &ship, &mut diagnostics)?;
+        let protocol_fingerprint = fingerprint.to_string();
+        let binary_version = owner_binary_version().to_string();
+        let workspace_id = self.workspace_id()?;
+        let owner_machine_id = self.distributed_owner_machine_id();
+        let session = probe_session(self.env(), session);
+        let review = review_switches(self, Utc::now())?;
+        let validation_gates = self.owner_validation_gates();
+
         Ok(DrainProbeReport {
             schema_version: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             protocol_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            protocol_fingerprint: fingerprint.to_string(),
-            binary_version: owner_binary_version().to_string(),
-            workspace_id: self.workspace_id()?,
-            owner_machine_id: self.distributed_owner_machine_id(),
-            session: probe_session(self.env(), session),
-            review: review_switches(self, Utc::now())?,
-            validation_gates: self.owner_validation_gates(),
+            protocol_fingerprint,
+            binary_version,
+            workspace_id,
+            owner_machine_id,
+            session,
             ship,
+            review,
+            validation_gates,
             admits: refusal.is_none(),
             refusal: refusal.map(|refusal| refusal.as_str().to_string()),
             diagnostics,

@@ -18,12 +18,6 @@ use orbit_types::workflow::automation::recovery::HistoryDivergence;
 use super::super::stall::{self, dedupe_miss_hook};
 use crate::OrbitRuntime;
 
-fn serialize_reports() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 struct ClearHook;
 
 impl Drop for ClearHook {
@@ -35,6 +29,12 @@ impl Drop for ClearHook {
 struct Gate {
     arrived: usize,
     scan_done: bool,
+}
+
+fn serialize_reports() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn runtime() -> (tempfile::TempDir, OrbitRuntime) {

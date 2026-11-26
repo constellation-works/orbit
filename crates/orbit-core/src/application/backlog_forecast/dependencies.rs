@@ -128,10 +128,13 @@ pub(super) fn plan_forecast_dependencies(
         }
         reason
     };
+    let backlog = scenario(false);
+    let approved = scenario(true);
+
     DependencyPlan {
-        backlog: scenario(false),
-        approved: scenario(true),
         edges,
+        backlog,
+        approved,
         unverifiable,
     }
 }
