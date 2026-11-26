@@ -1,98 +1,32 @@
 # Changelog — STD-02 Rust architecture and errors
 
-Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its
-frontmatter as `STD-02@<version>`; a version changes only when a rule is added,
-removed or changed in meaning.
+Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its frontmatter as `STD-02@<version>`; a version changes only when a rule is added, removed or changed in meaning.
 
+- **10** (2026-11-26): New rule, a heuristic: a function past about 60 code lines SHOULD be checked for phases and split along them (review-only) (scribe standard-27).
+  - New rule, a MUST: a function takes at most seven parameters, the receiver counted; Clippy gate at threshold 7 (scribe standard-27).
+  - New rule, a SHOULD: a function is not copied under a longer name to pass one more value (review-only) (scribe standard-27).
+- **9** (2026-11-26): R48 added (CLI output is one file per top-level command; code shared by two or more commands lives under `output/common/`, in files named for what they hold) (scribe standard-23, ORB-28671)
+  - R49 added (a command noun with more than three verbs is a directory with one file per verb; code shared by two or more nouns lives under `command/common/`) (scribe standard-23, ORB-28671)
+- **Editorial (2026-11-25, version unchanged):** `checks.md` gains the copyable gate for R43: the *Architecture-map check* section points at the Rust CLI template's `scripts/check-architecture-map.sh` (constellation-works/rust-cli-template#37, 7a018d7) and states how the architecture doc must be written for it. No rule changed (ORB-28053).
 - **8** (2026-11-25): R6 changed (adds `clippy.toml` `disallowed-types`/`disallowed-methods` as the rung between item visibility and source grep, removes superseded grep bans, and adds the baseline list in `checks.md`) (scribe standard-16)
 - **7** (2026-11-25): R43 changed (the architecture doc's unit map is machine-checked: a missing crate or top-level module, a documented path that does not exist, or a unit without a doc comment fails the structure gate; a copyable script follows once the template's has landed) (scribe standard-15, ORB-28029, ORB-28053)
-- **6** (2026-11-24): R45 added (the application layer is one unit per subject with one entry point; no second sort by kind; repositories stay per record) (scribe standard-12, ORB-27921, ORB-27911)
-  R46 added (a project other than the orchestrator invokes no model or agent; such work is an orchestrator job over the project's own commands) (scribe standard-13, ORB-27921, ORB-27911)
-  R47 added (one subject is not split across units for purity alone; a library unit may own its file access in one module and use persistence) (scribe standard-14, ORB-27921, ORB-27911)
-  R7 changed (composition, adapters and environment reads live in the library crate; the CLI crate is arguments, mapping, rendering and `main`) (scribe standard-11, ORB-27921, ORB-27911)
-- **5** (2026-11-24): Architecture rules drawn from the scribe-core analysis: R39 added (no
-  import cycles between units; a layer of more than about ten units declares an order inside
-  itself) (ORB-27707).
-  R40 added (persistence holds no validation, authorization or classification rule, imports
-  record types only, and is named for records; an atomic check runs in the caller's
-  transaction) (ORB-27707).
-  R41 added (an operation loads state into values, decides with pure functions, performs
-  effects through ports and commits in one transaction) (ORB-27707).
-  R42 added (a port is defined by the layer that calls it and implemented in composition; each
-  feature keeps its own request and response shapes) (ORB-27707).
-  R43 added (the architecture doc maps every unit with what it owns; new code goes to the
-  lowest unit that can own it; no catch-all unit names outside the foundation) (ORB-27707).
-  R44 added (readers of old formats, migrations and importers live in one unit the live path
-  calls only at open or upgrade) (ORB-27707).
-  R1 changed (the default layer model names an application layer and places persistence below
-  it) (ORB-27707).
-  R2 changed (each operation has one entry point in an application unit; composition only
-  constructs; a surface calls one operation) (ORB-27707).
-  R6 changed (the check also rejects import cycles and enforces in-layer order; crate edge
-  before visibility before grep) (ORB-27707).
-  R7 changed (persistence is a third crate from the day the project takes a storage-driver
-  dependency) (ORB-27707).
-  R18 changed (the size heuristic also covers a type's public methods and a directory's sibling
-  modules) (ORB-27707).
-- **Editorial (2026-11-23, version unchanged):** Orbit trimmed `ARCHITECTURE.md` to its layering
-  rules and edge table (constellation-works/orbit#10858), so the R2, R3, R5, R7 and R16 exemplars
-  now cite the crate pages under `docs/architecture/`, and R4 cites `ARCHITECTURE.md#architecture`.
-  No rule changed.
-- **Editorial (2026-11-22, version unchanged):** `checks.md` now points at the Rust CLI
-  template repository `constellation-works/rust-cli-template` (checkout
-  `codebases/rust-cli-template`) instead of `operations/templates/rust-cli/`. No rule
-  changed. ORB-26696.
-- **4** (2026-10-28, Daniel; adopted from the BeautifulRust agent skills, reviewed
-  2026-10-28).
-  - Normative, new cluster "Idiom and naming", binding new and changed code: R36 no boolean
-    mode parameters on functions callable outside their module (MUST; data `bool`s and
-    private helpers exempt); R37 Rust API naming (SHOULD); R38 signatures borrow the most
-    general type and own only what they keep, no borrow-ending clones, no sentinels
-    (SHOULD).
-  - Normative, new rule in Gates: R35 lint suppressions are `#[expect(…, reason = …)]` on
-    the narrowest item, `#[allow]` only for generated, macro or target-dependent cases and
-    still with a reason, and no `#![deny(warnings)]` in source.
-  - Normative, changed rule: R13's invariant `expect` uses `#[expect(clippy::expect_used,
-    reason = …)]` instead of a scoped `#[allow]` with a comment.
-  - Machine checks gained the R35, R36 and R38 adoptable lints, a `deny(warnings)` grep ban
-    and a review checklist with severity tiers. The lint baseline block is unchanged.
-  - Not adopted from the source: `anyhow` in application code (contradicts R10), clippy's
-    `pedantic` group and `missing_docs` everywhere (R22 keeps the baseline short).
+- **6** (2026-11-24): R45 added (the application layer is one unit per subject with one entry point; no second sort by kind; repositories stay per record) (scribe standard-12, ORB-27921, ORB-27911) R46 added (a project other than the orchestrator invokes no model or agent; such work is an orchestrator job over the project's own commands) (scribe standard-13, ORB-27921, ORB-27911) R47 added (one subject is not split across units for purity alone; a library unit may own its file access in one module and use persistence) (scribe standard-14, ORB-27921, ORB-27911) R7 changed (composition, adapters and environment reads live in the library crate; the CLI crate is arguments, mapping, rendering and `main`) (scribe standard-11, ORB-27921, ORB-27911)
+- **5** (2026-11-24): Architecture rules drawn from the scribe-core analysis: R39 added (no import cycles between units; a layer of more than about ten units declares an order inside itself) (ORB-27707). R40 added (persistence holds no validation, authorization or classification rule, imports record types only, and is named for records; an atomic check runs in the caller's transaction) (ORB-27707). R41 added (an operation loads state into values, decides with pure functions, performs effects through ports and commits in one transaction) (ORB-27707). R42 added (a port is defined by the layer that calls it and implemented in composition; each feature keeps its own request and response shapes) (ORB-27707). R43 added (the architecture doc maps every unit with what it owns; new code goes to the lowest unit that can own it; no catch-all unit names outside the foundation) (ORB-27707). R44 added (readers of old formats, migrations and importers live in one unit the live path calls only at open or upgrade) (ORB-27707). R1 changed (the default layer model names an application layer and places persistence below it) (ORB-27707). R2 changed (each operation has one entry point in an application unit; composition only constructs; a surface calls one operation) (ORB-27707). R6 changed (the check also rejects import cycles and enforces in-layer order; crate edge before visibility before grep) (ORB-27707). R7 changed (persistence is a third crate from the day the project takes a storage-driver dependency) (ORB-27707). R18 changed (the size heuristic also covers a type's public methods and a directory's sibling modules) (ORB-27707).
+- **Editorial (2026-11-23, version unchanged):** Orbit trimmed `ARCHITECTURE.md` to its layering rules and edge table (constellation-works/orbit#10858), so the R2, R3, R5, R7 and R16 exemplars now cite the crate pages under `docs/architecture/`, and R4 cites `ARCHITECTURE.md#architecture`. No rule changed.
+- **Editorial (2026-11-22, version unchanged):** `checks.md` now points at the Rust CLI template repository `constellation-works/rust-cli-template` (checkout `codebases/rust-cli-template`) instead of `operations/templates/rust-cli/`. No rule changed. ORB-26696.
+- **4** (2026-10-28, Daniel; adopted from the BeautifulRust agent skills, reviewed 2026-10-28).
+  - Normative, new cluster "Idiom and naming", binding new and changed code: R36 no boolean mode parameters on functions callable outside their module (MUST; data `bool`s and private helpers exempt); R37 Rust API naming (SHOULD); R38 signatures borrow the most general type and own only what they keep, no borrow-ending clones, no sentinels (SHOULD).
+  - Normative, new rule in Gates: R35 lint suppressions are `#[expect(…, reason = …)]` on the narrowest item, `#[allow]` only for generated, macro or target-dependent cases and still with a reason, and no `#![deny(warnings)]` in source.
+  - Normative, changed rule: R13's invariant `expect` uses `#[expect(clippy::expect_used, reason = …)]` instead of a scoped `#[allow]` with a comment.
+  - Machine checks gained the R35, R36 and R38 adoptable lints, a `deny(warnings)` grep ban and a review checklist with severity tiers. The lint baseline block is unchanged.
+  - Not adopted from the source: `anyhow` in application code (contradicts R10), clippy's `pedantic` group and `missing_docs` everywhere (R22 keeps the baseline short).
 - **3** (2026-09-26, Daniel).
-  - Normative, changed rule: R18 treats file size as a heuristic. Past about 800 lines a
-    file SHOULD be checked for multiple responsibilities and split along them; closely
-    related functionality MAY stay in one file when a split would only scatter it. v2 read
-    as "split when past ~800 lines" on length alone.
-- **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-02.md`
-  keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*,
-  *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and
-  `CHANGELOG.md`. No rule changed.
+  - Normative, changed rule: R18 treats file size as a heuristic. Past about 800 lines a file SHOULD be checked for multiple responsibilities and split along them; closely related functionality MAY stay in one file when a split would only scatter it. v2 read as "split when past ~800 lines" on length alone.
+- **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-02.md` keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*, *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and `CHANGELOG.md`. No rule changed.
 - **2** (2026-09-26, ORB-13126).
-  - Normative, new rules from `projects/standards/tacit-extraction-2026-09-26.md`
-    (disposition on ORB-13088): R24 one definition per rule at the chokepoint (T6); R25
-    obligations in deterministic code, SHOULD (A2); R26 errors state verified causes,
-    resolved inputs and a runnable remedy (T13); R27 exhaustive matches on domain enums
-    (A5); R28 config validated at load with checked conversions (E4); R29 unknown never
-    reads as zero, empty, success or healthy, and health checks probe real state (T2 with
-    O2); R30 distinct failure classes get distinct terminal states (E3); R31 fail closed on
-    integrity, fail open on side channels, declared per check (T5); R32 one bad item is
-    isolated, reported and counted (E2 with E6); R33 recovery paths accept the states they
-    exist to fix (E5); R34 preconditions before the first side effect, with preflight
-    sharing the real run's checks (T15).
-  - Normative, extended rules: R10 classifies failures from structured data, never message
-    or stderr substrings (E1). R16 requires lossless round trips and forbids fabricating an
-    unknown value on write or deserialize (P4).
-  - Normative, clarified from frictions found building the constellation Rust CLI template
-    on v1 (ORB-13117): R7 says a new CLI SHOULD start as two crates (domain library plus CLI
-    surface), while other projects still start as one. R11 requires `#[non_exhaustive]`
-    only when the surface type is public. R12 accepts a single `#[from]`/`From` impl on a
-    downstream surface type as the one translator. R15 bans naming `io::stdout()` or
-    `io::stderr()` outside the output layer, with a stream grep guard.
-  - Editorial: plain-line cluster labels became `###` headings; the Errors cluster is now
-    "Errors and domain types", and a new "Failure semantics" cluster holds R29–R34.
-    "Applies to" is a tag list with rule scopes. The lint guidance recommends locked-handle
-    writes over a scoped print allow. Machine checks gained adoptable lints (beyond Orbit's
-    baseline), a stream grep guard and a manifest-only dependency-direction variant. The
-    lint baseline block is unchanged.
+  - Normative, new rules from `projects/standards/tacit-extraction-2026-09-26.md` (disposition on ORB-13088): R24 one definition per rule at the chokepoint (T6); R25 obligations in deterministic code, SHOULD (A2); R26 errors state verified causes, resolved inputs and a runnable remedy (T13); R27 exhaustive matches on domain enums (A5); R28 config validated at load with checked conversions (E4); R29 unknown never reads as zero, empty, success or healthy, and health checks probe real state (T2 with O2); R30 distinct failure classes get distinct terminal states (E3); R31 fail closed on integrity, fail open on side channels, declared per check (T5); R32 one bad item is isolated, reported and counted (E2 with E6); R33 recovery paths accept the states they exist to fix (E5); R34 preconditions before the first side effect, with preflight sharing the real run's checks (T15).
+  - Normative, extended rules: R10 classifies failures from structured data, never message or stderr substrings (E1). R16 requires lossless round trips and forbids fabricating an unknown value on write or deserialize (P4).
+  - Normative, clarified from frictions found building the constellation Rust CLI template on v1 (ORB-13117): R7 says a new CLI SHOULD start as two crates (domain library plus CLI surface), while other projects still start as one. R11 requires `#[non_exhaustive]` only when the surface type is public. R12 accepts a single `#[from]`/`From` impl on a downstream surface type as the one translator. R15 bans naming `io::stdout()` or `io::stderr()` outside the output layer, with a stream grep guard.
+  - Editorial: plain-line cluster labels became `###` headings; the Errors cluster is now "Errors and domain types", and a new "Failure semantics" cluster holds R29–R34. "Applies to" is a tag list with rule scopes. The lint guidance recommends locked-handle writes over a scoped print allow. Machine checks gained adoptable lints (beyond Orbit's baseline), a stream grep guard and a manifest-only dependency-direction variant. The lint baseline block is unchanged.
 - **1** (2026-09-26). First publication: R1–R23.
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).
