@@ -48,6 +48,7 @@ use super::resolve::{
     resolve_unlocked_path_validation_commands, resolve_web_trusted_hosts,
     resolve_web_trusted_logins, resolve_worker_tasks_max,
 };
+use super::snapshot::AdmissionOptions;
 use super::snapshot::AdmissionScope;
 use crate::crew_auto_effort::AutoEffortBand;
 use crate::crew_task_type::TaskTypeDefinition;
@@ -149,10 +150,12 @@ macro_rules! define_config_settings {
                     config_path,
                     crews,
                     env_default,
-                    false,
-                    false,
-                    None,
-                    AdmissionScope::File,
+                    AdmissionOptions {
+                        require_default_crew: false,
+                        validate_auto_memory: false,
+                        global_memory_high_percent: None,
+                        scope: AdmissionScope::File,
+                    },
                 )
             }
 
@@ -168,10 +171,12 @@ macro_rules! define_config_settings {
                     config_path,
                     crews,
                     env_default,
-                    require_default_crew,
-                    true,
-                    None,
-                    AdmissionScope::Layered,
+                    AdmissionOptions {
+                        require_default_crew,
+                        validate_auto_memory: true,
+                        global_memory_high_percent: None,
+                        scope: AdmissionScope::Layered,
+                    },
                 )
             }
 
@@ -189,10 +194,12 @@ macro_rules! define_config_settings {
                     config_path,
                     crews,
                     env_default,
-                    true,
-                    true,
-                    Some(global_memory_high_percent),
-                    AdmissionScope::Layered,
+                    AdmissionOptions {
+                        require_default_crew: true,
+                        validate_auto_memory: true,
+                        global_memory_high_percent: Some(global_memory_high_percent),
+                        scope: AdmissionScope::Layered,
+                    },
                 )
             }
 
@@ -210,25 +217,29 @@ macro_rules! define_config_settings {
                     config_path,
                     crews,
                     env_default,
-                    true,
-                    false,
-                    None,
-                    AdmissionScope::Layered,
+                    AdmissionOptions {
+                        require_default_crew: true,
+                        validate_auto_memory: false,
+                        global_memory_high_percent: None,
+                        scope: AdmissionScope::Layered,
+                    },
                 )
             }
 
             // Private, with a named wrapper per admission view above.
-            #[allow(clippy::too_many_arguments)]
             fn admit_internal(
                 document: &toml::Value,
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
                 env_default: Option<&str>,
-                require_default_crew: bool,
-                validate_auto_memory: bool,
-                global_memory_high_percent: Option<u8>,
-                scope: AdmissionScope,
+                options: AdmissionOptions,
             ) -> Result<Self, OrbitError> {
+                let AdmissionOptions {
+                    require_default_crew,
+                    validate_auto_memory,
+                    global_memory_high_percent,
+                    scope,
+                } = options;
                 $(let $field: $resolved = {
                     let raw_value: Option<$raw> = $crate::config_document::read_typed_config_value(document, $key, config_path)?;
                     resolve_at(($resolve)(raw_value), config_path)?
