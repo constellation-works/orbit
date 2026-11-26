@@ -9,7 +9,7 @@ tags: [architecture, orbit-search]
 
 ## What it owns
 
-Lexical retrieval: SQLite chunk + FTS5 schema, chunking, task-field extraction, BM25 ranking. Index file keeps `semantic.db` name.
+Lexical retrieval: SQLite chunk + FTS5 schema, chunking, task-field extraction, BM25 ranking. The `semantic.db` file evolves through `orbit-common`'s SQLite migration ledger.
 
 ## Main modules and types
 

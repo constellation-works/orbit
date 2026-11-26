@@ -1,10 +1,11 @@
 // v38 `job_run_states`: pipeline state leaves `job_runs` for a side table.
 use rusqlite::Connection;
 
-use super::super::super::ledger::{self, Migration};
+use super::super::super::ledger::run_store_migrations;
 use super::super::*;
 use crate::Store;
 use crate::contracts::JobRunQuery;
+use orbit_common::storage::sqlite::ledger::Migration;
 
 /// The registry up to, not including, v38.
 fn before_job_run_states() -> &'static [Migration] {
@@ -56,7 +57,7 @@ fn job_run_states_move_survives_interruption_byte_for_byte() {
     let dir = tempfile::tempdir().expect("fixture dir");
     let path = dir.path().join("orbit.db");
     let conn = Connection::open(&path).expect("open database");
-    ledger::run_migrations(&conn, before_job_run_states()).expect("migrate to v37");
+    run_store_migrations(&conn, before_job_run_states(), None).expect("migrate to v37");
     let big = format!("{{\"blob\":\"{}\"}}", "\u{e9}x".repeat(700_000));
     seed_run(&conn, "ws_a", "jrun-null", "pending", None);
     seed_run(&conn, "ws_a", "jrun-small", "success", Some("{\"a\":1}"));
@@ -87,7 +88,7 @@ fn job_run_states_move_survives_interruption_byte_for_byte() {
          WHEN OLD.run_id = 'jrun-big' BEGIN SELECT RAISE(ABORT, 'interrupted'); END;",
     )
     .expect("install interruption");
-    ledger::run_migrations(&conn, MIGRATIONS).expect_err("interrupted migration fails");
+    run_store_migrations(&conn, MIGRATIONS, None).expect_err("interrupted migration fails");
     assert_eq!(current_schema_version(&conn).expect("version"), 37);
     assert!(!table_exists(&conn, "job_run_states").expect("table probe"));
     assert_eq!(
@@ -98,7 +99,7 @@ fn job_run_states_move_survives_interruption_byte_for_byte() {
 
     conn.execute_batch("DROP TRIGGER interrupt_v38;")
         .expect("remove interruption");
-    ledger::run_migrations(&conn, MIGRATIONS).expect("rerun v38");
+    run_store_migrations(&conn, MIGRATIONS, None).expect("rerun v38");
     assert_eq!(
         current_schema_version(&conn).expect("version"),
         SUPPORTED_SCHEMA_VERSION

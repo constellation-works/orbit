@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: Open questions about verifying additive claims, widening the read-only guarantee beyond SQLite, and how other systems version state readers can outlive.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs"]
+paths: ["crates/orbit-common/src/storage/compatibility.rs"]
 related_features: [state-compatibility]
 related_artifacts: [ORB-12434]
 ---
@@ -35,7 +35,7 @@ from. The shipped mechanism is in [2_design.md](./2_design.md).
    keep the trail intact, but introduces a second write target.
 4. **Does the task registry's `user_version` floor belong in this contract?**
    *Resolved 2026-10-12; shipped in [ORB-15822].* Yes. The registry runs on its own ledger, run by
-   the store's ledger engine, and keeps `user_version` only as a fence for
+   the shared SQLite ledger in `orbit-common`, and keeps `user_version` only as a fence for
    binaries that predate that ledger. See
    [4_decisions.md](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
 5. **How far back should read-only support reach?** *Resolved 2026-10-11 by [ORB-15732].* The

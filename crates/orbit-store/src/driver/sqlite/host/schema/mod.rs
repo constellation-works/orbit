@@ -66,12 +66,11 @@ mod v2_audit_events;
 mod worker_resource_limits;
 mod workspace_ownership;
 
-pub(super) use introspect::table_exists;
 #[cfg(test)]
-use introspect::table_has_column;
+use introspect::{table_exists, table_has_column};
 
-pub(crate) use super::ledger::applied_migrations;
-pub use super::ledger::{
+pub(crate) use orbit_common::storage::sqlite::ledger::applied_migrations;
+pub use orbit_common::storage::sqlite::ledger::{
     AppliedMigration, LedgerStamp, LedgeredDatabase, Migration, current_schema_version,
     evaluate_newer_database, run_database_migrations,
 };
@@ -922,14 +921,14 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 96;
 /// `Ok(Some(..))` means the caller must hold the connection read-only, and
 /// an error means the database must not be opened at all.
 pub(crate) fn apply_schema(conn: &Connection) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    ledger::run_migrations(conn, MIGRATIONS)
+    ledger::run_store_migrations(conn, MIGRATIONS, None)
 }
 
 pub(crate) fn apply_schema_at_path(
     conn: &Connection,
     path: &Path,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    ledger::run_migrations_at_path(conn, MIGRATIONS, path)
+    ledger::run_store_migrations(conn, MIGRATIONS, Some(path))
 }
 
 /// Registry metadata for one schema migration not yet recorded as applied,
@@ -982,7 +981,7 @@ pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, O
         })?;
         let current_version = current_schema_version(&conn)?;
         let forward_compatible = if current_version > SUPPORTED_SCHEMA_VERSION {
-            ledger::read_compat_record(&conn)
+            orbit_common::storage::sqlite::ledger::read_compat_record(&conn)
                 .and_then(|record| {
                     evaluate_newer_state(
                         StateComponent::StoreSchema,

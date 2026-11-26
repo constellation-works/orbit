@@ -1,39 +1,14 @@
 use std::path::Path;
 
-use orbit_common::storage::sqlite::{pragma, sqlite_error, sqlite_store_error};
-use orbit_common::{OrbitError, SqliteContention, StorageLayer};
+use crate::storage::sqlite::{pragma, sqlite_error, sqlite_store_error};
+use crate::{OrbitError, SqliteContention, StorageLayer};
 use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
 use super::compatibility::write_compat_record;
-use super::{
-    AppliedMigration, LedgeredDatabase, Migration, STORE_DATABASE, evaluate_newer_database,
-};
-use crate::contracts::ForwardCompatibleOpen;
+use super::{AppliedMigration, LedgeredDatabase, Migration, evaluate_newer_database};
+use crate::storage::compatibility::ForwardCompatibleOpen;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
-
-/// Bring `conn` up to the newest version in `migrations`, recording each
-/// applied migration in the ledger.
-///
-/// A database newer than the registry supports is decided by its
-/// forward-compatibility record: `Ok(Some(..))` describes that newer open —
-/// the caller must keep the connection read-only unless it is
-/// [`ForwardCompatibleOpen::writable`] (ORB-12434); an error means this binary
-/// must not touch the database at all.
-pub(crate) fn run_migrations(
-    conn: &Connection,
-    migrations: &[Migration],
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_database_migrations(conn, &STORE_DATABASE, migrations, None)
-}
-
-pub(crate) fn run_migrations_at_path(
-    conn: &Connection,
-    migrations: &[Migration],
-    path: &Path,
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_database_migrations(conn, &STORE_DATABASE, migrations, Some(path))
-}
 
 /// Apply a database's ordered registry through its own transactional ledger.
 /// `path`, when known, names the file in a contention error.
@@ -85,8 +60,15 @@ pub fn current_schema_version(conn: &Connection) -> Result<u32, OrbitError> {
 }
 
 /// All migrations recorded as applied, ordered by version ascending.
-pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigration>, OrbitError> {
-    if !super::super::schema::table_exists(conn, "schema_meta")? {
+pub fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigration>, OrbitError> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_store_error)?;
+    if !exists {
         return Ok(Vec::new());
     }
 
@@ -176,7 +158,7 @@ fn apply_one(
         params![
             ledger_key(migration.version),
             migration.name,
-            crate::now_string()
+            chrono::Utc::now().to_rfc3339()
         ],
     )
     .map_err(|e| {
@@ -197,7 +179,7 @@ fn apply_one(
     tx.commit()
         .map_err(|error| commit_migration_error(migration, error))?;
 
-    orbit_common::tracing::info!(
+    tracing::info!(
         target: "orbit.store.sqlite",
         database = database.noun,
         version = migration.version,
@@ -258,7 +240,7 @@ impl<'a> ForeignKeysOff<'a> {
 impl Drop for ForeignKeysOff<'_> {
     fn drop(&mut self) {
         if let Err(error) = pragma::set(self.conn, "foreign_keys", &"ON") {
-            orbit_common::tracing::warn!(
+            tracing::warn!(
                 target: "orbit.store.sqlite",
                 error = %error,
                 "could not turn foreign keys back on after a migration",
@@ -267,7 +249,7 @@ impl Drop for ForeignKeysOff<'_> {
     }
 }
 
-pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {
+fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {
     if matches!(
         &error,
         rusqlite::Error::SqliteFailure(sqlite_error, _)

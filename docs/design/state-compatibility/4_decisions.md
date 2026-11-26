@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, why read-compatible store opens are enforced read-only by SQLite itself, when a compatibility path may be deleted, and why every SQLite schema change goes through one frozen, versioned ledger per database.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-store/src/workflow/layout/marker.rs", "crates/orbit-store/src/driver/sqlite/task_index/schema/open.rs"]
+paths: ["crates/orbit-common/src/storage/compatibility.rs", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-store/src/workflow/layout/marker.rs", "crates/orbit-store/src/driver/sqlite/task_index/schema/open.rs"]
 related_features: [state-compatibility]
 related_artifacts: [ORB-12434, ORB-15732, ORB-15729]
 ---
@@ -22,7 +22,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Compatibility is declared by the binary that migrates, never inferred from the version number
 
 **Recorded:** 2026-09 · [ORB-12434]
-**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/host/ledger/compatibility.rs::write_compat_record`
+**Code anchors:** `crates/orbit-common/src/storage/compatibility.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-common/src/storage/sqlite/ledger/compatibility.rs::write_compat_record`
 
 ### Context
 
@@ -218,8 +218,8 @@ The alternatives considered:
 
 ### Decision
 
-There is one schema-evolution mechanism: the store ledger engine in
-`migration/ledger/mod.rs`. It is an append-only registry of
+There is one schema-evolution mechanism. The ledger engine now lives in
+`crates/orbit-common/src/storage/sqlite/ledger/`. It runs an append-only registry of
 `Migration { version, name, compat, apply }` entries. Each entry commits in one
 `BEGIN IMMEDIATE` transaction with its `schema_meta` ledger row and its
 `migration.compat` record. The rules, for any Orbit SQLite database whose

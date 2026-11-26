@@ -1,6 +1,27 @@
-//! Forward-only migration of the legacy semantic.db into a lexical index.
+//! Ordered schema migrations for the lexical index (`semantic.db`).
+use std::path::Path;
+
 use orbit_common::OrbitError;
+use orbit_common::storage::compatibility::{MigrationCompatibility, StateComponent};
+use orbit_common::storage::sqlite::{ledger, pragma};
 use rusqlite::Connection;
+
+const DATABASE: ledger::LedgeredDatabase = ledger::LedgeredDatabase {
+    component: StateComponent::FeatureSchema,
+    noun: "search index",
+    foreign_keys_off: false,
+    stamp: None,
+};
+
+/// Append-only registry. Each migration owns its schema-defining code.
+const MIGRATIONS: &[ledger::Migration] = &[ledger::Migration {
+    version: 1,
+    name: "lexical_index_baseline",
+    compat: MigrationCompatibility::Additive,
+    apply: apply_lexical_index_baseline,
+}];
+
+const SUPPORTED_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 const CHUNKS_DDL: &str = r#"
     CREATE TABLE IF NOT EXISTS chunks (
@@ -88,56 +109,57 @@ const CORPUS_SUBSTRING_FTS_DDL: &str = r#"
     END;
 "#;
 
-pub fn ensure_schema(conn: &Connection) -> Result<(), OrbitError> {
+/// Migrate the index and report whether its newer schema requires read-only access.
+pub(super) fn migrate_search_index(
+    conn: &Connection,
+    path: Option<&Path>,
+) -> Result<bool, OrbitError> {
     let obsolete = table_exists(conn, "embeddings")? || table_exists(conn, "id_allocations")?;
-    if !obsolete
-        && schema_present(conn)?
-        && table_exists(conn, "corpus_substring_fts")?
-        && table_exists(conn, "source_index_coverage")?
-        && !corpus_fts_has_inline_columns(conn)?
-        && !table_exists(conn, legacy_task_fts_table())?
-    {
-        return Ok(());
-    }
-    conn.execute_batch("BEGIN IMMEDIATE").map_err(store_error)?;
-    let result = (|| {
-        conn.execute_batch(CHUNKS_DDL).map_err(store_error)?;
-        conn.execute_batch(COVERAGE_DDL).map_err(store_error)?;
-        let adopted = adopt_inline_corpus_fts(conn)?;
-        if !table_exists(conn, "corpus_fts")? {
-            conn.execute_batch(CORPUS_FTS_DDL).map_err(store_error)?;
-            if adopted {
-                conn.execute("INSERT INTO corpus_fts(corpus_fts) VALUES ('rebuild')", [])
-                    .map_err(store_error)?;
-            }
-        }
-        migrate_legacy_task_fts(conn)?;
-        // After every chunk-copying migration above, so the rebuild picks
-        // up adopted and legacy chunks as well as an upgraded store's own.
-        if !table_exists(conn, "corpus_substring_fts")? {
-            conn.execute_batch(CORPUS_SUBSTRING_FTS_DDL)
-                .map_err(store_error)?;
-            conn.execute(
-                "INSERT INTO corpus_substring_fts(corpus_substring_fts) VALUES ('rebuild')",
-                [],
-            )
-            .map_err(store_error)?;
-        }
-        conn.execute_batch("DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS id_allocations;")
-            .map_err(store_error)?;
-        Ok::<_, OrbitError>(())
-    })();
-    match result {
-        Ok(()) => conn.execute_batch("COMMIT").map_err(store_error)?,
-        Err(error) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(error);
-        }
+    if ledger::run_database_migrations(conn, &DATABASE, MIGRATIONS, path)?.is_some() {
+        pragma::set(conn, "query_only", &"ON").map_err(store_error)?;
+        return Ok(true);
     }
     if obsolete {
+        // VACUUM must run after the ledger transaction commits.
         conn.execute_batch("VACUUM").map_err(store_error)?;
         tracing::info!("removed obsolete search vectors and reclaimed database space");
     }
+    Ok(false)
+}
+
+pub(super) fn check_search_read_compatibility(conn: &Connection) -> Result<(), OrbitError> {
+    let version = ledger::current_schema_version(conn)?;
+    if version > SUPPORTED_VERSION {
+        ledger::evaluate_newer_database(conn, &DATABASE, version, SUPPORTED_VERSION)?;
+    }
+    Ok(())
+}
+
+fn apply_lexical_index_baseline(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(CHUNKS_DDL).map_err(store_error)?;
+    conn.execute_batch(COVERAGE_DDL).map_err(store_error)?;
+    let adopted = adopt_inline_corpus_fts(conn)?;
+    if !table_exists(conn, "corpus_fts")? {
+        conn.execute_batch(CORPUS_FTS_DDL).map_err(store_error)?;
+        if adopted {
+            conn.execute("INSERT INTO corpus_fts(corpus_fts) VALUES ('rebuild')", [])
+                .map_err(store_error)?;
+        }
+    }
+    migrate_legacy_task_fts(conn)?;
+    // After every chunk-copying migration above, so the rebuild picks
+    // up adopted and legacy chunks as well as an upgraded store's own.
+    if !table_exists(conn, "corpus_substring_fts")? {
+        conn.execute_batch(CORPUS_SUBSTRING_FTS_DDL)
+            .map_err(store_error)?;
+        conn.execute(
+            "INSERT INTO corpus_substring_fts(corpus_substring_fts) VALUES ('rebuild')",
+            [],
+        )
+        .map_err(store_error)?;
+    }
+    conn.execute_batch("DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS id_allocations;")
+        .map_err(store_error)?;
     Ok(())
 }
 

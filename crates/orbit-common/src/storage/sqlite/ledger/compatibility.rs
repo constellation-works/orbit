@@ -1,15 +1,15 @@
-use orbit_common::storage::sqlite::sqlite_error;
-use orbit_common::{OrbitError, StorageLayer};
+use crate::storage::sqlite::sqlite_error;
+use crate::{OrbitError, StorageLayer};
 use rusqlite::{Connection, params};
 
 use super::{LedgeredDatabase, Migration};
-use crate::contracts::{
+use crate::storage::compatibility::{
     CompatibilityRecord, CompatibilityRefusal, ForwardCompatibleOpen, evaluate_newer_state,
 };
 
 /// `schema_meta` key carrying the forward-compatibility record (ORB-12434).
 /// Deliberately outside the `migration.v<NNNN>` namespace the ledger scans.
-pub(crate) const COMPAT_KEY: &str = "migration.compat";
+const COMPAT_KEY: &str = "migration.compat";
 
 /// Decide a database recorded newer than this binary supports. Reads only
 /// the compatibility record a newer binary left behind; never writes.
@@ -25,22 +25,22 @@ pub fn evaluate_newer_database(
     };
     match record {
         Ok(forward) if forward.writable => {
-            orbit_common::tracing::info!(
+            tracing::info!(
                 target: "orbit.store.sqlite",
                 database = database.noun,
                 schema_version = current,
                 supported_version = supported,
-                "opening a newer database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
+                "newer database declares its migrations safe for older writers; this binary applies no schema migration to it",
             );
             Ok(forward)
         }
         Ok(forward) => {
-            orbit_common::tracing::warn!(
+            tracing::warn!(
                 target: "orbit.store.sqlite",
                 database = database.noun,
                 schema_version = current,
                 supported_version = supported,
-                "opening a newer database read-only; this binary applies no schema migration to it",
+                "newer database declares its migrations read-compatible; this binary applies no schema migration to it",
             );
             Ok(forward)
         }
@@ -50,7 +50,7 @@ pub fn evaluate_newer_database(
 
 /// Read the forward-compatibility record from `schema_meta`. A missing row
 /// is the pre-ORB-12434 case, not an error.
-pub(crate) fn read_compat_record(
+pub fn read_compat_record(
     conn: &Connection,
 ) -> Result<Option<CompatibilityRecord>, CompatibilityRefusal> {
     let raw = match conn.query_row(
@@ -81,7 +81,11 @@ pub(super) fn write_compat_record(
     conn.execute(
         "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![COMPAT_KEY, record.encode()?, crate::now_string()],
+        params![
+            COMPAT_KEY,
+            record.encode()?,
+            chrono::Utc::now().to_rfc3339()
+        ],
     )
     .map_err(|error| {
         sqlite_error(

@@ -1,5 +1,6 @@
-use super::super::super::super::ledger::{self, Migration};
+use super::super::super::super::ledger::run_store_migrations;
 use super::super::super::*;
+use orbit_common::storage::sqlite::ledger::Migration;
 use rusqlite::Connection;
 
 /// The two resource-minute tables, and the admission reservations and
@@ -20,14 +21,14 @@ fn resource_minute_tables_keep_an_older_binary_writing() {
     let older = &MIGRATIONS[..first];
 
     let conn = Connection::open_in_memory().expect("open in-memory connection");
-    ledger::run_migrations(&conn, &newer[..last]).expect("pre-provenance schema");
+    run_store_migrations(&conn, &newer[..last], None).expect("pre-provenance schema");
     let legacy_insert = "INSERT INTO run_resource_minutes (
         workspace_id, run_id, minute_index, minute_started_at, task_id,
         work_class, cpu_cores, memory_bytes, samples
     ) VALUES ('ws_a', ?1, 0, '2026-10-13T00:00:00Z', 'task', 'change', 0.03, 4096, 12)";
     conn.execute(legacy_insert, ["before"]).expect("old sample");
     assert!(
-        ledger::run_migrations(&conn, newer)
+        run_store_migrations(&conn, newer, None)
             .expect("migrate")
             .is_none()
     );
@@ -39,7 +40,7 @@ fn resource_minute_tables_keep_an_older_binary_writing() {
     ] {
         assert!(table_exists(&conn, table).expect("introspect"), "{table}");
     }
-    let open = ledger::run_migrations(&conn, older)
+    let open = run_store_migrations(&conn, older, None)
         .expect("an older binary opens the database")
         .expect("the database is newer than that binary");
     assert!(open.writable, "{open}");
@@ -81,7 +82,7 @@ fn executor_census_keeps_an_older_binary_writing() {
 
     let conn = Connection::open_in_memory().expect("open in-memory connection");
     assert!(
-        ledger::run_migrations(&conn, newer)
+        run_store_migrations(&conn, newer, None)
             .expect("migrate")
             .is_none()
     );
@@ -92,7 +93,7 @@ fn executor_census_keeps_an_older_binary_writing() {
         [],
     )
     .expect("a census row");
-    let open = ledger::run_migrations(&conn, older)
+    let open = run_store_migrations(&conn, older, None)
         .expect("an older binary opens the database")
         .expect("the database is newer than that binary");
     assert!(open.writable, "{open}");

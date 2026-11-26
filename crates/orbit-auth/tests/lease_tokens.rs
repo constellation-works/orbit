@@ -8,6 +8,9 @@
     reason = "token fixtures panic on a bad permission, clock or store path so the failure names that step"
 )]
 
+#[path = "lease_tokens/legacy_schema.rs"]
+mod legacy_schema;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

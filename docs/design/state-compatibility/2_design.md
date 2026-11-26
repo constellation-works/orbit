@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: The implemented forward-compatibility contract — how migrations declare additive, read-compatible or breaking, where the record lives, and when an older binary keeps writing, is held read-only, or is refused.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
+paths: ["crates/orbit-common/src/storage/compatibility.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
 related_features: [state-compatibility, orbit-core]
 related_artifacts: [ORB-10003, ORB-10012, ORB-12434, ORB-13631]
 ---
@@ -73,9 +73,9 @@ that applies them records the classification:
 | State | Record location | Written when |
 | --- | --- | --- |
 | `.orbit/` layout | `<orbit_dir>/state/layout.compat` | after each migration advances `state/layout.version` |
-| Store database | `schema_meta` row `migration.compat` | inside the same transaction that commits a migration and its ledger row |
+| Each SQLite database | `schema_meta` row `migration.compat` | inside the same transaction that commits a migration and its ledger row |
 
-The record (`contracts::CompatibilityRecord`) is JSON: a `format`, the
+The record (`orbit_common::storage::compatibility::CompatibilityRecord`) is JSON: a `format`, the
 `version` it describes, every `Breaking` migration at or below that version,
 and (`read_only`, an optional field format 1 readers ignore) every
 `ReadCompatible` one. It is written only when a migration is applied — the up-to-date
@@ -178,7 +178,7 @@ cannot prove data compatibility.
 ## 7 The task registry ledger
 
 `tasks/index.sqlite` is a separate SQLite file, so it has a registry of its own
-(`driver/sqlite/task_index/schema/mod.rs`), run by the store's ledger engine.
+(`driver/sqlite/task_index/schema/mod.rs`), run by the shared SQLite ledger in `orbit-common`.
 The engine takes a `LedgeredDatabase` naming the state component (`task
 registry`), and writes the same `schema_meta` ledger rows and
 `migration.compat` record into that file. Its entries follow the rules of §1
@@ -317,8 +317,8 @@ There is no new layout version, and no shipped migration is changed.
 
 ## 10 Recovery authority ledger
 
-[ORB-15824] moved the protected `authority.db` onto the shared store ledger
-engine. Its additive v1 baseline lives in
+[ORB-15824] gave the protected `authority.db` its own registry on the
+shared SQLite ledger. Its additive v1 baseline lives in
 `crates/orbit-store/src/driver/sqlite/authority/schema/mod.rs` and freezes all five
 shipped tables, including the formerly first-use worker bindings. The database
 keeps its own `schema_meta` and `migration.compat`; it is separate from both
@@ -331,7 +331,22 @@ Pre-ledger clients have no version fence, so future entries must preserve their
 table contracts throughout the support window. Root validation, permissions
 and sandbox protections are unchanged.
 
-## 11 Concerns & Honest Limitations
+## 11 Search index and lease token ledgers
+
+`semantic.db` and `lease-tokens.db` each record versions in their own
+`schema_meta` using `orbit_common::storage::sqlite::ledger`. The search
+baseline adopts the unversioned lexical tables and indexes, including the
+older full-text layouts that the lexical index previously upgraded at open.
+Newer compatible indexes open read-only. A read-only observation can still
+use a pre-ledger index without adopting it.
+
+The lease-token baseline uses `user_version` to recognize the schema on the
+first writable open. It applies any remaining legacy steps in the same
+transaction as the baseline ledger row. Version 3 stays in `user_version`
+for pre-ledger listeners, while the ledger tracks subsequent versions.
+The listener store still requires writable storage and refuses newer schemas.
+
+## 12 Concerns & Honest Limitations
 
 - **Forward compatibility starts from the first release that writes records.**
   A binary that predates [ORB-12434] still refuses any newer state, and state

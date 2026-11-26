@@ -1,5 +1,7 @@
-use super::super::super::super::ledger::{self, Migration};
+use super::super::super::super::ledger::STORE_DATABASE;
+use super::super::super::super::ledger::run_store_migrations;
 use super::super::super::MIGRATIONS;
+use orbit_common::storage::sqlite::ledger::{self, Migration};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -13,7 +15,7 @@ fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
         .iter()
         .position(|m| m.name == "invocation_workspace_scope")
         .expect("v36 registered");
-    ledger::run_migrations(&conn, &MIGRATIONS[..before]).expect("migrate to v35");
+    run_store_migrations(&conn, &MIGRATIONS[..before], None).expect("migrate to v35");
     conn.execute_batch(
         r#"
             INSERT INTO job_run_id_allocations(workspace_id, run_id) VALUES
@@ -28,7 +30,7 @@ fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
     )
     .expect("seed legacy invocations");
 
-    ledger::run_migrations(&conn, MIGRATIONS).expect("apply v36");
+    run_store_migrations(&conn, MIGRATIONS, None).expect("apply v36");
 
     let workspace_of = |run_id: &str| -> Option<String> {
         conn.query_row(
@@ -55,7 +57,7 @@ fn legacy_admission_only_rows_reopen_and_sticky_rows_stay() {
         .iter()
         .position(|m| m.name == "reopen_legacy_experiment_admissions")
         .expect("v70 registered");
-    ledger::run_migrations(&conn, &MIGRATIONS[..before]).expect("migrate to v69");
+    run_store_migrations(&conn, &MIGRATIONS[..before], None).expect("migrate to v69");
     conn.execute_batch(
         r#"
             INSERT INTO experiment_admissions(workspace_id, task_id) VALUES
@@ -70,7 +72,7 @@ fn legacy_admission_only_rows_reopen_and_sticky_rows_stay() {
     )
     .expect("seed legacy admissions");
 
-    ledger::run_migrations(&conn, MIGRATIONS).expect("apply v70");
+    run_store_migrations(&conn, MIGRATIONS, None).expect("apply v70");
 
     let mut statement = conn
         .prepare("SELECT workspace_id, task_id FROM experiment_admissions ORDER BY 1, 2")
@@ -96,7 +98,7 @@ fn legacy_admission_only_rows_reopen_and_sticky_rows_stay() {
 fn store_schema_prefix_goldens() {
     check_schema_prefix_goldens(
         "driver::sqlite::host::schema::tests::ledger::registry::store_schema_prefix_goldens",
-        &ledger::STORE_DATABASE,
+        &STORE_DATABASE,
         MIGRATIONS,
         "src/driver/sqlite/host/schema/tests/store_schema.golden",
     );

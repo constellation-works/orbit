@@ -34,14 +34,17 @@ impl LexicalStore {
         let opened = orbit_common::storage::sqlite::open_private(path)?;
         let mut read_only = opened.read_only;
         let conn = opened.connection;
-        if let Err(error) = migration::ensure_schema(&conn) {
-            if !error.is_readonly_or_access_failure() || !migration::schema_present(&conn)? {
-                return Err(error);
+        match migration::migrate_search_index(&conn, Some(path)) {
+            Ok(forward_read_only) => read_only |= forward_read_only,
+            Err(error)
+                if error.is_readonly_or_access_failure() && migration::schema_present(&conn)? =>
+            {
+                // The schema is already built, so reads proceed; a storage layer
+                // that refused the migration write will refuse index writes too.
+                read_only = true;
+                tracing::warn!(%error, "search index migration requires writable storage");
             }
-            // The schema is already built, so reads proceed; a storage layer
-            // that refused the migration write will refuse index writes too.
-            read_only = true;
-            tracing::warn!(%error, "search index migration requires writable storage");
+            Err(error) => return Err(error),
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -52,6 +55,7 @@ impl LexicalStore {
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(err)?;
+        migration::check_search_read_compatibility(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
@@ -60,11 +64,11 @@ impl LexicalStore {
     }
     pub fn open_in_memory() -> Result<Self, OrbitError> {
         let conn = Connection::open_in_memory().map_err(err)?;
-        migration::ensure_schema(&conn)?;
+        let read_only = migration::migrate_search_index(&conn, None)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
-            read_only: false,
+            read_only,
         })
     }
     /// Whether this connection can never write: it was opened read-only, or

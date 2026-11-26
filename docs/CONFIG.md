@@ -3062,7 +3062,8 @@ paths = [
 name = "store-migrations"
 paths = [
   "crates/orbit-store/src/driver/sqlite/host/schema/**",
-  "crates/orbit-store/src/driver/sqlite/host/ledger/**",
+  "crates/orbit-common/src/storage/sqlite/ledger/**",
+  "crates/orbit-common/src/storage/compatibility.rs",
   "crates/orbit-store/src/driver/file/task_bundle/migrations.rs",
   "crates/orbit-common/src/migration/**",
   "crates/orbit-core/src/bootstrap/task_migration.rs",

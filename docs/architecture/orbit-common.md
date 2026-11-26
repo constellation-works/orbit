@@ -42,7 +42,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `process`: Bounded child-process execution, process-group supervision, build-budget admission, and signal helpers; imports `error`, `fs`, `security`, and `text`.
 - `protocol`: Canonical JSON ordering, YAML codecs, and shared tool-input parsing; imports `error` and `orbit-types`.
 - `security`: Secret redaction, child-environment allowlisting, token minting, and release signature verification; imports `error`, `fs`, `process`, and `orbit-types`.
-- `storage`: Content-addressed blob storage, sweep helpers, timestamps, and shared SQLite utilities; imports `error`, `fs`, and `security`.
+- `storage`: Content-addressed blob storage, sweep helpers, timestamps, state compatibility records, and SQLite utilities including the shared migration ledger; imports `error`, `fs`, and `security`.
 - `test_env`: Ambient-process isolation and validation helpers for re-executed child tests; imports `fs`, `process`, `security`, and `orbit-types`.
 - `test_fixtures`: Frozen model-name constants for deterministic tests; imports `model_defaults` only.
 - `test_process`: Bounded retries for launching freshly written test executables on Linux; imports `std` only.

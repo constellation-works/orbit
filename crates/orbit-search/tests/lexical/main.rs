@@ -1,6 +1,8 @@
 //! Query ranking and token semantics through the public SQLite index API.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod legacy_schema;
+
 use orbit_search::{LexicalIndex, TaskSidecarSearchText, bm25_or_page, bm25_page, bm25_top_k};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
