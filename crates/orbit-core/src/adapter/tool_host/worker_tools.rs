@@ -213,7 +213,7 @@ fn worker_friction_add(
     binding.validate_arguments(input)?;
     let parsed = FrictionVerb::Add.spec().parse_input(input.clone())?;
     let model = claimed_friction_model(runtime, binding);
-    let (mut params, substitutions) = super::friction_tools::add_params(&parsed, Some(model))?;
+    let (mut params, substitutions) = crate::app::friction::add_params(&parsed, Some(model))?;
     params.during_task = Some(binding.task_id.clone());
     let taxonomy = crate::runtime::friction::store_for(runtime)?
         .tags()?
@@ -633,7 +633,7 @@ fn apply(
     let mutation_id = blake3::hash(&bytes).to_hex().to_string();
     let result = runtime.mutate_execution_claim(Some(&auth), &mutation_id, &mutation)?;
     if let Some(record) = result.friction {
-        return super::friction_tools::record_to_json_with_tag_normalizations(
+        return crate::app::friction::record_to_json_with_tag_normalizations(
             orbit_store::contract::StoredFrictionRecord { record, path: None },
             friction_tag_substitutions,
         );

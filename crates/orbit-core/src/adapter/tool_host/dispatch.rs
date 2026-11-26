@@ -340,11 +340,15 @@ fn execute_admitted(
         OrbitBuiltinAction::Drain(verb) => {
             super::drain_tools::dispatch(runtime, session_context, verb, input)
         }
-        // ADR-0209 bearing 1 [ORB-10358]: the friction handler table lives with
-        // the other friction handlers, keyed by the registry's verb enum.
-        OrbitBuiltinAction::Friction(verb) => {
-            super::friction_tools::dispatch(runtime, verb, input, model)
-        }
+        // ADR-0209 bearing 1 [ORB-10358]: the friction handler table is the
+        // friction app, keyed by the registry's verb enum. This entry already
+        // authorized and audited the call.
+        OrbitBuiltinAction::Friction(verb) => super::friction_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            model,
+        ),
         OrbitBuiltinAction::PipelineInvoke => super::pipeline_tools::invoke(
             runtime,
             input,

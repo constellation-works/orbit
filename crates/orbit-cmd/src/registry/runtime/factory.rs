@@ -175,6 +175,19 @@ const PIPELINE_WORKER_BOOTSTRAP_RETRY_DEADLINE: Duration = Duration::from_secs(1
 const PIPELINE_WORKER_BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 impl RegisteredRuntimeFactory {
+    /// The opaque handle a one-command process passes to an app's `exec`,
+    /// over the runtime this factory opened for that command. Handed out
+    /// beside the runtime while surfaces are converted to call the apps.
+    pub fn core_for_command(runtime: OrbitRuntime) -> orbit_core::Core {
+        orbit_core::composition::core_for_command(runtime)
+    }
+
+    /// The opaque handle a long-lived server passes to an app's `exec`, over
+    /// the runtime this factory opened for one of its workspaces.
+    pub fn core_for_service(runtime: OrbitRuntime) -> orbit_core::Core {
+        orbit_core::composition::core_for_service(runtime)
+    }
+
     /// Bootstrap the hidden detached worker with lock-only bounded recovery.
     pub fn initialize_pipeline_worker_with_overrides(
         root_override: Option<&Path>,

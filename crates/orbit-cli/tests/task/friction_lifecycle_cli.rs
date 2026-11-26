@@ -1000,6 +1000,57 @@ fn friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on
     assert_eq!(rows, bare, "--header only prepends the header row");
 }
 
+fn friction_commands_write_one_audit_row_from_the_cli_and_from_the_tool() {
+    let fixture = Fixture::new();
+    let input = json!({"action": "add", "body": "Audit row fixture", "model": "codex"});
+    let created = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.friction",
+        "--input",
+        &input.to_string(),
+    ]);
+    let id = created["id"].as_str().unwrap();
+    fixture.json(&["friction", "list", "--json"]);
+    fixture.json(&["friction", "resolve", id, "--json"]);
+
+    let audit = fixture.json(&["audit", "list", "--json"]);
+    let rows = audit.as_array().unwrap();
+    let friction_rows = |subcommand: &str| {
+        rows.iter()
+            .filter(|row| row["command"] == "friction" && row["subcommand"] == subcommand)
+            .collect::<Vec<_>>()
+    };
+    let tool_rows = rows
+        .iter()
+        .filter(|row| row["tool_name"] == "orbit.friction.add")
+        .collect::<Vec<_>>();
+    assert_eq!(tool_rows.len(), 1, "one row for the tool call: {audit}");
+    assert_eq!(tool_rows[0]["status"], "success");
+    assert!(
+        friction_rows("add").is_empty(),
+        "the tool call writes no command row: {audit}"
+    );
+
+    let list = friction_rows("list");
+    assert_eq!(list.len(), 1, "a read writes one row: {audit}");
+    assert_eq!(list[0]["status"], "success");
+    assert_eq!(list[0]["target_type"], "friction");
+    assert!(list[0]["tool_name"].is_null(), "{audit}");
+
+    let resolve = friction_rows("resolve");
+    assert_eq!(resolve.len(), 1, "a write writes one row: {audit}");
+    assert_eq!(resolve[0]["status"], "success");
+    assert_eq!(resolve[0]["target_type"], "friction");
+    assert_eq!(resolve[0]["target_id"], id);
+    assert!(
+        rows.iter()
+            .all(|row| row["tool_name"] != "orbit.friction.list"
+                && row["tool_name"] != "orbit.friction.resolve"),
+        "a CLI command writes no tool row: {audit}"
+    );
+}
+
 #[test]
 fn friction_tool_input_is_checked_against_the_spec() {
     for (name, check) in [
@@ -1067,6 +1118,10 @@ fn friction_ownership_and_redaction() {
         (
             "friction_add_description_alias_is_redacted_like_body",
             friction_add_description_alias_is_redacted_like_body as fn(),
+        ),
+        (
+            "friction_commands_write_one_audit_row_from_the_cli_and_from_the_tool",
+            friction_commands_write_one_audit_row_from_the_cli_and_from_the_tool as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

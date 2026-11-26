@@ -60,3 +60,46 @@ fn dashboard_friction_writes_forward_undeclared_fields_to_the_tool_entry() {
         },
     );
 }
+
+#[test]
+fn dashboard_friction_requests_write_no_invocation_audit_row() {
+    isolated(
+        "friction_writes::dashboard_friction_requests_write_no_invocation_audit_row",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+
+            let created = json_ok(server.send(
+                "POST",
+                &format!("/api/frictions{WORKSPACE}"),
+                json!({"body": "Dashboard friction audit fixture"}),
+            ));
+            let id = created["id"].as_str().expect("friction id");
+            json_ok(server.get(&format!("/api/frictions{WORKSPACE}")));
+            json_ok(server.send(
+                "PATCH",
+                &format!("/api/frictions/{id}{WORKSPACE}"),
+                json!({"status": "triaged"}),
+            ));
+
+            let rows = fixture
+                .runtime
+                .list_audit_events(None, None, None, None, 100)
+                .expect("list audit events")
+                .into_iter()
+                .filter(|event| {
+                    event.command == "friction"
+                        || event
+                            .tool_name
+                            .as_deref()
+                            .is_some_and(|tool| tool.starts_with("orbit.friction"))
+                })
+                .map(|event| (event.command, event.subcommand, event.tool_name))
+                .collect::<Vec<_>>();
+            assert!(
+                rows.is_empty(),
+                "the dashboard audits no friction call: {rows:?}"
+            );
+        },
+    );
+}

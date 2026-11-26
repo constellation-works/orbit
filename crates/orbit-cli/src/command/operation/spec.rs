@@ -12,7 +12,7 @@ use std::path::Path;
 use orbit_common::Env;
 use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
+use orbit_core::{ActorIdentity, Core, OrbitError, OrbitRuntime};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
@@ -79,6 +79,9 @@ pub enum RuntimeNeed {
 
 pub struct DispatchContext<'a> {
     runtime: Option<&'a OrbitRuntime>,
+    /// The opaque handle over the same runtime, for a command that runs
+    /// through an app's `exec`.
+    core: Option<&'a Core>,
     root_override: Option<&'a Path>,
     /// The global `--workspace` selector, for the runtime-forbidden commands
     /// that resolve their own workspaces instead of being handed one runtime.
@@ -92,6 +95,7 @@ pub struct DispatchContext<'a> {
 impl<'a> DispatchContext<'a> {
     pub fn with_runtime(
         runtime: &'a OrbitRuntime,
+        core: &'a Core,
         root_override: Option<&'a Path>,
         workspace_selector: Option<&'a str>,
         env: &'a Env,
@@ -99,6 +103,7 @@ impl<'a> DispatchContext<'a> {
     ) -> Self {
         Self {
             runtime: Some(runtime),
+            core: Some(core),
             root_override,
             workspace_selector,
             env,
@@ -114,6 +119,7 @@ impl<'a> DispatchContext<'a> {
     ) -> Self {
         Self {
             runtime: None,
+            core: None,
             root_override,
             workspace_selector,
             env,
@@ -125,6 +131,14 @@ impl<'a> DispatchContext<'a> {
         self.runtime.ok_or_else(|| {
             OrbitError::Execution(
                 "command operation required a runtime but dispatch did not provide one".to_string(),
+            )
+        })
+    }
+
+    pub(super) fn core(&self) -> Result<&'a Core, OrbitError> {
+        self.core.ok_or_else(|| {
+            OrbitError::Execution(
+                "command operation required a core but dispatch did not provide one".to_string(),
             )
         })
     }
@@ -243,6 +257,17 @@ macro_rules! runtime_dispatch {
     }};
 }
 
+/// Dispatch a command that runs through an app's `exec`, handing it the
+/// opaque `Core` instead of the runtime.
+macro_rules! core_dispatch {
+    ($variant:ident) => {{
+        |command, context| match command {
+            Commands::$variant(command) => ExecuteCore::execute(command, context.core()?),
+            _ => dispatch_mismatch(stringify!($variant)),
+        }
+    }};
+}
+
 macro_rules! runtime_env_dispatch {
     ($variant:ident) => {{
         |command, context| match command {
@@ -266,7 +291,9 @@ macro_rules! boxed_runtime_env_dispatch {
 }
 
 // Shared only with the sibling registry; dispatch helpers stay inside operation.
-pub(super) use {boxed_runtime_env_dispatch, runtime_dispatch, runtime_env_dispatch};
+pub(super) use {
+    boxed_runtime_env_dispatch, core_dispatch, runtime_dispatch, runtime_env_dispatch,
+};
 
 pub(super) fn dispatch_mismatch(variant: &str) -> CommandOut {
     Err(OrbitError::Execution(format!(

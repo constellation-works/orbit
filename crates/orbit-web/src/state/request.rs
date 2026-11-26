@@ -1,3 +1,6 @@
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_core::Core;
+
 use super::*;
 
 /// A request-pinned view of dashboard state: one immutable [`Snapshot`]
@@ -187,6 +190,27 @@ impl FromRequestParts<DashboardState> for Ws {
             message: format!("workspace selection panicked: {error}"),
             code: None,
         })?
+    }
+}
+
+/// Extractor yielding the opaque [`Core`] of the request's workspace, for a
+/// handler that calls an app's `exec` (`orbit_core::app::<subject>::exec`).
+///
+/// It selects the workspace exactly as [`Ws`] does and wraps the same runtime,
+/// so a handler destructures it as `WsCore(core)` without naming the runtime.
+pub(crate) struct WsCore(pub(crate) Arc<Core>);
+
+impl FromRequestParts<DashboardState> for WsCore {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
+        Ok(WsCore(Arc::new(
+            RegisteredRuntimeFactory::core_for_service(runtime.as_ref().clone()),
+        )))
     }
 }
 

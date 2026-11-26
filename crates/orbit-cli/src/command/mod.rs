@@ -44,7 +44,7 @@ pub mod workspace;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError, OrbitRuntime};
 
 // Re-exported so a command file imports its return type from the module that
 // defines the trait, rather than reaching into `output` for half of it.
@@ -60,6 +60,14 @@ pub type CommandOut = Result<CommandOutput, OrbitError>;
 
 pub trait Execute {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut;
+}
+
+/// A command body that runs through an app's one `exec`
+/// (`orbit_core::app::<subject>::exec`). It is handed the opaque [`Core`]
+/// instead of the runtime, and `exec` authorizes and audits the command, so
+/// the entry's own authorization and audit guard leave it alone.
+pub trait ExecuteCore {
+    fn execute(self, core: &Core) -> CommandOut;
 }
 
 /// Require the standard non-interactive confirmation flag before an

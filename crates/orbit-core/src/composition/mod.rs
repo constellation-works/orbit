@@ -1,12 +1,15 @@
 //! Composition root joining resolved configuration, the runtime kernel, and adapters.
 
 mod application_port;
+mod core;
 mod runtime;
 mod services;
 mod store;
 
 pub use orbit_store::compose::compiled_compatibility;
 
+pub(crate) use self::core::Entry;
+pub use self::core::{Core, core_for_command, core_for_service};
 pub use self::runtime::{pin_executable_generation, pin_executable_generation_as};
 pub use self::services::host_resource_monitor;
 pub use self::store::store_opener;

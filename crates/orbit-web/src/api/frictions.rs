@@ -9,13 +9,14 @@
 
 use std::sync::Arc;
 
-use crate::state::Ws;
+use crate::state::WsCore;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
 use orbit_common::governance::operation::OperationVerb;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::friction::{self, Command, Input, Outcome};
+use orbit_core::{Core, Error};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -44,14 +45,14 @@ impl FrictionCall {
         }
     }
 
-    fn set(&mut self, param: &str, value: Value) -> Result<(), OrbitError> {
+    fn set(&mut self, param: &str, value: Value) -> Result<(), Error> {
         if !self
             .verb
             .spec()
             .params()
             .any(|declared| declared.name == param)
         {
-            return Err(OrbitError::Execution(format!(
+            return Err(Error::Execution(format!(
                 "{} does not declare a `{param}` parameter",
                 self.verb.tool_name()
             )));
@@ -73,7 +74,7 @@ impl FrictionCall {
     }
 
     /// Set a parameter only when the caller supplied a non-blank value.
-    fn set_optional(&mut self, param: &str, value: Option<&str>) -> Result<(), OrbitError> {
+    fn set_optional(&mut self, param: &str, value: Option<&str>) -> Result<(), Error> {
         match value.and_then(non_empty_string) {
             Some(value) => self.set(param, Value::String(value)),
             None => Ok(()),
@@ -82,28 +83,27 @@ impl FrictionCall {
 
     /// `orbit.friction` action `add` requires a non-empty `model`; when the caller
     /// supplies no attribution, default to the human actor label rather than a
-    /// model constant. No other friction verb consumes `model`.
-    fn into_tool_call(mut self) -> (String, Value) {
+    /// model constant. No other friction verb consumes `model`. A call that
+    /// carries the human label is the operator's own, so it is attributed to
+    /// them by the entry rather than by the field.
+    fn into_command(mut self) -> Command {
         if self.verb == FrictionVerb::Add {
             self.input
                 .entry("model".to_string())
                 .or_insert_with(|| Value::String(HUMAN_ACTOR_LABEL.to_string()));
         }
-        (self.verb.tool_name().to_string(), Value::Object(self.input))
+        let input = if self.input.get("model").and_then(Value::as_str) == Some(HUMAN_ACTOR_LABEL) {
+            Input::from_human(self.input)
+        } else {
+            Input::new(self.input)
+        };
+        Command::new(self.verb, input)
     }
 }
 
-async fn run_friction(
-    runtime: Arc<OrbitRuntime>,
-    call: FrictionCall,
-) -> Result<Value, Box<Response>> {
+async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<Response>> {
     blocking("friction tool", move || {
-        let (tool, input) = call.into_tool_call();
-        if input.get("model").and_then(Value::as_str) == Some(HUMAN_ACTOR_LABEL) {
-            runtime.run_tool_as_human(&tool, input)
-        } else {
-            runtime.run_tool(&tool, input)
-        }
+        friction::exec(&core, call.into_command()).map(Outcome::into_value)
     })
     .await
 }
@@ -128,7 +128,7 @@ pub(super) struct FrictionsQuery {
 /// schema: `body` is required, `model` provenance and `tags`/`during_task`
 /// are optional. Field parsing and validation stay in the shared runtime add
 /// path so the wire shape and defaults match the native MCP tool exactly.
-/// `model` falls back to the human actor label via [`run_friction_tool`] when
+/// `model` falls back to the human actor label via [`FrictionCall::into_command`] when
 /// the caller omits it. `orbit.friction` action `add` rejects
 /// a separate `agent` field (attribution was consolidated to `model`-only),
 /// so this body does not accept one. Fields the tool does not declare are
@@ -166,7 +166,7 @@ pub(super) struct FrictionPatchBody {
 }
 
 pub(super) async fn list_frictions(
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Query(query): Query<FrictionsQuery>,
 ) -> Response {
     let mut call = FrictionCall::new(FrictionVerb::List);
@@ -190,12 +190,12 @@ pub(super) async fn list_frictions(
     }
 
     let listed = match blocking("friction list", move || {
-        let (tool, input) = call.into_tool_call();
-        let items = runtime.run_tool(&tool, input)?;
-        let stats_call = FrictionCall::new(FrictionVerb::Stats).into_tool_call();
-        let stats = runtime.run_tool(&stats_call.0, stats_call.1)?;
-        let tags_call = FrictionCall::new(FrictionVerb::Tags).into_tool_call();
-        let tags = runtime.run_tool(&tags_call.0, tags_call.1)?;
+        let run = |call: FrictionCall| {
+            friction::exec(&core, call.into_command()).map(Outcome::into_value)
+        };
+        let items = run(call)?;
+        let stats = run(FrictionCall::new(FrictionVerb::Stats))?;
+        let tags = run(FrictionCall::new(FrictionVerb::Tags))?;
         Ok((items, stats, tags))
     })
     .await
@@ -220,7 +220,7 @@ pub(super) async fn list_frictions(
             (items, notes)
         }
         other => {
-            return map_runtime_error(OrbitError::Execution(format!(
+            return map_runtime_error(Error::Execution(format!(
                 "{} returned non-array JSON: {other}",
                 FrictionVerb::List.tool_name()
             )));
@@ -248,7 +248,7 @@ pub(super) async fn list_frictions(
 /// (missing/empty `body`, bad fields) surface through [`map_runtime_error`] as
 /// 4xx carrying Orbit's own error text.
 pub(super) async fn create_friction_action(
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     body: Result<Json<CreateFrictionBody>, JsonRejection>,
 ) -> Response {
     let Json(body) = match body {
@@ -276,22 +276,22 @@ pub(super) async fn create_friction_action(
         return map_runtime_error(e);
     }
 
-    match run_friction(runtime, call).await {
+    match run_friction(core, call).await {
         Ok(friction) => Json(friction).into_response(),
         Err(response) => *response,
     }
 }
 
-pub(super) async fn get_friction(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+pub(super) async fn get_friction(WsCore(core): WsCore, Path(id): Path<String>) -> Response {
     let call = match id_call(FrictionVerb::Show, id) {
         Ok(call) => call,
         Err(e) => return map_runtime_error(e),
     };
-    let mut friction = match run_friction(runtime.clone(), call).await {
+    let mut friction = match run_friction(core.clone(), call).await {
         Ok(friction) => friction,
         Err(response) => return *response,
     };
-    let tags = match run_friction(runtime, FrictionCall::new(FrictionVerb::Tags)).await {
+    let tags = match run_friction(core, FrictionCall::new(FrictionVerb::Tags)).await {
         Ok(tags) => tags,
         Err(response) => return *response,
     };
@@ -301,15 +301,15 @@ pub(super) async fn get_friction(Ws(runtime): Ws, Path(id): Path<String>) -> Res
     Json(friction).into_response()
 }
 
-pub(super) async fn friction_stats(Ws(runtime): Ws) -> Response {
-    match run_friction(runtime, FrictionCall::new(FrictionVerb::Stats)).await {
+pub(super) async fn friction_stats(WsCore(core): WsCore) -> Response {
+    match run_friction(core, FrictionCall::new(FrictionVerb::Stats)).await {
         Ok(stats) => Json(stats).into_response(),
         Err(response) => *response,
     }
 }
 
 pub(super) async fn update_friction_action(
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<FrictionPatchBody>,
 ) -> Response {
@@ -337,25 +337,28 @@ pub(super) async fn update_friction_action(
         Err(e) => return map_runtime_error(e),
     };
 
-    match run_friction(runtime, call).await {
+    match run_friction(core, call).await {
         Ok(friction) => Json(friction).into_response(),
         Err(response) => *response,
     }
 }
 
-pub(super) async fn resolve_friction_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+pub(super) async fn resolve_friction_action(
+    WsCore(core): WsCore,
+    Path(id): Path<String>,
+) -> Response {
     let call = match id_call(FrictionVerb::Resolve, id) {
         Ok(call) => call,
         Err(e) => return map_runtime_error(e),
     };
-    match run_friction(runtime, call).await {
+    match run_friction(core, call).await {
         Ok(friction) => Json(friction).into_response(),
         Err(response) => *response,
     }
 }
 
 /// Seed a call with the path-supplied record id.
-fn id_call(verb: FrictionVerb, id: String) -> Result<FrictionCall, OrbitError> {
+fn id_call(verb: FrictionVerb, id: String) -> Result<FrictionCall, Error> {
     let mut call = FrictionCall::new(verb);
     call.set("id", Value::String(id))?;
     Ok(call)

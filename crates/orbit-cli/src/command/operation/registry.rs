@@ -1,6 +1,6 @@
 use orbit_common::Env;
 
-use super::super::{Commands, Execute};
+use super::super::{Commands, Execute, ExecuteCore};
 use super::spec::*;
 
 impl Commands {
@@ -488,9 +488,11 @@ impl Commands {
             }
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
             // runtime need and audit metadata derive from its spec. A new
-            // friction verb needs no edit here.
+            // friction verb needs no edit here. It runs through the friction
+            // app's `exec`, which authorizes it and writes its audit row; the
+            // metadata here covers a refusal before the command reaches it.
             Commands::Friction(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Friction))
+                registry_operation(&command.command, core_dispatch!(Friction))
             }
             // Decision requests are registry-driven like friction; the
             // answer verb's write effect makes its runtime need required.
