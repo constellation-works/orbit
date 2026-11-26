@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Proposed mechanics for path leases: lease rows on the owner's reservation store and lock index, advisory and hard modes, a priority queue, TTL plus heartbeat and release on landing, durable notices read by poll or SSE, MCP/CLI/REST surfaces, and a lease-only token listener, run as its own OS user with credential code in an orbit-auth crate, so several people and their agents coordinate on one owner."
 tags: [path-leases, locks, admission, reservations, notifications, authentication]
-paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**", "crates/orbit-auth/**"]
+paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/repository/task_reservation/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**", "crates/orbit-auth/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
 related_artifacts: []
 ---

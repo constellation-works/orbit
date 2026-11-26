@@ -19,7 +19,7 @@ unit coverage, path existence, first-line `//!` doc comments, and one destinatio
 1. **Task filed.** A task (`Task` in `crates/orbit-types/src/task/model/task.rs`)
    is created through `orbit.task.add` (MCP, `crates/orbit-mcp/src/lib.rs`) or
    the CLI (`crates/orbit-cli/src/main.rs`). It is persisted by `orbit-store`
-   (`TaskV2Store` in `crates/orbit-store/src/repository/task/v2/mod.rs`)
+   (`TaskV2Store` in `crates/orbit-store/src/boundary/v2/mod.rs`)
    as a canonical bundle plus registry rows; task and reservation changes
    commit through one boundary (see `docs/design-patterns/task_commit_boundary.md`).
 2. **Pilot.** `orbit-core`'s `crates/orbit-core/src/application/task/pilot/` prepares and applies the

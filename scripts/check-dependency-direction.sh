@@ -1935,26 +1935,26 @@ fi
 
 # orbit-store is intentionally one crate, but its internal persistence graph
 # is directional: contracts and shared fs mechanics are leaves; each driver is
-# isolated; only repositories, workflows, and composition may join drivers.
+# isolated; task writes across drivers belong to the commit boundary.
 store_src="$repo_root/crates/orbit-store/src"
-if ! super_chains_into "$store_src" contracts 'crate::driver|crate::repository|crate::workflow' named-path ||
+if ! super_chains_into "$store_src" contracts 'crate::driver|crate::repository|crate::workflow|crate::boundary' named-path ||
   dependency_matches -n '\brusqlite\b' \
     "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store contracts must not import persistence implementations"
   fail=1
 fi
 
-if ! super_chains_into "$store_src" driver/file 'crate::driver::sqlite|crate::repository|crate::workflow|crate::Store|crate::StoreTx' named-path; then
-  echo "orbit-store file driver must not import SQLite, repositories, or workflows"
+if ! super_chains_into "$store_src" driver/file 'crate::driver::sqlite|crate::repository|crate::workflow|crate::boundary|crate::Store|crate::StoreTx' named-path; then
+  echo "orbit-store file driver must not import SQLite, repositories, workflows, or the task boundary"
   fail=1
 fi
 
-if ! super_chains_into "$store_src" driver/sqlite 'crate::driver::file|crate::repository|crate::workflow' named-path; then
-  echo "orbit-store SQLite driver must not import file drivers, repositories, or workflows"
+if ! super_chains_into "$store_src" driver/sqlite 'crate::driver::file|crate::repository|crate::workflow|crate::boundary' named-path; then
+  echo "orbit-store SQLite driver must not import file drivers, repositories, workflows, or the task boundary"
   fail=1
 fi
 
-if ! super_chains_into "$store_src" fs 'crate::driver|crate::repository|crate::workflow' named-path; then
+if ! super_chains_into "$store_src" fs 'crate::driver|crate::repository|crate::workflow|crate::boundary' named-path; then
   echo "orbit-store filesystem primitives must not import drivers or orchestration"
   fail=1
 fi

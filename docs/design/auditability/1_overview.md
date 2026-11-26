@@ -100,7 +100,7 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 | V2 invocation metrics persistence | `crates/orbit-store/src/repository/invocation/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | Landed: [T20260426-0526] |
 | Task attribution fields | `crates/orbit-types/src/task/model/task.rs`, task update/runtime host paths | Landed: [T20260426-0605], [T20260427-47] |
 | Workflow git commit identity attribution | `crates/orbit-engine/src/executor/automation/vcs/commit/` | Landed: [T20260508-22], [T20260509-12] |
-| Friction live-tracing projection | `crates/orbit-store/src/workflow/friction/submission.rs`, `crates/orbit-store/src/repository/task/coordination/journal_commit.rs` | Landed: [ORB-21797] |
+| Friction live-tracing projection | `crates/orbit-store/src/workflow/friction/submission.rs`, `crates/orbit-store/src/boundary/coordination/journal_commit.rs` | Landed: [ORB-21797] |
 
 ---
 

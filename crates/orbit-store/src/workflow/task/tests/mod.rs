@@ -6,8 +6,8 @@ use orbit_types::task::{
     TaskStatus, TaskType,
 };
 
+use crate::boundary::v2_bundle::TaskBundleStoreV2;
 use crate::driver::file::task_bundle::TaskBundleV2;
-use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 use crate::repository::task_index::{
     TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
 };

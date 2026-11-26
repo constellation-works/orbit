@@ -3,7 +3,7 @@
 //! One task transition, its history, a file reservation, and the dependent
 //! coordination rows an admission decision needs are published as a single
 //! durable outcome. The boundary itself lives in
-//! `repository::task::coordination`; these are the caller-visible parameter
+//! `boundary::coordination`; these are the caller-visible parameter
 //! and result shapes, free of any persistence technology.
 
 mod admission;

@@ -4,36 +4,47 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::Store;
-use crate::contracts::{
-    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend,
-};
+use crate::boundary::{TaskCommitBoundary, TaskV2Store};
 use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
 use crate::driver::file::session_log_store::SessionLogDir;
 use crate::file_store::FileStore;
-use crate::repository::sqlite_backends::SqliteTaskReservationStoreBackend;
-use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
 use crate::repository::task_index::TaskRegistryStore;
 use crate::workflow::friction::import_workspace_frictions;
+use crate::{
+    TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
+    TaskReservationRepository,
+};
 
 pub struct WorkspaceTaskBackends {
     pub task: Arc<TaskV2Store>,
-    pub document: Arc<dyn TaskDocumentStoreBackend>,
-    pub history: Arc<dyn TaskHistoryStoreBackend>,
-    pub artifact: Arc<dyn TaskArtifactStoreBackend>,
+    pub document: TaskDocumentRepository,
+    pub history: TaskHistoryRepository,
+    pub artifact: TaskArtifactRepository,
 }
 
 pub fn workspace_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
 ) -> WorkspaceTaskBackends {
-    let store = Arc::new(TaskV2Store::new(registry, workspace_id));
-    WorkspaceTaskBackends {
-        task: store.clone(),
-        document: store.clone(),
-        history: store.clone(),
-        artifact: store,
+    WorkspaceTaskBackends::new(TaskV2Store::new(registry, workspace_id))
+}
+
+impl WorkspaceTaskBackends {
+    fn new(store: TaskV2Store) -> Self {
+        let task = Arc::new(store);
+        Self {
+            document: TaskDocumentRepository {
+                store: task.clone(),
+            },
+            history: TaskHistoryRepository {
+                store: task.clone(),
+            },
+            artifact: TaskArtifactRepository {
+                store: task.clone(),
+            },
+            task,
+        }
     }
 }
 
@@ -113,7 +124,7 @@ pub fn workspace_session_log_store(orbit_dir: PathBuf) -> FileStore<SessionLogDi
 /// its reservation store from here too.
 pub struct CoordinatedWorkspaceBackends {
     pub task: WorkspaceTaskBackends,
-    pub reservation: Arc<dyn TaskReservationStoreBackend>,
+    pub reservation: TaskReservationRepository,
     /// The durable commit/recovery authority. Admission publishes a task
     /// transition, its history, a reservation, and dependent coordination rows
     /// through [`TaskCommitBoundary::commit_task_transition`], optionally
@@ -147,22 +158,14 @@ pub fn workspace_observational_backends(
     // The task store joins the same observation handle: a partition that has
     // activated coordination refuses the legacy uncoordinated store, and every
     // partition written since the boundary shipped has.
-    let task_store = Arc::new(TaskV2Store::with_commit_boundary(
-        registry,
-        workspace_id,
-        Arc::clone(&commit_boundary),
-    ));
+    let task =
+        TaskV2Store::with_commit_boundary(registry, workspace_id, Arc::clone(&commit_boundary));
     Ok(CoordinatedWorkspaceBackends {
-        task: WorkspaceTaskBackends {
-            task: task_store.clone(),
-            document: task_store.clone(),
-            history: task_store.clone(),
-            artifact: task_store,
-        },
-        reservation: Arc::new(SqliteTaskReservationStoreBackend {
+        task: WorkspaceTaskBackends::new(task),
+        reservation: TaskReservationRepository {
             store,
             coordination: Arc::clone(&commit_boundary),
-        }),
+        },
         commit_boundary,
     })
 }
@@ -189,22 +192,14 @@ pub fn workspace_coordinated_backends(
         registry.clone(),
         workspace_id.clone(),
     )?);
-    let task_store = Arc::new(TaskV2Store::with_commit_boundary(
-        registry,
-        workspace_id,
-        Arc::clone(&commit_boundary),
-    ));
+    let task =
+        TaskV2Store::with_commit_boundary(registry, workspace_id, Arc::clone(&commit_boundary));
     Ok(CoordinatedWorkspaceBackends {
-        task: WorkspaceTaskBackends {
-            task: task_store.clone(),
-            document: task_store.clone(),
-            history: task_store.clone(),
-            artifact: task_store,
-        },
-        reservation: Arc::new(SqliteTaskReservationStoreBackend {
+        task: WorkspaceTaskBackends::new(task),
+        reservation: TaskReservationRepository {
             store,
             coordination: Arc::clone(&commit_boundary),
-        }),
+        },
         commit_boundary,
     })
 }

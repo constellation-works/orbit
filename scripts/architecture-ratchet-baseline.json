@@ -13,7 +13,7 @@
     "orbit_runtime_ref_param_fns": 1372,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
-    "store_backend_traits": 4,
+    "store_backend_traits": 0,
     "worker_or_owner_reads": 219
   }
 }

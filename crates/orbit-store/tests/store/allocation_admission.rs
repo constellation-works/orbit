@@ -491,7 +491,7 @@ impl Coordinated {
     fn task_store(&self) -> &Arc<orbit_store::TaskV2Store> {
         &self.backends.task.task
     }
-    fn artifact_store(&self) -> &Arc<dyn orbit_store::contracts::TaskArtifactStoreBackend> {
+    fn artifact_store(&self) -> &orbit_store::TaskArtifactRepository {
         &self.backends.task.artifact
     }
     fn task(&self, id: &str) -> orbit_types::task::Task {

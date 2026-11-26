@@ -12,9 +12,7 @@ use rusqlite::{Connection, params};
 use serde_json::json;
 
 use crate::contracts::{LeaseLandedNoticeParams, LeaseNotice};
-use crate::driver::sqlite::task_reservation_store::notices::{
-    LeaseOverlapNotice, append_lease_overlaps,
-};
+use crate::repository::task_reservation::notices::{LeaseOverlapNotice, append_lease_overlaps};
 use crate::store::{Snapshot, Tx};
 
 /// Concrete lease-notice repository scoped to a [`Snapshot`] (read-only) or a
