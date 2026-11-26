@@ -124,23 +124,29 @@ impl RuntimeKernel {
     ) -> Result<Self, OrbitError> {
         invocation.validate()?;
         if self
-            .run()
-            .worker_invocation
-            .as_deref()
+            .base()
+            .role()
+            .invocation()
             .is_some_and(|old| old != &invocation)
         {
             return Err(OrbitError::PolicyDenied(
                 "worker binding is immutable".into(),
             ));
         }
-        self.run_mut().worker_invocation = Some(Arc::new(invocation));
+        let role = crate::base::role::Role::resolve(
+            self.base().workspace_binding.as_deref(),
+            Some(Arc::new(invocation)),
+        );
+        self.base_mut().role = role;
         self.run_mut().owner_coordinator = Some(coordinator);
         Ok(self)
     }
 
     pub fn without_worker_routing(&self) -> Self {
         let mut owner = self.clone();
-        owner.run_mut().worker_invocation = None;
+        let role =
+            crate::base::role::Role::resolve(owner.base().workspace_binding.as_deref(), None);
+        owner.base_mut().role = role;
         owner.run_mut().owner_coordinator = None;
         owner
     }
@@ -170,10 +176,6 @@ impl RuntimeKernel {
                 .bind_worker_process(pid, binding)?;
         }
         Ok(())
-    }
-
-    pub fn worker_invocation(&self) -> Option<&WorkerInvocation> {
-        self.run().worker_invocation.as_deref()
     }
 
     pub fn read_owner<T: serde::de::DeserializeOwned>(

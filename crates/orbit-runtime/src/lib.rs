@@ -118,6 +118,7 @@ pub use application_port::ApplicationPort;
 pub use base::Base;
 pub use base::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 pub use base::config::{CONFIG_TOML_FILE, existing_config_file_path};
+pub use base::role::Role;
 pub use host::Host;
 pub use orbit_runtime::{
     AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
