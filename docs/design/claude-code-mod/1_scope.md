@@ -259,9 +259,9 @@ The plugin has no setting of its own.
 2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914]);
    `GET /t/<id>`, both forms of `GET /r/<id>` and every redirect naming the host
    ([ORB-28915]).
-3. **Replace the mod** ([ORB-28916]). Move the linking function and its cases into `plugin/hooks/mod`,
-   add the run pattern, read the prefixes and the address at session start, delete the
-   rest, update the docs.
+3. **Replace the mod** ([ORB-28916]). Move the linking function and its cases into
+   `plugin/hooks/mod`, add the run pattern, read the prefixes and the address at session
+   start, delete the rest, update the docs.
 4. **A result's `url` and the skill line** ([ORB-28917]).
 5. **Messages from other sessions in Claude Code, a trial first** ([ORB-28918]). A
    peer's message, a task notification and hook feedback arrive as user rows, and their
