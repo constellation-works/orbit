@@ -57,6 +57,18 @@ fn action(
     runtime.run_deterministic(name, &json!({}), input, ToolContext::default())
 }
 
+#[track_caller]
+fn classify(owner: &OrbitRuntime, input: Value) -> Value {
+    action(owner, "classify_workspace_auto_tasks", &input).expect("classify")
+}
+
+/// Start a drain and wait for its first running leaf without sharing state.
+fn drain_with_leaf(pair: &Pair, start: fn(&Pair) -> String) -> (String, String) {
+    let drain = start(pair);
+    let leaf = pair.running_leaf(&drain, 1);
+    (drain, leaf)
+}
+
 fn owner_call(pair: &Pair, name: &str, input: Value) -> Result<Value, OrbitError> {
     pair.wire.call("", name, input)
 }
@@ -69,6 +81,31 @@ fn fail_candidate(pair: &Pair, drain: &str) -> Value {
     let leaf = pair.running_leaf(drain, 1);
     pair.leaf_fails_with(&leaf, "candidate validation failed");
     pair.pass_with(drain, 0)
+}
+
+/// Commit an owner claim while dropping its reply, leaving it live and unbound.
+#[track_caller]
+fn start_with_lost_pull(pair: &Pair) {
+    let drain = pair.start_drain();
+    pair.wire.lose_next_reply("orbit.task.pull");
+    let lost = pair.pass(&drain);
+    assert!(error_of(&lost).contains("dropped"), "{lost}");
+}
+
+#[track_caller]
+fn assert_throttled(pass: &Value, resource: &str) {
+    assert_eq!(pass["admitting"], false, "{pass}");
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert_eq!(
+        pass["resource_throttle"]["resources"][0]["resource"], resource,
+        "{pass}"
+    );
+}
+
+#[track_caller]
+fn assert_idle_pass(pass: &Value) {
+    assert!(error_of(pass).is_empty(), "{pass}");
+    assert_eq!(pass["admitted"], 0, "{pass}");
 }
 
 #[track_caller]
@@ -1020,8 +1057,7 @@ fn no_drain_task_is_never_claimed_by_a_pull_follower() {
     pair.tasks.push(task.clone());
     let drain = pair.start_drain();
     let pass = pair.pass(&drain);
-    assert!(error_of(&pass).is_empty(), "{pass}");
-    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert_idle_pass(&pass);
     assert_no_admission(&pair);
     assert_eq!(pair.owner_status(&task), "backlog");
 }
@@ -1062,8 +1098,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
     );
     let drain = pair.start_drain();
     let idle = pair.pass(&drain);
-    assert!(error_of(&idle).is_empty(), "{idle}");
-    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert_idle_pass(&idle);
     assert!(
         pair.owner_claims().is_empty(),
         "no claim for an owner-only tool"
@@ -1191,8 +1226,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
     }
     let drain = pair.start_drain();
     let idle = pair.pass(&drain);
-    assert!(error_of(&idle).is_empty(), "{idle}");
-    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert_idle_pass(&idle);
     assert!(
         pair.owner_claims().is_empty(),
         "no claim for unsatisfiable tools"
@@ -1295,9 +1329,7 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
     let pair = Pair::with_crews(&[Some("gemini-flash"), Some("sol")]);
     pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
     let (unrunnable, runnable) = (&pair.tasks[0], &pair.tasks[1]);
-    let drain = pair.start_drain();
-
-    let leaf = pair.running_leaf(&drain, 1);
+    let (drain, leaf) = drain_with_leaf(&pair, Pair::start_drain);
     let first = pair.pass(&drain);
     let exclusion = excluded(&first, "gemini-flash");
     assert_eq!(exclusion["source"], "preflight", "{first}");
@@ -1453,8 +1485,7 @@ fn a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_
 /// provider failure whose provider text includes `reason`.
 fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     let pair = Pair::with_crews(&[Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
+    let (drain, leaf) = drain_with_leaf(&pair, Pair::run_drain);
     let task = pair.claimed_task(&leaf);
     pair.leaf_fails_with(&leaf, diagnostic);
 
@@ -1540,8 +1571,7 @@ model = \"gpt-sol\"
         pair.tasks[1].clone(),
         pair.tasks[2].clone(),
     );
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
+    let (drain, leaf) = drain_with_leaf(&pair, Pair::run_drain);
     assert_eq!(pair.claimed_task(&leaf), opus);
 
     pair.leaf_fails_with(
@@ -1639,8 +1669,7 @@ provider = \"codex\"
 model = \"gpt-sol\"
 ";
     let pair = Pair::with_configs(config, config, &[Some("opus"), Some("sol")]);
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
+    let (drain, leaf) = drain_with_leaf(&pair, Pair::run_drain);
     assert_eq!(pair.claimed_task(&leaf), pair.tasks[0]);
     let healthy = crew_window(&pair, &drain).capability();
     assert_eq!(
@@ -1701,8 +1730,7 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
         selection: None,
         failures: Default::default(),
     };
-    let drain = pair.run_drain();
-    let leaf = pair.running_leaf(&drain, 1);
+    let (drain, leaf) = drain_with_leaf(&pair, Pair::run_drain);
     let task = pair.claimed_task(&leaf);
     pair.leaf_fails_with(
         &leaf,
@@ -1819,12 +1847,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
 
     probe.sustain_memory(&pair.follower, 96.0);
     let held = pair.pass(&drain);
-    assert_eq!(held["admitting"], false, "{held}");
-    assert_eq!(held["admitted"], 0, "{held}");
-    assert_eq!(
-        held["resource_throttle"]["resources"][0]["resource"], "memory",
-        "{held}"
-    );
+    assert_throttled(&held, "memory");
     assert_eq!(held["sleep_seconds"], 30, "a throttled drain polls: {held}");
     assert_eq!(pulls(&pair), 1, "no new claim");
     assert_eq!(
@@ -1925,12 +1948,7 @@ fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
     let drain = pair.start_drain();
     follower_probe.sustain(&pair.follower, |probe| probe.cpu(Some(195.0)));
     let held = pair.pass(&drain);
-    assert_eq!(held["admitting"], false, "{held}");
-    assert_eq!(held["admitted"], 0, "{held}");
-    assert_eq!(
-        held["resource_throttle"]["resources"][0]["resource"], "cpu",
-        "{held}"
-    );
+    assert_throttled(&held, "cpu");
     assert_eq!(held["refusal"], Value::Null, "{held}");
     assert_eq!(pulls(&pair), 1, "no new claim");
     let recorded = recorded_pass(&pair.follower, &drain);
@@ -1992,6 +2010,16 @@ fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
     assert_eq!(claims[0]["claim"]["task_id"], task.as_str());
 }
 
+fn gate_input(task: &str) -> Value {
+    json!({
+        "job_name": "task_pr_pipeline",
+        "run_input": {"task_ids": [task]},
+        "admission_task_ids": [task],
+        "admission_workflow": "worktree_setup",
+        "timeout_seconds": 5,
+    })
+}
+
 /// [ORB-13918] While a follower's claim on a task is live, the owner's local
 /// drain neither selects it nor lets a gate that queued it before the claim
 /// landed dispatch it: the gate's pre-dispatch admission stops as a no-op and
@@ -1999,36 +2027,16 @@ fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
 fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
-    let drain = pair.start_drain();
-    // The owner commits the claim; the lost reply leaves it unbound and live.
-    pair.wire.lose_next_reply("orbit.task.pull");
-    let lost = pair.pass(&drain);
-    assert!(error_of(&lost).contains("dropped"), "{lost}");
+    start_with_lost_pull(&pair);
     let claims = pair.owner_claims();
     assert_eq!(claims.len(), 1, "{claims:#?}");
     assert_eq!(claims[0]["claim"]["phase"], "claimed");
     let owner = &pair.wire.owner;
 
-    let wave = action(
-        owner,
-        "classify_workspace_auto_tasks",
-        &json!({"max_active_leaf_runs": 4}),
-    )
-    .expect("classify");
+    let wave = classify(owner, json!({"max_active_leaf_runs": 4}));
     assert_eq!(wave["loose_task_ids"], json!([]), "{wave}");
 
-    let gate = action(
-        owner,
-        "invoke_and_wait",
-        &json!({
-            "job_name": "task_pr_pipeline",
-            "run_input": {"task_ids": [task]},
-            "admission_task_ids": [task],
-            "admission_workflow": "worktree_setup",
-            "timeout_seconds": 5,
-        }),
-    )
-    .expect("gate dispatch");
+    let gate = action(owner, "invoke_and_wait", &gate_input(&task)).expect("gate dispatch");
     assert_eq!(gate["skipped"], true, "{gate}");
     assert_eq!(gate["status"], "success", "{gate}");
     assert!(gate.get("error").is_none(), "{gate}");
@@ -2073,12 +2081,7 @@ fn a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted() {
     let admitted = pair.tasks[0].clone();
     let overlapping = backlog_task(owner, &pair.owner_repo, "src/f0.rs", None);
 
-    let wave = action(
-        owner,
-        "classify_workspace_auto_tasks",
-        &json!({"max_active_leaf_runs": 4}),
-    )
-    .expect("classify");
+    let wave = classify(owner, json!({"max_active_leaf_runs": 4}));
     assert_eq!(wave["loose_task_ids"], json!([admitted]), "{wave}");
 
     // Nothing has reserved the footprint or carries the task in a live run
@@ -2098,11 +2101,7 @@ fn a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted() {
 fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
     let pair = Pair::new(1);
     let claimed = pair.tasks[0].clone();
-    let drain = pair.start_drain();
-    // The owner commits the claim; the lost reply leaves it unbound and live.
-    pair.wire.lose_next_reply("orbit.task.pull");
-    let lost = pair.pass(&drain);
-    assert!(error_of(&lost).contains("dropped"), "{lost}");
+    start_with_lost_pull(&pair);
     let claim = pair.only_owner_claim();
     let claim_id = claim["claim"]["claim_id"].as_str().unwrap().to_string();
     let owner = &pair.wire.owner;
@@ -2120,12 +2119,10 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
         )
         .unwrap();
     let local_drain = local_drain.run_id;
-    let wave = action(
+    let wave = classify(
         owner,
-        "classify_workspace_auto_tasks",
-        &json!({"run_id": local_drain, "max_active_leaf_runs": 4}),
-    )
-    .expect("classify");
+        json!({"run_id": local_drain, "max_active_leaf_runs": 4}),
+    );
     assert_eq!(wave["loose_task_ids"], json!([]), "{wave}");
     let pass = recorded_pass(owner, &local_drain);
     let held = pass
@@ -2322,13 +2319,7 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
             .run_deterministic(
                 "invoke_and_wait",
                 &json!({"run_id": "parent-run"}),
-                &json!({
-                    "job_name": "task_pr_pipeline",
-                    "run_input": {"task_ids": [task]},
-                    "admission_task_ids": [task],
-                    "admission_workflow": "worktree_setup",
-                    "timeout_seconds": 5,
-                }),
+                &gate_input(task),
                 ToolContext::default(),
             )
             .expect("gate dispatch")
@@ -2748,6 +2739,19 @@ fn pull_deferred(pair: &Pair, task_id: &str) -> Value {
     panic!("no pull receipt deferred {task_id}")
 }
 
+/// A follower whose pull is attributed to the owner host.
+fn owner_host_follower(pair: &Pair) -> Pair {
+    let local = Pair::follower_of(
+        pair._root.clone(),
+        pair.wire.owner.clone(),
+        pair.owner_repo.clone(),
+        pair.tasks.clone(),
+        OWNER,
+    );
+    *local.wire.local.lock().unwrap() = true;
+    local
+}
+
 /// A pull on a host that already holds a perf claim admits other work and
 /// leaves the next perf task in the backlog.
 fn a_pull_drain_admits_one_perf_task_per_host_and_still_admits_other_work() {
@@ -2796,28 +2800,15 @@ fn an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host() {
     let pair = Pair::new(0);
     let owner = &pair.wire.owner;
     let (holder, waiting, plain) = perf_and_plain(&pair);
-    let wave = action(
-        owner,
-        "classify_workspace_auto_tasks",
-        &json!({"max_active_leaf_runs": 1}),
-    )
-    .expect("classify");
+    let wave = classify(owner, json!({"max_active_leaf_runs": 1}));
     assert_eq!(wave["loose_task_ids"], json!([holder]), "{wave}");
     assert_eq!(pair.owner_status(&holder), "backlog");
 
     // A pull whose execution machine is the owner host. Flipping only the
     // transport on a follower drain stamps the receipt with the owner machine
     // and the drain refuses it.
-    let local = Pair::follower_of(
-        pair._root.clone(),
-        pair.wire.owner.clone(),
-        pair.owner_repo.clone(),
-        pair.tasks.clone(),
-        OWNER,
-    );
-    *local.wire.local.lock().unwrap() = true;
-    let drain = local.start_drain();
-    let leaf = local.running_leaf(&drain, 1);
+    let local = owner_host_follower(&pair);
+    let (_drain, leaf) = drain_with_leaf(&local, Pair::start_drain);
     assert_eq!(local.claimed_task(&leaf), plain);
     assert_eq!(pair.owner_status(&holder), "backlog");
     assert_eq!(pair.owner_status(&waiting), "backlog");
@@ -2863,16 +2854,8 @@ fn a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_pull() {
     let pair = Pair::new(0);
     let (holder, waiting, _plain) = perf_and_plain(&pair);
     move_to_review(&pair.wire.owner, &holder);
-    let local = Pair::follower_of(
-        pair._root.clone(),
-        pair.wire.owner.clone(),
-        pair.owner_repo.clone(),
-        pair.tasks.clone(),
-        OWNER,
-    );
-    *local.wire.local.lock().unwrap() = true;
-    let drain = local.start_drain();
-    let leaf = local.running_leaf(&drain, 1);
+    let local = owner_host_follower(&pair);
+    let (_drain, leaf) = drain_with_leaf(&local, Pair::start_drain);
     assert_eq!(
         local.claimed_task(&leaf),
         waiting,
@@ -2891,12 +2874,7 @@ fn a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_wave() {
     let owner = &pair.wire.owner;
     let (holder, waiting, _plain) = perf_and_plain(&pair);
     move_to_review(owner, &holder);
-    let wave = action(
-        owner,
-        "classify_workspace_auto_tasks",
-        &json!({"max_active_leaf_runs": 1}),
-    )
-    .expect("classify");
+    let wave = classify(owner, json!({"max_active_leaf_runs": 1}));
     assert_eq!(wave["loose_task_ids"], json!([waiting]), "{wave}");
     assert_eq!(pair.owner_status(&holder), "review");
 }
@@ -2971,38 +2949,47 @@ fn pull_from_owner(
         .expect("pull from owner")
 }
 
+fn partition_holder(pair: &Pair) -> String {
+    backlog_task_with_input(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        "src/holder_a.rs",
+        None,
+        json!({"tags": ["performance"], "priority": "high"}),
+    )
+}
+
+fn partition_waiting_tasks(pair: &Pair) -> (OrbitRuntime, PathBuf, String, String) {
+    let (owner, repo) = second_owner_workspace(pair);
+    let waiting = backlog_task_with_input(
+        &owner,
+        &repo,
+        "src/waiting_b.rs",
+        None,
+        json!({"tags": ["perf-review"], "priority": "high"}),
+    );
+    let plain = backlog_task_with_input(
+        &owner,
+        &repo,
+        "src/plain_b.rs",
+        None,
+        json!({"priority": "low"}),
+    );
+    (owner, repo, waiting, plain)
+}
+
 /// Two workspace partitions on one owner host share the perf lane per
 /// execution machine: a perf claim granted from workspace A blocks a second
 /// perf pull from workspace B onto that same machine, while plain work in
 /// workspace B and perf work on a distinct execution machine remain eligible.
 fn a_perf_claim_in_one_workspace_blocks_another_workspaces_perf_pull_on_the_same_machine() {
     let pair = Pair::new(0);
-    let holder_a = backlog_task_with_input(
-        &pair.wire.owner,
-        &pair.owner_repo,
-        "src/holder_a.rs",
-        None,
-        json!({"tags": ["performance"], "priority": "high"}),
-    );
+    let holder_a = partition_holder(&pair);
     let drain_a = pair.start_drain();
     let leaf_a = pair.running_leaf(&drain_a, 1);
     assert_eq!(pair.claimed_task(&leaf_a), holder_a);
 
-    let (owner_b, repo_b) = second_owner_workspace(&pair);
-    let waiting_b = backlog_task_with_input(
-        &owner_b,
-        &repo_b,
-        "src/waiting_b.rs",
-        None,
-        json!({"tags": ["perf-review"], "priority": "high"}),
-    );
-    let plain_b = backlog_task_with_input(
-        &owner_b,
-        &repo_b,
-        "src/plain_b.rs",
-        None,
-        json!({"priority": "low"}),
-    );
+    let (owner_b, repo_b, waiting_b, plain_b) = partition_waiting_tasks(&pair);
 
     // Same execution machine pulling from workspace B skips waiting_b for the
     // perf lane and admits plain_b instead.
@@ -3055,43 +3042,13 @@ fn a_perf_claim_in_one_workspace_blocks_another_workspaces_perf_pull_on_the_same
 /// plain work in workspace B remains eligible.
 fn an_owner_wave_perf_task_holds_the_lane_across_workspace_partitions() {
     let pair = Pair::new(0);
-    let holder_a = backlog_task_with_input(
-        &pair.wire.owner,
-        &pair.owner_repo,
-        "src/holder_a.rs",
-        None,
-        json!({"tags": ["performance"], "priority": "high"}),
-    );
-    let wave_a = action(
-        &pair.wire.owner,
-        "classify_workspace_auto_tasks",
-        &json!({"max_active_leaf_runs": 1}),
-    )
-    .expect("classify A");
+    let holder_a = partition_holder(&pair);
+    let wave_a = classify(&pair.wire.owner, json!({"max_active_leaf_runs": 1}));
     assert_eq!(wave_a["loose_task_ids"], json!([holder_a]), "{wave_a}");
 
-    let (owner_b, repo_b) = second_owner_workspace(&pair);
-    let waiting_b = backlog_task_with_input(
-        &owner_b,
-        &repo_b,
-        "src/waiting_b.rs",
-        None,
-        json!({"tags": ["perf-review"], "priority": "high"}),
-    );
-    let plain_b = backlog_task_with_input(
-        &owner_b,
-        &repo_b,
-        "src/plain_b.rs",
-        None,
-        json!({"priority": "low"}),
-    );
+    let (owner_b, repo_b, waiting_b, plain_b) = partition_waiting_tasks(&pair);
 
-    let wave_b = action(
-        &owner_b,
-        "classify_workspace_auto_tasks",
-        &json!({"max_active_leaf_runs": 2}),
-    )
-    .expect("classify B");
+    let wave_b = classify(&owner_b, json!({"max_active_leaf_runs": 2}));
     assert_eq!(wave_b["loose_task_ids"], json!([plain_b]), "{wave_b}");
     let deferred_b = wave_b["deferred_conflicts"]
         .as_array()
