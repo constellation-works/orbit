@@ -72,6 +72,211 @@ use tempfile::TempDir;
 
 const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}"#;
 
+#[cfg(unix)]
+const CANARY_MISS_SCRIPT: &str = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \
+ '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"canary\":\"KT2NJ4\"},\"error\":null}'\n";
+
+/// Read the staged PNG the way the provider receives it (`--image`) and return
+/// the code it draws. The script fails closed if it cannot read the file.
+#[cfg(unix)]
+const CANARY_READER_SCRIPT: &str = r#"#!/bin/sh
+cat >/dev/null
+exec /usr/bin/python3 - "$@" <<'PY'
+import struct, sys, zlib
+path = None
+args = sys.argv[1:]
+for index, arg in enumerate(args):
+    if arg == "--image" and index + 1 < len(args):
+        path = args[index + 1]
+if not path:
+    sys.stderr.write("canary reader: no --image argument\n")
+    sys.exit(2)
+data = open(path, "rb").read()
+if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+    sys.stderr.write("canary reader: not a png\n")
+    sys.exit(2)
+pos, width, height, idat = 8, None, None, b""
+while pos + 8 <= len(data):
+    length = struct.unpack(">I", data[pos:pos + 4])[0]
+    kind = data[pos + 4:pos + 8]
+    chunk = data[pos + 8:pos + 8 + length]
+    if kind == b"IHDR":
+        width, height = struct.unpack(">II", chunk[:8])
+    elif kind == b"IDAT":
+        idat += chunk
+    elif kind == b"IEND":
+        break
+    pos += 12 + length
+raw = zlib.decompress(idat)
+scale, margin, glyph_width, glyph_height = 12, 3, 5, 7
+glyphs = {
+    "A": [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+    "C": [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+    "E": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+    "F": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+    "H": [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+    "J": [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+    "K": [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+    "M": [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+    "N": [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+    "P": [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+    "Q": [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+    "R": [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+    "T": [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+    "U": [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+    "V": [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+    "W": [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+    "X": [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+    "Y": [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+    "3": [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+    "4": [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+    "7": [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+    "9": [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+}
+def ink(column, row):
+    x = column * scale + scale // 2
+    y = row * scale + scale // 2
+    return raw[y * (width + 1) + 1 + x] == 0
+code = []
+for index in range(6):
+    bits = []
+    for row in range(glyph_height):
+        byte = 0
+        for offset in range(glyph_width):
+            if ink(margin + index * (glyph_width + 1) + offset, margin + row):
+                byte |= 0x10 >> offset
+        bits.append(byte)
+    match = [char for char, glyph in glyphs.items() if glyph == bits]
+    if len(match) != 1:
+        sys.stderr.write("canary reader: unreadable glyph %s\n" % bits)
+        sys.exit(2)
+    code.append(match[0])
+sys.stdout.write('{"schemaVersion":1,"status":"success","result":{"canary":"%s"},"error":null}\n' % "".join(code))
+PY
+"#;
+
+#[cfg(unix)]
+struct CanaryDispatch {
+    success: bool,
+    message: Option<String>,
+    returned: Option<String>,
+    canary_seen: Option<bool>,
+    audit_seen: Option<bool>,
+}
+
+/// Outcome of one threaded image-input dispatch: `error_display` is `None`
+/// when dispatch returned `Ok` and names the error otherwise.
+#[cfg(unix)]
+struct ThreadedImageReport {
+    error_display: Option<String>,
+    outcome_message: Option<String>,
+    marker_spawned: bool,
+    invocation_started: bool,
+    elapsed: Duration,
+}
+
+/// Write a shell-script "fake CLI" into a tempdir using the chosen basename
+/// so `AgentConfig::from_cli_config` resolves it to the matching factory.
+/// The struct retains ownership of the `TempDir` so the file lives for the
+/// whole scenario.
+#[cfg(unix)]
+pub(super) struct FakeCli {
+    _tempdir: TempDir,
+    path: PathBuf,
+}
+#[cfg(unix)]
+impl FakeCli {
+    pub(super) fn cli_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+// Hosts --------------------------------------------------------------------
+
+struct ScriptHost {
+    command: String,
+    args: Vec<String>,
+    /// Behave as a macOS host: Claude must bring its own credential.
+    requires_claude_credential: bool,
+    /// Variables the host's allowlist admits, beyond the baseline.
+    admitted_env: Vec<(String, String)>,
+    image_input: Option<orbit_types::workflow::ExecutorImageInput>,
+}
+impl ScriptHost {
+    fn new(path: &Path) -> Self {
+        Self::new_with_args(path, Vec::new())
+    }
+
+    fn new_with_args(path: &Path, args: Vec<String>) -> Self {
+        Self {
+            command: path.to_string_lossy().into_owned(),
+            args,
+            requires_claude_credential: false,
+            admitted_env: Vec::new(),
+            image_input: None,
+        }
+    }
+
+    fn with_image_input(mut self, declaration: orbit_types::workflow::ExecutorImageInput) -> Self {
+        self.image_input = Some(declaration);
+        self
+    }
+
+    fn requiring_claude_credential(mut self, admitted_env: &[(&str, &str)]) -> Self {
+        self.requires_claude_credential = true;
+        self.admitted_env = admitted_env
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        self
+    }
+}
+impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
+    fn requires_claude_worker_credential(&self) -> bool {
+        self.requires_claude_credential
+    }
+
+    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
+        let mut env = orbit_common::security::child_env::allowlisted_child_env(
+            &orbit_common::Env::capture(),
+            &[],
+            required_env_vars,
+        );
+        env.extend(self.admitted_env.iter().cloned());
+        env
+    }
+
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".to_string(),
+        ))
+    }
+    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        Ok(ResolvedCliExecutor {
+            command: self.command.clone(),
+            args: self.args.clone(),
+            inspection_args: None,
+            image_input: self.image_input.clone(),
+        })
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext::default()
+    }
+}
+
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
 #[cfg(unix)]
@@ -1284,15 +1489,6 @@ fn probe_records_a_returned_canary_and_a_miss_without_failing_the_probe()
 }
 
 #[cfg(unix)]
-struct CanaryDispatch {
-    success: bool,
-    message: Option<String>,
-    returned: Option<String>,
-    canary_seen: Option<bool>,
-    audit_seen: Option<bool>,
-}
-
-#[cfg(unix)]
 fn dispatch_canary(
     activity_name: &str,
     run_id: &str,
@@ -1357,89 +1553,6 @@ fn attach_image_declaration() -> orbit_types::workflow::ExecutorImageInput {
     }
 }
 
-#[cfg(unix)]
-const CANARY_MISS_SCRIPT: &str = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \
- '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"canary\":\"KT2NJ4\"},\"error\":null}'\n";
-
-/// Read the staged PNG the way the provider receives it (`--image`) and return
-/// the code it draws. The script fails closed if it cannot read the file.
-#[cfg(unix)]
-const CANARY_READER_SCRIPT: &str = r#"#!/bin/sh
-cat >/dev/null
-exec /usr/bin/python3 - "$@" <<'PY'
-import struct, sys, zlib
-path = None
-args = sys.argv[1:]
-for index, arg in enumerate(args):
-    if arg == "--image" and index + 1 < len(args):
-        path = args[index + 1]
-if not path:
-    sys.stderr.write("canary reader: no --image argument\n")
-    sys.exit(2)
-data = open(path, "rb").read()
-if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-    sys.stderr.write("canary reader: not a png\n")
-    sys.exit(2)
-pos, width, height, idat = 8, None, None, b""
-while pos + 8 <= len(data):
-    length = struct.unpack(">I", data[pos:pos + 4])[0]
-    kind = data[pos + 4:pos + 8]
-    chunk = data[pos + 8:pos + 8 + length]
-    if kind == b"IHDR":
-        width, height = struct.unpack(">II", chunk[:8])
-    elif kind == b"IDAT":
-        idat += chunk
-    elif kind == b"IEND":
-        break
-    pos += 12 + length
-raw = zlib.decompress(idat)
-scale, margin, glyph_width, glyph_height = 12, 3, 5, 7
-glyphs = {
-    "A": [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-    "C": [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
-    "E": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
-    "F": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
-    "H": [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-    "J": [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
-    "K": [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
-    "M": [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
-    "N": [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
-    "P": [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
-    "Q": [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
-    "R": [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
-    "T": [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-    "U": [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-    "V": [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
-    "W": [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
-    "X": [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
-    "Y": [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
-    "3": [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
-    "4": [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
-    "7": [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-    "9": [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
-}
-def ink(column, row):
-    x = column * scale + scale // 2
-    y = row * scale + scale // 2
-    return raw[y * (width + 1) + 1 + x] == 0
-code = []
-for index in range(6):
-    bits = []
-    for row in range(glyph_height):
-        byte = 0
-        for offset in range(glyph_width):
-            if ink(margin + index * (glyph_width + 1) + offset, margin + row):
-                byte |= 0x10 >> offset
-        bits.append(byte)
-    match = [char for char, glyph in glyphs.items() if glyph == bits]
-    if len(match) != 1:
-        sys.stderr.write("canary reader: unreadable glyph %s\n" % bits)
-        sys.exit(2)
-    code.append(match[0])
-sys.stdout.write('{"schemaVersion":1,"status":"success","result":{"canary":"%s"},"error":null}\n' % "".join(code))
-PY
-"#;
-
 /// Image-input declaration shared by the staging regression tests: canary
 /// plus one image on a `native_read` lane.
 #[cfg(unix)]
@@ -1453,17 +1566,6 @@ fn image_test_declaration() -> orbit_types::workflow::ExecutorImageInput {
         max_images: 5,
         attach_args: None,
     }
-}
-
-/// Outcome of one threaded image-input dispatch: `error_display` is `None`
-/// when dispatch returned `Ok` and names the error otherwise.
-#[cfg(unix)]
-struct ThreadedImageReport {
-    error_display: Option<String>,
-    outcome_message: Option<String>,
-    marker_spawned: bool,
-    invocation_started: bool,
-    elapsed: Duration,
 }
 
 /// Run one image-input dispatch on a worker thread and wait at most 20
@@ -1823,22 +1925,6 @@ pub(super) fn events_snapshot(
         .collect()
 }
 
-/// Write a shell-script "fake CLI" into a tempdir using the chosen basename
-/// so `AgentConfig::from_cli_config` resolves it to the matching factory.
-/// The struct retains ownership of the `TempDir` so the file lives for the
-/// whole scenario.
-#[cfg(unix)]
-pub(super) struct FakeCli {
-    _tempdir: TempDir,
-    path: PathBuf,
-}
-#[cfg(unix)]
-impl FakeCli {
-    pub(super) fn cli_path(&self) -> &Path {
-        &self.path
-    }
-}
-
 #[cfg(unix)]
 pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn std::error::Error>> {
     let tempdir = tempfile::tempdir()?;
@@ -1854,90 +1940,4 @@ pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn st
         _tempdir: tempdir,
         path,
     })
-}
-
-// Hosts --------------------------------------------------------------------
-
-struct ScriptHost {
-    command: String,
-    args: Vec<String>,
-    /// Behave as a macOS host: Claude must bring its own credential.
-    requires_claude_credential: bool,
-    /// Variables the host's allowlist admits, beyond the baseline.
-    admitted_env: Vec<(String, String)>,
-    image_input: Option<orbit_types::workflow::ExecutorImageInput>,
-}
-impl ScriptHost {
-    fn new(path: &Path) -> Self {
-        Self::new_with_args(path, Vec::new())
-    }
-
-    fn new_with_args(path: &Path, args: Vec<String>) -> Self {
-        Self {
-            command: path.to_string_lossy().into_owned(),
-            args,
-            requires_claude_credential: false,
-            admitted_env: Vec::new(),
-            image_input: None,
-        }
-    }
-
-    fn with_image_input(mut self, declaration: orbit_types::workflow::ExecutorImageInput) -> Self {
-        self.image_input = Some(declaration);
-        self
-    }
-
-    fn requiring_claude_credential(mut self, admitted_env: &[(&str, &str)]) -> Self {
-        self.requires_claude_credential = true;
-        self.admitted_env = admitted_env
-            .iter()
-            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-            .collect();
-        self
-    }
-}
-impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
-    fn requires_claude_worker_credential(&self) -> bool {
-        self.requires_claude_credential
-    }
-
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        let mut env = orbit_common::security::child_env::allowlisted_child_env(
-            &orbit_common::Env::capture(),
-            &[],
-            required_env_vars,
-        );
-        env.extend(self.admitted_env.iter().cloned());
-        env
-    }
-
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".to_string(),
-        ))
-    }
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.clone(),
-            args: self.args.clone(),
-            inspection_args: None,
-            image_input: self.image_input.clone(),
-        })
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
 }

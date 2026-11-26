@@ -28,28 +28,10 @@ use super::provider_capacity::{
 const ANTIGRAVITY_QUOTA: &str = "Individual quota reached. Please upgrade your subscription to \
      increase your limits. Resets in 1h37m37s.";
 
-fn antigravity_quota_stdout() -> String {
-    format!(
-        r#"{{"status":"ERROR","response":"","error":{}}}"#,
-        serde_json::to_string(ANTIGRAVITY_QUOTA).unwrap()
-    )
-}
-
 /// [ORB-15102] What `agy` wrote on exit 0 for crew `gemini-flash` (run
 /// jrun-20261009-2155-c5): the terminal `event=result` frame, after progress.
 const ANTIGRAVITY_EXIT_ZERO_QUOTA: &str = "Individual quota reached. Please upgrade your \
      subscription to increase your limits. Resets in 20h52m17s.";
-
-fn antigravity_result_frame(status: &str, error: &str) -> String {
-    format!(
-        "{}\n{}",
-        r#"{"event":"step","step":{"type":"thinking","text":"working"}}"#,
-        json!({
-            "event": "result",
-            "result": {"status": status, "response": "", "error": error, "usage": {}},
-        })
-    )
-}
 
 /// Gemini CLI's quota error (ORB-10814), on stderr.
 const GEMINI_QUOTA: &str = "TerminalQuotaError: You exceeded your current quota, please check \
@@ -64,16 +46,6 @@ const CODEX_LIMIT: &str = "You've hit your usage limit for gpt-5.1-codex-max. Vi
 /// The same message on the day it resets, with no model.
 const CODEX_LIMIT_TODAY: &str = "You've hit your usage limit. Upgrade to Pro \
      (https://chatgpt.com/explore/pro) or try again at 3:42 PM.";
-
-/// Codex's own `error` and `turn.failed` frames after the turn's tool traffic.
-fn codex_limit_frames(message: &str) -> String {
-    let message = serde_json::to_string(message).unwrap();
-    format!(
-        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"cargo test","aggregated_output":"","exit_code":0,"status":"completed"}}}}
-{{"type":"error","message":{message}}}
-{{"type":"turn.failed","error":{{"message":{message}}}}}"#
-    )
-}
 
 /// grok 1.0.46's HTTP failure, on stderr.
 const GROK_LIMIT: &str = "Error: Too Many Requests (429): rate limit exceeded for this account";
@@ -97,6 +69,34 @@ struct Case {
     stderr: &'static str,
     exit_code: i32,
     limit: bool,
+}
+
+fn antigravity_quota_stdout() -> String {
+    format!(
+        r#"{{"status":"ERROR","response":"","error":{}}}"#,
+        serde_json::to_string(ANTIGRAVITY_QUOTA).unwrap()
+    )
+}
+
+fn antigravity_result_frame(status: &str, error: &str) -> String {
+    format!(
+        "{}\n{}",
+        r#"{"event":"step","step":{"type":"thinking","text":"working"}}"#,
+        json!({
+            "event": "result",
+            "result": {"status": status, "response": "", "error": error, "usage": {}},
+        })
+    )
+}
+
+/// Codex's own `error` and `turn.failed` frames after the turn's tool traffic.
+fn codex_limit_frames(message: &str) -> String {
+    let message = serde_json::to_string(message).unwrap();
+    format!(
+        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"cargo test","aggregated_output":"","exit_code":0,"status":"completed"}}}}
+{{"type":"error","message":{message}}}
+{{"type":"turn.failed","error":{{"message":{message}}}}}"#
+    )
 }
 
 fn case(

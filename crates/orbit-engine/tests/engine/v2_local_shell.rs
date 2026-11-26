@@ -22,6 +22,87 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use serde_json::{Value, json};
 
+struct AuditedDispatch {
+    result: Result<DispatchOutcome, DispatchError>,
+    events: Vec<V2AuditEvent>,
+}
+
+struct ShellHost {
+    root: PathBuf,
+    observed: std::sync::Mutex<Vec<(String, Option<String>)>>,
+}
+
+impl ShellHost {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            observed: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn observed_executor(&self) -> Option<String> {
+        self.observed
+            .lock()
+            .expect("lock")
+            .first()
+            .map(|(executor, _)| executor.clone())
+    }
+
+    fn observed_fs_profile(&self) -> Option<String> {
+        self.observed
+            .lock()
+            .expect("lock")
+            .first()
+            .and_then(|(_, profile)| profile.clone())
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
+    fn repo_root(&self) -> Result<String, orbit_common::OrbitError> {
+        Ok(self.root.to_string_lossy().into_owned())
+    }
+
+    // A host bound to a registered workspace. A CLI agent launched from it
+    // would receive both of these; a shell step must not.
+    fn orbit_registry_root(&self) -> Option<String> {
+        Some("/authoritative/registry".to_string())
+    }
+
+    fn orbit_workspace_selector(&self) -> Option<String> {
+        Some("ws_owner".to_string())
+    }
+
+    fn agent_subprocess_environment(&self, _required_env_vars: &[&str]) -> Vec<(String, String)> {
+        vec![
+            (
+                "PATH".to_string(),
+                std::env::var("PATH").unwrap_or_default(),
+            ),
+            ("ORBIT_BASELINE".to_string(), "from-policy".to_string()),
+        ]
+    }
+
+    fn resolve_local_shell_executor(
+        &self,
+        _executor: &str,
+    ) -> Result<ResolvedShellExecutor, DispatchError> {
+        Ok(ResolvedShellExecutor::default())
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        provider: &str,
+        fs_profile: Option<&str>,
+        _subprocess_cwd: Option<&Path>,
+    ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
+        self.observed
+            .lock()
+            .expect("lock")
+            .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
+        Ok(None)
+    }
+}
+
 fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -186,11 +267,6 @@ fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
     );
 }
 
-struct AuditedDispatch {
-    result: Result<DispatchOutcome, DispatchError>,
-    events: Vec<V2AuditEvent>,
-}
-
 fn dispatch(yaml: &str, input: Value, host: &ShellHost) -> Result<DispatchOutcome, DispatchError> {
     dispatch_with_audit(yaml, input, host).result
 }
@@ -242,82 +318,6 @@ fn shell_activity_with_profile(config: Value, fs_profile: Option<&str>) -> Strin
         }
     });
     serde_json::to_string(&asset).expect("serialize activity asset")
-}
-
-struct ShellHost {
-    root: PathBuf,
-    observed: std::sync::Mutex<Vec<(String, Option<String>)>>,
-}
-
-impl ShellHost {
-    fn new(root: &Path) -> Self {
-        Self {
-            root: root.to_path_buf(),
-            observed: std::sync::Mutex::new(Vec::new()),
-        }
-    }
-
-    fn observed_executor(&self) -> Option<String> {
-        self.observed
-            .lock()
-            .expect("lock")
-            .first()
-            .map(|(executor, _)| executor.clone())
-    }
-
-    fn observed_fs_profile(&self) -> Option<String> {
-        self.observed
-            .lock()
-            .expect("lock")
-            .first()
-            .and_then(|(_, profile)| profile.clone())
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
-    fn repo_root(&self) -> Result<String, orbit_common::OrbitError> {
-        Ok(self.root.to_string_lossy().into_owned())
-    }
-
-    // A host bound to a registered workspace. A CLI agent launched from it
-    // would receive both of these; a shell step must not.
-    fn orbit_registry_root(&self) -> Option<String> {
-        Some("/authoritative/registry".to_string())
-    }
-
-    fn orbit_workspace_selector(&self) -> Option<String> {
-        Some("ws_owner".to_string())
-    }
-
-    fn agent_subprocess_environment(&self, _required_env_vars: &[&str]) -> Vec<(String, String)> {
-        vec![
-            (
-                "PATH".to_string(),
-                std::env::var("PATH").unwrap_or_default(),
-            ),
-            ("ORBIT_BASELINE".to_string(), "from-policy".to_string()),
-        ]
-    }
-
-    fn resolve_local_shell_executor(
-        &self,
-        _executor: &str,
-    ) -> Result<ResolvedShellExecutor, DispatchError> {
-        Ok(ResolvedShellExecutor::default())
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        provider: &str,
-        fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
-        self.observed
-            .lock()
-            .expect("lock")
-            .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
-        Ok(None)
-    }
 }
 
 /// Behavior-distinct rows share one bounded family process.

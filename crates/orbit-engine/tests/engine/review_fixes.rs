@@ -28,302 +28,6 @@ use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, Determinis
 use orbit_types::workflow::{FinalRecoveryDecision, ReviewGateRefusal};
 use serde_json::{Value, json};
 
-fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication() {
-    let host = ScriptedHost::new(Settlement::Timeout, Revalidation::Passes);
-    let result = run_shipped_pipeline(&host);
-    assert!(
-        !matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
-    assert_eq!(host.inputs("agent_review_repair").len(), 1);
-    assert!(host.inputs("review_gate_settle").is_empty());
-    assert!(host.inputs("pr_open").is_empty());
-    let handoff = host.inputs("pr_failure_handoff");
-    assert_eq!(handoff.len(), 1);
-    assert_eq!(
-        handoff[0]["error_code"],
-        ReviewGateRefusal::TimeoutIncomplete.error_code(),
-        "the handoff decides on the executor's typed refusal: {}",
-        handoff[0]
-    );
-    assert_eq!(handoff[0]["pipeline"]["review"]["timed_out"], true);
-    assert!(matches!(
-        host.reviewer_events.lock().unwrap().as_slice(),
-        [
-            orbit_types::workflow::ReviewerInvocationEvent::Started,
-            orbit_types::workflow::ReviewerInvocationEvent::TimedOut { .. },
-        ]
-    ));
-}
-
-/// No findings: the reviewed head is the implementation head, nothing is
-/// revalidated, and the PR opens with no "Review fixes" section.
-fn accept_publishes_the_implementation_head_without_revalidation() {
-    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
-    assert_eq!(
-        host.actions(),
-        [
-            "worktree_setup",
-            "review_gate_admit",
-            "candidate_resume",
-            "agent_implement",
-            "git_commit",
-            "pr_prepare",
-            "git_rebase",
-            "candidate_validate",
-            "review_gate_admit",
-            "agent_review_repair",
-            "review_gate_settle",
-            "git_push",
-            "pr_open",
-            "pr_promote",
-            "review_gate_admit",
-            "review_gate_settle",
-            "pr_complete",
-            "review_gate_admit",
-            "review_gate_settle",
-            "review_gate_admit",
-            "review_gate_settle",
-        ],
-        "one review, no revalidation, then delivery; the before-landing gate and both \
-         completion re-review rounds only admit and settle as not applicable"
-    );
-    let pr_open = &host.inputs("pr_open")[0];
-    assert_eq!(pr_open["reviewed_head_sha"], "candidate");
-    assert_eq!(pr_open["review_fixes"], "");
-    assert!(host.inputs("pr_failure_handoff").is_empty());
-}
-
-/// [ORB-14616] A report settlement would refuse only for its shape goes back
-/// to the reviewer once, with the typed defect, in the same attempt: the
-/// reviewer step dispatches a second time carrying `report_correction`, the
-/// engine never asks again, and one admission and one settlement follow.
-fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
-    const DEFECT: &str = "validation_contradicted: negative control `make test-guard` names \
-                          `crates/orbit-cmd/src/update/converge.rs`, outside the candidate's scope";
-    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes)
-        .with_report_defects([DEFECT, DEFECT]);
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
-    let reviews = host.inputs("agent_review_repair");
-    assert_eq!(reviews.len(), 2, "one correction, never a third reviewer");
-    assert_eq!(reviews[0].get("report_correction"), None);
-    assert_eq!(reviews[1]["report_correction"], DEFECT);
-    assert_eq!(
-        reviews[1]["attempt_id"], reviews[0]["attempt_id"],
-        "the correction belongs to the same attempt"
-    );
-    let asked = host.report_checks.lock().unwrap().clone();
-    assert_eq!(asked.len(), 1, "the corrected report goes to settlement");
-    assert_eq!(asked[0].attempt_id, "rvw-1");
-    assert_eq!(asked[0].lineage_key, "lineage-1");
-    assert_eq!(asked[0].task_ids, ["T-1"]);
-    assert_eq!(asked[0].workspace_path, PathBuf::from(WORKSPACE));
-    assert_eq!(
-        host.inputs("review_gate_admit")
-            .iter()
-            .filter(|input| input["preflight"] != true
-                && input.get("re_review_after").is_none()
-                && input["before_landing"] != true)
-            .count(),
-        1,
-        "no second reviewer start"
-    );
-    let settle = host
-        .inputs("review_gate_settle")
-        .into_iter()
-        .filter(|input| input.pointer("/admission/applies") == Some(&json!(true)))
-        .count();
-    assert_eq!(settle, 1);
-    assert!(
-        matches!(
-            host.reviewer_events.lock().unwrap().as_slice(),
-            [
-                orbit_types::workflow::ReviewerInvocationEvent::Started,
-                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
-                orbit_types::workflow::ReviewerInvocationEvent::Started,
-                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
-            ]
-        ),
-        "both invocations are charged to the attempt"
-    );
-}
-
-/// Fixable findings: the reviewer commit becomes the reviewed head. Owner
-/// validation reruns on it with the implementation head as the ownership
-/// base, and only then is it pushed and opened with the "Review fixes"
-/// section the settlement produced.
-fn accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it() {
-    let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Passes);
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
-    let actions = host.actions();
-    let settle = position(&actions, "review_gate_settle");
-    assert_eq!(
-        &actions[settle..settle + 4],
-        [
-            "review_gate_settle",
-            "candidate_validate",
-            "git_push",
-            "pr_open"
-        ],
-        "revalidation sits between settlement and publication: {actions:?}"
-    );
-    assert_eq!(
-        host.inputs("agent_review_repair").len(),
-        1,
-        "one reviewer, no second round"
-    );
-
-    let validations = host.inputs("candidate_validate");
-    assert_eq!(validations.len(), 2);
-    assert_eq!(validations[0].get("ownership_base_sha"), None);
-    assert_eq!(validations[1]["ownership_base_sha"], "candidate");
-    assert_eq!(validations[1]["base_sha"], "base-sha");
-    assert_eq!(validations[1]["workspace_path"], WORKSPACE);
-
-    let pr_open = &host.inputs("pr_open")[0];
-    assert_eq!(pr_open["reviewed_head_sha"], "reviewer-fixes");
-    assert_eq!(pr_open["review_fixes"], REVIEW_FIXES);
-    assert_eq!(host.inputs("git_push")[0]["workspace_path"], WORKSPACE);
-    let complete = &host.inputs("pr_complete")[0];
-    assert_eq!(complete["reviewed_head_sha"], "reviewer-fixes");
-    assert_eq!(complete["published_head_sha"], "reviewer-fixes");
-    assert!(host.inputs("pr_failure_handoff").is_empty());
-}
-
-/// A reviewer commit that fails owner revalidation rejects the candidate:
-/// no step recovery, no second review, nothing pushed or opened, and the
-/// failure handoff blocks the task naming the revalidation step.
-fn a_failed_revalidation_rejects_without_a_second_review() {
-    let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Fails);
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        !matches!(&result, Ok(outcome) if outcome.success),
-        "a reviewer commit that fails revalidation must not deliver: {result:?}"
-    );
-    assert_eq!(host.inputs("agent_review_repair").len(), 1);
-    assert_eq!(
-        host.inputs("review_gate_admit")
-            .iter()
-            .filter(|input| input["preflight"] != true)
-            .count(),
-        1,
-        "no second reviewer start"
-    );
-    for step in ["git_push", "pr_open", "pr_promote", "pr_complete"] {
-        assert!(host.inputs(step).is_empty(), "{step} ran after a rejection");
-    }
-    assert!(
-        host.inputs("step_failure_recovery").is_empty(),
-        "revalidation has no step recovery"
-    );
-    let handoff = host.inputs("pr_failure_handoff");
-    assert_eq!(handoff.len(), 1);
-    assert_eq!(handoff[0]["failed_step_id"], "review_validate");
-    assert_eq!(
-        handoff[0]["pipeline"]["review_gate_settle"]["implementation_head_sha"], "candidate",
-        "the handoff sees both commits"
-    );
-}
-
-/// An unfixable finding: settlement refuses, nothing is published, final
-/// recovery gets its one look, and the failure handoff blocks the task with
-/// the candidate preserved.
-fn reject_blocks_the_task_after_final_recovery() {
-    let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes);
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        !matches!(&result, Ok(outcome) if outcome.success),
-        "a rejected candidate must not deliver: {result:?}"
-    );
-    for step in [
-        "candidate_validate",
-        "git_push",
-        "pr_open",
-        "pr_promote",
-        "pr_complete",
-    ] {
-        let after_review = host
-            .actions()
-            .iter()
-            .skip_while(|action| *action != "review_gate_settle")
-            .any(|action| action == step);
-        assert!(!after_review, "{step} ran after a rejection");
-    }
-    assert!(
-        host.inputs("step_failure_recovery").is_empty(),
-        "a settled refusal is a decision, not a fault to recover"
-    );
-
-    let admissions = host.final_recovery_admissions();
-    assert_eq!(admissions.len(), 1, "final recovery is eligible");
-    assert_eq!(admissions[0].failed_step_id, "review_gate_settle");
-    let recovery_inputs = host.inputs("final_recovery");
-    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
-    assert_eq!(recovery_inputs[0]["task_id"], "T-1");
-    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
-    assert_eq!(recovery_inputs[0]["failed_step_id"], "review_gate_settle");
-    assert_eq!(recovery_inputs[0]["activity_name"], "review_gate_settle");
-    assert_eq!(recovery_inputs[0]["workspace_path"], WORKSPACE);
-    assert_eq!(recovery_inputs[0]["log_tail"], "");
-    assert_eq!(recovery_inputs[0]["step_recovery_attempts"], json!([]));
-    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
-
-    let actions = host.actions();
-    let review_settled = position(&actions, "review_gate_settle");
-    assert_eq!(
-        &actions[review_settled + 1..review_settled + 3],
-        ["final_recovery", "pr_failure_handoff"],
-        "recovery escalates before failure handoff: {actions:?}"
-    );
-
-    let handoff = host.inputs("pr_failure_handoff");
-    assert_eq!(handoff.len(), 1);
-    assert_eq!(handoff[0]["failed_step_id"], "review_gate_settle");
-    assert_eq!(
-        handoff[0]["error_code"],
-        ReviewGateRefusal::Blocked.error_code(),
-        "the handoff carries the gate's typed refusal: {}",
-        handoff[0]
-    );
-}
-
-fn reject_supplies_fixture_log_tail_to_final_recovery() {
-    let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes)
-        .with_log_tail("fixture-owned recovery evidence");
-    let result = run_shipped_pipeline(&host);
-
-    assert!(
-        !matches!(&result, Ok(outcome) if outcome.success),
-        "a rejected candidate must not deliver: {result:?}"
-    );
-    let recovery_inputs = host.inputs("final_recovery");
-    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
-    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
-    assert_eq!(
-        recovery_inputs[0]["log_tail"],
-        "fixture-owned recovery evidence"
-    );
-    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
-}
-
 const STUB_PREFIX: &str = "test_stub_";
 const RUN_ID: &str = "review-fixes-run";
 const WORKSPACE: &str = "/worktrees/review-fixes-run";
@@ -354,79 +58,6 @@ const ACTIVITIES: &[&str] = &[
     "claim_candidate_carry",
     "invoke_detached",
 ];
-
-pub(super) fn position(actions: &[String], action: &str) -> usize {
-    actions
-        .iter()
-        .position(|candidate| candidate == action)
-        .unwrap_or_else(|| panic!("{action} never ran: {actions:?}"))
-}
-
-pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
-    run_shipped_job(
-        host,
-        "task_pr_pipeline",
-        json!({
-            "task_ids": ["T-1"],
-            "base_branch": "main",
-            "base_sync": "remote",
-            "completion": "done",
-        }),
-    )
-}
-
-/// Run the shipped job `name` over `input`, every activity scripted.
-pub(super) fn run_shipped_job(
-    host: &ScriptedHost,
-    name: &str,
-    input: Value,
-) -> Result<JobOutcome, DispatchError> {
-    let audit_root = tempfile::tempdir().expect("audit tempdir");
-    let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
-    let store = orbit_store::Store::open_in_memory().expect("open sqlite sink");
-    let envelope = Arc::new(V2SqliteSink::for_audit_root(
-        store,
-        "ws_review_fixes",
-        RUN_ID,
-        audit_root.path(),
-    ));
-    let writer = Arc::new(
-        V2AuditWriter::new(RUN_ID, "review-fixes-agent", inner).with_envelope_sink(envelope),
-    );
-    execute_job_with_resume(&shipped_job(name), input, RUN_ID, writer, host, None)
-}
-
-/// The shipped job `name`, every activity resolved to a scripted
-/// deterministic action named after it. The prefix keeps the engine's own
-/// built-in actions of the same names out of the way.
-fn shipped_job(name: &str) -> orbit_types::workflow::JobV2 {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(format!("crates/orbit-core/assets/jobs/{name}.yaml"));
-    let shipped = std::fs::read_to_string(root).expect("read the shipped job");
-    let mut job = load_job_asset(&shipped)
-        .expect("the shipped job loads")
-        .spec;
-    let mut catalog = V2ActivityCatalog::new();
-    for &name in ACTIVITIES {
-        catalog.insert(
-            name,
-            ActivityV2 {
-                description: format!("scripted `{name}`"),
-                input_schema_json: Value::Null,
-                output_schema_json: Value::Null,
-                fs_profile: None,
-                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
-                    action: format!("{STUB_PREFIX}{name}"),
-                    config: Value::Null,
-                }),
-            },
-        );
-    }
-    resolve_job_catalog_refs_for_execution(&mut job, &catalog)
-        .expect("every shipped activity resolves to a stand-in");
-    job
-}
 
 /// What the scripted gate settles the admitted attempt as.
 #[derive(Clone, Copy)]
@@ -794,6 +425,375 @@ impl DeterministicFailure {
             message: format!("required validation 'make test' did not pass on candidate {head}"),
         }
     }
+}
+
+fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication() {
+    let host = ScriptedHost::new(Settlement::Timeout, Revalidation::Passes);
+    let result = run_shipped_pipeline(&host);
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    assert_eq!(host.inputs("agent_review_repair").len(), 1);
+    assert!(host.inputs("review_gate_settle").is_empty());
+    assert!(host.inputs("pr_open").is_empty());
+    let handoff = host.inputs("pr_failure_handoff");
+    assert_eq!(handoff.len(), 1);
+    assert_eq!(
+        handoff[0]["error_code"],
+        ReviewGateRefusal::TimeoutIncomplete.error_code(),
+        "the handoff decides on the executor's typed refusal: {}",
+        handoff[0]
+    );
+    assert_eq!(handoff[0]["pipeline"]["review"]["timed_out"], true);
+    assert!(matches!(
+        host.reviewer_events.lock().unwrap().as_slice(),
+        [
+            orbit_types::workflow::ReviewerInvocationEvent::Started,
+            orbit_types::workflow::ReviewerInvocationEvent::TimedOut { .. },
+        ]
+    ));
+}
+
+/// No findings: the reviewed head is the implementation head, nothing is
+/// revalidated, and the PR opens with no "Review fixes" section.
+fn accept_publishes_the_implementation_head_without_revalidation() {
+    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    assert_eq!(
+        host.actions(),
+        [
+            "worktree_setup",
+            "review_gate_admit",
+            "candidate_resume",
+            "agent_implement",
+            "git_commit",
+            "pr_prepare",
+            "git_rebase",
+            "candidate_validate",
+            "review_gate_admit",
+            "agent_review_repair",
+            "review_gate_settle",
+            "git_push",
+            "pr_open",
+            "pr_promote",
+            "review_gate_admit",
+            "review_gate_settle",
+            "pr_complete",
+            "review_gate_admit",
+            "review_gate_settle",
+            "review_gate_admit",
+            "review_gate_settle",
+        ],
+        "one review, no revalidation, then delivery; the before-landing gate and both \
+         completion re-review rounds only admit and settle as not applicable"
+    );
+    let pr_open = &host.inputs("pr_open")[0];
+    assert_eq!(pr_open["reviewed_head_sha"], "candidate");
+    assert_eq!(pr_open["review_fixes"], "");
+    assert!(host.inputs("pr_failure_handoff").is_empty());
+}
+
+/// [ORB-14616] A report settlement would refuse only for its shape goes back
+/// to the reviewer once, with the typed defect, in the same attempt: the
+/// reviewer step dispatches a second time carrying `report_correction`, the
+/// engine never asks again, and one admission and one settlement follow.
+fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
+    const DEFECT: &str = "validation_contradicted: negative control `make test-guard` names \
+                          `crates/orbit-cmd/src/update/converge.rs`, outside the candidate's scope";
+    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes)
+        .with_report_defects([DEFECT, DEFECT]);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    let reviews = host.inputs("agent_review_repair");
+    assert_eq!(reviews.len(), 2, "one correction, never a third reviewer");
+    assert_eq!(reviews[0].get("report_correction"), None);
+    assert_eq!(reviews[1]["report_correction"], DEFECT);
+    assert_eq!(
+        reviews[1]["attempt_id"], reviews[0]["attempt_id"],
+        "the correction belongs to the same attempt"
+    );
+    let asked = host.report_checks.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "the corrected report goes to settlement");
+    assert_eq!(asked[0].attempt_id, "rvw-1");
+    assert_eq!(asked[0].lineage_key, "lineage-1");
+    assert_eq!(asked[0].task_ids, ["T-1"]);
+    assert_eq!(asked[0].workspace_path, PathBuf::from(WORKSPACE));
+    assert_eq!(
+        host.inputs("review_gate_admit")
+            .iter()
+            .filter(|input| input["preflight"] != true
+                && input.get("re_review_after").is_none()
+                && input["before_landing"] != true)
+            .count(),
+        1,
+        "no second reviewer start"
+    );
+    let settle = host
+        .inputs("review_gate_settle")
+        .into_iter()
+        .filter(|input| input.pointer("/admission/applies") == Some(&json!(true)))
+        .count();
+    assert_eq!(settle, 1);
+    assert!(
+        matches!(
+            host.reviewer_events.lock().unwrap().as_slice(),
+            [
+                orbit_types::workflow::ReviewerInvocationEvent::Started,
+                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Started,
+                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
+            ]
+        ),
+        "both invocations are charged to the attempt"
+    );
+}
+
+/// Fixable findings: the reviewer commit becomes the reviewed head. Owner
+/// validation reruns on it with the implementation head as the ownership
+/// base, and only then is it pushed and opened with the "Review fixes"
+/// section the settlement produced.
+fn accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it() {
+    let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Passes);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    let actions = host.actions();
+    let settle = position(&actions, "review_gate_settle");
+    assert_eq!(
+        &actions[settle..settle + 4],
+        [
+            "review_gate_settle",
+            "candidate_validate",
+            "git_push",
+            "pr_open"
+        ],
+        "revalidation sits between settlement and publication: {actions:?}"
+    );
+    assert_eq!(
+        host.inputs("agent_review_repair").len(),
+        1,
+        "one reviewer, no second round"
+    );
+
+    let validations = host.inputs("candidate_validate");
+    assert_eq!(validations.len(), 2);
+    assert_eq!(validations[0].get("ownership_base_sha"), None);
+    assert_eq!(validations[1]["ownership_base_sha"], "candidate");
+    assert_eq!(validations[1]["base_sha"], "base-sha");
+    assert_eq!(validations[1]["workspace_path"], WORKSPACE);
+
+    let pr_open = &host.inputs("pr_open")[0];
+    assert_eq!(pr_open["reviewed_head_sha"], "reviewer-fixes");
+    assert_eq!(pr_open["review_fixes"], REVIEW_FIXES);
+    assert_eq!(host.inputs("git_push")[0]["workspace_path"], WORKSPACE);
+    let complete = &host.inputs("pr_complete")[0];
+    assert_eq!(complete["reviewed_head_sha"], "reviewer-fixes");
+    assert_eq!(complete["published_head_sha"], "reviewer-fixes");
+    assert!(host.inputs("pr_failure_handoff").is_empty());
+}
+
+/// A reviewer commit that fails owner revalidation rejects the candidate:
+/// no step recovery, no second review, nothing pushed or opened, and the
+/// failure handoff blocks the task naming the revalidation step.
+fn a_failed_revalidation_rejects_without_a_second_review() {
+    let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Fails);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "a reviewer commit that fails revalidation must not deliver: {result:?}"
+    );
+    assert_eq!(host.inputs("agent_review_repair").len(), 1);
+    assert_eq!(
+        host.inputs("review_gate_admit")
+            .iter()
+            .filter(|input| input["preflight"] != true)
+            .count(),
+        1,
+        "no second reviewer start"
+    );
+    for step in ["git_push", "pr_open", "pr_promote", "pr_complete"] {
+        assert!(host.inputs(step).is_empty(), "{step} ran after a rejection");
+    }
+    assert!(
+        host.inputs("step_failure_recovery").is_empty(),
+        "revalidation has no step recovery"
+    );
+    let handoff = host.inputs("pr_failure_handoff");
+    assert_eq!(handoff.len(), 1);
+    assert_eq!(handoff[0]["failed_step_id"], "review_validate");
+    assert_eq!(
+        handoff[0]["pipeline"]["review_gate_settle"]["implementation_head_sha"], "candidate",
+        "the handoff sees both commits"
+    );
+}
+
+/// An unfixable finding: settlement refuses, nothing is published, final
+/// recovery gets its one look, and the failure handoff blocks the task with
+/// the candidate preserved.
+fn reject_blocks_the_task_after_final_recovery() {
+    let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "a rejected candidate must not deliver: {result:?}"
+    );
+    for step in [
+        "candidate_validate",
+        "git_push",
+        "pr_open",
+        "pr_promote",
+        "pr_complete",
+    ] {
+        let after_review = host
+            .actions()
+            .iter()
+            .skip_while(|action| *action != "review_gate_settle")
+            .any(|action| action == step);
+        assert!(!after_review, "{step} ran after a rejection");
+    }
+    assert!(
+        host.inputs("step_failure_recovery").is_empty(),
+        "a settled refusal is a decision, not a fault to recover"
+    );
+
+    let admissions = host.final_recovery_admissions();
+    assert_eq!(admissions.len(), 1, "final recovery is eligible");
+    assert_eq!(admissions[0].failed_step_id, "review_gate_settle");
+    let recovery_inputs = host.inputs("final_recovery");
+    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
+    assert_eq!(recovery_inputs[0]["task_id"], "T-1");
+    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
+    assert_eq!(recovery_inputs[0]["failed_step_id"], "review_gate_settle");
+    assert_eq!(recovery_inputs[0]["activity_name"], "review_gate_settle");
+    assert_eq!(recovery_inputs[0]["workspace_path"], WORKSPACE);
+    assert_eq!(recovery_inputs[0]["log_tail"], "");
+    assert_eq!(recovery_inputs[0]["step_recovery_attempts"], json!([]));
+    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
+
+    let actions = host.actions();
+    let review_settled = position(&actions, "review_gate_settle");
+    assert_eq!(
+        &actions[review_settled + 1..review_settled + 3],
+        ["final_recovery", "pr_failure_handoff"],
+        "recovery escalates before failure handoff: {actions:?}"
+    );
+
+    let handoff = host.inputs("pr_failure_handoff");
+    assert_eq!(handoff.len(), 1);
+    assert_eq!(handoff[0]["failed_step_id"], "review_gate_settle");
+    assert_eq!(
+        handoff[0]["error_code"],
+        ReviewGateRefusal::Blocked.error_code(),
+        "the handoff carries the gate's typed refusal: {}",
+        handoff[0]
+    );
+}
+
+fn reject_supplies_fixture_log_tail_to_final_recovery() {
+    let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes)
+        .with_log_tail("fixture-owned recovery evidence");
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "a rejected candidate must not deliver: {result:?}"
+    );
+    let recovery_inputs = host.inputs("final_recovery");
+    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
+    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
+    assert_eq!(
+        recovery_inputs[0]["log_tail"],
+        "fixture-owned recovery evidence"
+    );
+    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
+}
+
+pub(super) fn position(actions: &[String], action: &str) -> usize {
+    actions
+        .iter()
+        .position(|candidate| candidate == action)
+        .unwrap_or_else(|| panic!("{action} never ran: {actions:?}"))
+}
+
+pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
+    run_shipped_job(
+        host,
+        "task_pr_pipeline",
+        json!({
+            "task_ids": ["T-1"],
+            "base_branch": "main",
+            "base_sync": "remote",
+            "completion": "done",
+        }),
+    )
+}
+
+/// Run the shipped job `name` over `input`, every activity scripted.
+pub(super) fn run_shipped_job(
+    host: &ScriptedHost,
+    name: &str,
+    input: Value,
+) -> Result<JobOutcome, DispatchError> {
+    let audit_root = tempfile::tempdir().expect("audit tempdir");
+    let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
+    let store = orbit_store::Store::open_in_memory().expect("open sqlite sink");
+    let envelope = Arc::new(V2SqliteSink::for_audit_root(
+        store,
+        "ws_review_fixes",
+        RUN_ID,
+        audit_root.path(),
+    ));
+    let writer = Arc::new(
+        V2AuditWriter::new(RUN_ID, "review-fixes-agent", inner).with_envelope_sink(envelope),
+    );
+    execute_job_with_resume(&shipped_job(name), input, RUN_ID, writer, host, None)
+}
+
+/// The shipped job `name`, every activity resolved to a scripted
+/// deterministic action named after it. The prefix keeps the engine's own
+/// built-in actions of the same names out of the way.
+fn shipped_job(name: &str) -> orbit_types::workflow::JobV2 {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(format!("crates/orbit-core/assets/jobs/{name}.yaml"));
+    let shipped = std::fs::read_to_string(root).expect("read the shipped job");
+    let mut job = load_job_asset(&shipped)
+        .expect("the shipped job loads")
+        .spec;
+    let mut catalog = V2ActivityCatalog::new();
+    for &name in ACTIVITIES {
+        catalog.insert(
+            name,
+            ActivityV2 {
+                description: format!("scripted `{name}`"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: format!("{STUB_PREFIX}{name}"),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+        .expect("every shipped activity resolves to a stand-in");
+    job
 }
 
 /// Behavior-distinct rows share one bounded family process.

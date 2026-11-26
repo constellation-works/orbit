@@ -24,8 +24,29 @@ use tempfile::tempdir;
 
 use evidence_fixture::VerifierHost;
 
+// Keep scenario names in the bounded, isolated family harness without spelling
+// each identifier twice.
+macro_rules! commit_contracts {
+    ($name:ident: $( $(#[$attr:meta])* $row:ident ),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
+                crate::git_fixture::run_scenarios(&[
+                    $( $(#[$attr])* (stringify!($row), $row as fn()) ),+
+                ]);
+            });
+        }
+    };
+}
+
 const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-verifier-test";
+
+/// The command F2026-11-309 captured under a diagnostic label.
+const VISUAL_FIXTURE_CHECK: &str = "node --check scripts/visual-fixture-front.mjs";
+
+const LIST_EVERY_CHECK: &str =
+    "list every required workspace/task check and concrete evidence for every acceptance criterion";
 
 fn fixture_task() -> Task {
     let now = Utc::now();
@@ -1278,21 +1299,6 @@ fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
     assert!(marker.exists(), "the fixture's filter must be reachable");
 }
 
-// Keep scenario names in the bounded, isolated family harness without spelling
-// each identifier twice.
-macro_rules! commit_contracts {
-    ($name:ident: $( $(#[$attr:meta])* $row:ident ),+ $(,)?) => {
-        #[test]
-        fn $name() {
-            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
-                crate::git_fixture::run_scenarios(&[
-                    $( $(#[$attr])* (stringify!($row), $row as fn()) ),+
-                ]);
-            });
-        }
-    };
-}
-
 commit_contracts!(commit_evidence_contracts_1:
     per_task_commit_delivers_both_sides_of_a_staged_rename,
     commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields,
@@ -1321,12 +1327,6 @@ commit_contracts!(commit_evidence_contracts_3:
     clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
     owner_empty_candidates_require_reports_and_claimed_selectors_settle,
 );
-
-/// The command F2026-11-309 captured under a diagnostic label.
-const VISUAL_FIXTURE_CHECK: &str = "node --check scripts/visual-fixture-front.mjs";
-
-const LIST_EVERY_CHECK: &str =
-    "list every required workspace/task check and concrete evidence for every acceptance criterion";
 
 fn already_landed_with_checks(
     head: &str,

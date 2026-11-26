@@ -12,6 +12,24 @@ mod unreadable_log;
 use super::*;
 use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunPlan, CiRerunRoot};
 
+// Each case is refused under both the step-grouped and the raw
+// (timestamp-prefixed) log fallback, in its own fresh row. The 62 independent
+// rows were one serial carrier that alone set its CI partition's floor
+// (100-129 s hosted, ORB-25328). Thirteen carriers let nextest spread them
+// across slots and partitions; thirteen, one more than NEXTEST_PARTITIONS, so
+// every other test in this binary keeps its count partition.
+macro_rules! dependency_adapter_refusal_carriers {
+    ($($name:ident: [$($case:literal),+ $(,)?];)+) => {$(
+        #[test]
+        fn $name() {
+            assert_dependency_adapter_refusals(
+                concat!("ci_rerun::", stringify!($name)),
+                &[$($case),+],
+            );
+        }
+    )+};
+}
+
 const WORKFLOW: &str = r#"name: CI
 on: [push, pull_request]
 jobs:
@@ -51,6 +69,82 @@ jobs:
       - name: Tests
         run: echo independent check
 "#;
+
+struct ClaimedRetry<'a> {
+    inner: &'a DeliveryHost,
+    context: orbit_engine::HandoffLandingContext,
+    steps: Mutex<Vec<orbit_engine::HandoffLandingStep>>,
+    /// The host data root; empty keeps no completed-job log cache.
+    data_root: PathBuf,
+    waits: Mutex<Vec<Value>>,
+}
+impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
+    fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        RuntimeHost::pr_config(self.inner)
+    }
+    fn repo_root(&self) -> Res<String> {
+        Ok(self.inner.repo.to_string_lossy().into_owned())
+    }
+    fn handoff_landing_context(&self, _: &str) -> Res<orbit_engine::HandoffLandingContext> {
+        Ok(self.context.clone())
+    }
+    fn record_handoff_landing(&self, update: &orbit_engine::HandoffLandingUpdate) -> Res<()> {
+        locked(&self.steps).push(update.step.clone());
+        Ok(())
+    }
+    fn record_handoff_landing_wait(&self, _: &str, note: &str) -> Res<()> {
+        locked(&self.waits).push(serde_json::from_str(note).unwrap_or(Value::Null));
+        Ok(())
+    }
+    fn record_handoff_landing_history(&self, _: &str, event: &str, note: &str) -> Res<()> {
+        locked(&self.inner.history)
+            .entry(TASK_ID.into())
+            .or_default()
+            .push(TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".into(),
+                event: event.into(),
+                note: Some(note.into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+                surface: None,
+                caller: None,
+            });
+        Ok(())
+    }
+    fn get_task_history(&self, task: &str) -> Res<Vec<TaskHistoryEntry>> {
+        Ok(self.inner.history(task))
+    }
+    fn admit_ci_rerun(
+        &self,
+        tasks: &[String],
+        handoff: Option<&str>,
+        plan: &CiRerunPlan,
+        now_ms: u64,
+    ) -> Res<orbit_types::workflow::CiRerunAdmission> {
+        RuntimeHost::admit_ci_rerun(self.inner, tasks, handoff, plan, now_ms)
+    }
+    fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
+        if operation == "pr.merge" {
+            assert_eq!(
+                input["reviewed_head_sha"],
+                self.context.candidate.candidate.commit
+            );
+            fs::write(
+                self.inner.repo.parent().unwrap().join("forge/retry-merged"),
+                b"merged",
+            )
+            .unwrap();
+            return Ok(json!({"landed_commit":self.context.candidate.candidate.commit}));
+        }
+        RuntimeHost::run_private_vcs_operation(self.inner, operation, input)
+    }
+}
 
 pub(super) fn fixture(row: &Path) -> (Fixture, DeliveryHost, Value) {
     fixture_with_source(row, WORKFLOW)
@@ -187,24 +281,6 @@ fn first_dependency_failure_repairs_without_owner_rerun() {
             assert_eq!(pr_auto_fix_attempts(&host.history(TASK_ID), "42").len(), 1);
         },
     );
-}
-
-// Each case is refused under both the step-grouped and the raw
-// (timestamp-prefixed) log fallback, in its own fresh row. The 62 independent
-// rows were one serial carrier that alone set its CI partition's floor
-// (100-129 s hosted, ORB-25328). Thirteen carriers let nextest spread them
-// across slots and partitions; thirteen, one more than NEXTEST_PARTITIONS, so
-// every other test in this binary keeps its count partition.
-macro_rules! dependency_adapter_refusal_carriers {
-    ($($name:ident: [$($case:literal),+ $(,)?];)+) => {$(
-        #[test]
-        fn $name() {
-            assert_dependency_adapter_refusals(
-                concat!("ci_rerun::", stringify!($name)),
-                &[$($case),+],
-            );
-        }
-    )+};
 }
 
 dependency_adapter_refusal_carriers! {
@@ -395,82 +471,6 @@ fn reserved_owner_retry_never_resends_an_unknown_reply() {
             assert!(pr_auto_fix_attempts(&host.history(TASK_ID), "42").is_empty());
         },
     );
-}
-
-struct ClaimedRetry<'a> {
-    inner: &'a DeliveryHost,
-    context: orbit_engine::HandoffLandingContext,
-    steps: Mutex<Vec<orbit_engine::HandoffLandingStep>>,
-    /// The host data root; empty keeps no completed-job log cache.
-    data_root: PathBuf,
-    waits: Mutex<Vec<Value>>,
-}
-impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
-    fn data_root(&self) -> &Path {
-        &self.data_root
-    }
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        RuntimeHost::pr_config(self.inner)
-    }
-    fn repo_root(&self) -> Res<String> {
-        Ok(self.inner.repo.to_string_lossy().into_owned())
-    }
-    fn handoff_landing_context(&self, _: &str) -> Res<orbit_engine::HandoffLandingContext> {
-        Ok(self.context.clone())
-    }
-    fn record_handoff_landing(&self, update: &orbit_engine::HandoffLandingUpdate) -> Res<()> {
-        locked(&self.steps).push(update.step.clone());
-        Ok(())
-    }
-    fn record_handoff_landing_wait(&self, _: &str, note: &str) -> Res<()> {
-        locked(&self.waits).push(serde_json::from_str(note).unwrap_or(Value::Null));
-        Ok(())
-    }
-    fn record_handoff_landing_history(&self, _: &str, event: &str, note: &str) -> Res<()> {
-        locked(&self.inner.history)
-            .entry(TASK_ID.into())
-            .or_default()
-            .push(TaskHistoryEntry {
-                at: Utc::now(),
-                by: "system".into(),
-                event: event.into(),
-                note: Some(note.into()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-                surface: None,
-                caller: None,
-            });
-        Ok(())
-    }
-    fn get_task_history(&self, task: &str) -> Res<Vec<TaskHistoryEntry>> {
-        Ok(self.inner.history(task))
-    }
-    fn admit_ci_rerun(
-        &self,
-        tasks: &[String],
-        handoff: Option<&str>,
-        plan: &CiRerunPlan,
-        now_ms: u64,
-    ) -> Res<orbit_types::workflow::CiRerunAdmission> {
-        RuntimeHost::admit_ci_rerun(self.inner, tasks, handoff, plan, now_ms)
-    }
-    fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
-        if operation == "pr.merge" {
-            assert_eq!(
-                input["reviewed_head_sha"],
-                self.context.candidate.candidate.commit
-            );
-            fs::write(
-                self.inner.repo.parent().unwrap().join("forge/retry-merged"),
-                b"merged",
-            )
-            .unwrap();
-            return Ok(json!({"landed_commit":self.context.candidate.candidate.commit}));
-        }
-        RuntimeHost::run_private_vcs_operation(self.inner, operation, input)
-    }
 }
 
 fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {

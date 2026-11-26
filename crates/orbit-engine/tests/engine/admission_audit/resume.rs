@@ -97,110 +97,6 @@ impl orbit_engine::test_support::NullRuntimeHost for CheckpointHost {
     }
 }
 
-fn resume_state_with_completed_steps(steps: &[(u32, &str, Value)]) -> PipelineState {
-    let mut state = PipelineState::new(
-        "jrun-source".to_string(),
-        "qa_resume".to_string(),
-        Value::Object(Default::default()),
-    );
-    let mut pipeline = serde_json::Map::new();
-    for (index, step_id, output) in steps {
-        state.record_step(*index, JobRunState::Success, Some(output.clone()), None);
-        pipeline.insert((*step_id).to_string(), output.clone());
-    }
-    state.sync_pipeline(Value::Object(pipeline));
-    state
-}
-
-#[test]
-fn resume_reexecuted_pr_output_reaches_promotion_and_checkpoint() {
-    if !super::run_isolated(concat!(
-        module_path!(),
-        "::resume_reexecuted_pr_output_reaches_promotion_and_checkpoint"
-    )) {
-        return;
-    }
-
-    // ORB-10241 / ORB-10240 incident shape: push completed in the source
-    // attempt, pr_open failed, then resume skips push, re-executes pr_open,
-    // and renders its numeric-looking string output into pr_promote.
-    let host = CheckpointHost::new(ScriptedHost::new([
-        (
-            "test_git_push",
-            vec![Action::Ok(json!({"pushed": "again"}))],
-        ),
-        (
-            "test_pr_open",
-            vec![Action::Ok(json!({
-                "pr_number": "618",
-                "pr_url": "https://github.example/pull/618",
-            }))],
-        ),
-        (
-            "test_pr_promote",
-            vec![Action::Ok(json!({"promoted": true}))],
-        ),
-    ]));
-    let mut promote = target_step("promote_tasks", "test_pr_promote");
-    promote.when = Some("{{ steps.pr_open.output.pr_number }} == 618".to_string());
-    let JobV2StepBody::Target(target) = &mut promote.body else {
-        panic!("target step");
-    };
-    target.default_input = Some(json!({
-        "pr_number": "{{ steps.pr_open.output.pr_number }}",
-        "pr_url": "{{ steps.pr_open.output.pr_url }}",
-    }));
-    let job = job_with_steps(vec![
-        target_step("push", "test_git_push"),
-        target_step("pr_open", "test_pr_open"),
-        promote,
-    ]);
-    let mut resume = resume_state_with_completed_steps(&[(0, "push", json!({"pushed": true}))]);
-    resume.record_step(
-        1,
-        JobRunState::Failed,
-        Some(json!({"pr_number": "stale"})),
-        None,
-    );
-    resume.sync_pipeline(json!({
-        "push": {"pushed": true},
-        "pr_open": {"pr_number": "stale"},
-    }));
-    let writer = std::sync::Arc::new(test_writer("run-resume-pr-open"));
-
-    let outcome = execute_job_with_resume(
-        &job,
-        Value::Null,
-        "run-resume-pr-open",
-        writer,
-        &host,
-        Some(&resume),
-    )
-    .expect("resume succeeds through promotion");
-
-    assert!(outcome.success);
-    assert_eq!(host.inner.call_count("test_git_push"), 0);
-    assert_eq!(host.inner.call_count("test_pr_open"), 1);
-    assert_eq!(host.inner.call_count("test_pr_promote"), 1);
-    assert_eq!(
-        host.inputs_for("test_pr_promote"),
-        vec![json!({
-            "pr_number": "618",
-            "pr_url": "https://github.example/pull/618",
-            "run_id": "run-resume-pr-open",
-            "step_id": "promote_tasks",
-        })],
-        "fresh pr_open output retains its string type for downstream input",
-    );
-
-    let checkpoints = host.checkpoints();
-    assert_eq!(checkpoints.len(), 2);
-    assert_eq!(checkpoints[0].0, 1);
-    assert_eq!(checkpoints[0].1, "pr_open");
-    assert_eq!(checkpoints[0].2["pr_number"], json!("618"));
-    assert_eq!(resume.step_states.get(&1), Some(&JobRunState::Failed));
-}
-
 /// How the waiting auto-task branch answers on the next parked replay.
 #[derive(Clone, Copy)]
 enum CompoundReplayPhase {
@@ -391,6 +287,200 @@ impl orbit_engine::test_support::NullRuntimeHost for CompoundReplayHost {
     ) -> Result<(), DispatchError> {
         Ok(())
     }
+}
+
+/// Host that keeps the run's `PipelineState` the way the production host
+/// writes it (an executed step's output, or a `when:`-skipped step's null and
+/// skip marker), and snapshots it after every checkpoint, so a test can
+/// resume from any point the run reached.
+struct StateHost {
+    inner: ScriptedHost,
+    state: StdMutex<PipelineState>,
+    snapshots: StdMutex<Vec<PipelineState>>,
+    inputs: StdMutex<Vec<(String, Value)>>,
+}
+
+impl StateHost {
+    fn new(inner: ScriptedHost) -> Self {
+        Self {
+            inner,
+            state: StdMutex::new(PipelineState::new(
+                "jrun-source".to_string(),
+                "qa_resume".to_string(),
+                Value::Object(Default::default()),
+            )),
+            snapshots: StdMutex::new(Vec::new()),
+            inputs: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, step_index: u32, step_id: &str, output: &Value, skipped: bool) {
+        let mut state = self.state.lock().expect("state");
+        state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
+        state.record_step_skipped(step_index, skipped);
+        state.record_pipeline_output(step_id, output.clone());
+        self.snapshots
+            .lock()
+            .expect("snapshots")
+            .push(state.clone());
+    }
+
+    fn snapshot_after(&self, checkpoints: usize) -> PipelineState {
+        self.snapshots.lock().expect("snapshots")[checkpoints - 1].clone()
+    }
+
+    fn inputs_for(&self, action: &str) -> Vec<Value> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .iter()
+            .filter(|(recorded, _)| recorded == action)
+            .map(|(_, input)| input.clone())
+            .collect()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for StateHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .push((action.to_string(), input.clone()));
+        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+    }
+
+    fn checkpoint_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        step_id: &str,
+        output: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
+        _: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+    ) -> Result<(), DispatchError> {
+        self.record(step_index, step_id, output, false);
+        Ok(())
+    }
+
+    fn checkpoint_skipped_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        self.record(step_index, step_id, &Value::Null, true);
+        Ok(())
+    }
+}
+
+fn resume_state_with_completed_steps(steps: &[(u32, &str, Value)]) -> PipelineState {
+    let mut state = PipelineState::new(
+        "jrun-source".to_string(),
+        "qa_resume".to_string(),
+        Value::Object(Default::default()),
+    );
+    let mut pipeline = serde_json::Map::new();
+    for (index, step_id, output) in steps {
+        state.record_step(*index, JobRunState::Success, Some(output.clone()), None);
+        pipeline.insert((*step_id).to_string(), output.clone());
+    }
+    state.sync_pipeline(Value::Object(pipeline));
+    state
+}
+
+#[test]
+fn resume_reexecuted_pr_output_reaches_promotion_and_checkpoint() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::resume_reexecuted_pr_output_reaches_promotion_and_checkpoint"
+    )) {
+        return;
+    }
+
+    // ORB-10241 / ORB-10240 incident shape: push completed in the source
+    // attempt, pr_open failed, then resume skips push, re-executes pr_open,
+    // and renders its numeric-looking string output into pr_promote.
+    let host = CheckpointHost::new(ScriptedHost::new([
+        (
+            "test_git_push",
+            vec![Action::Ok(json!({"pushed": "again"}))],
+        ),
+        (
+            "test_pr_open",
+            vec![Action::Ok(json!({
+                "pr_number": "618",
+                "pr_url": "https://github.example/pull/618",
+            }))],
+        ),
+        (
+            "test_pr_promote",
+            vec![Action::Ok(json!({"promoted": true}))],
+        ),
+    ]));
+    let mut promote = target_step("promote_tasks", "test_pr_promote");
+    promote.when = Some("{{ steps.pr_open.output.pr_number }} == 618".to_string());
+    let JobV2StepBody::Target(target) = &mut promote.body else {
+        panic!("target step");
+    };
+    target.default_input = Some(json!({
+        "pr_number": "{{ steps.pr_open.output.pr_number }}",
+        "pr_url": "{{ steps.pr_open.output.pr_url }}",
+    }));
+    let job = job_with_steps(vec![
+        target_step("push", "test_git_push"),
+        target_step("pr_open", "test_pr_open"),
+        promote,
+    ]);
+    let mut resume = resume_state_with_completed_steps(&[(0, "push", json!({"pushed": true}))]);
+    resume.record_step(
+        1,
+        JobRunState::Failed,
+        Some(json!({"pr_number": "stale"})),
+        None,
+    );
+    resume.sync_pipeline(json!({
+        "push": {"pushed": true},
+        "pr_open": {"pr_number": "stale"},
+    }));
+    let writer = std::sync::Arc::new(test_writer("run-resume-pr-open"));
+
+    let outcome = execute_job_with_resume(
+        &job,
+        Value::Null,
+        "run-resume-pr-open",
+        writer,
+        &host,
+        Some(&resume),
+    )
+    .expect("resume succeeds through promotion");
+
+    assert!(outcome.success);
+    assert_eq!(host.inner.call_count("test_git_push"), 0);
+    assert_eq!(host.inner.call_count("test_pr_open"), 1);
+    assert_eq!(host.inner.call_count("test_pr_promote"), 1);
+    assert_eq!(
+        host.inputs_for("test_pr_promote"),
+        vec![json!({
+            "pr_number": "618",
+            "pr_url": "https://github.example/pull/618",
+            "run_id": "run-resume-pr-open",
+            "step_id": "promote_tasks",
+        })],
+        "fresh pr_open output retains its string type for downstream input",
+    );
+
+    let checkpoints = host.checkpoints();
+    assert_eq!(checkpoints.len(), 2);
+    assert_eq!(checkpoints[0].0, 1);
+    assert_eq!(checkpoints[0].1, "pr_open");
+    assert_eq!(checkpoints[0].2["pr_number"], json!("618"));
+    assert_eq!(resume.step_states.get(&1), Some(&JobRunState::Failed));
 }
 
 fn compound_replay_job() -> JobV2 {
@@ -868,96 +958,6 @@ fn parked_alias_equal_to_sibling_worker_id_keeps_the_producer_collection() {
     assert_eq!(read_back["b_results"], json!([]));
     assert_eq!(read_back["kept"], json!([{"tag": "kept"}]));
     assert_eq!(read_back["step_id"], json!("read_back"));
-}
-
-/// Host that keeps the run's `PipelineState` the way the production host
-/// writes it (an executed step's output, or a `when:`-skipped step's null and
-/// skip marker), and snapshots it after every checkpoint, so a test can
-/// resume from any point the run reached.
-struct StateHost {
-    inner: ScriptedHost,
-    state: StdMutex<PipelineState>,
-    snapshots: StdMutex<Vec<PipelineState>>,
-    inputs: StdMutex<Vec<(String, Value)>>,
-}
-
-impl StateHost {
-    fn new(inner: ScriptedHost) -> Self {
-        Self {
-            inner,
-            state: StdMutex::new(PipelineState::new(
-                "jrun-source".to_string(),
-                "qa_resume".to_string(),
-                Value::Object(Default::default()),
-            )),
-            snapshots: StdMutex::new(Vec::new()),
-            inputs: StdMutex::new(Vec::new()),
-        }
-    }
-
-    fn record(&self, step_index: u32, step_id: &str, output: &Value, skipped: bool) {
-        let mut state = self.state.lock().expect("state");
-        state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
-        state.record_step_skipped(step_index, skipped);
-        state.record_pipeline_output(step_id, output.clone());
-        self.snapshots
-            .lock()
-            .expect("snapshots")
-            .push(state.clone());
-    }
-
-    fn snapshot_after(&self, checkpoints: usize) -> PipelineState {
-        self.snapshots.lock().expect("snapshots")[checkpoints - 1].clone()
-    }
-
-    fn inputs_for(&self, action: &str) -> Vec<Value> {
-        self.inputs
-            .lock()
-            .expect("inputs")
-            .iter()
-            .filter(|(recorded, _)| recorded == action)
-            .map(|(_, input)| input.clone())
-            .collect()
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for StateHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.inputs
-            .lock()
-            .expect("inputs")
-            .push((action.to_string(), input.clone()));
-        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
-    }
-
-    fn checkpoint_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        step_id: &str,
-        output: &Value,
-        _compound_outputs: &BTreeMap<String, Value>,
-        _: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
-    ) -> Result<(), DispatchError> {
-        self.record(step_index, step_id, output, false);
-        Ok(())
-    }
-
-    fn checkpoint_skipped_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        step_id: &str,
-    ) -> Result<(), DispatchError> {
-        self.record(step_index, step_id, &Value::Null, true);
-        Ok(())
-    }
 }
 
 /// The job behind the skipped-output resume regression: a `when:`-skipped

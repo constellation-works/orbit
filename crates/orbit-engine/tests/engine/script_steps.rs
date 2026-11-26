@@ -28,6 +28,8 @@ use orbit_types::workflow::activity_job::{
 };
 use serde_json::{Value, json};
 
+const FAST_RETRY: &str = r#"{"max_attempts": 2, "initial_backoff_ms": 1, "backoff_cap_ms": 1}"#;
+
 struct Fixture {
     root: tempfile::TempDir,
 }
@@ -81,6 +83,51 @@ impl Fixture {
             "package",
             "  description: Package the built site.\n  entry: tools/package.sh\n  args: [\"--label={{ input.label }}\"]\n",
         )
+    }
+}
+
+/// A host that answers every attempt with the same scripted run.
+struct ScriptedRunHost {
+    end: ScriptStepEnd,
+    stdout: &'static str,
+    log: &'static str,
+    requests: Mutex<Vec<ScriptStepRequest>>,
+}
+
+impl ScriptedRunHost {
+    fn new(end: ScriptStepEnd, stdout: &'static str, log: &'static str) -> Self {
+        Self {
+            end,
+            stdout,
+            log,
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn attempts(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedRunHost {
+    fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
+        self.requests.lock().unwrap().push(request.clone());
+        ScriptStepRun::Ran(Box::new(ScriptStepRan {
+            end: self.end,
+            stdout: self.stdout.as_bytes().to_vec(),
+            stdout_over_cap: false,
+            output_schema: Value::Null,
+            log: self.log.as_bytes().to_vec(),
+            record: ScriptExecutionRecord {
+                script: request.script.clone(),
+                digest: "d".repeat(64),
+                grant_id: Some("grant-1".to_string()),
+                argv: vec!["/usr/bin/bash".to_string()],
+                duration_ms: Some(7),
+                ..ScriptExecutionRecord::default()
+            },
+            outputs: orbit_engine::ScriptStepOutputs::None,
+        }))
     }
 }
 
@@ -347,53 +394,6 @@ fn resolved_script_job(fixture: &Fixture, retry: Option<Value>) -> orbit_types::
         .expect("valid script step resolves");
     job
 }
-
-/// A host that answers every attempt with the same scripted run.
-struct ScriptedRunHost {
-    end: ScriptStepEnd,
-    stdout: &'static str,
-    log: &'static str,
-    requests: Mutex<Vec<ScriptStepRequest>>,
-}
-
-impl ScriptedRunHost {
-    fn new(end: ScriptStepEnd, stdout: &'static str, log: &'static str) -> Self {
-        Self {
-            end,
-            stdout,
-            log,
-            requests: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn attempts(&self) -> usize {
-        self.requests.lock().unwrap().len()
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for ScriptedRunHost {
-    fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
-        self.requests.lock().unwrap().push(request.clone());
-        ScriptStepRun::Ran(Box::new(ScriptStepRan {
-            end: self.end,
-            stdout: self.stdout.as_bytes().to_vec(),
-            stdout_over_cap: false,
-            output_schema: Value::Null,
-            log: self.log.as_bytes().to_vec(),
-            record: ScriptExecutionRecord {
-                script: request.script.clone(),
-                digest: "d".repeat(64),
-                grant_id: Some("grant-1".to_string()),
-                argv: vec!["/usr/bin/bash".to_string()],
-                duration_ms: Some(7),
-                ..ScriptExecutionRecord::default()
-            },
-            outputs: orbit_engine::ScriptStepOutputs::None,
-        }))
-    }
-}
-
-const FAST_RETRY: &str = r#"{"max_attempts": 2, "initial_backoff_ms": 1, "backoff_cap_ms": 1}"#;
 
 #[test]
 fn a_host_without_the_script_profile_refuses_before_spawn_and_records_the_refusal() {

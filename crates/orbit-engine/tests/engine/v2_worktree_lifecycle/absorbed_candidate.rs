@@ -63,6 +63,60 @@ impl AbsorbedRun {
     }
 }
 
+impl PreparedRebase {
+    /// Copy only an unrecovered preparation. Each row owns all mutable Git
+    /// metadata and host stores; no refs, indexes, objects or certificates are
+    /// shared with the immutable seed. The public executor still performs the
+    /// real conflict, provider invocation, continuation and validation per row.
+    fn fresh_copy(&self) -> Self {
+        let root = TempDir::new().unwrap();
+        crate::git_fixture::copy_template(self.fixture.root.path(), root.path());
+        let old_root = canonical(self.fixture.root.path());
+        let new_root = canonical(root.path());
+        let relocate = |path: &Path| new_root.join(path.strip_prefix(&old_root).unwrap());
+        let repo = relocate(&self.fixture.repo);
+        let checkout = Checkout {
+            path: relocate(&self.checkout.path),
+            branch: self.checkout.branch.clone(),
+        };
+        // copy_template relocates origin's config. A linked worktree also
+        // has two absolute links; relocate both without consulting/mutating
+        // the seed. commondir and index entries are already relative.
+        let link = fs::read_to_string(checkout.path.join(".git")).unwrap();
+        let git_dir = relocate(Path::new(link.trim().strip_prefix("gitdir: ").unwrap()));
+        assert!(git_dir.starts_with(repo.join(".git/worktrees")));
+        fs::write(
+            checkout.path.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .unwrap();
+        fs::write(
+            git_dir.join("gitdir"),
+            format!("{}\n", checkout.path.join(".git").display()),
+        )
+        .unwrap();
+        let host = LifecycleHost {
+            tasks: Mutex::new(self.host.tasks.lock().unwrap().clone()),
+            runs: Mutex::new(self.host.runs.lock().unwrap().clone()),
+            run_states: Mutex::new(self.host.run_states.lock().unwrap().clone()),
+            ..LifecycleHost::new(&repo)
+        };
+        let mut common = self.common.clone();
+        common["workspace_path"] = json!(checkout.path);
+        Self {
+            fixture: Fixture { root, repo },
+            host,
+            run_id: self.run_id.clone(),
+            checkout,
+            base_sha: self.base_sha.clone(),
+            candidate: self.candidate.clone(),
+            target: self.target.clone(),
+            common,
+            prepared: self.prepared.clone(),
+        }
+    }
+}
+
 fn an_identical_landed_patch_settles_before_candidate_validation() {
     isolated_in(
         module_path!(),
@@ -809,60 +863,6 @@ fn absorbed_rebase(run_id: &str) -> PreparedRebase {
         &[("README.md", "draft\n"), ("README.md", "target\n")],
         &[("README.md", "target\n")],
     )
-}
-
-impl PreparedRebase {
-    /// Copy only an unrecovered preparation. Each row owns all mutable Git
-    /// metadata and host stores; no refs, indexes, objects or certificates are
-    /// shared with the immutable seed. The public executor still performs the
-    /// real conflict, provider invocation, continuation and validation per row.
-    fn fresh_copy(&self) -> Self {
-        let root = TempDir::new().unwrap();
-        crate::git_fixture::copy_template(self.fixture.root.path(), root.path());
-        let old_root = canonical(self.fixture.root.path());
-        let new_root = canonical(root.path());
-        let relocate = |path: &Path| new_root.join(path.strip_prefix(&old_root).unwrap());
-        let repo = relocate(&self.fixture.repo);
-        let checkout = Checkout {
-            path: relocate(&self.checkout.path),
-            branch: self.checkout.branch.clone(),
-        };
-        // copy_template relocates origin's config. A linked worktree also
-        // has two absolute links; relocate both without consulting/mutating
-        // the seed. commondir and index entries are already relative.
-        let link = fs::read_to_string(checkout.path.join(".git")).unwrap();
-        let git_dir = relocate(Path::new(link.trim().strip_prefix("gitdir: ").unwrap()));
-        assert!(git_dir.starts_with(repo.join(".git/worktrees")));
-        fs::write(
-            checkout.path.join(".git"),
-            format!("gitdir: {}\n", git_dir.display()),
-        )
-        .unwrap();
-        fs::write(
-            git_dir.join("gitdir"),
-            format!("{}\n", checkout.path.join(".git").display()),
-        )
-        .unwrap();
-        let host = LifecycleHost {
-            tasks: Mutex::new(self.host.tasks.lock().unwrap().clone()),
-            runs: Mutex::new(self.host.runs.lock().unwrap().clone()),
-            run_states: Mutex::new(self.host.run_states.lock().unwrap().clone()),
-            ..LifecycleHost::new(&repo)
-        };
-        let mut common = self.common.clone();
-        common["workspace_path"] = json!(checkout.path);
-        Self {
-            fixture: Fixture { root, repo },
-            host,
-            run_id: self.run_id.clone(),
-            checkout,
-            base_sha: self.base_sha.clone(),
-            candidate: self.candidate.clone(),
-            target: self.target.clone(),
-            common,
-            prepared: self.prepared.clone(),
-        }
-    }
 }
 
 /// `prepared`'s host, with a conflict-recovery provider that runs `body`.

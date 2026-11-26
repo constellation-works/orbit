@@ -8,6 +8,17 @@ use orbit_types::workflow::handoff::{
     LandingChecksObservationState,
 };
 
+const GRAPHQL_OUTAGE: &str = "GraphQL: Something went wrong while executing your query";
+
+const TRANSIENT_SIGNATURE: &str = "ci-download: outcome=failed class=transient";
+const TRANSIENT_DOWNLOAD_504: &str = "\
+test\tTests\tcurl: (22) The requested URL returned error: 504
+test\tTests\tci-download: attempt=9 curl_exit=22 http='504' seconds=0.400
+test\tTests\tci-download: failure=total budget cannot accommodate backoff
+test\tTests\tci-download: outcome=failed class=transient attempts=9 total_seconds=57.100 budget_seconds=60.0
+test\tTests\t##[error]Process completed with exit code 1.
+";
+
 #[test]
 fn a_review_delivery_with_failed_checks_records_their_classification() {
     isolated(
@@ -102,8 +113,6 @@ fn a_review_delivery_with_failed_checks_records_their_classification() {
         },
     );
 }
-
-const GRAPHQL_OUTAGE: &str = "GraphQL: Something went wrong while executing your query";
 
 fn open_review_delivery(fx: &Fixture, host: &DeliveryHost) {
     action(host, "pr_open", &fx.open_input(&fx.candidate, &fx.base_sha))
@@ -532,15 +541,6 @@ fn leaving_review_before_read_expiry_or_during_pending_wait_does_not_record() {
         },
     );
 }
-
-const TRANSIENT_SIGNATURE: &str = "ci-download: outcome=failed class=transient";
-const TRANSIENT_DOWNLOAD_504: &str = "\
-test\tTests\tcurl: (22) The requested URL returned error: 504
-test\tTests\tci-download: attempt=9 curl_exit=22 http='504' seconds=0.400
-test\tTests\tci-download: failure=total budget cannot accommodate backoff
-test\tTests\tci-download: outcome=failed class=transient attempts=9 total_seconds=57.100 budget_seconds=60.0
-test\tTests\t##[error]Process completed with exit code 1.
-";
 
 fn failing_retry_watch(row: &Path) -> (Fixture, DeliveryHost) {
     let (fx, host, _) = super::ci_rerun::fixture(row);

@@ -182,10 +182,6 @@ exec '{real_git}' "$@"
     }
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    super::git_fixture::run(dir, args)
-}
-
 /// Plays every scripted activity, and checkpoints completed steps the way
 /// Core persists them, so a later run can resume from them.
 #[derive(Default)]
@@ -293,6 +289,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ForgeHost {
             .push(request.clone());
         Ok(FinalRecoveryAdmission::Admitted)
     }
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    super::git_fixture::run(dir, args)
 }
 
 fn deterministic_activity(name: &str) -> ActivityV2 {

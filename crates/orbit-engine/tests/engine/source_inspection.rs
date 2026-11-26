@@ -15,6 +15,73 @@ use orbit_store::Store;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider, V2AuditEventKind};
 use serde_json::{Value, json};
 
+const NATIVE_PROVIDER: &str = r#"#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+provider = pathlib.Path(sys.argv[0]).name
+if provider == 'codex':
+    config = dict(arg.split('=', 1) for i, arg in enumerate(args) if i and args[i-1] in ('--config', '-c'))
+    assert config['features.shell_tool'] == 'true'
+    assert config['features.unified_exec'] == 'true'
+elif provider == 'claude':
+    assert args[args.index('--tools') + 1] == 'default'
+else:
+    assert '--native-inspection' in args
+prompt = pathlib.Path(args[args.index('--prompt-file') + 1]).read_text() if '--prompt-file' in args else sys.stdin.read()
+envelope = json.loads(prompt.split('Execution envelope:\n', 1)[1])
+assert 'proc.spawn' not in envelope['tools']
+root = pathlib.Path(envelope['input']['workspace_path']).resolve()
+assert root == pathlib.Path.cwd().resolve()
+assert envelope['input']['repo_root'] == str(root)
+content = pathlib.Path('candidate.rs').read_text()
+head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+matches = subprocess.check_output(['rg', '-n', 'pinned', 'candidate.rs'], text=True).strip()
+assert head == envelope['input']['source_revision']
+answer = json.dumps({'schemaVersion': 1, 'status': 'success', 'result': {'content': content, 'head': head, 'matches': matches, 'root': str(root)}, 'error': None})
+if provider == 'muse':
+    # Muse answers in its JSONL stream: only the terminal record's text counts.
+    print(json.dumps({'payload_type': 'run.terminal.completed', 'payload': {'terminal': 'completed', 'text': answer}}))
+else:
+    print(answer)
+"#;
+
+struct InspectionHost {
+    command: PathBuf,
+    args: Vec<String>,
+    inspection_args: Option<Vec<String>>,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
+    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        Ok(ResolvedCliExecutor {
+            command: self.command.display().to_string(),
+            args: self.args.clone(),
+            inspection_args: self.inspection_args.clone(),
+            image_input: None,
+        })
+    }
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        _input: &Value,
+        _ctx: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            action.into(),
+        ))
+    }
+    fn tool_context_for_activity(
+        &self,
+        _run: Option<&str>,
+        _profile: Option<&str>,
+        _audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext::default()
+    }
+}
+
 #[test]
 fn pilots_of_any_provider_inspect_the_pinned_checkout_with_native_tools() {
     let temp = tempfile::tempdir().unwrap();
@@ -225,70 +292,3 @@ fn git(root: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
-
-struct InspectionHost {
-    command: PathBuf,
-    args: Vec<String>,
-    inspection_args: Option<Vec<String>>,
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: self.args.clone(),
-            inspection_args: self.inspection_args.clone(),
-            image_input: None,
-        })
-    }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _ctx: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            action.into(),
-        ))
-    }
-    fn tool_context_for_activity(
-        &self,
-        _run: Option<&str>,
-        _profile: Option<&str>,
-        _audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
-}
-
-const NATIVE_PROVIDER: &str = r#"#!/usr/bin/env python3
-import json, os, pathlib, subprocess, sys
-args = sys.argv[1:]
-provider = pathlib.Path(sys.argv[0]).name
-if provider == 'codex':
-    config = dict(arg.split('=', 1) for i, arg in enumerate(args) if i and args[i-1] in ('--config', '-c'))
-    assert config['features.shell_tool'] == 'true'
-    assert config['features.unified_exec'] == 'true'
-elif provider == 'claude':
-    assert args[args.index('--tools') + 1] == 'default'
-else:
-    assert '--native-inspection' in args
-prompt = pathlib.Path(args[args.index('--prompt-file') + 1]).read_text() if '--prompt-file' in args else sys.stdin.read()
-envelope = json.loads(prompt.split('Execution envelope:\n', 1)[1])
-assert 'proc.spawn' not in envelope['tools']
-root = pathlib.Path(envelope['input']['workspace_path']).resolve()
-assert root == pathlib.Path.cwd().resolve()
-assert envelope['input']['repo_root'] == str(root)
-content = pathlib.Path('candidate.rs').read_text()
-head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-matches = subprocess.check_output(['rg', '-n', 'pinned', 'candidate.rs'], text=True).strip()
-assert head == envelope['input']['source_revision']
-answer = json.dumps({'schemaVersion': 1, 'status': 'success', 'result': {'content': content, 'head': head, 'matches': matches, 'root': str(root)}, 'error': None})
-if provider == 'muse':
-    # Muse answers in its JSONL stream: only the terminal record's text counts.
-    print(json.dumps({'payload_type': 'run.terminal.completed', 'payload': {'terminal': 'completed', 'text': answer}}))
-else:
-    print(answer)
-"#;

@@ -21,6 +21,504 @@ use super::v2_runtime::{RECOVERY, REVIEWER, build_writer_and_sinks, job_asset, w
 const RUN: &str = "complete-review-run";
 const CONFLICT_RECOVERY: &str = "test_stub_pr_conflict_recovery";
 
+const LOCAL_RUN: &str = "complete-local-run";
+
+const NO_DIFF_RUN: &str = "complete-no-diff-run";
+
+/// Scripts the completion stage. Completion `n` (in call order, counting only
+/// the calls that get past their conflict stops) finds the PR conflicting and
+/// rebases it for re-review while `n` is below `rebases`, and merges after
+/// that. Before rebasing, completion `n` stops on `stops[n]` distinct typed
+/// rebase conflicts, each repaired by a conflict recovery round.
+struct CompletionReviewHost {
+    rebases: usize,
+    stops_left: Mutex<Vec<usize>>,
+    completions: Mutex<usize>,
+    last_completion: Mutex<Option<Value>>,
+    calls: Mutex<Vec<(String, Value)>>,
+    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
+}
+
+impl CompletionReviewHost {
+    fn new(rebases: usize, stops: &[usize]) -> Self {
+        Self {
+            rebases,
+            stops_left: Mutex::new(stops.to_vec()),
+            completions: Mutex::default(),
+            last_completion: Mutex::default(),
+            calls: Mutex::default(),
+            invocations: Mutex::default(),
+        }
+    }
+
+    fn calls(&self) -> Vec<(String, Value)> {
+        self.calls.lock().expect("call log").clone()
+    }
+
+    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
+        self.invocations.lock().expect("invocations").clone()
+    }
+
+    fn pr_complete(&self, input: &Value) -> Result<Value, DispatchError> {
+        let mut completions = self.completions.lock().expect("completions");
+        let index = *completions;
+        if let Some(stops) = self.stops_left.lock().expect("stops").get_mut(index)
+            && *stops > 0
+        {
+            *stops -= 1;
+            return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                orbit_common::RecoverableVcsConflict {
+                    operation: "git_rebase".to_string(),
+                    original_base_sha: "base-sha".to_string(),
+                    target_base_sha: format!("rebased-base{}", round_suffix(index)),
+                    conflicting_paths: vec!["src/lib.rs".to_string()],
+                    conflicting_files: Vec::new(),
+                    diagnostic: format!("rebase stopped; {stops} later stops remain"),
+                },
+            )));
+        }
+        *completions += 1;
+        let output = if index < self.rebases {
+            if input.get("re_review_on_conflict").and_then(Value::as_bool) != Some(true) {
+                return Err(DispatchError::DeterministicActionRefused {
+                    action: "test_stub_pr_complete".to_string(),
+                    message: "review_gate_stale: pull request #41 has merge conflicts".to_string(),
+                });
+            }
+            let suffix = round_suffix(index);
+            let published = published_head(index);
+            json!({
+                "re_review_required": true,
+                "rebased": {
+                    "head": format!("rebased-branch{suffix}"),
+                    "head_sha": format!("rebased-head{suffix}"),
+                    "base": "main",
+                    "base_ref": "origin/main",
+                    "base_sha": format!("rebased-base{suffix}"),
+                    "remote_sha_before": published,
+                    "head_sha_before": published,
+                    "rewritten": true,
+                },
+                "completed_task_ids": [],
+                "skipped_task_ids": [],
+            })
+        } else {
+            json!({
+                "re_review_required": false,
+                "merge": { "merged": true },
+                "completed_task_ids": ["T-1"],
+                "skipped_task_ids": [],
+            })
+        };
+        *self.last_completion.lock().expect("last completion") = Some(output.clone());
+        Ok(output)
+    }
+
+    /// Admission reads the named completion's checkpoint; here that is the
+    /// most recent completion, which is the one each round follows.
+    fn review_gate_admit(&self, input: &Value) -> Value {
+        // A before-PR run: the gate after `pr_open` does not apply.
+        if input.get("before_landing") == Some(&json!(true)) {
+            return json!({ "applies": false, "reason": "reviewed_before_pr" });
+        }
+        let attempt_id = match input.get("re_review_after").and_then(Value::as_str) {
+            None => "rvw-first",
+            Some("complete_pr") => "rvw-re-review",
+            Some(_) => "rvw-re-review-2",
+        };
+        let applies = input.get("re_review_after").is_none()
+            || self
+                .last_completion
+                .lock()
+                .expect("last completion")
+                .as_ref()
+                .is_some_and(|output| output["re_review_required"] == true);
+        if !applies {
+            return json!({ "applies": false, "reason": "re_review_not_required" });
+        }
+        json!({
+            "applies": true,
+            "decision": "admitted",
+            "first_task_id": "T-1",
+            "attempt_id": attempt_id,
+            "lineage_key": "lineage-1",
+            "manifest_artifact": "review-manifest.json",
+            "report_artifact": "review-report.json",
+            "reviewer": { "crew": "reviewers" },
+        })
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push((action.to_string(), input.clone()));
+        let output = match action {
+            "test_stub_worktree" => json!({
+                "job_run_id": RUN,
+                "workspace_path": "/worktrees/complete-review-run",
+            }),
+            "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
+            "test_stub_prepare_branch" => json!({
+                "head": "candidate-branch",
+                "head_sha": "candidate",
+                "base": "main",
+                "base_ref": "origin/main",
+                "base_sha": "base-sha",
+                "remote_sha": "candidate",
+                "commits_behind": 0,
+                "sync_required": false,
+            }),
+            "test_stub_sync_base" => json!({
+                "head": "candidate-branch",
+                "head_sha": "candidate",
+                "base": "main",
+                "base_ref": "origin/main",
+                "base_sha": "base-sha",
+                "remote_sha": "candidate",
+                "commits_behind": 0,
+                "sync_required": false,
+                "rewritten": false,
+            }),
+            "test_stub_review_gate_admit" => self.review_gate_admit(input),
+            "test_stub_agent_review_repair" => {
+                json!({ "summary": "reviewed", "verdict": "accept" })
+            }
+            "test_stub_review_gate_settle" => {
+                if input.pointer("/admission/applies") != Some(&json!(true)) {
+                    json!({
+                        "gate": "not_required",
+                        "reviewed_head_sha": "",
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
+                        "reviewer_fixed": false,
+                    })
+                } else {
+                    let attempt = input
+                        .pointer("/admission/attempt_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let reviewed = |name: &str| match attempt {
+                        "rvw-re-review" => format!("rebased-{name}"),
+                        "rvw-re-review-2" => format!("rebased-{name}-2"),
+                        _ => String::new(),
+                    };
+                    let re_review = attempt != "rvw-first";
+                    json!({
+                        "gate": "passed",
+                        "reviewed_head_sha": if re_review { reviewed("head") } else { "candidate".to_string() },
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
+                        "reviewed_base_sha": if re_review { reviewed("base") } else { "base-sha".to_string() },
+                        "implementation_head_sha": if re_review { reviewed("implementation") } else { "candidate".to_string() },
+                        "reviewer_fixed": re_review,
+                        "review_fixes": "",
+                    })
+                }
+            }
+            "test_stub_push" => json!({ "local_sha": "candidate", "remote_sha_before": null }),
+            "test_stub_git_push" => {
+                let branch = input.get("branch").and_then(Value::as_str).unwrap_or("");
+                json!({
+                    "remote_sha_before": input.get("expected_remote_sha").cloned().unwrap_or(json!("candidate")),
+                    "local_sha": branch
+                        .strip_prefix("rebased-branch")
+                        .map_or_else(|| "candidate".to_string(), |suffix| format!("rebased-head{suffix}")),
+                })
+            }
+            "test_stub_pr_open" => {
+                json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
+            }
+            "test_stub_promote_tasks" => json!({ "promoted": true }),
+            "test_stub_candidate_validate" => json!({ "decision": "passed" }),
+            "test_stub_pr_complete" => return self.pr_complete(input),
+            CONFLICT_RECOVERY => json!({}),
+            other => panic!("unexpected action `{other}`"),
+        };
+        Ok(output)
+    }
+
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    fn record_reviewer_invocation(
+        &self,
+        request: &ReviewerInvocationRequest,
+    ) -> Result<Option<u64>, OrbitError> {
+        self.invocations
+            .lock()
+            .expect("invocations")
+            .push(request.clone());
+        Ok(None)
+    }
+}
+
+/// In-memory task store for the local completion route: one `in-progress`
+/// task, a `tags = ["sensitive"]` hold rule, a real git workspace on
+/// `main`, and the real `git_merge`/`update_task` actions.
+struct LocalCompletionHost {
+    task: Mutex<orbit_types::task::Task>,
+    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    workspace: std::path::PathBuf,
+}
+
+impl LocalCompletionHost {
+    fn new() -> (Self, tempfile::TempDir) {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let repo = workspace.path();
+        crate::git_fixture::init(repo);
+        let git = |args: &[&str]| crate::git_fixture::run(repo, args);
+        git(&["config", "user.name", "Orbit Test"]);
+        git(&["config", "user.email", "orbit-test@example.invalid"]);
+        std::fs::write(repo.join("README.md"), "base\n").expect("write base file");
+        git(&["add", "README.md"]);
+        git(&["commit", "-m", "base"]);
+        git(&["branch", "-M", "main"]);
+        let task: orbit_types::task::Task = serde_json::from_value(json!({
+            "id": "FIXTURE",
+            "title": "Fixture",
+            "description": "Fixture",
+            "status": "in_progress",
+            "priority": "medium",
+            "task_type": "bug",
+            "tags": ["sensitive"],
+            "context_files": [],
+            "execution_summary": "Validated the fixture.",
+            "job_run_id": LOCAL_RUN,
+            "created_at": chrono::Utc::now(),
+            "updated_at": chrono::Utc::now(),
+        }))
+        .expect("fixture task");
+        let host = Self {
+            task: Mutex::new(task),
+            history: Mutex::default(),
+            workspace: repo.to_path_buf(),
+        };
+        (host, workspace)
+    }
+
+    fn task(&self) -> orbit_types::task::Task {
+        self.task.lock().expect("task").clone()
+    }
+
+    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
+        self.history.lock().expect("history").clone()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for LocalCompletionHost {
+    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+        Ok(self.task())
+    }
+
+    fn get_task_history(
+        &self,
+        _: &str,
+    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+        Ok(self.history())
+    }
+
+    fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+        Ok(vec![self.task()])
+    }
+
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.history
+            .lock()
+            .expect("history")
+            .extend(update.append_history);
+        Ok(())
+    }
+
+    fn update_task_from_activity(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskActivityUpdate,
+    ) -> Result<orbit_types::task::Task, OrbitError> {
+        let mut task = self.task.lock().expect("task");
+        assert_eq!(task.status, update.expected_status);
+        let from_status = task.status;
+        task.status = update.status;
+        self.history
+            .lock()
+            .expect("history")
+            .push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "system".to_string(),
+                event: "status_changed".to_string(),
+                note: update.note,
+                from_status: Some(from_status),
+                to_status: Some(update.status),
+                operation_id: None,
+                decision: None,
+                surface: None,
+                caller: None,
+            });
+        Ok(task.clone())
+    }
+
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "test_stub_worktree" => Ok(json!({
+                "job_run_id": LOCAL_RUN,
+                "workspace_path": self.workspace,
+            })),
+            "test_stub_commit" => Ok(json!({
+                "skipped_no_diff_expected": false,
+                "decision": "committed",
+            })),
+            "test_stub_step_failure_recovery" => Ok(json!({})),
+            "git_merge" | "update_task" => orbit_engine::execute_deterministic_action(
+                self,
+                action,
+                config,
+                input,
+                false,
+                &std::collections::HashMap::new(),
+                None,
+            )
+            .map_err(|error| DispatchError::JobExecution(error.to_string())),
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+}
+
+/// In-memory task store for the no-diff completion route: one review task,
+/// a `tags = ["sensitive"]` hold rule, and the real `pr_complete` action.
+struct NoDiffCompletionHost {
+    task: Mutex<orbit_types::task::Task>,
+    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    workspace: std::path::PathBuf,
+}
+
+impl NoDiffCompletionHost {
+    fn new(tags: &[&str]) -> (Self, tempfile::TempDir) {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let task: orbit_types::task::Task = serde_json::from_value(json!({
+            "id": "FIXTURE",
+            "title": "Fixture",
+            "description": "Fixture",
+            "status": "review",
+            "priority": "medium",
+            "task_type": "bug",
+            "tags": tags,
+            "context_files": [],
+            "execution_summary": "Validated the fixture; no change required.",
+            "job_run_id": NO_DIFF_RUN,
+            "created_at": chrono::Utc::now(),
+            "updated_at": chrono::Utc::now(),
+        }))
+        .expect("fixture task");
+        let host = Self {
+            task: Mutex::new(task),
+            history: Mutex::default(),
+            workspace: workspace.path().to_path_buf(),
+        };
+        (host, workspace)
+    }
+
+    fn task(&self) -> orbit_types::task::Task {
+        self.task.lock().expect("task").clone()
+    }
+
+    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
+        self.history.lock().expect("history").clone()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for NoDiffCompletionHost {
+    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+        Ok(self.task())
+    }
+
+    fn get_task_history(
+        &self,
+        _: &str,
+    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+        Ok(self.history())
+    }
+
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.history
+            .lock()
+            .expect("history")
+            .extend(update.append_history);
+        Ok(())
+    }
+
+    fn update_task_from_activity(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskActivityUpdate,
+    ) -> Result<orbit_types::task::Task, OrbitError> {
+        let mut task = self.task.lock().expect("task");
+        assert_eq!(task.status, update.expected_status);
+        task.status = update.status;
+        Ok(task.clone())
+    }
+
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "test_stub_worktree" => Ok(json!({
+                "job_run_id": NO_DIFF_RUN,
+                "workspace_path": self.workspace,
+            })),
+            "test_stub_commit" => Ok(json!({
+                "skipped_no_diff_expected": true,
+                "decision": "skipped_no_diff_expected",
+            })),
+            "pr_complete" => orbit_engine::execute_deterministic_action(
+                self,
+                action,
+                config,
+                input,
+                false,
+                &std::collections::HashMap::new(),
+                None,
+            )
+            .map_err(|error| DispatchError::JobExecution(error.to_string())),
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+}
+
 /// The deterministic completion stub reports that the published, reviewed
 /// head needs rebasing; the fake reviewer then fixes and certifies the new
 /// head, owner validation reruns on the reviewer commit [ORB-13989], and the
@@ -409,130 +907,6 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
     job
 }
 
-/// Scripts the completion stage. Completion `n` (in call order, counting only
-/// the calls that get past their conflict stops) finds the PR conflicting and
-/// rebases it for re-review while `n` is below `rebases`, and merges after
-/// that. Before rebasing, completion `n` stops on `stops[n]` distinct typed
-/// rebase conflicts, each repaired by a conflict recovery round.
-struct CompletionReviewHost {
-    rebases: usize,
-    stops_left: Mutex<Vec<usize>>,
-    completions: Mutex<usize>,
-    last_completion: Mutex<Option<Value>>,
-    calls: Mutex<Vec<(String, Value)>>,
-    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
-}
-
-impl CompletionReviewHost {
-    fn new(rebases: usize, stops: &[usize]) -> Self {
-        Self {
-            rebases,
-            stops_left: Mutex::new(stops.to_vec()),
-            completions: Mutex::default(),
-            last_completion: Mutex::default(),
-            calls: Mutex::default(),
-            invocations: Mutex::default(),
-        }
-    }
-
-    fn calls(&self) -> Vec<(String, Value)> {
-        self.calls.lock().expect("call log").clone()
-    }
-
-    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
-        self.invocations.lock().expect("invocations").clone()
-    }
-
-    fn pr_complete(&self, input: &Value) -> Result<Value, DispatchError> {
-        let mut completions = self.completions.lock().expect("completions");
-        let index = *completions;
-        if let Some(stops) = self.stops_left.lock().expect("stops").get_mut(index)
-            && *stops > 0
-        {
-            *stops -= 1;
-            return Err(DispatchError::RecoverableVcsConflict(Box::new(
-                orbit_common::RecoverableVcsConflict {
-                    operation: "git_rebase".to_string(),
-                    original_base_sha: "base-sha".to_string(),
-                    target_base_sha: format!("rebased-base{}", round_suffix(index)),
-                    conflicting_paths: vec!["src/lib.rs".to_string()],
-                    conflicting_files: Vec::new(),
-                    diagnostic: format!("rebase stopped; {stops} later stops remain"),
-                },
-            )));
-        }
-        *completions += 1;
-        let output = if index < self.rebases {
-            if input.get("re_review_on_conflict").and_then(Value::as_bool) != Some(true) {
-                return Err(DispatchError::DeterministicActionRefused {
-                    action: "test_stub_pr_complete".to_string(),
-                    message: "review_gate_stale: pull request #41 has merge conflicts".to_string(),
-                });
-            }
-            let suffix = round_suffix(index);
-            let published = published_head(index);
-            json!({
-                "re_review_required": true,
-                "rebased": {
-                    "head": format!("rebased-branch{suffix}"),
-                    "head_sha": format!("rebased-head{suffix}"),
-                    "base": "main",
-                    "base_ref": "origin/main",
-                    "base_sha": format!("rebased-base{suffix}"),
-                    "remote_sha_before": published,
-                    "head_sha_before": published,
-                    "rewritten": true,
-                },
-                "completed_task_ids": [],
-                "skipped_task_ids": [],
-            })
-        } else {
-            json!({
-                "re_review_required": false,
-                "merge": { "merged": true },
-                "completed_task_ids": ["T-1"],
-                "skipped_task_ids": [],
-            })
-        };
-        *self.last_completion.lock().expect("last completion") = Some(output.clone());
-        Ok(output)
-    }
-
-    /// Admission reads the named completion's checkpoint; here that is the
-    /// most recent completion, which is the one each round follows.
-    fn review_gate_admit(&self, input: &Value) -> Value {
-        // A before-PR run: the gate after `pr_open` does not apply.
-        if input.get("before_landing") == Some(&json!(true)) {
-            return json!({ "applies": false, "reason": "reviewed_before_pr" });
-        }
-        let attempt_id = match input.get("re_review_after").and_then(Value::as_str) {
-            None => "rvw-first",
-            Some("complete_pr") => "rvw-re-review",
-            Some(_) => "rvw-re-review-2",
-        };
-        let applies = input.get("re_review_after").is_none()
-            || self
-                .last_completion
-                .lock()
-                .expect("last completion")
-                .as_ref()
-                .is_some_and(|output| output["re_review_required"] == true);
-        if !applies {
-            return json!({ "applies": false, "reason": "re_review_not_required" });
-        }
-        json!({
-            "applies": true,
-            "decision": "admitted",
-            "first_task_id": "T-1",
-            "attempt_id": attempt_id,
-            "lineage_key": "lineage-1",
-            "manifest_artifact": "review-manifest.json",
-            "report_artifact": "review-report.json",
-            "reviewer": { "crew": "reviewers" },
-        })
-    }
-}
-
 /// Suffix of the names completion round `index` rebases to.
 fn round_suffix(index: usize) -> String {
     if index == 0 {
@@ -547,119 +921,6 @@ fn published_head(index: usize) -> String {
     match index {
         0 => "candidate".to_string(),
         _ => format!("rebased-head{}", round_suffix(index - 1)),
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        let output = match action {
-            "test_stub_worktree" => json!({
-                "job_run_id": RUN,
-                "workspace_path": "/worktrees/complete-review-run",
-            }),
-            "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
-            "test_stub_prepare_branch" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-            }),
-            "test_stub_sync_base" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-                "rewritten": false,
-            }),
-            "test_stub_review_gate_admit" => self.review_gate_admit(input),
-            "test_stub_agent_review_repair" => {
-                json!({ "summary": "reviewed", "verdict": "accept" })
-            }
-            "test_stub_review_gate_settle" => {
-                if input.pointer("/admission/applies") != Some(&json!(true)) {
-                    json!({
-                        "gate": "not_required",
-                        "reviewed_head_sha": "",
-                        "selective_selection_head_sha": "",
-                        "selective_receipt": null,
-                        "reviewer_fixed": false,
-                    })
-                } else {
-                    let attempt = input
-                        .pointer("/admission/attempt_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let reviewed = |name: &str| match attempt {
-                        "rvw-re-review" => format!("rebased-{name}"),
-                        "rvw-re-review-2" => format!("rebased-{name}-2"),
-                        _ => String::new(),
-                    };
-                    let re_review = attempt != "rvw-first";
-                    json!({
-                        "gate": "passed",
-                        "reviewed_head_sha": if re_review { reviewed("head") } else { "candidate".to_string() },
-                        "selective_selection_head_sha": "",
-                        "selective_receipt": null,
-                        "reviewed_base_sha": if re_review { reviewed("base") } else { "base-sha".to_string() },
-                        "implementation_head_sha": if re_review { reviewed("implementation") } else { "candidate".to_string() },
-                        "reviewer_fixed": re_review,
-                        "review_fixes": "",
-                    })
-                }
-            }
-            "test_stub_push" => json!({ "local_sha": "candidate", "remote_sha_before": null }),
-            "test_stub_git_push" => {
-                let branch = input.get("branch").and_then(Value::as_str).unwrap_or("");
-                json!({
-                    "remote_sha_before": input.get("expected_remote_sha").cloned().unwrap_or(json!("candidate")),
-                    "local_sha": branch
-                        .strip_prefix("rebased-branch")
-                        .map_or_else(|| "candidate".to_string(), |suffix| format!("rebased-head{suffix}")),
-                })
-            }
-            "test_stub_pr_open" => {
-                json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
-            }
-            "test_stub_promote_tasks" => json!({ "promoted": true }),
-            "test_stub_candidate_validate" => json!({ "decision": "passed" }),
-            "test_stub_pr_complete" => return self.pr_complete(input),
-            CONFLICT_RECOVERY => json!({}),
-            other => panic!("unexpected action `{other}`"),
-        };
-        Ok(output)
-    }
-
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-
-    fn record_reviewer_invocation(
-        &self,
-        request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        self.invocations
-            .lock()
-            .expect("invocations")
-            .push(request.clone());
-        Ok(None)
     }
 }
 
@@ -825,152 +1086,6 @@ fn shipped_local_completion_job() -> orbit_types::workflow::JobV2 {
     job
 }
 
-const LOCAL_RUN: &str = "complete-local-run";
-
-/// In-memory task store for the local completion route: one `in-progress`
-/// task, a `tags = ["sensitive"]` hold rule, a real git workspace on
-/// `main`, and the real `git_merge`/`update_task` actions.
-struct LocalCompletionHost {
-    task: Mutex<orbit_types::task::Task>,
-    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
-    workspace: std::path::PathBuf,
-}
-
-impl LocalCompletionHost {
-    fn new() -> (Self, tempfile::TempDir) {
-        let workspace = tempfile::tempdir().expect("workspace tempdir");
-        let repo = workspace.path();
-        crate::git_fixture::init(repo);
-        let git = |args: &[&str]| crate::git_fixture::run(repo, args);
-        git(&["config", "user.name", "Orbit Test"]);
-        git(&["config", "user.email", "orbit-test@example.invalid"]);
-        std::fs::write(repo.join("README.md"), "base\n").expect("write base file");
-        git(&["add", "README.md"]);
-        git(&["commit", "-m", "base"]);
-        git(&["branch", "-M", "main"]);
-        let task: orbit_types::task::Task = serde_json::from_value(json!({
-            "id": "FIXTURE",
-            "title": "Fixture",
-            "description": "Fixture",
-            "status": "in_progress",
-            "priority": "medium",
-            "task_type": "bug",
-            "tags": ["sensitive"],
-            "context_files": [],
-            "execution_summary": "Validated the fixture.",
-            "job_run_id": LOCAL_RUN,
-            "created_at": chrono::Utc::now(),
-            "updated_at": chrono::Utc::now(),
-        }))
-        .expect("fixture task");
-        let host = Self {
-            task: Mutex::new(task),
-            history: Mutex::default(),
-            workspace: repo.to_path_buf(),
-        };
-        (host, workspace)
-    }
-
-    fn task(&self) -> orbit_types::task::Task {
-        self.task.lock().expect("task").clone()
-    }
-
-    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
-        self.history.lock().expect("history").clone()
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for LocalCompletionHost {
-    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        Ok(self.task())
-    }
-
-    fn get_task_history(
-        &self,
-        _: &str,
-    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
-        Ok(self.history())
-    }
-
-    fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
-        Ok(vec![self.task()])
-    }
-
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.history
-            .lock()
-            .expect("history")
-            .extend(update.append_history);
-        Ok(())
-    }
-
-    fn update_task_from_activity(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskActivityUpdate,
-    ) -> Result<orbit_types::task::Task, OrbitError> {
-        let mut task = self.task.lock().expect("task");
-        assert_eq!(task.status, update.expected_status);
-        let from_status = task.status;
-        task.status = update.status;
-        self.history
-            .lock()
-            .expect("history")
-            .push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: "system".to_string(),
-                event: "status_changed".to_string(),
-                note: update.note,
-                from_status: Some(from_status),
-                to_status: Some(update.status),
-                operation_id: None,
-                decision: None,
-                surface: None,
-                caller: None,
-            });
-        Ok(task.clone())
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "test_stub_worktree" => Ok(json!({
-                "job_run_id": LOCAL_RUN,
-                "workspace_path": self.workspace,
-            })),
-            "test_stub_commit" => Ok(json!({
-                "skipped_no_diff_expected": false,
-                "decision": "committed",
-            })),
-            "test_stub_step_failure_recovery" => Ok(json!({})),
-            "git_merge" | "update_task" => orbit_engine::execute_deterministic_action(
-                self,
-                action,
-                config,
-                input,
-                false,
-                &std::collections::HashMap::new(),
-                None,
-            )
-            .map_err(|error| DispatchError::JobExecution(error.to_string())),
-            other => panic!("unexpected action `{other}`"),
-        }
-    }
-}
-
 fn run_no_diff_completion(host: &NoDiffCompletionHost) -> JobOutcome {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), NO_DIFF_RUN);
@@ -1045,121 +1160,6 @@ fn shipped_no_diff_completion_job() -> orbit_types::workflow::JobV2 {
     resolve_job_catalog_refs_for_execution(&mut job, &catalog)
         .expect("resolve the shipped complete_no_diff step");
     job
-}
-
-const NO_DIFF_RUN: &str = "complete-no-diff-run";
-
-/// In-memory task store for the no-diff completion route: one review task,
-/// a `tags = ["sensitive"]` hold rule, and the real `pr_complete` action.
-struct NoDiffCompletionHost {
-    task: Mutex<orbit_types::task::Task>,
-    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
-    workspace: std::path::PathBuf,
-}
-
-impl NoDiffCompletionHost {
-    fn new(tags: &[&str]) -> (Self, tempfile::TempDir) {
-        let workspace = tempfile::tempdir().expect("workspace tempdir");
-        let task: orbit_types::task::Task = serde_json::from_value(json!({
-            "id": "FIXTURE",
-            "title": "Fixture",
-            "description": "Fixture",
-            "status": "review",
-            "priority": "medium",
-            "task_type": "bug",
-            "tags": tags,
-            "context_files": [],
-            "execution_summary": "Validated the fixture; no change required.",
-            "job_run_id": NO_DIFF_RUN,
-            "created_at": chrono::Utc::now(),
-            "updated_at": chrono::Utc::now(),
-        }))
-        .expect("fixture task");
-        let host = Self {
-            task: Mutex::new(task),
-            history: Mutex::default(),
-            workspace: workspace.path().to_path_buf(),
-        };
-        (host, workspace)
-    }
-
-    fn task(&self) -> orbit_types::task::Task {
-        self.task.lock().expect("task").clone()
-    }
-
-    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
-        self.history.lock().expect("history").clone()
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for NoDiffCompletionHost {
-    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        Ok(self.task())
-    }
-
-    fn get_task_history(
-        &self,
-        _: &str,
-    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
-        Ok(self.history())
-    }
-
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.history
-            .lock()
-            .expect("history")
-            .extend(update.append_history);
-        Ok(())
-    }
-
-    fn update_task_from_activity(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskActivityUpdate,
-    ) -> Result<orbit_types::task::Task, OrbitError> {
-        let mut task = self.task.lock().expect("task");
-        assert_eq!(task.status, update.expected_status);
-        task.status = update.status;
-        Ok(task.clone())
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "test_stub_worktree" => Ok(json!({
-                "job_run_id": NO_DIFF_RUN,
-                "workspace_path": self.workspace,
-            })),
-            "test_stub_commit" => Ok(json!({
-                "skipped_no_diff_expected": true,
-                "decision": "skipped_no_diff_expected",
-            })),
-            "pr_complete" => orbit_engine::execute_deterministic_action(
-                self,
-                action,
-                config,
-                input,
-                false,
-                &std::collections::HashMap::new(),
-                None,
-            )
-            .map_err(|error| DispatchError::JobExecution(error.to_string())),
-            other => panic!("unexpected action `{other}`"),
-        }
-    }
 }
 
 /// Behavior-distinct rows share one bounded family process.

@@ -5,6 +5,46 @@ pub(super) const NEW: &str = "name: CI\non:\n  pull_request:\n    branches: [age
 
 const LIVE_PR_GATE: &str = "tests/engine/pr_landing/infrastructure/fixtures/live-pr-gate.yml";
 const LIVE_PR_GATE_CONTEXT: &str = "Windows cargo check (x86_64-pc-windows-msvc)";
+
+pub(super) struct AcceptedLanding {
+    host: DeliveryHost,
+    pub(super) context: orbit_engine::HandoffLandingContext,
+    pub(super) updates: Mutex<Vec<orbit_engine::HandoffLandingUpdate>>,
+}
+impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
+    fn admit_handoff_base_update(
+        &self,
+        _: &str,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], request)
+    }
+
+    fn handoff_landing_context(
+        &self,
+        _: &str,
+    ) -> Result<orbit_engine::HandoffLandingContext, OrbitError> {
+        Ok(self.context.clone())
+    }
+    fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        RuntimeHost::get_task_history(&self.host, id)
+    }
+    fn admit_pr_base_update(
+        &self,
+        tasks: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        RuntimeHost::admit_pr_base_update(&self.host, tasks, request)
+    }
+    fn record_handoff_landing(
+        &self,
+        update: &orbit_engine::HandoffLandingUpdate,
+    ) -> Result<(), OrbitError> {
+        self.updates.lock().unwrap().push(update.clone());
+        Ok(())
+    }
+}
+
 pub(super) fn setup(sandbox: &Path, source: &str) -> (Fixture, DeliveryHost) {
     setup_with_context(sandbox, source, "Protected (rust)")
 }
@@ -16,9 +56,11 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
         &["merge", "--no-ff", "-qm", "Seed accepted base", BASE],
     );
     git(&initial.repo, &["push", "origin", BRANCH]);
+    let candidate = initial.head();
+    let base_sha = git(&initial.repo, &["rev-parse", BASE]);
     let fx = Fixture {
-        candidate: initial.head(),
-        base_sha: git(&initial.repo, &["rev-parse", BASE]),
+        base_sha,
+        candidate,
         ..initial
     };
     let remote = fx.forge.join("orbit/test.git");
@@ -233,50 +275,13 @@ fn workflow_source_bounds_are_checked_during_emission_proof() {
     );
 }
 
-pub(super) struct AcceptedLanding {
-    host: DeliveryHost,
-    pub(super) context: orbit_engine::HandoffLandingContext,
-    pub(super) updates: Mutex<Vec<orbit_engine::HandoffLandingUpdate>>,
-}
-impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
-    fn admit_handoff_base_update(
-        &self,
-        _: &str,
-        request: &orbit_types::workflow::PrBaseUpdateReservation,
-    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], request)
-    }
-
-    fn handoff_landing_context(
-        &self,
-        _: &str,
-    ) -> Result<orbit_engine::HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
-    }
-    fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
-        RuntimeHost::get_task_history(&self.host, id)
-    }
-    fn admit_pr_base_update(
-        &self,
-        tasks: &[String],
-        request: &orbit_types::workflow::PrBaseUpdateReservation,
-    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        RuntimeHost::admit_pr_base_update(&self.host, tasks, request)
-    }
-    fn record_handoff_landing(
-        &self,
-        update: &orbit_engine::HandoffLandingUpdate,
-    ) -> Result<(), OrbitError> {
-        self.updates.lock().unwrap().push(update.clone());
-        Ok(())
-    }
-}
 pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLanding {
     let revision = |commit: &str| orbit_types::workflow::automation::SourceRevision {
         commit: commit.into(),
         tree: git(&fx.repo, &["rev-parse", &format!("{commit}^{{tree}}")]),
     };
     AcceptedLanding {
+        host,
         context: orbit_engine::HandoffLandingContext {
             handoff_id: "accepted-fixture".into(),
             task_id: TASK_ID.into(),
@@ -297,7 +302,6 @@ pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLand
                 delivery: HandoffDelivery::PullRequest { number: 42 },
             },
         },
-        host,
         updates: Mutex::default(),
     }
 }

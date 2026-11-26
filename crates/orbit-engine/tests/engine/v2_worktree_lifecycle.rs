@@ -70,7 +70,27 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+/// Each family retains its own bounded child and every row's name and cfg.
+macro_rules! worktree_families {
+    ($($family:ident: [$($(#[$gate:meta])* $scenario:ident),* $(,)?]),* $(,)?) => {
+        $(
+            #[test]
+            fn $family() {
+                isolated(stringify!($family), || {
+                    crate::git_fixture::run_scenarios(&[
+                        $($(#[$gate])* (stringify!($scenario), $scenario as fn())),*
+                    ]);
+                });
+            }
+        )*
+    };
+}
+
 const BASE: &str = "agent-main";
+
+const RESUME_TASK: &str = "T-RESUME";
+const FAILED_RUN: &str = "jrun-failed";
+const NEXT_RUN: &str = "jrun-next";
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -86,6 +106,1423 @@ struct GcRun {
     /// The task the report names: the blocking member, or every member
     /// when the bundle is eligible.
     expected_task: &'static str,
+}
+
+/// A task whose run `FAILED_RUN` committed a candidate and failed after
+/// implementation, with the failure handoff's preservation record.
+struct PreservedCandidate {
+    fixture: Fixture,
+    host: LifecycleHost,
+    candidate: String,
+    branch: String,
+}
+
+impl PreservedCandidate {
+    fn assert_fresh(&self, setup: &Value, base: &str, case: &str) -> Value {
+        let resumed = self.resume(setup).expect("candidate_resume");
+        assert_eq!(resumed["outcome"], "fresh", "{case}: {resumed}");
+        let checkout = workspace(setup);
+        assert_eq!(head(&checkout), base, "{case}");
+        assert!(status(&checkout).is_empty(), "{case}");
+        resumed
+    }
+
+    fn feature() -> Self {
+        Self::new("feature.txt", "feature\n")
+    }
+
+    fn new(file: &str, contents: &str) -> Self {
+        let (fixture, host) = Fixture::hosted();
+        let (_, checkout) = setup_checkout(&host, RESUME_TASK, FAILED_RUN);
+        let candidate = commit_file(&checkout.path, file, contents);
+        let input = json!({ "task_ids": [RESUME_TASK] });
+        host.add_run(job_run(FAILED_RUN, JobRunState::Failed, input));
+        let preserved = Self {
+            fixture,
+            host,
+            candidate,
+            branch: checkout.branch,
+        };
+        preserved.preserve_step("validate");
+        preserved.host.set_status(RESUME_TASK, TaskStatus::Backlog);
+        preserved
+    }
+
+    /// The `feature.txt` candidate carried onto an advanced base under the
+    /// required `command` and committed by the next run, with that run's
+    /// setup and resume.
+    fn committed(command: &str) -> (Self, Value, Value) {
+        let preserved = Self::feature();
+        preserved.advance_base();
+        preserved.require(&[command]);
+        let (setup, resumed) = preserved.resumed();
+        preserved.commit(&setup);
+        (preserved, setup, resumed)
+    }
+
+    /// Advance the base past the candidate's with a `base.txt` edit.
+    fn advance_base(&self) -> String {
+        commit_file(&self.fixture.repo, "base.txt", "v2\n")
+    }
+
+    /// Set `workflow.required_validation_commands`.
+    fn require(&self, commands: &[&str]) {
+        self.host.set_required_commands(commands);
+    }
+
+    /// Point the failed run's handoff at `failed_step_id` and requeue.
+    fn resume_failed_step(
+        &self,
+        failed_step_id: &str,
+        run_id: &str,
+    ) -> (Value, Result<Value, OrbitError>) {
+        self.preserve_step(failed_step_id);
+        self.requeue(run_id)
+    }
+
+    /// Requeue as `run_id`: its setup, and the resume that follows it.
+    fn requeue(&self, run_id: &str) -> (Value, Result<Value, OrbitError>) {
+        let setup = self.relinked_setup(run_id);
+        let resumed = self.resume_for(&setup, run_id);
+        (setup, resumed)
+    }
+
+    /// `run_id`'s setup, linked to the failed run.
+    ///
+    /// The task is linked back to the failed run first: each setup stamps
+    /// its own run id, and resume reads the link from before that stamp.
+    fn relinked_setup(&self, run_id: &str) -> Value {
+        self.host.link_run(RESUME_TASK, FAILED_RUN);
+        self.next_setup_for(run_id)
+    }
+
+    fn preserve_step(&self, failed_step_id: &str) {
+        self.preserve_decision(failed_step_id, "blocked_failure_pr");
+    }
+
+    /// Record the failed run's handoff at `failed_step_id` as `decision`.
+    fn preserve_decision(&self, failed_step_id: &str, decision: &str) {
+        let task = self.host.get_task(RESUME_TASK).unwrap();
+        let handoff = json!({
+            "phase": "failure_handoff",
+            "decision": decision,
+            "task_id": RESUME_TASK,
+            "handoff_run_id": FAILED_RUN,
+            "branch": self.branch,
+            "head_sha": self.candidate,
+            "task_spec_digest": task.spec_digest(),
+        });
+        self.host.preserve(FAILED_RUN, failed_step_id, handoff);
+    }
+
+    /// [ORB-14450] Make `FAILED_RUN` a run held on named external evidence
+    /// for `head_sha`, whose receipt is the task's latest decision: no
+    /// failure checkpoint, the task's hold artifact, and the receipt event.
+    fn hold(&self, head_sha: &str) {
+        let mut state = pipeline_state(FAILED_RUN);
+        state.pipeline = json!({"worktree": {"head_ref": self.branch}});
+        let mut states = self.host.run_states.lock().unwrap();
+        states.insert(FAILED_RUN.to_string(), state);
+        drop(states);
+        let task = self.host.get_task(RESUME_TASK).unwrap();
+        let hold = json!({
+            "schema_version": 1,
+            "attempt_id": "attempt-1",
+            "lineage_key": "lineage-1",
+            "run_id": FAILED_RUN,
+            "candidate": {"commit": head_sha, "tree": "held-tree"},
+            "task_meaning_digest": "meaning",
+            "requirements": [{
+                "kind": "native_os", "name": "macOS run",
+                "command": "native macos", "artifact": "evidence/macos.json",
+            }],
+            "task_spec_digest": task.spec_digest(),
+        });
+        let artifact = json_artifact("review-evidence-hold.json", &hold);
+        self.host.set_artifact(RESUME_TASK, artifact);
+        self.host.clear_history(RESUME_TASK);
+        let receipt = TaskHistoryEntry {
+            note: Some(format!(
+                "run={FAILED_RUN}; all named external checks arrived for the held \
+                 candidate; queued for fresh review."
+            )),
+            from_status: Some(TaskStatus::InProgress),
+            to_status: Some(TaskStatus::Backlog),
+            ..history_entry(Utc::now(), "system", "review_evidence_received")
+        };
+        self.host.record_history(RESUME_TASK, receipt);
+    }
+
+    /// The requeued task's next run sets up its checkout, linked to the
+    /// failed run.
+    fn next_setup(&self) -> Value {
+        self.next_setup_for(NEXT_RUN)
+    }
+
+    fn next_setup_for(&self, run_id: &str) -> Value {
+        let input = setup_input(&[RESUME_TASK], run_id);
+        let setup = action(&self.host, "worktree_setup", &input)
+            .unwrap_or_else(|error| panic!("the next run's setup ({run_id}): {error}"));
+        assert_eq!(setup["prior_job_run_id"], FAILED_RUN);
+        setup
+    }
+
+    /// The next run's setup and its resume, which must not error.
+    fn resumed(&self) -> (Value, Value) {
+        let setup = self.next_setup();
+        let resumed = self.resume(&setup).expect("candidate_resume");
+        (setup, resumed)
+    }
+
+    /// A claimed leaf's resume with the claim's `fields`.
+    fn resume_claimed(&self, setup: &Value, fields: Value) -> Result<Value, OrbitError> {
+        let mut input = json!({
+            "job_run_id": NEXT_RUN,
+            "task_ids": [RESUME_TASK],
+            "workspace_path": setup["workspace_path"],
+            "base_sha": setup["base_sha"],
+            "claimed": true,
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        action(&self.host, "candidate_resume", &input)
+    }
+
+    /// A claimed leaf's resume of the repair its claim carries for `head_sha`.
+    fn resume_claim_repair(&self, setup: &Value, head_sha: &str) -> Result<Value, OrbitError> {
+        let repair = json!({
+            "repairs_claim_id": "claim-1",
+            "handoff_id": "handoff-1",
+            "branch": self.branch,
+            "head_sha": head_sha,
+            "stop_evidence": "pull request #42 conflicts with its base",
+        });
+        self.resume_claimed(setup, json!({"claim_repair": repair}))
+    }
+
+    fn commit(&self, setup: &Value) -> Value {
+        action(
+            &self.host,
+            "git_commit",
+            &json!({
+                "job_run_id": NEXT_RUN, "scope": "all",
+                "workspace_path": setup["workspace_path"],
+                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+            }),
+        )
+        .expect("commit carried candidate")
+    }
+
+    fn validate(&self, setup: &Value) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_validate",
+            &json!({
+                "job_run_id": NEXT_RUN, "completed_task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+            }),
+        )
+    }
+
+    fn validation_log(&self) -> Value {
+        let artifacts = self.host.artifacts.lock().unwrap();
+        let log = artifacts[RESUME_TASK]
+            .iter()
+            .find(|artifact| artifact.path == format!("validation/{NEXT_RUN}/0.json"))
+            .expect("durable final validation evidence");
+        serde_json::from_slice(&log.content).unwrap()
+    }
+
+    fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {
+        self.resume_for(setup, NEXT_RUN)
+    }
+
+    fn resume_for(&self, setup: &Value, run_id: &str) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_resume",
+            &json!({
+                "job_run_id": run_id,
+                "task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_sha": setup["base_sha"],
+                "prior_job_run_id": setup["prior_job_run_id"],
+            }),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/// A primary checkout on `agent-main` whose `.orbit/` scratch is ignored, as
+/// in an initialized workspace.
+struct Fixture {
+    root: TempDir,
+    repo: PathBuf,
+}
+
+impl Fixture {
+    #[cfg(unix)]
+    fn with_provider(&self, host: &LifecycleHost, body: &str) -> LifecycleHost {
+        host.with_provider(&install_provider(self.root.path(), body))
+    }
+
+    fn hosted() -> (Self, LifecycleHost) {
+        let fixture = Self::new();
+        let host = LifecycleHost::new(&fixture.repo);
+        (fixture, host)
+    }
+
+    fn with_checkout(task_id: &str, run_id: &str) -> (Self, LifecycleHost, Checkout) {
+        let (fixture, host) = Self::hosted();
+        let (_, checkout) = setup_checkout(&host, task_id, run_id);
+        (fixture, host, checkout)
+    }
+
+    fn new() -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(Self::fresh);
+            let root = TempDir::new().unwrap();
+            super::git_fixture::copy_template(seed.root.path(), root.path());
+            let repo = canonical(&root.path().join("repo"));
+            Self { root, repo }
+        })
+    }
+
+    fn fresh() -> Self {
+        let root = TempDir::new().unwrap();
+        let repo = root.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        super::git_fixture::init(&repo);
+        git(&repo, &["checkout", "-b", BASE]);
+        git(&repo, &["config", "user.name", "Orbit Test"]);
+        git(
+            &repo,
+            &["config", "user.email", "orbit-test@example.invalid"],
+        );
+        fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
+        fs::write(repo.join("README.md"), "base\n").unwrap();
+        fs::write(repo.join("base.txt"), "v1\n").unwrap();
+        git(&repo, &["add", ".gitignore", "README.md", "base.txt"]);
+        git(&repo, &["commit", "-m", "base"]);
+        let origin = root.path().join("origin.git");
+        git(root.path(), &["init", "--bare", path_str(&origin)]);
+        git(&repo, &["remote", "add", "origin", path_str(&origin)]);
+        git(&repo, &["push", "-u", "origin", BASE]);
+        let repo = canonical(&repo);
+        Self { root, repo }
+    }
+}
+
+/// What `worktree_setup` reported for a run's checkout.
+struct Checkout {
+    path: PathBuf,
+    branch: String,
+}
+
+impl Checkout {
+    fn from_setup(output: &Value) -> Self {
+        Self {
+            path: PathBuf::from(output["workspace_path"].as_str().expect("workspace_path")),
+            branch: output["head_ref"].as_str().expect("head_ref").to_string(),
+        }
+    }
+}
+
+/// A run's checkout holding one committed candidate edit, prepared for
+/// handoff after the base advanced past the commit it was created from.
+struct PreparedRebase {
+    fixture: Fixture,
+    host: LifecycleHost,
+    run_id: String,
+    checkout: Checkout,
+    base_sha: String,
+    candidate: String,
+    /// The advanced base `pr_prepare` pinned.
+    target: String,
+    common: Value,
+    prepared: Value,
+}
+
+impl PreparedRebase {
+    fn new(run_id: &str, candidate_file: &str, base_file: &str) -> Self {
+        Self::with_commits(
+            run_id,
+            &[(candidate_file, "candidate\n")],
+            &[(base_file, "target\n")],
+        )
+    }
+
+    /// A candidate of one commit per `candidate` file write, prepared against
+    /// a base advanced by one commit per `base` file write.
+    fn with_commits(run_id: &str, candidate: &[(&str, &str)], base: &[(&str, &str)]) -> Self {
+        let commit_all = |repo: &Path, writes: &[(&str, &str)]| {
+            writes
+                .iter()
+                .fold(None, |_, (file, contents)| {
+                    Some(commit_file(repo, file, contents))
+                })
+                .expect("at least one commit")
+        };
+        Self::with_edits(
+            run_id,
+            |checkout| commit_all(checkout, candidate),
+            |repo| commit_all(repo, base),
+        )
+    }
+
+    /// A candidate committed by `candidate` in the run's checkout, prepared
+    /// against a base `base` advanced in the primary; each returns its tip.
+    fn with_edits(
+        run_id: &str,
+        candidate: impl FnOnce(&Path) -> String,
+        base: impl FnOnce(&Path) -> String,
+    ) -> Self {
+        let fixture = Fixture::new();
+        Self::with_fixture(run_id, fixture, candidate, base)
+    }
+
+    /// Prepare from a fixture with a caller-selected common ancestor.
+    fn with_fixture(
+        run_id: &str,
+        fixture: Fixture,
+        candidate: impl FnOnce(&Path) -> String,
+        base: impl FnOnce(&Path) -> String,
+    ) -> Self {
+        let host = LifecycleHost::new(&fixture.repo);
+        host.start_run(run_id);
+        let (setup, checkout) = setup_checkout(&host, "T-REBASE", run_id);
+        let base_sha = setup["base_sha"].as_str().unwrap().to_string();
+        let candidate = candidate(&checkout.path);
+        let target = base(&fixture.repo);
+        let common = json!({
+            "workspace_path": checkout.path,
+            "job_run_id": run_id,
+            "completed_task_ids": ["T-REBASE"],
+            "base": BASE,
+            "base_sync": "local",
+        });
+        let prepared = action(&host, "pr_prepare", &common).expect("pr_prepare");
+        Self {
+            fixture,
+            host,
+            run_id: run_id.to_string(),
+            checkout,
+            base_sha,
+            candidate,
+            target,
+            common,
+            prepared,
+        }
+    }
+
+    fn rebase(&self) -> Result<Value, OrbitError> {
+        self.rebase_on(&self.host, &self.prepared)
+    }
+
+    /// Run `git_rebase` through `host` for the handoff `preparation` describes.
+    fn rebase_on(&self, host: &LifecycleHost, preparation: &Value) -> Result<Value, OrbitError> {
+        let mut input = self.common.clone();
+        for field in [
+            "head",
+            "head_sha",
+            "base",
+            "base_ref",
+            "base_sha",
+            "remote_sha",
+            "commits_behind",
+            "sync_required",
+        ] {
+            input[field] = preparation[field].clone();
+        }
+        action(host, "git_rebase", &input)
+    }
+
+    fn head(&self) -> String {
+        head(&self.checkout.path)
+    }
+
+    /// This fixture's host with a substitute `codex` that runs `body` in
+    /// the checkout.
+    #[cfg(unix)]
+    fn with_provider(&self, body: &str) -> LifecycleHost {
+        self.fixture.with_provider(&self.host, body)
+    }
+
+    /// Run conflict recovery on `host` for this fixture's stopped rebase.
+    #[cfg(unix)]
+    fn recover_conflict(
+        &self,
+        host: &LifecycleHost,
+        conflict: &Value,
+    ) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
+        recover(host, &self.run_id, conflict_recovery_input(self, conflict))
+    }
+}
+
+/// The task store, run store and provider resolution the lifecycle actions
+/// read through, kept in memory.
+#[derive(Default)]
+struct LifecycleHost {
+    worker: Option<orbit_types::tool::WorkerInvocation>,
+    gate_source: Option<orbit_types::workflow::ValidationGateSource>,
+    reclaim_patterns: Option<Vec<String>>,
+    repo: PathBuf,
+    provider: Option<PathBuf>,
+    tasks: Mutex<BTreeMap<String, Task>>,
+    runs: Mutex<Vec<JobRun>>,
+    admitted: Mutex<Vec<String>>,
+    checkpoints: Mutex<Vec<(String, String, Value)>>,
+    /// Admitted conflict recoveries, as (run, step, scope), in reservation
+    /// order. The attempt is a recovery's 1-based position for its run/step.
+    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
+    /// A replica owner's answer per task, overriding the local task store.
+    owner_answers: Mutex<BTreeMap<String, WorktreeGcTaskLookup>>,
+    /// Claimed runs whose claim is settled, with the settlement's account.
+    settled_claims: Mutex<BTreeMap<String, String>>,
+    /// The owner route of each claimed run for GC memoization tests.
+    lookup_scopes: Mutex<BTreeMap<String, String>>,
+    /// Selector widenings requested, as (task, step, activity, paths).
+    widenings: Mutex<Vec<Widening>>,
+    /// Durable run state by run id.
+    run_states: Mutex<BTreeMap<String, PipelineState>>,
+    /// Task history events by task id.
+    history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
+    /// `workflow.required_validation_commands`.
+    required_commands: Mutex<Vec<String>>,
+    /// Task artifacts by task id.
+    artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
+    /// This host's machine identity.
+    machine: Mutex<Option<String>>,
+    /// The candidate the owner kept from the task's last claim.
+    kept_claim: Mutex<Option<KeptClaimCandidate>>,
+    /// Deterministically model an operator write immediately before landing.
+    landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
+    landing_advance: Mutex<Option<PathBuf>>,
+    /// Scripted answers of host-run deterministic actions, by action name.
+    stubs: Mutex<BTreeMap<String, Result<Value, DispatchError>>>,
+    /// Every stubbed action call, as (action, input), in order.
+    stub_calls: Mutex<Vec<(String, Value)>>,
+    /// Final recovery admissions requested, in order.
+    final_recovery_admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
+    /// Final recovery decisions handed to the host, in order.
+    final_recovery_applications: Mutex<Vec<FinalRecoveryApplication>>,
+    /// Why the live run/task/worktree no longer owns a step recovery.
+    recovery_owner_refusal: Mutex<Option<String>>,
+    /// Why step recovery authorization was revoked.
+    recovery_revocation: Mutex<Option<String>>,
+    /// Deterministic race after host certification and before synchronization.
+    preparation_hook: Mutex<Option<PreparationHook>>,
+    /// `workflow.unlocked_context_paths` with
+    /// `workflow.unlocked_path_validation_commands`.
+    unlocked_validation: Mutex<orbit_engine::UnlockedPathValidation>,
+    /// `workflow.generated_paths`.
+    generated_paths: Mutex<Vec<orbit_engine::GeneratedPath>>,
+    /// The host's record of each run's last fully validated tree.
+    validated_trees: Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>,
+    /// `[pr]`, `[commit]` and `[branch]` delivery settings.
+    pr_config: Mutex<orbit_engine::PrConfig>,
+    /// Scripted `pr.status` answer for `pr_complete`.
+    pr_status: Mutex<Option<Value>>,
+    /// When set, the agent envelope carries this host's task id, status and
+    /// write-refusal flag. Recovery tests use it for the leaf's terminal stop;
+    /// other fixtures leave it unset and keep an empty task context.
+    publish_task_context: bool,
+}
+
+type Widening = (String, ContextWideningStep, String, Vec<String>);
+type PreparationHook = Box<dyn FnMut(&Value) + Send>;
+
+impl LifecycleHost {
+    pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
+        self.stubs.lock().unwrap().insert(
+            action.to_string(),
+            reply.map_err(|message| DispatchError::action_failed(action, message)),
+        );
+    }
+
+    pub(super) fn stub_calls_of(&self, action: &str) -> Vec<Value> {
+        self.stub_calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == action)
+            .map(|(_, input)| input.clone())
+            .collect()
+    }
+
+    fn new(repo: &Path) -> Self {
+        Self {
+            repo: repo.to_path_buf(),
+            ..Self::default()
+        }
+    }
+
+    /// The same stores, resolving the agent provider to `provider`. Every
+    /// store is copied, so a fixture seeded before the swap behaves the same
+    /// after it. Only the one-shot `preparation_hook` is not carried: a boxed
+    /// closure cannot be cloned, and a test that races preparation installs it
+    /// on the host it dispatches through.
+    fn with_provider(&self, provider: &Path) -> Self {
+        fn copied<T: Clone>(store: &Mutex<T>) -> Mutex<T> {
+            Mutex::new(store.lock().unwrap().clone())
+        }
+        Self {
+            worker: self.worker.clone(),
+            gate_source: self.gate_source,
+            reclaim_patterns: self.reclaim_patterns.clone(),
+            repo: self.repo.clone(),
+            provider: Some(provider.to_path_buf()),
+            tasks: copied(&self.tasks),
+            runs: copied(&self.runs),
+            admitted: copied(&self.admitted),
+            checkpoints: copied(&self.checkpoints),
+            recovery_attempts: copied(&self.recovery_attempts),
+            owner_answers: copied(&self.owner_answers),
+            settled_claims: copied(&self.settled_claims),
+            lookup_scopes: copied(&self.lookup_scopes),
+            widenings: copied(&self.widenings),
+            run_states: copied(&self.run_states),
+            history: copied(&self.history),
+            required_commands: copied(&self.required_commands),
+            artifacts: copied(&self.artifacts),
+            machine: copied(&self.machine),
+            kept_claim: copied(&self.kept_claim),
+            landing_write: copied(&self.landing_write),
+            landing_advance: copied(&self.landing_advance),
+            stubs: copied(&self.stubs),
+            stub_calls: copied(&self.stub_calls),
+            final_recovery_admissions: copied(&self.final_recovery_admissions),
+            final_recovery_applications: copied(&self.final_recovery_applications),
+            recovery_owner_refusal: copied(&self.recovery_owner_refusal),
+            recovery_revocation: copied(&self.recovery_revocation),
+            preparation_hook: Mutex::new(None),
+            unlocked_validation: copied(&self.unlocked_validation),
+            generated_paths: copied(&self.generated_paths),
+            validated_trees: copied(&self.validated_trees),
+            pr_config: copied(&self.pr_config),
+            pr_status: copied(&self.pr_status),
+            publish_task_context: self.publish_task_context,
+        }
+    }
+
+    /// Start `run_id` as a running run with a durable run state, as a host has
+    /// before any recovery certifies a completion for it. Keeps an existing
+    /// run or state.
+    fn start_run(&self, run_id: &str) {
+        let mut runs = self.runs.lock().unwrap();
+        if !runs.iter().any(|run| run.run_id == run_id) {
+            runs.push(job_run(run_id, JobRunState::Running, json!({})));
+        }
+        drop(runs);
+        self.run_states
+            .lock()
+            .unwrap()
+            .entry(run_id.to_string())
+            .or_insert_with(|| pipeline_state(run_id));
+    }
+
+    /// The reserved attempt `output` certifies, or why the authority refuses it.
+    fn certifiable_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<i64, OrbitError> {
+        bound_recovery_fields(run_id, step_id, output)?;
+        let attempt = match output.get("recovery_attempt") {
+            None => {
+                return Err(OrbitError::Execution(format!(
+                    "rebase recovery evidence for run {run_id} step `{step_id}` names no \
+                     host-reserved attempt"
+                )));
+            }
+            Some(value) => value
+                .as_i64()
+                .filter(|attempt| *attempt >= 1)
+                .ok_or_else(|| {
+                    OrbitError::Execution(
+                        "rebase recovery evidence has an invalid `recovery_attempt`".to_string(),
+                    )
+                })?,
+        };
+        let attempts = self.rebase_recovery_attempts(run_id, step_id)?;
+        let reserved = usize::try_from(attempt)
+            .ok()
+            .and_then(|attempt| attempts.get(attempt - 1))
+            .ok_or_else(|| {
+                OrbitError::PolicyDenied(format!(
+                    "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was not \
+                     reserved by this host"
+                ))
+            })?;
+        if attempt as usize != attempts.len() {
+            return Err(OrbitError::PolicyDenied(format!(
+                "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was \
+                 superseded by a later attempt"
+            )));
+        }
+        let field = |name: &str| output.get(name).and_then(Value::as_str);
+        if field("workspace_path") != Some(reserved.workspace_path.as_str())
+            || field("head_sha_before") != Some(reserved.head_sha_before.as_str())
+            || field("target_base_sha") != Some(reserved.target_base_sha.as_str())
+        {
+            return Err(OrbitError::PolicyDenied(format!(
+                "rebase recovery evidence for run {run_id} step `{step_id}` attempt {attempt} \
+                 does not describe the reserved workspace, original HEAD and pinned base"
+            )));
+        }
+        Ok(attempt)
+    }
+
+    fn set_pr_status(&self, status: Value) {
+        *self.pr_status.lock().unwrap() = Some(status);
+    }
+
+    fn add_task(&self, id: &str, status: TaskStatus) {
+        store_record(&self.tasks, id, task(id, status));
+    }
+
+    fn edit_task(&self, id: &str, edit: impl FnOnce(&mut Task)) {
+        edit(self.tasks.lock().unwrap().get_mut(id).unwrap());
+    }
+
+    fn set_status(&self, id: &str, status: TaskStatus) {
+        self.edit_task(id, |task| task.status = status);
+    }
+
+    fn link_run(&self, id: &str, run_id: &str) {
+        self.edit_task(id, |task| task.job_run_id = Some(run_id.to_string()));
+    }
+
+    fn add_run(&self, run: JobRun) {
+        self.runs.lock().unwrap().push(run);
+    }
+
+    fn answer(&self, task_id: &str, lookup: WorktreeGcTaskLookup) {
+        store_record(&self.owner_answers, task_id, lookup);
+    }
+
+    fn settle_claim(&self, run_id: &str, settlement: &str) {
+        store_record(&self.settled_claims, run_id, settlement.to_string());
+    }
+
+    fn set_lookup_scope(&self, run_id: &str, scope: &str) {
+        store_record(&self.lookup_scopes, run_id, scope.to_string());
+    }
+
+    fn admitted(&self) -> Vec<String> {
+        self.admitted.lock().unwrap().clone()
+    }
+
+    fn checkpoints(&self) -> Vec<(String, String, Value)> {
+        self.checkpoints.lock().unwrap().clone()
+    }
+
+    fn recovery_attempts(&self) -> Vec<(String, String, RebaseRecoveryAttemptScope)> {
+        self.recovery_attempts.lock().unwrap().clone()
+    }
+
+    /// Overwrite the run store's copy of `step_id`'s recovery, as a leaf
+    /// holding the store's modify grant can.
+    fn leaf_writes_recovery(&self, run_id: &str, step_id: &str, checkpoint: Value) {
+        self.run_states
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .unwrap()
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), checkpoint);
+    }
+
+    fn widenings(&self) -> Vec<Widening> {
+        self.widenings.lock().unwrap().clone()
+    }
+
+    fn set_description(&self, id: &str, description: &str) {
+        self.edit_task(id, |task| task.description = description.to_string());
+    }
+
+    fn set_acceptance_criteria(&self, id: &str, criteria: &[&str]) {
+        let criteria = criteria.iter().map(ToString::to_string).collect();
+        self.edit_task(id, |task| task.acceptance_criteria = criteria);
+    }
+
+    fn set_context_files(&self, id: &str, selectors: &[&str]) {
+        let selectors = selectors.iter().map(ToString::to_string).collect();
+        self.edit_task(id, |task| task.context_files = selectors);
+    }
+
+    /// Store `artifact` on `task_id`, replacing one at the same path.
+    fn set_artifact(&self, task_id: &str, artifact: TaskArtifact) {
+        let mut artifacts = self.artifacts.lock().unwrap();
+        let stored = artifacts.entry(task_id.to_string()).or_default();
+        stored.retain(|existing| existing.path != artifact.path);
+        stored.push(artifact);
+    }
+
+    fn set_unlocked_validation(&self, paths: &[&str], commands: &[&str]) {
+        *self.unlocked_validation.lock().unwrap() = orbit_engine::UnlockedPathValidation {
+            paths: paths.iter().map(ToString::to_string).collect(),
+            commands: commands.iter().map(ToString::to_string).collect(),
+        };
+    }
+
+    fn set_generated_path(&self, path: &str, command: &str) {
+        *self.generated_paths.lock().unwrap() = vec![orbit_engine::GeneratedPath {
+            path: path.to_string(),
+            command: command.to_string(),
+        }];
+    }
+
+    fn set_required_commands(&self, commands: &[&str]) {
+        *self.required_commands.lock().unwrap() =
+            commands.iter().map(ToString::to_string).collect();
+    }
+
+    /// Record `output` as `run_id`'s failure-activity checkpoint.
+    fn preserve(&self, run_id: &str, failed_step_id: &str, output: Value) {
+        let mut state = pipeline_state(run_id);
+        state.failure_activity_checkpoint = Some(FailureActivityCheckpoint {
+            activity_name: "pr_failure_handoff".to_string(),
+            failed_step_id: failed_step_id.to_string(),
+            output,
+        });
+        store_record(&self.run_states, run_id, state);
+    }
+
+    fn record_history(&self, task_id: &str, entry: TaskHistoryEntry) {
+        self.history
+            .lock()
+            .unwrap()
+            .entry(task_id.to_string())
+            .or_default()
+            .push(entry);
+    }
+
+    fn clear_history(&self, task_id: &str) {
+        self.history.lock().unwrap().remove(task_id);
+    }
+
+    fn history(&self, task_id: &str) -> Vec<TaskHistoryEntry> {
+        stored_record(&self.history, task_id).unwrap_or_default()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        self.pr_config.lock().unwrap().clone()
+    }
+
+    fn workspace_base_branch(&self) -> String {
+        BASE.to_string()
+    }
+
+    fn task_context_for_agent_input(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, DispatchError> {
+        if !self.publish_task_context {
+            return Ok(None);
+        }
+        let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let Some(task) = self.tasks.lock().unwrap().get(task_id).cloned() else {
+            return Ok(None);
+        };
+        Ok(Some(json!({
+            "id": task.id,
+            "status": task.status.cli_name(),
+            "terminal": orbit_types::task::refuses_implementer_writes(task.status),
+        })))
+    }
+
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        let mut environment = orbit_exec::ValidationEnvironment::launcher(
+            RuntimeHost::agent_subprocess_environment(self, &[]),
+        );
+        environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
+        environment
+    }
+
+    fn record_direct_landing_intent(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        if let Some(path) = self.landing_advance.lock().unwrap().take() {
+            commit_file(&path, "racing.txt", "later candidate\n");
+        }
+        if let Some((path, bytes)) = self.landing_write.lock().unwrap().take() {
+            fs::write(path, bytes).unwrap();
+        }
+        Ok(())
+    }
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        stored_record(&self.tasks, task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
+    }
+
+    fn list_tasks_filtered(
+        &self,
+        _status: Option<TaskStatus>,
+        _priority: Option<TaskPriority>,
+        _parent_id: Option<&str>,
+        _job_run_id: Option<&str>,
+        _external_ref: Option<&ExternalRef>,
+        _has_external_ref_system: Option<&str>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        Ok(self.tasks.lock().unwrap().values().cloned().collect())
+    }
+
+    fn admit_task_for_workflow(&self, task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
+        self.admitted.lock().unwrap().push(task_id.to_string());
+        self.set_status(task_id, TaskStatus::InProgress);
+        RuntimeHost::get_task(self, task_id)
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        task_id: &str,
+        update: TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        if let Some(job_run_id) = update.job_run_id {
+            task.job_run_id = Some(job_run_id);
+        }
+        if let Some(status) = update.status {
+            task.status = status;
+        }
+        drop(tasks);
+        if let Some(event) = update.status_event {
+            let entry = TaskHistoryEntry {
+                note: update.status_note,
+                ..history_entry(Utc::now(), "system", &event)
+            };
+            self.record_history(task_id, entry);
+        }
+        for entry in update.append_history {
+            self.record_history(task_id, entry);
+        }
+        Ok(())
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        if operation == "pr.status"
+            && let Some(status) = self.pr_status.lock().unwrap().clone()
+        {
+            return Ok(status);
+        }
+        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
+    }
+
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        Ok(self.history(task_id))
+    }
+
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        let artifact = self
+            .artifacts
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact.path == path))
+            .cloned();
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(task_id)?;
+        }
+        Ok(artifact)
+    }
+
+    fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+        Ok(stored_record(&self.artifacts, task_id).unwrap_or_default())
+    }
+
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned())
+    }
+
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        Ok(stored_record(&self.run_states, run_id))
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.required_commands.lock().unwrap().clone()
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        orbit_types::workflow::HostValidationGates {
+            gates: orbit_types::workflow::ValidationGates {
+                required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                baseline_commands: Vec::new(),
+                light_delivery_paths: None,
+                review_skip_tags: None,
+            },
+            source: self
+                .gate_source
+                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
+        }
+    }
+
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        self.worker.clone()
+    }
+
+    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
+        self.unlocked_validation.lock().unwrap().clone()
+    }
+
+    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
+        self.generated_paths.lock().unwrap().clone()
+    }
+
+    fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
+        store_record(&self.validated_trees, &tree.run_id, tree.clone());
+        Ok(())
+    }
+
+    fn validated_tree(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
+        Ok(stored_record(&self.validated_trees, run_id))
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+        let worker = self.worker.as_ref().expect("claimed fixture");
+        Ok(orbit_engine::ClaimExecutionContext {
+            footprint: vec!["file:README.md".to_string()],
+            workspace_id: worker.owner_workspace_id.clone(),
+            task_id: worker.task_id.clone(),
+            claim_id: worker.claim_id.clone(),
+            machine_id: worker.execution.machine_id.clone(),
+            run_id: worker.bound_run_id.clone(),
+            ship_mode: "pr".to_string(),
+            base_branch: "agent-main".to_string(),
+            landing_branch: "agent-main".to_string(),
+            required_commands: self.required_commands.lock().unwrap().clone(),
+        })
+    }
+
+    fn attach_task_validation_log(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        // As the runtime's host does: validate the path, refuse a run that
+        // does not own the task with a typed error, and store the bytes raw.
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
+            )));
+        }
+        let mut artifacts = self.artifacts.lock().unwrap();
+        let artifacts = artifacts.entry(task_id.to_string()).or_default();
+        artifacts.retain(|artifact| artifact.path != path);
+        artifacts.push(TaskArtifact {
+            path: path.to_string(),
+            content,
+            media_type: "application/json".to_string(),
+            created_by: None,
+        });
+        Ok(())
+    }
+
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
+        let worker = self
+            .worker
+            .as_ref()
+            .expect("claim routes evidence to its owner");
+        RuntimeHost::attach_task_validation_log(
+            self,
+            &worker.task_id,
+            &worker.bound_run_id,
+            path,
+            content,
+        )
+    }
+
+    fn local_machine_id(&self) -> Option<String> {
+        self.machine.lock().unwrap().clone()
+    }
+
+    fn kept_claim_candidate(
+        &self,
+        _task_id: &str,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        Ok(self.kept_claim.lock().unwrap().clone())
+    }
+
+    fn repo_root(&self) -> Result<String, OrbitError> {
+        Ok(self.repo.to_string_lossy().into_owned())
+    }
+
+    fn worktree_reclaim_patterns(&self) -> Vec<String> {
+        // Unset means the shipped default, as on a host without configuration.
+        self.reclaim_patterns.clone().unwrap_or_else(|| {
+            ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+                .map(String::from)
+                .to_vec()
+        })
+    }
+
+    fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
+        Ok(self.runs.lock().unwrap().clone())
+    }
+
+    fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
+        if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
+            return answer.clone();
+        }
+        match RuntimeHost::get_task(self, task_id) {
+            Ok(task) => WorktreeGcTaskLookup::Found {
+                status: task.status,
+                pr_status: task.pr_status,
+                status_since: Some(task.updated_at),
+            },
+            Err(_) => WorktreeGcTaskLookup::Unresolved,
+        }
+    }
+
+    fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
+        Some(stored_record(&self.lookup_scopes, run_id).unwrap_or_else(|| "local".to_string()))
+    }
+
+    fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
+        stored_record(&self.settled_claims, run_id)
+    }
+
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        _run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        self.widenings.lock().unwrap().push((
+            task_id.to_string(),
+            step,
+            activity.to_string(),
+            paths.to_vec(),
+        ));
+        Ok(paths.iter().map(|path| format!("file:{path}")).collect())
+    }
+
+    /// Reserves the next attempt for a run's step as the runtime's recovery
+    /// authority does: an incomplete scope is refused and each reservation
+    /// supersedes the earlier ones.
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        let refuse = |error: OrbitError| {
+            DispatchError::JobExecution(format!(
+                "reserve rebase recovery attempt (run {run_id}, step `{step_id}`): {error}"
+            ))
+        };
+        if [
+            run_id,
+            step_id,
+            &scope.workspace_path,
+            &scope.head_sha_before,
+            &scope.target_base_sha,
+        ]
+        .iter()
+        .any(|value| value.is_empty())
+        {
+            return Err(refuse(OrbitError::InvalidInput(
+                "rebase recovery attempt needs a run, step, workspace, original HEAD and pinned base"
+                    .to_string(),
+            )));
+        }
+        let mut attempts = self.recovery_attempts.lock().unwrap();
+        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
+        Ok(attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .count() as u64)
+    }
+
+    /// Certifies a completion as the runtime's recovery authority does, then
+    /// copies it into the run store the `git_rebase` retry reads. It refuses
+    /// a payload naming another run or step, or lacking its bindings or a
+    /// `recovery_attempt`; an attempt this host never reserved or a later
+    /// reservation superseded; evidence that does not describe the reserved
+    /// workspace, original HEAD and pinned base; and different evidence for an
+    /// attempt already certified. The copy needs the run to be Running with a
+    /// durable run state: neither is created here. As in the runtime, the
+    /// certificate is recorded before the copy is checked, so a refused copy
+    /// leaves the certificate in place for `verify_rebase_recovery`.
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        let certify = |error: OrbitError| {
+            DispatchError::JobExecution(format!(
+                "certify rebase recovery (run {run_id}, step `{step_id}`): {error}"
+            ))
+        };
+        let attempt = self
+            .certifiable_attempt(run_id, step_id, output)
+            .map_err(certify)?;
+        let persist = |reason: &str| {
+            DispatchError::JobExecution(format!(
+                "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
+            ))
+        };
+        {
+            let mut certified = self.checkpoints.lock().unwrap();
+            let recorded = certified
+                .iter()
+                .find(|(run, step, payload)| {
+                    run == run_id
+                        && step == step_id
+                        && payload.get("recovery_attempt").and_then(Value::as_i64) == Some(attempt)
+                })
+                .map(|(_, _, payload)| payload.clone());
+            match recorded {
+                Some(payload) if payload == *output => {}
+                Some(_) => {
+                    return Err(certify(OrbitError::Execution(format!(
+                        "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
+                         already certified with different evidence; the accepted certificate is \
+                         immutable"
+                    ))));
+                }
+                None => certified.push((run_id.to_string(), step_id.to_string(), output.clone())),
+            }
+        }
+        // Certify first, as the runtime does: the run-state copy below is
+        // refused for a run that is not Running or has no durable state, and
+        // the certificate recorded above stays in the store
+        // `verify_rebase_recovery` reads.
+        let running = self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
+        if !running {
+            return Err(persist("rebase recovery run is no longer running"));
+        }
+        let no_run_state = || persist("rebase recovery has no durable run state");
+        if !self.run_states.lock().unwrap().contains_key(run_id) {
+            return Err(no_run_state());
+        }
+        self.run_states
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .ok_or_else(no_run_state)?
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
+        if let Some(hook) = self.preparation_hook.lock().unwrap().as_mut() {
+            hook(output);
+        }
+        Ok(())
+    }
+
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        Ok(self
+            .recovery_attempts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .map(|(_, _, scope)| scope.clone())
+            .collect())
+    }
+
+    /// Only the newest certified attempt of a run's step vouches for it, and
+    /// only for the exact payload certified, as the runtime's recovery
+    /// authority does. A payload that cannot be bound, or that names no
+    /// attempt, is never vouched for.
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        if bound_recovery_fields(run_id, step_id, checkpoint).is_err() {
+            return Ok(false);
+        }
+        let Some(attempt) = checkpoint.get("recovery_attempt").and_then(Value::as_i64) else {
+            return Ok(false);
+        };
+        let certified = self.checkpoints.lock().unwrap();
+        let latest = certified
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .filter_map(|(_, _, payload)| payload.get("recovery_attempt").and_then(Value::as_i64))
+            .max();
+        Ok(latest == Some(attempt)
+            && certified.iter().any(|(run, step, payload)| {
+                run == run_id && step == step_id && payload == checkpoint
+            }))
+    }
+
+    fn validate_step_recovery_mutation(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _task_ids: &[String],
+        _workspace_path: &Path,
+    ) -> Result<(), OrbitError> {
+        match self.recovery_owner_refusal.lock().unwrap().clone() {
+            Some(reason) => Err(OrbitError::Execution(reason)),
+            None => Ok(()),
+        }
+    }
+
+    fn authorize_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<StepRecoveryAdmission, OrbitError> {
+        Ok(match self.recovery_revocation.lock().unwrap().clone() {
+            Some(reason) => StepRecoveryAdmission::Denied { reason },
+            None => StepRecoveryAdmission::Allowed,
+        })
+    }
+
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        let Some(reply) = stored_record(&self.stubs, action) else {
+            return Err(DispatchError::DeterministicActionNotRegistered(
+                action.to_string(),
+            ));
+        };
+        self.stub_calls
+            .lock()
+            .unwrap()
+            .push((action.to_string(), input.clone()));
+        reply
+    }
+
+    /// Conflict recovery dispatched by a job draws from a complexity pool;
+    /// with no crew registry here it keeps the activity's inline settings.
+    fn agent_crew_config_for_input(
+        &self,
+        _input: &Value,
+    ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
+        Ok(None)
+    }
+
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    fn admit_final_recovery(
+        &self,
+        _run_id: &str,
+        request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError> {
+        self.final_recovery_admissions
+            .lock()
+            .unwrap()
+            .push(request.clone());
+        Ok(FinalRecoveryAdmission::Admitted)
+    }
+
+    /// Settles every decision but `escalate`, leaving the task as it is: the
+    /// runtime's applier, not this host, owns the lifecycle change.
+    fn apply_final_recovery(
+        &self,
+        _run_id: &str,
+        application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError> {
+        self.final_recovery_applications
+            .lock()
+            .unwrap()
+            .push(application.clone());
+        Ok(match &application.decision {
+            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
+                outcome: "blocked for a human".to_string(),
+            },
+            other => FinalRecoveryApplied::Settled {
+                outcome: other.kind().to_string(),
+            },
+        })
+    }
+
+    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        let command = self
+            .provider
+            .as_ref()
+            .unwrap_or_else(|| panic!("no substitute CLI configured for provider {provider}"));
+        Ok(ResolvedCliExecutor {
+            command: command.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
+        })
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext {
+            workspace_root: Some(self.repo.clone()),
+            ..orbit_tools::ToolContext::default()
+        }
+    }
 }
 
 fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
@@ -1635,257 +3072,6 @@ fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
     assert_eq!(fresh["repair"], Value::Null);
 }
 
-const RESUME_TASK: &str = "T-RESUME";
-const FAILED_RUN: &str = "jrun-failed";
-const NEXT_RUN: &str = "jrun-next";
-
-/// A task whose run `FAILED_RUN` committed a candidate and failed after
-/// implementation, with the failure handoff's preservation record.
-struct PreservedCandidate {
-    fixture: Fixture,
-    host: LifecycleHost,
-    candidate: String,
-    branch: String,
-}
-
-impl PreservedCandidate {
-    fn assert_fresh(&self, setup: &Value, base: &str, case: &str) -> Value {
-        let resumed = self.resume(setup).expect("candidate_resume");
-        assert_eq!(resumed["outcome"], "fresh", "{case}: {resumed}");
-        let checkout = workspace(setup);
-        assert_eq!(head(&checkout), base, "{case}");
-        assert!(status(&checkout).is_empty(), "{case}");
-        resumed
-    }
-
-    fn feature() -> Self {
-        Self::new("feature.txt", "feature\n")
-    }
-
-    fn new(file: &str, contents: &str) -> Self {
-        let (fixture, host) = Fixture::hosted();
-        let (_, checkout) = setup_checkout(&host, RESUME_TASK, FAILED_RUN);
-        let candidate = commit_file(&checkout.path, file, contents);
-        let input = json!({ "task_ids": [RESUME_TASK] });
-        host.add_run(job_run(FAILED_RUN, JobRunState::Failed, input));
-        let preserved = Self {
-            fixture,
-            host,
-            candidate,
-            branch: checkout.branch,
-        };
-        preserved.preserve_step("validate");
-        preserved.host.set_status(RESUME_TASK, TaskStatus::Backlog);
-        preserved
-    }
-
-    /// The `feature.txt` candidate carried onto an advanced base under the
-    /// required `command` and committed by the next run, with that run's
-    /// setup and resume.
-    fn committed(command: &str) -> (Self, Value, Value) {
-        let preserved = Self::feature();
-        preserved.advance_base();
-        preserved.require(&[command]);
-        let (setup, resumed) = preserved.resumed();
-        preserved.commit(&setup);
-        (preserved, setup, resumed)
-    }
-
-    /// Advance the base past the candidate's with a `base.txt` edit.
-    fn advance_base(&self) -> String {
-        commit_file(&self.fixture.repo, "base.txt", "v2\n")
-    }
-
-    /// Set `workflow.required_validation_commands`.
-    fn require(&self, commands: &[&str]) {
-        self.host.set_required_commands(commands);
-    }
-
-    /// Point the failed run's handoff at `failed_step_id` and requeue.
-    fn resume_failed_step(
-        &self,
-        failed_step_id: &str,
-        run_id: &str,
-    ) -> (Value, Result<Value, OrbitError>) {
-        self.preserve_step(failed_step_id);
-        self.requeue(run_id)
-    }
-
-    /// Requeue as `run_id`: its setup, and the resume that follows it.
-    fn requeue(&self, run_id: &str) -> (Value, Result<Value, OrbitError>) {
-        let setup = self.relinked_setup(run_id);
-        let resumed = self.resume_for(&setup, run_id);
-        (setup, resumed)
-    }
-
-    /// `run_id`'s setup, linked to the failed run.
-    ///
-    /// The task is linked back to the failed run first: each setup stamps
-    /// its own run id, and resume reads the link from before that stamp.
-    fn relinked_setup(&self, run_id: &str) -> Value {
-        self.host.link_run(RESUME_TASK, FAILED_RUN);
-        self.next_setup_for(run_id)
-    }
-
-    fn preserve_step(&self, failed_step_id: &str) {
-        self.preserve_decision(failed_step_id, "blocked_failure_pr");
-    }
-
-    /// Record the failed run's handoff at `failed_step_id` as `decision`.
-    fn preserve_decision(&self, failed_step_id: &str, decision: &str) {
-        let task = self.host.get_task(RESUME_TASK).unwrap();
-        let handoff = json!({
-            "phase": "failure_handoff",
-            "decision": decision,
-            "task_id": RESUME_TASK,
-            "handoff_run_id": FAILED_RUN,
-            "branch": self.branch,
-            "head_sha": self.candidate,
-            "task_spec_digest": task.spec_digest(),
-        });
-        self.host.preserve(FAILED_RUN, failed_step_id, handoff);
-    }
-
-    /// [ORB-14450] Make `FAILED_RUN` a run held on named external evidence
-    /// for `head_sha`, whose receipt is the task's latest decision: no
-    /// failure checkpoint, the task's hold artifact, and the receipt event.
-    fn hold(&self, head_sha: &str) {
-        let mut state = pipeline_state(FAILED_RUN);
-        state.pipeline = json!({"worktree": {"head_ref": self.branch}});
-        let mut states = self.host.run_states.lock().unwrap();
-        states.insert(FAILED_RUN.to_string(), state);
-        drop(states);
-        let task = self.host.get_task(RESUME_TASK).unwrap();
-        let hold = json!({
-            "schema_version": 1,
-            "attempt_id": "attempt-1",
-            "lineage_key": "lineage-1",
-            "run_id": FAILED_RUN,
-            "candidate": {"commit": head_sha, "tree": "held-tree"},
-            "task_meaning_digest": "meaning",
-            "requirements": [{
-                "kind": "native_os", "name": "macOS run",
-                "command": "native macos", "artifact": "evidence/macos.json",
-            }],
-            "task_spec_digest": task.spec_digest(),
-        });
-        let artifact = json_artifact("review-evidence-hold.json", &hold);
-        self.host.set_artifact(RESUME_TASK, artifact);
-        self.host.clear_history(RESUME_TASK);
-        let receipt = TaskHistoryEntry {
-            note: Some(format!(
-                "run={FAILED_RUN}; all named external checks arrived for the held \
-                 candidate; queued for fresh review."
-            )),
-            from_status: Some(TaskStatus::InProgress),
-            to_status: Some(TaskStatus::Backlog),
-            ..history_entry(Utc::now(), "system", "review_evidence_received")
-        };
-        self.host.record_history(RESUME_TASK, receipt);
-    }
-
-    /// The requeued task's next run sets up its checkout, linked to the
-    /// failed run.
-    fn next_setup(&self) -> Value {
-        self.next_setup_for(NEXT_RUN)
-    }
-
-    fn next_setup_for(&self, run_id: &str) -> Value {
-        let input = setup_input(&[RESUME_TASK], run_id);
-        let setup = action(&self.host, "worktree_setup", &input)
-            .unwrap_or_else(|error| panic!("the next run's setup ({run_id}): {error}"));
-        assert_eq!(setup["prior_job_run_id"], FAILED_RUN);
-        setup
-    }
-
-    /// The next run's setup and its resume, which must not error.
-    fn resumed(&self) -> (Value, Value) {
-        let setup = self.next_setup();
-        let resumed = self.resume(&setup).expect("candidate_resume");
-        (setup, resumed)
-    }
-
-    /// A claimed leaf's resume with the claim's `fields`.
-    fn resume_claimed(&self, setup: &Value, fields: Value) -> Result<Value, OrbitError> {
-        let mut input = json!({
-            "job_run_id": NEXT_RUN,
-            "task_ids": [RESUME_TASK],
-            "workspace_path": setup["workspace_path"],
-            "base_sha": setup["base_sha"],
-            "claimed": true,
-        });
-        input
-            .as_object_mut()
-            .unwrap()
-            .extend(fields.as_object().unwrap().clone());
-        action(&self.host, "candidate_resume", &input)
-    }
-
-    /// A claimed leaf's resume of the repair its claim carries for `head_sha`.
-    fn resume_claim_repair(&self, setup: &Value, head_sha: &str) -> Result<Value, OrbitError> {
-        let repair = json!({
-            "repairs_claim_id": "claim-1",
-            "handoff_id": "handoff-1",
-            "branch": self.branch,
-            "head_sha": head_sha,
-            "stop_evidence": "pull request #42 conflicts with its base",
-        });
-        self.resume_claimed(setup, json!({"claim_repair": repair}))
-    }
-
-    fn commit(&self, setup: &Value) -> Value {
-        action(
-            &self.host,
-            "git_commit",
-            &json!({
-                "job_run_id": NEXT_RUN, "scope": "all",
-                "workspace_path": setup["workspace_path"],
-                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
-            }),
-        )
-        .expect("commit carried candidate")
-    }
-
-    fn validate(&self, setup: &Value) -> Result<Value, OrbitError> {
-        action(
-            &self.host,
-            "candidate_validate",
-            &json!({
-                "job_run_id": NEXT_RUN, "completed_task_ids": [RESUME_TASK],
-                "workspace_path": setup["workspace_path"],
-                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
-            }),
-        )
-    }
-
-    fn validation_log(&self) -> Value {
-        let artifacts = self.host.artifacts.lock().unwrap();
-        let log = artifacts[RESUME_TASK]
-            .iter()
-            .find(|artifact| artifact.path == format!("validation/{NEXT_RUN}/0.json"))
-            .expect("durable final validation evidence");
-        serde_json::from_slice(&log.content).unwrap()
-    }
-
-    fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {
-        self.resume_for(setup, NEXT_RUN)
-    }
-
-    fn resume_for(&self, setup: &Value, run_id: &str) -> Result<Value, OrbitError> {
-        action(
-            &self.host,
-            "candidate_resume",
-            &json!({
-                "job_run_id": run_id,
-                "task_ids": [RESUME_TASK],
-                "workspace_path": setup["workspace_path"],
-                "base_sha": setup["base_sha"],
-                "prior_job_run_id": setup["prior_job_run_id"],
-            }),
-        )
-    }
-}
-
 /// `resumed` has `outcome` and runs the implementer exactly when `implement`.
 fn assert_resumed(case: &str, resumed: &Value, outcome: &str, implement: bool) {
     assert_eq!(resumed["outcome"], outcome, "{case}: {resumed}");
@@ -3351,220 +4537,6 @@ fn integrity_diagnostic(error: &DispatchError, code: &str) -> Value {
     serde_json::from_str(diagnostic).expect("integrity diagnostic is json")
 }
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-/// A primary checkout on `agent-main` whose `.orbit/` scratch is ignored, as
-/// in an initialized workspace.
-struct Fixture {
-    root: TempDir,
-    repo: PathBuf,
-}
-
-impl Fixture {
-    #[cfg(unix)]
-    fn with_provider(&self, host: &LifecycleHost, body: &str) -> LifecycleHost {
-        host.with_provider(&install_provider(self.root.path(), body))
-    }
-
-    fn hosted() -> (Self, LifecycleHost) {
-        let fixture = Self::new();
-        let host = LifecycleHost::new(&fixture.repo);
-        (fixture, host)
-    }
-
-    fn with_checkout(task_id: &str, run_id: &str) -> (Self, LifecycleHost, Checkout) {
-        let (fixture, host) = Self::hosted();
-        let (_, checkout) = setup_checkout(&host, task_id, run_id);
-        (fixture, host, checkout)
-    }
-
-    fn new() -> Self {
-        thread_local! {
-            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
-        }
-        TEMPLATE.with(|slot| {
-            let mut template = slot.borrow_mut();
-            let seed = template.get_or_insert_with(Self::fresh);
-            let root = TempDir::new().unwrap();
-            super::git_fixture::copy_template(seed.root.path(), root.path());
-            let repo = canonical(&root.path().join("repo"));
-            Self { root, repo }
-        })
-    }
-
-    fn fresh() -> Self {
-        let root = TempDir::new().unwrap();
-        let repo = root.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        super::git_fixture::init(&repo);
-        git(&repo, &["checkout", "-b", BASE]);
-        git(&repo, &["config", "user.name", "Orbit Test"]);
-        git(
-            &repo,
-            &["config", "user.email", "orbit-test@example.invalid"],
-        );
-        fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
-        fs::write(repo.join("README.md"), "base\n").unwrap();
-        fs::write(repo.join("base.txt"), "v1\n").unwrap();
-        git(&repo, &["add", ".gitignore", "README.md", "base.txt"]);
-        git(&repo, &["commit", "-m", "base"]);
-        let origin = root.path().join("origin.git");
-        git(root.path(), &["init", "--bare", path_str(&origin)]);
-        git(&repo, &["remote", "add", "origin", path_str(&origin)]);
-        git(&repo, &["push", "-u", "origin", BASE]);
-        let repo = canonical(&repo);
-        Self { root, repo }
-    }
-}
-
-/// What `worktree_setup` reported for a run's checkout.
-struct Checkout {
-    path: PathBuf,
-    branch: String,
-}
-
-impl Checkout {
-    fn from_setup(output: &Value) -> Self {
-        Self {
-            path: PathBuf::from(output["workspace_path"].as_str().expect("workspace_path")),
-            branch: output["head_ref"].as_str().expect("head_ref").to_string(),
-        }
-    }
-}
-
-/// A run's checkout holding one committed candidate edit, prepared for
-/// handoff after the base advanced past the commit it was created from.
-struct PreparedRebase {
-    fixture: Fixture,
-    host: LifecycleHost,
-    run_id: String,
-    checkout: Checkout,
-    base_sha: String,
-    candidate: String,
-    /// The advanced base `pr_prepare` pinned.
-    target: String,
-    common: Value,
-    prepared: Value,
-}
-
-impl PreparedRebase {
-    fn new(run_id: &str, candidate_file: &str, base_file: &str) -> Self {
-        Self::with_commits(
-            run_id,
-            &[(candidate_file, "candidate\n")],
-            &[(base_file, "target\n")],
-        )
-    }
-
-    /// A candidate of one commit per `candidate` file write, prepared against
-    /// a base advanced by one commit per `base` file write.
-    fn with_commits(run_id: &str, candidate: &[(&str, &str)], base: &[(&str, &str)]) -> Self {
-        let commit_all = |repo: &Path, writes: &[(&str, &str)]| {
-            writes
-                .iter()
-                .fold(None, |_, (file, contents)| {
-                    Some(commit_file(repo, file, contents))
-                })
-                .expect("at least one commit")
-        };
-        Self::with_edits(
-            run_id,
-            |checkout| commit_all(checkout, candidate),
-            |repo| commit_all(repo, base),
-        )
-    }
-
-    /// A candidate committed by `candidate` in the run's checkout, prepared
-    /// against a base `base` advanced in the primary; each returns its tip.
-    fn with_edits(
-        run_id: &str,
-        candidate: impl FnOnce(&Path) -> String,
-        base: impl FnOnce(&Path) -> String,
-    ) -> Self {
-        let fixture = Fixture::new();
-        Self::with_fixture(run_id, fixture, candidate, base)
-    }
-
-    /// Prepare from a fixture with a caller-selected common ancestor.
-    fn with_fixture(
-        run_id: &str,
-        fixture: Fixture,
-        candidate: impl FnOnce(&Path) -> String,
-        base: impl FnOnce(&Path) -> String,
-    ) -> Self {
-        let host = LifecycleHost::new(&fixture.repo);
-        host.start_run(run_id);
-        let (setup, checkout) = setup_checkout(&host, "T-REBASE", run_id);
-        let base_sha = setup["base_sha"].as_str().unwrap().to_string();
-        let candidate = candidate(&checkout.path);
-        let target = base(&fixture.repo);
-        let common = json!({
-            "workspace_path": checkout.path,
-            "job_run_id": run_id,
-            "completed_task_ids": ["T-REBASE"],
-            "base": BASE,
-            "base_sync": "local",
-        });
-        let prepared = action(&host, "pr_prepare", &common).expect("pr_prepare");
-        Self {
-            fixture,
-            host,
-            run_id: run_id.to_string(),
-            checkout,
-            base_sha,
-            candidate,
-            target,
-            common,
-            prepared,
-        }
-    }
-
-    fn rebase(&self) -> Result<Value, OrbitError> {
-        self.rebase_on(&self.host, &self.prepared)
-    }
-
-    /// Run `git_rebase` through `host` for the handoff `preparation` describes.
-    fn rebase_on(&self, host: &LifecycleHost, preparation: &Value) -> Result<Value, OrbitError> {
-        let mut input = self.common.clone();
-        for field in [
-            "head",
-            "head_sha",
-            "base",
-            "base_ref",
-            "base_sha",
-            "remote_sha",
-            "commits_behind",
-            "sync_required",
-        ] {
-            input[field] = preparation[field].clone();
-        }
-        action(host, "git_rebase", &input)
-    }
-
-    fn head(&self) -> String {
-        head(&self.checkout.path)
-    }
-
-    /// This fixture's host with a substitute `codex` that runs `body` in
-    /// the checkout.
-    #[cfg(unix)]
-    fn with_provider(&self, body: &str) -> LifecycleHost {
-        self.fixture.with_provider(&self.host, body)
-    }
-
-    /// Run conflict recovery on `host` for this fixture's stopped rebase.
-    #[cfg(unix)]
-    fn recover_conflict(
-        &self,
-        host: &LifecycleHost,
-        conflict: &Value,
-    ) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
-        recover(host, &self.run_id, conflict_recovery_input(self, conflict))
-    }
-}
-
 fn setup_input(task_ids: &[&str], run_id: &str) -> Value {
     json!({
         "task_ids": task_ids,
@@ -3683,79 +4655,6 @@ fn task(id: &str, status: TaskStatus) -> Task {
     }
 }
 
-/// The task store, run store and provider resolution the lifecycle actions
-/// read through, kept in memory.
-#[derive(Default)]
-struct LifecycleHost {
-    worker: Option<orbit_types::tool::WorkerInvocation>,
-    gate_source: Option<orbit_types::workflow::ValidationGateSource>,
-    reclaim_patterns: Option<Vec<String>>,
-    repo: PathBuf,
-    provider: Option<PathBuf>,
-    tasks: Mutex<BTreeMap<String, Task>>,
-    runs: Mutex<Vec<JobRun>>,
-    admitted: Mutex<Vec<String>>,
-    checkpoints: Mutex<Vec<(String, String, Value)>>,
-    /// Admitted conflict recoveries, as (run, step, scope), in reservation
-    /// order. The attempt is a recovery's 1-based position for its run/step.
-    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
-    /// A replica owner's answer per task, overriding the local task store.
-    owner_answers: Mutex<BTreeMap<String, WorktreeGcTaskLookup>>,
-    /// Claimed runs whose claim is settled, with the settlement's account.
-    settled_claims: Mutex<BTreeMap<String, String>>,
-    /// The owner route of each claimed run for GC memoization tests.
-    lookup_scopes: Mutex<BTreeMap<String, String>>,
-    /// Selector widenings requested, as (task, step, activity, paths).
-    widenings: Mutex<Vec<Widening>>,
-    /// Durable run state by run id.
-    run_states: Mutex<BTreeMap<String, PipelineState>>,
-    /// Task history events by task id.
-    history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
-    /// `workflow.required_validation_commands`.
-    required_commands: Mutex<Vec<String>>,
-    /// Task artifacts by task id.
-    artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
-    /// This host's machine identity.
-    machine: Mutex<Option<String>>,
-    /// The candidate the owner kept from the task's last claim.
-    kept_claim: Mutex<Option<KeptClaimCandidate>>,
-    /// Deterministically model an operator write immediately before landing.
-    landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
-    landing_advance: Mutex<Option<PathBuf>>,
-    /// Scripted answers of host-run deterministic actions, by action name.
-    stubs: Mutex<BTreeMap<String, Result<Value, DispatchError>>>,
-    /// Every stubbed action call, as (action, input), in order.
-    stub_calls: Mutex<Vec<(String, Value)>>,
-    /// Final recovery admissions requested, in order.
-    final_recovery_admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
-    /// Final recovery decisions handed to the host, in order.
-    final_recovery_applications: Mutex<Vec<FinalRecoveryApplication>>,
-    /// Why the live run/task/worktree no longer owns a step recovery.
-    recovery_owner_refusal: Mutex<Option<String>>,
-    /// Why step recovery authorization was revoked.
-    recovery_revocation: Mutex<Option<String>>,
-    /// Deterministic race after host certification and before synchronization.
-    preparation_hook: Mutex<Option<PreparationHook>>,
-    /// `workflow.unlocked_context_paths` with
-    /// `workflow.unlocked_path_validation_commands`.
-    unlocked_validation: Mutex<orbit_engine::UnlockedPathValidation>,
-    /// `workflow.generated_paths`.
-    generated_paths: Mutex<Vec<orbit_engine::GeneratedPath>>,
-    /// The host's record of each run's last fully validated tree.
-    validated_trees: Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>,
-    /// `[pr]`, `[commit]` and `[branch]` delivery settings.
-    pr_config: Mutex<orbit_engine::PrConfig>,
-    /// Scripted `pr.status` answer for `pr_complete`.
-    pr_status: Mutex<Option<Value>>,
-    /// When set, the agent envelope carries this host's task id, status and
-    /// write-refusal flag. Recovery tests use it for the leaf's terminal stop;
-    /// other fixtures leave it unset and keep an empty task context.
-    publish_task_context: bool,
-}
-
-type Widening = (String, ContextWideningStep, String, Vec<String>);
-type PreparationHook = Box<dyn FnMut(&Value) + Send>;
-
 /// Insert one fixture record under its durable identity.
 fn store_record<T>(store: &Mutex<BTreeMap<String, T>>, id: &str, value: T) {
     store.lock().unwrap().insert(id.to_string(), value);
@@ -3764,282 +4663,6 @@ fn store_record<T>(store: &Mutex<BTreeMap<String, T>>, id: &str, value: T) {
 /// Read one fixture record without retaining a lock across engine dispatch.
 fn stored_record<T: Clone>(store: &Mutex<BTreeMap<String, T>>, id: &str) -> Option<T> {
     store.lock().unwrap().get(id).cloned()
-}
-
-impl LifecycleHost {
-    pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
-        self.stubs.lock().unwrap().insert(
-            action.to_string(),
-            reply.map_err(|message| DispatchError::action_failed(action, message)),
-        );
-    }
-
-    pub(super) fn stub_calls_of(&self, action: &str) -> Vec<Value> {
-        self.stub_calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(name, _)| name == action)
-            .map(|(_, input)| input.clone())
-            .collect()
-    }
-
-    fn new(repo: &Path) -> Self {
-        Self {
-            repo: repo.to_path_buf(),
-            ..Self::default()
-        }
-    }
-
-    /// The same stores, resolving the agent provider to `provider`. Every
-    /// store is copied, so a fixture seeded before the swap behaves the same
-    /// after it. Only the one-shot `preparation_hook` is not carried: a boxed
-    /// closure cannot be cloned, and a test that races preparation installs it
-    /// on the host it dispatches through.
-    fn with_provider(&self, provider: &Path) -> Self {
-        fn copied<T: Clone>(store: &Mutex<T>) -> Mutex<T> {
-            Mutex::new(store.lock().unwrap().clone())
-        }
-        Self {
-            worker: self.worker.clone(),
-            gate_source: self.gate_source,
-            reclaim_patterns: self.reclaim_patterns.clone(),
-            repo: self.repo.clone(),
-            provider: Some(provider.to_path_buf()),
-            tasks: copied(&self.tasks),
-            runs: copied(&self.runs),
-            admitted: copied(&self.admitted),
-            checkpoints: copied(&self.checkpoints),
-            recovery_attempts: copied(&self.recovery_attempts),
-            owner_answers: copied(&self.owner_answers),
-            settled_claims: copied(&self.settled_claims),
-            lookup_scopes: copied(&self.lookup_scopes),
-            widenings: copied(&self.widenings),
-            run_states: copied(&self.run_states),
-            history: copied(&self.history),
-            required_commands: copied(&self.required_commands),
-            artifacts: copied(&self.artifacts),
-            machine: copied(&self.machine),
-            kept_claim: copied(&self.kept_claim),
-            landing_write: copied(&self.landing_write),
-            landing_advance: copied(&self.landing_advance),
-            stubs: copied(&self.stubs),
-            stub_calls: copied(&self.stub_calls),
-            final_recovery_admissions: copied(&self.final_recovery_admissions),
-            final_recovery_applications: copied(&self.final_recovery_applications),
-            recovery_owner_refusal: copied(&self.recovery_owner_refusal),
-            recovery_revocation: copied(&self.recovery_revocation),
-            preparation_hook: Mutex::new(None),
-            unlocked_validation: copied(&self.unlocked_validation),
-            generated_paths: copied(&self.generated_paths),
-            validated_trees: copied(&self.validated_trees),
-            pr_config: copied(&self.pr_config),
-            pr_status: copied(&self.pr_status),
-            publish_task_context: self.publish_task_context,
-        }
-    }
-
-    /// Start `run_id` as a running run with a durable run state, as a host has
-    /// before any recovery certifies a completion for it. Keeps an existing
-    /// run or state.
-    fn start_run(&self, run_id: &str) {
-        let mut runs = self.runs.lock().unwrap();
-        if !runs.iter().any(|run| run.run_id == run_id) {
-            runs.push(job_run(run_id, JobRunState::Running, json!({})));
-        }
-        drop(runs);
-        self.run_states
-            .lock()
-            .unwrap()
-            .entry(run_id.to_string())
-            .or_insert_with(|| pipeline_state(run_id));
-    }
-
-    /// The reserved attempt `output` certifies, or why the authority refuses it.
-    fn certifiable_attempt(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        output: &Value,
-    ) -> Result<i64, OrbitError> {
-        bound_recovery_fields(run_id, step_id, output)?;
-        let attempt = match output.get("recovery_attempt") {
-            None => {
-                return Err(OrbitError::Execution(format!(
-                    "rebase recovery evidence for run {run_id} step `{step_id}` names no \
-                     host-reserved attempt"
-                )));
-            }
-            Some(value) => value
-                .as_i64()
-                .filter(|attempt| *attempt >= 1)
-                .ok_or_else(|| {
-                    OrbitError::Execution(
-                        "rebase recovery evidence has an invalid `recovery_attempt`".to_string(),
-                    )
-                })?,
-        };
-        let attempts = self.rebase_recovery_attempts(run_id, step_id)?;
-        let reserved = usize::try_from(attempt)
-            .ok()
-            .and_then(|attempt| attempts.get(attempt - 1))
-            .ok_or_else(|| {
-                OrbitError::PolicyDenied(format!(
-                    "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was not \
-                     reserved by this host"
-                ))
-            })?;
-        if attempt as usize != attempts.len() {
-            return Err(OrbitError::PolicyDenied(format!(
-                "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was \
-                 superseded by a later attempt"
-            )));
-        }
-        let field = |name: &str| output.get(name).and_then(Value::as_str);
-        if field("workspace_path") != Some(reserved.workspace_path.as_str())
-            || field("head_sha_before") != Some(reserved.head_sha_before.as_str())
-            || field("target_base_sha") != Some(reserved.target_base_sha.as_str())
-        {
-            return Err(OrbitError::PolicyDenied(format!(
-                "rebase recovery evidence for run {run_id} step `{step_id}` attempt {attempt} \
-                 does not describe the reserved workspace, original HEAD and pinned base"
-            )));
-        }
-        Ok(attempt)
-    }
-
-    fn set_pr_status(&self, status: Value) {
-        *self.pr_status.lock().unwrap() = Some(status);
-    }
-
-    fn add_task(&self, id: &str, status: TaskStatus) {
-        store_record(&self.tasks, id, task(id, status));
-    }
-
-    fn edit_task(&self, id: &str, edit: impl FnOnce(&mut Task)) {
-        edit(self.tasks.lock().unwrap().get_mut(id).unwrap());
-    }
-
-    fn set_status(&self, id: &str, status: TaskStatus) {
-        self.edit_task(id, |task| task.status = status);
-    }
-
-    fn link_run(&self, id: &str, run_id: &str) {
-        self.edit_task(id, |task| task.job_run_id = Some(run_id.to_string()));
-    }
-
-    fn add_run(&self, run: JobRun) {
-        self.runs.lock().unwrap().push(run);
-    }
-
-    fn answer(&self, task_id: &str, lookup: WorktreeGcTaskLookup) {
-        store_record(&self.owner_answers, task_id, lookup);
-    }
-
-    fn settle_claim(&self, run_id: &str, settlement: &str) {
-        store_record(&self.settled_claims, run_id, settlement.to_string());
-    }
-
-    fn set_lookup_scope(&self, run_id: &str, scope: &str) {
-        store_record(&self.lookup_scopes, run_id, scope.to_string());
-    }
-
-    fn admitted(&self) -> Vec<String> {
-        self.admitted.lock().unwrap().clone()
-    }
-
-    fn checkpoints(&self) -> Vec<(String, String, Value)> {
-        self.checkpoints.lock().unwrap().clone()
-    }
-
-    fn recovery_attempts(&self) -> Vec<(String, String, RebaseRecoveryAttemptScope)> {
-        self.recovery_attempts.lock().unwrap().clone()
-    }
-
-    /// Overwrite the run store's copy of `step_id`'s recovery, as a leaf
-    /// holding the store's modify grant can.
-    fn leaf_writes_recovery(&self, run_id: &str, step_id: &str, checkpoint: Value) {
-        self.run_states
-            .lock()
-            .unwrap()
-            .get_mut(run_id)
-            .unwrap()
-            .rebase_recovery_checkpoints
-            .insert(step_id.to_string(), checkpoint);
-    }
-
-    fn widenings(&self) -> Vec<Widening> {
-        self.widenings.lock().unwrap().clone()
-    }
-
-    fn set_description(&self, id: &str, description: &str) {
-        self.edit_task(id, |task| task.description = description.to_string());
-    }
-
-    fn set_acceptance_criteria(&self, id: &str, criteria: &[&str]) {
-        let criteria = criteria.iter().map(ToString::to_string).collect();
-        self.edit_task(id, |task| task.acceptance_criteria = criteria);
-    }
-
-    fn set_context_files(&self, id: &str, selectors: &[&str]) {
-        let selectors = selectors.iter().map(ToString::to_string).collect();
-        self.edit_task(id, |task| task.context_files = selectors);
-    }
-
-    /// Store `artifact` on `task_id`, replacing one at the same path.
-    fn set_artifact(&self, task_id: &str, artifact: TaskArtifact) {
-        let mut artifacts = self.artifacts.lock().unwrap();
-        let stored = artifacts.entry(task_id.to_string()).or_default();
-        stored.retain(|existing| existing.path != artifact.path);
-        stored.push(artifact);
-    }
-
-    fn set_unlocked_validation(&self, paths: &[&str], commands: &[&str]) {
-        *self.unlocked_validation.lock().unwrap() = orbit_engine::UnlockedPathValidation {
-            paths: paths.iter().map(ToString::to_string).collect(),
-            commands: commands.iter().map(ToString::to_string).collect(),
-        };
-    }
-
-    fn set_generated_path(&self, path: &str, command: &str) {
-        *self.generated_paths.lock().unwrap() = vec![orbit_engine::GeneratedPath {
-            path: path.to_string(),
-            command: command.to_string(),
-        }];
-    }
-
-    fn set_required_commands(&self, commands: &[&str]) {
-        *self.required_commands.lock().unwrap() =
-            commands.iter().map(ToString::to_string).collect();
-    }
-
-    /// Record `output` as `run_id`'s failure-activity checkpoint.
-    fn preserve(&self, run_id: &str, failed_step_id: &str, output: Value) {
-        let mut state = pipeline_state(run_id);
-        state.failure_activity_checkpoint = Some(FailureActivityCheckpoint {
-            activity_name: "pr_failure_handoff".to_string(),
-            failed_step_id: failed_step_id.to_string(),
-            output,
-        });
-        store_record(&self.run_states, run_id, state);
-    }
-
-    fn record_history(&self, task_id: &str, entry: TaskHistoryEntry) {
-        self.history
-            .lock()
-            .unwrap()
-            .entry(task_id.to_string())
-            .or_default()
-            .push(entry);
-    }
-
-    fn clear_history(&self, task_id: &str) {
-        self.history.lock().unwrap().remove(task_id);
-    }
-
-    fn history(&self, task_id: &str) -> Vec<TaskHistoryEntry> {
-        stored_record(&self.history, task_id).unwrap_or_default()
-    }
 }
 
 fn conflict_recovery_activity() -> ActivityV2 {
@@ -4073,613 +4696,6 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
     orbit_engine::activity_job::load_activity_asset(&asset.to_string())
         .expect("fixture activity loads")
         .spec
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        self.pr_config.lock().unwrap().clone()
-    }
-
-    fn workspace_base_branch(&self) -> String {
-        BASE.to_string()
-    }
-
-    fn task_context_for_agent_input(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-        input: &Value,
-    ) -> Result<Option<Value>, DispatchError> {
-        if !self.publish_task_context {
-            return Ok(None);
-        }
-        let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
-            return Ok(None);
-        };
-        let Some(task) = self.tasks.lock().unwrap().get(task_id).cloned() else {
-            return Ok(None);
-        };
-        Ok(Some(json!({
-            "id": task.id,
-            "status": task.status.cli_name(),
-            "terminal": orbit_types::task::refuses_implementer_writes(task.status),
-        })))
-    }
-
-    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
-        let mut environment = orbit_exec::ValidationEnvironment::launcher(
-            RuntimeHost::agent_subprocess_environment(self, &[]),
-        );
-        environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
-        environment
-    }
-
-    fn record_direct_landing_intent(
-        &self,
-        _request: &orbit_types::workflow::automation::DirectLandingRequest,
-    ) -> Result<(), OrbitError> {
-        if let Some(path) = self.landing_advance.lock().unwrap().take() {
-            commit_file(&path, "racing.txt", "later candidate\n");
-        }
-        if let Some((path, bytes)) = self.landing_write.lock().unwrap().take() {
-            fs::write(path, bytes).unwrap();
-        }
-        Ok(())
-    }
-    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        stored_record(&self.tasks, task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
-    }
-
-    fn list_tasks_filtered(
-        &self,
-        _status: Option<TaskStatus>,
-        _priority: Option<TaskPriority>,
-        _parent_id: Option<&str>,
-        _job_run_id: Option<&str>,
-        _external_ref: Option<&ExternalRef>,
-        _has_external_ref_system: Option<&str>,
-    ) -> Result<Vec<Task>, OrbitError> {
-        Ok(self.tasks.lock().unwrap().values().cloned().collect())
-    }
-
-    fn admit_task_for_workflow(&self, task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
-        self.admitted.lock().unwrap().push(task_id.to_string());
-        self.set_status(task_id, TaskStatus::InProgress);
-        RuntimeHost::get_task(self, task_id)
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let task = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-        if let Some(job_run_id) = update.job_run_id {
-            task.job_run_id = Some(job_run_id);
-        }
-        if let Some(status) = update.status {
-            task.status = status;
-        }
-        drop(tasks);
-        if let Some(event) = update.status_event {
-            let entry = TaskHistoryEntry {
-                note: update.status_note,
-                ..history_entry(Utc::now(), "system", &event)
-            };
-            self.record_history(task_id, entry);
-        }
-        for entry in update.append_history {
-            self.record_history(task_id, entry);
-        }
-        Ok(())
-    }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        input: Value,
-    ) -> Result<Value, OrbitError> {
-        if operation == "pr.status"
-            && let Some(status) = self.pr_status.lock().unwrap().clone()
-        {
-            return Ok(status);
-        }
-        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
-    }
-
-    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
-        Ok(self.history(task_id))
-    }
-
-    fn get_task_artifact(
-        &self,
-        task_id: &str,
-        path: &str,
-    ) -> Result<Option<TaskArtifact>, OrbitError> {
-        let artifact = self
-            .artifacts
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact.path == path))
-            .cloned();
-        if let Some(artifact) = &artifact {
-            artifact.validate_inline_size(task_id)?;
-        }
-        Ok(artifact)
-    }
-
-    fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(stored_record(&self.artifacts, task_id).unwrap_or_default())
-    }
-
-    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        Ok(self
-            .runs
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|run| run.run_id == run_id)
-            .cloned())
-    }
-
-    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
-        Ok(stored_record(&self.run_states, run_id))
-    }
-
-    fn required_validation_commands(&self) -> Vec<String> {
-        self.required_commands.lock().unwrap().clone()
-    }
-
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        orbit_types::workflow::HostValidationGates {
-            gates: orbit_types::workflow::ValidationGates {
-                required_validation_commands: self.required_commands.lock().unwrap().clone(),
-                baseline_commands: Vec::new(),
-                light_delivery_paths: None,
-                review_skip_tags: None,
-            },
-            source: self
-                .gate_source
-                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
-        }
-    }
-
-    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
-        self.worker.clone()
-    }
-
-    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
-        self.unlocked_validation.lock().unwrap().clone()
-    }
-
-    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
-        self.generated_paths.lock().unwrap().clone()
-    }
-
-    fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
-        store_record(&self.validated_trees, &tree.run_id, tree.clone());
-        Ok(())
-    }
-
-    fn validated_tree(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
-        Ok(stored_record(&self.validated_trees, run_id))
-    }
-
-    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
-        let worker = self.worker.as_ref().expect("claimed fixture");
-        Ok(orbit_engine::ClaimExecutionContext {
-            footprint: vec!["file:README.md".to_string()],
-            workspace_id: worker.owner_workspace_id.clone(),
-            task_id: worker.task_id.clone(),
-            claim_id: worker.claim_id.clone(),
-            machine_id: worker.execution.machine_id.clone(),
-            run_id: worker.bound_run_id.clone(),
-            ship_mode: "pr".to_string(),
-            base_branch: "agent-main".to_string(),
-            landing_branch: "agent-main".to_string(),
-            required_commands: self.required_commands.lock().unwrap().clone(),
-        })
-    }
-
-    fn attach_task_validation_log(
-        &self,
-        task_id: &str,
-        run_id: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Result<(), OrbitError> {
-        // As the runtime's host does: validate the path, refuse a run that
-        // does not own the task with a typed error, and store the bytes raw.
-        orbit_types::task::validate_relative_artifact_path(path)?;
-        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
-            )));
-        }
-        let mut artifacts = self.artifacts.lock().unwrap();
-        let artifacts = artifacts.entry(task_id.to_string()).or_default();
-        artifacts.retain(|artifact| artifact.path != path);
-        artifacts.push(TaskArtifact {
-            path: path.to_string(),
-            content,
-            media_type: "application/json".to_string(),
-            created_by: None,
-        });
-        Ok(())
-    }
-
-    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
-        let worker = self
-            .worker
-            .as_ref()
-            .expect("claim routes evidence to its owner");
-        RuntimeHost::attach_task_validation_log(
-            self,
-            &worker.task_id,
-            &worker.bound_run_id,
-            path,
-            content,
-        )
-    }
-
-    fn local_machine_id(&self) -> Option<String> {
-        self.machine.lock().unwrap().clone()
-    }
-
-    fn kept_claim_candidate(
-        &self,
-        _task_id: &str,
-    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
-        Ok(self.kept_claim.lock().unwrap().clone())
-    }
-
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-
-    fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        // Unset means the shipped default, as on a host without configuration.
-        self.reclaim_patterns.clone().unwrap_or_else(|| {
-            ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
-                .map(String::from)
-                .to_vec()
-        })
-    }
-
-    fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
-        Ok(self.runs.lock().unwrap().clone())
-    }
-
-    fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
-        if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
-            return answer.clone();
-        }
-        match RuntimeHost::get_task(self, task_id) {
-            Ok(task) => WorktreeGcTaskLookup::Found {
-                status: task.status,
-                pr_status: task.pr_status,
-                status_since: Some(task.updated_at),
-            },
-            Err(_) => WorktreeGcTaskLookup::Unresolved,
-        }
-    }
-
-    fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
-        Some(stored_record(&self.lookup_scopes, run_id).unwrap_or_else(|| "local".to_string()))
-    }
-
-    fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
-        stored_record(&self.settled_claims, run_id)
-    }
-
-    fn widen_task_context_files(
-        &self,
-        task_id: &str,
-        _run_id: &str,
-        step: ContextWideningStep,
-        activity: &str,
-        paths: &[String],
-    ) -> Result<Vec<String>, OrbitError> {
-        self.widenings.lock().unwrap().push((
-            task_id.to_string(),
-            step,
-            activity.to_string(),
-            paths.to_vec(),
-        ));
-        Ok(paths.iter().map(|path| format!("file:{path}")).collect())
-    }
-
-    /// Reserves the next attempt for a run's step as the runtime's recovery
-    /// authority does: an incomplete scope is refused and each reservation
-    /// supersedes the earlier ones.
-    fn begin_rebase_recovery_attempt(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        scope: &RebaseRecoveryAttemptScope,
-    ) -> Result<u64, DispatchError> {
-        let refuse = |error: OrbitError| {
-            DispatchError::JobExecution(format!(
-                "reserve rebase recovery attempt (run {run_id}, step `{step_id}`): {error}"
-            ))
-        };
-        if [
-            run_id,
-            step_id,
-            &scope.workspace_path,
-            &scope.head_sha_before,
-            &scope.target_base_sha,
-        ]
-        .iter()
-        .any(|value| value.is_empty())
-        {
-            return Err(refuse(OrbitError::InvalidInput(
-                "rebase recovery attempt needs a run, step, workspace, original HEAD and pinned base"
-                    .to_string(),
-            )));
-        }
-        let mut attempts = self.recovery_attempts.lock().unwrap();
-        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
-        Ok(attempts
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .count() as u64)
-    }
-
-    /// Certifies a completion as the runtime's recovery authority does, then
-    /// copies it into the run store the `git_rebase` retry reads. It refuses
-    /// a payload naming another run or step, or lacking its bindings or a
-    /// `recovery_attempt`; an attempt this host never reserved or a later
-    /// reservation superseded; evidence that does not describe the reserved
-    /// workspace, original HEAD and pinned base; and different evidence for an
-    /// attempt already certified. The copy needs the run to be Running with a
-    /// durable run state: neither is created here. As in the runtime, the
-    /// certificate is recorded before the copy is checked, so a refused copy
-    /// leaves the certificate in place for `verify_rebase_recovery`.
-    fn checkpoint_rebase_recovery(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        let certify = |error: OrbitError| {
-            DispatchError::JobExecution(format!(
-                "certify rebase recovery (run {run_id}, step `{step_id}`): {error}"
-            ))
-        };
-        let attempt = self
-            .certifiable_attempt(run_id, step_id, output)
-            .map_err(certify)?;
-        let persist = |reason: &str| {
-            DispatchError::JobExecution(format!(
-                "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
-            ))
-        };
-        {
-            let mut certified = self.checkpoints.lock().unwrap();
-            let recorded = certified
-                .iter()
-                .find(|(run, step, payload)| {
-                    run == run_id
-                        && step == step_id
-                        && payload.get("recovery_attempt").and_then(Value::as_i64) == Some(attempt)
-                })
-                .map(|(_, _, payload)| payload.clone());
-            match recorded {
-                Some(payload) if payload == *output => {}
-                Some(_) => {
-                    return Err(certify(OrbitError::Execution(format!(
-                        "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
-                         already certified with different evidence; the accepted certificate is \
-                         immutable"
-                    ))));
-                }
-                None => certified.push((run_id.to_string(), step_id.to_string(), output.clone())),
-            }
-        }
-        // Certify first, as the runtime does: the run-state copy below is
-        // refused for a run that is not Running or has no durable state, and
-        // the certificate recorded above stays in the store
-        // `verify_rebase_recovery` reads.
-        let running = self
-            .runs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
-        if !running {
-            return Err(persist("rebase recovery run is no longer running"));
-        }
-        let no_run_state = || persist("rebase recovery has no durable run state");
-        if !self.run_states.lock().unwrap().contains_key(run_id) {
-            return Err(no_run_state());
-        }
-        self.run_states
-            .lock()
-            .unwrap()
-            .get_mut(run_id)
-            .ok_or_else(no_run_state)?
-            .rebase_recovery_checkpoints
-            .insert(step_id.to_string(), output.clone());
-        if let Some(hook) = self.preparation_hook.lock().unwrap().as_mut() {
-            hook(output);
-        }
-        Ok(())
-    }
-
-    fn rebase_recovery_attempts(
-        &self,
-        run_id: &str,
-        step_id: &str,
-    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
-        Ok(self
-            .recovery_attempts
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .map(|(_, _, scope)| scope.clone())
-            .collect())
-    }
-
-    /// Only the newest certified attempt of a run's step vouches for it, and
-    /// only for the exact payload certified, as the runtime's recovery
-    /// authority does. A payload that cannot be bound, or that names no
-    /// attempt, is never vouched for.
-    fn verify_rebase_recovery(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        checkpoint: &Value,
-    ) -> Result<bool, OrbitError> {
-        if bound_recovery_fields(run_id, step_id, checkpoint).is_err() {
-            return Ok(false);
-        }
-        let Some(attempt) = checkpoint.get("recovery_attempt").and_then(Value::as_i64) else {
-            return Ok(false);
-        };
-        let certified = self.checkpoints.lock().unwrap();
-        let latest = certified
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .filter_map(|(_, _, payload)| payload.get("recovery_attempt").and_then(Value::as_i64))
-            .max();
-        Ok(latest == Some(attempt)
-            && certified.iter().any(|(run, step, payload)| {
-                run == run_id && step == step_id && payload == checkpoint
-            }))
-    }
-
-    fn validate_step_recovery_mutation(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-        _task_ids: &[String],
-        _workspace_path: &Path,
-    ) -> Result<(), OrbitError> {
-        match self.recovery_owner_refusal.lock().unwrap().clone() {
-            Some(reason) => Err(OrbitError::Execution(reason)),
-            None => Ok(()),
-        }
-    }
-
-    fn authorize_step_recovery(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-    ) -> Result<StepRecoveryAdmission, OrbitError> {
-        Ok(match self.recovery_revocation.lock().unwrap().clone() {
-            Some(reason) => StepRecoveryAdmission::Denied { reason },
-            None => StepRecoveryAdmission::Allowed,
-        })
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        let Some(reply) = stored_record(&self.stubs, action) else {
-            return Err(DispatchError::DeterministicActionNotRegistered(
-                action.to_string(),
-            ));
-        };
-        self.stub_calls
-            .lock()
-            .unwrap()
-            .push((action.to_string(), input.clone()));
-        reply
-    }
-
-    /// Conflict recovery dispatched by a job draws from a complexity pool;
-    /// with no crew registry here it keeps the activity's inline settings.
-    fn agent_crew_config_for_input(
-        &self,
-        _input: &Value,
-    ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
-        Ok(None)
-    }
-
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.final_recovery_admissions
-            .lock()
-            .unwrap()
-            .push(request.clone());
-        Ok(FinalRecoveryAdmission::Admitted)
-    }
-
-    /// Settles every decision but `escalate`, leaving the task as it is: the
-    /// runtime's applier, not this host, owns the lifecycle change.
-    fn apply_final_recovery(
-        &self,
-        _run_id: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        self.final_recovery_applications
-            .lock()
-            .unwrap()
-            .push(application.clone());
-        Ok(match &application.decision {
-            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
-                outcome: "blocked for a human".to_string(),
-            },
-            other => FinalRecoveryApplied::Settled {
-                outcome: other.kind().to_string(),
-            },
-        })
-    }
-
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        let command = self
-            .provider
-            .as_ref()
-            .unwrap_or_else(|| panic!("no substitute CLI configured for provider {provider}"));
-        Ok(ResolvedCliExecutor {
-            command: command.to_string_lossy().into_owned(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: Some(self.repo.clone()),
-            ..orbit_tools::ToolContext::default()
-        }
-    }
 }
 
 fn assert_landing_checkout_refusal(error: &OrbitError, landing: &Path, spelling: &str) {
@@ -4935,22 +4951,6 @@ fn isolated(test: &str, body: impl FnOnce()) {
 /// [`isolated`] for a test defined in `module`, a submodule of this one.
 fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
     crate::git_fixture::isolated(module, test, body);
-}
-
-/// Each family retains its own bounded child and every row's name and cfg.
-macro_rules! worktree_families {
-    ($($family:ident: [$($(#[$gate:meta])* $scenario:ident),* $(,)?]),* $(,)?) => {
-        $(
-            #[test]
-            fn $family() {
-                isolated(stringify!($family), || {
-                    crate::git_fixture::run_scenarios(&[
-                        $($(#[$gate])* (stringify!($scenario), $scenario as fn())),*
-                    ]);
-                });
-            }
-        )*
-    };
 }
 
 worktree_families! {

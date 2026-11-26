@@ -15,46 +15,6 @@ use serde_json::{Value, json};
 
 const RUN_ID: &str = "task-complete-batch-run";
 
-fn task(id: &str, status: TaskStatus) -> Task {
-    let now = Utc::now();
-    Task {
-        granted_tools: Vec::new(),
-        requires_labels: Vec::new(),
-        job_run_machine: None,
-        id: id.to_string(),
-        title: format!("Task {id}"),
-        description: String::new(),
-        acceptance_criteria: Vec::new(),
-        tags: Vec::new(),
-        required_tools: Vec::new(),
-        plan: String::new(),
-        execution_summary: String::new(),
-        context_files: Vec::new(),
-        created_by: None,
-        planned_by: None,
-        implemented_by: None,
-        status,
-        priority: TaskPriority::Medium,
-        complexity: None,
-        task_type: TaskType::Chore,
-        pr_status: None,
-        external_refs: Vec::new(),
-        relations: Vec::new(),
-        job_run_id: Some(RUN_ID.to_string()),
-        crew: None,
-        crew_source: None,
-        orchestrator: None,
-        orchestrator_model: None,
-        orchestrator_model_source: None,
-        created_by_model: None,
-        origin: None,
-        rule_fingerprint: None,
-        created_at: now,
-        updated_at: now,
-        not_before: None,
-    }
-}
-
 struct BatchHost {
     tasks: Mutex<BTreeMap<String, Task>>,
     owed: Mutex<BTreeMap<String, Vec<usize>>>,
@@ -128,6 +88,46 @@ impl orbit_engine::test_support::NullRuntimeHost for BatchHost {
             .get(task_id)
             .cloned()
             .unwrap_or_default())
+    }
+}
+
+fn task(id: &str, status: TaskStatus) -> Task {
+    let now = Utc::now();
+    Task {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
+        job_run_machine: None,
+        id: id.to_string(),
+        title: format!("Task {id}"),
+        description: String::new(),
+        acceptance_criteria: Vec::new(),
+        tags: Vec::new(),
+        required_tools: Vec::new(),
+        plan: String::new(),
+        execution_summary: String::new(),
+        context_files: Vec::new(),
+        created_by: None,
+        planned_by: None,
+        implemented_by: None,
+        status,
+        priority: TaskPriority::Medium,
+        complexity: None,
+        task_type: TaskType::Chore,
+        pr_status: None,
+        external_refs: Vec::new(),
+        relations: Vec::new(),
+        job_run_id: Some(RUN_ID.to_string()),
+        crew: None,
+        crew_source: None,
+        orchestrator: None,
+        orchestrator_model: None,
+        orchestrator_model_source: None,
+        created_by_model: None,
+        origin: None,
+        rule_fingerprint: None,
+        created_at: now,
+        updated_at: now,
+        not_before: None,
     }
 }
 

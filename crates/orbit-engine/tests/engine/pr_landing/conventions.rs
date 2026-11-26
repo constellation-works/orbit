@@ -14,6 +14,24 @@ use orbit_types::workflow::{
 const TEMPLATE_PATH: &str = ".github/PULL_REQUEST_TEMPLATE.md";
 const TEMPLATE: &str = "## Summary\n\n{{title}} ({{task_id}})\n\n## Risk\n\n<!-- describe the risk -->\n\n## Rollback\n\n<!-- how to roll back -->\n";
 
+/// A tilde line sits inside a backtick fence. The `Rollback` heading after the
+/// fence closes is still a real, required section.
+const TILDE_IN_BACKTICK_FENCE: &str =
+    "## Summary\n\n{{title}}\n\n```text\n~~~\n```\n\n## Rollback\n\n<!-- required rollback -->\n";
+
+/// The fenced sample is a four-backtick block holding a three-backtick line,
+/// which is shorter, and a tilde line, which is another kind, plus a `Risk`
+/// heading. The sample stays literal, the real `Risk` heading takes the filled
+/// content, and the real `Rollback` heading is still required.
+const FENCED_SAMPLE_HEADINGS: &str = "## Summary\n\n{{title}}\n\n````markdown\n```\n~~~\n## Risk\n<!-- sample risk -->\n```\n````\n\n## Risk\n\n<!-- describe the risk -->\n\n## Rollback\n\n<!-- how to roll back -->\n";
+
+const EVIDENCE_REF: &str = "refs/orbit/evidence/T-LANDING";
+const SCREENSHOTS: [&str; 3] = [
+    "screenshots/a-dark-1440-before.png",
+    "screenshots/a-dark-1440-after.png",
+    "screenshots/a-dark-375.png",
+];
+
 /// A candidate rebased onto a base carrying the repository template, whose
 /// own commit rewrites that template: only the base revision may publish.
 fn templated(sandbox: &Path, policy: MissingSectionPolicy) -> (Fixture, DeliveryHost) {
@@ -175,11 +193,6 @@ fn unfilled_template(
     (fx, host)
 }
 
-/// A tilde line sits inside a backtick fence. The `Rollback` heading after the
-/// fence closes is still a real, required section.
-const TILDE_IN_BACKTICK_FENCE: &str =
-    "## Summary\n\n{{title}}\n\n```text\n~~~\n```\n\n## Rollback\n\n<!-- required rollback -->\n";
-
 #[test]
 fn pr_open_drafts_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence() {
     isolated(
@@ -258,12 +271,6 @@ fn pr_open_refuses_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence
         },
     );
 }
-
-/// The fenced sample is a four-backtick block holding a three-backtick line,
-/// which is shorter, and a tilde line, which is another kind, plus a `Risk`
-/// heading. The sample stays literal, the real `Risk` heading takes the filled
-/// content, and the real `Rollback` heading is still required.
-const FENCED_SAMPLE_HEADINGS: &str = "## Summary\n\n{{title}}\n\n````markdown\n```\n~~~\n## Risk\n<!-- sample risk -->\n```\n````\n\n## Risk\n\n<!-- describe the risk -->\n\n## Rollback\n\n<!-- how to roll back -->\n";
 
 #[test]
 fn pr_open_keeps_fenced_sample_headings_literal_and_drafts_the_real_required_heading() {
@@ -400,13 +407,6 @@ fn pr_open_publishes_task_identity_when_the_repository_template_omits_it() {
         },
     );
 }
-
-const EVIDENCE_REF: &str = "refs/orbit/evidence/T-LANDING";
-const SCREENSHOTS: [&str; 3] = [
-    "screenshots/a-dark-1440-before.png",
-    "screenshots/a-dark-1440-after.png",
-    "screenshots/a-dark-375.png",
-];
 
 /// A tiny distinct PNG per name: the signature, then the name.
 fn png(name: &str) -> Vec<u8> {

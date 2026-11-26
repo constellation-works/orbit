@@ -32,6 +32,307 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+macro_rules! runtime_contracts {
+    ($name:ident: $($row:ident),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
+                crate::git_fixture::run_scenarios(&[$((stringify!($row), $row as fn())),+]);
+            });
+        }
+    };
+}
+
+pub(crate) const REVIEWER: &str = "agent_review_repair";
+pub(crate) const RECOVERY: &str = "step_failure_recovery";
+
+struct GraphRun {
+    host: GraphHost,
+    result: Result<JobOutcome, DispatchError>,
+    events: Vec<V2AuditEvent>,
+}
+impl GraphRun {
+    fn succeeded(&self) -> bool {
+        matches!(&self.result, Ok(outcome) if outcome.success)
+    }
+    fn outcome(&self) -> &JobOutcome {
+        self.result.as_ref().expect("job ran to an outcome")
+    }
+    fn loop_iteration_ends(&self) -> Vec<(u32, bool)> {
+        let mut ends = Vec::new();
+        for event in &self.events {
+            if let V2AuditEventKind::LoopIterationEnd {
+                iteration, broke, ..
+            } = &event.kind
+            {
+                ends.push((*iteration, *broke));
+            }
+        }
+        ends
+    }
+    fn did_not_converge(&self) -> bool {
+        has_event(&self.events, |kind| {
+            matches!(kind, V2AuditEventKind::LoopDidNotConverge { .. })
+        })
+    }
+    fn step_join_outcomes(&self, step_id: &str, mode: &str) -> Option<Vec<(String, String)>> {
+        for event in &self.events {
+            if let V2AuditEventKind::StepJoin {
+                step_id: id,
+                mode: m,
+                branch_outcomes,
+            } = &event.kind
+                && id == step_id
+                && m == mode
+            {
+                let mut outcomes = Vec::new();
+                for branch in branch_outcomes {
+                    outcomes.push((branch.branch_id.clone(), branch.outcome.clone()));
+                }
+                return Some(outcomes);
+            }
+        }
+        None
+    }
+    fn fanout_dispatched(&self, step_id: &str, count: u32) -> bool {
+        has_event(&self.events, |kind| {
+            matches!(kind, V2AuditEventKind::FanoutDispatched { step_id: id, worker_count }
+                if id == step_id && *worker_count == count)
+        })
+    }
+    fn fanin_joined(&self, collected: u32, failed: u32) -> bool {
+        has_event(&self.events, |kind| {
+            matches!(kind, V2AuditEventKind::FaninJoined { collected: c, failed: f, .. }
+                if *c == collected && *f == failed)
+        })
+    }
+    fn step_skipped(&self, step_id: &str) -> bool {
+        has_event(
+            &self.events,
+            |kind| matches!(kind, V2AuditEventKind::StepSkipped { step_id: id, .. } if id == step_id),
+        )
+    }
+    fn has_worker_state(&self) -> bool {
+        has_event(&self.events, |kind| {
+            matches!(kind, V2AuditEventKind::WorkerState { .. })
+        })
+    }
+}
+
+/// Runs the `probe` action: sleep `sleep_ms`, then panic, fail or echo the input back.
+#[derive(Default)]
+struct GraphHost {
+    calls: Mutex<Vec<Value>>,
+    checkpoints: Mutex<BTreeMap<u32, Value>>,
+    compound_outputs: Mutex<BTreeMap<u32, BTreeMap<String, Value>>>,
+    in_flight: AtomicUsize,
+    peak_in_flight: AtomicUsize,
+}
+impl GraphHost {
+    fn calls(&self) -> Vec<Value> {
+        self.calls.lock().expect("call log").clone()
+    }
+    fn labels(&self) -> Vec<String> {
+        let mut labels = Vec::new();
+        for input in self.calls() {
+            labels.push(input["label"].as_str().unwrap_or_default().to_string());
+        }
+        labels
+    }
+    fn peak_in_flight(&self) -> usize {
+        self.peak_in_flight.load(Ordering::SeqCst)
+    }
+}
+impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
+    fn checkpoint_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        _step_id: &str,
+        output: &Value,
+        compound_outputs: &BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
+    ) -> Result<(), DispatchError> {
+        let mut compounds = self.compound_outputs.lock().unwrap();
+        compounds.insert(step_index, compound_outputs.clone());
+        let mut checkpoints = self.checkpoints.lock().expect("checkpoints");
+        checkpoints.insert(step_index, output.clone());
+        Ok(())
+    }
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        assert_eq!(action, "probe", "graph fixtures dispatch only `probe`");
+        self.calls.lock().expect("call log").push(input.clone());
+        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+        let flag = |name: &str| input[name] == json!(true) || input[name] == json!("true");
+        let sleep_ms = input["sleep_ms"]
+            .as_u64()
+            .or_else(|| input["sleep_ms"].as_str().and_then(|ms| ms.parse().ok()))
+            .unwrap_or(0);
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        assert!(!flag("panic"), "probe panicked for {}", input["label"]);
+        if flag("fail") {
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("probe failed for {}", input["label"]),
+            });
+        }
+        Ok(input.clone())
+    }
+}
+
+/// A host that records every action and answers with `respond`.
+struct StubHost<F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync> {
+    calls: Mutex<Vec<String>>,
+    respond: F,
+}
+impl<F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    orbit_engine::test_support::NullRuntimeHost for StubHost<F>
+{
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _: &Value,
+        input: &Value,
+        _: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.calls.lock().unwrap().push(action.to_string());
+        (self.respond)(action, input)
+    }
+}
+struct ScriptedHost {
+    implement_output: Value,
+    calls: Mutex<Vec<(String, Value)>>,
+}
+impl ScriptedHost {
+    fn new(implement_output: Value) -> Self {
+        Self {
+            implement_output,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+    fn preserve_call(&self) -> Value {
+        for (action, input) in self.calls.lock().expect("call log").iter() {
+            if action == "preserve_candidate" {
+                return input.clone();
+            }
+        }
+        panic!("failure activity ran")
+    }
+    fn expect_actions(&self, expected: &[&str], case: &str) {
+        let actions = self.actions();
+        let refs: Vec<&str> = actions.iter().map(String::as_str).collect();
+        assert_eq!(refs, expected, "{case}: dispatch sequence");
+    }
+    fn actions(&self) -> Vec<String> {
+        let mut actions = Vec::new();
+        for (action, _) in self.calls.lock().expect("call log").iter() {
+            actions.push(action.clone());
+        }
+        actions
+    }
+}
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _: &Value,
+        input: &Value,
+        _: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push((action.to_string(), input.clone()));
+        if action == "implement" {
+            Ok(self.implement_output.clone())
+        } else {
+            Ok(json!({}))
+        }
+    }
+}
+
+/// Serves the stub gate steps, a reviewer that fails its first `failures`
+/// dispatches like an unavailable provider, and a recovery that succeeds.
+struct ReviewerHost {
+    failures_left: Mutex<usize>,
+    calls: Mutex<Vec<&'static str>>,
+    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
+}
+impl ReviewerHost {
+    fn failing(failures: usize) -> Self {
+        Self {
+            failures_left: Mutex::new(failures),
+            calls: Mutex::default(),
+            invocations: Mutex::default(),
+        }
+    }
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().expect("call log").clone()
+    }
+    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
+        self.invocations.lock().expect("invocations").clone()
+    }
+}
+impl orbit_engine::test_support::NullRuntimeHost for ReviewerHost {
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "worktree" => {
+                Ok(json!({"job_run_id": "review-run", "workspace_path": "/worktrees/review-run"}))
+            }
+            "review_gate_admit" => Ok(
+                json!({"applies": true, "decision": "admitted", "first_task_id": "T-1", "attempt_id": "rvw-1", "lineage_key": "lineage-1", "manifest_artifact": "review-manifest.json", "report_artifact": "review-report.json", "reviewer": {"crew": "reviewers"}}),
+            ),
+            REVIEWER => {
+                self.calls.lock().expect("call log").push(REVIEWER);
+                let mut failures_left = self.failures_left.lock().expect("failures");
+                if *failures_left == 0 {
+                    return Ok(json!({ "summary": "reviewed", "verdict": "accept" }));
+                }
+                *failures_left = failures_left.saturating_sub(1);
+                Err(DispatchError::CliInvocationFailed(
+                    "provider overloaded".to_string(),
+                ))
+            }
+            RECOVERY => {
+                self.calls.lock().expect("call log").push(RECOVERY);
+                Ok(json!({ "recovered": true }))
+            }
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+    fn record_reviewer_invocation(
+        &self,
+        request: &ReviewerInvocationRequest,
+    ) -> Result<Option<u64>, OrbitError> {
+        self.invocations
+            .lock()
+            .expect("invocations")
+            .push(request.clone());
+        Ok(None)
+    }
+}
+
 /// [ORB-13115] A deterministic step's binding comes from the dispatch, not its tool arguments.
 fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args() {
     use orbit_agent::loop_engine::audit::{AuditSink, NullSink};
@@ -624,78 +925,6 @@ fn assert_no_retry_or_recovery(events: &[V2AuditEvent], case: &str) {
     );
 }
 
-struct GraphRun {
-    host: GraphHost,
-    result: Result<JobOutcome, DispatchError>,
-    events: Vec<V2AuditEvent>,
-}
-impl GraphRun {
-    fn succeeded(&self) -> bool {
-        matches!(&self.result, Ok(outcome) if outcome.success)
-    }
-    fn outcome(&self) -> &JobOutcome {
-        self.result.as_ref().expect("job ran to an outcome")
-    }
-    fn loop_iteration_ends(&self) -> Vec<(u32, bool)> {
-        let mut ends = Vec::new();
-        for event in &self.events {
-            if let V2AuditEventKind::LoopIterationEnd {
-                iteration, broke, ..
-            } = &event.kind
-            {
-                ends.push((*iteration, *broke));
-            }
-        }
-        ends
-    }
-    fn did_not_converge(&self) -> bool {
-        has_event(&self.events, |kind| {
-            matches!(kind, V2AuditEventKind::LoopDidNotConverge { .. })
-        })
-    }
-    fn step_join_outcomes(&self, step_id: &str, mode: &str) -> Option<Vec<(String, String)>> {
-        for event in &self.events {
-            if let V2AuditEventKind::StepJoin {
-                step_id: id,
-                mode: m,
-                branch_outcomes,
-            } = &event.kind
-                && id == step_id
-                && m == mode
-            {
-                let mut outcomes = Vec::new();
-                for branch in branch_outcomes {
-                    outcomes.push((branch.branch_id.clone(), branch.outcome.clone()));
-                }
-                return Some(outcomes);
-            }
-        }
-        None
-    }
-    fn fanout_dispatched(&self, step_id: &str, count: u32) -> bool {
-        has_event(&self.events, |kind| {
-            matches!(kind, V2AuditEventKind::FanoutDispatched { step_id: id, worker_count }
-                if id == step_id && *worker_count == count)
-        })
-    }
-    fn fanin_joined(&self, collected: u32, failed: u32) -> bool {
-        has_event(&self.events, |kind| {
-            matches!(kind, V2AuditEventKind::FaninJoined { collected: c, failed: f, .. }
-                if *c == collected && *f == failed)
-        })
-    }
-    fn step_skipped(&self, step_id: &str) -> bool {
-        has_event(
-            &self.events,
-            |kind| matches!(kind, V2AuditEventKind::StepSkipped { step_id: id, .. } if id == step_id),
-        )
-    }
-    fn has_worker_state(&self) -> bool {
-        has_event(&self.events, |kind| {
-            matches!(kind, V2AuditEventKind::WorkerState { .. })
-        })
-    }
-}
 fn run_graph_job(job: &orbit_types::workflow::JobV2, input: Value) -> GraphRun {
     run_graph_job_with_resume(job, input, None)
 }
@@ -882,77 +1111,7 @@ fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpo
         )));
     }
 }
-/// Runs the `probe` action: sleep `sleep_ms`, then panic, fail or echo the input back.
-#[derive(Default)]
-struct GraphHost {
-    calls: Mutex<Vec<Value>>,
-    checkpoints: Mutex<BTreeMap<u32, Value>>,
-    compound_outputs: Mutex<BTreeMap<u32, BTreeMap<String, Value>>>,
-    in_flight: AtomicUsize,
-    peak_in_flight: AtomicUsize,
-}
-impl GraphHost {
-    fn calls(&self) -> Vec<Value> {
-        self.calls.lock().expect("call log").clone()
-    }
-    fn labels(&self) -> Vec<String> {
-        let mut labels = Vec::new();
-        for input in self.calls() {
-            labels.push(input["label"].as_str().unwrap_or_default().to_string());
-        }
-        labels
-    }
-    fn peak_in_flight(&self) -> usize {
-        self.peak_in_flight.load(Ordering::SeqCst)
-    }
-}
-impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
-    fn checkpoint_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        _step_id: &str,
-        output: &Value,
-        compound_outputs: &BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        let mut compounds = self.compound_outputs.lock().unwrap();
-        compounds.insert(step_index, compound_outputs.clone());
-        let mut checkpoints = self.checkpoints.lock().expect("checkpoints");
-        checkpoints.insert(step_index, output.clone());
-        Ok(())
-    }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        assert_eq!(action, "probe", "graph fixtures dispatch only `probe`");
-        self.calls.lock().expect("call log").push(input.clone());
-        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        self.peak_in_flight.fetch_max(in_flight, Ordering::SeqCst);
-        let flag = |name: &str| input[name] == json!(true) || input[name] == json!("true");
-        let sleep_ms = input["sleep_ms"]
-            .as_u64()
-            .or_else(|| input["sleep_ms"].as_str().and_then(|ms| ms.parse().ok()))
-            .unwrap_or(0);
-        std::thread::sleep(Duration::from_millis(sleep_ms));
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        assert!(!flag("panic"), "probe panicked for {}", input["label"]);
-        if flag("fail") {
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("probe failed for {}", input["label"]),
-            });
-        }
-        Ok(input.clone())
-    }
-}
+
 /// The shipped `review` step retries, then recovers, a fault-injected reviewer; only reviewer dispatches report invocation start/end.
 fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
     for (failures, succeeds, expected_calls) in [
@@ -1005,8 +1164,7 @@ fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
         }
     }
 }
-pub(crate) const REVIEWER: &str = "agent_review_repair";
-pub(crate) const RECOVERY: &str = "step_failure_recovery";
+
 /// Provider-unavailable dispatch errors bypass recovery (the CLI-outcome case lives in v2_cli_agent).
 fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
     let host = StubHost {
@@ -1304,76 +1462,7 @@ fn malformed_regression_from_fails_implement_one_before_delivery() {
         assert_valid_output_delivers(output);
     }
 }
-/// A host that records every action and answers with `respond`.
-struct StubHost<F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync> {
-    calls: Mutex<Vec<String>>,
-    respond: F,
-}
-impl<F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
-    orbit_engine::test_support::NullRuntimeHost for StubHost<F>
-{
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls.lock().unwrap().push(action.to_string());
-        (self.respond)(action, input)
-    }
-}
-struct ScriptedHost {
-    implement_output: Value,
-    calls: Mutex<Vec<(String, Value)>>,
-}
-impl ScriptedHost {
-    fn new(implement_output: Value) -> Self {
-        Self {
-            implement_output,
-            calls: Mutex::new(Vec::new()),
-        }
-    }
-    fn preserve_call(&self) -> Value {
-        for (action, input) in self.calls.lock().expect("call log").iter() {
-            if action == "preserve_candidate" {
-                return input.clone();
-            }
-        }
-        panic!("failure activity ran")
-    }
-    fn expect_actions(&self, expected: &[&str], case: &str) {
-        let actions = self.actions();
-        let refs: Vec<&str> = actions.iter().map(String::as_str).collect();
-        assert_eq!(refs, expected, "{case}: dispatch sequence");
-    }
-    fn actions(&self) -> Vec<String> {
-        let mut actions = Vec::new();
-        for (action, _) in self.calls.lock().expect("call log").iter() {
-            actions.push(action.clone());
-        }
-        actions
-    }
-}
-impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        if action == "implement" {
-            Ok(self.implement_output.clone())
-        } else {
-            Ok(json!({}))
-        }
-    }
-}
+
 /// One retrying, recovering `implement` step, optionally resolved under a
 /// catalog activity name (as the shipped resolver sets for
 /// `target: activity:agent_implement`).
@@ -1526,75 +1615,7 @@ fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
     resolve_job_catalog_refs_for_execution(&mut job, &catalog).expect("resolve the review step");
     job
 }
-/// Serves the stub gate steps, a reviewer that fails its first `failures`
-/// dispatches like an unavailable provider, and a recovery that succeeds.
-struct ReviewerHost {
-    failures_left: Mutex<usize>,
-    calls: Mutex<Vec<&'static str>>,
-    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
-}
-impl ReviewerHost {
-    fn failing(failures: usize) -> Self {
-        Self {
-            failures_left: Mutex::new(failures),
-            calls: Mutex::default(),
-            invocations: Mutex::default(),
-        }
-    }
-    fn calls(&self) -> Vec<&'static str> {
-        self.calls.lock().expect("call log").clone()
-    }
-    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
-        self.invocations.lock().expect("invocations").clone()
-    }
-}
-impl orbit_engine::test_support::NullRuntimeHost for ReviewerHost {
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "worktree" => {
-                Ok(json!({"job_run_id": "review-run", "workspace_path": "/worktrees/review-run"}))
-            }
-            "review_gate_admit" => Ok(
-                json!({"applies": true, "decision": "admitted", "first_task_id": "T-1", "attempt_id": "rvw-1", "lineage_key": "lineage-1", "manifest_artifact": "review-manifest.json", "report_artifact": "review-report.json", "reviewer": {"crew": "reviewers"}}),
-            ),
-            REVIEWER => {
-                self.calls.lock().expect("call log").push(REVIEWER);
-                let mut failures_left = self.failures_left.lock().expect("failures");
-                if *failures_left == 0 {
-                    return Ok(json!({ "summary": "reviewed", "verdict": "accept" }));
-                }
-                *failures_left = failures_left.saturating_sub(1);
-                Err(DispatchError::CliInvocationFailed(
-                    "provider overloaded".to_string(),
-                ))
-            }
-            RECOVERY => {
-                self.calls.lock().expect("call log").push(RECOVERY);
-                Ok(json!({ "recovered": true }))
-            }
-            other => panic!("unexpected action `{other}`"),
-        }
-    }
-    fn record_reviewer_invocation(
-        &self,
-        request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        self.invocations
-            .lock()
-            .expect("invocations")
-            .push(request.clone());
-        Ok(None)
-    }
-}
+
 /// An admission refusal in the shipped prefix stops the graph before `implement_one`.
 fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation() {
     let shipped = shipped_pipeline();
@@ -1802,16 +1823,7 @@ fn nested_fan_out_is_rejected_before_any_worker_runs() {
         assert!(run.host.calls().is_empty(), "no worker runs");
     }
 }
-macro_rules! runtime_contracts {
-    ($name:ident: $($row:ident),+ $(,)?) => {
-        #[test]
-        fn $name() {
-            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
-                crate::git_fixture::run_scenarios(&[$((stringify!($row), $row as fn())),+]);
-            });
-        }
-    };
-}
+
 runtime_contracts!(runtime_contracts_1: a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args, parallel_join_policy_decides_the_block_from_its_branches, fan_out_collects_outputs_in_item_order_within_the_worker_cap);
 runtime_contracts!(runtime_contracts_2: fan_in_join_policy_decides_the_block_from_its_workers, loop_iterates_until_break_failure_or_budget, a_loop_opting_in_fails_when_it_exhausts_its_ceiling, the_shipped_pull_drain_loop_fails_when_exhausted, items_expression_rejects_non_array_json, when_false_step_skips_log_below_warn_and_other_skips_keep_warn);
 runtime_contracts!(runtime_contracts_3: incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint, the_shipped_review_step_retries_then_recovers_a_failing_reviewer, provider_unavailable_dispatch_errors_do_not_attempt_recovery, an_implementer_blocker_ends_implement_one_without_recovery);

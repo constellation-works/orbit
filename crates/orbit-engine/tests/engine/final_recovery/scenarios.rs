@@ -28,7 +28,24 @@ use host::{
     ApplyScript, RecoveryHost, Reply, Run, evidence_hold, run, run_with_evidence, run_with_input,
 };
 
+/// Behavior-distinct rows share one bounded family process; the row name
+/// is the scenario function name, so failures still name the case.
+macro_rules! recovery_contracts {
+    ($name:ident: $($row:ident),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
+                crate::git_fixture::run_scenarios(&[$((stringify!($row), $row as fn())),+]);
+            });
+        }
+    };
+}
+
 const RUN_ID: &str = "jrun-final-recovery";
+
+const FAULT_EVIDENCE: &str = "run fixture: the candidate failed its check";
+
+const INSPECT_PUBLICATION: &str = "Inspect the publication and admit current-policy source repair";
 
 fn deterministic_activity(name: &str) -> ActivityV2 {
     let asset = json!({
@@ -107,8 +124,6 @@ fn pipeline_acting(middle: &str, step_recovery: bool) -> JobV2 {
 fn pipeline_step_acting(step_id: &str, action: &str) -> JobV2 {
     three_step_job(step_id, action)
 }
-
-const FAULT_EVIDENCE: &str = "run fixture: the candidate failed its check";
 
 fn resume_reply(step_id: &str, rationale: &str) -> Reply {
     Reply::Ok(json!({
@@ -1535,18 +1550,6 @@ fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
     }
 }
 
-/// Behavior-distinct rows share one bounded family process; the row name
-/// is the scenario function name, so failures still name the case.
-macro_rules! recovery_contracts {
-    ($name:ident: $($row:ident),+ $(,)?) => {
-        #[test]
-        fn $name() {
-            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
-                crate::git_fixture::run_scenarios(&[$((stringify!($row), $row as fn())),+]);
-            });
-        }
-    };
-}
 recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_and_the_run_completes, resume_context_is_opaque_when_the_target_inherits_job_input, a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart, an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id, an_oversized_refused_output_reaches_the_resumed_implementer_bounded, a_settling_decision_ends_the_run_without_the_failure_handoff);
 recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
 recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_malformed_decision_keeps_the_failed_step_evidence, a_malformed_decision_with_repair_evidence_keeps_the_failed_step_evidence, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
@@ -1609,8 +1612,6 @@ fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
         assert!(text.contains(classification), "{text}");
     }
 }
-
-const INSPECT_PUBLICATION: &str = "Inspect the publication and admit current-policy source repair";
 
 fn unchanged_observation(liveness: CompletionOwnerLiveness) -> PublishedCompletionObservation {
     PublishedCompletionObservation {

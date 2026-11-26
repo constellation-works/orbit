@@ -67,31 +67,6 @@ impl DeniedCheckHost {
     }
 }
 
-fn held() -> ReviewEvidenceHold {
-    ReviewEvidenceHold {
-        schema_version: 1,
-        attempt_id: "rvw-landing".to_string(),
-        lineage_key: "lineage-1".to_string(),
-        run_id: RUN.to_string(),
-        candidate: SourceRevision {
-            commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
-            tree: "89abcdef0123456789abcdef0123456789abcdef".to_string(),
-        },
-        task_meaning_digest: "meaning".to_string(),
-        requirements: vec![ReviewEvidenceRequirement {
-            kind: ReviewEvidenceKind::NativeOs,
-            name: "Website inline-code layout".to_string(),
-            command: WEBSITE_CHECK.to_string(),
-            artifact: "evidence/website-inline-code.json".to_string(),
-            os: None,
-            hosted_check: None,
-        }],
-        task_spec_digest: None,
-        published_ref: None,
-        candidate_carry: None,
-    }
-}
-
 impl orbit_engine::test_support::NullRuntimeHost for DeniedCheckHost {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         RuntimeHost::agent_subprocess_environment(&self.cli, required_env_vars)
@@ -170,6 +145,31 @@ impl orbit_engine::test_support::NullRuntimeHost for DeniedCheckHost {
             Report::EvidenceOnly => Some(format!("`{WEBSITE_CHECK}`")),
             Report::NotEvidenceOnly => None,
         })
+    }
+}
+
+fn held() -> ReviewEvidenceHold {
+    ReviewEvidenceHold {
+        schema_version: 1,
+        attempt_id: "rvw-landing".to_string(),
+        lineage_key: "lineage-1".to_string(),
+        run_id: RUN.to_string(),
+        candidate: SourceRevision {
+            commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            tree: "89abcdef0123456789abcdef0123456789abcdef".to_string(),
+        },
+        task_meaning_digest: "meaning".to_string(),
+        requirements: vec![ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::NativeOs,
+            name: "Website inline-code layout".to_string(),
+            command: WEBSITE_CHECK.to_string(),
+            artifact: "evidence/website-inline-code.json".to_string(),
+            os: None,
+            hosted_check: None,
+        }],
+        task_spec_digest: None,
+        published_ref: None,
+        candidate_carry: None,
     }
 }
 

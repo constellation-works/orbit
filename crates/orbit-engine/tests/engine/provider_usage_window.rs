@@ -83,6 +83,14 @@ impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
     }
 }
 
+struct DispatchOptions<'a> {
+    stderr: &'a str,
+    exit_code: i32,
+    prelude: &'a str,
+    launcher: Option<(&'a str, &'a [String])>,
+    conversation_ref: Option<&'a str>,
+}
+
 /// Dispatch a fake `binary` that prints `stdout`, with `agent_env` in the
 /// child's environment, and return the outcome and the limits recorded.
 fn dispatch(
@@ -126,14 +134,6 @@ fn dispatch_with_prelude_and_launcher(
             conversation_ref,
         },
     )
-}
-
-struct DispatchOptions<'a> {
-    stderr: &'a str,
-    exit_code: i32,
-    prelude: &'a str,
-    launcher: Option<(&'a str, &'a [String])>,
-    conversation_ref: Option<&'a str>,
 }
 
 fn dispatch_with_streams(

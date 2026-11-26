@@ -23,6 +23,14 @@ const VALID: &str =
     r#"{"schemaVersion":1,"status":"success","result":{"summary":"the answer"},"error":null}"#;
 const DECLARED_FAILED: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"blocked","message":"the checkout was unreadable"}}"#;
 
+const MISSING: &str = "stdout does not contain an Orbit response envelope";
+const PROSE: &str = "The retry budget lives in the supervisor.";
+
+// [ORB-22663] This terminal is a provider-owned formatting failure, not an
+// assistant's JSON tool arguments and not an unrelated workspace-trust warning.
+const STRUCTURED_EXHAUSTED: &str = r#"{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"terminal_reason":"structured_output_retry_exhausted","errors":["Failed to provide valid structured output after 5 attempts"],"usage":{"input_tokens":11,"output_tokens":7}}"#;
+const STRUCTURED_SIGNATURE: &str = "structured_output_retry_exhausted";
+
 /// Records the sandbox each invocation asked the host for.
 struct RecordingHost {
     cli: ScriptHost,
@@ -562,9 +570,6 @@ fn other_failures_do_not_start_a_correction() {
     }
 }
 
-const MISSING: &str = "stdout does not contain an Orbit response envelope";
-const PROSE: &str = "The retry budget lives in the supervisor.";
-
 /// What a clean Claude turn that answered in prose prints.
 fn prose_wrapper() -> String {
     reply(&format!(
@@ -1006,11 +1011,6 @@ fn a_disallow_list_that_predates_a_mutating_tool_still_denies_it() {
         );
     }
 }
-
-// [ORB-22663] This terminal is a provider-owned formatting failure, not an
-// assistant's JSON tool arguments and not an unrelated workspace-trust warning.
-const STRUCTURED_EXHAUSTED: &str = r#"{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"terminal_reason":"structured_output_retry_exhausted","errors":["Failed to provide valid structured output after 5 attempts"],"usage":{"input_tokens":11,"output_tokens":7}}"#;
-const STRUCTURED_SIGNATURE: &str = "structured_output_retry_exhausted";
 
 fn structured_exhaustion_with_stop_reason(stop_reason: Option<&str>) -> String {
     let tool = json!({

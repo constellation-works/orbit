@@ -18,6 +18,8 @@ use super::*;
 /// The fixture task every recovery input names.
 const TASK: &str = "T-REBASE";
 
+const NONCE: &str = "0123456789abcdef0123456789abcdef";
+
 /// The slot the dispatcher names for `prepared`'s recovery, under its real
 /// scratch directory, with a fixed fresh-looking nonce.
 fn slot_for(prepared: &PreparedRebase, conflict: &Value, nonce: &str) -> Value {
@@ -36,8 +38,6 @@ fn slot_for(prepared: &PreparedRebase, conflict: &Value, nonce: &str) -> Value {
         "task_ids": [TASK],
     })
 }
-
-const NONCE: &str = "0123456789abcdef0123456789abcdef";
 
 /// The intent file a leaf writes into `slot` for `resolutions`.
 fn intent_for(slot: &Value, resolutions: Value) -> Value {

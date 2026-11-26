@@ -43,31 +43,9 @@ use tempfile::TempDir;
 
 const CAPACITY: &str = "Selected model is at capacity. Please try a different model.";
 
-/// What Codex wrote when `gpt-6.1-sol` was at capacity (run
-/// jrun-20261005-0456-c6): its own `error` and `turn.failed` frames after the
-/// turn's tool traffic.
-fn codex_capacity_frames() -> String {
-    format!(
-        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"cargo test","aggregated_output":"","exit_code":0,"status":"completed"}}}}
-{{"type":"error","message":"{CAPACITY}"}}
-{{"type":"turn.failed","error":{{"message":"{CAPACITY}"}}}}"#
-    )
-}
-
 const CONTENT_FILTER: &str = "This content was flagged for possible cybersecurity risk. If this \
      seems wrong, try rephrasing your request. To get authorized for security work, join the \
      Trusted Access for Cyber program: https://chatgpt.com/cyber";
-
-/// What Codex wrote when its cybersecurity content filter ended a review of
-/// sandbox code (runs jrun-20261006-0104-c24/c29): its own `error` and
-/// `turn.failed` frames after the turn's tool traffic.
-fn codex_content_filter_frames() -> String {
-    format!(
-        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"rg sandbox","aggregated_output":"","exit_code":0,"status":"completed"}}}}
-{{"type":"error","message":"{CONTENT_FILTER}"}}
-{{"type":"turn.failed","error":{{"message":"{CONTENT_FILTER}"}}}}"#
-    )
-}
 
 pub(super) const SUCCESS_ENVELOPE: &str =
     r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
@@ -123,34 +101,6 @@ impl FakeProvider {
             .map(|text| text.lines().count())
             .unwrap_or(0)
     }
-}
-
-pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
-    AgentLoopSpec::for_provider("implement the task".to_string(), provider, 30)
-}
-
-pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
-    let audit = root.join("audit");
-    fs::create_dir_all(&audit).unwrap();
-    V2AuditWriter::with_disk_sinks(
-        &audit,
-        Store::open_in_memory().unwrap(),
-        "ws_capacity",
-        run_id,
-        "capacity".to_string(),
-        None,
-    )
-    .unwrap()
-}
-
-/// Classification and host telemetry rows do not observe audit persistence.
-/// Job rows keep `writer` for their durable envelope/readback assertions.
-pub(super) fn outcome_writer(run_id: &str) -> Arc<V2AuditWriter> {
-    Arc::new(V2AuditWriter::new(
-        run_id,
-        "capacity",
-        Arc::new(orbit_agent::loop_engine::audit::NullSink),
-    ))
 }
 
 /// Stands in for Core: resolves the fake provider, records deterministic
@@ -334,6 +284,61 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
     }
 }
 
+pub(super) struct JobRun {
+    pub(super) outcome: Result<JobOutcome, DispatchError>,
+    pub(super) events: Vec<V2AuditEvent>,
+}
+
+/// What Codex wrote when `gpt-6.1-sol` was at capacity (run
+/// jrun-20261005-0456-c6): its own `error` and `turn.failed` frames after the
+/// turn's tool traffic.
+fn codex_capacity_frames() -> String {
+    format!(
+        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"cargo test","aggregated_output":"","exit_code":0,"status":"completed"}}}}
+{{"type":"error","message":"{CAPACITY}"}}
+{{"type":"turn.failed","error":{{"message":"{CAPACITY}"}}}}"#
+    )
+}
+
+/// What Codex wrote when its cybersecurity content filter ended a review of
+/// sandbox code (runs jrun-20261006-0104-c24/c29): its own `error` and
+/// `turn.failed` frames after the turn's tool traffic.
+fn codex_content_filter_frames() -> String {
+    format!(
+        r#"{{"type":"item.completed","item":{{"id":"item_1","type":"command_execution","command":"rg sandbox","aggregated_output":"","exit_code":0,"status":"completed"}}}}
+{{"type":"error","message":"{CONTENT_FILTER}"}}
+{{"type":"turn.failed","error":{{"message":"{CONTENT_FILTER}"}}}}"#
+    )
+}
+
+pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
+    AgentLoopSpec::for_provider("implement the task".to_string(), provider, 30)
+}
+
+pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
+    let audit = root.join("audit");
+    fs::create_dir_all(&audit).unwrap();
+    V2AuditWriter::with_disk_sinks(
+        &audit,
+        Store::open_in_memory().unwrap(),
+        "ws_capacity",
+        run_id,
+        "capacity".to_string(),
+        None,
+    )
+    .unwrap()
+}
+
+/// Classification and host telemetry rows do not observe audit persistence.
+/// Job rows keep `writer` for their durable envelope/readback assertions.
+pub(super) fn outcome_writer(run_id: &str) -> Arc<V2AuditWriter> {
+    Arc::new(V2AuditWriter::new(
+        run_id,
+        "capacity",
+        Arc::new(orbit_agent::loop_engine::audit::NullSink),
+    ))
+}
+
 fn deterministic_activity(name: &str) -> ActivityV2 {
     let asset = json!({
         "schemaVersion": 2,
@@ -369,11 +374,6 @@ pub(super) fn implementation_job(spec: AgentLoopSpec) -> JobV2 {
     job.final_recovery_activity = Some("decide".to_string());
     job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
     job
-}
-
-pub(super) struct JobRun {
-    pub(super) outcome: Result<JobOutcome, DispatchError>,
-    pub(super) events: Vec<V2AuditEvent>,
 }
 
 pub(super) fn run_job(job: &JobV2, host: &CapacityHost, run_id: &str) -> JobRun {

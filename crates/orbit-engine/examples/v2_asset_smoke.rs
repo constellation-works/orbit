@@ -22,6 +22,12 @@ use std::process::ExitCode;
 
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 
+#[derive(Default)]
+struct Counts {
+    activities: usize,
+    jobs: usize,
+}
+
 fn main() -> ExitCode {
     let root = workspace_root();
     let activities_dir = root.join("crates/orbit-core/assets/activities");
@@ -63,12 +69,6 @@ fn main() -> ExitCode {
         }
         ExitCode::FAILURE
     }
-}
-
-#[derive(Default)]
-struct Counts {
-    activities: usize,
-    jobs: usize,
 }
 
 fn walk_yaml(dir: &Path) -> Vec<PathBuf> {

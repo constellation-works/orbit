@@ -27,6 +27,286 @@ use orbit_types::workflow::activity_job::{
 };
 use serde_json::{Value, json};
 
+struct RecordingHost {
+    command: PathBuf,
+    worktree: PathBuf,
+    sandbox: Option<ResolvedSandbox>,
+    broker_runs: Mutex<Vec<PluginBrokerRun>>,
+    denial_activities: Mutex<Vec<String>>,
+    /// Refuses worker registration once the provider has published its
+    /// grandchild's pid to this file, so the refusal lands while it is alive.
+    refuse_registration_after: Option<PathBuf>,
+    panic_on_registration: bool,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
+    }
+
+    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        Ok(ResolvedCliExecutor {
+            command: self.command.display().to_string(),
+            args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
+        })
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        _provider: &str,
+        _fs_profile: Option<&str>,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        Ok(self.sandbox.clone())
+    }
+
+    fn resolve_activity_tool_denials(
+        &self,
+        _run_id: Option<&str>,
+        _task_ids: &[String],
+        activity: &str,
+        _disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError> {
+        self.denial_activities
+            .lock()
+            .unwrap()
+            .push(activity.to_string());
+        Ok(ResolvedActivityTools::default())
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext {
+            workspace_root: Some(self.worktree.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn start_plugin_broker(
+        &self,
+        run: &PluginBrokerRun,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        self.broker_runs.lock().unwrap().push(run.clone());
+        Ok(None)
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        let Some(pid_file) = &self.refuse_registration_after else {
+            return Ok(());
+        };
+        assert!(wait_until(Duration::from_secs(10), || pid_file.exists()));
+        assert!(!self.panic_on_registration, "worker registration panicked");
+        Err(OrbitError::Execution("worker registration refused".into()))
+    }
+}
+
+struct MissingWrapperHost {
+    command: PathBuf,
+    allow_fallback: bool,
+    broker_starts: AtomicUsize,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
+    }
+
+    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        Ok(ResolvedCliExecutor {
+            command: self.command.display().to_string(),
+            args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
+        })
+    }
+
+    fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {
+        HashMap::from([("sandbox".into(), "read-only".into())])
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        _provider: &str,
+        _fs_profile: Option<&str>,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        Ok(Some(ResolvedSandbox {
+            kind: ExecutorSandboxKind::MacosSandboxExec,
+            fs_profile: ResolvedFsProfile {
+                name: "fixture".into(),
+                read: vec!["**".into()],
+                modify: vec![format!("{}/**", self.command.parent().unwrap().display())],
+            },
+            allow_fallback: self.allow_fallback,
+            managed_worktree: false,
+            runtime_write_authority: Vec::new(),
+            mask: None,
+        }))
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext {
+            workspace_root: Some(self.command.parent().unwrap().to_path_buf()),
+            ..Default::default()
+        }
+    }
+
+    fn start_plugin_broker(
+        &self,
+        _run: &PluginBrokerRun,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        self.broker_starts.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    }
+}
+
+/// The grandchild a fake provider published. Dropping it kills the grandchild
+/// if an assertion failed before the test saw it end, so no sleep outlives the
+/// test.
+struct Grandchild(PathBuf);
+
+impl Grandchild {
+    fn assert_ended(&self) {
+        let leader: u32 = fs::read_to_string(self.0.with_extension("leader"))
+            .expect("provider leader pid")
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            !process_is_running(leader).expect("inspect provider leader after cleanup"),
+            "provider leader survived registration failure"
+        );
+        assert_eq!(
+            orbit_common::process::identity::probe_process_group_liveness(leader as i32),
+            orbit_common::process::identity::KernelLiveness::Exited,
+            "the provider group must have no live members after registration failure"
+        );
+        let text = fs::read_to_string(&self.0).expect("the provider publishes its grandchild");
+        let pid: u32 = text.trim().parse().expect("grandchild pid");
+        assert!(
+            wait_until(Duration::from_secs(5), || !process_is_running(pid)
+                .expect("inspect grandchild after cleanup")),
+            "grandchild {pid} outlived the refused worker registration"
+        );
+    }
+}
+
+impl Drop for Grandchild {
+    fn drop(&mut self) {
+        if let Some(leader) = fs::read_to_string(self.0.with_extension("leader"))
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            let _ = orbit_common::process::OwnedChild::signal_spawned_group(leader, libc::SIGKILL);
+            // SAFETY: only reap this fixture's own provider; it may already have been reaped.
+            unsafe { libc::waitpid(leader as libc::pid_t, std::ptr::null_mut(), 0) };
+        }
+        let Some(pid) = fs::read_to_string(&self.0)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        else {
+            return;
+        };
+        // A denied inspection is not evidence of death. Keep cleanup armed
+        // if the sandbox starts denying ps after the pre-spawn probe.
+        if process_is_running(pid).unwrap_or(true) {
+            // SAFETY: the pid was published by this test's own provider, and
+            // signalling it only ends the sleep that provider started.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
+/// A host whose implementer lane has no sandbox, or whose sandbox cannot be
+/// resolved, for Orbit's own deferral probe [ORB-15516].
+struct ProbeHost {
+    unresolvable: bool,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for ProbeHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        provider: &str,
+        _fs_profile: Option<&str>,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        if self.unresolvable {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "no sandbox for `{provider}`: bwrap: No permissions to create new namespace"
+            )));
+        }
+        Ok(None)
+    }
+
+    fn run_deferral_probe(
+        &self,
+        probe: &orbit_types::workflow::DeferralProbe,
+        provider: Option<&str>,
+        fs_profile: Option<&str>,
+        cwd: &Path,
+    ) -> orbit_types::workflow::NamespaceProbe {
+        orbit_engine::run_deferral_probe(self, probe, provider, fs_profile, cwd)
+    }
+}
+
+/// A host that has not opted into executing deferral probes.
+struct UnsupportedProbeHost;
+
+impl orbit_engine::test_support::NullRuntimeHost for UnsupportedProbeHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
+    }
+}
+
 /// A pipeline step's id is not its activity: `task_claimed_pr_pipeline` step
 /// `review` targets `agent_review_repair`. Policy, `ORBIT_ACTIVITY_NAME`, tool
 /// denials and the plugin broker are keyed by the catalog name; events keep
@@ -197,94 +477,6 @@ fn platform_sandbox(test: &str) -> Option<ExecutorSandboxKind> {
     }
 }
 
-struct RecordingHost {
-    command: PathBuf,
-    worktree: PathBuf,
-    sandbox: Option<ResolvedSandbox>,
-    broker_runs: Mutex<Vec<PluginBrokerRun>>,
-    denial_activities: Mutex<Vec<String>>,
-    /// Refuses worker registration once the provider has published its
-    /// grandchild's pid to this file, so the refusal lands while it is alive.
-    refuse_registration_after: Option<PathBuf>,
-    panic_on_registration: bool,
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
-
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(self.sandbox.clone())
-    }
-
-    fn resolve_activity_tool_denials(
-        &self,
-        _run_id: Option<&str>,
-        _task_ids: &[String],
-        activity: &str,
-        _disallow_list: &[String],
-    ) -> Result<ResolvedActivityTools, DispatchError> {
-        self.denial_activities
-            .lock()
-            .unwrap()
-            .push(activity.to_string());
-        Ok(ResolvedActivityTools::default())
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: Some(self.worktree.clone()),
-            ..Default::default()
-        }
-    }
-
-    fn start_plugin_broker(
-        &self,
-        run: &PluginBrokerRun,
-    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        self.broker_runs.lock().unwrap().push(run.clone());
-        Ok(None)
-    }
-
-    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
-        let Some(pid_file) = &self.refuse_registration_after else {
-            return Ok(());
-        };
-        assert!(wait_until(Duration::from_secs(10), || pid_file.exists()));
-        assert!(!self.panic_on_registration, "worker registration panicked");
-        Err(OrbitError::Execution("worker registration refused".into()))
-    }
-}
-
 #[test]
 fn missing_macos_wrapper_preserves_provider_confinement_and_honest_audit() {
     if orbit_exec::sandbox_exec_available() {
@@ -407,80 +599,6 @@ fn missing_macos_wrapper_preserves_provider_confinement_and_honest_audit() {
                 "refused admission must not run the provider"
             );
         }
-    }
-}
-
-struct MissingWrapperHost {
-    command: PathBuf,
-    allow_fallback: bool,
-    broker_starts: AtomicUsize,
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
-
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
-
-    fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {
-        HashMap::from([("sandbox".into(), "read-only".into())])
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(Some(ResolvedSandbox {
-            kind: ExecutorSandboxKind::MacosSandboxExec,
-            fs_profile: ResolvedFsProfile {
-                name: "fixture".into(),
-                read: vec!["**".into()],
-                modify: vec![format!("{}/**", self.command.parent().unwrap().display())],
-            },
-            allow_fallback: self.allow_fallback,
-            managed_worktree: false,
-            runtime_write_authority: Vec::new(),
-            mask: None,
-        }))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: Some(self.command.parent().unwrap().to_path_buf()),
-            ..Default::default()
-        }
-    }
-
-    fn start_plugin_broker(
-        &self,
-        _run: &PluginBrokerRun,
-    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        self.broker_starts.fetch_add(1, Ordering::SeqCst);
-        Ok(None)
     }
 }
 
@@ -769,63 +887,6 @@ fn write_grandchild_provider(command: &Path, pid_file: &Path) {
     fs::set_permissions(command, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// The grandchild a fake provider published. Dropping it kills the grandchild
-/// if an assertion failed before the test saw it end, so no sleep outlives the
-/// test.
-struct Grandchild(PathBuf);
-
-impl Grandchild {
-    fn assert_ended(&self) {
-        let leader: u32 = fs::read_to_string(self.0.with_extension("leader"))
-            .expect("provider leader pid")
-            .trim()
-            .parse()
-            .unwrap();
-        assert!(
-            !process_is_running(leader).expect("inspect provider leader after cleanup"),
-            "provider leader survived registration failure"
-        );
-        assert_eq!(
-            orbit_common::process::identity::probe_process_group_liveness(leader as i32),
-            orbit_common::process::identity::KernelLiveness::Exited,
-            "the provider group must have no live members after registration failure"
-        );
-        let text = fs::read_to_string(&self.0).expect("the provider publishes its grandchild");
-        let pid: u32 = text.trim().parse().expect("grandchild pid");
-        assert!(
-            wait_until(Duration::from_secs(5), || !process_is_running(pid)
-                .expect("inspect grandchild after cleanup")),
-            "grandchild {pid} outlived the refused worker registration"
-        );
-    }
-}
-
-impl Drop for Grandchild {
-    fn drop(&mut self) {
-        if let Some(leader) = fs::read_to_string(self.0.with_extension("leader"))
-            .ok()
-            .and_then(|text| text.trim().parse::<u32>().ok())
-        {
-            let _ = orbit_common::process::OwnedChild::signal_spawned_group(leader, libc::SIGKILL);
-            // SAFETY: only reap this fixture's own provider; it may already have been reaped.
-            unsafe { libc::waitpid(leader as libc::pid_t, std::ptr::null_mut(), 0) };
-        }
-        let Some(pid) = fs::read_to_string(&self.0)
-            .ok()
-            .and_then(|text| text.trim().parse::<u32>().ok())
-        else {
-            return;
-        };
-        // A denied inspection is not evidence of death. Keep cleanup armed
-        // if the sandbox starts denying ps after the pre-spawn probe.
-        if process_is_running(pid).unwrap_or(true) {
-            // SAFETY: the pid was published by this test's own provider, and
-            // signalling it only ends the sleep that provider started.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-        }
-    }
-}
-
 /// A zombie has ended but still answers `kill(pid, 0)` until its parent reaps
 /// it, so `ps` decides whether the process still runs.
 fn process_is_running(pid: u32) -> Result<bool, String> {
@@ -869,67 +930,6 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(25));
     }
     condition()
-}
-
-/// A host whose implementer lane has no sandbox, or whose sandbox cannot be
-/// resolved, for Orbit's own deferral probe [ORB-15516].
-struct ProbeHost {
-    unresolvable: bool,
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for ProbeHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        provider: &str,
-        _fs_profile: Option<&str>,
-        _cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        if self.unresolvable {
-            return Err(DispatchError::CliInvocationPermanent(format!(
-                "no sandbox for `{provider}`: bwrap: No permissions to create new namespace"
-            )));
-        }
-        Ok(None)
-    }
-
-    fn run_deferral_probe(
-        &self,
-        probe: &orbit_types::workflow::DeferralProbe,
-        provider: Option<&str>,
-        fs_profile: Option<&str>,
-        cwd: &Path,
-    ) -> orbit_types::workflow::NamespaceProbe {
-        orbit_engine::run_deferral_probe(self, probe, provider, fs_profile, cwd)
-    }
-}
-
-/// A host that has not opted into executing deferral probes.
-struct UnsupportedProbeHost;
-
-impl orbit_engine::test_support::NullRuntimeHost for UnsupportedProbeHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
 }
 
 /// Orbit runs a deferral's probe itself, in the implementer's lane, and
