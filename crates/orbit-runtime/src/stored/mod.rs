@@ -8,18 +8,25 @@ pub mod job_runs;
 mod persistence;
 pub mod recovery_authority;
 pub mod stores;
+pub mod task_access;
 pub mod workspace;
 
 use std::sync::Arc;
 
 use self::stores::OrbitStores;
+use self::task_access::{OwnerRoute, TaskAccess, TaskRoute};
 use self::workspace::catalog;
 use crate::base::Base;
+use crate::base::role::Role;
 
 /// The layer an operation that reads or writes a record runs against.
 #[derive(Clone)]
 pub struct Stored {
     pub(crate) stores: OrbitStores,
+    /// Where task reads go: this checkout's store, or the drain owner for a
+    /// claimed worker. Chosen once from the base's role; see
+    /// [`Self::set_role`] for the builders that re-resolve it.
+    task_route: TaskRoute,
     /// This process joined a live executable generation other than its own
     /// without recording itself, so it opened Orbit's state without write
     /// access. Reads work; operational state mutations must be skipped. Tool
@@ -47,6 +54,7 @@ impl Stored {
     ) -> Self {
         Self {
             stores,
+            task_route: TaskRoute::for_role(base.role(), None),
             write_free: false,
             workspace_catalog: None,
             layout_report: Arc::new(layout_report),
@@ -66,6 +74,35 @@ impl Stored {
     /// The opened stores.
     pub fn stores(&self) -> &OrbitStores {
         &self.stores
+    }
+
+    /// This process's task reads, through the route chosen for its role.
+    pub fn task(&self) -> TaskAccess<'_> {
+        TaskAccess::new(self)
+    }
+
+    /// The route to the drain owner, when this process is a claimed worker.
+    pub(crate) fn owner_route(&self) -> Option<&OwnerRoute> {
+        self.task_route.owner()
+    }
+
+    /// Replace the role a kernel builder re-resolved, and choose the task
+    /// route again for it. A worker keeps the coordinator it already has.
+    pub(crate) fn set_role(&mut self, role: Role) {
+        let coordinator = self.owner_route().and_then(OwnerRoute::coordinator);
+        self.task_route = TaskRoute::for_role(&role, coordinator);
+        self.base.set_role(role);
+    }
+
+    /// Attach the coordinator a worker's owner route calls. A process that is
+    /// not a claimed worker has no owner route and keeps none.
+    pub(crate) fn set_owner_coordinator(
+        &mut self,
+        coordinator: Arc<dyn orbit_tools::OwnerCoordinator>,
+    ) {
+        if let Some(route) = self.task_route.owner_mut() {
+            route.set_coordinator(coordinator);
+        }
     }
 
     pub(crate) fn set_execution_location(

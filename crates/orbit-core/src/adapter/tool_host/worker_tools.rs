@@ -345,7 +345,7 @@ fn worker_read(
         }
         "tasks" => serde_json::to_value(runtime.list_tasks()?),
         "task_metadata" => {
-            return crate::application::task::metadata::owner_metadata_page(runtime, input);
+            return runtime.owner_task_metadata_page(input);
         }
         // [ORB-22806] Regression-risk marks were removed. A follower still
         // on an earlier build asks for them at each prompt; answer "no

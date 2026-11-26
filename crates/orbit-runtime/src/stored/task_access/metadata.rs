@@ -1,4 +1,6 @@
-//! Internal bodyless owner reads. This is not a public list pagination API.
+//! Body-less task metadata: the local index reads, and the internal paged
+//! owner read a claimed worker collects them through. This is not a public
+//! list pagination API.
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
@@ -9,8 +11,44 @@ use orbit_types::task::{Task, TaskEnvelopeV2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::listing::metadata_task;
-use crate::OrbitRuntime;
+use super::OwnerRead;
+use crate::RuntimeKernel;
+
+/// Every task `store` lists, newest first, without body documents:
+/// `description`, `acceptance_criteria`, `plan` and `execution_summary` are
+/// empty and every envelope field is populated as a full read populates it.
+///
+/// One index-validated envelope read per task instead of a bundle read, for
+/// callers that read status, attribution, tags, relations, context files or
+/// timestamps of the whole workspace.
+pub fn list_task_metadata_in(store: &TaskV2Store) -> Result<Vec<Task>, OrbitError> {
+    list_task_metadata_matching(store, &TaskListFilter::default())
+}
+
+/// [`list_task_metadata_in`] narrowed by `filter`: one freshness pass, and
+/// only the envelopes the filter selects are read.
+pub fn list_task_metadata_matching(
+    store: &TaskV2Store,
+    filter: &TaskListFilter,
+) -> Result<Vec<Task>, OrbitError> {
+    Ok(store
+        .task_candidates(filter, usize::MAX)?
+        .items
+        .into_iter()
+        .map(metadata_task)
+        .collect())
+}
+
+/// The envelope of one task as a body-less [`Task`].
+pub fn metadata_task(envelope: TaskEnvelopeV2) -> Task {
+    Task::from_envelope_parts(
+        envelope,
+        String::new(),
+        Vec::new(),
+        String::new(),
+        String::new(),
+    )
+}
 
 // Leave ample room for MCP's text/structured result framing under its 64 MiB cap.
 const MAX_METADATA_ROWS: usize = 128;
@@ -68,12 +106,17 @@ fn encode_metadata<T: Serialize>(value: &T) -> Result<Vec<u8>, OrbitError> {
     serde_json::to_vec(value).map_err(|_| invalid_metadata("could not encode page"))
 }
 
-/// Serve only through the authenticated host projection, after owner/workspace
-/// checks. A stale/unavailable index is a refusal, never a full-bundle fallback.
-pub(crate) fn owner_metadata_page(
-    runtime: &OrbitRuntime,
-    input: &Value,
-) -> Result<Value, OrbitError> {
+impl RuntimeKernel {
+    /// Serve one page of the owner's body-less task metadata. Serve only
+    /// through the authenticated host projection, after owner/workspace
+    /// checks. A stale/unavailable index is a refusal, never a full-bundle
+    /// fallback.
+    pub fn owner_task_metadata_page(&self, input: &Value) -> Result<Value, OrbitError> {
+        owner_metadata_page(self, input)
+    }
+}
+
+fn owner_metadata_page(runtime: &RuntimeKernel, input: &Value) -> Result<Value, OrbitError> {
     let request: MetadataRequest = serde_json::from_value(input["metadata_page"].clone())
         .map_err(|_| invalid_metadata("malformed page request"))?;
     if request.schema_version != 1
@@ -216,8 +259,8 @@ fn set_metadata_continuation(page: &mut MetadataPage) {
 }
 
 /// Collect only a complete validated scan; any error discards its prefix.
-pub(crate) fn collect_owner_metadata(
-    runtime: &OrbitRuntime,
+pub(super) fn collect_owner_metadata(
+    owner: &OwnerRead<'_>,
     ids: Option<&BTreeSet<String>>,
 ) -> Result<Vec<Task>, OrbitError> {
     if let Some(ids) = ids {
@@ -225,15 +268,15 @@ pub(crate) fn collect_owner_metadata(
         // Bound request size and keyed owner work too. No full-corpus fallback.
         for chunk in ids.iter().collect::<Vec<_>>().chunks(MAX_METADATA_ROWS) {
             let selected = chunk.iter().map(|id| (*id).clone()).collect();
-            tasks.extend(collect_metadata_scan(runtime, Some(selected))?);
+            tasks.extend(collect_metadata_scan(owner, Some(selected))?);
         }
         return Ok(tasks);
     }
-    collect_metadata_scan(runtime, None)
+    collect_metadata_scan(owner, None)
 }
 
 fn collect_metadata_scan(
-    runtime: &OrbitRuntime,
+    owner: &OwnerRead<'_>,
     ids: Option<BTreeSet<String>>,
 ) -> Result<Vec<Task>, OrbitError> {
     let mut request = MetadataRequest {
@@ -248,9 +291,8 @@ fn collect_metadata_scan(
     let mut seen = BTreeSet::new();
     let mut expected_total = None;
     loop {
-        let value: Value = runtime.read_owner_request(
-            json!({ "_worker_read": "task_metadata", "metadata_page": &request }),
-        )?;
+        let value: Value =
+            owner.request(json!({ "_worker_read": "task_metadata", "metadata_page": &request }))?;
         if encode_metadata(&value)?.len() > request.max_bytes {
             return Err(invalid_metadata("response exceeds the byte budget"));
         }

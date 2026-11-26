@@ -327,7 +327,7 @@ impl OrbitRuntime {
 
     /// A claimed leaf's steering records, read from its owner.
     fn owner_claim_steering(&self, task_id: &str) -> Result<ClaimSteeringReading, OrbitError> {
-        self.read_owner_request(json!({"id": task_id, "_worker_read": "steering"}))
+        self.stored().task().claim_steering(task_id)
     }
 
     /// Record that `step_id` built a prompt for `task_id` with no steering

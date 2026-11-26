@@ -30,7 +30,8 @@
 //! complete [`RuntimeKernel`], while the four layers hold the runtime's
 //! mechanisms: `base` (configuration, paths, actor, binding, event log,
 //! authorization policy data, managed-run env parsing), `stored` (stores,
-//! persistence, audit, workspace catalog and claims, recovery authority), `host`
+//! persistence, the task access chosen for the process's role, audit,
+//! workspace catalog and claims, recovery authority), `host`
 //! (PR forge, host signals, resource probes and forecasts, admission policy,
 //! plugins, command/tool/script/Git-sandbox execution, embedded assets) and
 //! `run` (worker coordination, engine helpers, step-recovery decisions, run
@@ -74,7 +75,9 @@ pub use host::resource::with_host_load_sampling_wait;
 #[cfg(feature = "test-support")]
 pub use run::worker_coordination::pipeline_poll_wait_override;
 #[cfg(feature = "test-support")]
-pub use run::worker_coordination::{with_owner_read_retry_wait, with_pipeline_poll_wait};
+pub use run::worker_coordination::with_pipeline_poll_wait;
+#[cfg(feature = "test-support")]
+pub use stored::task_access::with_owner_read_retry_wait;
 
 // Compatibility module re-exports so callers outside this crate keep their
 // public paths until the wrapper is deleted.

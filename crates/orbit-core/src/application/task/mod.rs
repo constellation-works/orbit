@@ -48,7 +48,6 @@ pub(crate) mod light_delivery;
 mod lint;
 mod list_result;
 mod listing;
-pub(crate) mod metadata;
 mod mutation_audit;
 mod mutation_proposals;
 mod notice_port;
