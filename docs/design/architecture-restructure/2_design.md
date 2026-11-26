@@ -118,12 +118,67 @@ pub fn exec(core: &Core, command: Command) -> Result<Outcome, Error> {
 }
 ```
 
-- **The chokepoint** (`app/exec.rs`) is written once, as in the template: it authorizes the command against the operation's governance row, starts the audit guard for a mutating command, runs the flow, tells the guard the outcome, and maps the app's typed error into `orbit-core`'s `Error`. An app supplies only what differs. No surface authorizes or audits, and none can skip it (STD-02 §R24).
+- **The chokepoint** (`app/exec.rs`) is written once, as in the template: it authorizes the command against the operation's governance row, starts the audit guard for a mutating command, runs the flow, tells the guard the outcome, and maps the app's typed error into `orbit-core`'s `Error`. An app supplies only what differs. No surface authorizes or audits, and none can skip it (STD-02 §R24). Its files and stages are in [The chokepoint's structure](#the-chokepoints-structure).
 - **A flow** is a function, not a method: `pub(super) fn add(rt: &Stored, new: NewTask) -> Result<Outcome, Error>`. Its first parameter is the lowest runtime layer it needs (§4). It follows load, decide, effect, commit (STD-02 §R41) where it can; one that cannot says why in its doc comment.
 - **`Command` and the registry.** For a noun in the operation registry, `Command` is the typed form of that noun's verb enum and parameters: the spec in `orbit-common` stays the cross-surface contract, and `Command` is what the handler builds from validated input. A noun that is not yet in the registry keeps its hand-written surface and changes only what it calls; moving it into the registry stays with operations-as-data [ORB-15932].
 - **Module privacy does the enforcing.** A flow file is a private child module, so a sibling app can call only what `mod.rs` exports. Today the same boundary needs a script that reads `impl` blocks.
 - **Which modules become apps.** The rule is STD-02 §R45: a subject a user can name is an app (`task`, `run`, `workspace`, `plugin`, `routine`, `auto_task`, `notice`, `review`, `config`, `skill`, `search`, `codebase`, `experiment`, `resident`, `friction`, `doctor`, `update`, `host`). Machinery several subjects use and that has its own identity (admission, the distributed and pull drains, crew pools, landing, the backlog forecast) is a subsystem unit beside the apps, called by them, with no `Command` of its own. Legacy readers (`tool_name_migration`, `task_bundle/migration.rs`) go to one `migrate` unit (STD-02 §R44). The complete table, one row per current module, is written into `docs/architecture/orbit-core.md` by the first task; `scripts/check-architecture-map.py` already fails when a module is missing from that page.
 - **`application/contracts/`** (18 files of shapes several modules share) dissolves as its users become apps: a shape goes to the app that owns it, or stays only if two apps truly share it (STD-02 §R42, §R43).
+
+### The chokepoint's structure
+
+`app/exec.rs` was to be written once (above). It has instead grown with each surface converted: 235 lines with friction [ORB-28396], 350 with task, 425 with run and 535 with plugin [ORB-28399], read at `17eff13d45`. Each task added what its surface needed, and the file now holds more than the chokepoint. Daniel, 2026-11-26: "this is turning into a dump of various things. can you propose a better design"; shown the proposal below, to "Write the exec.rs split into the restructure design?": "Yes, write it". Proposed, not built, and no task is filed.
+
+**Today.**
+
+| In the file | Lines | What is wrong |
+|---|---|---|
+| `App`, `Operation`, `run`, `authorize` | 171 | The chokepoint as designed. `Operation` is a command's identity plus five options added one at a time, four of them used by one file each |
+| `AuditGuard` | 136 | The command-line invocation row. One of two 32-field audit rows built by hand in this file |
+| `MutationAudit`, `record_mutation` | 45 | The task app's `task.mutation` row. The generic file imports `application::task` to write it, and two hooks on `App` exist for that one app |
+| `dashboard_authorize`, `dashboard_controls` | 37 | A second authorization, by session. Called in eight places in the run app before the chokepoint runs, and exported to `orbit-web`, whose handlers call it themselves |
+| `run_dashboard`, `DashboardOperation` | 97 | A second chokepoint, with the other hand-built row. The plugin app's `exec` branches to it and never reaches `run` |
+
+- **What that breaks.** The rule above is that no surface authorizes or audits and none can skip the chokepoint. A constructor that decides its own admission, and an `exec` that branches around `run`, break it from inside `orbit-core`.
+- **The session travels in the command.** A `Core` knows how it was entered (`Entry`) but not who is asking, so the session's operator flag enters through eight parameters or fields in the run and plugin apps and one field of the task app's command.
+- **One decision already exists.** `orbit_common::governance::authorization::authorize(operation, &CallerCapabilities)` is pure, and every path ends in it. The paths differ in how the caller's capabilities are resolved (the process environment, or the dashboard session alone), in what is recorded, and in the type of the refusal: `OrbitError::CapabilityDenied(message)` from the runtime, the `AuthorizationDenial` value on the dashboard.
+
+**Proposed.** One chokepoint with three stages, each in its own file:
+
+```text
+app/exec/
+  mod.rs            App and run(): admit, with the audit around it. Nothing else
+  caller.rs         Caller: who is asking, and how that resolves to CallerCapabilities
+  operation.rs      Operation: a command's identity, what it requires, how its row is attributed
+  admit.rs          the one place a command is authorized
+  audit/
+    mod.rs          which row a caller is owed, and the fields every row shares
+    invocation.rs   the command-line row and its drop guard
+    dashboard.rs    the dashboard.operations row
+app/task/audit.rs   the task.mutation row, in the app that owns it
+```
+
+```rust
+pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome, Error> {
+    let operation = A::operation(&command);
+    let audit = audit::start::<A>(core, &operation, &command); // first, so a refusal is recorded
+    let result = admit::decide(core.caller(), &operation)
+        .and_then(|()| A::run(core, command).map_err(Into::into));
+    audit.finish(&result);
+    result
+}
+```
+
+- **The caller rides on the `Core`.** `Entry` becomes `Caller`: a command line, a session with its grants, or a tool call. A command-line `Core` has one caller for its life. A server derives a `Core` for each request from the workspace's `Core` and the request's session, as `Core::within_tool_entry` derives one for a tool call today. The operator parameters and fields go, and an app's `run` reads `core.caller()` where a flow needs to know.
+- **A command declares what it requires, and only `admit` decides.** `Operation::requires(&DASHBOARD_LEASE_WRITE)` replaces the call in the constructor. `requires_if(condition, &OPERATION)` replaces `dashboard_controls`, in order, so the first refusal is still the one reported. `require_native_operator` becomes one more requirement. `dashboard_authorize` is no longer exported.
+- **A requirement that depends on a record is asked in the flow.** Resuming or replaying a run needs completion authority only when the source run asked for completion, which the flow learns when it reads the run. Today the constructor decides early and carries the result in as a value. The flow instead calls `core.caller().require(&DASHBOARD_AUTO_DRAIN_COMPLETE)`, which ends in the same decision function.
+- **A refusal is one typed error.** A dashboard command's outcome wraps its refusal today, up to `Result<Result<T, E>, AuthorizationDenial>`, because `CapabilityDenied` carries only a message and the dashboard's 403 body needs the operation id and the provenance. `OrbitError` gets one variant that carries the `AuthorizationDenial`; both types are in `orbit-common`. `admit` returns it for a session, and the dashboard's error mapping renders the same body from it. A command-line caller keeps `CapabilityDenied(message)` and the authorization event the runtime records, so nothing a CLI prints or exits with changes.
+- **Admission before a workspace is opened.** Two dashboard writes are admitted before the workspace is opened or discovered: the lease write and the run replay. A session's decision needs only the caller and the operation and records nothing, so each app also offers `admit(&caller, &command)`, the same stage without a `Core`. A surface may call it early. It cannot skip the one in `exec`.
+- **Audit is chosen by the caller.** `audit::start` returns the writer the caller is owed. A command line is owed the invocation row. A session is owed the row its command declares, or none: `Operation::dashboard_row(target, arguments, host)` for a governed dashboard write, the task app's writer for a task write. A tool call is owed none, because the generic tool entry audited it. A row is declared, never inferred from a requirement: the run app's dashboard commands require a grant today and write no row in `orbit-core`. One function fills the fields every row shares (process, host, workspace, working directory, the run a worker belongs to).
+- **`Operation` in three parts:** its identity (command, subcommand, tool row), what it requires, and how its row is attributed (target, run, role, the declared row). `admit` reads the first two and `audit` the first and third, so an option added for one stage is not in the other's way.
+- **`App` shrinks** to `operation`, `run`, `exit_code` and one session-audit hook, which only the task app implements. `mutation_audit` and `written_id` fold into the task app's writer.
+- **It is a move plus one error variant.** Every audit row keeps its fields and every refusal its text. The frozen surface fixtures and `crates/orbit-web/tests/http_api/guards.rs` are the net.
+- **When.** Each surface family still to convert adds to this file: workspace [ORB-28400], config, skill and audit [ORB-28401], the CLI entry [ORB-28407] and the dashboard [ORB-28415]. The dashboard task is also where `orbit-web`'s own copy of the dashboard row (`OperationAudit` in `api/routines.rs`) and its direct calls to `dashboard_authorize` need a home. The split is cheapest before [ORB-28415], and it must be ordered against whichever of those tasks is in flight, since they declare the same file.
 
 ### `metrics` dissolves into the run app
 
@@ -383,6 +438,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - **Folding the role checks is not a move.** About 194 places ask the role today. Replacing them with one choice made when `Stored` is built changes code paths that drains depend on, and whether a worker's writes fit the same task access as its reads is not examined (`route_worker_tool` routes whole tool calls, at 9 places).
 - **The four layers are read from field names and a name-based call graph.** Until the role checks are folded, calls do not sort into the four: 615 functions reach a worker or drain field and the stores but no host mechanism. The design expects them to fall to `Stored` afterwards; that is not measured. The file mapping in §4 is by module name.
 - **Pure decisions are not enforced.** The shape load, decide, effect, commit is asked of each flow, and a conversion that is only a move will not produce it. Reaching STD-02 §R41 is later work per subject.
+- **The chokepoint's structure is designed from one reading (§3).** Not checked: every exhaustive match on `OrbitError` that a new variant touches; which dashboard routes write a denied row today when admission fails before a workspace is opened; whether deriving a `Core` for each request costs more than the runtime clone the dashboard already makes in `WsCore::over`.
 - **The ports are a symptom this does not treat.** There are 31 port traits, and `task` needs 49 methods from `job` through `TaskJobPort` alone. Rebinding the traits keeps the order honest; it does not untangle the two subjects.
 - **"Move only" rests on review.** Nothing mechanical proves a moved body is unchanged. An agent that tidies while it moves can change behaviour, and the existing tests are the only net.
 - **Collisions with in-flight work.** A conversion touches files that drains change every day. Small changes per subject reduce it; they do not remove it.
