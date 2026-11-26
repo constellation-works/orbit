@@ -11,8 +11,8 @@ mod tests;
 
 pub(super) use guard::refresh_requested_for_this_process;
 pub use guard::{
-    GenerationGuard, Participant, pending_switch_for_this_process, process_handover,
-    process_participation,
+    GenerationGuard, Participant, ParticipantRequest, pending_switch_for_this_process,
+    process_handover, process_participation,
 };
 pub use lock::quiesce_bound;
 pub(super) use lock::{Admission, PROBE_SETTLE, admission};

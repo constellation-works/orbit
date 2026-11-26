@@ -486,6 +486,7 @@ use orbit_common::fs::generation::GenerationUpdate;
 use orbit_common::fs::generation::HandoverCandidate;
 use orbit_common::fs::generation::LedgerCompatibility;
 use orbit_common::fs::generation::Participant;
+use orbit_common::fs::generation::ParticipantRequest;
 use orbit_common::fs::generation::ParticipantRole;
 use orbit_common::fs::generation::RESUME_MCP_STDIO;
 use orbit_common::fs::generation::pending_switch;
