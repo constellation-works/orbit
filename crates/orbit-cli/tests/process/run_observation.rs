@@ -1025,6 +1025,82 @@ fn run_events_select_resolved_steps_and_add_inherited_step_ids() {
             .is_some_and(|m| m.contains("does not match any step")),
         "an unknown step selector is refused: {error}"
     );
+
+    // Plain summaries keep label order, drop a malformed field without
+    // losing its siblings, print an explicit `false`, and fall back to the
+    // raw `body_kind` or a dash for an unrecognised event.
+    let summaries = [
+        (
+            "s0",
+            r#"{"event_id":"s0","event_type":"cli.invocation.finished","provider":"codex","exit_code":0,"duration_ms":"slow","timed_out":false}"#,
+        ),
+        (
+            "s1",
+            r#"{"event_id":"s1","event_type":"step.finished","step_id":7,"outcome":"failed"}"#,
+        ),
+        (
+            "s2",
+            r#"{"event_id":"s2","event_type":"fs.call.denied","op":"read","path":"/x","allowed":false}"#,
+        ),
+        (
+            "s3",
+            r#"{"event_id":"s3","event_type":"run.cancelled","reason":"stop"}"#,
+        ),
+        (
+            "s4",
+            r#"{"event_id":"s4","event_type":"worker.state","step_id":"fan","worker_index":2,"state":"done"}"#,
+        ),
+        (
+            "s5",
+            r#"{"event_id":"s5","event_type":"future.event","body_kind":"future_body"}"#,
+        ),
+        (
+            "s6",
+            r#"{"event_id":"s6","event_type":"future.event","body_kind":9}"#,
+        ),
+    ];
+    for (offset, (event_id, payload)) in summaries.iter().enumerate() {
+        let ts = format!("2026-09-20T03:02:{offset:02}+00:00");
+        db.execute("INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version, event_type, ts, run_id, agent_identity, payload_json) VALUES (?1, ?2, 'v2_envelope', 1, 'fixture', ?3, ?4, 'test', ?5)", params![workspace_id, event_id, ts, FAILED, payload]).expect("seed summary event");
+    }
+    let plain = fixture.text(&["run", "events", FAILED, "--no-reconcile"]);
+    let trace = fixture.text(&["run", "trace", FAILED]);
+    for (event_type, summary) in [
+        (
+            "cli.invocation.finished",
+            "provider=codex exit=0 timed_out=false",
+        ),
+        ("step.finished", "outcome=failed"),
+        ("fs.call.denied", "op=read path=/x allowed=false"),
+        ("run.cancelled", "reason=stop"),
+        ("worker.state", "step=fan worker=2 state=done"),
+        ("future.event", "future_body"),
+    ] {
+        assert!(
+            plain
+                .lines()
+                .any(|line| line.contains(event_type) && line.trim_end().ends_with(summary)),
+            "plain events show `{summary}` for {event_type}:\n{plain}"
+        );
+        assert!(
+            trace.lines().any(|line| line
+                .trim_end()
+                .ends_with(&format!("{event_type} {summary}"))),
+            "trace shows `{summary}` for {event_type}:\n{trace}"
+        );
+    }
+    assert!(
+        plain
+            .lines()
+            .any(|line| line.contains("future.event")
+                && line.trim_end().ends_with("future.event\t-")),
+        "an unknown event without a string body_kind shows a dash:\n{plain}"
+    );
+    let raw = fixture.json(&["run", "events", FAILED, "--no-reconcile", "--json"]);
+    assert_eq!(
+        raw["events"][4]["duration_ms"], "slow",
+        "JSON keeps the raw payload: {raw}"
+    );
 }
 fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     let fixture = Fixture::init();
