@@ -193,7 +193,7 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
 
 ### Leases get their own app, and lock contention goes to the task app
 
-The section above left two of the run app's foreign nouns open: the `lease` operations (`app/run/lease.rs`, 106 lines) and one `task` operation, lock contention (`app/run/inspection.rs`). Read at `c8d4c48e1c`. Daniel, 2026-11-26: "have the advisor decide lease and lock-contention placement". Decided here on that word; not built, and no task is filed.
+The section above left two of the run app's foreign nouns open: the `lease` operations (`app/run/lease.rs`, 106 lines) and one `task` operation, lock contention (`app/run/inspection.rs`). Read at `c8d4c48e1c`. Daniel, 2026-11-26: "have the advisor decide lease and lock-contention placement". Decided here on that word and not built. The moves are filed as [ORB-28986] (leases) and [ORB-28987] (lock contention).
 
 | Today | What it is | Goes to |
 |---|---|---|
@@ -207,7 +207,7 @@ The section above left two of the run app's foreign nouns open: the `lease` oper
 - **Lock contention is a task read.** Its operation already names the noun `task`. Its flow is in `application/task/`, which the app table sends to `app::task`. Its one caller is `orbit task locks contention` (`crates/orbit-cli/src/command/locks.rs`), which imports the run app for this alone. It becomes a read of the task app, and that file stops naming `app::run`.
 - **What stays in the run app.** `lock_holders.rs` names the holders of the locks a run waits on, for `orbit run show`. It is a run read that asks the task tool, so it stays (§5).
 - **After these moves and [ORB-28971]** the run app's operations name `run`, `job`, `script` and `pipeline`, which are one subject by the app table.
-- **Order.** Both are moves and wait only for the CLI entry [ORB-28407], whose footprint includes `crates/orbit-cli/src/command/`. The lease move shares `app/mod.rs` and `app/run/mod.rs` with [ORB-28971], `app/run/mod.rs` with [ORB-28962], and `app/run/lease.rs` and `api/leases.rs` with [ORB-28970], so it goes after [ORB-28971] and before [ORB-28962]. The contention move shares `app/task/mod.rs` with [ORB-28970] and no file with the lease move, so it can run beside it and lands before [ORB-28970]. The split then converts each operation in its own app: [ORB-28407], [ORB-28971], these two moves, [ORB-28962], [ORB-28970], [ORB-28415].
+- **Order.** Both are moves and wait only for the CLI entry [ORB-28407], whose footprint includes `crates/orbit-cli/src/command/`. The lease move shares `app/mod.rs` and `app/run/mod.rs` with [ORB-28971], `app/run/mod.rs` with [ORB-28962], and `app/run/lease.rs` and `api/leases.rs` with [ORB-28970], so it goes after [ORB-28971] and before [ORB-28962]. The contention move shares `app/task/mod.rs` with [ORB-28970] and no file with the lease move, so it can run beside it and lands before [ORB-28970]. Both are filed to wait for [ORB-28971]. The split then converts each operation in its own app: [ORB-28407], [ORB-28971], the two moves [ORB-28986] and [ORB-28987], [ORB-28962], [ORB-28970], [ORB-28415].
 
 ### `metrics` dissolves into the run app
 
@@ -525,6 +525,8 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28963] — will move core metrics into the run app.
 - [ORB-28970] — will route every app through one `exec` path and split caller, admission and audit.
 - [ORB-28971] — will move the `command.exec` flow out of `app::run` into `app::remote_command`.
+- [ORB-28986] — will move the dashboard path leases out of `app::run` into `app::lease`.
+- [ORB-28987] — will move the task lock-contention read from `app::run` to `app::task`.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
