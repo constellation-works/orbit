@@ -19,7 +19,7 @@ use comfy_table::{
     Width, presets,
 };
 
-use crate::output::sink::{OutputMode, OutputSink};
+use crate::output::common::sink::{OutputMode, OutputSink};
 
 /// Spaces between two rendered columns.
 const GUTTER: usize = 2;
@@ -207,7 +207,7 @@ impl Table {
     /// after the empty-state line when there is no body.
     ///
     /// Returns whether any cell was shortened or a column hidden.
-    /// Called only by `output::render`; a command hands its table back inside a
+    /// Called only by `output::common::render`; a command hands its table back inside a
     /// payload rather than emitting one itself.
     pub(crate) fn emit(&self, sink: &OutputSink) -> bool {
         if self.rows.is_empty() {

@@ -7,7 +7,7 @@ use super::host_ssh::host_ssh_command;
 use super::output_args::{install_output_args, plain_header, requested_output};
 use super::resolved::generation_root;
 use crate::command;
-use crate::output::sink::FormatArg;
+use crate::output::common::sink::FormatArg;
 use crate::plugin_cli;
 use crate::usage_error;
 
@@ -123,7 +123,8 @@ pub(super) fn cli_command(
     // deterministic. The width comes from the sink, the only place that
     // queries terminal state (`check-terminal-state-guard.sh`); `main` still
     // resolves its own sink after parsing for rendering.
-    let term_width = crate::output::sink::OutputSink::from_process(env, None, false).width();
+    let term_width =
+        crate::output::common::sink::OutputSink::from_process(env, None, false).width();
     cli_command_with_width(groups, term_width)
 }
 

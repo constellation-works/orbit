@@ -80,7 +80,7 @@ fn closed_stdout_payload(payload: &(dyn Any + Send)) -> bool {
 /// and the error's `Display` ends in `(os error 32)` — `EPIPE` on every unix.
 /// Matching the prefix alone would also swallow a full disk, which is a real
 /// failure and must keep panicking, so both halves have to agree.
-// pub(super) widened for sibling-layout tests in output/tests/pipe.rs
+// pub(super) widened for sibling-layout tests in output/common/tests/pipe.rs
 pub(super) fn is_closed_stdout_panic(message: &str) -> bool {
     message.starts_with("failed printing to stdout")
         && (message.contains("os error 32") || message.contains("Broken pipe"))

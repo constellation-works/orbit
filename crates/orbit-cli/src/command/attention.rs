@@ -5,7 +5,8 @@ use super::{
 };
 use std::ffi::OsStr;
 
-use crate::output::payload::{AttentionRow, Block};
+use crate::output::attention::AttentionRow;
+use crate::output::common::payload::Block;
 use clap::{Arg, ArgMatches, Args, Command, FromArgMatches};
 use orbit_common::Env;
 use orbit_common::governance::{attention::AttentionVerb, operation::OperationVerb};

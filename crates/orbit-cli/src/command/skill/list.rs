@@ -13,7 +13,7 @@ impl Execute for SkillListArgs {
         let skills = runtime.list_file_skills()?;
         let values = skills.iter().map(skill_summary_json).collect::<Vec<_>>();
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         // `orbit skill show <id>` prints a skill's untruncated summary.
         let mut table = Table::new(vec![
             Column::new("ID").fixed(),

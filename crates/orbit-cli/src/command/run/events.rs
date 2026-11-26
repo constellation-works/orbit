@@ -61,7 +61,7 @@ fn run_events_payload(
         "events": events.iter().map(RunAuditEvent::json_with_step_id).collect::<Vec<_>>(),
     });
 
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     // `orbit run trace <run_id>` prints each event's untruncated payload.
     let mut table = Table::new(vec![
         Column::new("TS").fixed(),

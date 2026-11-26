@@ -23,7 +23,7 @@ use orbit_types::task::TaskHistoryEntry;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, ExecuteCore, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 
 /// Default bucket width. A week matches how the review sweeps are scheduled

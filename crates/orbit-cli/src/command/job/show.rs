@@ -19,7 +19,7 @@ impl ExecuteCore for JobShowArgs {
 
         use std::fmt::Write as _;
         let mut out = String::new();
-        use crate::output::color::{Domain, bold, text};
+        use crate::output::common::color::{Domain, bold, text};
         let _ = writeln!(out, "{} {}", bold("Job ID:"), job.job_id.as_str());
         let _ = writeln!(
             out,

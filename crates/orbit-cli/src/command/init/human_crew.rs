@@ -14,7 +14,7 @@ use orbit_config::{
 use orbit_core::OrbitError;
 
 use super::prompt_stdin;
-use crate::output::sink;
+use crate::output::common::sink;
 
 const MAX_HUMAN_CREW_NAME_ATTEMPTS: usize = 4;
 

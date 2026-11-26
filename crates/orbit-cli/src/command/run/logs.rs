@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::time::Duration;
 
 use crate::command::{CommandOut, Payload};
-use crate::output::sink::OutputMode;
+use crate::output::common::sink::OutputMode;
 
 use super::steps::RunRead;
 use orbit_core::app::run::{LogFollower, LogSnapshot};
@@ -76,7 +76,9 @@ fn follow_logs_payload(
             let json = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
             let result = follow_logs(&follower, &log_path, json, writer);
             match result {
-                Err(FollowError::Io(error)) if crate::output::pipe::is_broken_pipe(&error) => {
+                Err(FollowError::Io(error))
+                    if crate::output::common::pipe::is_broken_pipe(&error) =>
+                {
                     Ok(())
                 }
                 Err(FollowError::Io(error)) => Err(error.into()),

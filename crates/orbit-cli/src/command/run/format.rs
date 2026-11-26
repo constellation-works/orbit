@@ -545,7 +545,7 @@ pub(super) fn catalog_layer_lines(layers: &[CatalogReferenceLayer], verbose: boo
         .map(|layer| {
             format!(
                 "\n{} {}",
-                crate::output::color::bold("Catalog:"),
+                crate::output::common::color::bold("Catalog:"),
                 layer.to_line()
             )
         })
@@ -567,7 +567,7 @@ pub(super) fn agent_invocation_lines(value: &Value) -> String {
     let text = |key: &str| result.get(key).and_then(Value::as_str);
     let mut lines = format!(
         "\n{} outcome={} envelope_completed={} timed_out={} exit_code={} provider_sandbox={}",
-        crate::output::color::bold("Invocation:"),
+        crate::output::common::color::bold("Invocation:"),
         text("outcome").unwrap_or("-"),
         result
             .get("completed_envelope")
@@ -719,7 +719,7 @@ pub(super) fn live_provider_process_lines(processes: &[RunProviderProcess]) -> S
             let blocked = process.blocked_on_stopped_descendant();
             let mut lines = format!(
                 "\n{} provider={} pid={} step={} liveness={}{} started_at={}",
-                crate::output::color::bold("Agent:"),
+                crate::output::common::color::bold("Agent:"),
                 process.provider.as_deref().unwrap_or("-"),
                 process.pid,
                 process.step_id.as_deref().unwrap_or("-"),

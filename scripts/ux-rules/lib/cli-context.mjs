@@ -2,7 +2,7 @@
 //
 // PTY captures delete COLUMNS and record the width ioctl reports back. The
 // renderer reads COLUMNS first and the terminal width only after that
-// (output/sink.rs resolve_width), so a PTY whose COLUMNS is set does not
+// (output/common/sink.rs resolve_width), so a PTY whose COLUMNS is set does not
 // prove which width the renderer used.
 
 import { execFile } from "node:child_process";

@@ -25,7 +25,7 @@ Terminal Interface owns what `orbit` writes to stdout and stderr: table layout, 
 
 A CLI's output is read by a human scanning for a status and by a pipeline extracting a field, and those readers want different bytes. The human wants alignment, color, and a screenful; the pipeline wants one record per line and no escape sequences. Historically Orbit sent both readers the same bytes, chosen for the human; the terminal-interface work now resolves the rendering for the detected sink.
 
-The concrete failures were small and additive. `orbit tool list` drew box rules and wrapped long cells across three or four lines, so a row was not a line and `grep` returned fragments ([T20260411-0335] introduced the full-width dynamic arrangement that caused the wrapping); the shared list renderer is now borderless and one line per record [ORB-10567]. `orbit audit list` formerly used literal padding widths in a format string; it now builds a computed-width table. `output/sink.rs` resolves terminal state and color once, then applies the answer to both table and line renderers. Commands return shared payloads for central rendering; the global `--format` surface supplies the common modes, and the global `--json` shorthand selects pretty JSON across the assembled CLI. Older command-specific flags such as `--ops` remain where their argument types define them.
+The concrete failures were small and additive. `orbit tool list` drew box rules and wrapped long cells across three or four lines, so a row was not a line and `grep` returned fragments ([T20260411-0335] introduced the full-width dynamic arrangement that caused the wrapping); the shared list renderer is now borderless and one line per record [ORB-10567]. `orbit audit list` formerly used literal padding widths in a format string; it now builds a computed-width table. `output/common/sink.rs` resolves terminal state and color once, then applies the answer to both table and line renderers. Commands return shared payloads for central rendering; the global `--format` surface supplies the common modes, and the global `--json` shorthand selects pretty JSON across the assembled CLI. Older command-specific flags such as `--ops` remain where their argument types define them.
 
 None of these is severe alone. Together they mean output correctness is a property each command has or lacks individually, which is the thing this feature exists to stop.
 
@@ -43,9 +43,9 @@ The main rendering migration is done: borderless tables [ORB-10567], semantic ro
 
 | Concern | File | Task |
 |---------|------|------|
-| Table construction, preset, arrangement | [crates/orbit-cli/src/output/table.rs](../../../crates/orbit-cli/src/output/table.rs) | Done: [ORB-10567] (replaces [T20260411-0335]) |
-| Status and priority color vocabulary | [crates/orbit-cli/src/output/color.rs](../../../crates/orbit-cli/src/output/color.rs) | Done: [ORB-10568], [ORB-10570] (replaces [T20260427-43]) |
-| Structured output and error payloads | [crates/orbit-cli/src/output/json.rs](../../../crates/orbit-cli/src/output/json.rs) | [ORB-10356] |
+| Table construction, preset, arrangement | [crates/orbit-cli/src/output/common/table.rs](../../../crates/orbit-cli/src/output/common/table.rs) | Done: [ORB-10567] (replaces [T20260411-0335]) |
+| Status and priority color vocabulary | [crates/orbit-cli/src/output/common/color.rs](../../../crates/orbit-cli/src/output/common/color.rs) | Done: [ORB-10568], [ORB-10570] (replaces [T20260427-43]) |
+| Structured output and error payloads | [crates/orbit-cli/src/output/common/json.rs](../../../crates/orbit-cli/src/output/common/json.rs) | [ORB-10356] |
 | Audit list table and JSON payload | [crates/orbit-cli/src/command/audit/support.rs](../../../crates/orbit-cli/src/command/audit/support.rs) | [ORB-10228] |
 | Shared payload construction and rendering | [crates/orbit-cli/src/command/](../../../crates/orbit-cli/src/command/) | Done: [ORB-10586], [ORB-11596] (layout from [ORB-00279]) |
 | Table contract; full-detail recovery is done [ORB-21575] | [./specs/table-rendering.md](./specs/table-rendering.md) | [Borderless Tables With Truncate-to-Width Rows](./4_decisions.md#borderless-tables-with-truncate-to-width-rows) |

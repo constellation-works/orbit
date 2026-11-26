@@ -10,7 +10,7 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, ExecuteCore, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 use super::format::{format_duration, format_history_role, format_timestamp, format_waiting_line};
 use super::job::cli_job_run_to_json;
@@ -143,7 +143,7 @@ pub(crate) fn run_history_payload(
         .collect::<Vec<_>>();
     let show_errors = errors.iter().any(Option::is_some);
 
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     let mut columns = vec![
         Column::new("RUN_ID").fixed(),
         // Sibling top-level runs and one run's children share a minute stem, so
@@ -192,7 +192,7 @@ pub(crate) fn run_history_payload(
         row.extend([
             Cell::new(job_run_task_ids(run).join(", ")),
             Cell::new(run.attempt.to_string()),
-            crate::output::color::cell(&run.state.to_string(), Domain::JobState),
+            crate::output::common::color::cell(&run.state.to_string(), Domain::JobState),
             Cell::new(format_timestamp(run.started_at)),
             Cell::new(format_timestamp(run.finished_at)),
             Cell::new(
@@ -245,7 +245,7 @@ fn failure_history_payload(rows: &[FailureRow], paused: usize) -> CommandOut {
         .collect::<Vec<_>>();
     let mut doc = json!({ "failures": values });
 
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     let columns = vec![
         Column::new("TASK").fixed(),
         Column::new("RUN_ID").fixed(),

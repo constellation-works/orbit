@@ -2,8 +2,8 @@ use orbit_core::AuditEvent;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Value, json};
 
-use crate::output::color::{Domain, cell};
-use crate::output::table::{Column, Table};
+use crate::output::common::color::{Domain, cell};
+use crate::output::common::table::{Column, Table};
 
 pub(super) fn audit_event_to_json(event: &AuditEvent) -> Value {
     let mut value = audit_event_base_json(event);

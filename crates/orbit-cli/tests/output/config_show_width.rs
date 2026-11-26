@@ -4,8 +4,8 @@
 
 const DESCRIPTION: &str = "The crew dispatched when a task names no crew of its own, chosen from the configured crews and falling back only when that crew is empty or unset [allowed: any configured crew name]";
 
-fn sample_text() -> crate::output::payload::ConfigShow {
-    let mut text = crate::output::payload::ConfigShow::default();
+fn sample_text() -> crate::output::config::ConfigShow {
+    let mut text = crate::output::config::ConfigShow::default();
     text.push_str("orbit config — effective\n\n");
     text.push_str(&format!(
         "{:<28} how tasks are shipped, reviewed and landed by the delivery pipeline on this machine\n",
@@ -36,8 +36,8 @@ fn sample_text() -> crate::output::payload::ConfigShow {
 
 /// A key row whose first trailing word is wider than the first line's remainder
 /// at a narrow width but fits whole on a continuation line.
-fn continuation_word_text() -> crate::output::payload::ConfigShow {
-    let mut text = crate::output::payload::ConfigShow::default();
+fn continuation_word_text() -> crate::output::config::ConfigShow {
+    let mut text = crate::output::config::ConfigShow::default();
     text.push_str(&format!("  {:<10}  {:<8}  ", "label", "value"));
     text.mark_trailing_column();
     text.push_str("alpha-beta-gamma-delta\n");
@@ -45,7 +45,7 @@ fn continuation_word_text() -> crate::output::payload::ConfigShow {
 }
 
 /// The text the child renders, chosen by `ORBIT_CONFIG_SHOW_RENDER_TEXT`.
-fn child_text() -> crate::output::payload::ConfigShow {
+fn child_text() -> crate::output::config::ConfigShow {
     match std::env::var("ORBIT_CONFIG_SHOW_RENDER_TEXT").as_deref() {
         Ok("continuation") => continuation_word_text(),
         _ => sample_text(),
@@ -116,7 +116,7 @@ fn render_fixture_child() {
         false,
     );
     writeln!(std::io::stdout(), "BEGIN_CONFIG_SHOW").expect("start marker");
-    crate::output::render::emit(
+    crate::output::common::render::emit(
         Payload::blocks(
             serde_json::json!({}),
             vec![Block::config_show(child_text())],

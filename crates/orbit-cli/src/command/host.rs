@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::command::{CommandOut, Payload};
 use crate::entry::resolved::Resolved;
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 
 #[derive(Args)]
 #[command(

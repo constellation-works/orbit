@@ -7,12 +7,12 @@
 //! enforced by `scripts/check-terminal-state-guard.sh`.
 //!
 //! `main` resolves the sink, calls [`OutputSink::apply_color_policy`], and
-//! hands the sink to `output::render`, which is the only consumer. Commands
+//! hands the sink to `output::common::render`, which is the only consumer. Commands
 //! return payloads and never see a sink at all, so there is no process global
 //! to read: the value is a parameter of the single render call [ORB-10586,
 //! superseding ADR-0314's process-global decision]. Color emission is decided
 //! in exactly one place: `apply_color_policy` overrides the `colored` crate's
-//! own env detection, and `output::table` is handed the same answer for
+//! own env detection, and `output::common::table` is handed the same answer for
 //! `comfy_table`, so the two styling backends can no longer disagree about
 //! `NO_COLOR` [ADR-0308].
 
@@ -259,7 +259,7 @@ impl OutputSink {
     /// Spec §3 says "only when `is_tty`", and that is what `--format json`
     /// does. The global `--json` rung is pinned to pretty
     /// regardless: every one of those branches called
-    /// `output::json::print_pretty` unconditionally before the conversion, and
+    /// `output::common::json::print_pretty` unconditionally before the conversion, and
     /// existing `--json` invocations must remain byte-identical. The
     /// two rungs therefore differ deliberately — `--json | jq` keeps the bytes
     /// it has always had, and `--format json` gets the spec's shape.
@@ -281,7 +281,7 @@ impl OutputSink {
     /// shape, so it turns the heuristic off too; `auto` on a terminal retains
     /// it. A command that renders a fixed-shape view rather than a result set
     /// opts out separately, via
-    /// [`Table::keep_all_columns`](crate::output::table::Table::keep_all_columns).
+    /// [`Table::keep_all_columns`](crate::output::common::table::Table::keep_all_columns).
     pub fn suppress_uniform_columns(&self) -> bool {
         self.mode == OutputMode::Table && !self.explicit_table
     }
@@ -293,7 +293,7 @@ impl OutputSink {
     /// they do not agree — that disagreement is why a redirect used to capture
     /// escape sequences from the line-rendering paths. Overriding here, once,
     /// makes the sink the single decider for both: `comfy_table` is told
-    /// per-render by `output::table`, and every `colored` call in the crate is
+    /// per-render by `output::common::table`, and every `colored` call in the crate is
     /// covered by this override.
     pub fn apply_color_policy(&self) {
         colored::control::set_override(self.color_allowed);

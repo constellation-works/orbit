@@ -165,7 +165,7 @@ pub(crate) fn run_show_payload(
     if checkpoint_unreadable {
         header.push_str(&format!(
             "\n{} pipeline checkpoint unreadable; pipeline state omitted",
-            crate::output::color::bold("Warning:"),
+            crate::output::common::color::bold("Warning:"),
         ));
     }
     if let Some(mode) = auto_concurrency {
@@ -184,7 +184,7 @@ pub(crate) fn run_show_payload(
     {
         header.push_str(&format!(
             "\n{} {}",
-            crate::output::color::bold("Admission passes:"),
+            crate::output::common::color::bold("Admission passes:"),
             counters.describe()
         ));
     }
@@ -217,7 +217,7 @@ pub(crate) fn run_show_payload(
     {
         header.push_str(&format!(
             "\n{} {} (commit {})",
-            crate::output::color::bold("Rescue candidate:"),
+            crate::output::common::color::bold("Rescue candidate:"),
             reference,
             record["rescue_commit"].as_str().unwrap_or_default(),
         ));
@@ -315,7 +315,7 @@ pub(crate) fn run_show_payload(
         let title = task_titles.get(&id);
         header.push_str(&format!(
             "\n{} {}{}",
-            crate::output::color::bold("Task:"),
+            crate::output::common::color::bold("Task:"),
             id,
             title.map(|title| format!(" — {title}")).unwrap_or_default()
         ));
@@ -326,12 +326,12 @@ pub(crate) fn run_show_payload(
         header.push_str(&cause_lines.join("\n"));
     }
     if let Some(leaf) = resumable_leaf {
-        header.push_str(&format!("\n{} the failed work ran in {leaf}; `orbit job resume {leaf}` retries it, while resuming this run only re-checks that child's failure", crate::output::color::bold("Resume:")));
+        header.push_str(&format!("\n{} the failed work ran in {leaf}; `orbit job resume {leaf}` retries it, while resuming this run only re-checks that child's failure", crate::output::common::color::bold("Resume:")));
     }
     if let Some(state) = &state {
         header.push_str(&format!(
             "\n{} iteration={} step_outputs={} updated_at={}",
-            crate::output::color::bold("Pipeline:"),
+            crate::output::common::color::bold("Pipeline:"),
             state.iteration,
             state.step_output_entries().count(),
             state.updated_at.to_rfc3339(),
@@ -340,7 +340,7 @@ pub(crate) fn run_show_payload(
     if let Some(claim) = &pull.pull_claim {
         header.push_str(&format!(
             "\n{} {}",
-            crate::output::color::bold("Claim:"),
+            crate::output::common::color::bold("Claim:"),
             claim.describe()
         ));
     }
@@ -355,7 +355,7 @@ pub(crate) fn run_show_payload(
     for execution in &script_executions {
         header.push_str(&format!(
             "\n{} {}",
-            crate::output::color::bold("Script:"),
+            crate::output::common::color::bold("Script:"),
             execution.describe()
         ));
     }
@@ -429,7 +429,7 @@ pub(crate) fn run_show_payload(
             };
             header.push_str(&format!(
                 "\n{} consecutive_failures={} last_pass_error={error}",
-                crate::output::color::bold(label),
+                crate::output::common::color::bold(label),
                 pass.consecutive_pass_failures,
             ));
         }
@@ -442,7 +442,7 @@ pub(crate) fn run_show_payload(
     if let Some(breaker) = &pull.pull_breaker {
         header.push_str(&format!(
             "\n{} {}",
-            crate::output::color::bold("Breaker:"),
+            crate::output::common::color::bold("Breaker:"),
             breaker.describe(chrono::Utc::now())
         ));
     }
@@ -454,7 +454,7 @@ pub(crate) fn run_show_payload(
     for refused in &pull.refused_settlements {
         header.push_str(&format!(
             "\n{} {}",
-            crate::output::color::bold("Settlement refused:"),
+            crate::output::common::color::bold("Settlement refused:"),
             refused.describe()
         ));
     }
@@ -462,14 +462,14 @@ pub(crate) fn run_show_payload(
         for line in window.describe() {
             header.push_str(&format!(
                 "\n{} {line}",
-                crate::output::color::bold("Crews:")
+                crate::output::common::color::bold("Crews:")
             ));
         }
     }
     if steps_source == StepSource::Audit && !display_steps.records.is_empty() {
         header.push_str(&format!(
             "\n{} reconstructed from the run audit trail; the run record holds no per-step history",
-            crate::output::color::bold("Steps:"),
+            crate::output::common::color::bold("Steps:"),
         ));
     }
     if let Some(evidence) = worker_limit {
@@ -510,7 +510,7 @@ fn review_layer_line(layer: &Value) -> Option<String> {
     };
     Some(format!(
         "{} {timing} ({origin})",
-        crate::output::color::bold("Review:")
+        crate::output::common::color::bold("Review:")
     ))
 }
 
@@ -527,7 +527,7 @@ fn claimed_leaf_lines(
     {
         lines.push_str(&format!(
             "\n{} waiting for {} leaves (requested by {} at {}{}); `orbit run cancel {} --confirm --force` stops them",
-            crate::output::color::bold("Cancelling:"),
+            crate::output::common::color::bold("Cancelling:"),
             leaves.len(),
             cancel.actor,
             cancel.requested_at.format("%Y-%m-%dT%H:%M:%SZ"),
@@ -547,7 +547,7 @@ fn claimed_leaf_lines(
             .count();
         lines.push_str(&format!(
             "\n{} {} running ({} implementing, {} reviewing)",
-            crate::output::color::bold("Claimed leaves:"),
+            crate::output::common::color::bold("Claimed leaves:"),
             leaves.len(),
             leaves.len() - reviewing,
             reviewing

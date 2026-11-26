@@ -3,7 +3,7 @@
 //!
 //! A command body builds one of these and returns it. It does not choose a
 //! format, does not ask whether stdout is a terminal, and does not write to
-//! stdout — `output::render` projects the payload into the mode the sink
+//! stdout — `output::common::render` projects the payload into the mode the sink
 //! resolved, per `docs/design/terminal-interface/specs/output-modes.md` §3
 //! (ADR-0306, step 3).
 //!
@@ -16,8 +16,10 @@
 
 use serde_json::Value;
 
-use crate::output::sink::OutputSink;
-use crate::output::table::Table;
+use crate::output::attention::AttentionRow;
+use crate::output::common::sink::OutputSink;
+use crate::output::common::table::Table;
+use crate::output::config::ConfigShow;
 
 /// The result of a command: either a payload to render, or nothing.
 pub enum CommandOutput {
@@ -156,78 +158,6 @@ pub enum Block {
     DoctorFindings(Vec<orbit_cmd::WorkspaceDoctorResult>),
 }
 
-/// The values used to render one operator attention item in human output.
-#[derive(Debug)]
-pub struct AttentionRow {
-    pub(crate) severity: String,
-    pub(crate) kind: String,
-    pub(crate) host: Option<String>,
-    pub(crate) workspace: String,
-    pub(crate) reference: String,
-    pub(crate) age: String,
-    pub(crate) reason: String,
-    pub(crate) next_command: String,
-}
-
-impl AttentionRow {
-    /// Format a labeled item block for terminal display.
-    pub(crate) fn attention_terminal_text(&self) -> String {
-        let mut heading = format!("{} {}", self.severity, self.kind);
-        if let Some(host) = self.host.as_ref().filter(|host| !host.is_empty()) {
-            heading.push_str(&format!(" on {host}"));
-        }
-        if !self.workspace.is_empty() {
-            heading.push_str(&format!(" — {}", self.workspace));
-        }
-        if !self.reference.is_empty() {
-            heading.push_str(&format!(" ({})", self.reference));
-        }
-        if !self.age.is_empty() {
-            heading.push_str(&format!(" [{}]", self.age));
-        }
-
-        let mut text = format!("{heading}\n  Reason: {}", self.reason);
-        if !self.next_command.is_empty() {
-            text.push_str(&format!("\n  Next: {}", self.next_command));
-        }
-        text
-    }
-
-    /// Fields for the stable plain record form, omitting an absent next action.
-    pub(crate) fn attention_plain_fields(&self) -> Vec<&str> {
-        let mut fields = vec![
-            self.severity.as_str(),
-            self.kind.as_str(),
-            self.workspace.as_str(),
-            self.reference.as_str(),
-            self.age.as_str(),
-            self.reason.as_str(),
-        ];
-        if let Some(host) = self.host.as_deref() {
-            fields.insert(2, host);
-        }
-        if !self.next_command.is_empty() {
-            fields.push(self.next_command.as_str());
-        }
-        fields
-    }
-
-    /// The tab-separated plain-form header for `rows`: one label per field
-    /// that [`Self::attention_plain_fields`] emits, so the global `--header`
-    /// labels attention the way it labels every other plain table.
-    pub(crate) fn attention_plain_header(rows: &[AttentionRow]) -> String {
-        let mut labels = vec!["SEVERITY", "KIND"];
-        if rows.iter().any(|row| row.host.is_some()) {
-            labels.push("HOST");
-        }
-        labels.extend(["WORKSPACE", "REF", "AGE", "REASON"]);
-        if rows.iter().any(|row| !row.next_command.is_empty()) {
-            labels.push("NEXT");
-        }
-        labels.join("\t")
-    }
-}
-
 impl Block {
     /// A summary or explanation that may wrap between words on a terminal.
     pub(crate) fn prose(text: impl Into<String>) -> Self {
@@ -284,36 +214,6 @@ impl Block {
     /// A grid block.
     pub fn table(table: Table) -> Self {
         Self::Table(Box::new(table))
-    }
-}
-
-/// Aligned configuration text with trailing-prose boundaries supplied by its producer.
-/// Offsets refer to UTF-8 line starts; columns count characters, as the formatter does.
-#[derive(Debug, Default)]
-pub struct ConfigShow {
-    pub(crate) text: String,
-    pub(crate) trailing_columns: std::collections::BTreeMap<usize, usize>,
-}
-
-impl ConfigShow {
-    /// Append verbatim text without changing previously recorded boundaries.
-    pub(crate) fn push_str(&mut self, text: &str) {
-        self.text.push_str(text);
-    }
-
-    /// Mark the current position as this line's trailing prose column.
-    /// Call after writing all padded cells and their final gutter.
-    pub(crate) fn mark_trailing_column(&mut self) {
-        let line_start = self.text.rfind('\n').map_or(0, |index| index + 1);
-        let column = self.text[line_start..].chars().count();
-        self.trailing_columns.insert(line_start, column);
-    }
-}
-
-impl std::fmt::Write for ConfigShow {
-    fn write_str(&mut self, text: &str) -> std::fmt::Result {
-        self.push_str(text);
-        Ok(())
     }
 }
 

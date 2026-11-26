@@ -15,8 +15,8 @@ use serde_json::Value;
 
 use super::operation_args::Invocation;
 use crate::command::{CommandOut, Execute, Payload};
-use crate::output::payload::Block;
-use crate::output::table::{Column, Table};
+use crate::output::common::payload::Block;
+use crate::output::common::table::{Column, Table};
 
 /// Rows of each ranking the text view shows; `--json` carries every row the
 /// payload ranks.

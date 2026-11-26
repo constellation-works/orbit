@@ -2,7 +2,7 @@ use clap::Args;
 use orbit_core::{OrbitError, OrbitRuntime};
 
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::color::{Domain, Role};
+use crate::output::common::color::{Domain, Role};
 use serde_json::json;
 
 #[derive(Args)]
@@ -40,7 +40,7 @@ pub(super) fn execute_tool_doctor(runtime: &OrbitRuntime, name: Option<&str>) ->
     }
     let mut issues = 0;
 
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     let mut table = Table::new(vec![
         Column::new("TOOL").fixed(),
         Column::new("STATUS").fixed(),
@@ -59,7 +59,7 @@ pub(super) fn execute_tool_doctor(runtime: &OrbitRuntime, name: Option<&str>) ->
         use comfy_table::Cell;
         table.add_row(vec![
             Cell::new(&r.tool_name),
-            crate::output::color::cell(status_str, Domain::DoctorStatus),
+            crate::output::common::color::cell(status_str, Domain::DoctorStatus),
             Cell::new(&r.message),
         ]);
     }
@@ -82,7 +82,7 @@ pub(super) fn execute_tool_doctor(runtime: &OrbitRuntime, name: Option<&str>) ->
     if issues == 0 {
         blocks.push(Block::notice(format!(
             "\n{}",
-            crate::output::color::text("All tools healthy.", Role::Ok)
+            crate::output::common::color::text("All tools healthy.", Role::Ok)
         )));
     } else {
         eprintln!("\n{} issue(s) found.", issues);

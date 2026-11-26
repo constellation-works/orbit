@@ -381,7 +381,7 @@ fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {
 
     // A fixed-shape status readout, not a result set: every component is named
     // even when the two version columns happen to agree.
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     let mut table = Table::new(vec![
         Column::new("COMPONENT").fixed(),
         Column::new("CURRENT").fixed(),
@@ -449,9 +449,9 @@ fn status_trailer(status: &MigrateStatus) -> String {
         if status.pending_total() == 0 {
             trailer.push_str(&format!(
                 "\n\n{}",
-                crate::output::color::text(
+                crate::output::common::color::text(
                     "Workspace is up to date.",
-                    crate::output::color::Role::Ok
+                    crate::output::common::color::Role::Ok
                 )
             ));
         } else {

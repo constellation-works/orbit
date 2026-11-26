@@ -4,7 +4,7 @@ use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 #[derive(Args)]
 pub struct PluginSyncArgs {
@@ -40,7 +40,7 @@ impl ExecuteCore for PluginSyncArgs {
             })
             .collect::<Vec<_>>();
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         use comfy_table::Cell;
         let mut table = Table::new(vec![
             Column::new("PLUGIN").fixed(),
@@ -51,7 +51,7 @@ impl ExecuteCore for PluginSyncArgs {
         for outcome in &outcomes {
             table.add_row(vec![
                 Cell::new(&outcome.name),
-                crate::output::color::cell(outcome.status.as_str(), Domain::JobState),
+                crate::output::common::color::cell(outcome.status.as_str(), Domain::JobState),
                 Cell::new(&outcome.message),
             ]);
         }

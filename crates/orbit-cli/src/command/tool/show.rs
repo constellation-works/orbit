@@ -19,7 +19,7 @@ impl Execute for ToolShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let tool = runtime.show_tool(&self.name)?;
 
-        use crate::output::color::{self, Domain};
+        use crate::output::common::color::{self, Domain};
         let constraints = tool.input_schema.as_ref().map(tool_input_constraints);
         let constraint_text = constraints
             .as_ref()
@@ -127,7 +127,7 @@ impl Execute for ToolShowArgs {
         // A parameter schema, not a result set: keep every column even when
         // every parameter happens to share a type or be required.
         let mut table =
-            crate::output::table::build_table(&["NAME", "TYPE", "REQUIRED", "DESCRIPTION"])
+            crate::output::common::table::build_table(&["NAME", "TYPE", "REQUIRED", "DESCRIPTION"])
                 .keep_all_columns();
         for p in &tool.parameters {
             let req = tool_parameter_requirement(p.required, &p.name, constraints.as_ref());
