@@ -24,7 +24,8 @@ if [[ "${1:-}" == --check || "${1:-}" == --check-json ]]; then
   options=()
   if [[ "$1" == --check-json ]]; then options+=(--json); fi
   shift
-  exec python3 "$checker" "${options[@]}" -- "$@"
+  # Bash 3.2 (macOS /bin/bash) treats an empty array as unbound under `set -u`.
+  exec python3 "$checker" ${options[@]+"${options[@]}"} -- "$@"
 fi
 if [ "$#" -eq 0 ]; then
   echo "with-test-build-lint: no command given" >&2
