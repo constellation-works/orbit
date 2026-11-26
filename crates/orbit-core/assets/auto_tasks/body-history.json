@@ -2827,6 +2827,35 @@
     },
     {
       "comments": [
+        "# CONTRIBUTING.md), so the pilot never drops a minted selector with a",
+        "# Preparation keeps these selectors. It does not replace them with the",
+        "# The executing worker selects the batch at run time inside this bound.",
+        "# batch or with a document the brief excludes. A dir:. lock starves on a",
+        "# busy drain, so the minted task locks just this scope. Minting drops a",
+        "# footprint anchor the checkout lacks (for example a repository without",
+        "# promotion-holding warning.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "259b5dd4c57495110046ef775d757762469e1f0f7f724f275d888584403e00f5",
+      "revision": "0d6d6c9c719cdcaa0f5eb3dfa9286effbbc4897a",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# Preparation keeps these selectors. It does not replace them with the",
         "# The executing worker selects the batch at run time inside this bound.",
         "# batch or with a document the brief excludes. A dir:. lock starves on a",
@@ -3186,6 +3215,31 @@
       ],
       "digest": "80ad2547c3c401f10e6ae70c8a9378a7c804eb43c3bed7a069ea4cd1c2096cd7",
       "revision": "ece2cce0fa66cdec8e5bf16d30cfd813df4bc1a6",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 7 * * 1"
+        },
+        "tags": [
+          "escape-to-guard",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Classify unclassified and absent escapes",
+        "## Cluster by nature, escape, layer and mechanism",
+        "## File remedies for clusters at the bar",
+        "## Follow up earlier remedies",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
+      "digest": "cf6904e770293ed94b9e5197da2a52d1f79ae370ee187130d0fcbf38a62f8624",
+      "revision": "02fd64375d7a05a3245cffc204a15646fb39cdde",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
