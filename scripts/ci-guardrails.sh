@@ -667,6 +667,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-rust-module-order.py"
   run_guard "$repo_root/scripts/check-too-many-arguments.py"
   run_guard "$repo_root/scripts/check-rust-source-order.py" --check-baseline
+  run_guard "$repo_root/scripts/check-source-style-diff.py"
   run_guard "$repo_root/scripts/check-architecture-map.py"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"
   run_guard "$repo_root/scripts/check-test-shell-waits.py"
@@ -716,6 +717,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-check-architecture-map.py"
   run_guard "$repo_root/scripts/test-unit-test-inventory.py"
   run_guard "$repo_root/scripts/test-check-too-many-arguments.py"
+  run_guard "$repo_root/scripts/test-check-source-style-diff.py"
   run_guard "$repo_root/scripts/test-codeql-extension-schema.py"
   run_guard "$repo_root/scripts/test-codeql-production-paths.py"
   run_guard "$repo_root/scripts/test-auto-task-body-history.py"
