@@ -482,7 +482,19 @@ fn seed_null_scope(
     model: &str,
     tool: &str,
 ) {
-    seed_scope(rt, run, activity, agent, model, tool, 1_000, 1_000, 999);
+    seed_scope(
+        rt,
+        InvocationFixture {
+            run,
+            activity,
+            agent,
+            model,
+            tool,
+            input: 1_000,
+            output: 1_000,
+            bytes: 999,
+        },
+    );
     null_scope_workspace(fixture, run);
 }
 fn add_titled_task(fixture: &Fixture, title: &str, criteria: &str) -> String {
@@ -1720,21 +1732,28 @@ fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::O
         .unwrap()
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one projection row sets run, activity, agent, model, tool and the three counters independently"
-)]
-fn seed_scope(
-    runtime: &orbit_core::OrbitRuntime,
-    run: &str,
-    activity: &str,
-    agent: &str,
-    model: &str,
-    tool: &str,
+struct InvocationFixture<'a> {
+    run: &'a str,
+    activity: &'a str,
+    agent: &'a str,
+    model: &'a str,
+    tool: &'a str,
     input: u64,
     output: u64,
     bytes: u64,
-) {
+}
+
+fn seed_scope(runtime: &orbit_core::OrbitRuntime, invocation: InvocationFixture<'_>) {
+    let InvocationFixture {
+        run,
+        activity,
+        agent,
+        model,
+        tool,
+        input,
+        output,
+        bytes,
+    } = invocation;
     let row = (
         activity,
         agent,
@@ -1777,10 +1796,58 @@ projections_test!(
         let rt = &fixture.runtime;
         let (aa, ma, ta) = ("agent-a", "model-a", "scope-tool-a");
         let (ab, mb, tb) = ("agent-b", "model-b", "scope-tool-b");
-        seed_scope(rt, "scope-a-1", "scope-alpha", aa, ma, ta, 10, 20, 12);
-        seed_scope(rt, "scope-a-2", "scope-alpha", aa, ma, ta, 10, 20, 12);
-        seed_scope(rt, "scope-a-low", "scope-alpha-low", aa, ma, ta, 1, 1, 12);
-        seed_scope(&other, "scope-b-1", "scope-beta", ab, mb, tb, 100, 200, 34);
+        seed_scope(
+            rt,
+            InvocationFixture {
+                run: "scope-a-1",
+                activity: "scope-alpha",
+                agent: aa,
+                model: ma,
+                tool: ta,
+                input: 10,
+                output: 20,
+                bytes: 12,
+            },
+        );
+        seed_scope(
+            rt,
+            InvocationFixture {
+                run: "scope-a-2",
+                activity: "scope-alpha",
+                agent: aa,
+                model: ma,
+                tool: ta,
+                input: 10,
+                output: 20,
+                bytes: 12,
+            },
+        );
+        seed_scope(
+            rt,
+            InvocationFixture {
+                run: "scope-a-low",
+                activity: "scope-alpha-low",
+                agent: aa,
+                model: ma,
+                tool: ta,
+                input: 1,
+                output: 1,
+                bytes: 12,
+            },
+        );
+        seed_scope(
+            &other,
+            InvocationFixture {
+                run: "scope-b-1",
+                activity: "scope-beta",
+                agent: ab,
+                model: mb,
+                tool: tb,
+                input: 100,
+                output: 200,
+                bytes: 34,
+            },
+        );
         seed_null_scope(rt, &fixture, "scope-null-a", "scope-alpha", aa, ma, ta);
         seed_null_scope(rt, &fixture, "scope-null-b", "scope-beta", ab, mb, tb);
         seed_null_scope(

@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 
 use super::agents::implementation_run;
 use super::codebase::{
-    add, add_with_status, append_event, append_row, init_repo, land, pilot_receipt,
-    pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
+    TaskEventFixture, add, add_with_status, append_event, append_row, init_repo, land,
+    pilot_receipt, pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -678,17 +678,24 @@ fn pilots_grade_each_crew_against_landed_diffs() {
 
 /// A done, assessed task: `complexity`, a pilot receipt from `run` naming
 /// `after`, an implementation run priced at `cost`, and `files` landed.
-#[allow(clippy::too_many_arguments)]
-fn calibrated(
-    fixture: &Fixture,
-    repo: &std::path::Path,
-    title: &str,
+struct CalibrationFixture<'a> {
+    title: &'a str,
     complexity: TaskComplexity,
-    run: &str,
-    files: &[&str],
+    run: &'a str,
+    files: &'a [&'a str],
     cost: Option<f64>,
     now: DateTime<Utc>,
-) -> String {
+}
+
+fn calibrated(fixture: &Fixture, repo: &std::path::Path, sample: CalibrationFixture<'_>) -> String {
+    let CalibrationFixture {
+        title,
+        complexity,
+        run,
+        files,
+        cost,
+        now,
+    } = sample;
     let id = fixture
         .runtime
         .add_task(TaskAddParams {
@@ -850,42 +857,50 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
             calibrated(
                 &fixture,
                 &repo,
-                "t1",
-                low,
-                "jrun-pilot-a",
-                &["src/t1.rs"],
-                Some(1.0),
-                now,
+                CalibrationFixture {
+                    title: "t1",
+                    complexity: low,
+                    run: "jrun-pilot-a",
+                    files: &["src/t1.rs"],
+                    cost: Some(1.0),
+                    now,
+                },
             );
             calibrated(
                 &fixture,
                 &repo,
-                "t2",
-                low,
-                "jrun-pilot-b",
-                &["src/t2.rs"],
-                Some(5.0),
-                now,
+                CalibrationFixture {
+                    title: "t2",
+                    complexity: low,
+                    run: "jrun-pilot-b",
+                    files: &["src/t2.rs"],
+                    cost: Some(5.0),
+                    now,
+                },
             );
             calibrated(
                 &fixture,
                 &repo,
-                "t3",
-                hard,
-                "jrun-pilot-b",
-                &["src/t3.rs"],
-                Some(3.0),
-                now,
+                CalibrationFixture {
+                    title: "t3",
+                    complexity: hard,
+                    run: "jrun-pilot-b",
+                    files: &["src/t3.rs"],
+                    cost: Some(3.0),
+                    now,
+                },
             );
             calibrated(
                 &fixture,
                 &repo,
-                "t4",
-                hard,
-                "jrun-pilot-a",
-                &["src/t4.rs"],
-                Some(10.0),
-                now,
+                CalibrationFixture {
+                    title: "t4",
+                    complexity: hard,
+                    run: "jrun-pilot-a",
+                    files: &["src/t4.rs"],
+                    cost: Some(10.0),
+                    now,
+                },
             );
 
             let card = scorecard(&fixture, "30d");
@@ -1013,12 +1028,14 @@ fn pilots_calibrate_only_placed_tasks() {
             calibrated(
                 &fixture,
                 &repo,
-                title,
-                tier,
-                &format!("jrun-pilot-{crew}"),
-                &[&format!("src/{title}.rs")],
-                cost,
-                now,
+                CalibrationFixture {
+                    title,
+                    complexity: tier,
+                    run: &format!("jrun-pilot-{crew}"),
+                    files: &[&format!("src/{title}.rs")],
+                    cost,
+                    now,
+                },
             );
         }
         let server = fixture.server(false);
@@ -1161,13 +1178,15 @@ fn pilots_settle_held_warnings_from_history() {
                           to: Option<TaskStatus>| {
                 append_row(
                     &fixture,
-                    task,
-                    at(seconds),
-                    by,
-                    event,
-                    note.map(str::to_string),
-                    to,
-                    None,
+                    TaskEventFixture {
+                        task_id: task,
+                        at: at(seconds),
+                        by,
+                        event,
+                        note: note.map(str::to_string),
+                        to_status: to,
+                        decision: None,
+                    },
                 );
             };
             let approve = |task: &str, seconds: i64| {

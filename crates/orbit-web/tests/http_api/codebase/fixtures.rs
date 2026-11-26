@@ -159,22 +159,30 @@ pub(super) fn append_decided_event(
     decision: Option<TaskDecision>,
 ) {
     append_row(
-        fixture, task_id, at, "system", event, note, to_status, decision,
+        fixture,
+        TaskEventFixture {
+            task_id,
+            at,
+            by: "system",
+            event,
+            note,
+            to_status,
+            decision,
+        },
     );
 }
 
 /// [`append_decided_event`] by the actor `by`.
-#[allow(clippy::too_many_arguments)]
-pub(in super::super) fn append_row(
-    fixture: &Fixture,
-    task_id: &str,
-    at: DateTime<Utc>,
-    by: &str,
-    event: &str,
-    note: Option<String>,
-    to_status: Option<TaskStatus>,
-    decision: Option<TaskDecision>,
-) {
+pub(in super::super) fn append_row(fixture: &Fixture, event: TaskEventFixture<'_>) {
+    let TaskEventFixture {
+        task_id,
+        at,
+        by,
+        event,
+        note,
+        to_status,
+        decision,
+    } = event;
     let dir = bundle_dir(fixture.path("").as_path(), task_id).expect("fixture task bundle");
     let path = dir.join(TASK_EVENTS_FILE_NAME);
     let rows = fs::read_to_string(&path).unwrap().lines().count();
@@ -194,6 +202,16 @@ pub(in super::super) fn append_row(
     };
     let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
+}
+
+pub(in super::super) struct TaskEventFixture<'a> {
+    pub(in super::super) task_id: &'a str,
+    pub(in super::super) at: DateTime<Utc>,
+    pub(in super::super) by: &'a str,
+    pub(in super::super) event: &'a str,
+    pub(in super::super) note: Option<String>,
+    pub(in super::super) to_status: Option<TaskStatus>,
+    pub(in super::super) decision: Option<TaskDecision>,
 }
 
 /// Log a transition away from and back to backlog, so the bundle's last
@@ -220,13 +238,15 @@ pub(super) fn transition_by_and_return(
     let now = Utc::now();
     append_row(
         fixture,
-        task_id,
-        now,
-        by,
-        event,
-        note,
-        Some(to_status),
-        None,
+        TaskEventFixture {
+            task_id,
+            at: now,
+            by,
+            event,
+            note,
+            to_status: Some(to_status),
+            decision: None,
+        },
     );
     append_event(
         fixture,
