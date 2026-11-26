@@ -224,6 +224,7 @@ pub mod test_support {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<SweepOutcome, crate::OrbitError> {
         crate::application::routines::sweep::run_sweep_at_with_providers_at(
+            crate::composition::store_opener(),
             global_root,
             options,
             local_machine,

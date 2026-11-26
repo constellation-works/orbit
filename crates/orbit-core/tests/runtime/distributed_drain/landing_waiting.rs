@@ -389,6 +389,7 @@ fn the_owner_clock_resumes_waiting_landings_but_dry_runs_do_not() {
     let provider = WaitingOwnerProvider(runtime.clone());
     for dry_run in [true, false] {
         run_sweep_at_with_providers(
+            orbit_core::composition::store_opener(),
             &runtime.global_root(),
             SweepOptions {
                 dry_run,

@@ -285,8 +285,7 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 "schemaVersion: 1\nname: pilot\nenabled: false\ntarget: job:task_pilot_pipeline\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: {}\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 90\n",
                 fixture.runtime.automation_machine_identity().unwrap()
             )).unwrap();
-            let store =
-                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
             let slot = "2026-09-20T23:00:00+00:00";
             orbit_core::application::routines::record_fire_intent(
                 &store,
@@ -645,8 +644,7 @@ fn routine_fire_history_counts_slots_and_stops_at_non_failures() {
                     "schemaVersion: 1\nname: {name}\nenabled: true\ntarget: job:watch_pipeline\ntrigger: {{cron: '*/20 * * * *'}}\n"
                 )).unwrap();
             }
-            let store =
-                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
             let start = DateTime::parse_from_rfc3339("2026-10-10T06:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc);
@@ -757,8 +755,7 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
             fs::write(routines.join("review.yaml"),
                 "schemaVersion: 1\nname: review\nenabled: false\ntarget: job:review_pipeline\ntrigger:\n  deliveries_landed: {branch: agent-main, threshold: 1, max_wait_minutes: 10, coverage: landed_code_review_v1, max_items: 20, retries: 0}\n"
             ).unwrap();
-            let store =
-                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
             let start = DateTime::parse_from_rfc3339("2026-10-10T06:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc);
@@ -927,8 +924,7 @@ fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
                 );
             }
 
-            let store =
-                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
             let slot = "2026-10-10T06:00:00+00:00";
             orbit_core::application::routines::record_fire_intent(
                 &store,
@@ -1022,8 +1018,7 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
             )
             .unwrap();
 
-            let store =
-                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
             let now = Utc::now();
             let admitted_at = now - Duration::minutes(2);
             let set_breaker = |record: RoutineBreakerRecord, event: &str| {

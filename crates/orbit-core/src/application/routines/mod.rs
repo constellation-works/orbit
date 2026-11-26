@@ -77,12 +77,12 @@ pub struct RoutineMachineIdentity {
 
 /// Open the config-resolved machine-local scheduler store for a mutating route.
 /// Creates and migrates it on first use.
-fn open_routine_store(global_root: &Path) -> Result<Store, OrbitError> {
+fn open_routine_store(opener: StoreOpener, global_root: &Path) -> Result<Store, OrbitError> {
     let database = orbit_config::resolved_audit_db_path(
         &orbit_common::Env::capture(),
         &orbit_config::ConfigRoots::global_only(global_root),
     )?;
-    orbit_store::compose::routine_store(&database)
+    opener.open(&database)
 }
 
 /// This host's routine circuit breakers in its scheduler store, keyed by
@@ -99,8 +99,8 @@ pub(crate) fn host_routine_breakers(
 /// Create and migrate the machine's scheduler store when it is absent. `orbit
 /// init` calls this as the first-run setup step, so reads that follow it find
 /// an existing store (STD-01 R31).
-pub fn ensure_routine_store(global_root: &Path) -> Result<(), OrbitError> {
-    open_routine_store(global_root).map(|_| ())
+pub fn ensure_routine_store(opener: StoreOpener, global_root: &Path) -> Result<(), OrbitError> {
+    open_routine_store(opener, global_root).map(|_| ())
 }
 
 /// Open the existing scheduler store for a read-only projection. A read never

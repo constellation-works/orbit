@@ -79,6 +79,7 @@ pub(super) async fn control_routine_breaker(
         };
         // The request names the source workspace but not its `.orbit` directory.
         control_listed_routine_breaker(
+            orbit_core::composition::store_opener(),
             &global_root,
             &report,
             &name,

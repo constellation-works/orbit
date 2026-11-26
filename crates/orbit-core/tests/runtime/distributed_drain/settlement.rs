@@ -752,6 +752,7 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
 
     *pair.wire.unreachable.lock().unwrap() = false;
     let sweep = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &pair.follower.global_root(),
         SweepOptions::default(),
         RoutineMachineIdentity {

@@ -63,6 +63,7 @@ fn blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces() {
     }
     let started = Instant::now();
     let outcome = run_sweep_at_with_providers_at(
+        crate::composition::store_opener(),
         &global,
         SweepOptions {
             deadline: Some(started + Duration::from_millis(100)),
@@ -156,6 +157,7 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
             source: "fixture".into(),
         };
         run_sweep_at_with_providers_at(
+            crate::composition::store_opener(),
             &global,
             SweepOptions::default(),
             RoutineMachineIdentity {

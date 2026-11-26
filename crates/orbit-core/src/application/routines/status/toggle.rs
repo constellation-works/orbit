@@ -191,29 +191,48 @@ pub(crate) fn rewrite_enabled_line(raw: &str, enabled: bool) -> Result<String, O
 
 /// Pause a routine on this host (host-local, never synced). Returns `false`
 /// when it was already paused.
-pub fn pause_routine(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(global_root)?;
+pub fn pause_routine(
+    opener: StoreOpener,
+    global_root: &Path,
+    name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(opener, global_root)?;
     store.write(|tx| tx.routine().insert_pause(name, actor))
 }
 
 /// Clear a host-local pause. Returns `false` when it was not paused.
-pub fn resume_routine(global_root: &Path, name: &str) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(global_root)?;
+pub fn resume_routine(
+    opener: StoreOpener,
+    global_root: &Path,
+    name: &str,
+) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(opener, global_root)?;
     store.write(|tx| tx.routine().delete_pause(name))
 }
 
 /// Close a routine's open circuit breaker now, recording the reset under
 /// `actor`. Returns `false` when it was not open.
-fn reset_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(global_root)?;
+fn reset_routine_breaker(
+    opener: StoreOpener,
+    global_root: &Path,
+    name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(opener, global_root)?;
     orbit_automation::routines::breaker::reset_breaker(&store, name, actor)
 }
 
 /// Let one fire of a routine through its open circuit breaker on the next
 /// sweep, recording the bypass under `actor`. Returns `false` when it was not
 /// open.
-fn bypass_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(global_root)?;
+fn bypass_routine_breaker(
+    opener: StoreOpener,
+    global_root: &Path,
+    name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(opener, global_root)?;
     orbit_automation::routines::breaker::request_breaker_bypass(&store, name, actor)
 }
 
@@ -262,6 +281,7 @@ impl RoutineBreakerOutcome {
 /// refusal is one [`RoutineEditRefusal`]; the outer error is a failed store
 /// write.
 pub fn control_listed_routine_breaker(
+    opener: StoreOpener,
     global_root: &Path,
     report: &RoutineStatusReport,
     name: &str,
@@ -273,8 +293,8 @@ pub fn control_listed_routine_breaker(
         return Ok(Err(refusal));
     }
     let changed = match action {
-        RoutineBreakerAction::Reset => reset_routine_breaker(global_root, name, actor)?,
-        RoutineBreakerAction::Bypass => bypass_routine_breaker(global_root, name, actor)?,
+        RoutineBreakerAction::Reset => reset_routine_breaker(opener, global_root, name, actor)?,
+        RoutineBreakerAction::Bypass => bypass_routine_breaker(opener, global_root, name, actor)?,
     };
     Ok(Ok(if changed {
         RoutineBreakerOutcome::Changed

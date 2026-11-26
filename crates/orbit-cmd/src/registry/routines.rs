@@ -379,6 +379,7 @@ pub fn run_sweep(
         workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())?;
     let environment = RegistryRoutineEnvironment::load(&global_root, workspace_selector)?;
     orbit_core::application::routines::run_sweep_with_providers(
+        orbit_core::composition::store_opener(),
         &orbit_core::composition::composition_env(),
         options,
         environment.local_machine(),
@@ -394,6 +395,7 @@ pub fn run_sweep_at(
 ) -> Result<SweepOutcome, OrbitError> {
     let environment = RegistryRoutineEnvironment::load(global_root, workspace_selector)?;
     orbit_core::application::routines::run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         global_root,
         options,
         environment.local_machine(),

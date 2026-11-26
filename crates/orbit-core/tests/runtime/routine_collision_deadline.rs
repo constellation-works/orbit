@@ -87,6 +87,7 @@ fn a_peer_collision_scan_past_the_deadline_defers_the_workspace() {
     let deadline = Instant::now() + Duration::from_secs(3);
 
     let outcome = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &global,
         SweepOptions {
             deadline: Some(deadline),

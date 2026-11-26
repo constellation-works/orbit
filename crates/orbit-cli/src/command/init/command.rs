@@ -194,7 +194,10 @@ impl InitCommand {
         // routine reads that follow find it (STD-01 R31). The store rejects
         // parent-relative paths, so it takes the canonical root.
         let global_root = std::fs::canonicalize(resolve_global_root(root_override, resolved)?)?;
-        orbit_core::application::routines::ensure_routine_store(&global_root)?;
+        orbit_core::application::routines::ensure_routine_store(
+            orbit_core::composition::store_opener(),
+            &global_root,
+        )?;
         // A release that ships a workspace routine or auto-task must reach
         // every registered workspace here, not only at the next `workspace sync`.
         let registered = seed_registered_workspaces(

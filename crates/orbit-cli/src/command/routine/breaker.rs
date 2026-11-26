@@ -66,15 +66,22 @@ impl RoutineBreakerArgs {
         // The shared routine selection; a breaker is host-local, so no source
         // workspace narrows it. A misspelt name is refused rather than
         // reported as not tripped.
-        let changed =
-            control_listed_routine_breaker(global_root, &report, &name, None, action, "human")?
-                .map_err(|refusal| match refusal {
-                    RoutineEditRefusal::NotFound { .. } => OrbitError::InvalidInput(format!(
-                        "no routine named '{name}' (see `orbit routine list`)"
-                    )),
-                    other => other.into(),
-                })?
-                .changed();
+        let changed = control_listed_routine_breaker(
+            orbit_core::composition::store_opener(),
+            global_root,
+            &report,
+            &name,
+            None,
+            action,
+            "human",
+        )?
+        .map_err(|refusal| match refusal {
+            RoutineEditRefusal::NotFound { .. } => OrbitError::InvalidInput(format!(
+                "no routine named '{name}' (see `orbit routine list`)"
+            )),
+            other => other.into(),
+        })?
+        .changed();
         let text = match (action, changed) {
             (RoutineBreakerAction::Reset, true) => {
                 format!("reset the breaker of '{name}'; it fires as scheduled again")
