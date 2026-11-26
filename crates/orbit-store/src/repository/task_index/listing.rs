@@ -1,7 +1,7 @@
 //! Generated-index reads behind bounded task listing.
 //!
 //! Listing validates the index against every registered envelope first
-//! (`repository::task::v2::index`), then lets SQL answer the predicates the
+//! (`boundary::v2::index`), then lets SQL answer the predicates the
 //! composite indexes cover — status, priority, job run, tags, parent,
 //! continuation — together with ordering and `LIMIT`, so a page costs the
 //! freshness scan plus the selected rows rather than every envelope in the

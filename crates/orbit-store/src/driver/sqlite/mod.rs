@@ -1,8 +1,6 @@
 pub(crate) mod authority;
 pub mod host;
-pub(crate) mod task_commit_journal;
 pub(crate) mod task_index;
-pub(crate) mod task_reservation_store;
 
 // SQLite text ordering requires every writer to use the same timestamp encoding.
 pub(crate) mod codec {

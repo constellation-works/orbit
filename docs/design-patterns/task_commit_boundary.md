@@ -14,8 +14,8 @@ its reservation in the host store database. Anything that must publish all of th
 independently committed writes, and cannot roll an already-published `task.yaml` back. The
 boundary makes the decision in one place and replays everything else from it.
 
-Implementation: `crates/orbit-store/src/repository/task/coordination/` (protocol, serialization,
-recovery) over `crates/orbit-store/src/driver/sqlite/task_commit_journal/` (the SQL).
+Implementation: `crates/orbit-store/src/boundary/coordination/` (protocol, serialization,
+recovery) over `crates/orbit-store/src/boundary/journal/` (the SQL).
 
 ## The two mechanisms
 

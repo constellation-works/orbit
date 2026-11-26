@@ -74,7 +74,7 @@ relations:
   - type: resolves
     target: F2026-05-007
 context_files:
-  - file:crates/orbit-store/src/repository/task/v2/crud.rs
+  - file:crates/orbit-store/src/boundary/v2/crud.rs
 external_refs: []
 created_by: codex:gpt-5.5
 created_by_model: gpt-5.5   # only when the create named a full model

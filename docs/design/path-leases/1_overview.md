@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: "Lease storage, queue, notices, the loopback REST routes, orbit-auth credentials, the Unix intake socket and the token-authenticated lease listener are implemented but unreachable: the lease.* config keys, the orbit lease CLI and the orbit.lease.* MCP tools were withdrawn in ORB-22808 and leases stay disabled."
 tags: [path-leases, locks, admission, reservations, notifications]
-paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**"]
+paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/repository/task_reservation/**", "crates/orbit-web/src/api/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
 related_artifacts: []
 ---
@@ -94,7 +94,7 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 |---------|------|------|
 | Reserve and release path selectors with a TTL (exists) | [crates/orbit-runtime/src/task/locks/command.rs](../../../crates/orbit-runtime/src/task/locks/command.rs) | — |
 | Which tasks hold their context (exists) | [crates/orbit-runtime/src/task/locks/index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs) | — |
-| Reservation rows and lease columns | [crates/orbit-store/src/driver/sqlite/task_reservation_store/](../../../crates/orbit-store/src/driver/sqlite/task_reservation_store/) | [ORB-18404] |
+| Reservation rows and lease columns | [crates/orbit-store/src/repository/task_reservation/](../../../crates/orbit-store/src/repository/task_reservation/) | [ORB-18404] |
 | Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/application/codebase/facts/scan.rs](../../../crates/orbit-core/src/application/codebase/facts/scan.rs) | — |
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
 | Hard/advisory modes, lease lifetime and notices | implemented by [ORB-18405], [ORB-18551] and [ORB-18554], [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |

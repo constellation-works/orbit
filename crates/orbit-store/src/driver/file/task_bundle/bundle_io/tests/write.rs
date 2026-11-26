@@ -8,7 +8,7 @@ use orbit_types::task::{
 use tempfile::TempDir;
 
 use super::super::write::write_bundle_atomically;
-use crate::repository::task::tests::test_support::{bundle_store, sample_bundle};
+use crate::boundary::tests::test_support::{bundle_store, sample_bundle};
 
 #[test]
 fn interrupted_bundle_publish_never_exposes_partial_final_directory() {

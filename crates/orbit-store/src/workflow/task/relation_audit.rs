@@ -7,7 +7,7 @@
 
 use orbit_common::OrbitError;
 
-use crate::repository::task::v2_bundle::TaskBundleStoreV2;
+use crate::boundary::v2_bundle::TaskBundleStoreV2;
 use crate::repository::task_index::{DanglingRelationTarget, TaskRegistryStore};
 
 /// Every canonical relation edge in `workspace_id` (or in every bound

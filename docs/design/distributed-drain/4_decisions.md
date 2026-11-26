@@ -407,7 +407,7 @@ handoff state; completion still requires explicit authorization and verified lan
 
 **Recorded:** 2026-10-04 · [ORB-13908], at Daniel's direction to run the [ORB-13989] reviewer model
 on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-13992], [ORB-13895]).
-**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission/refusal.rs::admission_refusal`,
+**Code anchors:** `crates/orbit-store/src/boundary/coordination/admission/refusal.rs::admission_refusal`,
 `crates/orbit-runtime/src/stored/job_runs/pull.rs` (`claimed_leaf`, `claim_review_admission`),
 `crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
 `crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
@@ -538,7 +538,7 @@ ACL: an owner operator retains cross-attempt receipt inspection and deliberate r
 ## An owner completion policy lands accepted handoffs without per-task approval
 
 **Recorded:** 2026-09-27 · [ORB-13637], after the first live follower drain [ORB-13625].
-**Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff/accept.rs::accept_typed_handoff`,
+**Code anchors:** `crates/orbit-store/src/boundary/coordination/handoff/accept.rs::accept_typed_handoff`,
 `crates/orbit-core/src/application/distributed/contract.rs::owner_completion_authority`,
 `crates/orbit-config/src/registry/settings/table.rs` (`workflow.distributed_completion`)
 
@@ -736,7 +736,7 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 ## Admission prefers work only the requesting executor can run
 
 **Recorded:** 2026-10-20 · [ORB-17304] (refines [ORB-14938])
-**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_with_affinity`, `crates/orbit-store/src/contracts/task/coordination/census.rs::census_dispatch_order`, `crates/orbit-store/src/repository/task/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`, `crates/orbit-core/src/application/admission/census.rs`
+**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_with_affinity`, `crates/orbit-store/src/contracts/task/coordination/census.rs::census_dispatch_order`, `crates/orbit-store/src/boundary/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`, `crates/orbit-core/src/application/admission/census.rs`
 
 ### Context
 

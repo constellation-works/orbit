@@ -112,7 +112,7 @@ The core cutover is shipped (legacy-backend removal `e9582ebafee9342ec38d663e4d5
 | V2 envelope, relations, JSONL rows, and manifest types | [crates/orbit-types/src/task/artifacts.rs](../../../crates/orbit-types/src/task/artifacts.rs) | Done: [ORB-10580], [ORB-11365] |
 | Public `Task` DTO | [crates/orbit-types/src/task/model/task.rs](../../../crates/orbit-types/src/task/model/task.rs) | Done: [ORB-10580], [ORB-10587] |
 | V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | Done: [ORB-10466], [ORB-11349] |
-| V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | Done: [ORB-11205], [ORB-15856] |
+| V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/boundary/v2/](../../../crates/orbit-store/src/boundary/v2/) | Done: [ORB-11205], [ORB-15856] |
 | Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/repository/task_index/](../../../crates/orbit-store/src/repository/task_index/) | Done: [ORB-10721], [ORB-11205] |
 | V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-runtime/src/builder.rs](../../../crates/orbit-runtime/src/builder.rs) | — |
 | Local task store and canonical lookup | [2_design.md §6](./2_design.md#6-local-task-store-and-canonical-lookup) | — |

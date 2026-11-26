@@ -1,4 +1,4 @@
-//! Consumer-facing persistence traits, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only.
+//! Consumer-facing record shapes, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only.
 
 mod admission_load;
 mod audit;
@@ -23,7 +23,6 @@ mod routine;
 mod session_log;
 mod skill;
 mod task;
-mod traits;
 mod v2_audit;
 
 pub use admission_load::*;
@@ -50,7 +49,6 @@ pub use routine::*;
 pub use session_log::*;
 pub use skill::*;
 pub use task::*;
-pub use traits::*;
 pub use v2_audit::*;
 mod review;
 pub use review::*;

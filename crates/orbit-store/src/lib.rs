@@ -16,6 +16,7 @@
 #[path = "../tests/store/support/git.rs"]
 mod git_test_support;
 
+mod boundary;
 pub mod compose;
 pub mod contracts;
 mod driver;
@@ -63,6 +64,8 @@ pub mod recovery_authority {
 
 use chrono::{DateTime, Utc};
 
+pub use boundary::TaskV2Store;
+pub use boundary::{TaskCommitBoundary, admission_refusal};
 pub use contracts::incident::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
     FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,
@@ -130,33 +133,35 @@ pub use repository::review::ReviewRepository;
 pub use repository::script_grant::ScriptGrantRepository;
 pub use repository::session_log::SessionLogRepository;
 pub use repository::skill::SkillRepository;
-pub use repository::task::TaskV2Store;
-pub use repository::task::{TaskCommitBoundary, admission_refusal};
 pub use repository::tool::ToolRepository;
+pub use repository::{
+    TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
+    TaskReservationRepository,
+};
 pub use store::{Snapshot, Tx};
 
 /// Hooks for tests in crates that depend on `orbit-store`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    pub use crate::boundary::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
+    pub use crate::boundary::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
+    pub use crate::boundary::coordination::task_write_hold_hook::with_task_commit_write_hold;
     pub use crate::repository::recovery_authority::seed_legacy_authority_certificate;
-    pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
-    pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
-    pub use crate::repository::task::coordination::task_write_hold_hook::with_task_commit_write_hold;
 
     /// Canonical (artifact-hashing) task-bundle reads on this thread.
     pub fn canonical_bundle_reads() -> u64 {
-        crate::repository::task::v2_bundle::CANONICAL_BUNDLE_READS.with(std::cell::Cell::get)
+        crate::boundary::v2_bundle::CANONICAL_BUNDLE_READS.with(std::cell::Cell::get)
     }
 
     /// Lightweight task-bundle reads on this thread, listing or by id.
     pub fn lightweight_bundle_reads() -> u64 {
-        crate::repository::task::v2_bundle::LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get)
+        crate::boundary::v2_bundle::LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get)
     }
 
     /// Listing-path task-bundle reads on this thread.
     pub fn listing_bundle_reads() -> u64 {
-        crate::repository::task::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
+        crate::boundary::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
     }
 }
 

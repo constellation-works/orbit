@@ -406,9 +406,7 @@ fn stale_and_legacy_rows_compute_live_and_stay_readable() {
     );
 }
 
-pub(super) fn history(
-    fixture: &Fixture,
-) -> std::sync::Arc<dyn orbit_store::contracts::TaskHistoryStoreBackend> {
+pub(super) fn history(fixture: &Fixture) -> orbit_store::TaskHistoryRepository {
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
         &orbit_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),

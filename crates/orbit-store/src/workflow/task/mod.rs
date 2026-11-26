@@ -89,27 +89,13 @@ mod inspect;
 mod manifest;
 mod publication;
 mod publish;
-mod reindex;
 mod relation_audit;
 mod restore;
 
 #[cfg(test)]
 mod tests;
 
-/// Log a failed undo step of a rollback. Rollback runs while the caller is
-/// already returning the original error, so a failing step is reported here
-/// instead of replacing that error or vanishing.
-fn log_rollback_failure<T, E: std::fmt::Display>(step: &'static str, result: Result<T, E>) {
-    if let Err(error) = result {
-        orbit_common::tracing::warn!(
-            target: "orbit.store.task_rollback",
-            step,
-            error = %error,
-            "task rollback step failed; run `orbit task reindex` if the task index disagrees with the bundles on disk",
-        );
-    }
-}
-
+pub use crate::boundary::reindex::{ReindexOutcome, reindex_workspace};
 pub use export::{ExportOutcome, ExportSelection, export_tasks};
 pub use import::{ImportAction, ImportConflictPolicy, ImportOutcome, ImportedTask, import_tasks};
 pub use inspect::{
@@ -127,7 +113,6 @@ pub use publish::{
     PublicationCallerRole, PublicationLastSuccess, PublicationPublishOutcome,
     PublicationPublishRequest, PublicationPublishStatus, publish_task_snapshot,
 };
-pub use reindex::{ReindexOutcome, reindex_workspace};
 pub use relation_audit::audit_relation_targets;
 pub use restore::{
     PublicationRecoveryCompleteness, PublicationRestoreMode, PublicationRestoreOutcome,

@@ -377,3 +377,26 @@ pub struct TaskPage {
 /// the bundles of candidates it rejects, then again on each hydrated task.
 pub type TaskResidualFilter<'a> =
     Option<&'a dyn Fn(&Task, &std::collections::BTreeMap<String, TaskStatus>) -> bool>;
+
+/// How one task id resolved against this machine's task ownership registry.
+///
+/// Every variant fails closed: only [`Self::Resolved`] carries a body, and
+/// neither of the other two may be read as a satisfied prerequisite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisteredTaskResolution {
+    /// A workspace registered on this machine owns the id, and its bundle was
+    /// read from the path the registry binds it to.
+    Resolved(Box<Task>),
+    /// The id is well formed and belongs to a task-id prefix this registry has
+    /// never issued or registered, so its authority is another host's. This
+    /// machine cannot read the body and must not invent one.
+    ForeignAuthority,
+    /// The id belongs to a prefix this registry knows, but no readable task is
+    /// bound to it here — deleted, never published, or not yet imported.
+    Missing,
+}
+
+/// Outcome of reading one task's history in a batch: `Ok(Some(entries))`,
+/// `Ok(None)` when the task does not exist, or `Err` when its bundle or event
+/// log is corrupt or unreadable.
+pub type TaskHistoryReadOutcome = Result<Option<Vec<TaskHistoryEntry>>, orbit_common::OrbitError>;

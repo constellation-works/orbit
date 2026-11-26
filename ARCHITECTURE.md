@@ -78,8 +78,9 @@ Edge rules the guard enforces beyond the table:
   `workspace = true`.
 
 Inside `orbit-store`, `crates/orbit-store/src/driver/file` and `crates/orbit-store/src/driver/sqlite` are private, implement one technology
-each and never import each other; `repository` enforces cross-driver invariants, `workflow`
-holds explicit import/export/repair operations, and `compose` builds the stores. The same
+each and never import each other. Concrete records live in `repository`. Only `boundary`
+sequences writes across the canonical task files, the registry index and host reservations.
+The `workflow` layer runs import, export and repair, and `compose` builds the stores. The same
 guard enforces these arrows; see [orbit-store](docs/architecture/orbit-store.md).
 
 ## Stability tiers

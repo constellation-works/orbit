@@ -199,7 +199,7 @@ pub fn release(
 }
 
 /// Reservation ids are minted as `reservation-<nanos>`
-/// (`TaskReservationStoreBackend::reserve_task_reservation`). A
+/// (`TaskReservationRepository::reserve_task_reservation`). A
 /// task id or other identifier passed here can never match a stored
 /// reservation, so without this check `release` falls through to the "no
 /// matching row" path and returns a falsy `{"released": false}` — indistinguishable

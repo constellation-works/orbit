@@ -4,12 +4,12 @@ use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
 use orbit_store::TaskV2Store;
-use orbit_store::contracts::{
-    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend,
-};
 use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
+use orbit_store::{
+    TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
+    TaskReservationRepository,
+};
 use orbit_tools::ToolRegistry;
 use std::sync::Arc;
 
@@ -24,11 +24,11 @@ pub(crate) struct OrbitHostStore {
 #[derive(Clone)]
 pub struct OrbitStores {
     pub(crate) task: Arc<TaskV2Store>,
-    pub(crate) task_document: Arc<dyn TaskDocumentStoreBackend>,
-    pub(crate) task_history: Arc<dyn TaskHistoryStoreBackend>,
-    pub(crate) task_artifact: Arc<dyn TaskArtifactStoreBackend>,
+    pub(crate) task_document: TaskDocumentRepository,
+    pub(crate) task_history: TaskHistoryRepository,
+    pub(crate) task_artifact: TaskArtifactRepository,
     pub(crate) lexical_index: LexicalIndex,
-    pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
+    pub(crate) task_reservation: TaskReservationRepository,
     pub job_run: Arc<JobRuns>,
     pub(crate) executor_def: FileStore<ExecutorDefDir>,
     pub(crate) policy_def: FileStore<PolicyDefDirs>,
@@ -39,11 +39,11 @@ impl OrbitStores {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         task: Arc<TaskV2Store>,
-        task_document: Arc<dyn TaskDocumentStoreBackend>,
-        task_history: Arc<dyn TaskHistoryStoreBackend>,
-        task_artifact: Arc<dyn TaskArtifactStoreBackend>,
+        task_document: TaskDocumentRepository,
+        task_history: TaskHistoryRepository,
+        task_artifact: TaskArtifactRepository,
         lexical_index: LexicalIndex,
-        task_reservation: Arc<dyn TaskReservationStoreBackend>,
+        task_reservation: TaskReservationRepository,
         job_run: Arc<JobRuns>,
         executor_def: FileStore<ExecutorDefDir>,
         policy_def: FileStore<PolicyDefDirs>,
@@ -67,16 +67,16 @@ impl OrbitStores {
         self.task.as_ref()
     }
 
-    pub fn task_documents(&self) -> &dyn TaskDocumentStoreBackend {
-        self.task_document.as_ref()
+    pub fn task_documents(&self) -> &TaskDocumentRepository {
+        &self.task_document
     }
 
-    pub fn task_history(&self) -> &dyn TaskHistoryStoreBackend {
-        self.task_history.as_ref()
+    pub fn task_history(&self) -> &TaskHistoryRepository {
+        &self.task_history
     }
 
-    pub fn task_artifacts(&self) -> &dyn TaskArtifactStoreBackend {
-        self.task_artifact.as_ref()
+    pub fn task_artifacts(&self) -> &TaskArtifactRepository {
+        &self.task_artifact
     }
 
     /// The optional lexical index. Callers reach its store through
@@ -85,8 +85,8 @@ impl OrbitStores {
         &self.lexical_index
     }
 
-    pub fn task_reservations(&self) -> &dyn TaskReservationStoreBackend {
-        self.task_reservation.as_ref()
+    pub fn task_reservations(&self) -> &TaskReservationRepository {
+        &self.task_reservation
     }
 
     /// This workspace's job runs, local pull admissions and drain intent.
