@@ -11,9 +11,9 @@ use std::process::Stdio;
 use orbit_common::OrbitError;
 use orbit_exec::{
     BUNDLED_BWRAP_PATH, BwrapProbeOutcome, HOST_BWRAP_PATH, LINUX_STABLE_BUILD_MOUNT,
-    LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
-    LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval, LinuxBwrapSpawnRequest, WriteAnchorKind,
-    bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,
+    LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapCommand, LinuxBwrapMask, LinuxBwrapMountAuthority,
+    LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval, LinuxBwrapSpawnRequest,
+    WriteAnchorKind, bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,
     compile_linux_bwrap_argv_with_authority, existing_glob_matches,
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
     probe_bwrap, spawn_under_linux_bwrap,
@@ -438,10 +438,12 @@ fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
     let plan = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &profile(vec![format!("{}/**", workspace.display())]),
-        "/bin/sh",
-        &["-c".to_string(), script],
-        Some(&workspace),
-        false,
+        &LinuxBwrapCommand {
+            program: "/bin/sh",
+            args: &["-c".to_string(), script],
+            cwd: Some(&workspace),
+            managed_worktree: false,
+        },
         Vec::new(),
         Some(&mask),
     )
@@ -509,13 +511,15 @@ fn kernel_descriptor_mount_never_writes_the_replacement_object() {
     let plan = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &resolved,
-        "/bin/sh",
-        &[
-            "-c".to_string(),
-            format!("printf child > '{}'", target.display()),
-        ],
-        Some(&root),
-        false,
+        &LinuxBwrapCommand {
+            program: "/bin/sh",
+            args: &[
+                "-c".to_string(),
+                format!("printf child > '{}'", target.display()),
+            ],
+            cwd: Some(&root),
+            managed_worktree: false,
+        },
         vec![LinuxBwrapMountAuthority {
             destination: target.clone(),
             source: std::sync::Arc::new(source),

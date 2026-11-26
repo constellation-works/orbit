@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    LinuxBwrapMask, LinuxBwrapSpawnRequest, compile_linux_bwrap_argv,
+    LinuxBwrapCommand, LinuxBwrapMask, LinuxBwrapSpawnRequest, compile_linux_bwrap_argv,
     compile_linux_bwrap_argv_with_authority, probe_bwrap, spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
@@ -180,16 +180,18 @@ print('runtime sockets hidden; control connected; descendant and manager query r
             compile_linux_bwrap_argv_with_authority(
                 &orbit_common::Env::capture(),
                 &profile,
-                "/bin/true",
-                &[],
-                Some(&root),
-                false,
+                &LinuxBwrapCommand {
+                    program: "/bin/true",
+                    args: &[],
+                    cwd: Some(&root),
+                    managed_worktree: false
+                },
                 Vec::new(),
                 Some(&LinuxBwrapMask {
                     sentinel,
                     targets: vec![target],
                     files: Vec::new()
-                }),
+                })
             ),
             Err(OrbitError::PolicyDenied(_))
         ),

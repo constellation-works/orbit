@@ -200,14 +200,16 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                     let mut plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
                         &orbit_common::Env::capture(),
                         &profile,
-                        probe_binary.to_str().expect("UTF-8 probe"),
-                        &[
-                            "--exact".to_string(),
-                            TEST.to_string(),
-                            "--nocapture".to_string(),
-                        ],
-                        Some(&worktree),
-                        resolved.managed_worktree,
+                        &orbit_exec::LinuxBwrapCommand {
+                            program: probe_binary.to_str().expect("UTF-8 probe"),
+                            args: &[
+                                "--exact".to_string(),
+                                TEST.to_string(),
+                                "--nocapture".to_string(),
+                            ],
+                            cwd: Some(&worktree),
+                            managed_worktree: resolved.managed_worktree,
+                        },
                         authority,
                         Some(&linux_mask),
                     )

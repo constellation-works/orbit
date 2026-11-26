@@ -1752,10 +1752,12 @@ impl Confined {
         let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
             &orbit_common::Env::capture(),
             profile,
-            "/usr/bin/python3",
-            argv,
-            Some(cwd),
-            false,
+            &orbit_exec::LinuxBwrapCommand {
+                program: "/usr/bin/python3",
+                args: argv,
+                cwd: Some(cwd),
+                managed_worktree: false,
+            },
             Vec::new(),
             Some(&mask),
         )

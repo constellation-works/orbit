@@ -3,8 +3,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_exec::{
-    bwrap_program_for_audit, claude_state_dir_from_env, compile_linux_bwrap_argv_with_authority,
-    sandbox_exec_program_for_audit,
+    LinuxBwrapCommand, bwrap_program_for_audit, claude_state_dir_from_env,
+    compile_linux_bwrap_argv_with_authority, sandbox_exec_program_for_audit,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::Provider;
@@ -82,10 +82,12 @@ pub(super) fn try_audit_argv_for_dispatch(
             let plan = compile_linux_bwrap_argv_with_authority(
                 process_env,
                 &sb.fs_profile,
-                program,
-                args,
-                cwd,
-                sb.managed_worktree,
+                &LinuxBwrapCommand {
+                    program: program,
+                    args: args,
+                    cwd: cwd,
+                    managed_worktree: sb.managed_worktree,
+                },
                 Vec::new(),
                 linux_bwrap_mask(sb).as_ref(),
             )?;

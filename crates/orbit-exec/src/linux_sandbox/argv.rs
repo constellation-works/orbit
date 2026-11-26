@@ -30,25 +30,25 @@ pub fn compile_linux_bwrap_argv(
     cwd: Option<&Path>,
     managed_worktree: bool,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
-    compile_plan(env, profile, program, args, cwd, managed_worktree, None)
+    let command = LinuxBwrapCommand {
+        program,
+        args,
+        cwd,
+        managed_worktree,
+    };
+    compile_plan(env, profile, &command, None)
 }
 
 fn compile_plan(
     env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
-    program: &str,
-    args: &[String],
-    cwd: Option<&Path>,
-    managed_worktree: bool,
+    command: &LinuxBwrapCommand<'_>,
     mask: Option<&LinuxBwrapMask>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
     compile_plan_with_credentials(
         env,
         profile,
-        program,
-        args,
-        cwd,
-        managed_worktree,
+        command,
         mask,
         &host_credential_denies(env),
         host_mounts,
@@ -58,18 +58,20 @@ fn compile_plan(
 /// [`compile_plan`] with the credential locations to mask passed explicitly,
 /// so the placement can be exercised against a fixture home instead of the
 /// host account's.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn compile_plan_with_credentials(
     env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
-    program: &str,
-    args: &[String],
-    cwd: Option<&Path>,
-    managed_worktree: bool,
+    command: &LinuxBwrapCommand<'_>,
     mask: Option<&LinuxBwrapMask>,
     credentials: &[CredentialReadDeny],
     mounts: impl FnOnce() -> Result<Vec<MountEntry>, OrbitError>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
+    let LinuxBwrapCommand {
+        program,
+        args,
+        cwd,
+        managed_worktree,
+    } = *command;
     let compiled = CompiledModifyRules::compile(profile)?;
     let expanded = expand_each_rule(
         profile
@@ -261,18 +263,14 @@ pub(super) fn compile_plan_with_credentials(
 /// `mask`, when given, follows policy mounts; mandatory credential and runtime
 /// masks follow it. A masked directory or file reachable through another path
 /// refuses the plan (see [`LinuxBwrapMask`]).
-#[allow(clippy::too_many_arguments)]
 pub fn compile_linux_bwrap_argv_with_authority(
     env: &orbit_common::Env,
     profile: &ResolvedFsProfile,
-    program: &str,
-    args: &[String],
-    cwd: Option<&Path>,
-    managed_worktree: bool,
+    command: &LinuxBwrapCommand<'_>,
     authority: Vec<LinuxBwrapMountAuthority>,
     mask: Option<&LinuxBwrapMask>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
-    let mut plan = compile_plan(env, profile, program, args, cwd, managed_worktree, mask)?;
+    let mut plan = compile_plan(env, profile, command, mask)?;
     for grant in authority {
         let source = prepare_mount_source(grant.source)?;
         #[cfg(unix)]

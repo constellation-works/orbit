@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 use orbit_core::OrbitRuntime;
 use orbit_engine::{ResolvedSandbox, RuntimeHost};
 use orbit_exec::{
-    LinuxBwrapMask, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
-    prepare_linux_bwrap_write_grants,
+    LinuxBwrapCommand, LinuxBwrapMask, LinuxBwrapMountAuthority,
+    compile_linux_bwrap_argv_with_authority, prepare_linux_bwrap_write_grants,
 };
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
@@ -333,10 +333,12 @@ fn bwrap_lines(sandbox: &ResolvedSandbox, cwd: &Path) -> Vec<String> {
     let plan = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &sandbox.fs_profile,
-        "/usr/bin/true",
-        &[],
-        Some(cwd),
-        sandbox.managed_worktree,
+        &LinuxBwrapCommand {
+            program: "/usr/bin/true",
+            args: &[],
+            cwd: Some(cwd),
+            managed_worktree: sandbox.managed_worktree,
+        },
         authority,
         mask.as_ref(),
     )

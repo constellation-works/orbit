@@ -718,10 +718,12 @@ impl Fixture {
         let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
             &orbit_common::Env::capture(),
             &case.profile,
-            "/usr/bin/true",
-            &[],
-            Some(&case.cwd),
-            case.managed_worktree,
+            &orbit_exec::LinuxBwrapCommand {
+                program: "/usr/bin/true",
+                args: &[],
+                cwd: Some(&case.cwd),
+                managed_worktree: case.managed_worktree,
+            },
             Vec::new(),
             Some(&mask),
         )
