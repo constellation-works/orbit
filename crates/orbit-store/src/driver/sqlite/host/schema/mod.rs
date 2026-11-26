@@ -1,17 +1,6 @@
 //! Frozen schema steps for `orbit.db`, one module per table, with
 //! `MIGRATIONS` as the one ordered step list.
 
-use std::path::Path;
-
-use orbit_common::storage::sqlite::sqlite_error;
-use orbit_common::{OrbitError, StorageLayer};
-use rusqlite::Connection;
-
-use super::ledger;
-use crate::contract::{
-    ForwardCompatibleOpen, MigrationCompatibility, StateComponent, evaluate_newer_state,
-};
-
 mod admission_forecasts;
 mod admission_reservations;
 mod agent_executions;
@@ -66,14 +55,21 @@ mod v2_audit_events;
 mod worker_resource_limits;
 mod workspace_ownership;
 
+use super::ledger;
+use crate::contract::{
+    ForwardCompatibleOpen, MigrationCompatibility, StateComponent, evaluate_newer_state,
+};
 #[cfg(test)]
 use introspect::{table_exists, table_has_column};
-
 pub(crate) use orbit_common::storage::sqlite::ledger::applied_migrations;
 pub use orbit_common::storage::sqlite::ledger::{
     AppliedMigration, LedgerStamp, LedgeredDatabase, Migration, current_schema_version,
     evaluate_newer_database, run_database_migrations,
 };
+use orbit_common::storage::sqlite::sqlite_error;
+use orbit_common::{OrbitError, StorageLayer};
+use rusqlite::Connection;
+use std::path::Path;
 
 /// Stable ordered registry of store-database migrations. Append-only:
 /// never renumber or edit an entry that has shipped. Its body and shape-defining

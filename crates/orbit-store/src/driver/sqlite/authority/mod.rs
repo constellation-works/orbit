@@ -1,12 +1,11 @@
 //! The host-only recovery authority SQLite database (`authority.db`): its file
 //! name, open paths, connection pragmas, and ordered schema ledger.
 
-use std::path::Path;
+pub mod schema;
 
 use orbit_common::OrbitError;
 use rusqlite::{Connection, OpenFlags};
-
-pub mod schema;
+use std::path::Path;
 
 /// File name of the host-only recovery authority SQLite database.
 pub const FILE_NAME: &str = "authority.db";

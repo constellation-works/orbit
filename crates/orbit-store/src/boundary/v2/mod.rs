@@ -13,32 +13,6 @@
 //! The `artifact_paths` module owns artifact path normalization and safe resolution.
 //! The `acceptance` module owns acceptance-criteria rendering and parsing.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use chrono::Utc;
-use orbit_common::fs::io::atomic_write_bytes;
-use orbit_common::security::release::sha256_hex;
-use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::identity::OrbitId;
-use orbit_types::task::{
-    ArtifactManifestFileV2, ArtifactManifestV2, ExternalRef, TASK_ARTIFACT_FILES_DIR_NAME,
-    TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME, Task, TaskArtifact, TaskComment,
-    TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskPriority, TaskRelation,
-    TaskRelationType, TaskStatus, normalize_task_tags, validate_os_tags,
-};
-
-use crate::boundary::coordination::TaskCommitBoundary;
-use crate::boundary::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDocumentV2};
-use crate::contract::{
-    RegisteredTaskResolution, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams,
-    TaskHistoryUpdateParams,
-};
-use crate::driver::file::sort::sort_by_created_desc_id_asc;
-use crate::repository::task_index::{TaskIndexFilter, TaskRegistryStore};
-
 mod acceptance;
 mod artifact_paths;
 mod artifacts;
@@ -57,19 +31,42 @@ pub(crate) mod sequencing;
 mod sidecars;
 mod updates;
 
-#[cfg(test)]
-mod tests;
-
+use crate::boundary::coordination::TaskCommitBoundary;
+use crate::boundary::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDocumentV2};
+use crate::contract::{
+    RegisteredTaskResolution, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams,
+    TaskHistoryUpdateParams,
+};
+use crate::driver::file::sort::sort_by_created_desc_id_asc;
+use crate::repository::task_index::{TaskIndexFilter, TaskRegistryStore};
 use acceptance::{parse_acceptance, render_acceptance};
 pub(crate) use artifact_paths::normalize_v2_artifact_path;
 pub(crate) use artifact_paths::resolve_v2_artifact_file_path;
 pub(crate) use artifacts::review_report_history;
+use chrono::Utc;
 use creation_grant::{append_creation_grant, creation_state, reject_forged_grant};
 use envelope_cache::{EnvelopeCache, EnvelopeStamp, persisted_file_stamp};
+use orbit_common::fs::io::atomic_write_bytes;
+use orbit_common::security::release::sha256_hex;
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_types::identity::OrbitId;
+use orbit_types::task::{
+    ArtifactManifestFileV2, ArtifactManifestV2, ExternalRef, TASK_ARTIFACT_FILES_DIR_NAME,
+    TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME, Task, TaskArtifact, TaskComment,
+    TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskPriority, TaskRelation,
+    TaskRelationType, TaskStatus, normalize_task_tags, validate_os_tags,
+};
 use relations::{relations_from_create_params, replace_relations};
 use row_cache::RowCache;
 use sequencing::{next_event_id, next_sequence};
 pub(crate) use sidecars::{task_comment_from_row, task_history_from_events};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) fn task_from_bundle(bundle: TaskBundleV2) -> Task {
     let _span = orbit_common::tracing::trace_span!(

@@ -1,12 +1,12 @@
 //! Relation validation across workspace boundaries.
 
-use std::fs;
-
-use orbit_types::task::{TaskRelation, TaskRelationType, TaskStatus};
-use tempfile::TempDir;
-
 use super::*;
+use chrono::{TimeZone, Utc};
 use orbit_store::maintenance::task_registry::RegisterWorkspaceParams;
+use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskType};
+use orbit_types::task::{TaskRelation, TaskRelationType, TaskStatus};
+use std::fs;
+use tempfile::TempDir;
 
 /// Relation validation reads a reachable subgraph rather than the whole
 /// relation table, and the walk has to cross workspace boundaries: a relation
@@ -97,7 +97,6 @@ fn blocked_by(target: &str) -> TaskRelation {
         regression: None,
     }
 }
-
 /// Allocate, register, and index one task, returning its id.
 fn register_indexed_task(
     store: &TaskRegistryStore,
@@ -122,9 +121,6 @@ fn register_indexed_task(
         .expect("index task");
     task_id
 }
-
-use chrono::{TimeZone, Utc};
-use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskType};
 fn envelope(
     task_id: &str,
     status: TaskStatus,

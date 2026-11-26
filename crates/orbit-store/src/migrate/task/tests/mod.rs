@@ -1,20 +1,18 @@
-use std::path::Path;
-
-use chrono::{TimeZone, Utc};
-use orbit_types::task::{
-    TASK_ARTIFACT_SCHEMA_VERSION, TaskEnvelopeV2, TaskEventRowV2, TaskPriority, TaskRelation,
-    TaskStatus, TaskType,
-};
+pub(super) mod archive;
+mod git;
+mod publish;
 
 use crate::boundary::v2_bundle::TaskBundleStoreV2;
 use crate::driver::file::task_bundle::TaskBundleV2;
 use crate::repository::task_index::{
     TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
 };
-
-pub(super) mod archive;
-mod git;
-mod publish;
+use chrono::{TimeZone, Utc};
+use orbit_types::task::{
+    TASK_ARTIFACT_SCHEMA_VERSION, TaskEnvelopeV2, TaskEventRowV2, TaskPriority, TaskRelation,
+    TaskStatus, TaskType,
+};
+use std::path::Path;
 
 fn open_registry(global: &Path) -> TaskRegistryStore {
     TaskRegistryStore::open(&task_registry_path(global)).expect("open registry")

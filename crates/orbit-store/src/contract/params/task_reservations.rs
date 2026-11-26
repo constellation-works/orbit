@@ -1,6 +1,3 @@
-use orbit_types::task::ReservationOwnerMetadata;
-use serde::{Deserialize, Serialize};
-
 /// Serde for the owner-metadata field of the reservation records below:
 /// on the wire / in persisted serde shapes it stays
 /// `owner_metadata_json` carrying the JSON document as a string, exactly
@@ -39,6 +36,9 @@ mod owner_metadata_as_json_string {
         .transpose()
     }
 }
+
+use orbit_types::task::ReservationOwnerMetadata;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

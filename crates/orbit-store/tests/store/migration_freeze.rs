@@ -2,6 +2,7 @@
 //  This separate integration area guards legacy schema repair and actor data
 //  backfills; the schema golden covers the empty-database prefixes.
 
+
 fn migration_freeze_isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_MIGRATION_FREEZE_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -196,9 +197,6 @@ fn actor_backfills_stamp_the_map_and_preserve_roles_and_current_rows() {
         }
     }
 }
-
-#[path = "migration_freeze/ledger.rs"]
-mod ledger;
 
 #[test]
 fn forecast_attribution_migrates_legacy_rows_and_reopens_idempotently() {

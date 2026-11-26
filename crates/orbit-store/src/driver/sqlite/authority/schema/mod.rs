@@ -4,18 +4,16 @@
 //! a new migration for later shapes. The additive baseline preserves every
 //! table a pre-ledger binary creates or reads, including the legacy certificate.
 
-use std::path::Path;
-
-use orbit_common::OrbitError;
-use rusqlite::Connection;
+mod baseline;
 
 use crate::contract::{ForwardCompatibleOpen, MigrationCompatibility, StateComponent};
+use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::ledger::{
     LedgeredDatabase, Migration, current_schema_version, evaluate_newer_database,
     run_database_migrations,
 };
-
-mod baseline;
+use rusqlite::Connection;
+use std::path::Path;
 
 const DATABASE: LedgeredDatabase = LedgeredDatabase {
     component: StateComponent::RecoveryAuthority,

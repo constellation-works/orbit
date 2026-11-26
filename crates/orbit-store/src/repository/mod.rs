@@ -36,11 +36,11 @@ pub(crate) mod skill;
 mod task_artifact;
 mod task_document;
 mod task_history;
+pub(crate) mod task_index;
 pub(crate) mod task_reservation;
+pub(crate) mod tool;
 
 pub use task_artifact::TaskArtifactRepository;
 pub use task_document::TaskDocumentRepository;
 pub use task_history::TaskHistoryRepository;
 pub use task_reservation::TaskReservationRepository;
-pub(crate) mod task_index;
-pub(crate) mod tool;

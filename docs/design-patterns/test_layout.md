@@ -273,8 +273,9 @@ crate-root boundary cannot reach economically.
 
 Orbit-store's public persistence cases share `tests/store/main.rs`. The included
 roots group the boundaries: `file_store.rs`, `task_mutations.rs`,
-`migration_freeze.rs`, `task_registry_ledger.rs` and `publication.rs`, with
-supporting modules under matching directories. `tests/store/support/mod.rs`
+`migration_freeze.rs`, `task_registry_ledger.rs` and `publication.rs`. Those
+roots keep their tests and helpers; `main.rs` declares their supporting
+modules under matching directories. `tests/store/support/mod.rs`
 supplies isolated child execution and the shared task-creation fixture. Disk
 snapshots used as fixture
 evidence deserialize exported persisted types; they do not copy the private

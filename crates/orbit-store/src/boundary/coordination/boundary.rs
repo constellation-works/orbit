@@ -1,6 +1,75 @@
 //! Entering the boundary: construction and journal binding, the ordinary
 //! (shared) and admission (exclusive) sections, and per-thread boundary depth.
 
+/// Pause one downstream task write after it acquires the task-commit boundary.
+/// The hook is available only to tests that enable `test-support`.
+#[cfg(feature = "test-support")]
+pub(crate) mod task_write_hold_hook {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    thread_local! {
+        static HOLD_AFTER_BOUNDARY: Cell<Option<Duration>> = const { Cell::new(None) };
+    }
+
+    /// Run `operation` with the next task write on this thread paused inside
+    /// its boundary for `duration`, so downstream tests can observe its
+    /// release report deterministically.
+    pub fn with_task_commit_write_hold<T>(duration: Duration, operation: impl FnOnce() -> T) -> T {
+        struct Restore(Option<Duration>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                HOLD_AFTER_BOUNDARY.with(|slot| slot.set(self.0));
+            }
+        }
+
+        let _restore = Restore(HOLD_AFTER_BOUNDARY.with(|slot| slot.replace(Some(duration))));
+        operation()
+    }
+
+    /// Apply the one-shot pause from `TaskV2Store::with_task_lock`, which runs
+    /// after the task-commit boundary has been acquired.
+    pub(crate) fn after_boundary_acquired() {
+        if let Some(duration) = HOLD_AFTER_BOUNDARY.with(Cell::take) {
+            std::thread::sleep(duration);
+        }
+    }
+}
+/// A shorter acquisition deadline for the boundary sections one thread
+/// enters, so a downstream test of what follows a lock timeout waits seconds
+/// instead of the production 30 s.
+#[cfg(feature = "test-support")]
+pub(crate) mod lock_timeout_hook {
+    use orbit_common::fs::io::FileLockOptions;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    thread_local! {
+        static TIMEOUT: Cell<Option<Duration>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn applied(mut options: FileLockOptions) -> FileLockOptions {
+        if let Some(timeout) = TIMEOUT.with(Cell::get) {
+            options.timeout = timeout;
+        }
+        options
+    }
+
+    /// Run `operation` with every task-commit boundary section it enters on
+    /// this thread failing acquisition after `timeout`, restoring the
+    /// previous deadline on return or unwind. Other threads keep theirs.
+    pub fn with_task_commit_lock_timeout<T>(timeout: Duration, operation: impl FnOnce() -> T) -> T {
+        struct Restore(Option<Duration>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                TIMEOUT.with(|slot| slot.set(self.0));
+            }
+        }
+        let _restore = Restore(TIMEOUT.with(|slot| slot.replace(Some(timeout))));
+        operation()
+    }
+}
+
 use super::apply::ApplyScope;
 use super::{
     COORDINATION_LOCK_FILE, COORDINATION_LOCK_LABEL, REQUIRED_MARKER_FILE, TaskCommitBoundary,
@@ -28,6 +97,7 @@ const SECTION_HOLD_WARN_AFTER: Duration = Duration::from_secs(2);
 /// The step a section's operation is timed as, less whatever steps it timed
 /// inside itself.
 const OPERATION_STEP: &str = "operation";
+
 /// The step that settles an interrupted commit before a section runs.
 const PENDING_RECOVERY_STEP: &str = "pending recovery";
 
@@ -107,77 +177,6 @@ fn exclusive_section<T>(
     #[cfg(feature = "test-support")]
     let options = lock_timeout_hook::applied(options);
     with_exclusive_file_lock_options(target, &section.label(), options, op)
-}
-
-/// Pause one downstream task write after it acquires the task-commit boundary.
-/// The hook is available only to tests that enable `test-support`.
-#[cfg(feature = "test-support")]
-pub(crate) mod task_write_hold_hook {
-    use std::cell::Cell;
-    use std::time::Duration;
-
-    thread_local! {
-        static HOLD_AFTER_BOUNDARY: Cell<Option<Duration>> = const { Cell::new(None) };
-    }
-
-    /// Run `operation` with the next task write on this thread paused inside
-    /// its boundary for `duration`, so downstream tests can observe its
-    /// release report deterministically.
-    pub fn with_task_commit_write_hold<T>(duration: Duration, operation: impl FnOnce() -> T) -> T {
-        struct Restore(Option<Duration>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                HOLD_AFTER_BOUNDARY.with(|slot| slot.set(self.0));
-            }
-        }
-
-        let _restore = Restore(HOLD_AFTER_BOUNDARY.with(|slot| slot.replace(Some(duration))));
-        operation()
-    }
-
-    /// Apply the one-shot pause from `TaskV2Store::with_task_lock`, which runs
-    /// after the task-commit boundary has been acquired.
-    pub(crate) fn after_boundary_acquired() {
-        if let Some(duration) = HOLD_AFTER_BOUNDARY.with(Cell::take) {
-            std::thread::sleep(duration);
-        }
-    }
-}
-
-/// A shorter acquisition deadline for the boundary sections one thread
-/// enters, so a downstream test of what follows a lock timeout waits seconds
-/// instead of the production 30 s.
-#[cfg(feature = "test-support")]
-pub(crate) mod lock_timeout_hook {
-    use std::cell::Cell;
-    use std::time::Duration;
-
-    use orbit_common::fs::io::FileLockOptions;
-
-    thread_local! {
-        static TIMEOUT: Cell<Option<Duration>> = const { Cell::new(None) };
-    }
-
-    pub(super) fn applied(mut options: FileLockOptions) -> FileLockOptions {
-        if let Some(timeout) = TIMEOUT.with(Cell::get) {
-            options.timeout = timeout;
-        }
-        options
-    }
-
-    /// Run `operation` with every task-commit boundary section it enters on
-    /// this thread failing acquisition after `timeout`, restoring the
-    /// previous deadline on return or unwind. Other threads keep theirs.
-    pub fn with_task_commit_lock_timeout<T>(timeout: Duration, operation: impl FnOnce() -> T) -> T {
-        struct Restore(Option<Duration>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                TIMEOUT.with(|slot| slot.set(self.0));
-            }
-        }
-        let _restore = Restore(TIMEOUT.with(|slot| slot.replace(Some(timeout))));
-        operation()
-    }
 }
 
 thread_local! {
@@ -637,13 +636,11 @@ impl TaskCommitBoundary {
 /// partition-scoped section from a host-wide one.
 #[cfg(test)]
 pub(crate) mod section_probe {
-    use std::cell::{Cell, RefCell};
-    use std::time::{Duration, Instant};
-
-    use orbit_common::fs::io::durability_syncs_requested;
-
     use super::super::lifecycle::STATE_DECODES;
     use crate::boundary::v2_bundle::{CANONICAL_BUNDLE_READS, LIGHTWEIGHT_BUNDLE_READS};
+    use orbit_common::fs::io::durability_syncs_requested;
+    use std::cell::{Cell, RefCell};
+    use std::time::{Duration, Instant};
 
     /// One exclusive section: its kind (`admission` holds the host lock
     /// shared, `host admission` exclusively), how long it was held, the

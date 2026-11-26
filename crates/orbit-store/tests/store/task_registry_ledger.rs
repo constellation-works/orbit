@@ -12,6 +12,7 @@
 //  Every test re-runs itself in a child of this binary with inherited Orbit
 //  authority cleared and a disposable `HOME`.
 
+
 const PARTITION: &str = "ws_prior";
 
 /// The registry ledger this binary ships, as `(version, name)`. Every entry
@@ -548,6 +549,3 @@ fn a_newer_registry_is_decided_from_its_compatibility_record() {
         assert!(error.contains("newer_registry_change"), "{error}");
     }
 }
-
-#[path = "task_registry/relations.rs"]
-mod relations;

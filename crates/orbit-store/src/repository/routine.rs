@@ -1,9 +1,5 @@
 //! Host-local routine cursor, fire, pause and circuit-breaker records.
 
-use rusqlite::Connection;
-
-use crate::store::{Snapshot, Tx};
-
 mod breaker;
 mod cursor;
 mod fingerprint;
@@ -15,6 +11,8 @@ use crate::contract::{
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutinePauseRecord,
     RoutineSlotAttempts,
 };
+use crate::store::{Snapshot, Tx};
+use rusqlite::Connection;
 
 /// Routine records in a host-store snapshot or write transaction.
 pub struct RoutineRepository<'a, Access> {

@@ -1,31 +1,5 @@
 // Identity allocation and coordinated admission through the store's public composition: task ids are monotonic, never wrapped past the ceiling and exhausted cleanly (including an imported maximum); job-run ids are never reminted after archive/delete; local pull admission holds one slot per request under the drain's live ceiling; the commit boundary admits at most one claim per request/task under concurrent pulls; a handoff is authorized only by its admission policy over unchanged evidence; settled claims' receipts are pruned past retention while claim/lifecycle rows stay (pruned replays are refused); claimed evidence stores canonical paths and racing report revisions are each retained; typed mutation receipts replay (text receipts still do); a pull is granted only listed, executor-runnable work (census rows land with receipts and stay live while claiming); a hard path lease defers and names itself, an advisory one holds nothing. Every test re-runs itself in a child with inherited Orbit authority cleared, a disposable `HOME`, a bounded wait.
 
-#[path = "allocation_admission/claim_reads.rs"]
-mod claim_reads;
-#[path = "allocation_admission/claim_retention.rs"]
-mod claim_retention;
-#[path = "allocation_admission/dependencies.rs"]
-mod dependencies;
-#[path = "allocation_admission/handoff_compatibility.rs"]
-mod handoff_compatibility;
-#[path = "allocation_admission/import_relations.rs"]
-mod import_relations;
-#[path = "allocation_admission/known_red.rs"]
-mod known_red;
-#[path = "allocation_admission/mutation_receipts.rs"]
-mod mutation_receipts;
-#[path = "allocation_admission/ordering.rs"]
-mod ordering;
-#[path = "allocation_admission/path_leases.rs"]
-mod path_leases;
-#[path = "allocation_admission/reservation_grants.rs"]
-mod reservation_grants;
-#[path = "allocation_admission/task_index/mod.rs"]
-mod task_index;
-#[path = "allocation_admission/unscoped_claim_writes.rs"]
-mod unscoped_claim_writes;
-#[path = "allocation_admission/work_fit.rs"]
-mod work_fit;
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 /// Run `test` alone in a child with authority cleared and a disposable `HOME`; `true` inside the child.

@@ -1,13 +1,13 @@
 //! Typed handoff acceptance and completion authority on the claim journal.
 
-use super::TaskCommitBoundary;
-
 mod accept;
 mod authority;
 mod evidence;
 mod queries;
 mod repair;
 mod review;
+
+use super::TaskCommitBoundary;
 
 const HANDOFF: &str = "distributed-handoff-v1";
 const AUTHORIZATION: &str = "distributed-handoff-authorization-v1";

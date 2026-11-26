@@ -1,11 +1,5 @@
 //! Internal attempt lifecycle on the existing task commit journal. No public pull route.
 
-use orbit_types::task::{ArtifactManifestV2, TaskCommentRowV2, TaskStatus};
-use serde::{Deserialize, Serialize};
-
-use crate::boundary::v2_bundle::TaskBundleV2;
-use crate::contract::{ClaimInspection, ClaimMutationResult, ExecutionClaim, TaskCoordinationRow};
-
 mod codec;
 mod evidence;
 mod inspect;
@@ -16,10 +10,14 @@ mod releases;
 mod retention;
 mod steering;
 
+use crate::boundary::v2_bundle::TaskBundleV2;
+use crate::contract::{ClaimInspection, ClaimMutationResult, ExecutionClaim, TaskCoordinationRow};
 #[cfg(test)]
 pub(super) use codec::STATE_DECODES;
 pub(super) use codec::{CLAIM, STATE, decode, decode_state, encode, invalid, row};
+use orbit_types::task::{ArtifactManifestV2, TaskCommentRowV2, TaskStatus};
 pub(super) use releases::{DrainReleases, fresh_offer_history};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MutationReceipt {

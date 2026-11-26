@@ -1,7 +1,18 @@
 //! Composition constructors that assemble driver, repository, and migration store handles; imports `contract`, `driver`, `repository`, `migrate`, and `orbit-common`.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+mod compatibility;
+/// Composition for workspace-local auto-task cursors.
+pub mod auto_task {
+    pub use crate::driver::file::auto_task::cursor_state_path;
+    use crate::file_store::AutoTaskStore;
+    pub use crate::repository::auto_task::AutoTaskWriteRepository;
+    use std::path::Path;
+
+    /// Bind a cursor store to its workspace state file.
+    pub fn cursor_store(path: &Path) -> AutoTaskStore {
+        AutoTaskStore::new(path.to_path_buf())
+    }
+}
 
 use crate::Store;
 use crate::boundary::{TaskCommitBoundary, TaskCoordination, TaskV2Store};
@@ -15,6 +26,9 @@ use crate::{
     TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
     TaskReservationRepository,
 };
+pub use compatibility::compiled_compatibility;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct WorkspaceTaskBackends {
     pub task: Arc<TaskV2Store>,
@@ -231,23 +245,4 @@ pub fn layered_policy_def_store(
         workspace.layout().primary.clone(),
         global.layout().primary.clone(),
     ))
-}
-
-mod compatibility;
-
-pub use compatibility::compiled_compatibility;
-
-/// Composition for workspace-local auto-task cursors.
-pub mod auto_task {
-    use std::path::Path;
-
-    use crate::file_store::AutoTaskStore;
-
-    pub use crate::driver::file::auto_task::cursor_state_path;
-    pub use crate::repository::auto_task::AutoTaskWriteRepository;
-
-    /// Bind a cursor store to its workspace state file.
-    pub fn cursor_store(path: &Path) -> AutoTaskStore {
-        AutoTaskStore::new(path.to_path_buf())
-    }
 }

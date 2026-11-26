@@ -2,18 +2,6 @@
 //! owner seams — the `orbit.task.pull` tool and the owner-local drain adapter —
 //! which supply the caller identity from the session, never from the request.
 
-use std::collections::BTreeSet;
-use std::path::Path;
-
-use orbit_common::OrbitError;
-use orbit_common::fs::selector::canonical_selector_in_workspace;
-use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
-use serde::{Deserialize, Serialize};
-
-use super::TaskCommitBoundary;
-use crate::contract::*;
-
 mod admit;
 mod census;
 mod footprint;
@@ -21,10 +9,19 @@ mod lookup;
 mod refusal;
 mod retention;
 
+use super::TaskCommitBoundary;
+use crate::contract::*;
 pub(super) use lookup::decode_claim;
 #[cfg(test)]
 pub(super) use lookup::{claim_decodes, reset_claim_decodes};
+use orbit_common::OrbitError;
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+use orbit_common::security::release::sha256_hex;
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 pub use refusal::admission_refusal;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::path::Path;
 
 /// The in-section re-check of assessment-scoped holds a caller gives
 /// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and

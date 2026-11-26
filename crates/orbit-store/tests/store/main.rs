@@ -6,6 +6,74 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
+#[cfg(unix)]
+#[path = "publication/archive.rs"]
+mod archive;
+#[path = "allocation_admission/claim_reads.rs"]
+mod claim_reads;
+#[path = "allocation_admission/claim_retention.rs"]
+mod claim_retention;
+#[path = "task_mutations/concurrency.rs"]
+mod concurrency;
+#[path = "task_mutations/creation_grant.rs"]
+mod creation_grant;
+#[cfg(unix)]
+#[path = "publication/credentials.rs"]
+mod credentials;
+#[path = "allocation_admission/dependencies.rs"]
+mod dependencies;
+#[path = "file_store/executor.rs"]
+mod executor;
+#[path = "support/git.rs"]
+mod git_test_support;
+#[path = "allocation_admission/handoff_compatibility.rs"]
+mod handoff_compatibility;
+#[path = "allocation_admission/import_relations.rs"]
+mod import_relations;
+#[path = "publication/inspect.rs"]
+mod inspect;
+#[path = "task_mutations/jsonl.rs"]
+mod jsonl;
+#[path = "allocation_admission/known_red.rs"]
+mod known_red;
+#[cfg(unix)]
+#[path = "file_store/layout.rs"]
+mod layout;
+#[path = "migration_freeze/ledger.rs"]
+mod ledger;
+#[path = "allocation_admission/mutation_receipts.rs"]
+mod mutation_receipts;
+#[path = "allocation_admission/ordering.rs"]
+mod ordering;
+#[path = "allocation_admission/path_leases.rs"]
+mod path_leases;
+#[path = "publication/pending.rs"]
+mod pending;
+#[path = "file_store/policy.rs"]
+mod policy;
+#[path = "task_registry/relations.rs"]
+mod relations;
+#[path = "task_mutations/repair_gate.rs"]
+mod repair_gate;
+#[path = "allocation_admission/reservation_grants.rs"]
+mod reservation_grants;
+#[path = "task_mutations/row_cache.rs"]
+mod row_cache;
+#[path = "publication/shared_repo.rs"]
+mod shared_repo;
+#[path = "file_store/skills.rs"]
+mod skills;
+mod support;
+#[path = "allocation_admission/task_index/mod.rs"]
+mod task_index;
+#[path = "allocation_admission/unscoped_claim_writes.rs"]
+mod unscoped_claim_writes;
+#[path = "allocation_admission/work_fit.rs"]
+mod work_fit;
+#[cfg(unix)]
+#[path = "file_store/workspace_claim.rs"]
+mod workspace_claim;
+
 use chrono::DateTime;
 use chrono::Duration as invocation_workspace_scope_Duration;
 use chrono::Duration as provider_ledger_Duration;
@@ -66,6 +134,8 @@ use orbit_store::contract::SessionLogKind;
 use orbit_store::contract::TaskArtifactUpdateParams;
 use orbit_store::contract::TaskCreateParams;
 use orbit_store::contract::TaskHistoryUpdateParams;
+use orbit_store::contract::{ResourceHistoryKeep, ResourceMinutesTable};
+use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 use orbit_store::maintenance::migration::read_schema_ledger_status;
 use orbit_store::maintenance::task_registry::BindWorkspaceParams;
@@ -156,11 +226,6 @@ use std::time::Duration;
 use std::time::Instant;
 use support::create_params;
 use tempfile::TempDir;
-
-#[path = "support/git.rs"]
-mod git_test_support;
-
-mod support;
 
 include!("allocation_admission.rs");
 include!("audit_tool_call_index.rs");

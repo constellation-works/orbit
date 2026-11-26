@@ -1,10 +1,10 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_store::migrate::task::{
     PublicationInspectRequest, PublicationRestoreMode, PublicationRestoreRequest,
     inspect_publication, restore_publication,
 };
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Bytes that exist only in the host file a publication symlink names.
 const SENTINEL: &str = "ORBIT_PUBLICATION_LINK_TARGET_BYTES";
@@ -266,8 +266,6 @@ fn assert_tree_excludes(root: &Path, sentinel: &str) {
         }
     }
 }
-
-use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 fn open_registry(global: &Path) -> TaskRegistryStore {
     TaskRegistryStore::open(&task_registry_path(global)).unwrap()
 }
