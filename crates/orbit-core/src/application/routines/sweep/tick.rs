@@ -8,17 +8,20 @@ use chrono::Utc;
 use orbit_automation::routines::sweep::{TICK_DEADLINE, run_sweep_core};
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
+use orbit_store::Store;
 use orbit_types::workspace::Workspace;
 
 use super::super::RoutineMachineIdentity;
 use super::super::loader::{
-    RoutineLoadError, RoutineWorkspaceProvider, apply_peer_name_collisions, collect_host_routines,
+    DiscoveredWorkspaces, OwnerOnlyRoutine, RoutineCollection, RoutineLoadError,
+    RoutineWorkspaceProvider, apply_peer_name_collisions, collect_host_routines,
 };
 use super::dispatch::RuntimeDispatch;
 use super::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     workspaces,
 };
+use crate::OrbitRuntime;
 use crate::application::auto_tasks::SchedulerOptions;
 use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
 use crate::application::automation::SourceCache;
@@ -54,6 +57,27 @@ impl<'a> SweepContext<'a> {
             now_utc: Utc::now(),
         }
     }
+}
+
+/// The clock, tick deadline and dry-run mode every phase of one pass reads.
+#[derive(Clone, Copy)]
+struct TickScope {
+    deadline: Instant,
+    now_utc: chrono::DateTime<Utc>,
+    dry_run: bool,
+}
+
+/// What pre-admission maintenance reports back to the pass.
+#[derive(Default)]
+struct PreAdmissionReport {
+    clock_env_loaded: Vec<String>,
+    external_merge_settlements: Vec<ExternalMergeSweepReport>,
+}
+
+/// What work admission reports back to the pass.
+struct WorkAdmissionReport {
+    reports: Vec<RoutineSweepReport>,
+    auto_task_reports: Vec<AutoTaskSweepReport>,
 }
 
 /// Run one sweep pass against the default global root with a caller-supplied
@@ -126,6 +150,11 @@ pub fn run_sweep_pass(
     // configured five-minute clock therefore keeps a slot natural for two
     // five-minute intervals instead of retaining the old 120-second default.
     let options = workspaces::configured_sweep_options(global_root, options)?;
+    let scope = TickScope {
+        deadline,
+        now_utc,
+        dry_run: options.dry_run,
+    };
     // One runtime per active workspace; discovery and dispatch share them.
     let mut discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
     let mut skipped_workspaces: BTreeSet<String> =
@@ -181,137 +210,16 @@ pub fn run_sweep_pass(
     let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
-    // [ORB-13892] A follower's recorded pull settlements are retried here,
-    // so one that missed its owner — a forced release while the owner was
-    // down, a leaf whose worker died — reaches it without a new drain once
-    // the leaf's worker and its drain are gone. Delivery starts nothing, so
-    // a pending host shutdown does not hold it.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter().chain(&discovered.replicas),
-            deadline,
-            &mut skipped_workspaces,
-            None,
-            None,
-            |workspace, runtime| {
-                workspaces::deliver_recorded_pull_settlements(workspace, runtime);
-                Ok(())
-            },
-        );
-    }
-
-    // Lifetime maintenance starts no work and must also run during an
-    // admission hold. Load the clock credentials before checking the forge.
-    let clock_env_loaded = if options.dry_run {
-        Vec::new()
-    } else {
-        let loaded = workspaces::load_clock_env_for(global_root, &mut discovered, &mut load_errors);
-        super::super::leases::sweep_owner_lease_lifetimes(
-            &discovered,
-            deadline,
-            &mut skipped_workspaces,
-        );
-        loaded
-    };
-
-    // Settle owner tasks whose delivery PR merged outside Orbit. Runs after
-    // the clock environment loads so forge credentials are available, and
-    // before the host-shutdown hold: settlement starts no work. Only owner
-    // entries settle; replicas are followers. A forge or store failure logs
-    // and skips that workspace without failing routines or auto-tasks.
-    let mut external_merge_settlements: Vec<ExternalMergeSweepReport> = Vec::new();
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.external_merge_settlement_failed"),
-            None,
-            |workspace, runtime| {
-                let settled = runtime.settle_externally_merged_tasks()?;
-                external_merge_settlements.extend(settled.into_iter().map(|settlement| {
-                    ExternalMergeSweepReport {
-                        task_id: settlement.task_id,
-                        source: workspace.name.clone(),
-                        pr_number: settlement.pr_number,
-                    }
-                }));
-                Ok(())
-            },
-        );
-    }
-
-    // [ORB-25966] Merge and settle the delivered pull requests whose
-    // authorised delivery ended with nobody left to finish them. Runs after
-    // settlement so a merge made elsewhere settles first. Owner entries only.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.owner_auto_landing_failed"),
-            None,
-            |workspace, runtime| {
-                for landed in runtime.land_completion_authorized_tasks()? {
-                    tracing::info!(
-                        target: "orbit_core::application::routines::sweep",
-                        workspace = %workspace.name,
-                        task_id = %landed.task_id,
-                        pull_request = landed.pull_request,
-                        "sweep.owner_auto_landed"
-                    );
-                }
-                Ok(())
-            },
-        );
-    }
-
-    // Fleet notices linked to a done task in another workspace this host
-    // owns are materialized closed here; reads already report them closed,
-    // so this only keeps the store honest. Like settlement it starts no
-    // work, so it also runs before the host-shutdown hold. Owner entries
-    // only.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.notice_closure_failed"),
-            None,
-            |_, runtime| {
-                if !runtime.role().is_replica() {
-                    runtime.run_notice_closure_tick()?;
-                }
-                Ok(())
-            },
-        );
-    }
-
-    // Resident mandates whose deadline has passed end here, on the owner,
-    // whether or not their cycle routine runs: expiry starts no work, so
-    // like notice closure it runs before the host-shutdown hold. Owner
-    // entries only; the expiry itself also refuses a replica runtime.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.resident_deadline_expiry_failed"),
-            None,
-            |workspace, runtime| {
-                let expired = runtime.expire_resident_mandates_past_deadline(now_utc)?;
-                if !expired.is_empty() {
-                    tracing::info!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        expired = ?expired,
-                        "sweep.resident_deadline_expired"
-                    );
-                }
-                Ok(())
-            },
-        );
-    }
+    let PreAdmissionReport {
+        clock_env_loaded,
+        external_merge_settlements,
+    } = run_pre_admission_maintenance(
+        global_root,
+        scope,
+        &mut discovered,
+        &mut skipped_workspaces,
+        &mut load_errors,
+    );
 
     // [ORB-12968] A host shutdown inside the hold horizon would kill anything
     // this tick starts, so the whole fire phase — routines and auto-tasks —
@@ -358,9 +266,197 @@ pub fn run_sweep_pass(
         });
     }
 
+    let WorkAdmissionReport {
+        reports,
+        auto_task_reports,
+    } = run_work_admission(
+        &store,
+        &discovered,
+        &collection,
+        &host.owner_only,
+        options,
+        scope,
+        &mut skipped_workspaces,
+    )?;
+
+    let skipped_workspaces =
+        run_post_scheduling_maintenance(global_root, scope, &discovered, skipped_workspaces);
+
+    let deadline_exceeded = Instant::now() >= deadline;
+    if deadline_exceeded {
+        tracing::error!(target: "orbit.core.sweep", skipped_workspaces = ?skipped_workspaces,
+            "sweep.tick_deadline: tick budget exhausted; remaining work waits for the next tick");
+    }
+    Ok(SweepOutcome {
+        machine_name: local_machine.machine_name,
+        machine_id: local_machine.machine_id,
+        lock_busy: false,
+        reports,
+        auto_task_reports,
+        load_errors,
+        clock_env_loaded,
+        no_workspace_loaded,
+        external_merge_settlements,
+        deadline_exceeded,
+        skipped_workspaces: skipped_workspaces.into_iter().collect(),
+    })
+}
+
+/// Maintenance that starts no work, so it also runs during an admission hold.
+/// Reads discovery, the tick deadline and dry-run mode; credential and
+/// lease-lifetime sweeps happen here, and the external-merge settlements it
+/// makes are returned for the outcome. Skips and load errors update in place.
+fn run_pre_admission_maintenance(
+    global_root: &Path,
+    scope: TickScope,
+    discovered: &mut DiscoveredWorkspaces,
+    skipped_workspaces: &mut BTreeSet<String>,
+    load_errors: &mut Vec<RoutineLoadError>,
+) -> PreAdmissionReport {
+    let TickScope {
+        deadline,
+        now_utc,
+        dry_run,
+    } = scope;
+    let mut report = PreAdmissionReport::default();
+    if dry_run {
+        return report;
+    }
+
+    // [ORB-13892] A follower's recorded pull settlements are retried here,
+    // so one that missed its owner — a forced release while the owner was
+    // down, a leaf whose worker died — reaches it without a new drain once
+    // the leaf's worker and its drain are gone. Delivery starts nothing, so
+    // a pending host shutdown does not hold it.
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter().chain(&discovered.replicas),
+        deadline,
+        skipped_workspaces,
+        None,
+        |workspace, runtime| {
+            workspaces::deliver_recorded_pull_settlements(workspace, runtime);
+            Ok(())
+        },
+    );
+
+    // Lifetime maintenance starts no work and must also run during an
+    // admission hold. Load the clock credentials before checking the forge.
+    report.clock_env_loaded = workspaces::load_clock_env_for(global_root, discovered, load_errors);
+    super::super::leases::sweep_owner_lease_lifetimes(discovered, deadline, skipped_workspaces);
+
+    // Settle owner tasks whose delivery PR merged outside Orbit. Runs after
+    // the clock environment loads so forge credentials are available, and
+    // before the host-shutdown hold: settlement starts no work. Only owner
+    // entries settle; replicas are followers. A forge or store failure logs
+    // and skips that workspace without failing routines or auto-tasks.
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped_workspaces,
+        Some("sweep.external_merge_settlement_failed"),
+        |workspace, runtime| {
+            let settled = runtime.settle_externally_merged_tasks()?;
+            report
+                .external_merge_settlements
+                .extend(
+                    settled
+                        .into_iter()
+                        .map(|settlement| ExternalMergeSweepReport {
+                            task_id: settlement.task_id,
+                            source: workspace.name.clone(),
+                            pr_number: settlement.pr_number,
+                        }),
+                );
+            Ok(())
+        },
+    );
+
+    // [ORB-25966] Merge and settle the delivered pull requests whose
+    // authorised delivery ended with nobody left to finish them. Runs after
+    // settlement so a merge made elsewhere settles first. Owner entries only.
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped_workspaces,
+        Some("sweep.owner_auto_landing_failed"),
+        |workspace, runtime| {
+            for landed in runtime.land_completion_authorized_tasks()? {
+                tracing::info!(
+                    target: "orbit_core::application::routines::sweep",
+                    workspace = %workspace.name,
+                    task_id = %landed.task_id,
+                    pull_request = landed.pull_request,
+                    "sweep.owner_auto_landed"
+                );
+            }
+            Ok(())
+        },
+    );
+
+    // Fleet notices linked to a done task in another workspace this host
+    // owns are materialized closed here; reads already report them closed,
+    // so this only keeps the store honest. Like settlement it starts no
+    // work, so it also runs before the host-shutdown hold. Owner entries
+    // only.
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped_workspaces,
+        Some("sweep.notice_closure_failed"),
+        |_, runtime| {
+            if !runtime.role().is_replica() {
+                runtime.run_notice_closure_tick()?;
+            }
+            Ok(())
+        },
+    );
+
+    // Resident mandates whose deadline has passed end here, on the owner,
+    // whether or not their cycle routine runs: expiry starts no work, so
+    // like notice closure it runs before the host-shutdown hold. Owner
+    // entries only; the expiry itself also refuses a replica runtime.
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped_workspaces,
+        Some("sweep.resident_deadline_expiry_failed"),
+        |workspace, runtime| {
+            let expired = runtime.expire_resident_mandates_past_deadline(now_utc)?;
+            if !expired.is_empty() {
+                tracing::info!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    expired = ?expired,
+                    "sweep.resident_deadline_expired"
+                );
+            }
+            Ok(())
+        },
+    );
+    report
+}
+
+/// Dispatch owner landings, then the due routines, then the auto-task
+/// schedulers, in that order. Reads the loaded workspaces, the deadline and
+/// dry-run mode; returns the routine and auto-task rows.
+fn run_work_admission(
+    store: &Store,
+    discovered: &DiscoveredWorkspaces,
+    collection: &RoutineCollection,
+    owner_only: &[OwnerOnlyRoutine],
+    options: SweepOptions,
+    scope: TickScope,
+    skipped_workspaces: &mut BTreeSet<String>,
+) -> Result<WorkAdmissionReport, OrbitError> {
+    let TickScope {
+        deadline,
+        now_utc,
+        dry_run,
+    } = scope;
+
     // Only owners resume authorized landing work. Honor dry runs, the tick
     // deadline and shutdown admission above; replicas never dispatch landings.
-    if !options.dry_run {
+    if !dry_run {
         for (workspace, runtime) in &discovered.entries {
             if Instant::now() >= deadline {
                 skipped_workspaces.insert(workspace.name.clone());
@@ -388,7 +484,7 @@ pub fn run_sweep_pass(
         source_cache: SourceCache::default(),
     };
 
-    let mut reports = run_sweep_core(&store, &collection, &dispatch, options, now_utc)?;
+    let mut reports = run_sweep_core(store, collection, &dispatch, options, now_utc)?;
     skipped_workspaces.extend(
         reports
             .iter()
@@ -407,7 +503,7 @@ pub fn run_sweep_pass(
         run_id: None,
         batch: Vec::new(),
     }));
-    reports.extend(host.owner_only.iter().map(|owned| RoutineSweepReport {
+    reports.extend(owner_only.iter().map(|owned| RoutineSweepReport {
         routine: owned.routine.definition.name.clone(),
         source: owned.routine.source_workspace.clone(),
         origin: owned.routine.origin.as_str(),
@@ -417,96 +513,127 @@ pub fn run_sweep_pass(
         run_id: None,
         batch: Vec::new(),
     }));
+
     // Auto-tasks run second so their task-store writes cannot delay routine
     // dispatch. Only owner checkouts mint: a replica holds no task store of
     // its own. The phase is bounded by this pass's discovered workspaces and
     // each scheduler's finite definition collection. A workspace-level error
     // becomes one row and never prevents the remaining workspaces from running.
-    let auto_task_reports = RefCell::new(Vec::new());
-    let mut on_auto_task_deadline = |workspace: &Workspace| {
-        auto_task_reports.borrow_mut().push(AutoTaskSweepReport {
-            name: "auto-tasks".into(),
-            source: workspace.name.clone(),
-            action: "skipped",
-            reason: Some("tick_deadline".into()),
-            slot: None,
-            task_id: None,
-        });
-    };
-    workspaces::each_workspace_in_tick(
-        discovered.entries.iter(),
-        deadline,
-        &mut skipped_workspaces,
-        None,
-        Some(&mut on_auto_task_deadline),
-        |workspace, runtime| {
-            match run_auto_task_scheduler_with_cache(
-                runtime,
-                now_utc,
-                SchedulerOptions {
-                    dry_run: options.dry_run,
-                },
-                &dispatch.source_cache,
-            ) {
-                Ok(outcome) => {
-                    let mut reports = auto_task_reports.borrow_mut();
-                    reports.extend(
-                        outcome
-                            .reports
-                            .into_iter()
-                            .map(|report| AutoTaskSweepReport {
-                                name: report.name,
-                                source: workspace.name.clone(),
-                                action: if report.action == "fired" {
-                                    "minted"
-                                } else {
-                                    report.action
-                                },
-                                reason: report.reason,
-                                slot: report.slot,
-                                task_id: report.task_id,
-                            }),
-                    );
-                    reports.extend(outcome.errors.into_iter().map(|error| {
-                        AutoTaskSweepReport {
-                            name: error
-                                .path
-                                .as_ref()
-                                .and_then(|path| path.file_stem())
-                                .and_then(|name| name.to_str())
-                                .unwrap_or("auto-task")
-                                .to_string(),
-                            source: workspace.name.clone(),
-                            action: "error",
-                            reason: Some(error.message),
-                            slot: None,
-                            task_id: None,
-                        }
-                    }));
-                }
-                Err(error) => auto_task_reports.borrow_mut().push(AutoTaskSweepReport {
-                    name: "auto-tasks".to_string(),
+    let mut auto_task_reports = Vec::new();
+    for (workspace, runtime) in &discovered.entries {
+        if !workspaces::tick_allows_workspace(deadline, workspace, skipped_workspaces) {
+            auto_task_reports.push(AutoTaskSweepReport {
+                name: "auto-tasks".into(),
+                source: workspace.name.clone(),
+                action: "skipped",
+                reason: Some("tick_deadline".into()),
+                slot: None,
+                task_id: None,
+            });
+            continue;
+        }
+        auto_task_reports.extend(auto_task_rows(
+            workspace,
+            runtime,
+            now_utc,
+            dry_run,
+            &dispatch.source_cache,
+        ));
+    }
+    Ok(WorkAdmissionReport {
+        reports,
+        auto_task_reports,
+    })
+}
+
+/// Run one workspace's auto-task scheduler and turn its outcome into rows.
+fn auto_task_rows(
+    workspace: &Workspace,
+    runtime: &OrbitRuntime,
+    now_utc: chrono::DateTime<Utc>,
+    dry_run: bool,
+    source_cache: &SourceCache,
+) -> Vec<AutoTaskSweepReport> {
+    match run_auto_task_scheduler_with_cache(
+        runtime,
+        now_utc,
+        SchedulerOptions { dry_run },
+        source_cache,
+    ) {
+        Ok(outcome) => {
+            let mut rows: Vec<AutoTaskSweepReport> = outcome
+                .reports
+                .into_iter()
+                .map(|report| AutoTaskSweepReport {
+                    name: report.name,
+                    source: workspace.name.clone(),
+                    action: if report.action == "fired" {
+                        "minted"
+                    } else {
+                        report.action
+                    },
+                    reason: report.reason,
+                    slot: report.slot,
+                    task_id: report.task_id,
+                })
+                .collect();
+            rows.extend(outcome.errors.into_iter().map(|error| {
+                AutoTaskSweepReport {
+                    name: error
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.file_stem())
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("auto-task")
+                        .to_string(),
                     source: workspace.name.clone(),
                     action: "error",
-                    reason: Some(error.to_string()),
+                    reason: Some(error.message),
                     slot: None,
                     task_id: None,
-                }),
-            }
-            Ok(())
-        },
-    );
-    let auto_task_reports = auto_task_reports.into_inner();
+                }
+            }));
+            rows
+        }
+        Err(error) => vec![AutoTaskSweepReport {
+            name: "auto-tasks".to_string(),
+            source: workspace.name.clone(),
+            action: "error",
+            reason: Some(error.to_string()),
+            slot: None,
+            task_id: None,
+        }],
+    }
+}
+
+/// Maintenance that follows scheduling: run resumption and wake, blocked
+/// recovery and review evidence, forecasts and baseline holds. Reads the same
+/// clock, deadline and scope; returns the accumulated skipped-workspace set.
+fn run_post_scheduling_maintenance(
+    global_root: &Path,
+    scope: TickScope,
+    discovered: &DiscoveredWorkspaces,
+    mut skipped_workspaces: BTreeSet<String>,
+) -> BTreeSet<String> {
+    let TickScope {
+        deadline,
+        now_utc,
+        dry_run,
+    } = scope;
+    if dry_run {
+        return skipped_workspaces;
+    }
+    let skipped = &mut skipped_workspaces;
+
     // [ORB-14273] After the executable generation settles, the clock resumes each
     // run the current upgrade interrupted at most once, and audits every run it
     // skips (an earlier upgrade's, an elapsed or stopped drain, a superseded one).
-    if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
+    if orbit_common::fs::generation::pending_switch(global_root).is_none() {
         workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
-            &mut skipped_workspaces,
+            skipped,
             Some("sweep.upgrade_interrupted_runs_resume_failed"),
-            None,
             |workspace, runtime| {
                 let resumed = runtime.auto_resume_upgrade_interrupted_runs(now_utc)?;
                 if !resumed.is_empty() {
@@ -528,13 +655,12 @@ pub fn run_sweep_pass(
     // gets one bounded drain when none is live and work waits. Off (the
     // default) reads and writes nothing. Owner entries only; replicas never
     // submit.
-    if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
+    if orbit_common::fs::generation::pending_switch(global_root).is_none() {
         workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
-            &mut skipped_workspaces,
+            skipped,
             Some("sweep.standing_drain_keeper_failed"),
-            None,
             |workspace, runtime| {
                 if let Some(crate::application::job::KeeperDecision::Submitted { run_id }) =
                     runtime.run_standing_drain_keeper_tick(now_utc)?
@@ -554,184 +680,147 @@ pub fn run_sweep_pass(
     // [ORB-14617] A delivery run held because the forge refused its push is
     // resumed from its checkpoints each tick, within its retry window; past
     // the window its tasks are blocked for a human.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.forge_held_runs_failed"),
-            None,
-            |workspace, runtime| {
-                let tick = runtime.auto_resume_forge_held_runs(now_utc)?;
-                if !tick.resumed.is_empty() || !tick.expired.is_empty() {
-                    tracing::info!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        resumed = tick.resumed.len(),
-                        expired = tick.expired.len(),
-                        "sweep.forge_held_runs"
-                    );
-                }
-                Ok(())
-            },
-        );
-    }
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped,
+        Some("sweep.forge_held_runs_failed"),
+        |workspace, runtime| {
+            let tick = runtime.auto_resume_forge_held_runs(now_utc)?;
+            if !tick.resumed.is_empty() || !tick.expired.is_empty() {
+                tracing::info!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    resumed = tick.resumed.len(),
+                    expired = tick.expired.len(),
+                    "sweep.forge_held_runs"
+                );
+            }
+            Ok(())
+        },
+    );
 
     // [ORB-20158] A job run parked on an auto-task step is revisited when
     // due: the same logical run continues, it is never submitted again.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.parked_runs_wake_failed"),
-            None,
-            |workspace, runtime| {
-                let woken = runtime.wake_parked_job_runs(now_utc)?;
-                if !woken.is_empty() {
-                    tracing::info!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        woken = woken.len(),
-                        "sweep.parked_runs_woken"
-                    );
-                }
-                Ok(())
-            },
-        );
-    }
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped,
+        Some("sweep.parked_runs_wake_failed"),
+        |workspace, runtime| {
+            let woken = runtime.wake_parked_job_runs(now_utc)?;
+            if !woken.is_empty() {
+                tracing::info!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    woken = woken.len(),
+                    "sweep.parked_runs_woken"
+                );
+            }
+            Ok(())
+        },
+    );
 
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
-    // `workflow.purpose_crews.final_recovery` pool.
-    if !options.dry_run {
-        {
-            // Recovery must be followed by evidence fulfilment per workspace;
-            // both steps recheck the same tick deadline independently.
-            let mut workspace_is_allowed = |workspace: &Workspace| {
-                workspaces::tick_allows_workspace(deadline, workspace, &mut skipped_workspaces)
-            };
-            for (workspace, runtime) in &discovered.entries {
-                if !workspace_is_allowed(workspace) {
-                    continue;
-                }
-                match runtime.run_blocked_task_recovery_tick(now_utc) {
-                    Ok(tick) => {
-                        if !tick.dispatched.is_empty()
-                            || !tick.settled.is_empty()
-                            || !tick.rechecked.is_empty()
-                        {
-                            tracing::info!(
-                                target: "orbit.core.sweep",
-                                workspace = %workspace.name,
-                                dispatched = tick.dispatched.len(),
-                                settled = tick.settled.len(),
-                                rechecked = tick.rechecked.len(),
-                                "sweep.blocked_task_recovery"
-                            );
-                        }
-                    }
-                    Err(error) => tracing::warn!(
+    // `workflow.purpose_crews.final_recovery` pool. Recovery must be followed
+    // by evidence fulfilment per workspace; both steps recheck the same tick
+    // deadline independently.
+    for (workspace, runtime) in &discovered.entries {
+        if !workspaces::tick_allows_workspace(deadline, workspace, skipped) {
+            continue;
+        }
+        match runtime.run_blocked_task_recovery_tick(now_utc) {
+            Ok(tick) => {
+                if !tick.dispatched.is_empty()
+                    || !tick.settled.is_empty()
+                    || !tick.rechecked.is_empty()
+                {
+                    tracing::info!(
                         target: "orbit.core.sweep",
                         workspace = %workspace.name,
-                        error = %error,
-                        "sweep.blocked_task_recovery_failed"
-                    ),
-                }
-                // A held review whose only missing evidence is a Linux CodeQL
-                // run gets that run here, on a Linux owner; one at a time.
-                if !workspace_is_allowed(workspace) {
-                    continue;
-                }
-                match runtime.run_review_evidence_fulfilment_tick(now_utc) {
-                    Ok(tick) => {
-                        if !tick.dispatched.is_empty() {
-                            tracing::info!(
-                                target: "orbit.core.sweep",
-                                workspace = %workspace.name,
-                                dispatched = tick.dispatched.len(),
-                                "sweep.review_evidence_fulfilment"
-                            );
-                        }
-                    }
-                    Err(error) => tracing::warn!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        error = %error,
-                        "sweep.review_evidence_fulfilment_failed"
-                    ),
+                        dispatched = tick.dispatched.len(),
+                        settled = tick.settled.len(),
+                        rechecked = tick.rechecked.len(),
+                        "sweep.blocked_task_recovery"
+                    );
                 }
             }
+            Err(error) => tracing::warn!(
+                target: "orbit.core.sweep",
+                workspace = %workspace.name,
+                error = %error,
+                "sweep.blocked_task_recovery_failed"
+            ),
+        }
+        // A held review whose only missing evidence is a Linux CodeQL
+        // run gets that run here, on a Linux owner; one at a time.
+        if !workspaces::tick_allows_workspace(deadline, workspace, skipped) {
+            continue;
+        }
+        match runtime.run_review_evidence_fulfilment_tick(now_utc) {
+            Ok(tick) => {
+                if !tick.dispatched.is_empty() {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        dispatched = tick.dispatched.len(),
+                        "sweep.review_evidence_fulfilment"
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(
+                target: "orbit.core.sweep",
+                workspace = %workspace.name,
+                error = %error,
+                "sweep.review_evidence_fulfilment_failed"
+            ),
         }
     }
 
     // Persist unattended forecasts on the owner clock as well as canonical
     // reads. A recent hourly slot avoids history reads and simulation; all
     // failures stay local to this workspace and never fail the tick.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.backlog_forecast_failed"),
-            None,
-            |_, runtime| runtime.record_scheduled_backlog_forecast(now_utc),
-        );
-    }
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped,
+        Some("sweep.backlog_forecast_failed"),
+        |_, runtime| runtime.record_scheduled_backlog_forecast(now_utc),
+    );
 
     // [ORB-14739, ORB-14823] Standing baseline-red holds are re-checked
     // here, never on a read or admission path. The tick reads only recorded
     // base results: a base tip nobody has checked gets one detached refresh
     // run per workspace, so the required command never runs under the sweep
     // lock. Admission reads the recorded verdict.
-    if !options.dry_run {
-        workspaces::each_workspace_in_tick(
-            discovered.entries.iter(),
-            deadline,
-            &mut skipped_workspaces,
-            Some("sweep.baseline_holds_failed"),
-            None,
-            |workspace, runtime| {
-                let refresh = runtime.run_baseline_hold_tick(deadline)?;
-                if !refresh.lifted.is_empty()
-                    || !refresh.held.is_empty()
-                    || refresh.dispatched.is_some()
-                    || !refresh.repairs_filed.is_empty()
-                    || !refresh.repairs_linked.is_empty()
-                {
-                    tracing::info!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        lifted = refresh.lifted.len(),
-                        held = refresh.held.len(),
-                        unchecked = refresh.unchecked.len(),
-                        dispatched = refresh.dispatched.as_deref().unwrap_or_default(),
-                        repairs_filed = refresh.repairs_filed.len(),
-                        repairs_linked = refresh.repairs_linked.len(),
-                        "sweep.baseline_holds"
-                    );
-                }
-                Ok(())
-            },
-        );
-    }
-
-    let deadline_exceeded = Instant::now() >= deadline;
-    if deadline_exceeded {
-        tracing::error!(target: "orbit.core.sweep", skipped_workspaces = ?skipped_workspaces,
-            "sweep.tick_deadline: tick budget exhausted; remaining work waits for the next tick");
-    }
-    Ok(SweepOutcome {
-        machine_name: local_machine.machine_name,
-        machine_id: local_machine.machine_id,
-        lock_busy: false,
-        reports,
-        auto_task_reports,
-        load_errors,
-        clock_env_loaded,
-        no_workspace_loaded,
-        external_merge_settlements,
-        deadline_exceeded,
-        skipped_workspaces: skipped_workspaces.into_iter().collect(),
-    })
+    workspaces::each_workspace_in_tick(
+        discovered.entries.iter(),
+        deadline,
+        skipped,
+        Some("sweep.baseline_holds_failed"),
+        |workspace, runtime| {
+            let refresh = runtime.run_baseline_hold_tick(deadline)?;
+            if !refresh.lifted.is_empty()
+                || !refresh.held.is_empty()
+                || refresh.dispatched.is_some()
+                || !refresh.repairs_filed.is_empty()
+                || !refresh.repairs_linked.is_empty()
+            {
+                tracing::info!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    lifted = refresh.lifted.len(),
+                    held = refresh.held.len(),
+                    unchecked = refresh.unchecked.len(),
+                    dispatched = refresh.dispatched.as_deref().unwrap_or_default(),
+                    repairs_filed = refresh.repairs_filed.len(),
+                    repairs_linked = refresh.repairs_linked.len(),
+                    "sweep.baseline_holds"
+                );
+            }
+            Ok(())
+        },
+    );
+    skipped_workspaces
 }
