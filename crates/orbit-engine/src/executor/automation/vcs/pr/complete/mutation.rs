@@ -69,10 +69,10 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
 }
 
 /// [ORB-21766] A transient required-checks read failure routed through
-/// [`observation_failure`] that it deliberately kept — because a completion
-/// mutation happened in this invocation or is recorded in durable history —
-/// still holds auto-fix as inconclusive check evidence. The required-checks
-/// read is read-only: holding does not claim nothing changed on the forge
+/// [`observation_failure`] that it deliberately kept — because this invocation
+/// requested a merge or auto-merge, or recorded mutation history stays
+/// fail-closed — still holds auto-fix as inconclusive check evidence. The required-checks
+/// read is read-only: this hold does not claim that no merge or auto-merge request was sent
 /// (unlike [`DeliveryRefusal::ForgeObservationUnavailable`]), and the next
 /// auto-fix pass re-reads the PR status, reconciling any earlier mutation
 /// from the forge. Every outcome `observation_failure` already decided
@@ -103,9 +103,9 @@ pub(super) fn checked_required_check_observation_failure<H: RuntimeHost + ?Sized
 /// failure's original text.
 pub(crate) fn forge_observation_hold_message(cause: &str) -> String {
     format!(
-        "{}: completion could not read the forge before any completion mutation ({cause}); \
-         nothing changed on the forge, the task stays in review and resuming the held run \
-         reads it again",
+        "{}: completion could not read the forge before sending a merge or auto-merge request ({cause}); \
+         no merge or auto-merge request was sent; the task stays in review and resuming the held run \
+         reads the forge again",
         DeliveryRefusal::ForgeObservationUnavailable.error_code()
     )
 }

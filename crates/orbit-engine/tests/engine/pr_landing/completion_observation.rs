@@ -210,6 +210,7 @@ fn post_rebase_transient_pr_status_and_capabilities_hold() {
                             message,
                             ..
                         } if message.contains("TLS handshake timeout")
+                            && message.contains("no merge or auto-merge request was sent")
                     ),
                     "post-rebase PR_STATUS TLS error must hold as ForgeObservationUnavailable: {err}"
                 );
