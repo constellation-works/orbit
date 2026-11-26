@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: Evolution gates for private task-publication repositories, authority transfer, aggregation, and bounded retention.
 tags: [task-publication, task-artifacts, backup, git, multi-host]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-registry/**"]
+paths: ["crates/orbit-store/src/migrate/task/**", "crates/orbit-registry/**"]
 related_features: [task-publication, task-artifacts, remote-access, federated-mcp, host-registry]
 related_artifacts: [ORB-11068, ORB-11077]
 ---

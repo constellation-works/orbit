@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Shipped contract for explicit owner publication, labelled inspection, and deliberate same-authority task recovery.
 tags: [task-publication, task-artifacts, backup, git, multi-host]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-registry/**"]
+paths: ["crates/orbit-store/src/migrate/task/**", "crates/orbit-registry/**"]
 related_features: [task-publication, task-artifacts, remote-access, federated-mcp, host-registry]
 related_artifacts: [ORB-11068, ORB-11072, ORB-11073, ORB-11074, ORB-11075, ORB-11076, ORB-11077, ORB-11110, ORB-18375]
 ---

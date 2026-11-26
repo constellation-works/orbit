@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Proposed contract for owner change-log mirroring, debounced git bootstrap, epoch-fenced handoff and takeover, per-epoch task-ID ranges, and old-owner rejoin with an operator conflict list.
 tags: [owner-failover, distributed-drain, task-publication, failover, multi-host]
-paths: ["crates/orbit-store/src/driver/sqlite/task_index/**", "crates/orbit-store/src/repository/task_index/**", "crates/orbit-store/src/workflow/task/**", "crates/orbit-cmd/src/registry/**"]
+paths: ["crates/orbit-store/src/driver/sqlite/task_index/**", "crates/orbit-store/src/repository/task_index/**", "crates/orbit-store/src/migrate/task/**", "crates/orbit-cmd/src/registry/**"]
 related_features: [distributed-drain, task-publication, host-registry, state-compatibility, federated-mcp]
 related_artifacts: [ORB-20620, ORB-12488, ORB-11068, ORB-11074, ORB-11076, ORB-11110, ORB-12528, ORB-13663]
 ---

@@ -214,7 +214,7 @@ Tests that call a supervisor directly are left out.
 
 | Caller | Entry point | What it needs |
 |--------|-------------|---------------|
-| `orbit-store/src/workflow/task/git.rs` (publication Git) | `run_bounded` | Deadline, full capture, no stdin |
+| `orbit-store/src/migrate/task/git.rs` (publication Git) | `run_bounded` | Deadline, full capture, no stdin |
 | `orbit-common/src/fs/git.rs` (`run_git`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-common/src/process/identity.rs` (`ps -o lstart`) | `run_bounded_capped_typed` | Deadline, prefix cap, spawn error kind; must not itself sample the process table (§4.4) |
 | `orbit-runtime/src/command_exec.rs` (`orbit.command.exec`) | `run_bounded_capped_typed` | Deadline (clamped), prefix cap, spawn error kind; timed-out output discarded |
