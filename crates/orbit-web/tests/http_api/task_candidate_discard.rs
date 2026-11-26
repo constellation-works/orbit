@@ -102,7 +102,7 @@ fn discard_candidate_from_open_states_and_refuse_live_run() {
             seed_candidate(&fixture, &running, "jrun-live", JobRunState::Running);
             let ws = "?workspace=ws_http_fixture";
             let requeue = |id: &str| format!("/api/tasks/{id}/requeue{ws}");
-            let detail = |id: &str| format!("/api/tasks/{id}{ws}");
+            let detail = |id: &str| format!("/api/tasks/{id}{ws}&detail_candidate=true");
             let anon = fixture.server(false);
             error_code(
                 anon.send(
@@ -114,6 +114,19 @@ fn discard_candidate_from_open_states_and_refuse_live_run() {
                 "authorization_denied",
             );
             let operator = fixture.server(true);
+            let id = &ids[0];
+            let plain: Value = operator
+                .get(&format!("/api/tasks/{id}{ws}"))
+                .json()
+                .unwrap();
+            assert!(plain.get("published_candidate").is_none());
+            let page: Value = operator
+                .get(&format!(
+                    "/api/tasks{ws}&group=status&detail={id}&detail_candidate=true"
+                ))
+                .json()
+                .unwrap();
+            assert_eq!(page["detail"]["published_candidate"], true, "{page}");
             let no_candidate: Value = operator.get(&detail(&empty)).json().unwrap();
             assert_eq!(no_candidate["published_candidate"], false);
             for id in &ids {

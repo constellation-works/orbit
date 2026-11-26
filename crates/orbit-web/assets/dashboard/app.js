@@ -952,7 +952,10 @@ function tasksListPath(base, loaded, detailId = null, includeRuns = false) {
     .filter(([, limit]) => limit !== TASK_SECTION_STEP)
     .map(([status, limit]) => `${status}:${limit}`);
   if (limits.length) sp.set("status_limit", limits.join(","));
-  if (detailId) sp.set("detail", detailId);
+  if (detailId) {
+    sp.set("detail", detailId);
+    sp.set("detail_candidate", "true");
+  }
   if (includeRuns) sp.set("detail_runs", "true");
   return `${base}?${sp}`;
 }

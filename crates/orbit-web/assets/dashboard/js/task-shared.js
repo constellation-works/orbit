@@ -220,6 +220,10 @@ export function bindTaskRunLink(link, task, runId) {
   return bindRunLink(link, runId, taskRunScope(task, runId));
 }
 
+export function taskDetailPath(task) {
+  return taskMutationPath(task, "?detail_candidate=true");
+}
+
 export function taskMutationPath(task, suffix = "") {
   return taskWorkspacePath(task, `/api/tasks/${encodeURIComponent(task.id)}${suffix}`);
 }

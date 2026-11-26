@@ -133,9 +133,7 @@ pub fn task_record_json(
 /// `completion.hold` rule and match that kept a completion-authorized run's
 /// task in `review`, while it is still there. `owed_criteria` lists each
 /// criterion the delivery owes after deploy, with its host, command, target
-/// and state. Each key is present only when it applies. `published_candidate`
-/// reports whether a candidate can be discarded when its evidence is readable.
-/// `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
+/// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
 /// routed remote show all serve this record and add only their own extras.
 pub fn task_show_json(
     runtime: &OrbitRuntime,
@@ -143,14 +141,6 @@ pub fn task_show_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
     let mut object = task_record_json(runtime, row, status_by_id)?;
-    match runtime.task_has_discardable_candidate(&row.task) {
-        Ok(published) => {
-            object.insert("published_candidate".into(), Value::Bool(published));
-        }
-        Err(error) => {
-            tracing::warn!(%error, task_id = %row.task.id, "task candidate evidence unreadable");
-        }
-    }
     object.insert(
         "experiments".into(),
         serde_json::to_value(runtime.task_experiment_assignment_readout(&row.task.id)?)

@@ -42,6 +42,7 @@ pub(super) struct TaskPageQuery {
     search: Option<String>,
     detail_id: Option<String>,
     detail_runs: bool,
+    pub(super) detail_candidate: bool,
     limit: usize,
     /// `group=status`: answer one section per status, each with its own
     /// total, rows and continuation, instead of one page across statuses.
@@ -66,6 +67,7 @@ impl Default for TaskPageQuery {
             search: None,
             detail_id: None,
             detail_runs: false,
+            detail_candidate: false,
             limit: DEFAULT_TASK_LIST_LIMIT,
             group_by_status: false,
             status_limits: Vec::new(),
@@ -109,6 +111,7 @@ impl TaskPageQuery {
                         Some(value.trim().to_string()).filter(|value| !value.is_empty());
                 }
                 "detail_runs" => query.detail_runs = value == "true",
+                "detail_candidate" => query.detail_candidate = value == "true",
                 "limit" => {
                     if let Some(raw) = split_values(&value).next_back() {
                         query.limit = parse_limit(raw)?;

@@ -155,6 +155,7 @@ pub(crate) fn task_detail_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
     riskiness: Option<&TaskRiskinessModel>,
     page: &DashboardPageReads<'_>,
+    include_candidate: bool,
 ) -> Result<Value, OrbitError> {
     let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id, page)?;
     if let Some(object) = value.as_object_mut() {
@@ -179,6 +180,16 @@ pub(crate) fn task_detail_json(
         let hands = runtime.task_handled_by(row);
         if !hands.is_empty() {
             object.insert("handled_by".to_string(), Value::Array(hands));
+        }
+        if include_candidate {
+            match runtime.task_has_discardable_candidate(&row.task) {
+                Ok(published) => {
+                    object.insert("published_candidate".to_string(), Value::Bool(published));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, task_id = %row.task.id, "task candidate evidence unreadable");
+                }
+            }
         }
         crate::why_stuck::attach_why_stuck(runtime, row, object)?;
     }
