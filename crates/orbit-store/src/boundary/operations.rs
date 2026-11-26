@@ -92,14 +92,6 @@ impl TaskV2Store {
             .mutate_execution_claim_outcome(context, mutation_id, mutation)
     }
 
-    /// Refuse a worker invocation whose claim lost its authority.
-    pub fn verify_worker_claim(
-        &self,
-        context: &crate::contracts::ClaimInvocation,
-    ) -> Result<(), OrbitError> {
-        self.claim_boundary()?.verify_worker_claim(context)
-    }
-
     /// Mid-run steering records for a claimed leaf.
     pub fn worker_claim_steering(
         &self,
@@ -181,13 +173,6 @@ impl TaskV2Store {
         self.claim_boundary()?.inspect_admission_receipt_storage()
     }
 
-    /// Settle an interrupted commit, then read execution claims.
-    pub fn resolve_execution_claims(
-        &self,
-    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
-        self.claim_boundary()?.resolve_execution_claims()
-    }
-
     /// Settle an interrupted commit, then read footprint-protecting claims.
     pub fn resolve_live_execution_claims(
         &self,
@@ -248,23 +233,6 @@ impl TaskV2Store {
             None => Err(OrbitError::Store(
                 "deferred branch observations require coordination".into(),
             )),
-        }
-    }
-
-    /// Admit an owner-local drain wave through the pull admission section.
-    /// `owner_machine_id` is the owner's machine, so a second perf task on
-    /// that host is withheld. `None` skips claim and owner-local lane holds.
-    pub fn admit_owner_wave(
-        &self,
-        candidates: &[crate::contracts::OwnerWaveCandidate],
-        owner_machine_id: Option<&str>,
-    ) -> Result<Vec<crate::contracts::OwnerWaveAdmission>, OrbitError> {
-        match self.coordination_boundary() {
-            Some(boundary) => boundary.admit_owner_wave(candidates, owner_machine_id),
-            None => Ok(candidates
-                .iter()
-                .map(|candidate| crate::contracts::OwnerWaveAdmission::admitted(&candidate.task_id))
-                .collect()),
         }
     }
 

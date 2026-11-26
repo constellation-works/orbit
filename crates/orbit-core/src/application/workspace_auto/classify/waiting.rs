@@ -97,7 +97,7 @@ pub(super) fn admit_through_section(
         .or(runtime.workspace_owner_machine_id());
     let admissions = runtime
         .stores()
-        .tasks()
+        .task_coordination()
         .admit_owner_wave(&candidates, owner_machine)
         .map_err(|error| {
             PassError::store(

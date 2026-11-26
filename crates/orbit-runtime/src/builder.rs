@@ -282,10 +282,7 @@ pub(crate) fn build_context_from_roots(
     Ok(OrbitContext::new(
         paths,
         OrbitStores::new(
-            task_backends.task,
-            task_backends.document,
-            task_backends.history,
-            task_backends.artifact,
+            task_backends,
             lexical_index,
             task_reservation_store,
             job_runs,

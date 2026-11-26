@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::Store;
-use crate::boundary::{TaskCommitBoundary, TaskV2Store};
+use crate::boundary::{TaskCommitBoundary, TaskCoordination, TaskV2Store};
 use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
 use crate::driver::file::session_log_store::SessionLogDir;
@@ -18,6 +18,7 @@ use crate::{
 
 pub struct WorkspaceTaskBackends {
     pub task: Arc<TaskV2Store>,
+    pub coordination: TaskCoordination,
     pub document: TaskDocumentRepository,
     pub history: TaskHistoryRepository,
     pub artifact: TaskArtifactRepository,
@@ -27,11 +28,14 @@ pub fn workspace_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
 ) -> WorkspaceTaskBackends {
-    WorkspaceTaskBackends::new(TaskV2Store::new(registry, workspace_id))
+    WorkspaceTaskBackends::new(
+        TaskV2Store::new(registry, workspace_id),
+        TaskCoordination::default(),
+    )
 }
 
 impl WorkspaceTaskBackends {
-    fn new(store: TaskV2Store) -> Self {
+    fn new(store: TaskV2Store, coordination: TaskCoordination) -> Self {
         let task = Arc::new(store);
         Self {
             document: TaskDocumentRepository {
@@ -44,6 +48,7 @@ impl WorkspaceTaskBackends {
                 store: task.clone(),
             },
             task,
+            coordination,
         }
     }
 }
@@ -161,7 +166,7 @@ pub fn workspace_observational_backends(
     let task =
         TaskV2Store::with_commit_boundary(registry, workspace_id, Arc::clone(&commit_boundary));
     Ok(CoordinatedWorkspaceBackends {
-        task: WorkspaceTaskBackends::new(task),
+        task: WorkspaceTaskBackends::new(task, TaskCoordination::new(Arc::clone(&commit_boundary))),
         reservation: TaskReservationRepository {
             store,
             coordination: Arc::clone(&commit_boundary),
@@ -195,7 +200,7 @@ pub fn workspace_coordinated_backends(
     let task =
         TaskV2Store::with_commit_boundary(registry, workspace_id, Arc::clone(&commit_boundary));
     Ok(CoordinatedWorkspaceBackends {
-        task: WorkspaceTaskBackends::new(task),
+        task: WorkspaceTaskBackends::new(task, TaskCoordination::new(Arc::clone(&commit_boundary))),
         reservation: TaskReservationRepository {
             store,
             coordination: Arc::clone(&commit_boundary),

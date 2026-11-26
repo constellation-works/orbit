@@ -127,8 +127,7 @@ impl TaskV2Store {
     }
 
     pub(crate) fn claim_boundary(&self) -> Result<&TaskCommitBoundary, OrbitError> {
-        self.coordination_boundary()
-            .ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
+        super::coordination::require_claim_boundary(self.coordination_boundary())
     }
 
     pub(crate) fn new(registry: TaskRegistryStore, workspace_id: String) -> Self {

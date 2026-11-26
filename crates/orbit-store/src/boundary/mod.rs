@@ -11,7 +11,7 @@ pub(crate) mod restore;
 pub(crate) mod v2;
 pub(crate) mod v2_bundle;
 
-pub use coordination::{TaskCommitBoundary, admission_refusal};
+pub use coordination::{TaskCommitBoundary, TaskCoordination, admission_refusal};
 pub use v2::TaskV2Store;
 
 #[cfg(test)]
