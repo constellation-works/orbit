@@ -35,3 +35,11 @@ await-holding-invalid-types = [
 # parameters and lifetimes are outside the lint. The desktop workspace enables
 # the lint; the main workspace enables it once its remaining bindings are renamed.
 allowed-idents-below-min-chars = []
+
+# Declaration order inside a module, read by clippy::arbitrary_source_item_ordering.
+# That lint is allowed by default; enabling it is a separate change. Groups run
+# module declarations, then imports, then everything else. Items inside the last
+# group may appear in any order.
+source-item-ordering = ["module"]
+module-item-order-groupings = [["modules", ["extern_crate", "mod", "foreign_mod"]], ["use", ["use"]], ["everything_else", ["macro", "global_asm", "static", "const", "ty_alias", "enum", "struct", "union", "trait", "trait_alias", "impl", "fn"]]]
+module-items-ordered-within-groupings = "none"
