@@ -9,7 +9,7 @@ links: [ORB-20368, ORB-19773, ORB-19781, ORB-20547, ORB-20409]
 
 ## Signature
 
-`activity refused: its crew's env sets ANTHROPIC_API_KEY (from ANTHROPIC_CREDITS_API_KEY_1) ...` or `crew opus lacked ANTHROPIC_CREDITS_API_KEY_1, required to populate ANTHROPIC_API_KEY`.
+``activity refused: its crew's `env` sets ANTHROPIC_API_KEY (from ANTHROPIC_CREDITS_API_KEY_1) ...`` or `crew opus lacked ANTHROPIC_CREDITS_API_KEY_1, required to populate ANTHROPIC_API_KEY`.
 
 ## Mechanism
 
@@ -41,4 +41,4 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-31T03:27:08.235274899Z | ORB-20368 | jrun-20261031-0322-c3 | crew credential variable missing from launch environment; source ORB-20368 history:blocked_triage@2026-10-31T03:27:08.235274899Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-31T03:27:08.235274899Z | ORB-20368 | jrun-20261031-0322-c3 | crew credential variable missing from launch environment; source ORB-20368 history:blocked_task_triaged@2026-10-31T03:27:08.235274899Z | blocked_task_triaged disposition=human_only recorded in ORB-22246 resume pass |

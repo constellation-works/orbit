@@ -36,4 +36,4 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-28T00:00:31.296484320Z | ORB-19242 | jrun-20261027-2353-t1 | cited commit missing from owner repository; operator fetch and requeue; source ORB-19242 history:blocked_triage@2026-10-28T00:00:31.296484320Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-28T00:00:31.296484320Z | ORB-19242 | jrun-20261027-2353-t1 | cited commit missing from owner repository; operator fetch and requeue; source ORB-19242 history:blocked_task_triaged@2026-10-28T00:00:31.296484320Z | blocked_task_triaged disposition=human_only recorded in ORB-22246 resume pass |
