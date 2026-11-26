@@ -65,6 +65,8 @@ mod hosts;
 mod registry;
 mod remote_access;
 mod request;
+#[cfg(test)]
+mod tests;
 mod trusted_hosts;
 
 pub(crate) use dashboard::DashboardState;

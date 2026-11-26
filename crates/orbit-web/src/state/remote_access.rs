@@ -4,7 +4,11 @@
 //! Everything here is in memory and resets on restart. Only requests whose
 //! Host is a trusted host are recorded; the loopback path never reaches the
 //! tracker. Memory is bounded: at most [`MAX_DEVICES`] devices and
-//! [`MAX_REFUSAL_KEYS`] refusal keys, each with fixed-size time buckets.
+//! [`MAX_REFUSAL_KEYS`] refusal keys, each with a bounded number of time
+//! buckets: one per second over the request window, one per minute over the
+//! refusal window. A bucket stays counted until it has wholly left its
+//! window, so an event is never dropped before the window it is reported for
+//! has passed, and is kept at most one bucket width longer.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -20,13 +24,23 @@ use super::TrustedHosts;
 const MAX_DEVICES: usize = 64;
 /// Distinct (reason, attempted login) refusal keys kept; further unlisted
 /// logins are counted without the login.
-const MAX_REFUSAL_KEYS: usize = 64;
+pub(crate) const MAX_REFUSAL_KEYS: usize = 64;
 /// How long a device stays listed after its last request.
 const DEVICE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 /// The "active" window: requests per device and active devices.
 pub(crate) const ACTIVE_WINDOW_MINUTES: i64 = 15;
 /// The refusal window.
 pub(crate) const REFUSAL_WINDOW_HOURS: i64 = 24;
+/// Request counts: one bucket per second, at most 900 per device.
+const REQUEST_WINDOW: Window = Window {
+    bucket_secs: 1,
+    span_secs: ACTIVE_WINDOW_MINUTES * 60,
+};
+/// Refusal counts: one bucket per minute, at most 1,441 per refusal key.
+const REFUSAL_WINDOW: Window = Window {
+    bucket_secs: 60,
+    span_secs: REFUSAL_WINDOW_HOURS * 3600,
+};
 /// Longest attempted login kept with an unlisted-login refusal.
 const MAX_LOGIN_CHARS: usize = 128;
 /// `tailscale whois` probes the server runs at once, across every request.
@@ -118,7 +132,17 @@ impl RemoteAccess {
 
     /// Count one admitted trusted-host request from `device` as `login`.
     pub(crate) fn record_admitted(&self, device: Option<IpAddr>, login: &str) {
-        self.activity().admit(device_key(device), login, Utc::now());
+        self.record_admitted_at(device, login, Utc::now());
+    }
+
+    /// [`Self::record_admitted`] as of `now`.
+    pub(crate) fn record_admitted_at(
+        &self,
+        device: Option<IpAddr>,
+        login: &str,
+        now: DateTime<Utc>,
+    ) {
+        self.activity().admit(device_key(device), login, now);
     }
 
     /// Count one open live stream for `device` until the guard drops.
@@ -143,6 +167,16 @@ impl RemoteAccess {
     /// Count one refused trusted-host request. `login` is kept only for an
     /// unlisted login, truncated and stripped of control characters.
     pub(crate) fn record_refused(&self, reason: RefusalReason, login: Option<&str>) {
+        self.record_refused_at(reason, login, Utc::now());
+    }
+
+    /// [`Self::record_refused`] as of `now`.
+    pub(crate) fn record_refused_at(
+        &self,
+        reason: RefusalReason,
+        login: Option<&str>,
+        now: DateTime<Utc>,
+    ) {
         let login = (reason == RefusalReason::UnlistedLogin)
             .then_some(login)
             .flatten()
@@ -153,12 +187,17 @@ impl RemoteAccess {
                     .take(MAX_LOGIN_CHARS)
                     .collect::<String>()
             });
-        self.activity().refuse(reason, login, Utc::now());
+        self.activity().refuse(reason, login, now);
     }
 
     /// The tracker's current view, pruned to its windows.
     pub(crate) fn snapshot(&self) -> ActivitySnapshot {
-        self.activity().snapshot(Utc::now())
+        self.snapshot_at(Utc::now())
+    }
+
+    /// [`Self::snapshot`] as of `now`.
+    pub(crate) fn snapshot_at(&self, now: DateTime<Utc>) -> ActivitySnapshot {
+        self.activity().snapshot(now)
     }
 
     /// The `tailscale serve status` reading: a cached one younger than `ttl`,
@@ -310,29 +349,56 @@ struct Device {
     generation: u64,
     login: String,
     open_streams: u32,
-    /// (minute since epoch, requests) for the last [`ACTIVE_WINDOW_MINUTES`].
-    minutes: VecDeque<(i64, u64)>,
+    /// (second since epoch, requests) over [`REQUEST_WINDOW`].
+    requests: VecDeque<(i64, u64)>,
     last_seen: DateTime<Utc>,
 }
 
 #[derive(Debug)]
 struct Refusals {
-    /// (hour since epoch, refusals) for the last [`REFUSAL_WINDOW_HOURS`].
-    hours: VecDeque<(i64, u64)>,
+    /// (minute since epoch, refusals) over [`REFUSAL_WINDOW`].
+    counts: VecDeque<(i64, u64)>,
     last_at: DateTime<Utc>,
 }
 
-/// Add one to the newest bucket and drop buckets older than `window`.
-fn bump(buckets: &mut VecDeque<(i64, u64)>, slot: i64, window: i64) {
+/// A rolling window counted in fixed-width buckets of unix time.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    /// Seconds one bucket covers.
+    bucket_secs: i64,
+    /// Seconds the window reaches back from now.
+    span_secs: i64,
+}
+
+impl Window {
+    /// The bucket holding the unix time `at`.
+    fn slot(self, at: i64) -> i64 {
+        at.div_euclid(self.bucket_secs)
+    }
+
+    /// Whether any part of bucket `slot` is still inside the window ending at
+    /// `now`. A bucket is dropped only once all of it is older than the
+    /// window, so a count never drops early.
+    fn is_live(self, slot: i64, now: i64) -> bool {
+        slot.saturating_add(1).saturating_mul(self.bucket_secs) > now.saturating_sub(self.span_secs)
+    }
+}
+
+/// Add one to the newest bucket and drop buckets that left the window.
+fn bump(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
+    let slot = window.slot(now);
     match buckets.back_mut() {
         Some((last, count)) if *last == slot => *count += 1,
         _ => buckets.push_back((slot, 1)),
     }
-    prune(buckets, slot, window);
+    prune(buckets, window, now);
 }
 
-fn prune(buckets: &mut VecDeque<(i64, u64)>, slot: i64, window: i64) {
-    while buckets.front().is_some_and(|(at, _)| *at <= slot - window) {
+fn prune(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
+    while buckets
+        .front()
+        .is_some_and(|(at, _)| !window.is_live(*at, now))
+    {
         buckets.pop_front();
     }
 }
@@ -340,13 +406,13 @@ fn prune(buckets: &mut VecDeque<(i64, u64)>, slot: i64, window: i64) {
 fn merge_buckets(
     target: &mut VecDeque<(i64, u64)>,
     extra: &VecDeque<(i64, u64)>,
-    slot: i64,
-    window: i64,
+    window: Window,
+    now: i64,
 ) {
     let merged = target
         .iter()
         .chain(extra.iter())
-        .filter(|(at, _)| *at > slot - window)
+        .filter(|(at, _)| window.is_live(*at, now))
         .fold(BTreeMap::new(), |mut acc, (at, count)| {
             *acc.entry(*at).or_insert(0) += *count;
             acc
@@ -383,7 +449,7 @@ impl Activity {
                 generation: *next_generation,
                 login: login.to_string(),
                 open_streams: 0,
-                minutes: VecDeque::new(),
+                requests: VecDeque::new(),
                 last_seen: now,
             }
         });
@@ -396,11 +462,7 @@ impl Activity {
         };
         login.clone_into(&mut device.login);
         device.last_seen = now;
-        bump(
-            &mut device.minutes,
-            now.timestamp() / 60,
-            ACTIVE_WINDOW_MINUTES,
-        );
+        bump(&mut device.requests, REQUEST_WINDOW, now.timestamp());
     }
 
     fn open_stream(&mut self, key: String, login: &str, now: DateTime<Utc>) -> Option<u64> {
@@ -411,9 +473,9 @@ impl Activity {
     }
 
     fn refuse(&mut self, reason: RefusalReason, login: Option<String>, now: DateTime<Utc>) {
-        let hour = now.timestamp() / 3600;
+        let at = now.timestamp();
         let mut key = (reason, login);
-        let mut merged_hours: Option<VecDeque<(i64, u64)>> = None;
+        let mut merged_counts: Option<VecDeque<(i64, u64)>> = None;
         if !self.refusals.contains_key(&key) && self.refusals.len() >= MAX_REFUSAL_KEYS {
             key.1 = None;
             if !self.refusals.contains_key(&key) && self.refusals.len() >= MAX_REFUSAL_KEYS {
@@ -431,32 +493,26 @@ impl Activity {
                 };
                 if let Some(evicted) = self.refusals.remove(&oldest) {
                     if oldest.0 == key.0 {
-                        merged_hours = Some(evicted.hours);
+                        merged_counts = Some(evicted.counts);
                     } else if let Some(overflow) = self.refusals.get_mut(&(oldest.0, None)) {
-                        merge_buckets(
-                            &mut overflow.hours,
-                            &evicted.hours,
-                            hour,
-                            REFUSAL_WINDOW_HOURS,
-                        );
+                        merge_buckets(&mut overflow.counts, &evicted.counts, REFUSAL_WINDOW, at);
                     }
                 }
             }
         }
         let entry = self.refusals.entry(key).or_insert_with(|| Refusals {
-            hours: VecDeque::new(),
+            counts: VecDeque::new(),
             last_at: now,
         });
-        if let Some(evicted_hours) = merged_hours {
-            merge_buckets(&mut entry.hours, &evicted_hours, hour, REFUSAL_WINDOW_HOURS);
+        if let Some(evicted_counts) = merged_counts {
+            merge_buckets(&mut entry.counts, &evicted_counts, REFUSAL_WINDOW, at);
         }
         entry.last_at = now;
-        bump(&mut entry.hours, hour, REFUSAL_WINDOW_HOURS);
+        bump(&mut entry.counts, REFUSAL_WINDOW, at);
     }
 
     fn snapshot(&mut self, now: DateTime<Utc>) -> ActivitySnapshot {
-        let minute = now.timestamp() / 60;
-        let hour = now.timestamp() / 3600;
+        let at = now.timestamp();
         let retention = chrono::Duration::from_std(DEVICE_RETENTION).unwrap_or_default();
         self.devices
             .retain(|_, device| device.open_streams > 0 || now - device.last_seen < retention);
@@ -464,28 +520,28 @@ impl Activity {
             .devices
             .iter_mut()
             .map(|(key, device)| {
-                prune(&mut device.minutes, minute, ACTIVE_WINDOW_MINUTES);
+                prune(&mut device.requests, REQUEST_WINDOW, at);
                 DeviceSnapshot {
                     ip: (key != "unknown").then(|| key.clone()),
                     login: device.login.clone(),
                     open_streams: device.open_streams,
-                    requests_15m: total(&device.minutes),
+                    requests_15m: total(&device.requests),
                     last_seen: device.last_seen,
                 }
             })
             .collect();
         devices.sort_by_key(|device| std::cmp::Reverse(device.last_seen));
         for entry in self.refusals.values_mut() {
-            prune(&mut entry.hours, hour, REFUSAL_WINDOW_HOURS);
+            prune(&mut entry.counts, REFUSAL_WINDOW, at);
         }
-        self.refusals.retain(|_, entry| !entry.hours.is_empty());
+        self.refusals.retain(|_, entry| !entry.counts.is_empty());
         let mut refusals: Vec<RefusalSnapshot> = self
             .refusals
             .iter()
             .map(|((reason, login), entry)| RefusalSnapshot {
                 reason: *reason,
                 login: login.clone(),
-                count_24h: total(&entry.hours),
+                count_24h: total(&entry.counts),
                 last_at: entry.last_at,
             })
             .collect();
@@ -499,6 +555,16 @@ impl Activity {
 pub(crate) struct ActivitySnapshot {
     pub(crate) devices: Vec<DeviceSnapshot>,
     pub(crate) refusals: Vec<RefusalSnapshot>,
+}
+
+impl ActivitySnapshot {
+    /// Devices with a request in the request window or an open stream.
+    pub(crate) fn active_devices(&self) -> usize {
+        self.devices
+            .iter()
+            .filter(|device| device.requests_15m > 0 || device.open_streams > 0)
+            .count()
+    }
 }
 
 #[derive(Debug, Serialize)]
