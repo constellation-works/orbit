@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-11-14
+last_validated: 2026-11-26
 ---
 
 # Development Reference
@@ -1485,7 +1485,7 @@ Letting `cargo` or a rustup proxy auto-install into a workspace `RUSTUP_HOME` us
 
 ## Toolchain (MSRV)
 
-- **MSRV:** `rust-version` in `[workspace.package]` of the root `Cargo.toml`, checked with `cargo check --workspace --locked` by the `msrv` job in `.github/workflows/msrv.yml` (push to `agent-main` only; it no longer runs on pull requests) and by `make ci-fast`. Keep the `MSRV` variables in `msrv.yml` and the Makefile equal to it.
+- **MSRV:** `rust-version` in `[workspace.package]` of the root `Cargo.toml`, checked with `cargo check --workspace --locked` by the `msrv` job in `.github/workflows/msrv.yml` (push to `agent-main` only; the full MSRV build still runs on push and no longer runs on pull requests) and by `make ci-fast`. Pull-request guardrails also reject `use super as <name>;` and `use super::{self as <name>, ...};`, which Rust 1.89 cannot resolve; use the module's full path. Keep the `MSRV` variables in `msrv.yml` and the Makefile equal to it.
 - **Pinned toolchain:** [`rust-toolchain.toml`](../rust-toolchain.toml); every non-MSRV CI step that installs Rust repeats its version, including the shard jobs' "Start the pinned toolchain install" step (a `rustup` command, not the toolchain action).
 
 Bump the pinned toolchain in one PR: the toolchain file and those CI steps together, plus fixes for new compiler or Clippy diagnostics, with `make ci-fast` and `make ci-lint` passing on the new version. Leave the `msrv` job on the declared minimum. If a change needs a newer compiler or a dependency raises the MSRV, update `rust-version` and both `MSRV` variables in that same PR.
