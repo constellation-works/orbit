@@ -226,6 +226,18 @@ fn git_scan_survives_worker_spawn_failure_with_the_same_refusals() {
         matches!(refused, orbit_common::OrbitError::PolicyDenied(_)),
         "{refused}"
     );
+    let text = refused.to_string();
+    assert!(
+        text.contains("`git clone`")
+            && text.contains("`cp -l`")
+            && text.contains("`--no-hardlinks`")
+            && text.contains("delete the clone"),
+        "hard-linked object refusal names the local-clone cause and remedy: {text}"
+    );
+    assert!(
+        !text.contains('\n'),
+        "hard-linked object refusal stays one line: {text}"
+    );
     drop(refusal);
     let threaded = scan().expect_err("the unrefused scan agrees");
     assert_eq!(refused.to_string(), threaded.to_string());
