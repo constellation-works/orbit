@@ -196,6 +196,7 @@ impl RuntimeKernel {
             context.settings,
             config_loader,
             binding,
+            worker_invocation,
             temp_dir,
         );
         let stored = Stored::new(base, context.stores, layout_report);
@@ -209,7 +210,7 @@ impl RuntimeKernel {
         );
         Self {
             application,
-            run: Run::new(host, worker_invocation),
+            run: Run::new(host),
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
             #[cfg(any(test, feature = "test-support"))]
             transition_read_hook: Arc::new(Mutex::new(None)),

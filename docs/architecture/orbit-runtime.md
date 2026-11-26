@@ -13,7 +13,7 @@ Runtime kernel: `RuntimeKernel`, stores, engine handles, event bus, audit, claim
 
 ## Main modules and types
 
-`orbit_runtime` (`RuntimeKernel`), `base` (`Base`, config, paths, actor, binding, event log, authorization policy data), `stored` (`Stored`, stores, persistence, authorization audit, `job_runs`, `workspace`, `audit`, `recovery_authority`), `host` (`Host`, execution assets, context assembly, tool authorization), `run` (`Run`, execution identity and coordination ownership), `builder`, `engine`, `plugin`, `application_port` (`ApplicationPort`), `cost`. See ``crates/orbit-runtime/src/lib.rs``.
+`orbit_runtime` (`RuntimeKernel`), `base` (`Base`, `Role`, config, paths, actor, binding, event log, authorization policy data), `stored` (`Stored`, stores, persistence, authorization audit, `job_runs`, `workspace`, `audit`, `recovery_authority`), `host` (`Host`, execution assets, context assembly, tool authorization), `run` (`Run`, execution identity and owner transports), `builder`, `engine`, `plugin`, `application_port` (`ApplicationPort`), `cost`. See ``crates/orbit-runtime/src/lib.rs``.
 
 ## Dependencies
 
@@ -34,7 +34,7 @@ The kernel's state is four structs, each holding the one below it and its own fi
 
 | Layer | Module | Holds | An operation that needs it |
 |---|---|---|---|
-| `Base` | `base` | the resolved configuration, paths, actor, clock, event log, host OS and workspace binding | every operation |
+| `Base` | `base` | the resolved configuration, paths, actor, clock, event log, host OS, workspace binding and process role | every operation |
 | `Stored` | `stored` | `Base` and the opened stores | one that reads or writes a record |
 | `Host` | `host` | `Stored` and this machine as a place work runs | one that starts, validates or lands work |
 | `Run` | `run` | `Host` and the run this process carries | code inside a drain or a worker |
@@ -78,10 +78,10 @@ The 34 fields `RuntimeKernel` had before the carve. `context` was one field hold
 | `claim_known_red_budget` | `Host` | the time budget of a base validation run |
 | `validated_trees` | `Host` | validated trees |
 | `pr_repair_checks` | `Host` | PR repair checks |
-| `worker_invocation` | `Run` | the worker invocation |
+| `worker_invocation` | `Base` (`Role`) | resolved once into `Role::Worker` when `Base` is built |
 | `owner_coordinator` | `Run` | the owner coordinator |
 | `drain_owner_transport` | `Run` | the drain owner transport |
-| `coordination_write_owner` | `Run` | the coordination write owner |
+| `coordination_write_owner` | `Base` (`Role`) | resolved once into `Role::Replica` when `Base` is built |
 | `automation_execution_location` | `Run` | the execution location |
 | `application` | `RuntimeKernel` | the callback into `orbit-core`; not layered |
 | `orphan_reconcile_hook` | `RuntimeKernel` | test hook; not layered |
@@ -109,7 +109,7 @@ Six of those fields were public. Callers outside the crate now read them through
 - `application_consent`: Application consent validation, host authority, and constrained call admission; imports `orbit_runtime`, `plugin`, `orbit-common`, `orbit-store`, `orbit-tools`, and `orbit-types`.
 - `application_port`: Callback port (`ApplicationPort`) the kernel invokes into Core use cases without depending on `orbit-core`; imports `orbit_runtime`, `orbit-common`, `orbit-engine`, `orbit-store`, and `orbit-types`.
 - `assets`: Embedded built-in activity definitions available to runtime and bootstrap layers; imports `orbit-types` only.
-- `base`: `Base`, the lowest runtime layer: resolved configuration and `config.toml` path selection (`config`), path normalization, working-directory confinement and root discovery (`path`), actor identity (`actor`, `identity`), workspace binding (`binding`), session event log (`event`), authorization policy data and execution policy context (`policy`), and base accessors (`accessors`); imports `builder`, `host_signal`, `run_input`, `task`, and lower workspace crates (never `stored`, `host`, or `run`).
+- `base`: `Base`, the lowest runtime layer: resolved configuration and `config.toml` path selection (`config`), path normalization, working-directory confinement and root discovery (`path`), actor identity (`actor`, `identity`), workspace binding (`binding`), process role resolved once (`role`), session event log (`event`), authorization policy data and execution policy context (`policy`), and base accessors (`accessors`); imports `builder`, `host_signal`, `run_input`, `task`, and lower workspace crates (never `stored`, `host`, or `run`).
 - `builder`: `RuntimeKernel` assembly wiring stores, policy, tools, plugins, and workspace bindings; imports `base`, `stored`, `host`, `plugin`, `task`, and lower workspace crates.
 - `command_exec`: Claim-gated remote command execution entry point (`orbit.command.exec`); imports `orbit_runtime`, `orbit-common`, and `orbit-types`.
 - `cost`: Managed-execution cost and token accounting plus shared dashboard time windows; imports `chrono`, `orbit-common`, `orbit-types`, and `serde` only.
@@ -123,7 +123,7 @@ Six of those fields were public. Callers outside the crate now read them through
 - `orbit_runtime`: `RuntimeKernel`, which holds `Run`, its layer accessors, and its method groups for construction, admission policy, validation warnings, and host probes; imports sibling runtime modules and lower workspace crates.
 - `plugin`: Host plugin contributions, recorded grants, install layout, and runtime load pass; imports `assets`, `base`, `stored`, and lower workspace crates.
 - `recovery_decision`: Durable step-recovery decisions (`step_failure_recovery`); imports `orbit-common`, `orbit-engine`, and `orbit-types`.
-- `run`: `Run`, the top runtime layer over `Host` for the run this process carries: worker invocation, owner coordinator, drain owner transport, execution location, and coordination ownership (`identity`); imports `base`, `stored`, `host`, `orbit-tools`, and `orbit-types`.
+- `run`: `Run`, the top runtime layer over `Host` for the run this process carries: owner coordinator, drain owner transport, and execution location (`identity`); imports `base`, `stored`, `host`, `orbit-tools`, and `orbit-types`.
 - `run_input`: Managed-run environment marker parsing (`ORBIT_MANAGED_RUN_CONTEXT`, run/task IDs); imports `std`, `serde_json`, and `orbit-common` only.
 - `scripts`: Host-local script grant consent keyed by workspace script content digest; imports `orbit-common`, `orbit-engine`, `orbit-exec`, `orbit-tools`, and `orbit-types`.
 - `stored`: `Stored`, the runtime layer over `Base` that holds the opened stores (`stores`), persistence readiness and audit stores (`persistence`), store-backed authorization (`authorization`), stored accessors (`accessors`), job runs (`job_runs`), workspace catalog and claims (`workspace`), runtime audit projections and system audit seams (`audit`), and host-only rebase-recovery authority (`recovery_authority`); imports `base`, `builder`, `run_input`, `task`, `orbit-store`, and lower workspace crates (never `host` or `run`).

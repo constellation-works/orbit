@@ -578,6 +578,7 @@
     },
     "orbit-runtime": {
       "test_function_paths": [
+        "base/tests/role.rs::resolves_each_process_role_and_its_accessor_answers",
         "host_resource/profile/tests/cache.rs::no_diff_tag_edit_reclassifies_a_cached_template",
         "host_resource/tests/platform.rs::cpu_window_handles_tick_wrap_and_the_freshness_boundary",
         "host_resource/tests/platform.rs::cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window",
@@ -687,16 +688,16 @@
         "driver/sqlite/host/schema/tests/ledger/registry.rs::task_registry_schema_prefix_goldens",
         "fs/tests/lock.rs::crash_holder_child",
         "fs/tests/lock.rs::sigkilled_holder_releases_lock",
+        "migrate/layout/tests/mod.rs::failed_migration_keeps_the_marker_at_the_last_applied_version",
+        "migrate/task/tests/archive.rs::packing_failure_preserves_destination_and_cleans_staging_file",
+        "migrate/task/tests/git.rs::git_failure_redacts_remote_credentials_in_arguments",
+        "migrate/task/tests/publish.rs::concurrent_losing_push_preserves_landed_evidence_across_failed_saves",
         "repository/audit/v2/tests/read.rs::delayed_insert_during_tail_read_keeps_snapshot_ranks_and_the_newest_event",
         "repository/invocation/records/tests/query.rs::succeeded_candidates_probe_later_invocations_by_run",
         "repository/job_run/tests/queries.rs::live_run_scans_seek_the_state_index_instead_of_walking_history",
         "repository/job_run/tests/queries.rs::recency_pages_walk_an_index_instead_of_sorting_the_workspace",
         "repository/task_index/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
-        "repository/task_reservation/tests/plans.rs::active_reservation_statements_seek_an_index",
-        "migrate/layout/tests/mod.rs::failed_migration_keeps_the_marker_at_the_last_applied_version",
-        "migrate/task/tests/archive.rs::packing_failure_preserves_destination_and_cleans_staging_file",
-        "migrate/task/tests/git.rs::git_failure_redacts_remote_credentials_in_arguments",
-        "migrate/task/tests/publish.rs::concurrent_losing_push_preserves_landed_evidence_across_failed_saves"
+        "repository/task_reservation/tests/plans.rs::active_reservation_statements_seek_an_index"
       ]
     },
     "orbit-tools": {

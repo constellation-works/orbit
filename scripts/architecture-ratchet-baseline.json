@@ -12,6 +12,6 @@
     "orbit_runtime_ref_param_fns": 1369,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 22,
-    "worker_or_owner_reads": 219
+    "worker_or_owner_reads": 216
   }
 }

@@ -1,6 +1,6 @@
 //! [`Base`]: what every operation has — the resolved configuration, the
-//! paths, the actor, the clock, the event log, the host OS and the workspace
-//! this process was opened for.
+//! paths, the actor, the clock, the event log, the host OS, the workspace
+//! this process was opened for, and the process's role.
 //!
 //! The lowest of the four runtime layers. It holds no store and nothing that
 //! belongs to one machine's work or one run.
@@ -13,6 +13,9 @@ pub mod event;
 mod identity;
 pub mod path;
 pub mod policy;
+pub mod role;
+#[cfg(test)]
+mod tests;
 
 use std::any::Any;
 use std::path::Path;
@@ -57,6 +60,9 @@ pub struct Base {
     /// draws exactly as a single-host owner always has.
     pub(crate) registered_host_oses: Vec<(String, orbit_types::task::HostOs)>,
     pub(crate) workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
+    /// What kind of process this runtime serves, resolved once at open from the
+    /// workspace binding and the worker invocation.
+    pub(crate) role: role::Role,
     /// The workspace was named by an explicit selector rather than discovered
     /// from the caller's working directory. Supplied by the composition layer
     /// that resolved the selector; never inferred by the runtime.
@@ -87,8 +93,10 @@ impl Base {
         settings: OrbitRuntimeSettings,
         config_loader: RuntimeConfigLoader,
         workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
+        worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
         temp_dir: Option<Arc<builder::TempDir>>,
     ) -> Self {
+        let role = role::Role::resolve(workspace_binding.as_deref(), worker_invocation);
         Self {
             paths,
             policy,
@@ -98,12 +106,18 @@ impl Base {
             host_os: orbit_types::task::HostOs::current(),
             registered_host_oses: Vec::new(),
             workspace_binding,
+            role,
             workspace_explicitly_selected: false,
             opened_registered_workspace: None,
             composition_snapshot: None,
             ci_failure_time: None,
             _temp_dir: temp_dir,
         }
+    }
+
+    /// The process's role, resolved once when this base was built.
+    pub fn role(&self) -> &role::Role {
+        &self.role
     }
 
     /// Returns the shared .orbit/ data directory.
