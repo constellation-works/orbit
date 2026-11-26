@@ -66,7 +66,7 @@ fn remote_access_json(state: &DashboardState) -> Value {
     let warnings = warnings(&hosts, &tailscale, &served);
 
     let activity = access.snapshot();
-    let mut lookups = 0;
+    let mut whois_budget = WHOIS_PER_REQUEST;
     let devices: Vec<Value> = activity
         .devices
         .iter()
@@ -75,7 +75,7 @@ fn remote_access_json(state: &DashboardState) -> Value {
                 .ip
                 .as_deref()
                 .and_then(|ip| ip.parse::<IpAddr>().ok());
-            let name = ip.and_then(|ip| device_name(&access, state.env(), ip, &mut lookups));
+            let name = ip.and_then(|ip| device_name(&access, state.env(), ip, &mut whois_budget));
             json!({
                 "ip": device.ip,
                 "device": name,
@@ -169,31 +169,17 @@ fn tailscale(env: &Env, args: &[&str]) -> TailscaleReading {
 }
 
 fn serve_status(access: &RemoteAccess, env: &Env) -> TailscaleReading {
-    if let Some(reading) = access.cached_serve_status(SERVE_STATUS_TTL) {
-        return reading;
-    }
-    let reading = tailscale(env, &["serve", "status", "--json"]);
-    access.store_serve_status(reading.clone());
-    reading
+    access.serve_status_or_probe(SERVE_STATUS_TTL, || {
+        tailscale(env, &["serve", "status", "--json"])
+    })
 }
 
-/// The device's tailnet name from `tailscale whois`, cached per IP.
-fn device_name(
-    access: &RemoteAccess,
-    env: &Env,
-    ip: IpAddr,
-    lookups: &mut usize,
-) -> Option<String> {
-    let reading = match access.cached_whois(ip, WHOIS_TTL) {
-        Some(reading) => reading,
-        None if *lookups < WHOIS_PER_REQUEST => {
-            *lookups += 1;
-            let reading = tailscale(env, &["whois", "--json", &ip.to_string()]);
-            access.store_whois(ip, reading.clone());
-            reading
-        }
-        None => return None,
-    };
+/// The device's tailnet name from `tailscale whois`, cached per IP. A new
+/// lookup spends one of the request's `budget`.
+fn device_name(access: &RemoteAccess, env: &Env, ip: IpAddr, budget: &mut usize) -> Option<String> {
+    let reading = access.whois_or_probe(ip, WHOIS_TTL, budget, || {
+        tailscale(env, &["whois", "--json", &ip.to_string()])
+    })?;
     let TailscaleReading::Json(whois) = reading else {
         return None;
     };
