@@ -347,7 +347,10 @@ fn direct_stale_and_invalid_preparations_refuse_without_mutation() {
         let status = git(&prepared.checkout.path, &["status", "--porcelain"]);
         let error = action(&prepared.host, "git_rebase", &input).expect_err(case);
         assert!(
-            !matches!(error, OrbitError::RecoverableVcsConflict(_)),
+            !matches!(
+                error,
+                OrbitError::RecoverableVcsConflict(_) | OrbitError::DeliveryRefused { .. }
+            ),
             "{case}: {error}"
         );
         assert_eq!(prepared.head(), head, "{case}");
@@ -395,6 +398,13 @@ fn churn_and_deadline_exhaustion_keep_original_and_fresh_evidence() {
             || action(&prepared.host, "git_rebase", &input),
         )
         .unwrap_err();
+        assert!(matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::BaseChaseExhausted,
+                ..
+            }
+        ));
         let message = error.to_string();
         assert!(
             message.contains(if deadline {
@@ -708,7 +718,10 @@ fn replacement_evidence_and_simultaneous_candidate_changes_fail_closed() {
             assert_eq!(prepared.head(), before);
         } else {
             assert!(
-                !matches!(first, OrbitError::RecoverableVcsConflict(_)),
+                !matches!(
+                    first,
+                    OrbitError::RecoverableVcsConflict(_) | OrbitError::DeliveryRefused { .. }
+                ),
                 "{case}: {first}"
             );
             if case == "candidate-after-refresh" {
@@ -763,19 +776,77 @@ fn exhausted_preparation_never_dispatches_source_recovery() {
     job.resolved_final_recovery_activity = Some(super::deterministic_activity("decide"));
     prepared.host.stub("decide", Ok(json!({"unexpected":true})));
     let (result, events) = run_job(&prepared, &job);
-    assert!(result.is_err(), "churn must exhaust: {result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::BaseChaseExhausted,
+                ..
+            })
+        ),
+        "churn must hold: {result:?}"
+    );
     assert_eq!(refresh_count(&prepared.host), 2);
     assert_eq!(prepared.head(), prepared.candidate);
     assert!(
         prepared.host.stub_calls_of("decide").is_empty(),
         "exhaustion never dispatches source repair"
     );
-    assert!(events.iter().any(|event| matches!(event, V2AuditEventKind::FinalRecoveryAttempted { outcome, detail: Some(reason), .. }
-        if outcome == "skipped" && reason.contains("host-owned preparation"))), "{events:#?}");
     assert!(
         !events
             .iter()
             .any(|event| matches!(event, V2AuditEventKind::StepRecoveryAttempted { .. })),
         "a base race is not conflict recovery"
     );
+}
+
+#[cfg(unix)]
+pub(crate) fn recovered_conflict_base_churn_holds_and_preserves_candidate() {
+    let mut prepared = PreparedRebase::new("jrun-recovered-churn", "README.md", "README.md");
+    git(&prepared.fixture.repo, &["push", "origin", BASE]);
+    let provider = prepared.fixture.root.path().join("codex");
+    write_executable(
+        &provider,
+        &provider_script("printf 'resolved\n' > README.md"),
+    );
+    prepared.host.provider = Some(provider);
+    let repo = prepared.fixture.repo.clone();
+    *prepared.host.preparation_hook.lock().unwrap() = Some(Box::new(move |checkpoint| {
+        if (checkpoint["step_id"] == "sync_base" && checkpoint["rewritten"] == true)
+            || checkpoint["step_id"] == "sync_base_preparation"
+        {
+            let name = format!(
+                "advance-{}-{}.txt",
+                checkpoint["step_id"].as_str().unwrap(),
+                checkpoint["recovery_attempt"]
+            );
+            commit_file(&repo, &name, "advance\n");
+            git(&repo, &["push", "origin", BASE]);
+        }
+    }));
+    let (result, events) = run_job(&prepared, &shipped_sync_job("task_pr_pipeline", true));
+    assert!(
+        matches!(
+            result,
+            Err(DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::BaseChaseExhausted,
+                ..
+            })
+        ),
+        "{result:?}; {events:#?}"
+    );
+    assert_eq!(refresh_count(&prepared.host), 2);
+    assert_eq!(
+        fs::read_to_string(prepared.checkout.path.join("README.md")).unwrap(),
+        "resolved\n"
+    );
+    assert!(prepared.host.stub_calls_of("deliver").is_empty());
+    assert!(events.iter().any(|event| matches!(event, V2AuditEventKind::StepPostRecoveryAttempt { outcome, .. } if outcome == "held")));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        V2AuditEventKind::StepRecoveryAttempted {
+            recovery_succeeded: true,
+            ..
+        }
+    )));
 }

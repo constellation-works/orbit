@@ -32,7 +32,7 @@ mod dirty_rescue;
 #[cfg(unix)]
 mod generated_regeneration;
 mod local_base_freshness;
-mod preparation;
+pub(crate) mod preparation;
 #[cfg(unix)]
 mod resolution_intent;
 mod trash;

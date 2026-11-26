@@ -7739,3 +7739,13 @@ fn merge_conflict_contracts() {
         merge_conflict::merge_conflict_refusal_scenarios(sandbox);
     });
 }
+
+#[test]
+fn recovered_conflict_base_churn_holds_and_preserves_candidate() {
+    isolated(
+        "recovered_conflict_base_churn_holds_and_preserves_candidate",
+        |_| {
+            crate::v2_worktree_lifecycle::preparation::recovered_conflict_base_churn_holds_and_preserves_candidate();
+        },
+    );
+}
