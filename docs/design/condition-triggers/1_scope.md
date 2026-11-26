@@ -70,12 +70,12 @@ about missing predicates or edge state describe the motivation, not current gaps
   utilization), memory percent, Linux I/O pressure, and disk used percent. Disk is
   measured for the filesystem that holds each of three paths: the repository root,
   `state/worktrees` and the global root (`HostResourceSample`,
-  `crates/orbit-runtime/src/host_resource/mod.rs`, and `host_resource_paths`,
-  `crates/orbit-runtime/src/orbit_runtime/host.rs`). A missing value means
+  `crates/orbit-runtime/src/host/resource/mod.rs`, and `host_resource_paths`,
+  `crates/orbit-runtime/src/host/probes.rs`). A missing value means
   unavailable, never zero. Admission throttling already uses high and resume
   thresholds as hysteresis (`ResourceThrottleSettings`,
   `crates/orbit-config/src/registry/settings/machine.rs`, and
-  `crates/orbit-runtime/src/host_resource/pressure.rs`).
+  `crates/orbit-runtime/src/host/resource/pressure.rs`).
 - **Authority.** The governed-operation catalog
   (`crates/orbit-common/src/governance/authorization/catalog/entry.rs`) marks routine and
   auto-task toggles and schedule edits from the dashboard as operator-only. The

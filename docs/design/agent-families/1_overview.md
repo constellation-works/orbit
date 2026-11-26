@@ -42,7 +42,7 @@ Family defaults were originally also used to pick activity role models, but that
 | Task-level crew field | `crates/orbit-types/src/task/model/task.rs` | [ORB-00058] | done |
 | Runtime config loading | `crates/orbit-config/src/resolved/config.rs` | [ORB-00058] | done |
 | Default config template | `crates/orbit-config/assets/default-config.toml` | [ORB-00058] | done |
-| Run-time crew resolution | `crates/orbit-runtime/src/engine/crew/resolution.rs` | [ORB-00058] | done |
+| Run-time crew resolution | `crates/orbit-runtime/src/run/engine/crew/resolution.rs` | [ORB-00058] | done |
 | Tool and CLI crew surfaces | `crates/orbit-tools/src/builtin/orbit/task/` | [ORB-00058] | done |
 | Grok family onboarding | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00043] | implemented; early task records unavailable |
 

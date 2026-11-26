@@ -584,7 +584,7 @@ impl RuntimeKernel {
                     .ok_or_else(|| {
                         OrbitError::CapabilityDenied("consented plugin is not installed".into())
                     })?;
-                crate::plugin::grants::verify_install_path(&self.global_root(), &installed)
+                crate::host::plugin::grants::verify_install_path(&self.global_root(), &installed)
                     .map_err(OrbitError::CapabilityDenied)?;
                 let loaded =
                     orbit_tools::plugin::load_plugin_dir(Path::new(&installed.install_path))

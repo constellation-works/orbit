@@ -10,14 +10,15 @@ use super::{HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel}
 use crate::application_port::ApplicationPort;
 use crate::base::Base;
 use crate::base::binding::WorkspaceRuntimeBinding;
+use crate::builder;
 use crate::host::Host;
 use crate::host::context::OrbitContext;
-use crate::host_resource::{HostResourceMonitor, default_host_resource_probe};
-use crate::host_signal::{FixedHostSignals, HostSignalProbe, default_host_signal_probe};
+use crate::host::forge::{NoTaskPrForge, TaskPrForge, default_task_pr_forge};
+use crate::host::resource::{HostResourceMonitor, default_host_resource_probe};
+use crate::host::signal::{FixedHostSignals, HostSignalProbe, default_host_signal_probe};
 use crate::run::Run;
+use crate::run::worker_coordination;
 use crate::stored::Stored;
-use crate::task_pr_forge::{NoTaskPrForge, TaskPrForge, default_task_pr_forge};
-use crate::{builder, worker_coordination};
 
 impl RuntimeKernel {
     /// Inject a caller's environment snapshot into a test fixture.

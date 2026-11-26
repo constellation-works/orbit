@@ -185,7 +185,7 @@ pub(crate) fn build_context_from_roots(
     // against the real surface, and each plugin fails closed on its own.
     // The workspace `[plugin_enablement]` toggles narrow the host state for
     // this runtime only; every surface below reads the narrowed load.
-    let plugin_load = crate::plugin::host::load_workspace_plugins(
+    let plugin_load = crate::host::plugin::host::load_workspace_plugins(
         env,
         global_root,
         &paths.orbit_dir,
@@ -212,7 +212,7 @@ pub(crate) fn build_context_from_roots(
     // `plugins.<ns>.<key>` from a typo, and a `[plugins.<ns>]` section with no
     // plugin behind it is a warning, never a failed build (§3). A plugin
     // switched off in this workspace still owns its section.
-    crate::plugin::config::publish_plugin_config_contracts(
+    crate::host::plugin::config::publish_plugin_config_contracts(
         &plugin_load
             .registered
             .iter()

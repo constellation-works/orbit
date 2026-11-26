@@ -29,7 +29,7 @@ impl RuntimeKernel {
 
     /// What the host plugin load pass registered and refused when this
     /// runtime was built.
-    pub fn plugin_load(&self) -> &crate::plugin::host::PluginHostLoad {
+    pub fn plugin_load(&self) -> &super::plugin::host::PluginHostLoad {
         self.host().plugin_load()
     }
 

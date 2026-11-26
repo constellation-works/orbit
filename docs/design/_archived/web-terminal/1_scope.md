@@ -40,7 +40,7 @@ path again. The dashboard already knows the host, the worktree and the run, and 
 an authenticated route to the host.
 
 `orbit.command.exec` cannot fill the gap, and should not be stretched to. It is deliberately
-the opposite of a terminal ([`command_exec.rs`](../../../../crates/orbit-runtime/src/command_exec.rs)):
+the opposite of a terminal ([`command_exec.rs`](../../../../crates/orbit-runtime/src/host/exec/command_exec.rs)):
 an argv with no shell, no PTY and no stdin; output buffered and capped at 4 MB per stream and
 discarded on timeout; a 10-minute ceiling; a workspace claim; and a working directory confined
 to a workspace checkout. `sudo` on dk-server-2 needs an interactive password, so even a plain

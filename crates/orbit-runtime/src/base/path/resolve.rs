@@ -1,4 +1,4 @@
-//! Global and workspace Orbit root discovery (`resolve_global_root`, workspace root lookup); imports `paths`, `run_input`, `orbit-common`, and `orbit-config`.
+//! Global and workspace Orbit root discovery (`resolve_global_root`, workspace root lookup); imports `paths`, `base::managed_env`, `orbit-common`, and `orbit-config`.
 
 use orbit_common::env_vars;
 use std::fs;
@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use serde::Deserialize;
 
 use super::paths;
-use crate::run_input::managed_dispatch_context_from_env;
+use crate::base::managed_env::managed_dispatch_context_from_env;
 
 /// Registry locator emitted to children of an Orbit-managed run.
 ///

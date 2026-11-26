@@ -153,7 +153,7 @@ What reaches an implementer besides the task, and what replay does about each:
 | Crew memory | Newest revision at dispatch | Off in the evaluation workspace |
 | Mid-run steering, workspace notices, experiments | Live | Off or empty in the evaluation workspace |
 | Project learnings | Retired; `.orbit/learnings/` is no longer read ([project-learnings](../project-learnings/4_decisions.md)) | Nothing to do |
-| Skills and the `agent_implement` instruction | Embedded in the installed binary (`crates/orbit-runtime/src/assets.rs`) | **Not pinned.** Every arm runs under today's harness |
+| Skills and the `agent_implement` instruction | Embedded in the installed binary (`crates/orbit-runtime/src/host/exec/assets.rs`) | **Not pinned.** Every arm runs under today's harness |
 | User-level provider files (`~/.claude`) | Live host files | Not pinned; same for every arm |
 
 **Skills and the implementer prompt are today's, on purpose.** Replay answers "which crew does this work best under the Orbit we run now", not "what would have happened then". All arms share the same harness, so the comparison between arms is fair, and each run records the Orbit version. The consequence: results from different Orbit versions are not comparable, and the readout refuses to merge them.

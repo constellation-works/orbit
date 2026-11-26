@@ -3,6 +3,13 @@ use orbit_config::PersistenceConfig;
 use orbit_engine::PrConfig;
 use orbit_types::identity::Crew;
 
+/// Minutes before a scheduled shutdown when new unattended admissions hold:
+/// long enough for work admitted now to finish, short enough that a reboot
+/// scheduled for tomorrow does not idle the host all day.
+///
+/// The former `machine.host_shutdown_hold_minutes` default, fixed when the key was removed [ORB-22808].
+pub const HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
+
 #[derive(Clone)]
 pub struct OrbitRuntimeSettings {
     pub(crate) persistence: PersistenceConfig,
@@ -57,7 +64,7 @@ pub struct OrbitRuntimeSettings {
     /// Existing machine identity's task namespace; ORB for legacy runtimes.
     machine_task_prefix: String,
     /// How close a scheduled shutdown must be before unattended admission
-    /// holds: [`crate::host_signal::HOST_SHUTDOWN_HOLD_MINUTES`] unless a
+    /// holds: [`HOST_SHUTDOWN_HOLD_MINUTES`] unless a
     /// fixture overrides it.
     host_shutdown_hold_minutes: u32,
     worktree_reclaim: Vec<String>,
@@ -203,7 +210,7 @@ impl OrbitRuntimeSettings {
             operation,
             worker_containment,
             machine_task_prefix,
-            host_shutdown_hold_minutes: crate::host_signal::HOST_SHUTDOWN_HOLD_MINUTES,
+            host_shutdown_hold_minutes: HOST_SHUTDOWN_HOLD_MINUTES,
             worktree_reclaim,
             worktree_reclaim_below_free_mib,
             worktree_parked_reclaim_after_hours: orbit_engine::WORKTREE_PARKED_RECLAIM_AFTER_HOURS,

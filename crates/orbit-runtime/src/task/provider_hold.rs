@@ -64,7 +64,7 @@ use orbit_types::workflow::{
 };
 
 use crate::RuntimeKernel;
-use crate::run_input::non_empty;
+use crate::base::managed_env::non_empty;
 
 /// How long a hold's first exclusion lasts, by class. Each consecutive hold
 /// within `BACKOFF_MEMORY` doubles it, up to `max_backoff`. A refusal is

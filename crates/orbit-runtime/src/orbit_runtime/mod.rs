@@ -1,16 +1,14 @@
 //! [`RuntimeKernel`]: shared runtime types and method groups for construction,
 //! identity, host probes, persistence, configuration, and internal accessors.
 
-pub(crate) mod admission_policy;
-pub use admission_policy::AdmissionCrewSettings;
 mod build;
-mod host;
 mod validation_warning;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub use crate::base::RuntimeConfigLoader;
+pub use crate::host::admission::AdmissionCrewSettings;
 
 use crate::application_port::ApplicationPort;
 use crate::base::Base;
