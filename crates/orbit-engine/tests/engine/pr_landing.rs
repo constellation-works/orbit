@@ -4,6 +4,28 @@
 // Integration fixtures exercise public behavior and unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 //! PR landing, merge gating and required validation through the engine's deterministic actions, with a substitute `gh` over a real bare remote (see below).
+mod absent_check_runs;
+mod absent_context;
+#[path = "pr_landing/auto_fix/scenarios.rs"]
+mod auto_fix;
+mod check_annotations;
+mod ci_rerun;
+mod completion_observation;
+mod conventions;
+mod draft_handoff;
+mod flaky;
+mod infrastructure;
+#[path = "pr_landing/pull_request/transport.rs"]
+mod landing_transport;
+mod mentions;
+mod merge_conflict;
+mod merge_in_progress;
+mod review_watch;
+#[cfg(target_os = "linux")]
+mod stable_build_mount;
+use super::git_fixture;
+use super::v2_runtime::{build_writer_and_sinks, job_asset, workspace_root};
+pub(super) use absent_context::adopted_policy_cases;
 use chrono::Utc;
 use orbit_common::{
     NotFoundKind, OrbitError, PrivateVcsFailureClass, RecoverableVcsConflict,
@@ -54,28 +76,6 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tempfile::TempDir;
-mod absent_check_runs;
-mod absent_context;
-pub(super) use absent_context::adopted_policy_cases;
-#[path = "pr_landing/auto_fix/scenarios.rs"]
-mod auto_fix;
-mod check_annotations;
-mod ci_rerun;
-mod completion_observation;
-mod conventions;
-mod draft_handoff;
-mod flaky;
-mod infrastructure;
-#[path = "pr_landing/pull_request/transport.rs"]
-mod landing_transport;
-mod mentions;
-mod merge_conflict;
-mod merge_in_progress;
-mod review_watch;
-#[cfg(target_os = "linux")]
-mod stable_build_mount;
-use super::git_fixture;
-use super::v2_runtime::{build_writer_and_sinks, job_asset, workspace_root};
 const CHILD_ENV: &str = "ORBIT_PR_LANDING_CHILD";
 /// The parent-owned directory holding the substitute `gh` and its pointer to the forge state of the case being run.
 const SANDBOX_ENV: &str = "ORBIT_PR_LANDING_SANDBOX";

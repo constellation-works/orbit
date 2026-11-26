@@ -13,6 +13,9 @@
 //! the candidate. `PATH` is process-global, so each body runs in an isolated
 //! copy of this binary.
 
+#[path = "final_recovery.rs"]
+mod final_recovery;
+
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -26,9 +29,6 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use super::git_fixture;
-
-#[path = "final_recovery.rs"]
-mod final_recovery;
 
 const CHILD_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_CHILD";
 const SANDBOX_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_SANDBOX";

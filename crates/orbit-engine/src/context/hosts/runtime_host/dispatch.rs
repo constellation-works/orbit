@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! dispatch_methods must precede pub(super) use dispatch_methods in lexical scope"
+)]
+
 macro_rules! dispatch_methods {
     () => {
         /// Dispatch a deterministic action by name. The host looks up `action`

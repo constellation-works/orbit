@@ -1,5 +1,11 @@
 //! The unified capability boundary between the engine and its runtime.
 
+mod dispatch;
+mod environment;
+mod lifecycle;
+mod recovery;
+mod review;
+
 use orbit_common::OrbitError;
 use orbit_store::contract::JobRunStepParams;
 use orbit_store::contract::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
@@ -38,12 +44,6 @@ use super::{
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
     TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
-
-mod dispatch;
-mod environment;
-mod lifecycle;
-mod recovery;
-mod review;
 
 /// The single capability boundary between the job executor and its runtime.
 ///

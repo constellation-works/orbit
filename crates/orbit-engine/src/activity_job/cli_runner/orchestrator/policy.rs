@@ -23,17 +23,17 @@ use crate::context::{ResolvedActivityTools, RuntimeHost};
 
 use super::super::super::dispatcher::DispatchError;
 
-/// Legacy-allowlist entry a deny-mode run stamps when its disallow list covers
-/// every registered tool. It names no tool, so an MCP server that predates
-/// deny mode refuses every call instead of reading an empty
-/// `ORBIT_ACTIVITY_TOOLS` as unrestricted.
-const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
-
 /// Process-policy envelope stamped for the current activity and removed from
 /// anything the outer process forwarded. [ORB-13427]
 use orbit_common::env_vars::ORBIT_PROC_ALLOWED_PROGRAMS as PROC_ALLOWED_PROGRAMS_ENV;
 use orbit_common::env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS as PROC_DISALLOWED_PROGRAMS_ENV;
 use orbit_common::env_vars::ORBIT_PROC_PROGRAM_POLICY as PROC_PROGRAM_POLICY_ENV;
+
+/// Legacy-allowlist entry a deny-mode run stamps when its disallow list covers
+/// every registered tool. It names no tool, so an MCP server that predates
+/// deny mode refuses every call instead of reading an empty
+/// `ORBIT_ACTIVITY_TOOLS` as unrestricted.
+const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
 
 /// Last pre-migration shipped program lists. An older MCP server understands
 /// only `ORBIT_PROC_ALLOWED_PROGRAMS`, so these preserve the old bound while

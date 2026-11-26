@@ -60,6 +60,8 @@ pub(crate) use commit::{
     persist_uncommitted_diff_artifact,
 };
 pub use commit::{compose_squash_merge_message, validate_claim_new_paths};
+#[cfg(feature = "test-support")]
+pub use completion_deadline::with_prerequisite_clock;
 pub use deferral_probe::run_deferral_probe;
 pub(crate) use deferred_sandbox::{ImplementerLane, accept_implementer_deferral};
 pub(super) use failure::pr_failure_handoff;
@@ -148,6 +150,3 @@ pub(crate) fn pr_merge_attribution(input: &serde_json::Value) -> serde_json::Val
         "task_id": task_id,
     })
 }
-
-#[cfg(feature = "test-support")]
-pub use completion_deadline::with_prerequisite_clock;

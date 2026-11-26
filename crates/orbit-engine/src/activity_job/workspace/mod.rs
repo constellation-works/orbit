@@ -1,11 +1,5 @@
 //! Linked-worktree workspace resolution and the provider boundary guard.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use super::audit_writer::V2AuditWriter;
-use super::dispatcher::DispatchError;
-
 mod boundary_guard;
 mod cwd;
 mod declared_pair;
@@ -17,6 +11,12 @@ mod recovery;
 
 #[cfg(test)]
 mod tests;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use super::audit_writer::V2AuditWriter;
+use super::dispatcher::DispatchError;
 
 pub(crate) use cwd::canonicalize_dir;
 pub use cwd::resolve_subprocess_cwd;

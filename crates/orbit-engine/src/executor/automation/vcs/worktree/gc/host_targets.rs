@@ -15,6 +15,42 @@
 //! run record nor a scratch record derives stays
 //! `skipped:unattributed_host_target`.
 
+// Replacing a component between the last check and the removal is a race in
+// production. Fixtures make it deterministic by acting at exactly that point.
+#[cfg(feature = "test-support")]
+mod removal_fixture {
+    use std::{cell::RefCell, path::Path, rc::Rc};
+
+    type Hook = Rc<dyn Fn(&Path)>;
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    /// Run `hook` with each host validation target's path after GC's last
+    /// check of it and before its removal, on this thread, for one fixture
+    /// operation.
+    pub fn with_host_target_removal_hook<T>(
+        hook: impl Fn(&Path) + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Restore(Option<Hook>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                HOOK.with(|slot| slot.replace(self.0.take()));
+            }
+        }
+        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
+        operation()
+    }
+
+    pub(super) fn before_removal(path: &Path) {
+        let hook = HOOK.with(|slot| slot.borrow().clone());
+        if let Some(hook) = hook {
+            hook(path);
+        }
+    }
+}
+
 use super::super::super::baseline::recorded_base_runs;
 use super::super::super::build_output::{
     HOST_VALIDATION_TARGETS_DIR, host_validation_source, host_validation_target_key,
@@ -34,6 +70,9 @@ use std::ffi::{CStr, CString, OsStr};
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+
+#[cfg(feature = "test-support")]
+pub use removal_fixture::with_host_target_removal_hook;
 
 const UNATTRIBUTED_DETAIL: &str = "Neither a recorded run's checkout nor a base-rerun, \
      host-evidence or recovery record derives this host validation target. GC retains it.";
@@ -606,42 +645,3 @@ fn reclaim(
     report.action = "reclaimed".to_string();
     Ok(())
 }
-
-// Replacing a component between the last check and the removal is a race in
-// production. Fixtures make it deterministic by acting at exactly that point.
-#[cfg(feature = "test-support")]
-mod removal_fixture {
-    use std::{cell::RefCell, path::Path, rc::Rc};
-
-    type Hook = Rc<dyn Fn(&Path)>;
-    thread_local! {
-        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
-    }
-
-    /// Run `hook` with each host validation target's path after GC's last
-    /// check of it and before its removal, on this thread, for one fixture
-    /// operation.
-    pub fn with_host_target_removal_hook<T>(
-        hook: impl Fn(&Path) + 'static,
-        operation: impl FnOnce() -> T,
-    ) -> T {
-        struct Restore(Option<Hook>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                HOOK.with(|slot| slot.replace(self.0.take()));
-            }
-        }
-        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
-        operation()
-    }
-
-    pub(super) fn before_removal(path: &Path) {
-        let hook = HOOK.with(|slot| slot.borrow().clone());
-        if let Some(hook) = hook {
-            hook(path);
-        }
-    }
-}
-
-#[cfg(feature = "test-support")]
-pub use removal_fixture::with_host_target_removal_hook;

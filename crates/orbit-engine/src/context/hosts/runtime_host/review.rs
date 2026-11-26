@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! review_methods must precede pub(super) use review_methods in lexical scope"
+)]
+
 macro_rules! review_methods {
     () => {
         // ── Step-recovery hooks [ORB-11332] ────────────────────────────────

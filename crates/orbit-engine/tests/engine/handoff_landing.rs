@@ -10,6 +10,8 @@
 //! unreadable evidence spends nothing, branch updates verify against the merged
 //! base [ORB-15970], and cached heads require a fresh base fetch [ORB-15976].
 
+mod log_read;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -48,8 +50,6 @@ const STOP: HandoffLandingStep = Stop { repairable: false };
 const NO_RERUN_UPDATE_OR_MERGE: &[&str] = &["ci.rerun_failed", "pr.update_branch", "pr.merge"];
 const NO_RERUN_OR_UPDATE: &[&str] = &["ci.rerun_failed", "pr.update_branch"];
 const NO_MERGE_OR_UPDATE: &[&str] = &["pr.merge", "pr.update_branch"];
-
-mod log_read;
 
 macro_rules! scenario_family {
     ($(#[$attr:meta])* $name:ident: $($row:ident),+ $(,)?) => {
