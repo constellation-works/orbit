@@ -2,7 +2,7 @@
 
 use crate::command::task::output::format_task_locks;
 use crate::command::{Block, CommandOut, ExecuteCore, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 use clap::Args;
 use orbit_common::governance::task::TaskVerb;

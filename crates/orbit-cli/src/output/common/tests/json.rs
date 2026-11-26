@@ -53,7 +53,7 @@ fn parse_tool_run(args: &[&str]) -> ToolRunArgs {
 #[test]
 fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     if run_isolated_test(
-        "output::tests::json::failed_terminal_resident_ledger_append_keeps_started_action_key",
+        "output::common::tests::json::failed_terminal_resident_ledger_append_keeps_started_action_key",
     ) {
         return;
     }

@@ -1,6 +1,6 @@
 //! CLI adapter over the shared evolution registry.
 use super::{CommandOut, Execute, Payload, operation_args::Invocation};
-use crate::output::{
+use crate::output::common::{
     payload::Block,
     table::{Column, Table},
 };

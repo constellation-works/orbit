@@ -5,8 +5,8 @@
 //! came from ([`role_for`]) — and [`cell`] or [`text`] turns that into ANSI.
 //! No call site names a color, and none asks whether color is permitted:
 //! emission is gated once, by the sink, via
-//! [`OutputSink::apply_color_policy`](crate::output::sink::OutputSink::apply_color_policy)
-//! for the `colored` paths here and by `output::table` for the `comfy_table`
+//! [`OutputSink::apply_color_policy`](crate::output::common::sink::OutputSink::apply_color_policy)
+//! for the `colored` paths here and by `output::common::table` for the `comfy_table`
 //! ones. See `docs/design/terminal-interface/specs/color-and-styling.md`
 //! (ADR-0308).
 
@@ -131,7 +131,7 @@ impl Tag for Domain {
 /// A role-tagged value as a table cell.
 ///
 /// The role's color is attached unconditionally; whether `comfy_table` emits it
-/// is the sink's call, applied per render in `output::table`.
+/// is the sink's call, applied per render in `output::common::table`.
 pub fn cell(value: &str, tag: impl Tag) -> Cell {
     cell_for(value, tag.role_of(value))
 }

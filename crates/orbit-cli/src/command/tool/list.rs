@@ -6,7 +6,7 @@ use orbit_core::OrbitError;
 use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 use super::support::{format_required_tool_input_summary, tool_status};
 
@@ -60,10 +60,10 @@ impl Execute for ToolListArgs {
             })
             .collect();
 
-        use crate::output::table::Column;
+        use crate::output::common::table::Column;
         // `orbit tool show <name>` prints the untruncated description and
         // input schema for any row truncated here.
-        let mut table = crate::output::table::Table::new(vec![
+        let mut table = crate::output::common::table::Table::new(vec![
             Column::new("NAME").fixed(),
             Column::new("STATUS").fixed(),
             Column::new("BUILTIN").fixed(),
@@ -79,7 +79,7 @@ impl Execute for ToolListArgs {
             use comfy_table::Cell;
             table.add_row(vec![
                 Cell::new(&tool.name),
-                crate::output::color::cell(tool_status(tool), Domain::JobState),
+                crate::output::common::color::cell(tool_status(tool), Domain::JobState),
                 Cell::new(if tool.builtin { "yes" } else { "no" }),
                 Cell::new(format_required_tool_input_summary(&tool.parameters)),
                 Cell::new(&tool.description),

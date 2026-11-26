@@ -5,7 +5,7 @@ use orbit_core::application::job::job_catalog_to_json_with_last_run;
 use orbit_types::workflow::JobKind;
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 use super::support::{
     format_last_run, job_catalog_filter, job_catalog_target_summary, job_catalog_to_signal_json,
@@ -45,7 +45,7 @@ impl ExecuteCore for JobListArgs {
                 .collect::<Vec<_>>()
         };
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         // `orbit job show <job_id>` prints a job's full definition.
         let mut table = Table::new(vec![
             Column::new("JOB_ID").fixed(),
@@ -64,7 +64,7 @@ impl ExecuteCore for JobListArgs {
                 Cell::new(job.kind().to_string()),
                 Cell::new(target_type),
                 Cell::new(target_id),
-                crate::output::color::cell(&job.state().to_string(), Domain::JobState),
+                crate::output::common::color::cell(&job.state().to_string(), Domain::JobState),
                 Cell::new(format_last_run(last_run.as_ref())),
             ]);
         }

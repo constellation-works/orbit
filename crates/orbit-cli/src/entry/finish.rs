@@ -2,7 +2,7 @@ use super::resolved::Resolved;
 use crate::audit_middleware;
 use crate::command;
 use crate::output;
-use crate::output::sink::{OutputMode, OutputSink};
+use crate::output::common::sink::{OutputMode, OutputSink};
 
 /// Refuse this invocation if a plugin backend is the caller [ORB-12876].
 ///
@@ -33,7 +33,7 @@ pub(super) fn refuse_plugin_child_cli(
 /// Render what the command returned, or report why it failed.
 ///
 /// This is the only place a command's records reach stdout: `dispatch` hands
-/// back a payload and `output::render` projects it into the mode the sink
+/// back a payload and `output::common::render` projects it into the mode the sink
 /// resolved (spec §3). A rendering failure is a command failure — a payload
 /// that could not be serialized must not exit `0`.
 pub(super) fn finish_command(
@@ -52,7 +52,7 @@ pub(super) fn finish_command(
         .and_then(command::CommandOutput::audit_message)
         .map(str::to_owned);
     let rendered = result.and_then(|output| {
-        output::pipe::catch_closed_stdout(|| output::render::emit(output, sink))
+        output::common::pipe::catch_closed_stdout(|| output::common::render::emit(output, sink))
     });
     if let Some(guard) = guard.as_mut() {
         guard.mark_result(&rendered, exit_code, audit_message.as_deref());
@@ -89,8 +89,8 @@ pub(super) fn print_error(
     tool_run_json_output: Option<bool>,
 ) {
     if let Some(pretty) = json_error_format(sink, tool_run_json_output) {
-        let payload = crate::output::json::error_payload(error);
-        if let Ok(rendered) = crate::output::json::render(&payload, pretty) {
+        let payload = crate::output::common::json::error_payload(error);
+        if let Ok(rendered) = crate::output::common::json::render(&payload, pretty) {
             eprintln!("{rendered}");
             return;
         }

@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 
 use super::operation_args::Invocation;
 use crate::command::{CommandOut, ExecuteCore, Payload};
-use crate::output::payload::Block;
+use crate::output::common::payload::Block;
 
 #[derive(Args)]
 #[command(about = orbit_common::governance::friction::FRICTION.cli_about)]
@@ -82,7 +82,7 @@ fn records_table_payload(value: &Value) -> CommandOut {
         return Ok(Payload::document(value.clone()).into());
     };
 
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     // `orbit friction show <id>` prints a record in full.
     let mut table = Table::new(vec![
         Column::new("ID").fixed(),

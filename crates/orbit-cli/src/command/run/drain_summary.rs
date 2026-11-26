@@ -15,7 +15,7 @@ pub(super) fn leaf_lines(
     drain_state: JobRunState,
     formatter: &WaitingTaskFormatter,
 ) -> Vec<String> {
-    use crate::output::color::bold;
+    use crate::output::common::color::bold;
     let mut lines = vec![format!(
         "{} admitted={} succeeded={} failed={} running={} cancelled={}{}{}",
         bold("Leaves:"),
@@ -146,7 +146,7 @@ pub(super) fn leaf_lines(
 /// The `Still waiting:` block, and for a pull drain that has found nothing
 /// claimable here several passes running, the `idle:` line that says why.
 fn waiting_lines(waiting: &WaitingBacklog, formatter: &WaitingTaskFormatter) -> Vec<String> {
-    use crate::output::color::bold;
+    use crate::output::common::color::bold;
     if !waiting.has_starved_tasks() {
         return Vec::new();
     }
@@ -250,7 +250,7 @@ fn approval_lines(report: &DrainApprovalReport, formatter: &WaitingTaskFormatter
     };
     let mut lines = vec![format!(
         "{} {} proposed task(s) moved to backlog{closed}; {} held{}",
-        crate::output::color::bold("Approved:"),
+        crate::output::common::color::bold("Approved:"),
         report.approved_total,
         report.held_total,
         if report.held_by_reason.is_empty() {
@@ -299,7 +299,7 @@ fn throttle_line(
         .unwrap_or_default();
     format!(
         "{} {}{at}",
-        crate::output::color::bold("Throttled:"),
+        crate::output::common::color::bold("Throttled:"),
         throttle.hold_reason()
     )
 }
@@ -319,7 +319,7 @@ pub(super) fn pass_refusal_line(pass: &DrainAdmissionPass) -> Option<String> {
     pass.admission_refusal.as_ref().map(|refusal| {
         format!(
             "{} {refusal} (last pass {})",
-            crate::output::color::bold("Requests held:"),
+            crate::output::common::color::bold("Requests held:"),
             pass.recorded_at.format("%Y-%m-%d %H:%M:%SZ")
         )
     })

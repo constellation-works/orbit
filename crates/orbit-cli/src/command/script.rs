@@ -18,7 +18,7 @@ use orbit_types::workflow::activity_job::{ScriptGrant, ScriptNetwork};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 
 #[derive(Args)]
 #[command(

@@ -4,7 +4,7 @@ use orbit_core::OrbitRuntime;
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 
 #[derive(Args)]
 pub struct ConfigKeysArgs {}

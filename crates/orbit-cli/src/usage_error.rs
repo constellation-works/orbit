@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use clap::ValueEnum;
 use clap::error::ErrorKind;
 
-use crate::output::sink::{FormatArg, OutputMode, OutputSink};
+use crate::output::common::sink::{FormatArg, OutputMode, OutputSink};
 
 /// The `--format` value and whether a legacy `--json`/`--ops` flag appears in
 /// argv, read without the command tree.
@@ -59,8 +59,9 @@ pub(crate) fn exit(
     if error.use_stderr() && error.kind() != ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand {
         let sink = OutputSink::from_process(env, requested, legacy_json);
         if matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson) {
-            let payload = crate::output::json::usage_error_payload(&message(&error));
-            if let Ok(rendered) = crate::output::json::render(&payload, sink.pretty_json()) {
+            let payload = crate::output::common::json::usage_error_payload(&message(&error));
+            if let Ok(rendered) = crate::output::common::json::render(&payload, sink.pretty_json())
+            {
                 eprintln!("{rendered}");
                 orbit_common::observability::logging::exit(error.exit_code());
             }

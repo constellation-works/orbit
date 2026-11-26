@@ -5,7 +5,7 @@ use orbit_types::workspace::WorkspaceRegistry;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 
 #[derive(Args)]
 pub struct WorkspaceListArgs {

@@ -11,7 +11,7 @@ Color in `orbit` output is a semantic role attached to a value's meaning, mapped
 
 ## Why This Exists
 
-Before this migration, separate helpers encoded the status vocabulary for `comfy_table::Cell` and `colored`-styled `String`. The copies had drifted, and the backends disagreed about whether `NO_COLOR` applied. The current `crates/orbit-cli/src/output/color.rs` maps values once through `role_for` and provides `cell` and `text` renderers; the sink decides whether ANSI is emitted. Rationale in [One Semantic Color Vocabulary, Gated at the Sink](../4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
+Before this migration, separate helpers encoded the status vocabulary for `comfy_table::Cell` and `colored`-styled `String`. The copies had drifted, and the backends disagreed about whether `NO_COLOR` applied. The current `crates/orbit-cli/src/output/common/color.rs` maps values once through `role_for` and provides `cell` and `text` renderers; the sink decides whether ANSI is emitted. Rationale in [One Semantic Color Vocabulary, Gated at the Sink](../4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
 ## 1. The Role Vocabulary
 
@@ -45,7 +45,7 @@ default.
 
 There are no command-line color override flags; the sink owns this environment-based policy.
 
-**Invariant:** exactly one place in the crate reads these — `output/sink.rs`, enforced by `scripts/check-terminal-state-guard.sh`. A call site that consults them itself is a defect. Because the two styling crates each ship their own probe, "one place" also means the sink must *override* them rather than agree with them: `OutputSink::apply_color_policy` sets `colored`'s global override, and `output::table` passes `enforce_styling`/`force_no_tty` per render. Neither backend is left to ask.
+**Invariant:** exactly one place in the crate reads these — `output/common/sink.rs`, enforced by `scripts/check-terminal-state-guard.sh`. A call site that consults them itself is a defect. Because the two styling crates each ship their own probe, "one place" also means the sink must *override* them rather than agree with them: `OutputSink::apply_color_policy` sets `colored`'s global override, and `output::common::table` passes `enforce_styling`/`force_no_tty` per render. Neither backend is left to ask.
 
 ## 3. Rules
 

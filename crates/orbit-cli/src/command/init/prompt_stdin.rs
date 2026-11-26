@@ -13,7 +13,7 @@ use std::io::{self, ErrorKind, Write};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use crate::output::sink;
+use crate::output::common::sink;
 
 /// The next step for a fresh machine's identity prompts, or for the crew prompts
 /// that run before them. It names both identity flags because `--non-interactive`

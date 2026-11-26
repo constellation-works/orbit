@@ -48,7 +48,7 @@ pub(super) fn job_catalog_to_signal_json(job: &JobCatalogEntry) -> Value {
 }
 
 pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
-    use crate::output::color::bold;
+    use crate::output::common::color::bold;
     use std::fmt::Write as _;
 
     let pad = " ".repeat(indent);

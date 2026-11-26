@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::prepare::StateFilter;
 use crate::command::{CommandOut, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 
 /// Build an auto-task response's payload. `name` is the requested definition.
 pub(super) fn render(

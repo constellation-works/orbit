@@ -28,7 +28,7 @@ use orbit_config::{
 use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
-use crate::output::payload::ConfigShow;
+use crate::output::config::ConfigShow;
 
 /// Rendered in place of a value that does not exist, so an unset key is not an
 /// empty column that reads as an empty string.

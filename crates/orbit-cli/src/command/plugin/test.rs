@@ -9,7 +9,7 @@ use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 #[derive(Args)]
 pub struct PluginTestArgs {
@@ -77,7 +77,7 @@ impl PluginTestArgs {
             unreachable!("plugin command returned an unrelated outcome");
         };
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         use comfy_table::Cell;
         let mut table = Table::new(vec![
             Column::new("TEST").fixed(),
@@ -90,7 +90,7 @@ impl PluginTestArgs {
             table.add_row(vec![
                 Cell::new(&result.name),
                 Cell::new(&result.tool),
-                crate::output::color::cell(
+                crate::output::common::color::cell(
                     if result.updated {
                         "updated"
                     } else if result.deferred {
