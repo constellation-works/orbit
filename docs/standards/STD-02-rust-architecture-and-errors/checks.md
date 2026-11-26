@@ -9,7 +9,7 @@ The gate that enforces each rule in [STD-02](STD-02.md), or `review-only`. Ship 
 | R3 | Clippy `disallowed-methods` ban on the `std::env` reads in [the baseline below](#clippy-disallowed-paths-r3-r5-r6) (config loads, `current_dir`, `home_dir`) outside composition, with a reasoned `#![expect]` in composition; discovery through other calls is review-only |
 | R4 | Dependency-direction check |
 | R5 | Dependency-direction check (no internal edges) plus a grep ban on `std::net` in the contract unit, and the Clippy `disallowed-types`/`disallowed-methods` ban on `std::fs` and `std::process` in [the baseline below](#clippy-disallowed-paths-r3-r5-r6) |
-| R6 | Dependency-direction check in CI (unlisted crate/edge/cycle, `crate::` module rules) plus `clippy.toml` `disallowed-types` and `disallowed-methods` with `cargo clippy --all-targets -- -D warnings` |
+| R6 | `clippy.toml` `disallowed-types` and `disallowed-methods` with `cargo clippy --all-targets -- -D warnings`; that an expectation sits only in a test target is review-only |
 | R7 | Dependency-direction check bans surface crates (`clap`, terminal and log-subscriber crates) in the domain crate; the split decision itself is review-only |
 | R24 | A regression test that drives the rule through the shared function rather than through one surface (Orbit: the ship guard's test calls `submit_ship_run` directly); otherwise review-only |
 | R25 | review-only |
@@ -45,12 +45,12 @@ The gate that enforces each rule in [STD-02](STD-02.md), or `review-only`. Ship 
 | R32 | A test with one poisoned item among good ones: the good items complete, the bad one is reported by identity, and the summary counts it as a failure |
 | R33 | A test per documented partial state that seeds it and asserts the recovery path completes or undoes it |
 | R34 | A test per rejected input asserting the fixture root is unchanged afterwards; dry-run/real-run code sharing is review-only |
-| R15 | `clippy::print_stdout`, `clippy::print_stderr`, `clippy::dbg_macro`, plus a stream grep guard (below): clippy does not see `writeln!(io::stdout(), …)` |
+| R15 | `clippy::print_stdout`, `clippy::print_stderr`, `clippy::dbg_macro`, and `clippy.toml` `disallowed-methods` entries for `std::io::stdout`, `std::io::stderr` and `std::io::IsTerminal::is_terminal`, with a module-level `#![expect]` on the output layer |
 | R16 | Round-trip tests on persisted fixtures (old document deserializes; removed key warns; write → read → write is byte-stable); grep ban on `serde(default = "…now")` |
 | R17 | Retired-path guard in the dependency-direction check; otherwise review-only |
 | R18 | review-only |
 | R50 | review-only |
-| R19 | Orphan-module check (every `src/**/tests/*.rs` declared in its `tests/mod.rs`) |
+| R19 | The orphan-test-module check (`scripts/check-test-modules.sh`); the file's name is review-only |
 | R20 | review-only |
 | R21 | review-only |
 | R22 | `cargo clippy --all-targets -- -D warnings` in CI and in the pre-handoff gate |

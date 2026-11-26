@@ -3,9 +3,9 @@ id: STD-08-economy
 title: Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, complete stored records, size stated at design time
 summary: Normative rules for designing anything an agent or operator reads repeatedly (prompts, briefs, tool results, task comments, checkpoints, errors, logs, reports) with an economical mindset — a fixed size that does not grow with history, each fact once and referenced by id, delta-only records, machine bookkeeping kept out of the readable body, asks in their own channel, outcome first, one-line errors with the diagnostic behind a detail view and repeats collapsed, and the steady-state and repeated size stated before it ships — while errors, logs and audit records stay complete and structured when stored; follow it in any project where agents produce or consume text.
 tags: [standard, agents, tokens, design]
-version: 3
+version: 4
 created_date: 2026-11-15
-updated_date: 2026-11-25
+updated_date: 2026-11-26
 last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-07-ui-ux]
 ---
@@ -46,7 +46,7 @@ This standard is a directory. This file holds the binding text. Beside it, [`why
 ### Errors, logs and audit
 
 - **R10.** An error or failure shown to a reader MUST say in one plain line what failed, why, and the next step. Its structured diagnostic (codes, paths, ids, serialized payloads) is kept in a field or behind a detail view, never interpolated into the message. Repeated identical failures collapse into one entry with a count and the time range. [STD-02](../STD-02-rust-architecture-and-errors/STD-02.md) owns which cause an error names; this rule owns how much of it is shown.
-- **R11.** Errors, logs and audit records MUST be complete when stored. Each keeps its full structured diagnostic, and each logged event or audited action records who acted, what was done, when, its inputs (or a digest of them) and its outcome, as structured fields rather than prose. Nothing is trimmed from a stored record to save space; only a declared retention policy removes records. Economy applies to how a record is shown and reread (R5, R7, R10), never to what is recorded.
+- **R11.** Errors, logs and audit records MUST be complete when stored. Each keeps its full structured diagnostic, and each logged event or audited action records who acted, what was done, when, its inputs (or a digest of them) and its outcome, as structured fields rather than prose. Nothing is trimmed from a stored record to save space; only a declared retention policy removes records. Economy applies to how a record is shown and reread (R5, R7, R10), never to what is recorded. Where STD-05 forbids storing a value in clear (a secret, free text that has not passed the redactor, a label the caller supplied), the record keeps its digest, its redacted form or a placeholder that says a value was withheld. That is a security boundary, not trimming.
 
 ## Applies to
 

@@ -2,6 +2,11 @@
 
 Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its frontmatter as `STD-02@<version>`; a version changes only when a rule is added, removed or changed in meaning.
 
+- **11** (2026-11-26): R6: the kit ban's "no exemption" covers shipped code; a test target may carry a reasoned expectation (ORB-28599).
+  - R15: the stream names are banned in `clippy.toml`, not by a grep guard; an exception is a reasoned `#[expect]` (ORB-28599).
+  - R19: the tests of a module's `mod.rs` are named for the module; `tests/mod.rs` is wiring only (ORB-28599).
+  - R20: the surface crate's `tests/` may hold end-to-end tests of the repository's check scripts (ORB-28599).
+  - R48: a top-level command that renders no result has no file under `output/` (ORB-28599).
 - **10** (2026-11-26): New rule, a heuristic: a function past about 60 code lines SHOULD be checked for phases and split along them (review-only) (scribe standard-27).
   - New rule, a MUST: a function takes at most seven parameters, the receiver counted; Clippy gate at threshold 7 (scribe standard-27).
   - New rule, a SHOULD: a function is not copied under a longer name to pass one more value (review-only) (scribe standard-27).
