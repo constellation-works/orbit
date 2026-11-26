@@ -2,10 +2,11 @@
 
 use orbit_common::OrbitError;
 use orbit_store::contract::{LocalPullAdmission, PullDestination};
-use orbit_types::workflow::DrainCancelRequest;
+use orbit_types::workflow::{DrainAdmissionPass, DrainCancelRequest};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::DrainClaimedLeaf;
 use crate::application::distributed::OwnerAnswer;
 use crate::application::pull_drain::drain::PullDrain;
 
@@ -20,24 +21,10 @@ pub(super) fn cancelling_pass(
     cancel: &DrainCancelRequest,
     poll: u64,
 ) -> Result<Value, OrbitError> {
-    let cause = match cancel.reason.as_deref() {
-        Some(reason) => format!("the drain was cancelled by {}: {reason}", cancel.actor),
-        None => format!("the drain was cancelled by {}", cancel.actor),
-    };
+    let cause = cancel_cause(cancel);
     // Only what this drain carries: another live drain's work is its own.
     let mut error = None;
-    let carried = runtime
-        .pull_drain_admissions(run_id)
-        .map(|records| {
-            records
-                .into_iter()
-                .map(|record| (record.destination, record.request.request_id))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|failure| {
-            error = Some(failure.to_string());
-            Vec::new()
-        });
+    let carried = carried_admissions(runtime, run_id, &mut error);
     let carries = |record: &LocalPullAdmission| {
         carried
             .iter()
@@ -65,13 +52,7 @@ pub(super) fn cancelling_pass(
             None
         }
     };
-    let waiting_leaves = match runtime.pull_drain_claimed_leaves(run_id) {
-        Ok(leaves) => leaves,
-        Err(failure) => {
-            error.get_or_insert(failure.to_string());
-            Vec::new()
-        }
-    };
+    let waiting_leaves = waiting_leaves(runtime, run_id, &mut error);
     let mut done = unsettled == Some(0);
     if done && let Err(failure) = runtime.complete_graceful_drain_cancel(run_id) {
         // The drain stays running and the next pass tries again.
@@ -95,7 +76,72 @@ pub(super) fn cancelling_pass(
         OwnerAnswer::None,
         None,
     )?;
-    Ok(json!({
+    Ok(cancelling_answer(
+        unsettled,
+        reclaimed_build_bytes,
+        error,
+        &health,
+        waiting_leaves,
+        done,
+        poll,
+    ))
+}
+
+fn cancel_cause(cancel: &DrainCancelRequest) -> String {
+    match cancel.reason.as_deref() {
+        Some(reason) => format!("the drain was cancelled by {}: {reason}", cancel.actor),
+        None => format!("the drain was cancelled by {}", cancel.actor),
+    }
+}
+
+/// The admissions this drain carries, as destination and request id; an
+/// unreadable list is kept as the pass's error.
+fn carried_admissions(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    error: &mut Option<String>,
+) -> Vec<(PullDestination, String)> {
+    runtime
+        .pull_drain_admissions(run_id)
+        .map(|records| {
+            records
+                .into_iter()
+                .map(|record| (record.destination, record.request.request_id))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|failure| {
+            *error = Some(failure.to_string());
+            Vec::new()
+        })
+}
+
+/// The claimed leaves a cancelling drain still waits on; an unreadable list
+/// is kept as the pass's error.
+fn waiting_leaves(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    error: &mut Option<String>,
+) -> Vec<DrainClaimedLeaf> {
+    match runtime.pull_drain_claimed_leaves(run_id) {
+        Ok(leaves) => leaves,
+        Err(failure) => {
+            error.get_or_insert(failure.to_string());
+            Vec::new()
+        }
+    }
+}
+
+/// What the engine reads of a cancelling pass.
+fn cancelling_answer(
+    unsettled: Option<usize>,
+    reclaimed_build_bytes: u64,
+    error: Option<String>,
+    health: &DrainAdmissionPass,
+    waiting_leaves: Vec<DrainClaimedLeaf>,
+    done: bool,
+    poll: u64,
+) -> Value {
+    json!({
         "admitted": 0,
         "unsettled": unsettled,
         "admitting": false,
@@ -114,5 +160,5 @@ pub(super) fn cancelling_pass(
         "done": done,
         "wait": !done,
         "sleep_seconds": if done { 0 } else { poll },
-    }))
+    })
 }

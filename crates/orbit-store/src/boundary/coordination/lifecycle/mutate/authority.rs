@@ -1,6 +1,7 @@
 use super::super::super::TaskCommitBoundary;
 use super::super::codec::{CLAIM, STATE};
 use super::super::{ClaimAuthority, decode, invalid};
+use crate::boundary::v2_bundle::TaskBundleV2;
 use crate::contract::*;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
@@ -43,46 +44,12 @@ impl TaskCommitBoundary {
             return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
         let bundle = self.bundle_store.read_bundle_lightweight(&claim.task_id)?;
-        let current_claim = bundle
-            .events
-            .iter()
-            .rev()
-            .find(|e| e.event_type == "pulled_by")
-            .and_then(|e| e.note.as_deref())
-            .map(serde_json::from_str::<serde_json::Value>)
-            .transpose()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        if current_claim
-            .as_ref()
-            .and_then(|v| v.get("claim_id"))
-            .and_then(serde_json::Value::as_str)
-            != Some(claim.claim_id.as_str())
-        {
-            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-        }
-        let expected_status = match claim.phase {
-            ExecutionClaimPhase::HandedOff => TaskStatus::Review,
-            ExecutionClaimPhase::Failed => TaskStatus::Blocked,
-            ExecutionClaimPhase::Landed => TaskStatus::Done,
-            ExecutionClaimPhase::Claimed
-            | ExecutionClaimPhase::Running
-            | ExecutionClaimPhase::Revoked
-            | ExecutionClaimPhase::RepairPending => TaskStatus::InProgress,
-        };
+        check_current_pull(&bundle, &claim)?;
+        let expected_status = expected_task_status(claim.phase);
         if bundle.envelope.status != expected_status {
             return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
-        if let Some(bound) = &state.bound_run
-            && (bundle.envelope.job_run_id.as_deref() != Some(&bound.run_id)
-                || bundle
-                    .envelope
-                    .job_run_machine
-                    .as_ref()
-                    .map(|location| location.machine_id.as_str())
-                    != Some(bound.machine_id.as_str()))
-        {
-            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
-        }
+        check_bound_leaf(&bundle, &state)?;
         Ok(ClaimAuthority {
             row,
             claim,
@@ -118,4 +85,55 @@ impl TaskCommitBoundary {
             Ok(())
         })
     }
+}
+
+/// The task's latest pull must be this claim's: a later pull supersedes it.
+fn check_current_pull(bundle: &TaskBundleV2, claim: &ExecutionClaim) -> Result<(), OrbitError> {
+    let current_claim = bundle
+        .events
+        .iter()
+        .rev()
+        .find(|e| e.event_type == "pulled_by")
+        .and_then(|e| e.note.as_deref())
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    if current_claim
+        .as_ref()
+        .and_then(|v| v.get("claim_id"))
+        .and_then(serde_json::Value::as_str)
+        != Some(claim.claim_id.as_str())
+    {
+        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+    }
+    Ok(())
+}
+
+/// The status the task holds while a claim is in `phase`.
+fn expected_task_status(phase: ExecutionClaimPhase) -> TaskStatus {
+    match phase {
+        ExecutionClaimPhase::HandedOff => TaskStatus::Review,
+        ExecutionClaimPhase::Failed => TaskStatus::Blocked,
+        ExecutionClaimPhase::Landed => TaskStatus::Done,
+        ExecutionClaimPhase::Claimed
+        | ExecutionClaimPhase::Running
+        | ExecutionClaimPhase::Revoked
+        | ExecutionClaimPhase::RepairPending => TaskStatus::InProgress,
+    }
+}
+
+/// A bound claim's task records the same leaf run, on the same machine.
+fn check_bound_leaf(bundle: &TaskBundleV2, state: &ClaimInspection) -> Result<(), OrbitError> {
+    if let Some(bound) = &state.bound_run
+        && (bundle.envelope.job_run_id.as_deref() != Some(&bound.run_id)
+            || bundle
+                .envelope
+                .job_run_machine
+                .as_ref()
+                .map(|location| location.machine_id.as_str())
+                != Some(bound.machine_id.as_str()))
+    {
+        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+    }
+    Ok(())
 }
