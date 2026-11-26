@@ -303,6 +303,8 @@ policy:
     backoff_minutes: 2
 ```
 
+`job:weekly_report_pipeline` is a placeholder: a routine whose target is not in the job catalog fails to load, so name a job from `orbit job list` or one you wrote.
+
 A cron routine runs on every machine that has this checkout registered as an owner and the clock on.
 
 | Field | Default | Meaning |
@@ -315,7 +317,7 @@ A cron routine runs on every machine that has this checkout registered as an own
 | `policy.retries.max` | `0` | Re-dispatches after the first fire fails. |
 | `policy.retries.backoff_minutes` | `2` | Minutes before a re-dispatch. At most 10080. |
 
-A `hosts:` key is retired: the file loads, and the key is ignored with a warning. `orbit doctor` warns when an enabled routine's last success is older than three times its schedule interval. After three fires in a row fail with the same error class, this host stops firing that routine until a successful trial or an operator reset closes the breaker; see [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine). `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task without dispatching any of them. It is not write-free: it still persists the validation status of registered checkouts and opens the host's scheduler store, creating or migrating it when needed.
+A `hosts:` key is retired: the file loads, and the key is ignored with a warning. `orbit doctor` warns when an enabled cron routine's last success is older than three times its schedule interval. After three fires in a row fail with the same error class, this host stops firing that routine until a successful trial or an operator reset closes the breaker; see [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine). `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task without dispatching any of them. It is not write-free: it still persists the validation status of registered checkouts and opens the host's scheduler store, creating or migrating it when needed.
 
 ### One trigger
 
