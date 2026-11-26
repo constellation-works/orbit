@@ -3,13 +3,13 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     RESIDENT_AUTHORITY_CHANGED_EVENT, RESIDENT_CYCLE_GRANTED_EVENT, ResidentComment,
-    ResidentLiveCycle, ResidentMandate,
+    ResidentMandate,
 };
 
 use super::super::control::{
     RESIDENT_CONTROL_EVENT, ResidentControlAction, ResidentControlEntry, ResidentControlState,
 };
-use super::super::cycle::CYCLE_CHANGED;
+use super::super::due::started_cycles;
 use super::super::resident_mandate_ended;
 use crate::application::statistics;
 
@@ -141,19 +141,9 @@ pub(super) fn mandate_activated_at(
 ) -> DateTime<Utc> {
     let first_cycle_at = history
         .iter()
-        .filter(|entry| {
-            entry.event == RESIDENT_CYCLE_GRANTED_EVENT
-                || (entry.event == CYCLE_CHANGED
-                    && entry
-                        .note
-                        .as_deref()
-                        .and_then(|note| {
-                            serde_json::from_str::<Option<ResidentLiveCycle>>(note).ok()
-                        })
-                        .flatten()
-                        .is_some())
-        })
+        .filter(|entry| entry.event == RESIDENT_CYCLE_GRANTED_EVENT)
         .map(|entry| entry.at)
+        .chain(started_cycles(history).into_iter().map(|cycle| cycle.at))
         .min();
     let first_checkpoint_at = comments
         .iter()

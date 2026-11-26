@@ -1,7 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskHistoryEntry;
-use orbit_types::workflow::ResidentLiveCycle;
+use orbit_types::workflow::{RESIDENT_CYCLE_CHANGED_EVENT, ResidentCycleChange, ResidentLiveCycle};
 
 use super::super::ResidentMandateState;
 #[cfg(feature = "test-support")]
@@ -9,21 +9,22 @@ use super::test_support;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
-pub(in crate::application::resident) const CYCLE_CHANGED: &str = "resident_cycle_changed";
-
+/// The live cycle the latest cycle change records. A malformed latest change
+/// refuses the read: an unreadable lease is never treated as clear.
 pub(in crate::application::resident) fn live_cycle_from_history(
     history: &[TaskHistoryEntry],
 ) -> Result<Option<ResidentLiveCycle>, OrbitError> {
-    let Some(entry) = history
+    match history
         .iter()
         .rev()
-        .find(|entry| entry.event == CYCLE_CHANGED)
-    else {
-        return Ok(None);
-    };
-    serde_json::from_str(entry.note.as_deref().unwrap_or_default()).map_err(|error| {
-        OrbitError::Execution(format!("resident cycle state is unreadable: {error}"))
-    })
+        .find_map(ResidentCycleChange::from_entry)
+    {
+        None | Some(Ok(ResidentCycleChange::Cleared)) => Ok(None),
+        Some(Ok(ResidentCycleChange::Started(live))) => Ok(Some(live)),
+        Some(Err(error)) => Err(OrbitError::Execution(format!(
+            "resident cycle state is unreadable: {error}"
+        ))),
+    }
 }
 
 impl OrbitRuntime {
@@ -82,6 +83,9 @@ impl OrbitRuntime {
         if next.is_some() {
             test_support::before_resident_cycle_publication();
         }
+        let change = next
+            .cloned()
+            .map_or(ResidentCycleChange::Cleared, ResidentCycleChange::Started);
         let mut prior_history = None;
         self.stores()
             .tasks()
@@ -106,23 +110,18 @@ impl OrbitRuntime {
                     ));
                 }
                 if let Some(next) = next
-                    && history
-                        .iter()
-                        .filter(|entry| entry.event == CYCLE_CHANGED)
-                        .any(|entry| {
-                            serde_json::from_str::<Option<ResidentLiveCycle>>(
-                                entry.note.as_deref().unwrap_or_default(),
-                            )
-                            .ok()
-                            .flatten()
-                            .is_some_and(|old| old.cycle == next.cycle)
-                        })
+                    && history.iter().any(|entry| {
+                        matches!(
+                            ResidentCycleChange::from_entry(entry),
+                            Some(Ok(ResidentCycleChange::Started(old))) if old.cycle == next.cycle
+                        )
+                    })
                 {
                     return Err(OrbitError::InvalidInput(
                         "resident cycle ids cannot be reused".into(),
                     ));
                 }
-                let note = serde_json::to_string(&next).map_err(|error| {
+                let note = change.to_note().map_err(|error| {
                     OrbitError::Execution(format!("serialize live cycle: {error}"))
                 })?;
                 self.stores().task_records().update(
@@ -132,7 +131,7 @@ impl OrbitRuntime {
                         append_history: vec![TaskHistoryEntry {
                             at: Utc::now(),
                             by: "system".into(),
-                            event: CYCLE_CHANGED.into(),
+                            event: RESIDENT_CYCLE_CHANGED_EVENT.into(),
                             note: Some(note),
                             from_status: None,
                             to_status: None,

@@ -6,4 +6,4 @@
 pub(crate) mod test_support;
 
 mod lifecycle;
-pub(super) use lifecycle::{CYCLE_CHANGED, live_cycle_from_history};
+pub(super) use lifecycle::live_cycle_from_history;
