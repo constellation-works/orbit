@@ -47,6 +47,7 @@ rust-version = "1.89"
 # Workspace-wide lint config. Each crate opts in via `[lints] workspace = true`.
 # Keep this list short — only rules that are mechanically true everywhere.
 [workspace.lints.clippy]
+arbitrary_source_item_ordering = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 await_holding_invalid_type = "deny"

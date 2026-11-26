@@ -1,6 +1,90 @@
 //! Age-based `.orbit/tmp` pruning by the worktree GC job, through the real
 //! CLI with disposable workspace state.
 
+#[cfg(target_os = "linux")]
+mod held {
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    struct Process(Child);
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn an_entry_a_live_process_has_open_or_uses_as_its_cwd_is_skipped_and_reported() {
+        let fixture = Fixture::new();
+        let tmp = fixture.tmp();
+        fs::create_dir_all(tmp.join("held-cwd")).unwrap();
+        fs::create_dir_all(tmp.join("held-open")).unwrap();
+        fs::write(tmp.join("held-open/data"), b"data").unwrap();
+        fs::write(tmp.join("idle"), b"idle").unwrap();
+
+        let in_cwd = Process(
+            Command::new("sleep")
+                .arg("300")
+                .current_dir(tmp.join("held-cwd"))
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        // `exec` replaces the shell, so fd 3 belongs to `sleep` itself.
+        let with_open_file = Process(
+            Command::new("sh")
+                .current_dir(&fixture.work)
+                .args(["-c", "exec sleep 300 3< .orbit/tmp/held-open/data"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let fd = PathBuf::from(format!("/proc/{}/fd/3", with_open_file.0.id()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fs::read_link(&fd).is_err() {
+            assert!(Instant::now() < deadline, "the shell never opened the file");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        for name in [
+            "held-cwd/",
+            "held-open/data",
+            "held-open",
+            "held-cwd",
+            "idle",
+        ] {
+            let path = tmp.join(name);
+            if path.exists() {
+                age(&path, 48);
+            }
+        }
+
+        let reap = fixture.gc(&[]);
+        let scratch = &reap["scratch"];
+        assert_eq!(scratch["entries_removed"], 1, "{reap}");
+        assert_eq!(scratch["entries_skipped"], 2, "{reap}");
+        assert_eq!(entry(scratch, &tmp, "idle")["action"], "removed");
+        for name in ["held-cwd", "held-open"] {
+            let skipped = entry(scratch, &tmp, name);
+            assert_eq!(skipped["action"], "skipped", "{name}");
+            assert!(
+                skipped["reason"].as_str().unwrap().contains("live process"),
+                "{name}: {skipped}"
+            );
+            assert!(tmp.join(name).exists(), "{name} was removed while held");
+        }
+
+        drop((in_cwd, with_open_file));
+        let after = fixture.gc(&[]);
+        assert_eq!(after["scratch"]["entries_removed"], 2, "{after}");
+        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
+    }
+}
+
 use std::ffi::CString;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -385,90 +469,6 @@ fn unreadable_retrying_inventory_or_state_prevents_all_scratch_deletion() {
         for name in ["from-input", "from-state", "unrelated"] {
             assert_eq!(fs::read(fixture.tmp().join(name)).unwrap(), name.as_bytes());
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-mod held {
-    use std::process::{Child, Command, Stdio};
-    use std::time::{Duration, Instant};
-
-    use super::*;
-
-    struct Process(Child);
-
-    impl Drop for Process {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
-    #[test]
-    fn an_entry_a_live_process_has_open_or_uses_as_its_cwd_is_skipped_and_reported() {
-        let fixture = Fixture::new();
-        let tmp = fixture.tmp();
-        fs::create_dir_all(tmp.join("held-cwd")).unwrap();
-        fs::create_dir_all(tmp.join("held-open")).unwrap();
-        fs::write(tmp.join("held-open/data"), b"data").unwrap();
-        fs::write(tmp.join("idle"), b"idle").unwrap();
-
-        let in_cwd = Process(
-            Command::new("sleep")
-                .arg("300")
-                .current_dir(tmp.join("held-cwd"))
-                .stdin(Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-        // `exec` replaces the shell, so fd 3 belongs to `sleep` itself.
-        let with_open_file = Process(
-            Command::new("sh")
-                .current_dir(&fixture.work)
-                .args(["-c", "exec sleep 300 3< .orbit/tmp/held-open/data"])
-                .stdin(Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-        let fd = PathBuf::from(format!("/proc/{}/fd/3", with_open_file.0.id()));
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while fs::read_link(&fd).is_err() {
-            assert!(Instant::now() < deadline, "the shell never opened the file");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-
-        for name in [
-            "held-cwd/",
-            "held-open/data",
-            "held-open",
-            "held-cwd",
-            "idle",
-        ] {
-            let path = tmp.join(name);
-            if path.exists() {
-                age(&path, 48);
-            }
-        }
-
-        let reap = fixture.gc(&[]);
-        let scratch = &reap["scratch"];
-        assert_eq!(scratch["entries_removed"], 1, "{reap}");
-        assert_eq!(scratch["entries_skipped"], 2, "{reap}");
-        assert_eq!(entry(scratch, &tmp, "idle")["action"], "removed");
-        for name in ["held-cwd", "held-open"] {
-            let skipped = entry(scratch, &tmp, name);
-            assert_eq!(skipped["action"], "skipped", "{name}");
-            assert!(
-                skipped["reason"].as_str().unwrap().contains("live process"),
-                "{name}: {skipped}"
-            );
-            assert!(tmp.join(name).exists(), "{name} was removed while held");
-        }
-
-        drop((in_cwd, with_open_file));
-        let after = fixture.gc(&[]);
-        assert_eq!(after["scratch"]["entries_removed"], 2, "{after}");
-        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
     }
 }
 
