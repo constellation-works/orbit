@@ -71,6 +71,11 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_at("repo")
+}
+
+/// A fixture whose workspace root directory is named `repo_dir`.
+fn fixture_at(repo_dir: &str) -> Fixture {
     crate::scenarios::require_isolated_mutable_fixture("resident_cycle::fixture");
     let env = std::cell::RefCell::new(Some(orbit_common::test_env::unset(TOOL_ENV)));
     // The default macOS temp path leaves too little room for the broker socket.
@@ -81,7 +86,7 @@ fn fixture() -> Fixture {
     };
     let root = TempDir::new_in(temp_root).unwrap();
     let global = root.path().join("global");
-    let repo = root.path().join("repo");
+    let repo = root.path().join(repo_dir);
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     std::fs::write(repo.join(".orbit/config.toml"), CONFIG).unwrap();
@@ -127,6 +132,12 @@ macro_rules! isolated_fixture {
             return;
         }
         fixture()
+    }};
+    ($name:ident, $repo_dir:expr) => {{
+        if !super::dispatch_admission::isolated(concat!("resident_cycle::", stringify!($name))) {
+            return;
+        }
+        fixture_at($repo_dir)
     }};
 }
 
@@ -1145,6 +1156,67 @@ fn a_locked_resident_worktree_stays_and_finalize_reports_gits_refusal() {
         listed.contains(&worktree.display().to_string()),
         "Git still registers the locked worktree: {listed}"
     );
+}
+
+/// A locked resident worktree is a registered worktree whatever its path
+/// holds. Git's machine-delimited listing carries a multiline workspace
+/// root and a multiline lock reason whole, so the checkout is kept and
+/// Git's refusal is reported instead of the checkout being treated as
+/// unregistered and deleted as owned.
+#[test]
+fn a_locked_resident_worktree_is_registered_under_ordinary_and_multiline_roots() {
+    for (label, repo_dir) in [("ordinary", "repo"), ("multiline", "multi\nline repo")] {
+        let fx = isolated_fixture!(
+            a_locked_resident_worktree_is_registered_under_ordinary_and_multiline_roots,
+            repo_dir
+        );
+        let (_watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+        let run = fx.cycle_run(&mandate, "resident-cycle-locked-root");
+        let brief = fx.begin_cycle(&run, Utc::now());
+        let worktree = PathBuf::from(
+            brief["workspace_path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label}: a due cycle names its worktree: {brief}")),
+        );
+        assert_eq!(
+            worktree.to_str().unwrap().contains('\n'),
+            label == "multiline",
+            "{label}: the worktree path {worktree:?}"
+        );
+        std::fs::write(worktree.join("investigation.txt"), "keep-this").unwrap();
+        let lock = crate::git_test_support::command()
+            .args([
+                "worktree",
+                "lock",
+                "--reason",
+                "keep this\ncycle investigation",
+                worktree.to_str().unwrap(),
+            ])
+            .current_dir(&fx.repo)
+            .status()
+            .unwrap();
+        assert!(lock.success(), "{label}: git worktree lock");
+
+        let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+        assert_eq!(finished["finalized"], true, "{label}: {finished}");
+        let error = finished["worktree_removal_error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label}: finalize reports the refusal: {finished}"));
+        assert!(
+            error.contains("refused to remove registered resident cycle worktree"),
+            "{label}: the locked checkout takes the registered branch: {error}"
+        );
+        assert!(
+            error.contains("cannot remove a locked working tree"),
+            "{label}: the report quotes Git's refusal: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("investigation.txt")).unwrap(),
+            "keep-this",
+            "{label}: a locked checkout is never routed to unregistered cleanup"
+        );
+        assert!(worktree.join(".git").exists(), "{label}: still a checkout");
+    }
 }
 
 /// [ORB-24317] A directory already at `resident-<run>` is not this run's

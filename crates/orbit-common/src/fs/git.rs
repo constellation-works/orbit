@@ -495,27 +495,39 @@ pub fn run_git_within(
     args: &[&str],
     deadline: Duration,
 ) -> Result<GitCommandOutput, OrbitError> {
-    let mut command = git_command(env, workspace_path, args)?;
-    let output =
-        run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
-            |error| match error {
-                OrbitError::ProcessTimeout { timeout_ms, .. } => OrbitError::ProcessTimeout {
-                    timeout_ms,
-                    detail: format!("`git {}` in '{}'", args.join(" "), workspace_path.display()),
-                },
-                other => OrbitError::Execution(format!(
-                    "failed to run `git {}` in '{}': {other}",
-                    args.join(" "),
-                    workspace_path.display()
-                )),
-            },
-        )?;
-
+    let output = run_git_bytes_within(env, workspace_path, args, deadline)?;
     Ok(GitCommandOutput {
         success: output.status.success(),
         code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// [`run_git_within`] that keeps the child's streams as raw bytes.
+///
+/// A caller decoding NUL-delimited (`-z`) output needs the exact bytes: the
+/// lossy text in [`GitCommandOutput`] replaces a byte sequence that is not
+/// UTF-8, so a path read from it would no longer name the original entry.
+/// The spawn, environment, deadline and output-limit rules are those of
+/// [`run_git_within`].
+pub fn run_git_bytes_within(
+    env: &crate::Env,
+    workspace_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<crate::process::CapturedOutput, OrbitError> {
+    let mut command = git_command(env, workspace_path, args)?;
+    run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(|error| match error {
+        OrbitError::ProcessTimeout { timeout_ms, .. } => OrbitError::ProcessTimeout {
+            timeout_ms,
+            detail: format!("`git {}` in '{}'", args.join(" "), workspace_path.display()),
+        },
+        other => OrbitError::Execution(format!(
+            "failed to run `git {}` in '{}': {other}",
+            args.join(" "),
+            workspace_path.display()
+        )),
     })
 }
 
