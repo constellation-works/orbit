@@ -14,6 +14,15 @@ use super::super::{encode, invalid};
 use super::decide::ClaimDecision;
 use crate::contract::*;
 
+/// Landing events an operator may record as task history.
+const RECORDABLE_LANDING_EVENTS: [&str; 5] = [
+    "ci_check_rerun",
+    "ci_base_suspect",
+    "ci_check_rerun_reserved",
+    "ci_infrastructure_retry_backoff",
+    "ci_infrastructure_retry_exhausted",
+];
+
 /// What an operator reports of a pull request merged outside Orbit.
 pub(super) struct ExternalMerge<'a> {
     pub(super) pull_request: u64,
@@ -28,40 +37,6 @@ pub(super) struct LandingHistoryRecord<'a> {
     pub(super) event: &'a str,
     pub(super) note: &'a str,
     pub(super) decision: Option<&'a TaskDecision>,
-}
-
-/// Landing events an operator may record as task history.
-const RECORDABLE_LANDING_EVENTS: [&str; 5] = [
-    "ci_check_rerun",
-    "ci_base_suspect",
-    "ci_check_rerun_reserved",
-    "ci_infrastructure_retry_backoff",
-    "ci_infrastructure_retry_exhausted",
-];
-
-fn recordable_landing_event(event: &str) -> bool {
-    RECORDABLE_LANDING_EVENTS.contains(&event)
-        || [
-            orbit_types::workflow::CI_FAILURE_RECORDED_EVENT,
-            orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT,
-            orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT,
-        ]
-        .contains(&event)
-}
-
-/// Landing mutations that record or wait act only for an operator on a
-/// handed-off claim whose landing context is still current.
-fn require_landing_context(
-    auth: &ClaimInvocation,
-    decision: &ClaimDecision,
-) -> Result<(), OrbitError> {
-    if !auth.operator
-        || decision.claim.phase != ExecutionClaimPhase::HandedOff
-        || decision.state.landing_invalidated
-    {
-        return Err(invalid("current operator landing context required"));
-    }
-    Ok(())
 }
 
 impl ClaimDecision {
@@ -404,6 +379,31 @@ impl TaskCommitBoundary {
         state.last_event = "claim_merge_intent".into();
         Ok(())
     }
+}
+
+fn recordable_landing_event(event: &str) -> bool {
+    RECORDABLE_LANDING_EVENTS.contains(&event)
+        || [
+            orbit_types::workflow::CI_FAILURE_RECORDED_EVENT,
+            orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT,
+            orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT,
+        ]
+        .contains(&event)
+}
+
+/// Landing mutations that record or wait act only for an operator on a
+/// handed-off claim whose landing context is still current.
+fn require_landing_context(
+    auth: &ClaimInvocation,
+    decision: &ClaimDecision,
+) -> Result<(), OrbitError> {
+    if !auth.operator
+        || decision.claim.phase != ExecutionClaimPhase::HandedOff
+        || decision.state.landing_invalidated
+    {
+        return Err(invalid("current operator landing context required"));
+    }
+    Ok(())
 }
 
 /// A landing history record names an event the claim may record, a note, and

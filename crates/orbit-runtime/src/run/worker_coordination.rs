@@ -11,35 +11,14 @@ use orbit_types::tool::WorkerInvocation;
 use crate::RuntimeKernel;
 
 #[cfg(feature = "test-support")]
-type TestWait = fn(std::time::Duration);
-
-#[cfg(feature = "test-support")]
 thread_local! {
     static TEST_PIPELINE_POLL_WAIT: std::cell::Cell<Option<TestWait>> = const {
         std::cell::Cell::new(None)
     };
 }
 
-/// Substitute only a pipeline wait's polling sleep on this thread. Elapsed
-/// time, caller deadlines, snapshots and child/process operations remain real.
-/// Restore the previous callback on return or unwind; worker threads must opt in
-/// separately, and cadence/deadline conformance tests must use the system wait.
 #[cfg(feature = "test-support")]
-pub fn with_pipeline_poll_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
-    struct Restore(Option<TestWait>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            TEST_PIPELINE_POLL_WAIT.with(|slot| slot.set(self.0));
-        }
-    }
-    let _restore = Restore(TEST_PIPELINE_POLL_WAIT.with(|slot| slot.replace(Some(wait))));
-    operation()
-}
-
-#[cfg(feature = "test-support")]
-pub fn pipeline_poll_wait_override() -> Option<TestWait> {
-    TEST_PIPELINE_POLL_WAIT.with(std::cell::Cell::get)
-}
+type TestWait = fn(std::time::Duration);
 
 impl RuntimeKernel {
     pub fn current_worker_invocation(
@@ -97,6 +76,27 @@ impl RuntimeKernel {
         }
         Ok(())
     }
+}
+
+/// Substitute only a pipeline wait's polling sleep on this thread. Elapsed
+/// time, caller deadlines, snapshots and child/process operations remain real.
+/// Restore the previous callback on return or unwind; worker threads must opt in
+/// separately, and cadence/deadline conformance tests must use the system wait.
+#[cfg(feature = "test-support")]
+pub fn with_pipeline_poll_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<TestWait>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_PIPELINE_POLL_WAIT.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_PIPELINE_POLL_WAIT.with(|slot| slot.replace(Some(wait))));
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+pub fn pipeline_poll_wait_override() -> Option<TestWait> {
+    TEST_PIPELINE_POLL_WAIT.with(std::cell::Cell::get)
 }
 
 /// A required child can start before the parent has recorded its PID. Wait

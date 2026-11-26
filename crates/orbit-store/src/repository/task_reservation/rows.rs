@@ -31,6 +31,60 @@ pub(super) const TASK_RESERVATION_ROWS: &str = "kind = 'task_reservation'";
 /// `files`-scope rows held by a lease principal.
 pub(super) const LEASE_ROWS: &str = "kind = 'lease'";
 
+#[derive(Debug, Clone)]
+pub(super) struct ReservationRow {
+    reservation_id: String,
+    workspace_id: Option<String>,
+    task_ids_json: String,
+    files_json: String,
+    actor: String,
+    created_at: String,
+    expires_at: String,
+    pub(super) released_at: Option<String>,
+    owner_run_id: Option<String>,
+    owner_metadata_json: Option<String>,
+    kind: String,
+}
+
+impl ReservationRow {
+    pub(super) fn into_active(self) -> Result<ActiveTaskReservation, OrbitError> {
+        Ok(ActiveTaskReservation {
+            reservation_id: self.reservation_id,
+            kind: TaskReservationKind::parse(&self.kind),
+            workspace_id: self.workspace_id,
+            task_ids: parse_string_list(&self.task_ids_json)?,
+            files: parse_string_list(&self.files_json)?,
+            actor: self.actor,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+            owner_run_id: self.owner_run_id,
+            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
+        })
+    }
+
+    pub(super) fn into_released(
+        self,
+        released_at: String,
+        release_reason: TaskReservationReleaseReason,
+        release_metadata_json: Option<String>,
+    ) -> Result<ReleasedTaskReservation, OrbitError> {
+        Ok(ReleasedTaskReservation {
+            reservation_id: self.reservation_id,
+            workspace_id: self.workspace_id,
+            task_ids: parse_string_list(&self.task_ids_json)?,
+            files: parse_string_list(&self.files_json)?,
+            actor: self.actor,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+            released_at,
+            owner_run_id: self.owner_run_id,
+            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
+            release_reason,
+            release_metadata_json,
+        })
+    }
+}
+
 /// Mint a reservation or claim row id that cannot collide with another
 /// caller's. The wall clock alone is not enough: two agents reserving in the
 /// same nanosecond tick (or on a clock that fails and reads as 0) would both
@@ -370,60 +424,6 @@ pub(super) fn reservation_scope_clause(
         None => "workspace_orbit_dir = ?2",
     };
     format!("{workspace} AND scope = '{}'", scope.as_str())
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ReservationRow {
-    reservation_id: String,
-    workspace_id: Option<String>,
-    task_ids_json: String,
-    files_json: String,
-    actor: String,
-    created_at: String,
-    expires_at: String,
-    pub(super) released_at: Option<String>,
-    owner_run_id: Option<String>,
-    owner_metadata_json: Option<String>,
-    kind: String,
-}
-
-impl ReservationRow {
-    pub(super) fn into_active(self) -> Result<ActiveTaskReservation, OrbitError> {
-        Ok(ActiveTaskReservation {
-            reservation_id: self.reservation_id,
-            kind: TaskReservationKind::parse(&self.kind),
-            workspace_id: self.workspace_id,
-            task_ids: parse_string_list(&self.task_ids_json)?,
-            files: parse_string_list(&self.files_json)?,
-            actor: self.actor,
-            created_at: self.created_at,
-            expires_at: self.expires_at,
-            owner_run_id: self.owner_run_id,
-            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
-        })
-    }
-
-    pub(super) fn into_released(
-        self,
-        released_at: String,
-        release_reason: TaskReservationReleaseReason,
-        release_metadata_json: Option<String>,
-    ) -> Result<ReleasedTaskReservation, OrbitError> {
-        Ok(ReleasedTaskReservation {
-            reservation_id: self.reservation_id,
-            workspace_id: self.workspace_id,
-            task_ids: parse_string_list(&self.task_ids_json)?,
-            files: parse_string_list(&self.files_json)?,
-            actor: self.actor,
-            created_at: self.created_at,
-            expires_at: self.expires_at,
-            released_at,
-            owner_run_id: self.owner_run_id,
-            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
-            release_reason,
-            release_metadata_json,
-        })
-    }
 }
 
 pub(super) fn select_reservation_columns() -> &'static str {

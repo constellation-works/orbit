@@ -22,6 +22,17 @@ pub(super) enum ArtifactPayloadCheck {
     Defer,
 }
 
+/// Why reading one contained blob named by `file` did not yield verified
+/// bytes. Callers map each case to their own error class and message text;
+/// `Error` passes a containment or I/O refusal through unchanged.
+#[derive(Debug)]
+pub(crate) enum ManifestBlobReadFailure {
+    Missing,
+    SizeMismatch,
+    DigestMismatch,
+    Error(OrbitError),
+}
+
 pub(super) fn read_artifact_manifest(
     bundle_dir: &Path,
     payloads: ArtifactPayloadCheck,
@@ -52,17 +63,6 @@ pub(super) fn read_artifact_manifest(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(OrbitError::Io(err.to_string())),
     }
-}
-
-/// Why reading one contained blob named by `file` did not yield verified
-/// bytes. Callers map each case to their own error class and message text;
-/// `Error` passes a containment or I/O refusal through unchanged.
-#[derive(Debug)]
-pub(crate) enum ManifestBlobReadFailure {
-    Missing,
-    SizeMismatch,
-    DigestMismatch,
-    Error(OrbitError),
 }
 
 /// Read the contained blob `file` names under `artifact_dir` and check its

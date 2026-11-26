@@ -66,31 +66,11 @@ use orbit_types::workflow::{
 use crate::RuntimeKernel;
 use crate::base::managed_env::non_empty;
 
-/// How long a hold's first exclusion lasts, by class. Each consecutive hold
-/// within `BACKOFF_MEMORY` doubles it, up to `max_backoff`. A refusal is
-/// not transient: another provider may take the task at once, and the
-/// refusing one is not asked again for a day. A usage limit that reported its
-/// reset is held until then instead.
-pub fn base_backoff(class: ProviderFailureClass) -> Duration {
-    match class {
-        ProviderFailureClass::Capacity => Duration::minutes(15),
-        ProviderFailureClass::Unavailable | ProviderFailureClass::Limit => Duration::minutes(30),
-        ProviderFailureClass::Refusal => Duration::hours(24),
-    }
-}
-
-/// The longest a backoff grows to, by class.
-fn max_backoff(class: ProviderFailureClass) -> Duration {
-    match class {
-        ProviderFailureClass::Limit => Duration::hours(6),
-        _ => Duration::hours(24),
-    }
-}
-
 const BACKOFF_MEMORY: Duration = Duration::hours(24);
 
 /// [ORB-14695] The bounds a usage limit's reported reset is clamped to.
 const MIN_LIMIT_HOLD: Duration = Duration::minutes(5);
+
 const MAX_LIMIT_HOLD: Duration = Duration::days(7);
 
 impl RuntimeKernel {
@@ -369,6 +349,26 @@ impl RuntimeKernel {
             hold.absorb(previous);
         }
         Ok((hold, failure))
+    }
+}
+/// How long a hold's first exclusion lasts, by class. Each consecutive hold
+/// within `BACKOFF_MEMORY` doubles it, up to `max_backoff`. A refusal is
+/// not transient: another provider may take the task at once, and the
+/// refusing one is not asked again for a day. A usage limit that reported its
+/// reset is held until then instead.
+pub fn base_backoff(class: ProviderFailureClass) -> Duration {
+    match class {
+        ProviderFailureClass::Capacity => Duration::minutes(15),
+        ProviderFailureClass::Unavailable | ProviderFailureClass::Limit => Duration::minutes(30),
+        ProviderFailureClass::Refusal => Duration::hours(24),
+    }
+}
+
+/// The longest a backoff grows to, by class.
+fn max_backoff(class: ProviderFailureClass) -> Duration {
+    match class {
+        ProviderFailureClass::Limit => Duration::hours(6),
+        _ => Duration::hours(24),
     }
 }
 

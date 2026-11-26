@@ -8,6 +8,9 @@ use super::RoutineRepository;
 use super::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineSlotAttempts};
 use crate::Tx;
 
+const FIRE_COLUMNS: &str =
+    "routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at";
+
 impl<Access> RoutineRepository<'_, Access> {
     /// Most recent fire attempt for one routine, if any.
     pub fn latest_fire(&self, routine_name: &str) -> Result<Option<RoutineFireRecord>, OrbitError> {
@@ -208,17 +211,6 @@ impl<Access> RoutineRepository<'_, Access> {
     }
 }
 
-const FIRE_COLUMNS: &str =
-    "routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at";
-
-fn sql_attempt(value: i64) -> Result<u32, OrbitError> {
-    u32::try_from(value).map_err(|_| {
-        OrbitError::Store(format!(
-            "routine fire attempt {value} is outside the supported range"
-        ))
-    })
-}
-
 struct FireRow {
     routine_name: String,
     slot: String,
@@ -231,44 +223,19 @@ struct FireRow {
     updated_at: String,
 }
 
-fn fire_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FireRow> {
-    Ok(FireRow {
-        routine_name: row.get(0)?,
-        slot: row.get(1)?,
-        attempt: row.get(2)?,
-        state: row.get(3)?,
-        run_id: row.get(4)?,
-        source_workspace: row.get(5)?,
-        detail: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
-    })
-}
-
-fn collect_fires(
-    rows: impl Iterator<Item = rusqlite::Result<FireRow>>,
-) -> Result<Vec<RoutineFireRecord>, OrbitError> {
-    let mut fires = Vec::new();
-    for row in rows {
-        fires.push(RoutineFireRecord::try_from_row(
-            row.map_err(sqlite_store_error)?,
-        )?);
-    }
-    Ok(fires)
-}
-
 impl RoutineFireRecord {
     fn try_from_row(row: FireRow) -> Result<Self, OrbitError> {
+        let state = RoutineFireState::parse(&row.state).ok_or_else(|| {
+            OrbitError::Store(format!(
+                "routine fire ({}, {}, {}) has unknown state '{}'",
+                row.routine_name, row.slot, row.attempt, row.state
+            ))
+        })?;
         Ok(Self {
-            state: RoutineFireState::parse(&row.state).ok_or_else(|| {
-                OrbitError::Store(format!(
-                    "routine fire ({}, {}, {}) has unknown state '{}'",
-                    row.routine_name, row.slot, row.attempt, row.state
-                ))
-            })?,
             routine_name: row.routine_name,
             slot: row.slot,
             attempt: row.attempt,
+            state,
             run_id: row.run_id,
             source_workspace: row.source_workspace,
             detail: row.detail,
@@ -338,4 +305,38 @@ impl RoutineRepository<'_, Tx<'_>> {
             .map_err(sqlite_store_error)?;
         Ok(())
     }
+}
+
+fn sql_attempt(value: i64) -> Result<u32, OrbitError> {
+    u32::try_from(value).map_err(|_| {
+        OrbitError::Store(format!(
+            "routine fire attempt {value} is outside the supported range"
+        ))
+    })
+}
+
+fn fire_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FireRow> {
+    Ok(FireRow {
+        routine_name: row.get(0)?,
+        slot: row.get(1)?,
+        attempt: row.get(2)?,
+        state: row.get(3)?,
+        run_id: row.get(4)?,
+        source_workspace: row.get(5)?,
+        detail: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn collect_fires(
+    rows: impl Iterator<Item = rusqlite::Result<FireRow>>,
+) -> Result<Vec<RoutineFireRecord>, OrbitError> {
+    let mut fires = Vec::new();
+    for row in rows {
+        fires.push(RoutineFireRecord::try_from_row(
+            row.map_err(sqlite_store_error)?,
+        )?);
+    }
+    Ok(fires)
 }

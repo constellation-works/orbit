@@ -87,59 +87,6 @@ impl ExecutorCapability {
     }
 }
 
-/// Why `task`'s effective OS requirement excludes an executor on `os`, or
-/// `None` when it admits it.
-///
-/// The requirement is the task's `os:` tags intersected with its assigned
-/// crew's executor `host_os` (`limits`). An empty `limits` map is the tag
-/// requirement alone.
-#[must_use]
-pub fn os_unavailable(
-    os: Option<HostOs>,
-    task: &Task,
-    limits: &BTreeMap<String, ExecutorOsLimit>,
-) -> Option<String> {
-    let runs = os.map_or("an undeclared OS", HostOs::as_str);
-    let wait = match TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), limits) {
-        Ok(requirement) => requirement.unsatisfied_reason(os)?,
-        Err(reason) => reason,
-    };
-    Some(format!("{wait}; the executor runs {runs}"))
-}
-
-/// Why a `ui` task excludes an executor, or `None` when it admits it: the
-/// executor declares no verified browser kit.
-#[must_use]
-pub fn browser_kit_unavailable(browser_kit: bool, task: &Task) -> Option<String> {
-    (!browser_kit && orbit_types::task::requires_browser_kit(&task.tags)).then(|| {
-        format!(
-            "{}; the executor reports no verified kit",
-            orbit_types::task::browser_kit_wait()
-        )
-    })
-}
-
-/// Why `task`'s labels, under the owner's tag policy `requirements` (explicit
-/// `requires_labels` plus every matching tag's mapping), exclude an executor
-/// on `os` declaring `labels`, or `None` when it carries every one. Every
-/// reader that judges an executor's labels passes the owner's policy here.
-#[must_use]
-pub fn labels_unavailable_with_tag_requirements(
-    os: Option<HostOs>,
-    labels: &[String],
-    task: &Task,
-    requirements: &orbit_types::task::TagLabelRequirements,
-) -> Option<String> {
-    let required = requirements.required_labels(&task.tags, &task.requires_labels);
-    if required.is_empty() {
-        return None;
-    }
-    orbit_types::task::host_labels_unavailable(
-        &required,
-        &orbit_types::task::effective_host_labels(labels, os),
-    )
-}
-
 /// One executor's latest declaration, as the owner persists it per
 /// workspace and machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,6 +284,59 @@ impl ExecutorCensus {
             census: self.machine_ids(),
         }
     }
+}
+
+/// Why `task`'s effective OS requirement excludes an executor on `os`, or
+/// `None` when it admits it.
+///
+/// The requirement is the task's `os:` tags intersected with its assigned
+/// crew's executor `host_os` (`limits`). An empty `limits` map is the tag
+/// requirement alone.
+#[must_use]
+pub fn os_unavailable(
+    os: Option<HostOs>,
+    task: &Task,
+    limits: &BTreeMap<String, ExecutorOsLimit>,
+) -> Option<String> {
+    let runs = os.map_or("an undeclared OS", HostOs::as_str);
+    let wait = match TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), limits) {
+        Ok(requirement) => requirement.unsatisfied_reason(os)?,
+        Err(reason) => reason,
+    };
+    Some(format!("{wait}; the executor runs {runs}"))
+}
+
+/// Why a `ui` task excludes an executor, or `None` when it admits it: the
+/// executor declares no verified browser kit.
+#[must_use]
+pub fn browser_kit_unavailable(browser_kit: bool, task: &Task) -> Option<String> {
+    (!browser_kit && orbit_types::task::requires_browser_kit(&task.tags)).then(|| {
+        format!(
+            "{}; the executor reports no verified kit",
+            orbit_types::task::browser_kit_wait()
+        )
+    })
+}
+
+/// Why `task`'s labels, under the owner's tag policy `requirements` (explicit
+/// `requires_labels` plus every matching tag's mapping), exclude an executor
+/// on `os` declaring `labels`, or `None` when it carries every one. Every
+/// reader that judges an executor's labels passes the owner's policy here.
+#[must_use]
+pub fn labels_unavailable_with_tag_requirements(
+    os: Option<HostOs>,
+    labels: &[String],
+    task: &Task,
+    requirements: &orbit_types::task::TagLabelRequirements,
+) -> Option<String> {
+    let required = requirements.required_labels(&task.tags, &task.requires_labels);
+    if required.is_empty() {
+        return None;
+    }
+    orbit_types::task::host_labels_unavailable(
+        &required,
+        &orbit_types::task::effective_host_labels(labels, os),
+    )
 }
 
 /// Sort owned or borrowed tasks into automatic dispatch order for `census`'s

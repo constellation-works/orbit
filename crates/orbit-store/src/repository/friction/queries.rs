@@ -23,6 +23,13 @@ use crate::driver::sqlite::host::connection::{UNICODE_LOWER_SQL, unicode_lower};
 const RECORD_COLUMNS: &str = "friction_id, title, model, status, created_at, resolved_at, \
      during_task, resolved_by_task, tags_json, body, legacy_path, rehome_to";
 
+/// A `WHERE` fragment plus its bound parameters, built once and reused by the
+/// list and count paths.
+pub(super) struct RecordPredicate {
+    pub(super) sql: String,
+    pub(super) params: Vec<SqlValue>,
+}
+
 /// Canonical, fixed-width, lexicographically ordered timestamp encoding.
 ///
 /// Ordering and range predicates run against the stored text directly, so the
@@ -35,13 +42,6 @@ pub(super) fn decode_timestamp(raw: &str) -> Result<DateTime<Utc>, OrbitError> {
     DateTime::parse_from_rfc3339(raw)
         .map(|value| value.with_timezone(&Utc))
         .map_err(|error| OrbitError::Store(format!("friction timestamp '{raw}': {error}")))
-}
-
-/// A `WHERE` fragment plus its bound parameters, built once and reused by the
-/// list and count paths.
-pub(super) struct RecordPredicate {
-    pub(super) sql: String,
-    pub(super) params: Vec<SqlValue>,
 }
 
 /// Builds the predicate with explicit `?N` placeholders. The free-text clause

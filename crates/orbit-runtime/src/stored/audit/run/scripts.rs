@@ -79,40 +79,6 @@ impl RunScriptExecution {
     }
 }
 
-/// The script executions among one run's events, oldest first.
-pub(super) fn script_executions_from_events(
-    run_id: &str,
-    events: &[RunAuditEvent],
-) -> Vec<RunScriptExecution> {
-    events
-        .iter()
-        .filter_map(|event| match &event.body {
-            RunTrailBody::ScriptExecution(Some(execution)) => Some(script_execution(
-                run_id,
-                &event.event_id,
-                event.timestamp,
-                execution,
-            )),
-            _ => None,
-        })
-        .collect()
-}
-
-fn script_execution(
-    run_id: &str,
-    event_id: &str,
-    timestamp: Option<DateTime<Utc>>,
-    execution: &RunTrailScriptExecution,
-) -> RunScriptExecution {
-    RunScriptExecution {
-        event_id: event_id.to_string(),
-        run_id: run_id.to_string(),
-        step_id: execution.step_id.clone(),
-        timestamp,
-        record: execution.record.clone(),
-    }
-}
-
 impl RuntimeKernel {
     /// The newest `limit` attempts of script `name` in this workspace,
     /// newest first.
@@ -158,5 +124,39 @@ impl RuntimeKernel {
             offset += fetched;
         }
         Ok(found)
+    }
+}
+
+/// The script executions among one run's events, oldest first.
+pub(super) fn script_executions_from_events(
+    run_id: &str,
+    events: &[RunAuditEvent],
+) -> Vec<RunScriptExecution> {
+    events
+        .iter()
+        .filter_map(|event| match &event.body {
+            RunTrailBody::ScriptExecution(Some(execution)) => Some(script_execution(
+                run_id,
+                &event.event_id,
+                event.timestamp,
+                execution,
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn script_execution(
+    run_id: &str,
+    event_id: &str,
+    timestamp: Option<DateTime<Utc>>,
+    execution: &RunTrailScriptExecution,
+) -> RunScriptExecution {
+    RunScriptExecution {
+        event_id: event_id.to_string(),
+        run_id: run_id.to_string(),
+        step_id: execution.step_id.clone(),
+        timestamp,
+        record: execution.record.clone(),
     }
 }

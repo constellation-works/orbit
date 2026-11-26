@@ -185,6 +185,23 @@ impl ResourceProfileCache {
     }
 }
 
+/// A build, with the template classes it read.
+struct Classified {
+    profiles: ProfileSet,
+    templates: BTreeSet<String>,
+    tagged: BTreeSet<String>,
+    load: DeliveryRunsLoad,
+    timing: BuildTiming,
+}
+
+/// Where a build spent its time, for the rebuild's debug event.
+struct BuildTiming {
+    load_ms: f64,
+    tags_ms: f64,
+    build_ms: f64,
+    runs: usize,
+}
+
 /// Whether the templates still carry the `no-diff-expected` tags the cache
 /// classified them with. One tag lookup, skipped when there is no template.
 fn tags_unchanged(
@@ -212,23 +229,6 @@ pub(crate) fn build_uncached(
     Ok(build_profiles(&runs, &tagged, crew_models, bounds, now))
 }
 
-/// A build, with the template classes it read.
-struct Classified {
-    profiles: ProfileSet,
-    templates: BTreeSet<String>,
-    tagged: BTreeSet<String>,
-    load: DeliveryRunsLoad,
-    timing: BuildTiming,
-}
-
-/// Where a build spent its time, for the rebuild's debug event.
-struct BuildTiming {
-    load_ms: f64,
-    tags_ms: f64,
-    build_ms: f64,
-    runs: usize,
-}
-
 fn build_classified(
     store: &dyn DeliveryRunSource,
     no_diff_tasks: NoDiffTasks<'_>,
@@ -247,17 +247,18 @@ fn build_classified(
     let classified = Instant::now();
     let profiles = build_profiles(&load.runs, &tagged, crew_models, bounds, now);
     let millis = |from: Instant, to: Instant| (to - from).as_secs_f64() * 1000.0;
+    let timing = BuildTiming {
+        load_ms: millis(started, loaded),
+        tags_ms: millis(loaded, classified),
+        build_ms: millis(classified, Instant::now()),
+        runs: load.runs.len(),
+    };
     Ok(Classified {
-        timing: BuildTiming {
-            load_ms: millis(started, loaded),
-            tags_ms: millis(loaded, classified),
-            build_ms: millis(classified, Instant::now()),
-            runs: load.runs.len(),
-        },
         profiles,
         templates,
         tagged,
         load,
+        timing,
     })
 }
 

@@ -10,6 +10,9 @@ use orbit_types::workflow::{
 use super::rows::optional_json;
 use super::state::write_state_json_conn;
 
+/// Sequence ceiling for one role inside one minute stem.
+const MAX_RUN_ID_SEQUENCE: u32 = 1023;
+
 pub(super) fn upsert_job_run_for_workspace_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
@@ -81,9 +84,6 @@ pub(super) fn upsert_job_run_for_workspace_conn(
     .map_err(sqlite_store_error)?;
     Ok(())
 }
-
-/// Sequence ceiling for one role inside one minute stem.
-const MAX_RUN_ID_SEQUENCE: u32 = 1023;
 
 /// Allocate the next free run id of `role` for the minute `submitted_at` falls
 /// in, across every workspace in the host's shared store. Workspace-scoped

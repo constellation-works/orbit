@@ -9,6 +9,12 @@ use orbit_common::fs::io::{FileLockProbe, LeaseFile, probe_file_lock, remove_pat
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+thread_local! {
+    /// The applies each outermost admission section on this thread owes,
+    /// one frame per partition.
+    static DEFERRED: RefCell<Vec<ApplyFrame>> = const { RefCell::new(Vec::new()) };
+}
+
 /// A decided commit whose bundle apply is still owed, with the task's bundle
 /// lock and commit lease its committer has held since before it prepared.
 ///
@@ -25,23 +31,6 @@ pub(super) struct DeferredApply {
 struct ApplyFrame {
     partition: PathBuf,
     applies: Vec<DeferredApply>,
-}
-
-thread_local! {
-    /// The applies each outermost admission section on this thread owes,
-    /// one frame per partition.
-    static DEFERRED: RefCell<Vec<ApplyFrame>> = const { RefCell::new(Vec::new()) };
-}
-
-fn take_frame(partition: &Path) -> Vec<DeferredApply> {
-    DEFERRED.with(|frames| {
-        let mut frames = frames.borrow_mut();
-        frames
-            .iter()
-            .rposition(|frame| frame.partition == partition)
-            .map(|index| frames.remove(index).applies)
-            .unwrap_or_default()
-    })
 }
 
 /// The outermost admission section's queue of applies for its partition.
@@ -289,6 +278,17 @@ impl TaskCommitBoundary {
     }
 }
 
+fn take_frame(partition: &Path) -> Vec<DeferredApply> {
+    DEFERRED.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        frames
+            .iter()
+            .rposition(|frame| frame.partition == partition)
+            .map(|index| frames.remove(index).applies)
+            .unwrap_or_default()
+    })
+}
+
 /// A hook run at the start of a commit's apply, so a test can hold the apply
 /// until a concurrent caller proves what it waits for.
 #[cfg(test)]
@@ -316,6 +316,10 @@ pub(crate) mod slow_apply {
 pub(crate) mod apply_fault {
     use std::cell::Cell;
 
+    thread_local! {
+        static FAULT: Cell<Option<Fault>> = const { Cell::new(None) };
+    }
+
     /// How far the crashed apply got.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum Fault {
@@ -323,10 +327,6 @@ pub(crate) mod apply_fault {
         BeforeApply,
         /// The history appended, nothing else.
         AfterEvents,
-    }
-
-    thread_local! {
-        static FAULT: Cell<Option<Fault>> = const { Cell::new(None) };
     }
 
     pub(crate) fn set(fault: Fault) {

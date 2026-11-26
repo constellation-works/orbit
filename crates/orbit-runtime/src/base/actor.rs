@@ -141,6 +141,12 @@ impl ActorIdentity {
     }
 }
 
+impl Default for ActorIdentity {
+    fn default() -> Self {
+        Self::unknown()
+    }
+}
+
 /// Shared write-path actor resolution: explicit model/agent to a canonical
 /// family, otherwise the process actor already resolved by [`ActorIdentity::from_env`].
 pub fn resolve_write_actor_label(
@@ -177,12 +183,6 @@ fn os_user_name(env: &orbit_common::Env) -> Option<String> {
         .map(str::trim)
         .find(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-impl Default for ActorIdentity {
-    fn default() -> Self {
-        Self::unknown()
-    }
 }
 
 fn normalize_actor_label(label: String, default_label: &str) -> String {

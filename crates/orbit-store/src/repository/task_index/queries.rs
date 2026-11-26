@@ -10,6 +10,93 @@ use rusqlite::{Connection, OptionalExtension, Statement, Transaction, params};
 use super::util::{path_to_string, relation_type_name, terminal_month};
 use crate::contract::{TaskBundleBinding, WorkspaceBinding, WorkspaceCheckoutBinding};
 
+pub(super) struct TaskIndexWriter<'tx> {
+    index: Statement<'tx>,
+    tag: Statement<'tx>,
+    relation: Statement<'tx>,
+}
+
+impl<'tx> TaskIndexWriter<'tx> {
+    pub(super) fn prepare(tx: &'tx Transaction<'_>) -> Result<Self, OrbitError> {
+        let index = tx
+            .prepare(
+                "INSERT INTO task_bundle_index (
+            task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity,
+            task_type
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        ON CONFLICT(task_id) DO UPDATE SET
+            workspace_id = excluded.workspace_id,
+            status = excluded.status,
+            priority = excluded.priority,
+            job_run_id = excluded.job_run_id,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            terminal_month = excluded.terminal_month,
+            complexity = excluded.complexity,
+            task_type = excluded.task_type",
+            )
+            .map_err(sqlite_store_error)?;
+        let tag = tx
+            .prepare(
+                "INSERT OR IGNORE INTO task_bundle_tags(task_id, workspace_id, tag)
+             VALUES (?1, ?2, ?3)",
+            )
+            .map_err(sqlite_store_error)?;
+        let relation = tx
+            .prepare(
+                "INSERT OR IGNORE INTO task_bundle_relations(
+                source_task_id, workspace_id, relation_type, target_task_id
+            ) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(Self {
+            index,
+            tag,
+            relation,
+        })
+    }
+
+    pub(super) fn write(
+        &mut self,
+        partition_id: &str,
+        envelope: &TaskEnvelopeV2,
+    ) -> Result<(), OrbitError> {
+        self.index
+            .execute(params![
+                &envelope.id,
+                partition_id,
+                envelope.status.to_string(),
+                envelope.priority.to_string(),
+                envelope.job_run_id.as_deref(),
+                envelope.created_at.to_rfc3339(),
+                envelope.updated_at.to_rfc3339(),
+                terminal_month(envelope.status, envelope.updated_at),
+                indexed_complexity(envelope.complexity),
+                envelope.task_type.to_string(),
+            ])
+            .map_err(sqlite_store_error)?;
+
+        for tag in normalize_task_tags(envelope.tags.clone()) {
+            self.tag
+                .execute(params![&envelope.id, partition_id, &tag])
+                .map_err(sqlite_store_error)?;
+        }
+
+        for relation in &envelope.relations {
+            self.relation
+                .execute(params![
+                    &envelope.id,
+                    partition_id,
+                    relation_type_name(relation.relation_type),
+                    &relation.target
+                ])
+                .map_err(sqlite_store_error)?;
+        }
+
+        Ok(())
+    }
+}
+
 pub(super) fn workspace_by_orbit_dir(
     conn: &Connection,
     orbit_dir: &Path,
@@ -101,93 +188,6 @@ pub(super) fn task_ids_for_workspace(
         .map_err(sqlite_store_error)?;
     rows.collect::<Result<BTreeSet<_>, _>>()
         .map_err(sqlite_store_error)
-}
-
-pub(super) struct TaskIndexWriter<'tx> {
-    index: Statement<'tx>,
-    tag: Statement<'tx>,
-    relation: Statement<'tx>,
-}
-
-impl<'tx> TaskIndexWriter<'tx> {
-    pub(super) fn prepare(tx: &'tx Transaction<'_>) -> Result<Self, OrbitError> {
-        let index = tx
-            .prepare(
-                "INSERT INTO task_bundle_index (
-            task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity,
-            task_type
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-        ON CONFLICT(task_id) DO UPDATE SET
-            workspace_id = excluded.workspace_id,
-            status = excluded.status,
-            priority = excluded.priority,
-            job_run_id = excluded.job_run_id,
-            created_at = excluded.created_at,
-            updated_at = excluded.updated_at,
-            terminal_month = excluded.terminal_month,
-            complexity = excluded.complexity,
-            task_type = excluded.task_type",
-            )
-            .map_err(sqlite_store_error)?;
-        let tag = tx
-            .prepare(
-                "INSERT OR IGNORE INTO task_bundle_tags(task_id, workspace_id, tag)
-             VALUES (?1, ?2, ?3)",
-            )
-            .map_err(sqlite_store_error)?;
-        let relation = tx
-            .prepare(
-                "INSERT OR IGNORE INTO task_bundle_relations(
-                source_task_id, workspace_id, relation_type, target_task_id
-            ) VALUES (?1, ?2, ?3, ?4)",
-            )
-            .map_err(sqlite_store_error)?;
-        Ok(Self {
-            index,
-            tag,
-            relation,
-        })
-    }
-
-    pub(super) fn write(
-        &mut self,
-        partition_id: &str,
-        envelope: &TaskEnvelopeV2,
-    ) -> Result<(), OrbitError> {
-        self.index
-            .execute(params![
-                &envelope.id,
-                partition_id,
-                envelope.status.to_string(),
-                envelope.priority.to_string(),
-                envelope.job_run_id.as_deref(),
-                envelope.created_at.to_rfc3339(),
-                envelope.updated_at.to_rfc3339(),
-                terminal_month(envelope.status, envelope.updated_at),
-                indexed_complexity(envelope.complexity),
-                envelope.task_type.to_string(),
-            ])
-            .map_err(sqlite_store_error)?;
-
-        for tag in normalize_task_tags(envelope.tags.clone()) {
-            self.tag
-                .execute(params![&envelope.id, partition_id, &tag])
-                .map_err(sqlite_store_error)?;
-        }
-
-        for relation in &envelope.relations {
-            self.relation
-                .execute(params![
-                    &envelope.id,
-                    partition_id,
-                    relation_type_name(relation.relation_type),
-                    &relation.target
-                ])
-                .map_err(sqlite_store_error)?;
-        }
-
-        Ok(())
-    }
 }
 
 fn cached_optional_row<T, P, F>(

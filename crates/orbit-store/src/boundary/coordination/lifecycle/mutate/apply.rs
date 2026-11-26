@@ -185,12 +185,12 @@ fn claim_commit_effects(
     handoff_effects: ClaimCommitEffects,
 ) -> ClaimCommitEffects {
     ClaimCommitEffects {
+        replacements: handoff_effects.replacements,
+        release_reservation: release.then(|| claim.reservation_id.clone()),
+        friction: handoff_effects.friction,
         execution_origin: Some(claim.executed_on.clone()),
         worker_update: handoff_effects.worker_update,
         regression_from: handoff_effects.regression_from,
-        friction: handoff_effects.friction,
-        replacements: handoff_effects.replacements,
-        release_reservation: release.then(|| claim.reservation_id.clone()),
         // `claim_authority` matched a worker's machine and run to this
         // binding; an operator's mutation carries no worker evidence.
         claimed_submission: state

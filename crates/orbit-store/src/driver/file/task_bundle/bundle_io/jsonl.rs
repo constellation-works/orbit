@@ -11,6 +11,10 @@ use std::path::Path;
 
 use super::read_required_bytes;
 
+struct JsonlTailScan {
+    truncate_at: u64,
+}
+
 pub(super) fn write_jsonl_file<T>(path: &Path, rows: &[T]) -> Result<(), OrbitError>
 where
     T: serde::Serialize,
@@ -117,10 +121,6 @@ where
             })
         })
         .collect()
-}
-
-struct JsonlTailScan {
-    truncate_at: u64,
 }
 
 fn scan_jsonl_tail(path: &Path, raw: &[u8]) -> Result<JsonlTailScan, OrbitError> {

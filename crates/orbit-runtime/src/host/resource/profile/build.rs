@@ -415,12 +415,12 @@ fn profile(
     };
     let (delivery_peak_cpu, delivery_peak_memory_bytes) = delivery_peak_quantiles(window);
     ResourceProfile {
-        sparse: count < bounds.min_deliveries,
         key,
         base_class,
         delivery_count: count,
         crew_model: crew_model.map(str::to_string),
         crews: profile_crews(window, crew_model, crew_sizes),
+        sparse: count < bounds.min_deliveries,
         horizon_minutes: horizon,
         peak_cpu_cores,
         peak_memory_bytes,

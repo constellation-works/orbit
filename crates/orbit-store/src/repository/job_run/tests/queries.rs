@@ -85,8 +85,8 @@ fn live_run_scans_seek_the_state_index_instead_of_walking_history() {
             ..JobRunQuery::default()
         },
         JobRunQuery {
-            active_only: true,
             job_id: Some("task_pilot_pipeline".into()),
+            active_only: true,
             ..JobRunQuery::default()
         },
     ] {

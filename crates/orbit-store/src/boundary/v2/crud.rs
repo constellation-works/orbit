@@ -521,8 +521,8 @@ impl TaskV2Store {
         let lowered = query.to_lowercase();
         let candidates = self.task_candidates_bare(
             &TaskListFilter {
-                tags: tags.to_vec(),
                 statuses: statuses.map(<[TaskStatus]>::to_vec),
+                tags: tags.to_vec(),
                 ..Default::default()
             },
             usize::MAX,

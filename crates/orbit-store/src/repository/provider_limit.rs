@@ -22,14 +22,6 @@ use rusqlite::{Connection, params};
 use crate::driver::sqlite::codec::stamp;
 use crate::store::{Snapshot, Tx};
 
-/// Literal statements for one reading's table; placeholder numbering matches
-/// the bound parameters in [`ProviderLimitRepository::put_reading`].
-struct ReadingSql {
-    select: &'static str,
-    delete: &'static str,
-    newer_exists: &'static str,
-}
-
 const NAMED_CREW_READING_SQL: ReadingSql = ReadingSql {
     select: "SELECT model_scope, window_label FROM provider_account_limit_observations \
              WHERE provider = ?1 AND source = ?2 AND observed_at < ?4 AND account = ?3",
@@ -49,6 +41,14 @@ const DEFAULT_LOGIN_READING_SQL: ReadingSql = ReadingSql {
     newer_exists: "SELECT EXISTS (SELECT 1 FROM provider_limit_observations \
              WHERE provider = ?1 AND source = ?2 AND observed_at > ?4)",
 };
+
+/// Literal statements for one reading's table; placeholder numbering matches
+/// the bound parameters in [`ProviderLimitRepository::put_reading`].
+struct ReadingSql {
+    select: &'static str,
+    delete: &'static str,
+    newer_exists: &'static str,
+}
 
 /// Concrete provider-limit repository scoped to a [`Snapshot`] (read-only) or
 /// a [`Tx`] (read-write).

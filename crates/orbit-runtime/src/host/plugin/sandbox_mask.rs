@@ -36,6 +36,15 @@ const SENTINEL_TEXT: &str = "Plugin state, plugin secrets, decision-channel keys
                              GitHub run logs are not visible from an Orbit agent sandbox; plugin \
                              and GitHub calls from the agent run on the host.\n";
 
+/// The paths a host masks for one sandboxed agent, created and resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedPluginMask {
+    /// The read-only stand-in directory, holding [`PLUGIN_MASK_SENTINEL_FILE`].
+    pub sentinel: PathBuf,
+    /// The trees the agent must not reach, as physical paths.
+    pub trees: Vec<PathBuf>,
+}
+
 /// The trees an agent sandbox masks: plugin state, the plugin secret store
 /// and the decision-channel store, whose registrations carry each channel's
 /// token key, the host-only application-consent witnesses, and the
@@ -92,15 +101,6 @@ pub fn not_visible(what: &str) -> OrbitError {
         "{what} is not visible from an agent sandbox; run this on the host, outside the agent's \
          sandbox"
     ))
-}
-
-/// The paths a host masks for one sandboxed agent, created and resolved.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedPluginMask {
-    /// The read-only stand-in directory, holding [`PLUGIN_MASK_SENTINEL_FILE`].
-    pub sentinel: PathBuf,
-    /// The trees the agent must not reach, as physical paths.
-    pub trees: Vec<PathBuf>,
 }
 
 /// Create every masked tree (`0700`) and the sentinel directory with its

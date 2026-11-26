@@ -25,6 +25,48 @@ use orbit_types::workflow::AutoTaskCursorState;
 
 use crate::file_store::{AutoTaskSnapshot, AutoTaskTx};
 
+/// Read access to the scheduler's workspace-local cursor file.
+pub struct AutoTaskRepository<'a> {
+    snapshot: &'a AutoTaskSnapshot<'a>,
+}
+
+impl<'a> AutoTaskRepository<'a> {
+    pub(crate) fn for_snapshot(snapshot: &'a AutoTaskSnapshot<'_>) -> Self {
+        Self { snapshot }
+    }
+
+    /// Load the cursor map, treating a missing file as empty.
+    pub fn get(&self) -> Result<AutoTaskCursorState, OrbitError> {
+        load_cursor_state(self.snapshot.path())
+    }
+}
+
+/// Working cursor map loaded under the sidecar lock.
+pub struct AutoTaskWriteRepository<'a> {
+    tx: &'a AutoTaskTx<'a>,
+    /// Current working copy, including other definitions' rows.
+    pub state: AutoTaskCursorState,
+}
+
+impl<'a> AutoTaskWriteRepository<'a> {
+    pub(crate) fn for_tx(tx: &'a AutoTaskTx<'_>) -> Result<Self, OrbitError> {
+        Ok(Self {
+            tx,
+            state: load_cursor_state(tx.path())?,
+        })
+    }
+
+    /// Atomically replace the state file. A scheduler can write several
+    /// checkpoints inside the same locked scope to persist mint recovery
+    /// evidence before it advances a slot.
+    pub fn put(&self) -> Result<(), OrbitError> {
+        let encoded = serde_json::to_string_pretty(&self.state)
+            .map_err(|error| OrbitError::Io(format!("encode auto-tasks state: {error}")))?;
+        let path = self.tx.path();
+        atomic_write_text(path, &encoded).map_err(|error| OrbitError::from_write_io(path, error))
+    }
+}
+
 /// Read the current cursor state.
 ///
 /// A missing file is empty state. An existing file that cannot be read or
@@ -193,46 +235,4 @@ fn parse_state(raw: &str, path: &Path) -> Result<AutoTaskCursorState, OrbitError
             path.display()
         ))
     })
-}
-
-/// Read access to the scheduler's workspace-local cursor file.
-pub struct AutoTaskRepository<'a> {
-    snapshot: &'a AutoTaskSnapshot<'a>,
-}
-
-impl<'a> AutoTaskRepository<'a> {
-    pub(crate) fn for_snapshot(snapshot: &'a AutoTaskSnapshot<'_>) -> Self {
-        Self { snapshot }
-    }
-
-    /// Load the cursor map, treating a missing file as empty.
-    pub fn get(&self) -> Result<AutoTaskCursorState, OrbitError> {
-        load_cursor_state(self.snapshot.path())
-    }
-}
-
-/// Working cursor map loaded under the sidecar lock.
-pub struct AutoTaskWriteRepository<'a> {
-    tx: &'a AutoTaskTx<'a>,
-    /// Current working copy, including other definitions' rows.
-    pub state: AutoTaskCursorState,
-}
-
-impl<'a> AutoTaskWriteRepository<'a> {
-    pub(crate) fn for_tx(tx: &'a AutoTaskTx<'_>) -> Result<Self, OrbitError> {
-        Ok(Self {
-            tx,
-            state: load_cursor_state(tx.path())?,
-        })
-    }
-
-    /// Atomically replace the state file. A scheduler can write several
-    /// checkpoints inside the same locked scope to persist mint recovery
-    /// evidence before it advances a slot.
-    pub fn put(&self) -> Result<(), OrbitError> {
-        let encoded = serde_json::to_string_pretty(&self.state)
-            .map_err(|error| OrbitError::Io(format!("encode auto-tasks state: {error}")))?;
-        let path = self.tx.path();
-        atomic_write_text(path, &encoded).map_err(|error| OrbitError::from_write_io(path, error))
-    }
 }

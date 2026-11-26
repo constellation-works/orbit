@@ -9,6 +9,12 @@ use super::{
     ProviderUnavailable,
 };
 
+/// The `reasoning_effort` a follower's settle call sends for a leaf that ran
+/// at its provider's default effort. Tool input drops a `null` parameter, so
+/// the provider default travels by this name and the owner records it as
+/// `null`.
+pub const PROVIDER_DEFAULT_REPORTED_EFFORT: &str = "provider_default";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionClaimPhase {
@@ -76,25 +82,6 @@ pub struct ExecutionClaim {
     pub repair: Option<ClaimRepair>,
 }
 
-/// The first of `claims` that refuses a task starting work on `footprint`:
-/// a protecting claim whose frozen footprint `footprint` blocks under
-/// `lock_modes`. `footprint` is the task's whole canonical context, unlocked
-/// paths included, because that is what the work-start guard compares
-/// [ORB-23894]. Admission defers on the same answer, so it never creates a run
-/// that guard would refuse.
-pub fn claim_refusing_work_start<'a>(
-    claims: impl IntoIterator<Item = &'a ExecutionClaim>,
-    footprint: &[String],
-    lock_modes: &orbit_common::fs::lock_mode::FootprintLockModes,
-) -> Option<&'a ExecutionClaim> {
-    if footprint.is_empty() {
-        return None;
-    }
-    claims.into_iter().find(|claim| {
-        claim.phase.protects_footprint() && lock_modes.footprints_block(footprint, &claim.footprint)
-    })
-}
-
 /// Immutable leaf identity. Host labels are diagnostic; machine and run fence ownership.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimRun {
@@ -160,23 +147,6 @@ impl ClaimAttribution {
             && self.worktree_path.is_none()
             && self.reasoning_effort.is_none()
     }
-}
-
-/// The `reasoning_effort` a follower's settle call sends for a leaf that ran
-/// at its provider's default effort. Tool input drops a `null` parameter, so
-/// the provider default travels by this name and the owner records it as
-/// `null`.
-pub const PROVIDER_DEFAULT_REPORTED_EFFORT: &str = "provider_default";
-
-/// Deserialize a present reported effort, `null` included, as `Some`; an
-/// absent one stays `None` through `#[serde(default)]`. A plain
-/// `Option<Option<_>>` would read `null` as absent and lose the provider
-/// default.
-pub(crate) fn reported_effort<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 impl ClaimInvocation {
@@ -559,4 +529,34 @@ pub struct KeptClaimCandidate {
     /// Why the run implements afresh instead, with the operator-facing
     /// detail; `None` when it resumes the candidate.
     pub fresh: Option<(CandidateFreshReason, String)>,
+}
+
+/// The first of `claims` that refuses a task starting work on `footprint`:
+/// a protecting claim whose frozen footprint `footprint` blocks under
+/// `lock_modes`. `footprint` is the task's whole canonical context, unlocked
+/// paths included, because that is what the work-start guard compares
+/// [ORB-23894]. Admission defers on the same answer, so it never creates a run
+/// that guard would refuse.
+pub fn claim_refusing_work_start<'a>(
+    claims: impl IntoIterator<Item = &'a ExecutionClaim>,
+    footprint: &[String],
+    lock_modes: &orbit_common::fs::lock_mode::FootprintLockModes,
+) -> Option<&'a ExecutionClaim> {
+    if footprint.is_empty() {
+        return None;
+    }
+    claims.into_iter().find(|claim| {
+        claim.phase.protects_footprint() && lock_modes.footprints_block(footprint, &claim.footprint)
+    })
+}
+
+/// Deserialize a present reported effort, `null` included, as `Some`; an
+/// absent one stays `None` through `#[serde(default)]`. A plain
+/// `Option<Option<_>>` would read `null` as absent and lose the provider
+/// default.
+pub(crate) fn reported_effort<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }

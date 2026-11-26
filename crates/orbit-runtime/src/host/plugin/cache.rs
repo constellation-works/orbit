@@ -17,6 +17,8 @@ use super::definitions::{
     load_plugin_definitions_recording, plugin_definition_paths, shipped_job_names,
 };
 
+static PLUGIN_HOST_LOAD_CACHE: OnceLock<Mutex<PluginHostLoadCache>> = OnceLock::new();
+
 /// The cheap facts used to decide whether a previously loaded manifest can be
 /// reused without walking its whole install tree again.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,8 +75,6 @@ struct CachedPluginDefinitions {
 struct PluginHostLoadCache {
     plugins: BTreeMap<PathBuf, CachedPluginLoad>,
 }
-
-static PLUGIN_HOST_LOAD_CACHE: OnceLock<Mutex<PluginHostLoadCache>> = OnceLock::new();
 
 fn plugin_host_load_cache() -> MutexGuard<'static, PluginHostLoadCache> {
     PLUGIN_HOST_LOAD_CACHE

@@ -13,10 +13,6 @@ use super::*;
 const RED: &str = "test";
 const FAILURES: [&str; 2] = ["test suite::broken", "test suite::flaky"];
 
-fn failures(names: &[&str]) -> BTreeSet<String> {
-    names.iter().map(ToString::to_string).collect()
-}
-
 impl Delivery {
     /// Replace the handoff's [`RED`] log with one that failed with
     /// `exit_code`, carrying `report`, persisted on the owner like the leaf's.
@@ -123,6 +119,10 @@ impl Delivery {
             })
             .collect()
     }
+}
+
+fn failures(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(ToString::to_string).collect()
 }
 
 /// [ORB-15427] A claimed leaf's failing validation log is accepted only as

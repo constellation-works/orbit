@@ -28,48 +28,6 @@ thread_local! {
     static RATE_LIMIT_CHARGED: RefCell<BTreeSet<String>> = const { RefCell::new(BTreeSet::new()) };
 }
 
-/// Drain the host-authenticated facts for the enclosing dispatch's audit row.
-pub fn take_application_audit() -> Option<ApplicationInvocation> {
-    APPLICATION_AUDIT.with(|state| state.borrow_mut().take())
-}
-
-/// End of one audited dispatch: the next call is charged to its scope's rate
-/// limit afresh.
-pub fn finish_application_dispatch() {
-    RATE_LIMIT_CHARGED.with(|charged| charged.borrow_mut().clear());
-}
-
-/// Record the first constrained refusal on the audit slot filled at the
-/// start of admission. Bindings, text digests and predicate evidence already
-/// on the slot stay: a callback refusal must not drop the entry's evidence,
-/// and a failed admission's own values are never copied onto it.
-fn stamp_application_refusal(
-    scope_index: usize,
-    scope_name: Option<String>,
-    field: Option<String>,
-    constraint: &str,
-    constrained: bool,
-) {
-    APPLICATION_AUDIT.with(|state| {
-        let mut slot = state.borrow_mut();
-        let Some(invocation) = slot.as_mut() else {
-            return;
-        };
-        invocation.scope_index = scope_index;
-        invocation.scope_name.clone_from(&scope_name);
-        invocation.admission_match = if constrained {
-            ApplicationAdmissionMatch::Constrained
-        } else {
-            ApplicationAdmissionMatch::Exact
-        };
-        invocation.refused = Some(ApplicationAuditRefusal {
-            scope_name,
-            field,
-            constraint: constraint.to_owned(),
-        });
-    });
-}
-
 impl RuntimeKernel {
     /// Resolve an inherited credential or an authenticated callback record,
     /// then check the exact workspace, input and live plugin digest. `false`
@@ -491,4 +449,46 @@ impl RuntimeKernel {
         }
         Ok(())
     }
+}
+
+/// Drain the host-authenticated facts for the enclosing dispatch's audit row.
+pub fn take_application_audit() -> Option<ApplicationInvocation> {
+    APPLICATION_AUDIT.with(|state| state.borrow_mut().take())
+}
+
+/// End of one audited dispatch: the next call is charged to its scope's rate
+/// limit afresh.
+pub fn finish_application_dispatch() {
+    RATE_LIMIT_CHARGED.with(|charged| charged.borrow_mut().clear());
+}
+
+/// Record the first constrained refusal on the audit slot filled at the
+/// start of admission. Bindings, text digests and predicate evidence already
+/// on the slot stay: a callback refusal must not drop the entry's evidence,
+/// and a failed admission's own values are never copied onto it.
+fn stamp_application_refusal(
+    scope_index: usize,
+    scope_name: Option<String>,
+    field: Option<String>,
+    constraint: &str,
+    constrained: bool,
+) {
+    APPLICATION_AUDIT.with(|state| {
+        let mut slot = state.borrow_mut();
+        let Some(invocation) = slot.as_mut() else {
+            return;
+        };
+        invocation.scope_index = scope_index;
+        invocation.scope_name.clone_from(&scope_name);
+        invocation.admission_match = if constrained {
+            ApplicationAdmissionMatch::Constrained
+        } else {
+            ApplicationAdmissionMatch::Exact
+        };
+        invocation.refused = Some(ApplicationAuditRefusal {
+            scope_name,
+            field,
+            constraint: constraint.to_owned(),
+        });
+    });
 }

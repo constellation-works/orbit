@@ -21,6 +21,17 @@ use orbit_store::migrate::task::{
 const TEST: &str = "credentials::publication_askpass_authenticates_without_admitting_global_config";
 const SECRET: &str = "fixture-password-never-log";
 
+struct TraceWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for TraceWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 #[test]
 fn publication_askpass_authenticates_without_admitting_global_config() {
     if std::env::var("ORBIT_CREDENTIAL_CHILD").as_deref() != Ok(TEST) {
@@ -284,17 +295,6 @@ esac
         "trace2",
     ] {
         assert!(!root.join(path).exists(), "publication must isolate {path}");
-    }
-}
-
-struct TraceWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-impl std::io::Write for TraceWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 

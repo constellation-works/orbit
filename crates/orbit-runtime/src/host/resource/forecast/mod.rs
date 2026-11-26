@@ -77,11 +77,6 @@ pub const RESERVATION_TTL_MINUTES: i64 = 5;
 /// Minutes of host and run resource history the baseline reads.
 pub(crate) const BASELINE_HISTORY_MINUTES: i64 = 5;
 
-/// A pull request's mutually exclusive profile alternatives share this key.
-pub fn pending_pull_reservation_id(request_id: &str) -> String {
-    format!("pending:{request_id}")
-}
-
 /// The host's measured load, in the units of the task samples.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct HostLoad {
@@ -198,4 +193,9 @@ pub struct AdmissionReservationRequest {
 pub struct ForecastDecision<T> {
     pub outcome: T,
     pub admitted: Vec<AdmissionReservationRequest>,
+}
+
+/// A pull request's mutually exclusive profile alternatives share this key.
+pub fn pending_pull_reservation_id(request_id: &str) -> String {
+    format!("pending:{request_id}")
 }

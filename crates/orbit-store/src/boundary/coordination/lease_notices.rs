@@ -47,12 +47,16 @@ impl TaskCommitBoundary {
             return Ok(None);
         };
         let paths = canonical_footprint(&envelope.context_files, &checkout.repo_root)?;
+        let orbit_dir = checkout.orbit_dir.to_string_lossy().into_owned();
+        let workspace_id = self.workspace_id.clone();
+        let task_id = envelope.id.clone();
+        let event_key = format!("task:{}:{}", envelope.id, json!(paths));
         Ok(Some(TaskLeaseNotice {
-            orbit_dir: checkout.orbit_dir.to_string_lossy().into_owned(),
-            workspace_id: self.workspace_id.clone(),
-            task_id: envelope.id.clone(),
-            event_key: format!("task:{}:{}", envelope.id, json!(paths)),
+            orbit_dir,
+            workspace_id,
+            task_id,
             paths,
+            event_key,
         }))
     }
 

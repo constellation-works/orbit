@@ -5,6 +5,9 @@ use std::path::Path;
 
 use super::super::usage::{CpuTicks, HostUsageReading, read_host_usage};
 
+const MEMINFO: &str = "MemTotal:       28311552 kB\nMemFree:          524288 kB\n\
+                       MemAvailable:   12582912 kB\nCached:         9437184 kB\n";
+
 fn write_proc(root: &Path, stat: &str, meminfo: &str) {
     std::fs::write(root.join("stat"), stat).unwrap();
     std::fs::write(root.join("meminfo"), meminfo).unwrap();
@@ -22,9 +25,6 @@ fn stat(user: u64, idle: u64, iowait: u64) -> String {
     stat.push_str("intr 1 2 3\nctxt 4\nbtime 5\nprocs_running 36\n");
     stat
 }
-
-const MEMINFO: &str = "MemTotal:       28311552 kB\nMemFree:          524288 kB\n\
-                       MemAvailable:   12582912 kB\nCached:         9437184 kB\n";
 
 /// CPU is busy cores from `/proc/stat` tick deltas: idle and iowait are idle
 /// time, guest time is already inside user, and the count is the `cpuN`

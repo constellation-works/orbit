@@ -25,10 +25,6 @@ use crate::store::{Snapshot, Tx};
 /// re-filtered by it, so a phase missing here is read too much, never lost.
 const RELEASED_PHASES_SQL: &str = "('idle','settled','refused')";
 
-fn decode(raw: String) -> Result<LocalPullAdmission, OrbitError> {
-    serde_json::from_str(&raw).map_err(|error| OrbitError::Store(error.to_string()))
-}
-
 /// Concrete local-pull repository scoped to a [`Snapshot`] (read-only) or a
 /// [`Tx`] (read-write).
 pub struct LocalPullRepository<'a, Access> {
@@ -315,4 +311,8 @@ impl<Access> LocalPullRepository<'_, Access> {
         }
         Ok(claims)
     }
+}
+
+fn decode(raw: String) -> Result<LocalPullAdmission, OrbitError> {
+    serde_json::from_str(&raw).map_err(|error| OrbitError::Store(error.to_string()))
 }

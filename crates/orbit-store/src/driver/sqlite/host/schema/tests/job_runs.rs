@@ -7,6 +7,9 @@ use crate::Store;
 use crate::contract::JobRunQuery;
 use orbit_common::storage::sqlite::ledger::Migration;
 
+/// `(workspace, run, bytes, storage class)` of every stored state.
+type StoredState = (String, String, Vec<u8>, String);
+
 /// The registry up to, not including, v38.
 fn before_job_run_states() -> &'static [Migration] {
     let before = MIGRATIONS
@@ -28,9 +31,6 @@ fn seed_run(conn: &Connection, workspace: &str, run_id: &str, state: &str, paylo
     )
     .expect("seed v36 run");
 }
-
-/// `(workspace, run, bytes, storage class)` of every stored state.
-type StoredState = (String, String, Vec<u8>, String);
 
 fn stored_states(conn: &Connection, table: &str) -> Vec<StoredState> {
     let mut statement = conn

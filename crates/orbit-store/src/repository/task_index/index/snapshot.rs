@@ -30,39 +30,6 @@ pub(crate) struct TaskIndexProofRow {
     pub(crate) recorded: Option<EnvelopeStampRecord>,
 }
 
-fn load_task_index_snapshot(
-    registry: &TaskRegistryStore,
-    partition_id: &str,
-) -> Result<Arc<TaskIndexSnapshot>, OrbitError> {
-    let registered = registry.tasks_for_workspace(partition_id)?;
-    let mut indexed = registry.indexed_task_rows_for_workspace(partition_id)?;
-    let indexed_count = indexed.len();
-    // As in an uncached scan, a row-count mismatch goes straight to fallback
-    // without consulting persisted proofs.
-    let rows = if registered.len() == indexed_count {
-        let mut recorded = registry.envelope_stamps_for_workspace(partition_id)?;
-        registered
-            .iter()
-            .map(|binding| {
-                let row = indexed.remove(&binding.task_id)?;
-                Some(Arc::new(TaskIndexProofRow {
-                    task_id: binding.task_id.clone(),
-                    fingerprint: row.fingerprint(),
-                    indexed: row,
-                    recorded: recorded.remove(&binding.task_id),
-                }))
-            })
-            .collect()
-    } else {
-        None
-    };
-    Ok(Arc::new(TaskIndexSnapshot {
-        registered,
-        indexed_count,
-        rows,
-    }))
-}
-
 type CachedSnapshot = (String, i64, Arc<TaskIndexSnapshot>);
 
 struct SnapshotReader {
@@ -159,4 +126,39 @@ impl TaskRegistryStore {
         }
         self.index_snapshots.snapshot_for(self, partition_id)
     }
+}
+
+fn load_task_index_snapshot(
+    registry: &TaskRegistryStore,
+    partition_id: &str,
+) -> Result<Arc<TaskIndexSnapshot>, OrbitError> {
+    let registered = registry.tasks_for_workspace(partition_id)?;
+    let mut indexed = registry.indexed_task_rows_for_workspace(partition_id)?;
+    let indexed_count = indexed.len();
+    // As in an uncached scan, a row-count mismatch goes straight to fallback
+    // without consulting persisted proofs.
+    let rows = if registered.len() == indexed_count {
+        let mut recorded = registry.envelope_stamps_for_workspace(partition_id)?;
+        registered
+            .iter()
+            .map(|binding| {
+                let row = indexed.remove(&binding.task_id)?;
+                let task_id = binding.task_id.clone();
+                let fingerprint = row.fingerprint();
+                Some(Arc::new(TaskIndexProofRow {
+                    task_id,
+                    indexed: row,
+                    fingerprint,
+                    recorded: recorded.remove(&binding.task_id),
+                }))
+            })
+            .collect()
+    } else {
+        None
+    };
+    Ok(Arc::new(TaskIndexSnapshot {
+        registered,
+        indexed_count,
+        rows,
+    }))
 }

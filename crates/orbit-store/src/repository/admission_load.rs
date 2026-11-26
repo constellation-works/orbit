@@ -189,19 +189,26 @@ impl<Access> AdmissionLoadRepository<'_, Access> {
                 .collect::<Vec<_>>();
             let rows = statement
                 .query_map(params_from_iter(values), |row| {
+                    let workspace_id = row.get(0)?;
+                    let run_id = row.get(1)?;
+                    let job_id = row.get(2)?;
+                    let live = row.get(3)?;
+                    let created_at = crate::parse_timestamp(&row.get::<_, String>(4)?)?;
+                    let input = row
+                        .get::<_, Option<String>>(5)?
+                        .and_then(|raw| serde_json::from_str(&raw).ok());
+                    let started_at = row
+                        .get::<_, Option<String>>(6)?
+                        .map(|at| crate::parse_timestamp(&at))
+                        .transpose()?;
                     Ok(AdmissionRun {
-                        workspace_id: row.get(0)?,
-                        run_id: row.get(1)?,
-                        job_id: row.get(2)?,
-                        live: row.get(3)?,
-                        created_at: crate::parse_timestamp(&row.get::<_, String>(4)?)?,
-                        input: row
-                            .get::<_, Option<String>>(5)?
-                            .and_then(|raw| serde_json::from_str(&raw).ok()),
-                        started_at: row
-                            .get::<_, Option<String>>(6)?
-                            .map(|at| crate::parse_timestamp(&at))
-                            .transpose()?,
+                        workspace_id,
+                        run_id,
+                        job_id,
+                        live,
+                        created_at,
+                        started_at,
+                        input,
                         newest_minute: None,
                     })
                 })

@@ -11,6 +11,12 @@ pub(crate) mod codec {
 
     use crate::contract::{HostResourceMinute, RunResourceMinute};
 
+    /// Column order consumed by `run_minute_from_row`.
+    pub(crate) const RUN_MINUTE_COLUMNS: &str =
+        "workspace_id, run_id, minute_index, minute_started_at, task_id,
+            work_class, complexity, resumed, delivery_admitted_at,
+            cpu_cores, memory_bytes, samples, cpu_accounting, crew_model, orbit_version";
+
     /// Fixed-width UTC RFC3339 text (microseconds, `Z`) for lexical comparisons.
     pub(crate) fn stamp(at: DateTime<Utc>) -> String {
         at.to_rfc3339_opts(SecondsFormat::Micros, true)
@@ -21,30 +27,37 @@ pub(crate) mod codec {
         u64::try_from(value).unwrap_or(0)
     }
 
-    /// Column order consumed by `run_minute_from_row`.
-    pub(crate) const RUN_MINUTE_COLUMNS: &str =
-        "workspace_id, run_id, minute_index, minute_started_at, task_id,
-            work_class, complexity, resumed, delivery_admitted_at,
-            cpu_cores, memory_bytes, samples, cpu_accounting, crew_model, orbit_version";
-
     pub(crate) fn run_minute_from_row(row: &Row<'_>) -> rusqlite::Result<RunResourceMinute> {
+        let workspace_id = row.get(0)?;
+        let run_id = row.get(1)?;
+        let minute_index = row.get(2)?;
+        let minute_started_at = crate::parse_timestamp(&row.get::<_, String>(3)?)?;
+        let task_id = row.get(4)?;
+        let work_class = row.get(5)?;
+        let complexity = row.get(6)?;
+        let resumed = row.get(7)?;
+        let delivery_admitted_at = row
+            .get::<_, Option<String>>(8)?
+            .map(|at| crate::parse_timestamp(&at))
+            .transpose()?;
+        let cpu_cores = row.get(9)?;
+        let memory_bytes = unsigned(row.get(10)?);
+        let samples = row.get(11)?;
+        let cpu_accounting = row.get(12)?;
         Ok(RunResourceMinute {
-            workspace_id: row.get(0)?,
-            run_id: row.get(1)?,
-            minute_index: row.get(2)?,
-            minute_started_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
-            task_id: row.get(4)?,
-            work_class: row.get(5)?,
-            complexity: row.get(6)?,
-            resumed: row.get(7)?,
-            delivery_admitted_at: row
-                .get::<_, Option<String>>(8)?
-                .map(|at| crate::parse_timestamp(&at))
-                .transpose()?,
-            cpu_cores: row.get(9)?,
-            memory_bytes: unsigned(row.get(10)?),
-            samples: row.get(11)?,
-            cpu_accounting: row.get(12)?,
+            workspace_id,
+            run_id,
+            minute_index,
+            minute_started_at,
+            task_id,
+            work_class,
+            complexity,
+            resumed,
+            delivery_admitted_at,
+            cpu_cores,
+            cpu_accounting,
+            memory_bytes,
+            samples,
             crew_model: row.get(13)?,
             orbit_version: row.get(14)?,
         })

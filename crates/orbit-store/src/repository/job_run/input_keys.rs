@@ -6,21 +6,6 @@ use std::fmt;
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::{Map, Value};
 
-/// `raw` parsed as JSON, keeping only `keys` of a top-level object, in the
-/// order and with the values a whole parse gives them. Other values are
-/// skipped without being built. Any input that is not a JSON object is parsed
-/// whole, so it reads exactly as it would without the projection.
-pub(super) fn parse_input_keys(raw: &str, keys: &[&str]) -> serde_json::Result<Value> {
-    let mut deserializer = serde_json::Deserializer::from_str(raw);
-    match deserializer
-        .deserialize_map(KeptKeys(keys))
-        .and_then(|kept| deserializer.end().map(|()| kept))
-    {
-        Ok(kept) => Ok(Value::Object(kept)),
-        Err(_) => serde_json::from_str(raw),
-    }
-}
-
 /// Visits a top-level object, keeping the listed keys.
 struct KeptKeys<'k>(&'k [&'k str]);
 
@@ -68,5 +53,20 @@ impl<'de, 'k> Visitor<'de> for KeyMatch<'k> {
 
     fn visit_str<E: serde::de::Error>(self, key: &str) -> Result<Self::Value, E> {
         Ok(self.0.iter().copied().find(|kept| *kept == key))
+    }
+}
+
+/// `raw` parsed as JSON, keeping only `keys` of a top-level object, in the
+/// order and with the values a whole parse gives them. Other values are
+/// skipped without being built. Any input that is not a JSON object is parsed
+/// whole, so it reads exactly as it would without the projection.
+pub(super) fn parse_input_keys(raw: &str, keys: &[&str]) -> serde_json::Result<Value> {
+    let mut deserializer = serde_json::Deserializer::from_str(raw);
+    match deserializer
+        .deserialize_map(KeptKeys(keys))
+        .and_then(|kept| deserializer.end().map(|()| kept))
+    {
+        Ok(kept) => Ok(Value::Object(kept)),
+        Err(_) => serde_json::from_str(raw),
     }
 }

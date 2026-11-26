@@ -15,6 +15,43 @@ use crate::contract::{
     ProviderLedgerEntry,
 };
 
+#[derive(Default)]
+struct InvocationListQuery {
+    conditions: Vec<String>,
+    params: Vec<Box<dyn ToSql>>,
+}
+
+impl InvocationListQuery {
+    fn push_filter<T>(&mut self, sql: &str, value: T)
+    where
+        T: ToSql + 'static,
+    {
+        self.push_value(value);
+        // L-0024: nested EXISTS filters need the bind index inserted at the placeholder.
+        let placeholder = format!("?{}", self.len());
+        self.conditions.push(sql.replacen('?', &placeholder, 1));
+    }
+
+    fn push_value<T>(&mut self, value: T)
+    where
+        T: ToSql + 'static,
+    {
+        self.params.push(Box::new(value));
+    }
+
+    fn len(&self) -> usize {
+        self.params.len()
+    }
+
+    fn where_clause(&self) -> String {
+        if self.conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", self.conditions.join(" AND "))
+        }
+    }
+}
+
 pub(in crate::repository::invocation) fn list(
     conn: &Connection,
     filter: &InvocationQuery,
@@ -237,41 +274,4 @@ pub(super) fn build_invocation_list_query(
     );
 
     (sql, query.params)
-}
-
-#[derive(Default)]
-struct InvocationListQuery {
-    conditions: Vec<String>,
-    params: Vec<Box<dyn ToSql>>,
-}
-
-impl InvocationListQuery {
-    fn push_filter<T>(&mut self, sql: &str, value: T)
-    where
-        T: ToSql + 'static,
-    {
-        self.push_value(value);
-        // L-0024: nested EXISTS filters need the bind index inserted at the placeholder.
-        let placeholder = format!("?{}", self.len());
-        self.conditions.push(sql.replacen('?', &placeholder, 1));
-    }
-
-    fn push_value<T>(&mut self, value: T)
-    where
-        T: ToSql + 'static,
-    {
-        self.params.push(Box::new(value));
-    }
-
-    fn len(&self) -> usize {
-        self.params.len()
-    }
-
-    fn where_clause(&self) -> String {
-        if self.conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", self.conditions.join(" AND "))
-        }
-    }
 }

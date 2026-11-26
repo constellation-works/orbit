@@ -10,6 +10,40 @@ use tracing_subscriber::{Layer, Registry};
 
 use super::*;
 
+/// Complete one supported write after the reader captured its index rows,
+/// before it probes the envelope. This forces the production interleaving
+/// without sleeps or exposing private store methods.
+struct WriteAtSnapshot(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl<S: tracing::Subscriber> Layer<S> for WriteAtSnapshot {
+    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+        if event.metadata().target() == "orbit.store.task_query"
+            && event.metadata().fields().field("indexed_tasks").is_some()
+        {
+            let write = self.0.lock().unwrap().take();
+            if let Some(write) = write {
+                write();
+            }
+        }
+    }
+}
+
+/// Counts `task.yaml` parses: the store opens one span per envelope read.
+struct EnvelopeReads(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl<S: tracing::Subscriber> Layer<S> for EnvelopeReads {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if attrs.metadata().name() == "task_envelope_read" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 fn observer(root: &Path) -> WorkspaceTaskBackends {
     workspace_observational_backends(
         TaskRegistryStore::open_read_only(&task_registry_path(root)).unwrap(),
@@ -98,24 +132,6 @@ fn read_only_fallback_does_not_suppress_the_next_writer_repair() {
     );
     assert_eq!(repaired.last().unwrap()["fields"]["path"], "index");
     assert!(repaired.iter().all(|event| event["level"] != "WARN"));
-}
-
-/// Complete one supported write after the reader captured its index rows,
-/// before it probes the envelope. This forces the production interleaving
-/// without sleeps or exposing private store methods.
-struct WriteAtSnapshot(Mutex<Option<Box<dyn FnOnce() + Send>>>);
-
-impl<S: tracing::Subscriber> Layer<S> for WriteAtSnapshot {
-    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
-        if event.metadata().target() == "orbit.store.task_query"
-            && event.metadata().fields().field("indexed_tasks").is_some()
-        {
-            let write = self.0.lock().unwrap().take();
-            if let Some(write) = write {
-                write();
-            }
-        }
-    }
 }
 
 #[test]
@@ -231,22 +247,6 @@ fn a_listing_skips_envelope_stamps_while_another_writer_holds_the_registry() {
         1,
         "the next scan records the stamp the contended one skipped"
     );
-}
-
-/// Counts `task.yaml` parses: the store opens one span per envelope read.
-struct EnvelopeReads(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-impl<S: tracing::Subscriber> Layer<S> for EnvelopeReads {
-    fn on_new_span(
-        &self,
-        attrs: &tracing::span::Attributes<'_>,
-        _: &tracing::span::Id,
-        _: Context<'_, S>,
-    ) {
-        if attrs.metadata().name() == "task_envelope_read" {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
 }
 
 /// One selection on a fresh store handle, as a new process makes it: the

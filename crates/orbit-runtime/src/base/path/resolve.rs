@@ -16,6 +16,57 @@ use crate::base::managed_env::managed_dispatch_context_from_env;
 /// changes workspace root discovery or bootstrap ownership.
 use orbit_common::env_vars::ORBIT_REGISTRY_ROOT as ORBIT_REGISTRY_ROOT_ENV;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedOrbitRoots {
+    /// Shared workspace `.orbit` directory (the main-worktree root).
+    pub shared_root: PathBuf,
+    /// Worktree-local `.orbit` directory (equals `shared_root` outside linked
+    /// worktrees).
+    pub local_root: PathBuf,
+}
+
+/// Registry-neutral root candidate supplied by a higher-level workspace
+/// catalog. Resolution applies it at the historical path-override precedence:
+/// after linked-worktree discovery and before filesystem walk-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceRootHint {
+    pub orbit_dir: PathBuf,
+}
+
+impl ResolvedOrbitRoots {
+    fn pinned(root: PathBuf) -> Self {
+        Self {
+            shared_root: root.clone(),
+            local_root: root,
+        }
+    }
+
+    fn new(shared_root: PathBuf, local_root: PathBuf) -> Self {
+        Self {
+            shared_root,
+            local_root,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum ExplicitRootMode {
+    AllowUninitialized,
+    RequireInitialized,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RootField {
+    String(String),
+    Table { path: String },
+}
+
+#[derive(Debug, Deserialize)]
+struct RootOnlyConfig {
+    root: Option<RootField>,
+}
+
 /// Returns the global Orbit root.
 ///
 /// Direct commands use `~/.orbit/`. A trusted managed child may instead carry
@@ -109,39 +160,6 @@ pub fn resolve_process_generation_root(
         return resolve_global_root(env);
     }
     resolve_generation_root(env, root_override)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedOrbitRoots {
-    /// Shared workspace `.orbit` directory (the main-worktree root).
-    pub shared_root: PathBuf,
-    /// Worktree-local `.orbit` directory (equals `shared_root` outside linked
-    /// worktrees).
-    pub local_root: PathBuf,
-}
-
-/// Registry-neutral root candidate supplied by a higher-level workspace
-/// catalog. Resolution applies it at the historical path-override precedence:
-/// after linked-worktree discovery and before filesystem walk-up.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceRootHint {
-    pub orbit_dir: PathBuf,
-}
-
-impl ResolvedOrbitRoots {
-    fn pinned(root: PathBuf) -> Self {
-        Self {
-            shared_root: root.clone(),
-            local_root: root,
-        }
-    }
-
-    fn new(shared_root: PathBuf, local_root: PathBuf) -> Self {
-        Self {
-            shared_root,
-            local_root,
-        }
-    }
 }
 
 /// Resolves the `.orbit` shared and local roots using the full resolution chain.
@@ -361,12 +379,6 @@ fn resolve_orbit_roots(
     ))
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum ExplicitRootMode {
-    AllowUninitialized,
-    RequireInitialized,
-}
-
 fn orbit_root_env_is_set(env: &orbit_common::Env) -> bool {
     env.orbit_root()
         .and_then(std::ffi::OsStr::to_str)
@@ -536,18 +548,6 @@ fn log_resolved_roots(
         "resolved Orbit roots"
     );
     roots
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RootField {
-    String(String),
-    Table { path: String },
-}
-
-#[derive(Debug, Deserialize)]
-struct RootOnlyConfig {
-    root: Option<RootField>,
 }
 
 fn configured_root_from_config(

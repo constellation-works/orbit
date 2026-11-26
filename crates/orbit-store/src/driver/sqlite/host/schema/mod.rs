@@ -908,25 +908,6 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
 /// [`AppliedMigration`] and the `Store` version accessors.
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 96;
 
-/// Bring the store database up to the newest supported schema version,
-/// applying any pending versioned migrations (each transactional and
-/// recorded in the `schema_meta` ledger).
-///
-/// A database whose recorded schema version is newer than this binary
-/// supports is decided by its forward-compatibility record (ORB-12434):
-/// `Ok(Some(..))` means the caller must hold the connection read-only, and
-/// an error means the database must not be opened at all.
-pub(crate) fn apply_schema(conn: &Connection) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    ledger::run_store_migrations(conn, MIGRATIONS, None)
-}
-
-pub(crate) fn apply_schema_at_path(
-    conn: &Connection,
-    path: &Path,
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    ledger::run_store_migrations(conn, MIGRATIONS, Some(path))
-}
-
 /// Registry metadata for one schema migration not yet recorded as applied,
 /// as surfaced by `orbit migrate --dry-run` (ORB-10012).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -952,6 +933,25 @@ pub struct SchemaLedgerStatus {
     /// `None` also covers a newer database this binary must refuse — the
     /// open path carries that refusal and its reason.
     pub forward_compatible: Option<ForwardCompatibleOpen>,
+}
+
+/// Bring the store database up to the newest supported schema version,
+/// applying any pending versioned migrations (each transactional and
+/// recorded in the `schema_meta` ledger).
+///
+/// A database whose recorded schema version is newer than this binary
+/// supports is decided by its forward-compatibility record (ORB-12434):
+/// `Ok(Some(..))` means the caller must hold the connection read-only, and
+/// an error means the database must not be opened at all.
+pub(crate) fn apply_schema(conn: &Connection) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
+    ledger::run_store_migrations(conn, MIGRATIONS, None)
+}
+
+pub(crate) fn apply_schema_at_path(
+    conn: &Connection,
+    path: &Path,
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
+    ledger::run_store_migrations(conn, MIGRATIONS, Some(path))
 }
 
 /// Inspect the migration ledger of the store database at `db_path` without

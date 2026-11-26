@@ -14,6 +14,16 @@ use super::{
 };
 use crate::host::resource::forecast::ACCURACY_OFFSETS;
 
+/// An ended minute with no host row.
+enum MissingMinute {
+    /// No delivery overlapped the minute.
+    Unsampled,
+    /// A delivery overlapped the minute, but none saw it whole.
+    Partial,
+    /// A delivery was running for the whole minute.
+    Gap,
+}
+
 /// The report over preselected `records` against the host's measured `minutes`.
 ///
 /// `deliveries` are the workers that could have sampled the host. An ended
@@ -111,6 +121,15 @@ pub(crate) fn forecast_accuracy(
                 unsampled,
                 partial,
                 gap,
+                cpu: summarize(&at_offset, |pair| {
+                    (pair.forecast_cpu_cores, pair.measured_cpu_cores)
+                }),
+                memory: summarize(&at_offset, |pair| {
+                    (
+                        pair.forecast_memory_bytes as f64,
+                        pair.measured_memory_bytes as f64,
+                    )
+                }),
                 attributed_paired: attributed.len() as u64,
                 attributed_cpu: summarize(&attributed, |pair| {
                     (
@@ -122,15 +141,6 @@ pub(crate) fn forecast_accuracy(
                     (
                         pair.forecast_memory_bytes as f64,
                         pair.attributed_memory_bytes.unwrap_or_default(),
-                    )
-                }),
-                cpu: summarize(&at_offset, |pair| {
-                    (pair.forecast_cpu_cores, pair.measured_cpu_cores)
-                }),
-                memory: summarize(&at_offset, |pair| {
-                    (
-                        pair.forecast_memory_bytes as f64,
-                        pair.measured_memory_bytes as f64,
                     )
                 }),
             }
@@ -158,16 +168,6 @@ fn delivery_covers(delivery: &DeliveryRunInterval, minute_at: DateTime<Utc>) -> 
         && delivery
             .finished_at
             .is_none_or(|finished| finished > minute_at)
-}
-
-/// An ended minute with no host row.
-enum MissingMinute {
-    /// No delivery overlapped the minute.
-    Unsampled,
-    /// A delivery overlapped the minute, but none saw it whole.
-    Partial,
-    /// A delivery was running for the whole minute.
-    Gap,
 }
 
 /// Classify an ended minute that has no host row.

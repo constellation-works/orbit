@@ -48,6 +48,41 @@ impl RecoveryAuthority {
     }
 }
 
+impl RecoveryAuthority {
+    /// Bind Bubblewrap's namespace leader as observed from the host. A process
+    /// inside that namespace sees this same kernel namespace, boot and start
+    /// identity even though all host PIDs have disappeared from its /proc.
+    #[cfg(target_os = "linux")]
+    pub fn bind_worker_namespace(
+        &self,
+        root_pid: u32,
+        binding: &orbit_types::tool::WorkerInvocation,
+    ) -> Result<(), OrbitError> {
+        let leader = worker_namespace_leader(root_pid)?;
+        self.record_worker_namespace(&namespace_key(Path::new(PROC_ROOT), leader)?, binding)
+    }
+
+    #[cfg(target_os = "linux")]
+    // Namespace persistence seam shared with the immutable-binding security fixture.
+    pub(super) fn record_worker_namespace(
+        &self,
+        key: &str,
+        binding: &orbit_types::tool::WorkerInvocation,
+    ) -> Result<(), OrbitError> {
+        let json =
+            serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
+        let stored = self
+            .store
+            .insert_or_get_worker_namespace_binding(key, &json)?;
+        if stored != json {
+            return Err(OrbitError::PolicyDenied(
+                "worker namespace binding is immutable".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Resolve a process or live ancestor against host-only authority. Environment
 /// values can require a binding, but never supply one or choose its identity.
 #[cfg(target_os = "linux")]
@@ -226,40 +261,5 @@ pub(crate) fn worker_namespace_leader(root_pid: u32) -> Result<u32, OrbitError> 
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-}
-
-impl RecoveryAuthority {
-    /// Bind Bubblewrap's namespace leader as observed from the host. A process
-    /// inside that namespace sees this same kernel namespace, boot and start
-    /// identity even though all host PIDs have disappeared from its /proc.
-    #[cfg(target_os = "linux")]
-    pub fn bind_worker_namespace(
-        &self,
-        root_pid: u32,
-        binding: &orbit_types::tool::WorkerInvocation,
-    ) -> Result<(), OrbitError> {
-        let leader = worker_namespace_leader(root_pid)?;
-        self.record_worker_namespace(&namespace_key(Path::new(PROC_ROOT), leader)?, binding)
-    }
-
-    #[cfg(target_os = "linux")]
-    // Namespace persistence seam shared with the immutable-binding security fixture.
-    pub(super) fn record_worker_namespace(
-        &self,
-        key: &str,
-        binding: &orbit_types::tool::WorkerInvocation,
-    ) -> Result<(), OrbitError> {
-        let json =
-            serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
-        let stored = self
-            .store
-            .insert_or_get_worker_namespace_binding(key, &json)?;
-        if stored != json {
-            return Err(OrbitError::PolicyDenied(
-                "worker namespace binding is immutable".into(),
-            ));
-        }
-        Ok(())
     }
 }

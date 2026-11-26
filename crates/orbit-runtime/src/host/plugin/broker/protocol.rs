@@ -36,13 +36,6 @@ const INVALID_INPUT: &str = "plugin_broker_invalid_input";
 /// timed out, or answered with something other than its envelope.
 const CALL_FAILED: &str = "plugin_broker_call_failed";
 
-/// Whether `code` is one the listener answers before dispatch, so no broker
-/// audit row exists for the call. [`call_error_response`] never lets a
-/// dispatched call answer with one, which keeps this an origin signal.
-pub(crate) fn is_listener_code(code: &str) -> bool {
-    matches!(code, BUSY | INVALID_REQUEST | REQUEST_TOO_LARGE)
-}
-
 /// Why a request frame could not be read.
 #[derive(Debug)]
 pub(crate) enum FrameError {
@@ -50,6 +43,37 @@ pub(crate) enum FrameError {
     TooLarge { declared: u32 },
     /// The peer closed, timed out, or sent a short frame.
     Io(io::Error),
+}
+
+/// Where the nested `orbit` received the call. A hint for the audit row;
+/// it grants nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryPoint {
+    Cli,
+    Mcp,
+}
+
+/// A version-1 request (design §4.3): only what the caller legitimately
+/// chooses. Nothing here decides the run, task, allowlist or profile, which
+/// come from the host's own dispatch record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrokerRequest {
+    pub tool: String,
+    pub input: Value,
+    /// Where the caller runs; the broker requires it to lie within the run's
+    /// worktree.
+    pub cwd: PathBuf,
+    /// A workspace selector, which may name only the run's own workspace.
+    pub workspace: Option<String>,
+    pub entry_point: EntryPoint,
+    pub dry_run: bool,
+}
+
+/// Whether `code` is one the listener answers before dispatch, so no broker
+/// audit row exists for the call. [`call_error_response`] never lets a
+/// dispatched call answer with one, which keeps this an origin signal.
+pub(crate) fn is_listener_code(code: &str) -> bool {
+    matches!(code, BUSY | INVALID_REQUEST | REQUEST_TOO_LARGE)
 }
 
 /// Read one frame whose body is at most `limit` bytes.
@@ -88,30 +112,6 @@ pub(crate) fn error_response(code: &str, message: &str, retryable: bool) -> Vec<
     })
     .to_string()
     .into_bytes()
-}
-
-/// Where the nested `orbit` received the call. A hint for the audit row;
-/// it grants nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryPoint {
-    Cli,
-    Mcp,
-}
-
-/// A version-1 request (design §4.3): only what the caller legitimately
-/// chooses. Nothing here decides the run, task, allowlist or profile, which
-/// come from the host's own dispatch record.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BrokerRequest {
-    pub tool: String,
-    pub input: Value,
-    /// Where the caller runs; the broker requires it to lie within the run's
-    /// worktree.
-    pub cwd: PathBuf,
-    /// A workspace selector, which may name only the run's own workspace.
-    pub workspace: Option<String>,
-    pub entry_point: EntryPoint,
-    pub dry_run: bool,
 }
 
 /// Parse and validate a request body. `schema_version`, `tool`, `input` and

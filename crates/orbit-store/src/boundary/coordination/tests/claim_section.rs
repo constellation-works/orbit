@@ -31,6 +31,26 @@ use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task
 const PARTITION: &str = "orbit-test-123456";
 const MACHINE: &str = "machine-a";
 
+/// Claims already bound in the partition before the measured one.
+const BOUND_CLAIMS: usize = 12;
+
+/// Only a hang guard for channel handshakes and lock acquisition, not a
+/// reader-performance assertion.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+
+const WAITING_FOR_LOCK: &str = "still waiting for advisory file lock; a holder may be hung";
+
+const WAITING_FOR_WRITER: &str = "task index freshness waiting for a bundle writer";
+
+const INDEX_FALLBACK: &str = "task index fallback";
+
+/// Writers in the hold-time fixture, each mutating only its own claims.
+const HOLD_WRITERS: usize = 4;
+
+const HOLD_CLAIMS_PER_WRITER: usize = 2;
+
+const HOLD_ROUNDS: usize = 10;
+
 /// One owner partition: its commit boundary and a task store inside it.
 pub(super) struct Owner {
     pub(super) root: TempDir,
@@ -75,14 +95,15 @@ impl Owner {
         let store = Store::open(&root.path().join("state.sqlite")).expect("open store");
         let backends = workspace_coordinated_backends(registry.clone(), PARTITION.into(), store)
             .expect("compose");
+        let task_store = Arc::new(TaskV2Store::with_commit_boundary(
+            registry,
+            PARTITION.into(),
+            Arc::clone(&backends.commit_boundary),
+        ));
         let owner = Self {
-            tasks: Arc::new(TaskV2Store::with_commit_boundary(
-                registry,
-                PARTITION.into(),
-                Arc::clone(&backends.commit_boundary),
-            )),
-            boundary: backends.commit_boundary,
             root,
+            boundary: backends.commit_boundary,
+            tasks: task_store,
             repo,
             orbit_dir,
         };
@@ -95,9 +116,6 @@ impl Owner {
     fn create(&self, index: usize) {
         self.tasks
             .create_task(TaskCreateParams {
-                write_provenance: None,
-                granted_tools: Vec::new(),
-                requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
                 title: format!("Task {index}"),
@@ -107,11 +125,15 @@ impl Owner {
                 relations: Vec::new(),
                 tags: Vec::new(),
                 required_tools: Vec::new(),
+                granted_tools: Vec::new(),
+                requires_labels: Vec::new(),
+                not_before: None,
                 plan: "1. Do the work".into(),
                 execution_summary: String::new(),
                 context_files: vec![format!("file:src/task_{index}.rs")],
                 repo_root: None,
                 created_by: Some("codex".into()),
+                created_by_model: None,
                 planned_by: None,
                 implemented_by: None,
                 status: TaskStatus::Backlog,
@@ -125,13 +147,12 @@ impl Owner {
                 orchestrator: None,
                 orchestrator_model: None,
                 orchestrator_model_source: None,
-                created_by_model: None,
                 origin: None,
                 rule_fingerprint: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
                 creation_decision: None,
-                not_before: None,
+                write_provenance: None,
             })
             .expect("create task");
     }
@@ -180,7 +201,6 @@ impl Owner {
         }
     }
 }
-
 impl Admitted {
     fn unbound(&self) -> ClaimInvocation {
         ClaimInvocation::trusted_worker(
@@ -225,10 +245,9 @@ impl Admitted {
         )
     }
 }
-
+type Events = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
 fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
-        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
@@ -255,6 +274,7 @@ fn request(id: &str) -> AdmissionRequest {
         crews: None,
         os: None,
         browser_kit: false,
+        labels: Vec::new(),
         admissible: None,
     }
 }
@@ -267,9 +287,6 @@ fn section_of<T>(op: impl FnOnce() -> T) -> (T, SectionCost) {
     assert_eq!(sections.len(), 1, "one exclusive section: {sections:?}");
     (value, sections[0])
 }
-
-/// Claims already bound in the partition before the measured one.
-const BOUND_CLAIMS: usize = 12;
 
 /// Criterion: the admission sections of a claim's bind and of its budgeted
 /// release decode only the claim's own lifecycle row, however many other
@@ -346,8 +363,6 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
     );
 }
 
-type Events = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
-
 /// Observe diagnostics synchronously on the calling thread, including a
 /// refused acquisition before the reader can return from `get_task`.
 fn lock_events_observed<T>(
@@ -388,14 +403,6 @@ fn lock_events_observed<T>(
     let events = events.lock().expect("events").clone();
     (value, events)
 }
-
-/// Only a hang guard for channel handshakes and lock acquisition, not a
-/// reader-performance assertion.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
-const WAITING_FOR_LOCK: &str = "still waiting for advisory file lock; a holder may be hung";
-const WAITING_FOR_WRITER: &str = "task index freshness waiting for a bundle writer";
-const INDEX_FALLBACK: &str = "task index fallback";
-
 /// [ORB-22425] A commit shows its envelope before its deferred apply updates
 /// the index row, with the partition already released. A listing in that window
 /// used to take the row for stale and scan and rebuild the whole workspace inside
@@ -481,7 +488,6 @@ fn a_listing_during_a_commit_apply_waits_for_the_writer_and_does_not_rebuild_the
         "the listing returns the decided state"
     );
 }
-
 /// [ORB-16389] Criterion: a claim commit's apply runs after its admission
 /// section has released the partition. While a slow apply holds the task's
 /// bundle, another admission in the partition decides and an envelope read
@@ -598,11 +604,6 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
         row.history
     );
 }
-
-/// Writers in the hold-time fixture, each mutating only its own claims.
-const HOLD_WRITERS: usize = 4;
-const HOLD_CLAIMS_PER_WRITER: usize = 2;
-const HOLD_ROUNDS: usize = 10;
 
 /// A directory on a real disk for the hold-time fixture: tmpfs syncs cost
 /// nothing, so a hold measured there says nothing about a busy disk.

@@ -40,6 +40,13 @@ const WITNESS_VERSION: &str = "orbit.script.grant.v1";
 const WITNESS_INTEGRITY_DOMAIN: &str = "orbit.script.grant.witness.v1";
 const INVALID_WITNESS_FILE: &str = ".invalid.json";
 
+/// The longest timeout a grant may record, in seconds. A step's deadline is
+/// `Instant::now() + timeout` when it starts, and that sum panics once it
+/// leaves the host's `Instant` range (ORB-21454). 2^32 seconds, about 136
+/// years, sits far inside that range on Linux, where the overflow was
+/// reproduced, so no realistic request is refused.
+const SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS: u64 = u32::MAX as u64;
+
 /// What the granting command authorized, as the loader checks it back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ScriptGrantWitness {
@@ -52,154 +59,6 @@ struct ScriptGrantWitness {
     manifest_hex: String,
     /// The granted entry bytes, hex.
     entry_hex: String,
-}
-
-fn witness_integrity(grant: &ScriptGrant) -> Result<String, OrbitError> {
-    let canonical = serde_json::to_string(grant).map_err(|error| {
-        OrbitError::Execution(format!("serialize script grant for witness: {error}"))
-    })?;
-    let mut hasher = Sha256::new();
-    hasher.update(WITNESS_INTEGRITY_DOMAIN.as_bytes());
-    hasher.update(b"\n");
-    hasher.update(canonical.as_bytes());
-    Ok(lower_hex(hasher.finalize()))
-}
-
-/// One path component for a workspace id: the id itself when it is a plain
-/// segment, otherwise a digest of it, so a stored id can never place the
-/// witness outside its directory.
-fn witness_workspace_component(workspace_id: &str) -> String {
-    let plain = !workspace_id.is_empty()
-        && workspace_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-    if plain {
-        workspace_id.to_string()
-    } else {
-        script_sha256_hex(workspace_id.as_bytes())
-    }
-}
-
-/// Where the witness for one workspace script lives.
-pub fn script_grant_witness_path(global_root: &Path, workspace_id: &str, name: &str) -> PathBuf {
-    let file_name = if is_valid_script_name(name) {
-        format!("{name}.json")
-    } else {
-        INVALID_WITNESS_FILE.to_string()
-    };
-    global_root
-        .join("scripts")
-        .join(".grants")
-        .join(witness_workspace_component(workspace_id))
-        .join(file_name)
-}
-
-/// Record the witness half of a grant the operator just authorized.
-pub fn record_script_grant_witness(
-    global_root: &Path,
-    grant: &ScriptGrant,
-    manifest_bytes: &[u8],
-    entry_bytes: &[u8],
-) -> Result<(), OrbitError> {
-    if !is_valid_script_name(&grant.name) {
-        return Err(OrbitError::Execution(format!(
-            "cannot record a script grant witness for invalid script name '{}'",
-            grant.name
-        )));
-    }
-    let witness = ScriptGrantWitness {
-        schema_version: WITNESS_SCHEMA_VERSION,
-        version: WITNESS_VERSION.to_string(),
-        integrity: witness_integrity(grant)?,
-        manifest_hex: lower_hex(manifest_bytes),
-        entry_hex: lower_hex(entry_bytes),
-        grant: grant.clone(),
-    };
-    let path = script_grant_witness_path(global_root, &grant.workspace_id, &grant.name);
-    let body = serde_json::to_string_pretty(&witness).map_err(|error| {
-        OrbitError::Execution(format!("serialize script grant witness: {error}"))
-    })?;
-    atomic_write_text(&path, &format!("{body}\n"))
-        .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
-    Ok(())
-}
-
-/// Drop a grant's witness, so a later row of the same name starts with no
-/// authority rather than the revoked one.
-pub fn forget_script_grant_witness(global_root: &Path, workspace_id: &str, name: &str) {
-    if !is_valid_script_name(name) {
-        return;
-    }
-    let path = script_grant_witness_path(global_root, workspace_id, name);
-    if path.exists()
-        && let Err(error) = std::fs::remove_file(&path)
-    {
-        tracing::warn!(
-            target: "orbit.runtime.scripts",
-            script = %name,
-            path = %path.display(),
-            "could not remove the script grant witness: {error}",
-        );
-    }
-}
-
-/// Check one grant row against its witness. `Err` is the operator-facing
-/// refusal; the caller treats the grant as no authority at all.
-pub fn verify_script_grant_witness(global_root: &Path, grant: &ScriptGrant) -> Result<(), String> {
-    let refused = |reason: String| {
-        format!(
-            "script '{}' grant {} is refused: {reason}. A grant row is authority only with \
-             the witness `orbit script grant` recorded. Run `orbit script grant {}` to \
-             authorize the current bytes, or `orbit script revoke {}` to drop the record.",
-            grant.name, grant.grant_id, grant.name, grant.name
-        )
-    };
-    if !is_valid_script_name(&grant.name) {
-        return Err(refused("its script name is invalid".to_string()));
-    }
-    let path = script_grant_witness_path(global_root, &grant.workspace_id, &grant.name);
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(refused(format!(
-                "no authorization witness exists at {}",
-                path.display()
-            )));
-        }
-        Err(error) => {
-            return Err(refused(format!(
-                "its witness at {} is unreadable: {error}",
-                path.display()
-            )));
-        }
-    };
-    let witness: ScriptGrantWitness = serde_json::from_str(&raw).map_err(|error| {
-        refused(format!(
-            "its witness at {} does not parse: {error}",
-            path.display()
-        ))
-    })?;
-    if witness.schema_version != WITNESS_SCHEMA_VERSION || witness.version != WITNESS_VERSION {
-        return Err(refused(format!(
-            "its witness at {} is version {} (schema {}) and this Orbit reads {WITNESS_VERSION}",
-            path.display(),
-            witness.version,
-            witness.schema_version
-        )));
-    }
-    let expected = witness_integrity(&witness.grant)
-        .map_err(|error| refused(format!("its witness grant does not serialize: {error}")))?;
-    if witness.integrity != expected {
-        return Err(refused(
-            "its witness integrity value does not match its grant record".to_string(),
-        ));
-    }
-    if witness.grant != *grant {
-        return Err(refused(
-            "the stored grant row does not match the grant its witness authorized".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// One script's grant standing, as `orbit script list`, `orbit script
@@ -296,88 +155,6 @@ pub struct ScriptGrantOptions {
     /// digest to anything else is refused instead of granted, so consent
     /// is never applied to bytes nobody reviewed.
     pub expected_digest: Option<String>,
-}
-
-/// The longest timeout a grant may record, in seconds. A step's deadline is
-/// `Instant::now() + timeout` when it starts, and that sum panics once it
-/// leaves the host's `Instant` range (ORB-21454). 2^32 seconds, about 136
-/// years, sits far inside that range on Linux, where the overflow was
-/// reproduced, so no realistic request is refused.
-const SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS: u64 = u32::MAX as u64;
-
-fn script_grant_timeout_refusal(name: &str, grant_id: &str, seconds: u64) -> String {
-    format!(
-        "script `{name}` grant {grant_id} is refused: timeout ceiling {seconds} is outside \
-         1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; review it and re-grant \
-         with `orbit script grant {name}`"
-    )
-}
-
-/// The limits one grant records: the defaults, with each acknowledged
-/// override checked against the hard ceilings.
-fn grant_output_limits(
-    name: &str,
-    options: &ScriptGrantOptions,
-) -> Result<ScriptGrantLimits, OrbitError> {
-    let mut limits = ScriptGrantLimits::default();
-    if let Some(seconds) = options.timeout_seconds {
-        if seconds == 0 {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` timeout must be at least 1 second; nothing was granted"
-            )));
-        }
-        if seconds > SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` timeout {seconds} is outside \
-                 1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; nothing was granted"
-            )));
-        }
-        limits.timeout_max_seconds = seconds;
-    }
-    if let Some(files) = options.output_max_files {
-        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILES).contains(&files) {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` output file count {files} is outside 1..={SCRIPT_OUTPUT_HARD_MAX_FILES}; \
-                 nothing was granted"
-            )));
-        }
-        limits.output_max_files = files;
-    }
-    if let Some(bytes) = options.output_max_file_bytes {
-        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES).contains(&bytes) {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` output file size {bytes} is outside \
-                 1..={SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES} bytes; nothing was granted"
-            )));
-        }
-        limits.output_max_file_bytes = bytes;
-    }
-    if let Some(bytes) = options.memory_max_bytes {
-        if bytes == 0 {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` memory ceiling must be at least 1 byte; nothing was granted"
-            )));
-        }
-        limits.memory_max_bytes = Some(bytes);
-    }
-    if let Some(tasks) = options.tasks_max {
-        if tasks == 0 {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` task ceiling must be at least 1; nothing was granted"
-            )));
-        }
-        limits.tasks_max = Some(tasks);
-    }
-    if let Some(percent) = options.cpu_quota_percent {
-        if percent == 0 {
-            return Err(OrbitError::InvalidInput(format!(
-                "script `{name}` CPU quota must be at least 1 percent of one core; nothing \
-                 was granted"
-            )));
-        }
-        limits.cpu_quota_percent = Some(percent);
-    }
-    Ok(limits)
 }
 
 impl RuntimeKernel {
@@ -482,19 +259,21 @@ impl RuntimeKernel {
                 Ok(()) => String::new(),
                 Err(reason) => format!(" Its witness also fails verification: {reason}"),
             };
+            let name = grant.name.clone();
+            let detail = format!(
+                "grant {} at digest {} has no manifest at {}; run `orbit script revoke {}` \
+                     to drop it.{witness_note}",
+                grant.grant_id,
+                grant.digest,
+                catalog.manifest_path_for(&grant.name).display(),
+                grant.name,
+            );
             statuses.push(ScriptStatus {
-                name: grant.name.clone(),
+                name,
                 state: ScriptGrantState::Orphaned,
                 asset: None,
-                detail: format!(
-                    "grant {} at digest {} has no manifest at {}; run `orbit script revoke {}` \
-                     to drop it.{witness_note}",
-                    grant.grant_id,
-                    grant.digest,
-                    catalog.manifest_path_for(&grant.name).display(),
-                    grant.name,
-                ),
                 grant: Some(grant),
+                detail,
             });
         }
         statuses.sort_by(|left, right| left.name.cmp(&right.name));
@@ -692,6 +471,233 @@ impl RuntimeKernel {
 pub struct GrantedScriptBytes {
     pub manifest: Vec<u8>,
     pub entry: Vec<u8>,
+}
+
+fn witness_integrity(grant: &ScriptGrant) -> Result<String, OrbitError> {
+    let canonical = serde_json::to_string(grant).map_err(|error| {
+        OrbitError::Execution(format!("serialize script grant for witness: {error}"))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(WITNESS_INTEGRITY_DOMAIN.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(canonical.as_bytes());
+    Ok(lower_hex(hasher.finalize()))
+}
+
+/// One path component for a workspace id: the id itself when it is a plain
+/// segment, otherwise a digest of it, so a stored id can never place the
+/// witness outside its directory.
+fn witness_workspace_component(workspace_id: &str) -> String {
+    let plain = !workspace_id.is_empty()
+        && workspace_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if plain {
+        workspace_id.to_string()
+    } else {
+        script_sha256_hex(workspace_id.as_bytes())
+    }
+}
+
+/// Where the witness for one workspace script lives.
+pub fn script_grant_witness_path(global_root: &Path, workspace_id: &str, name: &str) -> PathBuf {
+    let file_name = if is_valid_script_name(name) {
+        format!("{name}.json")
+    } else {
+        INVALID_WITNESS_FILE.to_string()
+    };
+    global_root
+        .join("scripts")
+        .join(".grants")
+        .join(witness_workspace_component(workspace_id))
+        .join(file_name)
+}
+
+/// Record the witness half of a grant the operator just authorized.
+pub fn record_script_grant_witness(
+    global_root: &Path,
+    grant: &ScriptGrant,
+    manifest_bytes: &[u8],
+    entry_bytes: &[u8],
+) -> Result<(), OrbitError> {
+    if !is_valid_script_name(&grant.name) {
+        return Err(OrbitError::Execution(format!(
+            "cannot record a script grant witness for invalid script name '{}'",
+            grant.name
+        )));
+    }
+    let version = WITNESS_VERSION.to_string();
+    let integrity = witness_integrity(grant)?;
+    let manifest_hex = lower_hex(manifest_bytes);
+    let entry_hex = lower_hex(entry_bytes);
+    let witness = ScriptGrantWitness {
+        schema_version: WITNESS_SCHEMA_VERSION,
+        version,
+        grant: grant.clone(),
+        integrity,
+        manifest_hex,
+        entry_hex,
+    };
+    let path = script_grant_witness_path(global_root, &grant.workspace_id, &grant.name);
+    let body = serde_json::to_string_pretty(&witness).map_err(|error| {
+        OrbitError::Execution(format!("serialize script grant witness: {error}"))
+    })?;
+    atomic_write_text(&path, &format!("{body}\n"))
+        .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
+    Ok(())
+}
+
+/// Drop a grant's witness, so a later row of the same name starts with no
+/// authority rather than the revoked one.
+pub fn forget_script_grant_witness(global_root: &Path, workspace_id: &str, name: &str) {
+    if !is_valid_script_name(name) {
+        return;
+    }
+    let path = script_grant_witness_path(global_root, workspace_id, name);
+    if path.exists()
+        && let Err(error) = std::fs::remove_file(&path)
+    {
+        tracing::warn!(
+            target: "orbit.runtime.scripts",
+            script = %name,
+            path = %path.display(),
+            "could not remove the script grant witness: {error}",
+        );
+    }
+}
+
+/// Check one grant row against its witness. `Err` is the operator-facing
+/// refusal; the caller treats the grant as no authority at all.
+pub fn verify_script_grant_witness(global_root: &Path, grant: &ScriptGrant) -> Result<(), String> {
+    let refused = |reason: String| {
+        format!(
+            "script '{}' grant {} is refused: {reason}. A grant row is authority only with \
+             the witness `orbit script grant` recorded. Run `orbit script grant {}` to \
+             authorize the current bytes, or `orbit script revoke {}` to drop the record.",
+            grant.name, grant.grant_id, grant.name, grant.name
+        )
+    };
+    if !is_valid_script_name(&grant.name) {
+        return Err(refused("its script name is invalid".to_string()));
+    }
+    let path = script_grant_witness_path(global_root, &grant.workspace_id, &grant.name);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(refused(format!(
+                "no authorization witness exists at {}",
+                path.display()
+            )));
+        }
+        Err(error) => {
+            return Err(refused(format!(
+                "its witness at {} is unreadable: {error}",
+                path.display()
+            )));
+        }
+    };
+    let witness: ScriptGrantWitness = serde_json::from_str(&raw).map_err(|error| {
+        refused(format!(
+            "its witness at {} does not parse: {error}",
+            path.display()
+        ))
+    })?;
+    if witness.schema_version != WITNESS_SCHEMA_VERSION || witness.version != WITNESS_VERSION {
+        return Err(refused(format!(
+            "its witness at {} is version {} (schema {}) and this Orbit reads {WITNESS_VERSION}",
+            path.display(),
+            witness.version,
+            witness.schema_version
+        )));
+    }
+    let expected = witness_integrity(&witness.grant)
+        .map_err(|error| refused(format!("its witness grant does not serialize: {error}")))?;
+    if witness.integrity != expected {
+        return Err(refused(
+            "its witness integrity value does not match its grant record".to_string(),
+        ));
+    }
+    if witness.grant != *grant {
+        return Err(refused(
+            "the stored grant row does not match the grant its witness authorized".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn script_grant_timeout_refusal(name: &str, grant_id: &str, seconds: u64) -> String {
+    format!(
+        "script `{name}` grant {grant_id} is refused: timeout ceiling {seconds} is outside \
+         1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; review it and re-grant \
+         with `orbit script grant {name}`"
+    )
+}
+
+/// The limits one grant records: the defaults, with each acknowledged
+/// override checked against the hard ceilings.
+fn grant_output_limits(
+    name: &str,
+    options: &ScriptGrantOptions,
+) -> Result<ScriptGrantLimits, OrbitError> {
+    let mut limits = ScriptGrantLimits::default();
+    if let Some(seconds) = options.timeout_seconds {
+        if seconds == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` timeout must be at least 1 second; nothing was granted"
+            )));
+        }
+        if seconds > SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` timeout {seconds} is outside \
+                 1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; nothing was granted"
+            )));
+        }
+        limits.timeout_max_seconds = seconds;
+    }
+    if let Some(files) = options.output_max_files {
+        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILES).contains(&files) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` output file count {files} is outside 1..={SCRIPT_OUTPUT_HARD_MAX_FILES}; \
+                 nothing was granted"
+            )));
+        }
+        limits.output_max_files = files;
+    }
+    if let Some(bytes) = options.output_max_file_bytes {
+        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES).contains(&bytes) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` output file size {bytes} is outside \
+                 1..={SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES} bytes; nothing was granted"
+            )));
+        }
+        limits.output_max_file_bytes = bytes;
+    }
+    if let Some(bytes) = options.memory_max_bytes {
+        if bytes == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` memory ceiling must be at least 1 byte; nothing was granted"
+            )));
+        }
+        limits.memory_max_bytes = Some(bytes);
+    }
+    if let Some(tasks) = options.tasks_max {
+        if tasks == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` task ceiling must be at least 1; nothing was granted"
+            )));
+        }
+        limits.tasks_max = Some(tasks);
+    }
+    if let Some(percent) = options.cpu_quota_percent {
+        if percent == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` CPU quota must be at least 1 percent of one core; nothing \
+                 was granted"
+            )));
+        }
+        limits.cpu_quota_percent = Some(percent);
+    }
+    Ok(limits)
 }
 
 fn decode_hex(hex: &str) -> Result<Vec<u8>, OrbitError> {

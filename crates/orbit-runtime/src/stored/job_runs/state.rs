@@ -11,16 +11,6 @@ use orbit_types::workflow::{
 
 use super::JobRuns;
 
-fn serialize(state: &PipelineState) -> Result<String, OrbitError> {
-    serde_json::to_string(state)
-        .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))
-}
-
-fn parse(raw: &str) -> Result<PipelineState, OrbitError> {
-    serde_json::from_str(raw)
-        .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))
-}
-
 impl JobRuns {
     /// Replace a run's pipeline state. Not-found when the run does not exist.
     ///
@@ -160,6 +150,16 @@ impl JobRuns {
             Ok(true)
         })
     }
+}
+
+fn serialize(state: &PipelineState) -> Result<String, OrbitError> {
+    serde_json::to_string(state)
+        .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))
+}
+
+fn parse(raw: &str) -> Result<PipelineState, OrbitError> {
+    serde_json::from_str(raw)
+        .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))
 }
 
 /// [ORB-14587] Drop the resume-only maps of a run that just finished

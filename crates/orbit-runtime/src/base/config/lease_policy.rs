@@ -25,6 +25,10 @@ pub const LEASE_MAX_PRIORITY_AGENT: LeasePriority = LeasePriority::Normal;
 /// The former `lease.aging_minutes` default, fixed when the key was removed [ORB-22808].
 pub const LEASE_AGING_MINUTES: u32 = 30;
 
+#[cfg(feature = "test-support")]
+static TEST_LEASE_POLICIES: std::sync::Mutex<Option<TestLeasePolicies>> =
+    std::sync::Mutex::new(None);
+
 /// The lease policy a runtime holds: whether leases are accepted, the mode a
 /// request that names none gets, and the per-principal-class guards.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,10 +107,6 @@ impl LeasePolicy {
 
 #[cfg(feature = "test-support")]
 type TestLeasePolicies = std::collections::HashMap<std::path::PathBuf, LeasePolicy>;
-
-#[cfg(feature = "test-support")]
-static TEST_LEASE_POLICIES: std::sync::Mutex<Option<TestLeasePolicies>> =
-    std::sync::Mutex::new(None);
 
 #[cfg(feature = "test-support")]
 fn test_lease_policy_key(orbit_dir: &std::path::Path) -> std::path::PathBuf {

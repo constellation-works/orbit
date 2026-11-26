@@ -37,9 +37,9 @@ impl TaskRegistryStore {
 
     fn over(db: TaskIndexDb) -> Self {
         Self {
-            db,
             index_snapshots: Arc::default(),
             change_stamps: Arc::default(),
+            db,
         }
     }
 

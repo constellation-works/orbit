@@ -11,6 +11,23 @@ use super::current_layout_version;
 use super::registry::LayoutMigration;
 use super::upgrade::upgrade_with;
 
+const TOY_V2_REGISTRY: &[LayoutMigration] = &[
+    LayoutMigration {
+        version: 1,
+        name: "baseline",
+        description: "adopt the versioned layout",
+        compat: MigrationCompatibility::Additive,
+        apply: |_| Ok(()),
+    },
+    LayoutMigration {
+        version: 2,
+        name: "notes-into-subdir",
+        description: "move notes.txt under notes/",
+        compat: MigrationCompatibility::Additive,
+        apply: toy_v2_apply,
+    },
+];
+
 fn temp_orbit_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("create temp .orbit dir")
 }
@@ -34,23 +51,6 @@ fn failing_apply(_orbit_dir: &Path) -> Result<(), OrbitError> {
     Err(OrbitError::Execution("boom".to_string()))
 }
 
-const TOY_V2_REGISTRY: &[LayoutMigration] = &[
-    LayoutMigration {
-        version: 1,
-        name: "baseline",
-        compat: MigrationCompatibility::Additive,
-        description: "adopt the versioned layout",
-        apply: |_| Ok(()),
-    },
-    LayoutMigration {
-        version: 2,
-        name: "notes-into-subdir",
-        compat: MigrationCompatibility::Additive,
-        description: "move notes.txt under notes/",
-        apply: toy_v2_apply,
-    },
-];
-
 #[test]
 fn failed_migration_keeps_the_marker_at_the_last_applied_version() {
     let temp = temp_orbit_dir();
@@ -58,15 +58,15 @@ fn failed_migration_keeps_the_marker_at_the_last_applied_version() {
         LayoutMigration {
             version: 1,
             name: "baseline",
-            compat: MigrationCompatibility::Additive,
             description: "adopt",
+            compat: MigrationCompatibility::Additive,
             apply: |_| Ok(()),
         },
         LayoutMigration {
             version: 2,
             name: "explodes",
-            compat: MigrationCompatibility::Additive,
             description: "always fails",
+            compat: MigrationCompatibility::Additive,
             apply: failing_apply,
         },
     ];

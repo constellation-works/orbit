@@ -55,11 +55,11 @@ impl AdmissionPolicy {
         let task_types = config.snapshot.task_types().to_vec();
         let final_recovery_crews = config.snapshot.final_recovery_crews().to_vec();
         Self {
+            auto_concurrency: config.auto_concurrency,
             provider_limit,
             mid_run_steering,
             experiments_enabled,
             standing_drain,
-            auto_concurrency: config.auto_concurrency,
             crew_settings: Arc::new(AdmissionCrewSettings {
                 complexity_crews: config.complexity_crews,
                 crews: config.crews,
@@ -78,21 +78,6 @@ impl AdmissionPolicy {
 pub(crate) struct CachedPolicy {
     stamps: [Option<(SystemTime, u64)>; 2],
     policy: Arc<AdmissionPolicy>,
-}
-
-/// Modification stamp of a layer's `config.toml`. The layer root is validated
-/// before the fixed leaf is probed; `None` means the layer has no config file.
-fn stamp(root: &Path) -> std::io::Result<Option<(SystemTime, u64)>> {
-    let Some(validated_root) = validated_existing_config_root(root)
-        .map_err(|error| std::io::Error::other(error.to_string()))?
-    else {
-        return Ok(None);
-    };
-    match std::fs::metadata(validated_root.join(CONFIG_TOML_FILE)) {
-        Ok(metadata) => Ok(Some((metadata.modified()?, metadata.len()))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
 }
 
 impl RuntimeKernel {
@@ -209,5 +194,20 @@ impl RuntimeKernel {
     /// this admission pass's snapshot.
     pub fn admission_crew_settings(&self) -> Arc<AdmissionCrewSettings> {
         self.current_admission_policy().crew_settings.clone()
+    }
+}
+
+/// Modification stamp of a layer's `config.toml`. The layer root is validated
+/// before the fixed leaf is probed; `None` means the layer has no config file.
+fn stamp(root: &Path) -> std::io::Result<Option<(SystemTime, u64)>> {
+    let Some(validated_root) = validated_existing_config_root(root)
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    match std::fs::metadata(validated_root.join(CONFIG_TOML_FILE)) {
+        Ok(metadata) => Ok(Some((metadata.modified()?, metadata.len()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }

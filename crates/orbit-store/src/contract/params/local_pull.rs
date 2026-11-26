@@ -89,11 +89,6 @@ pub struct LocalPullAdmission {
     pub build_output_reclaim_complete: bool,
 }
 
-/// `skip_serializing_if` for [`LocalPullAdmission::build_output_reclaim_complete`].
-fn reclaim_marker_unset(complete: &bool) -> bool {
-    !*complete
-}
-
 /// The settled claims that make up a pull drain's failure-breaker streak
 /// [ORB-15639]: how many of its most recent claims failed in a row, and their
 /// failure classes, newest first.
@@ -165,4 +160,9 @@ pub enum LocalPullMutation {
     /// it still holds the claim, and when delivery is next attempted. The
     /// admission stays `Settling` with its settlement unchanged.
     DeferSettlement(SettlementRefusal),
+}
+
+/// `skip_serializing_if` for [`LocalPullAdmission::build_output_reclaim_complete`].
+fn reclaim_marker_unset(complete: &bool) -> bool {
+    !*complete
 }

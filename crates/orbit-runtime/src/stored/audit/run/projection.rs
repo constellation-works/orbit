@@ -140,7 +140,6 @@ pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<R
                 let index = starts.len() as u32;
                 let start = starts.entry(step_id.as_str()).or_insert((index, None));
                 attempts.push(RunAuditStep {
-                    error_diagnostic: error_diagnostic.clone(),
                     lock_wait_ms: *lock_wait_ms,
                     step_index: start.0,
                     step_id: step_id.clone(),
@@ -148,6 +147,7 @@ pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<R
                     finished_at: event.timestamp,
                     outcome: outcome.as_deref().map(AuditStepOutcome::from_recorded),
                     error_message: error_message.clone(),
+                    error_diagnostic: error_diagnostic.clone(),
                 });
                 start.1 = event.timestamp;
             }
@@ -204,8 +204,8 @@ where
                     run_id: event_run_id.as_deref().unwrap_or(run_id).to_string(),
                     event_id: event.event_id.clone(),
                     ts: event.timestamp,
-                    step_index,
                     step_id: event.step_id.clone(),
+                    step_index,
                     provider: provider.clone(),
                     pid: *pid,
                     pid_start_time: pid_start_time.clone(),
@@ -412,13 +412,13 @@ pub(super) fn run_audit_event(
         body,
     } = row;
     RunAuditEvent {
+        raw,
+        event_id,
         parent_event_id: envelope.parent_event_id,
         event_type: envelope.event_type,
         body,
         timestamp: envelope.ts,
         step_id,
-        raw,
-        event_id,
     }
 }
 
@@ -460,20 +460,20 @@ pub(super) fn cli_invocation_record(
         .and_then(|step_id| step_index_by_id.get(step_id).copied());
     Some(RunCliInvocationRecord {
         run_id: event_run_id.unwrap_or_else(|| run_id.to_string()),
-        step_index,
-        provider,
-        exit_code,
-        timed_out,
-        duration_ms,
         event_id: event.event_id,
         ts: event.timestamp,
         step_id: event.step_id,
+        step_index,
+        provider,
         stdout_blob_ref,
         stderr_blob_ref,
         stdout,
         stderr,
         stdout_blob_truncated,
         stderr_blob_truncated,
+        exit_code,
+        timed_out,
+        duration_ms,
     })
 }
 
@@ -530,14 +530,15 @@ fn recovery_event_from_row(row: &orbit_store::V2AuditEventRow) -> Option<RunAudi
         envelope,
         body,
     } = RunTrailRow::parse(&row.payload_json)?;
+    let event_id = envelope.event_id?;
     Some(RunAuditEvent {
-        event_id: envelope.event_id?,
+        raw,
+        event_id,
         parent_event_id: envelope.parent_event_id,
         event_type: envelope.event_type,
         body,
         timestamp: envelope.ts.or(Some(row.ts)),
         step_id: envelope.step_id,
-        raw,
     })
 }
 
@@ -554,13 +555,13 @@ fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<Run
             let outcome = outcome?;
             let recovery_activity = final_recovery_activity?;
             let detail = detail.as_deref().map(bounded_recovery_diagnostic);
+            let retry_admitted = outcome == "resume";
             Some(RunRecoveryAttempt {
                 run_id: run_id.to_string(),
                 event_id: event.event_id,
                 attempted_at: event.timestamp,
                 failed_step_id,
                 recovery_activity,
-                retry_admitted: outcome == "resume",
                 outcome,
                 failure_phase: None,
                 diagnostic: detail.as_ref().map(|(text, _)| text.clone()),
@@ -570,6 +571,7 @@ fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<Run
                     verdict: Some(verdict),
                     detail: detail.map(|(text, _)| text),
                 }),
+                retry_admitted,
             })
         }
         RunTrailBody::StepRecoveryAttempted {

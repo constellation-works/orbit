@@ -2,33 +2,9 @@
 //  at several surfaces shares a cause, distinct structured codes stay
 //  distinct, and rows without structured evidence keep their own signature.
 
-struct Row<'a> {
-    surface: &'a str,
-    role: &'a str,
-    run: &'a str,
-    minute: i64,
-    message: Option<&'a str>,
-    activity: Option<&'a str>,
-    denied: bool,
-}
-
-impl<'a> Row<'a> {
-    fn new(surface: &'a str, run: &'a str, minute: i64, message: &'a str) -> Self {
-        Self {
-            surface,
-            role: "codex",
-            run,
-            minute,
-            message: Some(message),
-            activity: None,
-            denied: false,
-        }
-    }
-}
-
 /// A tool surface is a dotted name; anything else is a `command subcommand`
 /// pair, the shape direct CLI and job-run lifecycle rows record.
-fn event(id: i64, row: &Row<'_>) -> AuditEvent {
+fn event(id: i64, row: &IncidentRow<'_>) -> AuditEvent {
     let (command, subcommand, tool) = if row.surface.contains('.') {
         ("tool", Some("run"), Some(row.surface))
     } else {
@@ -49,7 +25,7 @@ fn event(id: i64, row: &Row<'_>) -> AuditEvent {
     .unwrap()
 }
 
-fn incidents(rows: &[Row<'_>]) -> Vec<FailureIncident> {
+fn incidents(rows: &[IncidentRow<'_>]) -> Vec<FailureIncident> {
     let events: Vec<AuditEvent> = rows
         .iter()
         .enumerate()
@@ -71,9 +47,6 @@ fn on<'a>(incidents: &'a [FailureIncident], run: &str) -> &'a FailureIncident {
         .unwrap()
 }
 
-const VALIDATE_FAILURE: &str =
-    "required check 'make check' did not pass on candidate 9f8e7d6c5b4a: check exited 2";
-
 #[test]
 fn one_action_failure_reported_at_two_surfaces_shares_a_cause() {
     let wrapped = format!(
@@ -83,18 +56,18 @@ fn one_action_failure_reported_at_two_surfaces_shares_a_cause() {
     let other = "execution failed: action `fixture_validate` failed: candidate checkout is missing";
     let denied = format!("action `fixture_validate` failed: {VALIDATE_FAILURE}");
     let rows = [
-        Row {
+        IncidentRow {
             role: "admin",
-            ..Row::new("fixture.wait", "run-wait", 0, &wrapped)
+            ..IncidentRow::new("fixture.wait", "run-wait", 0, &wrapped)
         },
-        Row {
+        IncidentRow {
             role: "human",
-            ..Row::new("job worker", "run-worker", 10, &direct)
+            ..IncidentRow::new("job worker", "run-worker", 10, &direct)
         },
-        Row::new("job worker", "run-other", 20, other),
-        Row {
+        IncidentRow::new("job worker", "run-other", 20, other),
+        IncidentRow {
             denied: true,
-            ..Row::new("job worker", "run-denied", 30, &denied)
+            ..IncidentRow::new("job worker", "run-denied", 30, &denied)
         },
     ];
     let incidents = incidents(&rows);
@@ -139,11 +112,11 @@ fn distinct_codes_under_one_step_are_distinct_causes() {
     };
     let (red_one, red_two) = (red("1111aaaa2222bbbb"), red("3333cccc4444dddd"));
     let rows = [
-        Row::new("fixture.wait", "run-alpha-wait", 0, &alpha),
-        Row::new("job worker", "run-alpha-worker", 10, &alpha),
-        Row::new("job worker", "run-beta", 20, &beta),
-        Row::new("job worker", "run-red-one", 30, &red_one),
-        Row::new("fixture.wait", "run-red-two", 40, &red_two),
+        IncidentRow::new("fixture.wait", "run-alpha-wait", 0, &alpha),
+        IncidentRow::new("job worker", "run-alpha-worker", 10, &alpha),
+        IncidentRow::new("job worker", "run-beta", 20, &beta),
+        IncidentRow::new("job worker", "run-red-one", 30, &red_one),
+        IncidentRow::new("fixture.wait", "run-red-two", 40, &red_two),
     ];
     let incidents = incidents(&rows);
     let alpha_cause = &on(&incidents, "run-alpha-wait").cause;
@@ -177,19 +150,19 @@ fn distinct_codes_under_one_step_are_distinct_causes() {
 #[test]
 fn a_code_without_a_step_groups_by_the_code() {
     let rows = [
-        Row::new(
+        IncidentRow::new(
             "fixture.wait",
             "run-kind-wait",
             0,
             "[blocked_by_agent] kind=sandbox_refused\nThe host refuses user namespaces.",
         ),
-        Row::new(
+        IncidentRow::new(
             "job worker",
             "run-kind-worker",
             10,
             "[blocked_by_agent] kind=sandbox_refused\nnamespace probe exited 1",
         ),
-        Row::new(
+        IncidentRow::new(
             "job worker",
             "run-tag",
             20,
@@ -216,18 +189,18 @@ fn a_code_without_a_step_groups_by_the_code() {
 #[test]
 fn an_activity_column_names_the_step_when_the_message_does_not() {
     let rows = [
-        Row {
+        IncidentRow {
             activity: Some("fixture_step"),
-            ..Row::new("fixture.wait", "run-col-wait", 0, "disk quota exceeded")
+            ..IncidentRow::new("fixture.wait", "run-col-wait", 0, "disk quota exceeded")
         },
-        Row {
+        IncidentRow {
             activity: Some("fixture_step"),
-            ..Row::new("job worker", "run-col-worker", 10, "disk quota exceeded")
+            ..IncidentRow::new("job worker", "run-col-worker", 10, "disk quota exceeded")
         },
-        Row {
-            activity: Some("fixture_step"),
+        IncidentRow {
             message: None,
-            ..Row::new("job worker", "run-col-silent", 20, "")
+            activity: Some("fixture_step"),
+            ..IncidentRow::new("job worker", "run-col-silent", 20, "")
         },
     ];
     let incidents = incidents(&rows);
@@ -248,19 +221,19 @@ fn an_activity_column_names_the_step_when_the_message_does_not() {
 #[test]
 fn rows_without_structured_evidence_fall_back_to_their_signature() {
     let rows = [
-        Row::new(
+        IncidentRow::new(
             "fixture.read",
             "run-plain-one",
             0,
             "database connection failed",
         ),
-        Row::new(
+        IncidentRow::new(
             "job worker",
             "run-plain-two",
             10,
             "database connection failed",
         ),
-        Row::new(
+        IncidentRow::new(
             "job worker",
             "run-log-level",
             20,
@@ -288,9 +261,9 @@ fn rows_without_structured_evidence_fall_back_to_their_signature() {
 fn cause_keys_are_stable_across_repeated_computation_and_input_order() {
     let message = format!("execution failed: action `fixture_validate` failed: {VALIDATE_FAILURE}");
     let rows = [
-        Row::new("fixture.wait", "run-a", 0, &message),
-        Row::new("job worker", "run-b", 10, &message),
-        Row::new("job worker", "run-c", 20, "database connection failed"),
+        IncidentRow::new("fixture.wait", "run-a", 0, &message),
+        IncidentRow::new("job worker", "run-b", 10, &message),
+        IncidentRow::new("job worker", "run-c", 20, "database connection failed"),
     ];
     let events: Vec<AuditEvent> = rows
         .iter()
@@ -319,13 +292,13 @@ fn cause_keys_are_stable_across_repeated_computation_and_input_order() {
 #[test]
 fn cluster_root_uses_earliest_timestamp_then_id() {
     for tied in [false, true] {
-        let early = Row {
+        let early = IncidentRow {
             activity: Some("compile"),
-            ..Row::new("job worker", "run-root", 1, "runner crashed")
+            ..IncidentRow::new("job worker", "run-root", 1, "runner crashed")
         };
-        let late = Row {
+        let late = IncidentRow {
             activity: Some("guard"),
-            ..Row::new(
+            ..IncidentRow::new(
                 "job worker",
                 "run-root",
                 if tied { 1 } else { 2 },

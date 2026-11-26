@@ -34,9 +34,9 @@ const REJECTED_RETRY_INTERVAL: Duration = Duration::from_secs(600);
 /// How long any other failure — a busy or unwritable registry — does.
 const STORE_RETRY_INTERVAL: Duration = Duration::from_secs(15);
 
-type GateKey = (PathBuf, String);
-
 static GATES: LazyLock<Mutex<HashMap<GateKey, GateState>>> = LazyLock::new(Default::default);
+
+type GateKey = (PathBuf, String);
 
 /// What a repair attempt reads: every registered task and its envelope stamp
 /// (`None` while it cannot be stamped), captured before the bundle scan so a

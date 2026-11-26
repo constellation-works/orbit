@@ -34,25 +34,6 @@ const PREPARE_STEP: &str = "commit prepare";
 const DECIDE_STEP: &str = "commit decision";
 const PUBLISH_STEP: &str = "commit envelope publish";
 
-fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(OrbitError::from_write_io(path, error)),
-    }
-}
-
-/// A journal id that cannot collide across threads, processes, or a clock
-/// that reads as zero — the same rule the reservation row ids follow.
-fn unique_journal_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let sequence = JOURNAL_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("commit-{nanos}-{}-{sequence}", std::process::id())
-}
-
 impl TaskCommitBoundary {
     /// Publish a task transition and history together with an optional
     /// reservation and dependent coordination rows.
@@ -565,4 +546,23 @@ impl TaskCommitBoundary {
     fn clear_pending_marker(&self) -> Result<(), OrbitError> {
         remove_file_if_present(&self.pending_marker_path())
     }
+}
+
+fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(OrbitError::from_write_io(path, error)),
+    }
+}
+
+/// A journal id that cannot collide across threads, processes, or a clock
+/// that reads as zero — the same rule the reservation row ids follow.
+fn unique_journal_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let sequence = JOURNAL_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("commit-{nanos}-{}-{sequence}", std::process::id())
 }

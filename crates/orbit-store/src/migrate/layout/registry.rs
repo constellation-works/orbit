@@ -13,23 +13,6 @@ use crate::contract::MigrationCompatibility;
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
 pub const SUPPORTED_LAYOUT_VERSION: u32 = 9;
 
-/// One entry in the layout-migration registry.
-pub(crate) struct LayoutMigration {
-    pub(crate) version: u32,
-    pub(crate) name: &'static str,
-    /// One-line human description surfaced by `orbit migrate --dry-run`.
-    pub(crate) description: &'static str,
-    /// What this migration means for a binary that does not have it. See
-    /// [`MigrationCompatibility`]; declare `Breaking` when in doubt.
-    pub(crate) compat: MigrationCompatibility,
-    /// Applies the migration to the workspace `.orbit` directory. MUST be
-    /// idempotent or staged (write-new-then-swap): a crash between `apply`
-    /// and the marker write re-runs it on the next open. Directories the
-    /// migration expects may be absent (fresh or partially-populated
-    /// workspaces) — treat "nothing to do" as success.
-    pub(crate) apply: fn(&Path) -> Result<(), OrbitError>,
-}
-
 /// Stable ordered registry of workspace-layout migrations. Append-only:
 /// never renumber or edit an entry that has shipped. Every breaking
 /// `.orbit/` layout change REQUIRES an entry here (see `RELEASING.md`).
@@ -129,6 +112,23 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         apply: apply_baseline_layout,
     },
 ];
+
+/// One entry in the layout-migration registry.
+pub(crate) struct LayoutMigration {
+    pub(crate) version: u32,
+    pub(crate) name: &'static str,
+    /// One-line human description surfaced by `orbit migrate --dry-run`.
+    pub(crate) description: &'static str,
+    /// What this migration means for a binary that does not have it. See
+    /// [`MigrationCompatibility`]; declare `Breaking` when in doubt.
+    pub(crate) compat: MigrationCompatibility,
+    /// Applies the migration to the workspace `.orbit` directory. MUST be
+    /// idempotent or staged (write-new-then-swap): a crash between `apply`
+    /// and the marker write re-runs it on the next open. Directories the
+    /// migration expects may be absent (fresh or partially-populated
+    /// workspaces) — treat "nothing to do" as success.
+    pub(crate) apply: fn(&Path) -> Result<(), OrbitError>,
+}
 
 /// This binary's layout ledger as upgrade admission compares it.
 pub(crate) fn layout_compatibility() -> orbit_common::fs::generation::LedgerCompatibility {

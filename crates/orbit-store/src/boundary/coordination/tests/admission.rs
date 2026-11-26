@@ -37,6 +37,21 @@ use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task
 const PARTITION: &str = "orbit-test-123456";
 const OTHER_PARTITION: &str = "other-test-654321";
 
+/// Large enough that scanning the full partition exceeds the 18-bundle read
+/// bound, without making this admission test spend minutes on durable seeding.
+const PARTITION_TASKS: usize = 128;
+
+const BACKLOG: usize = 40;
+
+const IN_PROGRESS: usize = 10;
+
+const REVIEW: usize = 5;
+
+/// Backlog tasks the selection itself rules out, ahead of the admitted one.
+const CONFLICTING: usize = 5;
+
+const NO_HOLD: &ValidationHold<'static> =
+    &|_: &Task, _: &[TaskComment], _: &[TaskHistoryEntry]| Ok(None);
 /// One owner partition: its commit boundary and a task store inside it.
 struct Owner {
     _root: Option<TempDir>,
@@ -47,7 +62,6 @@ struct Owner {
     repo: PathBuf,
     orbit_dir: PathBuf,
 }
-
 impl Owner {
     fn open() -> Self {
         // A partition seed fsyncs every task; keep it off a disk-backed `TMPDIR`.
@@ -119,9 +133,6 @@ impl Owner {
     fn create(&self, spec: Spec<'_>) -> Task {
         self.tasks
             .create_task(TaskCreateParams {
-                write_provenance: None,
-                granted_tools: Vec::new(),
-                requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
                 title: spec.title.into(),
@@ -131,11 +142,15 @@ impl Owner {
                 relations: Vec::new(),
                 tags: Vec::new(),
                 required_tools: Vec::new(),
+                granted_tools: Vec::new(),
+                requires_labels: Vec::new(),
+                not_before: None,
                 plan: "1. Do the work".into(),
                 execution_summary: String::new(),
                 context_files: vec![spec.file],
                 repo_root: None,
                 created_by: Some("codex".into()),
+                created_by_model: None,
                 planned_by: None,
                 implemented_by: None,
                 status: spec.status,
@@ -149,13 +164,12 @@ impl Owner {
                 orchestrator: None,
                 orchestrator_model: None,
                 orchestrator_model_source: None,
-                created_by_model: None,
                 origin: None,
                 rule_fingerprint: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
                 creation_decision: None,
-                not_before: None,
+                write_provenance: None,
             })
             .expect("create task")
     }
@@ -207,7 +221,6 @@ impl Owner {
         self.tasks.get_task_bare(id).unwrap().unwrap().status
     }
 }
-
 struct Spec<'a> {
     title: &'a str,
     status: TaskStatus,
@@ -215,7 +228,6 @@ struct Spec<'a> {
     file: String,
     dependencies: Vec<String>,
 }
-
 impl<'a> Spec<'a> {
     fn new(title: &'a str, status: TaskStatus, file: &str) -> Self {
         Self {
@@ -228,9 +240,39 @@ impl<'a> Spec<'a> {
     }
 }
 
+/// What changes a selected backlog task between selection and the section.
+#[derive(Clone, Copy)]
+enum Change {
+    Status,
+    Dependency,
+    Footprint,
+    PilotHold,
+}
+
+impl Owner {
+    /// `task` as one owner-local drain wave candidate, with the footprint
+    /// its gate would reserve.
+    fn wave_candidate(&self, task: &Task) -> OwnerWaveCandidate {
+        OwnerWaveCandidate {
+            task_id: task.id.clone(),
+            footprint: super::super::admission::canonical_footprint(
+                &task.context_files,
+                &self.repo,
+            )
+            .expect("canonical footprint"),
+        }
+    }
+}
+
+/// What an ordinary section in each partition got while an admission
+/// section was deciding.
+struct Neighbours {
+    own: Result<(), OrbitError>,
+    other: Result<(), OrbitError>,
+}
+
 fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
-        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
@@ -257,18 +299,10 @@ fn request(id: &str) -> AdmissionRequest {
         crews: None,
         os: None,
         browser_kit: false,
+        labels: Vec::new(),
         admissible: None,
     }
 }
-
-/// Large enough that scanning the full partition exceeds the 18-bundle read
-/// bound, without making this admission test spend minutes on durable seeding.
-const PARTITION_TASKS: usize = 128;
-const BACKLOG: usize = 40;
-const IN_PROGRESS: usize = 10;
-const REVIEW: usize = 5;
-/// Backlog tasks the selection itself rules out, ahead of the admitted one.
-const CONFLICTING: usize = 5;
 
 /// A mostly completed partition shaped like the incident's: almost every task is
 /// done, about 40 are backlog — each depending on one done task, the first
@@ -369,15 +403,6 @@ fn one_admission_section_reads_only_the_candidate_in_flight_and_dependency_bundl
          canonical bundle reads",
         cost.held, cost.lightweight_reads, cost.canonical_reads
     );
-}
-
-/// What changes a selected backlog task between selection and the section.
-#[derive(Clone, Copy)]
-enum Change {
-    Status,
-    Dependency,
-    Footprint,
-    PilotHold,
 }
 
 /// Each way a selected candidate can change after selection is judged on
@@ -495,24 +520,6 @@ fn a_candidate_changed_after_selection_is_never_admitted_from_the_selection() {
     }
 }
 
-impl Owner {
-    /// `task` as one owner-local drain wave candidate, with the footprint
-    /// its gate would reserve.
-    fn wave_candidate(&self, task: &Task) -> OwnerWaveCandidate {
-        OwnerWaveCandidate {
-            task_id: task.id.clone(),
-            footprint: super::super::admission::canonical_footprint(
-                &task.context_files,
-                &self.repo,
-            )
-            .expect("canonical footprint"),
-        }
-    }
-}
-
-const NO_HOLD: &ValidationHold<'static> =
-    &|_: &Task, _: &[TaskComment], _: &[TaskHistoryEntry]| Ok(None);
-
 /// ORB-15514: the owner's local drain admits a wave between a pull grant's
 /// selection and its admission section, and its gate has not reserved yet.
 /// The wave passed the same section, so the grant reads its footprint there
@@ -612,13 +619,6 @@ fn an_owner_wave_after_a_grant_refuses_the_claimed_footprint() {
         "the wave names the claim holding the footprint"
     );
     assert_eq!(admissions[1], OwnerWaveAdmission::admitted(&free.id));
-}
-
-/// What an ordinary section in each partition got while an admission
-/// section was deciding.
-struct Neighbours {
-    own: Result<(), OrbitError>,
-    other: Result<(), OrbitError>,
 }
 
 /// Admit one request from `owner` and, from inside its admission section,

@@ -10,10 +10,6 @@ use std::path::Path;
 /// File name of the host-only recovery authority SQLite database.
 pub const FILE_NAME: &str = "authority.db";
 
-pub(crate) fn authority_error(action: &str, error: rusqlite::Error) -> OrbitError {
-    OrbitError::Execution(format!("{action}: {error}"))
-}
-
 /// An opened connection to the isolated `authority.db` SQLite file.
 #[derive(Debug)]
 pub(crate) struct AuthorityDb {
@@ -91,6 +87,10 @@ impl AuthorityDb {
         }
         outcome
     }
+}
+
+pub(crate) fn authority_error(action: &str, error: rusqlite::Error) -> OrbitError {
+    OrbitError::Execution(format!("{action}: {error}"))
 }
 
 /// Keep the `-wal` and `-shm` sidecars when the last connection closes.

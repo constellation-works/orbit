@@ -49,6 +49,73 @@ const DEFAULT_CLAIM_TTL_SECONDS: u32 = 3600;
 const MAX_CLAIM_TTL_SECONDS: u32 = 43_200;
 const CLAIM_TARGET_TYPE: &str = "workspace_claim";
 
+impl RuntimeKernel {
+    /// Refuse `operation` unless the caller may dispatch in this workspace.
+    ///
+    /// Three outcomes, and only the middle one refuses:
+    ///
+    /// 1. **Unclaimed.** Nothing to arbitrate; dispatch proceeds. The claim is
+    ///    an opt-in hold, so an existing workspace keeps working unchanged until
+    ///    someone takes one.
+    /// 2. **Claimed by someone else.** Refuse with the holder and the expiry
+    ///    instant, so the caller can wait, ask, or force rather than retry.
+    /// 3. **Claimed, and the caller presented the holder's token.** Proceed.
+    ///
+    /// Nothing here is keyed on task ids, which is exactly why it covers the
+    /// discovery-mode submissions the duplicate-dispatch guard cannot see.
+    pub fn require_workspace_claim(
+        &self,
+        operation: &str,
+        claim_token: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        let presented = claim_token
+            .map(str::to_string)
+            .or_else(|| claim_token_from_env(self.env()))
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        let result =
+            self.stores()
+                .task_reservations()
+                .check_workspace_claim(WorkspaceClaimCheckParams {
+                    workspace_orbit_dir: workspace_orbit_dir(self),
+                    workspace_id: workspace_task_reservation_id(self)?,
+                    claim_token: presented,
+                })?;
+        record_expired_claims(self, &result.expired_claims)?;
+
+        let Some(claim) = result.claim else {
+            return Ok(());
+        };
+        if result.token_matches {
+            return Ok(());
+        }
+
+        record_claim_audit(
+            self,
+            "workspace.claim.dispatch.denied",
+            operation,
+            Some(claim.claim_id.as_str()),
+            AuditEventStatus::Denied,
+            json!({
+                "operation": operation,
+                "held_by": claim.actor,
+                "claim_id": claim.claim_id,
+                "expires_at": claim.expires_at,
+                "machine_id": claim.machine_id,
+                "session_id": claim.session_id,
+            }),
+        )?;
+        Err(OrbitError::WorkspaceClaimHeld(Box::new(
+            WorkspaceClaimHeld {
+                operation: operation.to_string(),
+                holder: claim.actor,
+                claim_id: claim.claim_id,
+                expires_at: claim.expires_at,
+            },
+        )))
+    }
+}
+
 pub fn acquire(
     runtime: &RuntimeKernel,
     input: Value,
@@ -219,73 +286,6 @@ pub fn show(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
         Some(claim) => json!({ "claimed": true, "claim": holder_json(&claim) }),
         None => json!({ "claimed": false }),
     })
-}
-
-impl RuntimeKernel {
-    /// Refuse `operation` unless the caller may dispatch in this workspace.
-    ///
-    /// Three outcomes, and only the middle one refuses:
-    ///
-    /// 1. **Unclaimed.** Nothing to arbitrate; dispatch proceeds. The claim is
-    ///    an opt-in hold, so an existing workspace keeps working unchanged until
-    ///    someone takes one.
-    /// 2. **Claimed by someone else.** Refuse with the holder and the expiry
-    ///    instant, so the caller can wait, ask, or force rather than retry.
-    /// 3. **Claimed, and the caller presented the holder's token.** Proceed.
-    ///
-    /// Nothing here is keyed on task ids, which is exactly why it covers the
-    /// discovery-mode submissions the duplicate-dispatch guard cannot see.
-    pub fn require_workspace_claim(
-        &self,
-        operation: &str,
-        claim_token: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let presented = claim_token
-            .map(str::to_string)
-            .or_else(|| claim_token_from_env(self.env()))
-            .map(|token| token.trim().to_string())
-            .filter(|token| !token.is_empty());
-        let result =
-            self.stores()
-                .task_reservations()
-                .check_workspace_claim(WorkspaceClaimCheckParams {
-                    workspace_orbit_dir: workspace_orbit_dir(self),
-                    workspace_id: workspace_task_reservation_id(self)?,
-                    claim_token: presented,
-                })?;
-        record_expired_claims(self, &result.expired_claims)?;
-
-        let Some(claim) = result.claim else {
-            return Ok(());
-        };
-        if result.token_matches {
-            return Ok(());
-        }
-
-        record_claim_audit(
-            self,
-            "workspace.claim.dispatch.denied",
-            operation,
-            Some(claim.claim_id.as_str()),
-            AuditEventStatus::Denied,
-            json!({
-                "operation": operation,
-                "held_by": claim.actor,
-                "claim_id": claim.claim_id,
-                "expires_at": claim.expires_at,
-                "machine_id": claim.machine_id,
-                "session_id": claim.session_id,
-            }),
-        )?;
-        Err(OrbitError::WorkspaceClaimHeld(Box::new(
-            WorkspaceClaimHeld {
-                operation: operation.to_string(),
-                holder: claim.actor,
-                claim_id: claim.claim_id,
-                expires_at: claim.expires_at,
-            },
-        )))
-    }
 }
 
 fn claim_token_from_env(env: &orbit_common::Env) -> Option<String> {

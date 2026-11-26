@@ -23,89 +23,14 @@ pub use crate::run::cost::{
     OrchestrationBucketSummary as OrchestratorInvocationMetricsBucket,
 };
 
-/// Aggregate completed invocations without consulting mutable crew configuration.
-/// Missing dispatch identity is a separate historical `unknown` population.
-pub fn agent_effort_usage<'a>(
-    facts: impl IntoIterator<Item = &'a InvocationAccountingFact>,
-) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
-    let mut accumulator = AgentEffortUsageAccumulator::default();
-    for fact in facts {
-        record_agent_effort_usage(&mut accumulator, fact);
-    }
-    finish_agent_effort_usage(accumulator)
-}
-
 type AgentEffortKey = (Option<String>, Option<String>, Option<String>);
-type AgentEffortPopulation = (orbit_types::telemetry::AgentEffortUsage, BTreeSet<String>);
 
+type AgentEffortPopulation = (orbit_types::telemetry::AgentEffortUsage, BTreeSet<String>);
 /// Bounded by distinct crew/model/effort identities and linked task ids, without
 /// retaining another copy of the full invocation population.
 #[derive(Debug, Default)]
 pub struct AgentEffortUsageAccumulator {
     rows: BTreeMap<AgentEffortKey, AgentEffortPopulation>,
-}
-
-/// Add exactly one completed invocation to its recorded population.
-pub fn record_agent_effort_usage(
-    accumulator: &mut AgentEffortUsageAccumulator,
-    fact: &InvocationAccountingFact,
-) {
-    use orbit_types::telemetry::AgentEffortUsage;
-    let crew = fact
-        .execution
-        .as_ref()
-        .and_then(|execution| execution.crew.clone());
-    let effort = fact
-        .execution
-        .as_ref()
-        .map(|execution| execution.reasoning_effort.map(|effort| effort.to_string()))
-        .unwrap_or(Some("unknown".to_string()));
-    let (row, tasks) = accumulator
-        .rows
-        .entry((crew.clone(), fact.model.clone(), effort.clone()))
-        .or_insert_with(|| {
-            (
-                AgentEffortUsage {
-                    crew,
-                    model: fact.model.clone(),
-                    reasoning_effort: effort,
-                    invocations: 0,
-                    tasks: 0,
-                    duration_ms: 0,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    provider_cost_usd: 0.0,
-                    provider_cost_count: 0,
-                },
-                BTreeSet::new(),
-            )
-        });
-    row.invocations += 1;
-    row.duration_ms = row.duration_ms.saturating_add(fact.duration_ms);
-    row.input_tokens = row.input_tokens.saturating_add(fact.input_tokens);
-    row.output_tokens = row.output_tokens.saturating_add(fact.output_tokens);
-    if let Some(cost) = fact
-        .provider_cost_usd
-        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-    {
-        row.provider_cost_usd += cost;
-        row.provider_cost_count += 1;
-    }
-    tasks.extend(fact.task_ids.iter().cloned());
-}
-
-/// Stable identity order, with distinct task support for each population.
-pub fn finish_agent_effort_usage(
-    accumulator: AgentEffortUsageAccumulator,
-) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
-    accumulator
-        .rows
-        .into_values()
-        .map(|(mut row, tasks)| {
-            row.tasks = tasks.len() as u64;
-            row
-        })
-        .collect()
 }
 
 /// Stable, managed-execution-only accounting snapshot.
@@ -359,24 +284,6 @@ impl ActivityMetricBucket {
         self.totals
             .push(sample.input_tokens.saturating_add(sample.output_tokens));
     }
-}
-
-fn average_u64(values: &[u64]) -> f64 {
-    if values.is_empty() {
-        0.0
-    } else {
-        values.iter().sum::<u64>() as f64 / values.len() as f64
-    }
-}
-
-fn percentile_u64(sorted_values: &[u64], percentile: u64) -> u64 {
-    if sorted_values.is_empty() {
-        return 0;
-    }
-    let n = sorted_values.len();
-    let rank = (percentile as usize * n).div_ceil(100);
-    let index = rank.saturating_sub(1).min(n - 1);
-    sorted_values[index]
 }
 
 impl RuntimeKernel {
@@ -727,6 +634,113 @@ impl RuntimeKernel {
     }
 }
 
+impl TaskTokenSpend {
+    fn add(&mut self, normalized: Option<u64>) {
+        self.invocation_count = self.invocation_count.saturating_add(1);
+        match normalized {
+            Some(tokens) => {
+                self.normalized_token_total = self.normalized_token_total.saturating_add(tokens);
+            }
+            None => {
+                self.uncovered_invocation_count = self.uncovered_invocation_count.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Aggregate completed invocations without consulting mutable crew configuration.
+/// Missing dispatch identity is a separate historical `unknown` population.
+pub fn agent_effort_usage<'a>(
+    facts: impl IntoIterator<Item = &'a InvocationAccountingFact>,
+) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
+    let mut accumulator = AgentEffortUsageAccumulator::default();
+    for fact in facts {
+        record_agent_effort_usage(&mut accumulator, fact);
+    }
+    finish_agent_effort_usage(accumulator)
+}
+
+/// Add exactly one completed invocation to its recorded population.
+pub fn record_agent_effort_usage(
+    accumulator: &mut AgentEffortUsageAccumulator,
+    fact: &InvocationAccountingFact,
+) {
+    use orbit_types::telemetry::AgentEffortUsage;
+    let crew = fact
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.crew.clone());
+    let effort = fact
+        .execution
+        .as_ref()
+        .map(|execution| execution.reasoning_effort.map(|effort| effort.to_string()))
+        .unwrap_or(Some("unknown".to_string()));
+    let (row, tasks) = accumulator
+        .rows
+        .entry((crew.clone(), fact.model.clone(), effort.clone()))
+        .or_insert_with(|| {
+            (
+                AgentEffortUsage {
+                    crew,
+                    model: fact.model.clone(),
+                    reasoning_effort: effort,
+                    invocations: 0,
+                    tasks: 0,
+                    duration_ms: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_cost_usd: 0.0,
+                    provider_cost_count: 0,
+                },
+                BTreeSet::new(),
+            )
+        });
+    row.invocations += 1;
+    row.duration_ms = row.duration_ms.saturating_add(fact.duration_ms);
+    row.input_tokens = row.input_tokens.saturating_add(fact.input_tokens);
+    row.output_tokens = row.output_tokens.saturating_add(fact.output_tokens);
+    if let Some(cost) = fact
+        .provider_cost_usd
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+    {
+        row.provider_cost_usd += cost;
+        row.provider_cost_count += 1;
+    }
+    tasks.extend(fact.task_ids.iter().cloned());
+}
+
+/// Stable identity order, with distinct task support for each population.
+pub fn finish_agent_effort_usage(
+    accumulator: AgentEffortUsageAccumulator,
+) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
+    accumulator
+        .rows
+        .into_values()
+        .map(|(mut row, tasks)| {
+            row.tasks = tasks.len() as u64;
+            row
+        })
+        .collect()
+}
+
+fn average_u64(values: &[u64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<u64>() as f64 / values.len() as f64
+    }
+}
+
+fn percentile_u64(sorted_values: &[u64], percentile: u64) -> u64 {
+    if sorted_values.is_empty() {
+        return 0;
+    }
+    let n = sorted_values.len();
+    let rank = (percentile as usize * n).div_ceil(100);
+    let index = rank.saturating_sub(1).min(n - 1);
+    sorted_values[index]
+}
+
 fn classify_invocation(
     task_ids: &[String],
     task_orchestrators: &HashMap<String, Option<String>>,
@@ -799,18 +813,4 @@ fn normalized_token_total(fact: &InvocationAccountingFact) -> Option<u64> {
             .saturating_add(usage.cache_create_1h)
             .saturating_add(usage.output),
     )
-}
-
-impl TaskTokenSpend {
-    fn add(&mut self, normalized: Option<u64>) {
-        self.invocation_count = self.invocation_count.saturating_add(1);
-        match normalized {
-            Some(tokens) => {
-                self.normalized_token_total = self.normalized_token_total.saturating_add(tokens);
-            }
-            None => {
-                self.uncovered_invocation_count = self.uncovered_invocation_count.saturating_add(1);
-            }
-        }
-    }
 }

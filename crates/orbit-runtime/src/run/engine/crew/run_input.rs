@@ -128,6 +128,29 @@ impl ClaimedTaskSnapshot {
     }
 }
 
+/// Whether a run's task bundle may name tasks whose stored crews differ.
+///
+/// The runtime cannot read automation claims, so the application layer that
+/// starts a run decides. Run input alone is never enough: any caller can
+/// shape it [ORB-16860].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleCrews {
+    /// Every named task must agree on its crew; a mix fails closed.
+    Unanimous,
+    /// The run is the live task-pilot preparation attempt's own admitted run.
+    /// It keeps the first task's crew, and prepare partitions the rest by
+    /// crew before any pilot worker runs [ORB-16839].
+    PreparationPartitions,
+    /// The task-auto pipeline's backlog action emits one task per gate bundle
+    /// before any task worker starts.
+    AutoDispatchSingletons,
+    /// A verified drain pilot whose tasks' crews changed after the drain
+    /// selected a homogeneous bundle. It keeps the first task's current
+    /// crew at run start, and prepare re-partitions by live `task.crew`
+    /// before any pilot worker runs [ORB-21839].
+    DrainPartitions,
+}
+
 /// Collect `task_id` / `task.id` / `task_ids` entries. Generic `id` is left to
 /// `RuntimeKernel::task_id_from_run_input` so a non-task `id` cannot pollute
 /// mixed-crew detection.
@@ -176,29 +199,6 @@ pub fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
     crew.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-/// Whether a run's task bundle may name tasks whose stored crews differ.
-///
-/// The runtime cannot read automation claims, so the application layer that
-/// starts a run decides. Run input alone is never enough: any caller can
-/// shape it [ORB-16860].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BundleCrews {
-    /// Every named task must agree on its crew; a mix fails closed.
-    Unanimous,
-    /// The run is the live task-pilot preparation attempt's own admitted run.
-    /// It keeps the first task's crew, and prepare partitions the rest by
-    /// crew before any pilot worker runs [ORB-16839].
-    PreparationPartitions,
-    /// The task-auto pipeline's backlog action emits one task per gate bundle
-    /// before any task worker starts.
-    AutoDispatchSingletons,
-    /// A verified drain pilot whose tasks' crews changed after the drain
-    /// selected a homogeneous bundle. It keeps the first task's current
-    /// crew at run start, and prepare re-partitions by live `task.crew`
-    /// before any pilot worker runs [ORB-21839].
-    DrainPartitions,
 }
 
 pub fn mixed_bundle_crew_error(left: Option<&str>, right: Option<&str>) -> String {

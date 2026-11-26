@@ -3,14 +3,6 @@ use orbit_types::identity::{AgentModelPair, normalize_agent_family_for_model};
 
 use crate::RuntimeKernel;
 
-pub(super) fn normalize_agent_name(agent_cli: &str) -> String {
-    std::path::Path::new(agent_cli)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(agent_cli)
-        .to_ascii_lowercase()
-}
-
 impl RuntimeKernel {
     pub fn configured_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         self.stores()
@@ -102,6 +94,14 @@ impl RuntimeKernel {
             .map(ToOwned::to_owned);
         (agent, model)
     }
+}
+
+pub(super) fn normalize_agent_name(agent_cli: &str) -> String {
+    std::path::Path::new(agent_cli)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(agent_cli)
+        .to_ascii_lowercase()
 }
 
 /// Grok Build's usage ledger names requested public menu id `grok-X.Y` as

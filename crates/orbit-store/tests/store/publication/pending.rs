@@ -21,18 +21,14 @@ use orbit_store::migrate::task::{
     PublicationPublishOutcome, PublicationPublishRequest, PublicationPublishStatus,
     ScannerFailureBehavior, publish_task_snapshot,
 };
-fn open_registry(root: &Path) -> TaskRegistryStore {
-    TaskRegistryStore::open(&task_registry_path(root)).unwrap()
-}
-
 const WORKSPACE_ID: &str = "ws_pub_pending";
+
 const PUBLICATION_ID: &str = "pub_pending";
 const FINGERPRINT: &str = "ssh://source.test/orbit.git";
 const AUTHORITY: &str = "hm_pub_owner";
 const BRANCH: &str = "main";
 /// Valid commit id that is never the branch tip in these fixtures.
 const UNLANDED_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
 struct Fixture {
     registry: TaskRegistryStore,
     bare: PathBuf,
@@ -155,6 +151,10 @@ impl Fixture {
         );
         fs::write(&path, document).expect("write pending publication");
     }
+}
+
+fn open_registry(root: &Path) -> TaskRegistryStore {
+    TaskRegistryStore::open(&task_registry_path(root)).unwrap()
 }
 
 #[test]

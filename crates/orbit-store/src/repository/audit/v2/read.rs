@@ -27,6 +27,20 @@ pub(crate) struct V2AuditRunEventRow {
     pub(crate) payload_json: String,
 }
 
+trait OptionalQueryRow {
+    fn optional_row(self) -> Result<Option<()>, OrbitError>;
+}
+
+impl OptionalQueryRow for Result<(), rusqlite::Error> {
+    fn optional_row(self) -> Result<Option<()>, OrbitError> {
+        match self {
+            Ok(()) => Ok(Some(())),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(sqlite_store_error(error)),
+        }
+    }
+}
+
 pub(super) fn list(
     conn: &Connection,
     filter: &V2AuditEventFilter,
@@ -349,18 +363,4 @@ fn payloads_for_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<String>, Orbit
         payloads.push(payload);
     }
     Ok(payloads)
-}
-
-trait OptionalQueryRow {
-    fn optional_row(self) -> Result<Option<()>, OrbitError>;
-}
-
-impl OptionalQueryRow for Result<(), rusqlite::Error> {
-    fn optional_row(self) -> Result<Option<()>, OrbitError> {
-        match self {
-            Ok(()) => Ok(Some(())),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(error) => Err(sqlite_store_error(error)),
-        }
-    }
 }

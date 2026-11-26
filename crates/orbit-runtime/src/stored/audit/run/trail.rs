@@ -18,6 +18,36 @@ use super::projection::{
     recovery_attempts_from_partitioned_rows, run_audit_event, step_index_by_id,
 };
 
+pub const MAX_RECOVERY_ATTEMPTS: usize = 8;
+
+/// One extra recovery row per run so `truncated` is visible without a
+/// page-wide LIMIT that would starve later runs [ORB-11625].
+pub const RECOVERY_FETCH_PER_RUN: usize = MAX_RECOVERY_ATTEMPTS + 1;
+
+/// Provider children carried on the progress projection. A run spawns a
+/// handful per step; the budget only bites on a long retry history.
+pub(super) const MAX_PROVIDER_PROCESSES: usize = 8;
+
+/// Rows per store read while reconstructing a complete run audit trail.
+///
+/// This is a paging size, not an evidence limit. Safety decisions such as
+/// orphan reconciliation must see provider spawns even in unusually long
+/// trails, while each SQLite read should remain bounded.
+#[cfg(not(test))]
+const RUN_AUDIT_PAGE_SIZE: usize = 50_000;
+
+#[cfg(test)]
+const RUN_AUDIT_PAGE_SIZE: usize = 8;
+
+/// Payload `body_kind`s the step projections read. Shared with the bounded
+/// run-detail reader so the two cannot drift.
+pub(super) const STEP_LIFECYCLE_KINDS: [&str; 4] = [
+    "step_started",
+    "step_finished",
+    "step_skipped",
+    "step_denied",
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunAuditEvent {
     pub raw: Value,
@@ -57,7 +87,6 @@ pub struct RunAuditStep {
     /// Structured detail recorded independently of the readable error.
     pub error_diagnostic: Option<Value>,
 }
-
 impl RunAuditStep {
     /// Display state derived from [`Self::outcome`].
     ///
@@ -164,11 +193,6 @@ impl RunRecoveryAttempts {
     }
 }
 
-pub const MAX_RECOVERY_ATTEMPTS: usize = 8;
-/// One extra recovery row per run so `truncated` is visible without a
-/// page-wide LIMIT that would starve later runs [ORB-11625].
-pub const RECOVERY_FETCH_PER_RUN: usize = MAX_RECOVERY_ATTEMPTS + 1;
-
 /// Recovery evidence for a list page, plus the query counts the list
 /// projection uses to prove it did not scan one full envelope per run.
 #[derive(Clone, Debug, PartialEq)]
@@ -274,7 +298,6 @@ impl RunStoppedDescendant {
         })
     }
 }
-
 impl RunProviderProcess {
     /// The stopped descendant an open, live child is blocked on: one the
     /// supervisor found stopped past its threshold that is still stopped now.
@@ -326,7 +349,6 @@ impl RunProviderProcess {
         })
     }
 }
-
 /// [ORB-11752] What a run is doing *right now*: the activity step that is open
 /// and the provider children it spawned, each with a liveness verdict.
 ///
@@ -375,28 +397,6 @@ impl RunExecutionProgress {
         }
     }
 }
-
-/// Provider children carried on the progress projection. A run spawns a
-/// handful per step; the budget only bites on a long retry history.
-pub(super) const MAX_PROVIDER_PROCESSES: usize = 8;
-/// Rows per store read while reconstructing a complete run audit trail.
-///
-/// This is a paging size, not an evidence limit. Safety decisions such as
-/// orphan reconciliation must see provider spawns even in unusually long
-/// trails, while each SQLite read should remain bounded.
-#[cfg(not(test))]
-const RUN_AUDIT_PAGE_SIZE: usize = 50_000;
-#[cfg(test)]
-const RUN_AUDIT_PAGE_SIZE: usize = 8;
-
-/// Payload `body_kind`s the step projections read. Shared with the bounded
-/// run-detail reader so the two cannot drift.
-pub(super) const STEP_LIFECYCLE_KINDS: [&str; 4] = [
-    "step_started",
-    "step_finished",
-    "step_skipped",
-    "step_denied",
-];
 
 /// What one scan of a run's v2 audit trail says about its execution: every
 /// step it started, and every provider child those steps spawned.

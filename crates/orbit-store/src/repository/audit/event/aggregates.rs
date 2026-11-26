@@ -149,19 +149,31 @@ pub(super) fn aggregates_by_tool(
 
     let rows = stmt
         .query_map(params![since.to_rfc3339()], |row| {
+            let tool_name = row.get(0)?;
+            let total = row.get(1)?;
+            let successes = row.get(2)?;
+            let failures = row.get(3)?;
+            let denials = row.get(4)?;
+            let mcp_total = row.get(5)?;
+            let cli_total = row.get(6)?;
+            let mcp_failures = row.get(7)?;
+            let cli_failures = row.get(8)?;
+            let avg_duration_ms = row.get(9)?;
+            let callable_denials = row.get(10)?;
+            let callable_unexpected_failures = row.get(11)?;
             Ok(AuditToolAggregate {
-                tool_name: row.get(0)?,
-                total: row.get(1)?,
-                successes: row.get(2)?,
-                failures: row.get(3)?,
-                denials: row.get(4)?,
-                mcp_total: row.get(5)?,
-                cli_total: row.get(6)?,
-                mcp_failures: row.get(7)?,
-                cli_failures: row.get(8)?,
-                avg_duration_ms: row.get(9)?,
-                callable_denials: row.get(10)?,
-                callable_unexpected_failures: row.get(11)?,
+                tool_name,
+                total,
+                successes,
+                failures,
+                denials,
+                mcp_total,
+                cli_total,
+                mcp_failures,
+                cli_failures,
+                callable_denials,
+                callable_unexpected_failures,
+                avg_duration_ms,
             })
         })
         .map_err(sqlite_store_error)?;

@@ -45,14 +45,6 @@ const CLAIM_REPAIR_KEY: &str = "claim_repair";
 /// it is.
 const LEGACY_WRAPPER_PIPELINE: &str = "task_auto_pipeline";
 
-fn codec_error(error: serde_json::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
-}
-
-fn invalid(message: &str) -> OrbitError {
-    OrbitError::JobValidation(message.into())
-}
-
 impl JobRuns {
     /// The local admission permanently bound to leaf run `run_id`,
     /// independent of owner connectivity.
@@ -498,6 +490,14 @@ impl JobRuns {
             Ok(record)
         })
     }
+}
+
+fn codec_error(error: serde_json::Error) -> OrbitError {
+    OrbitError::Store(error.to_string())
+}
+
+fn invalid(message: &str) -> OrbitError {
+    OrbitError::JobValidation(message.into())
 }
 
 /// The claimed leaf run and its initial state for `record`'s persisted claim.

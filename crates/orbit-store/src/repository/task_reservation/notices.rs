@@ -11,6 +11,31 @@ use super::rows::{LEASE_ROWS, parse_string_list, reservation_scope_clause};
 use crate::contract::TaskReservationScope;
 use crate::{Store, StoreTx};
 
+/// A holder's new surface. A landing additionally binds its base and time.
+pub(crate) struct LeaseOverlapNotice<'a> {
+    pub(crate) orbit_dir: &'a str,
+    pub(crate) workspace_id: Option<&'a str>,
+    pub(crate) holder: &'a str,
+    pub(crate) paths: &'a [String],
+    pub(crate) kind: &'a str,
+    pub(crate) payload: Value,
+    pub(crate) event_key: &'a str,
+    pub(crate) landing: Option<(&'a str, &'a str)>,
+}
+
+impl Store {
+    /// Idempotently record overlaps a task envelope publication discovered.
+    /// Only active leases receive them.
+    pub(crate) fn record_lease_overlaps(
+        &self,
+        event: &LeaseOverlapNotice<'_>,
+    ) -> Result<(), OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            append_lease_overlaps(tx, event)
+        })
+    }
+}
+
 pub(super) fn append_lease_notice(
     tx: &StoreTx<'_>,
     lease_id: &str,
@@ -26,18 +51,6 @@ pub(super) fn append_lease_notice(
         params![lease_id, kind, payload.to_string(), event_key],
     ).map_err(sqlite_store_error)?;
     Ok(())
-}
-
-/// A holder's new surface. A landing additionally binds its base and time.
-pub(crate) struct LeaseOverlapNotice<'a> {
-    pub(crate) orbit_dir: &'a str,
-    pub(crate) workspace_id: Option<&'a str>,
-    pub(crate) holder: &'a str,
-    pub(crate) paths: &'a [String],
-    pub(crate) kind: &'a str,
-    pub(crate) payload: Value,
-    pub(crate) event_key: &'a str,
-    pub(crate) landing: Option<(&'a str, &'a str)>,
 }
 
 pub(crate) fn append_lease_overlaps(
@@ -90,17 +103,4 @@ pub(crate) fn append_lease_overlaps(
         append_lease_notice(tx, &lease_id, event.kind, &payload, event.event_key)?;
     }
     Ok(())
-}
-
-impl Store {
-    /// Idempotently record overlaps a task envelope publication discovered.
-    /// Only active leases receive them.
-    pub(crate) fn record_lease_overlaps(
-        &self,
-        event: &LeaseOverlapNotice<'_>,
-    ) -> Result<(), OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            append_lease_overlaps(tx, event)
-        })
-    }
 }

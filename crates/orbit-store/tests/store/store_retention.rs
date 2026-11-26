@@ -2,11 +2,11 @@
 //  terminal run state older than a cutoff go in short batches, everything
 //  else stays.
 
-const CHILD: &str = "ORBIT_STORE_RETENTION_CHILD";
-
 /// Run `test` again in a child process rooted in a fresh directory, or return
 /// that directory when already inside the child.
 fn store_retention_isolated(test: &str, timeout: Duration) -> Option<std::path::PathBuf> {
+    const CHILD: &str = "ORBIT_STORE_RETENTION_CHILD";
+
     if std::env::var(CHILD).as_deref() == Ok(test) {
         return Some(std::env::current_dir().unwrap());
     }
@@ -92,12 +92,12 @@ fn blob_reference_scan_stops_at_its_initial_high_water_mark() {
     insert_run_audit(&store, "initial", at, 2_000);
     let mut visited = 0;
     orbit_store::visit_blob_reference_text(&store, None, &mut |_| {
-            if visited == 0 {
-                insert_run_audit(&store, "arriving", at, 1);
-            }
-            visited += 1;
-        })
-        .unwrap();
+        if visited == 0 {
+            insert_run_audit(&store, "arriving", at, 1);
+        }
+        visited += 1;
+    })
+    .unwrap();
     assert_eq!(
         visited, 2_000,
         "a GC scan must not chase new audit traffic past its initial end (ORB-24645)"
@@ -162,12 +162,18 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
     insert_run_audit(&store, "ws_b", cutoff - TimeDelta::days(30), 40);
 
     let command = store
-        .read().unwrap().retention().audit_selection(AuditRetentionTable::Command, workspace_only("ws_a"), cutoff)
+        .read()
+        .unwrap()
+        .retention()
+        .audit_selection(AuditRetentionTable::Command, workspace_only("ws_a"), cutoff)
         .unwrap();
     assert_eq!(command.rows, 4);
     assert!(command.bytes > 0);
     let run = store
-        .read().unwrap().retention().audit_selection(AuditRetentionTable::Run, workspace_only("ws_a"), cutoff)
+        .read()
+        .unwrap()
+        .retention()
+        .audit_selection(AuditRetentionTable::Run, workspace_only("ws_a"), cutoff)
         .unwrap();
     assert_eq!(
         run.rows, 250,
@@ -181,23 +187,27 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
 
     let (removed, _) = drain(|| {
         store
-            .write(|tx| tx.retention().delete_audit_batch(
-                AuditRetentionTable::Command,
-                workspace_only("ws_a"),
-                cutoff,
-                3,
-            ))
+            .write(|tx| {
+                tx.retention().delete_audit_batch(
+                    AuditRetentionTable::Command,
+                    workspace_only("ws_a"),
+                    cutoff,
+                    3,
+                )
+            })
             .unwrap()
     });
     assert_eq!(removed, 4);
     let (removed, _) = drain(|| {
         store
-            .write(|tx| tx.retention().delete_audit_batch(
-                AuditRetentionTable::Run,
-                workspace_only("ws_a"),
-                cutoff,
-                64,
-            ))
+            .write(|tx| {
+                tx.retention().delete_audit_batch(
+                    AuditRetentionTable::Run,
+                    workspace_only("ws_a"),
+                    cutoff,
+                    64,
+                )
+            })
             .unwrap()
     });
     assert_eq!(removed, 250);
@@ -238,7 +248,10 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
     for table in [AuditRetentionTable::Command, AuditRetentionTable::Run] {
         assert_eq!(
             store
-                .read().unwrap().retention().audit_selection(table, workspace_only("ws_a"), cutoff)
+                .read()
+                .unwrap()
+                .retention()
+                .audit_selection(table, workspace_only("ws_a"), cutoff)
                 .unwrap(),
             RetentionSelection::default()
         );
@@ -250,9 +263,6 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
         "deleted rows leave reusable pages"
     );
 }
-
-/// The retention batch size the runtime applies.
-const BATCH_ROWS: usize = 1_000;
 
 #[test]
 fn million_row_run_audit_prunes_in_sub_second_batches() {
@@ -272,12 +282,14 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
 
     let (removed, slowest) = drain(|| {
         store
-            .write(|tx| tx.retention().delete_audit_batch(
-                AuditRetentionTable::Run,
-                workspace_only("ws_a"),
-                cutoff,
-                BATCH_ROWS,
-            ))
+            .write(|tx| {
+                tx.retention().delete_audit_batch(
+                    AuditRetentionTable::Run,
+                    workspace_only("ws_a"),
+                    cutoff,
+                    BATCH_ROWS,
+                )
+            })
             .unwrap()
     });
     assert_eq!(removed, 50_000);
@@ -389,7 +401,10 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
     }
     assert_eq!(
         store
-            .read().unwrap().retention().workspace_ids(RetentionIdSource::CommitJournal)
+            .read()
+            .unwrap()
+            .retention()
+            .workspace_ids(RetentionIdSource::CommitJournal)
             .unwrap()
             .len(),
         3
@@ -400,7 +415,12 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
         legacy_ids: Some(&legacy),
     };
 
-    let plan = store.read().unwrap().retention().journal_candidates(scope, cutoff).unwrap();
+    let plan = store
+        .read()
+        .unwrap()
+        .retention()
+        .journal_candidates(scope, cutoff)
+        .unwrap();
     assert_eq!(
         plan.journal_ids,
         ["a-t4-1", "a-t1-1", "a-t3-1", "a-t1-2", "a-t3-2", "old-t1-1"],
@@ -417,20 +437,28 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
     let (removed, _) = drain(|| {
         batches
             .next()
-            .map(|batch| store.write(|tx| tx.retention().delete_applied_journal_rows(batch)).unwrap())
+            .map(|batch| {
+                store
+                    .write(|tx| tx.retention().delete_applied_journal_rows(batch))
+                    .unwrap()
+            })
             .unwrap_or(0)
     });
     assert_eq!(removed, 6);
     assert_eq!(
         store
-            .write(|tx| tx.retention().delete_applied_journal_rows(&plan.journal_ids))
+            .write(|tx| tx
+                .retention()
+                .delete_applied_journal_rows(&plan.journal_ids))
             .unwrap(),
         0,
         "a repeated batch deletes nothing"
     );
     assert_eq!(
         store
-            .write(|tx| tx.retention().delete_applied_journal_rows(&["a-t4-committed".to_string()]))
+            .write(|tx| tx
+                .retention()
+                .delete_applied_journal_rows(&["a-t4-committed".to_string()]))
             .unwrap(),
         0,
         "a batch never deletes a row that is not applied"
@@ -455,7 +483,12 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
         ]
     );
     assert_eq!(
-        store.read().unwrap().retention().journal_candidates(scope, cutoff).unwrap(),
+        store
+            .read()
+            .unwrap()
+            .retention()
+            .journal_candidates(scope, cutoff)
+            .unwrap(),
         JournalRetentionCandidates::default()
     );
 }
@@ -515,7 +548,10 @@ fn forty_thousand_row_journal_selects_once_and_deletes_in_short_batches() {
 
     let started = thread_cpu_time();
     let plan = store
-        .read().unwrap().retention().journal_candidates(workspace_only("ws_a"), cutoff)
+        .read()
+        .unwrap()
+        .retention()
+        .journal_candidates(workspace_only("ws_a"), cutoff)
         .unwrap();
     let selection = thread_cpu_time() - started;
     assert_eq!(plan.journal_ids.len(), expected);
@@ -528,7 +564,11 @@ fn forty_thousand_row_journal_selects_once_and_deletes_in_short_batches() {
     let (removed, slowest) = drain(|| {
         batches
             .next()
-            .map(|batch| store.write(|tx| tx.retention().delete_applied_journal_rows(batch)).unwrap())
+            .map(|batch| {
+                store
+                    .write(|tx| tx.retention().delete_applied_journal_rows(batch))
+                    .unwrap()
+            })
             .unwrap_or(0)
     });
     assert_eq!(removed, expected);
@@ -554,7 +594,10 @@ fn forty_thousand_row_journal_selects_once_and_deletes_in_short_batches() {
     );
     assert!(
         store
-            .read().unwrap().retention().journal_candidates(workspace_only("ws_a"), cutoff)
+            .read()
+            .unwrap()
+            .retention()
+            .journal_candidates(workspace_only("ws_a"), cutoff)
             .unwrap()
             .journal_ids
             .is_empty()

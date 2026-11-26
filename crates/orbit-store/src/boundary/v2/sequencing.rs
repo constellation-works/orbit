@@ -1,9 +1,5 @@
 use super::*;
 
-pub(crate) fn next_event_id(events: &[TaskEventRowV2]) -> String {
-    format!("EV-{:04}", next_sequence(events, "EV-"))
-}
-
 pub(crate) trait SequencedRow {
     fn row_id(&self) -> &str;
 }
@@ -18,6 +14,10 @@ impl SequencedRow for TaskCommentRowV2 {
     fn row_id(&self) -> &str {
         &self.comment_id
     }
+}
+
+pub(crate) fn next_event_id(events: &[TaskEventRowV2]) -> String {
+    format!("EV-{:04}", next_sequence(events, "EV-"))
 }
 
 pub(crate) fn next_sequence<T: SequencedRow>(rows: &[T], prefix: &str) -> usize {

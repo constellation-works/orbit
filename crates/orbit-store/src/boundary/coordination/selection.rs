@@ -23,10 +23,6 @@ use super::lifecycle::DrainReleases;
 use crate::boundary::v2::{TaskV2Store, task_history_from_events};
 use crate::contract::*;
 
-fn is_in_flight(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::InProgress | TaskStatus::Review)
-}
-
 /// Which workspace partitions a dependency read may reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DependencyReach {
@@ -476,6 +472,10 @@ impl TaskCommitBoundary {
             .collect();
         Ok(InFlight { tasks, footprints })
     }
+}
+
+fn is_in_flight(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::InProgress | TaskStatus::Review)
 }
 
 /// A hook run between an admission's candidate selection and its exclusive

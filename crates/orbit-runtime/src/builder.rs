@@ -63,6 +63,8 @@ pub(crate) enum StateAccess {
     WriteFree,
 }
 
+pub(crate) type TempDir = tempfile::TempDir;
+
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config and global skills; `store` is the SQLite handle composition opened.
 /// Shared root provides existing workspace state. Local root is carried for
@@ -699,8 +701,6 @@ fn workspace_slug(repo_root: &Path) -> String {
         .unwrap_or("workspace")
         .to_string()
 }
-
-pub(crate) type TempDir = tempfile::TempDir;
 
 fn load_external_tools(store: &Store, registry: &mut ToolRegistry) -> Result<(), OrbitError> {
     let stored_tools = store.read().and_then(|snapshot| snapshot.tool().list())?;

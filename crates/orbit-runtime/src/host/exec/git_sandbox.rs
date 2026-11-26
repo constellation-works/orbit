@@ -9,6 +9,181 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
 
+/// Most threads one object-store scan uses.
+const MAX_OBJECT_SCAN_THREADS: usize = 8;
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static REFUSED_SPAWNS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+thread_local! {
+    static SCAN_HOOK: std::cell::RefCell<Option<GitScanHook>> = const { std::cell::RefCell::new(None) };
+}
+
+type DirectoryIdentities = HashMap<PathBuf, (u64, u64)>;
+
+enum GitTreeScanError {
+    Disappeared { path: PathBuf, error: io::Error },
+    Denied(OrbitError),
+}
+
+impl From<OrbitError> for GitTreeScanError {
+    fn from(error: OrbitError) -> Self {
+        Self::Denied(error)
+    }
+}
+
+/// Where a directory sits in the protected tree. Only the object store
+/// directly under the scan root tolerates hard links among its own names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanScope {
+    Root,
+    Metadata,
+    ObjectStore,
+}
+
+/// Git writes an object to a temporary name, links it to the final name and
+/// unlinks the temporary one. A write interrupted between the last two steps
+/// leaves both names, so `objects/` may hold hard links that are Git's own.
+/// They are accepted only when every name of the inode is inside the store.
+#[derive(Default)]
+struct ObjectLinks {
+    inodes: HashMap<(u64, u64), ObjectInode>,
+}
+
+struct ObjectInode {
+    nlink: u64,
+    names_seen: u64,
+    reported: PathBuf,
+    reported_is_temp: bool,
+}
+
+impl ObjectLinks {
+    fn record(&mut self, path: &Path, metadata: &fs::Metadata) {
+        let temp = is_git_temp_name(path);
+        let entry = self
+            .inodes
+            .entry((metadata.dev(), metadata.ino()))
+            .or_insert_with(|| ObjectInode {
+                nlink: metadata.nlink(),
+                names_seen: 0,
+                reported: path.to_path_buf(),
+                reported_is_temp: temp,
+            });
+        entry.names_seen += 1;
+        if temp && !entry.reported_is_temp {
+            entry.reported = path.to_path_buf();
+            entry.reported_is_temp = true;
+        }
+    }
+
+    /// Add the names another scan of the same store counted, as if this scan
+    /// had seen them next: counts add up and a temporary name is preferred.
+    fn absorb(&mut self, other: ObjectLinks) {
+        for (key, inode) in other.inodes {
+            match self.inodes.entry(key) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(inode);
+                }
+                std::collections::hash_map::Entry::Occupied(mut slot) => {
+                    let entry = slot.get_mut();
+                    entry.names_seen += inode.names_seen;
+                    if inode.reported_is_temp && !entry.reported_is_temp {
+                        entry.reported = inode.reported;
+                        entry.reported_is_temp = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A name of some inode that lives outside the store, if any.
+    fn first_escape(&self) -> Option<OrbitError> {
+        self.inodes
+            .values()
+            .find(|inode| inode.names_seen < inode.nlink)
+            .map(|inode| metadata_entry_refusal(&inode.reported, true))
+    }
+}
+
+/// One entry directly under `objects/`, in `read_dir` order.
+enum ObjectStoreEntry {
+    /// A file with several names; recorded in the store's link counts.
+    Linked(PathBuf, fs::Metadata),
+    /// A fan-out, `pack` or `info` directory, scanned as its own subtree.
+    Directory(PathBuf, fs::Metadata),
+    /// The scan stops here, as the sequential walk would.
+    Failed(GitTreeScanError),
+}
+
+/// What one subtree scan found: its outcome, the directory identities it
+/// newly pinned (not already in the shared set) and the object names it counted.
+struct SubtreeScan {
+    result: Result<(), GitTreeScanError>,
+    directories: DirectoryIdentities,
+    links: ObjectLinks,
+}
+
+/// Per-thread seam that makes every scan worker spawn attempt fail the way an
+/// exhausted thread limit does, without placing load on the host. While held,
+/// an object-store scan takes its threaded path, and so attempts a spawn, only
+/// with two or more object-store subdirectories. With zero or one subdirectory
+/// it scans on the calling thread, attempts no spawn, and `refused` stays at
+/// zero. Outside the seam the thread count is also capped by the host's
+/// available parallelism.
+#[cfg(any(test, feature = "test-support"))]
+pub struct GitWorkerSpawnRefusal;
+
+#[cfg(any(test, feature = "test-support"))]
+impl GitWorkerSpawnRefusal {
+    pub fn install() -> Self {
+        REFUSED_SPAWNS.with(|slot| slot.set(Some(0)));
+        Self
+    }
+
+    /// Worker spawns refused since [`Self::install`].
+    pub fn refused(&self) -> usize {
+        REFUSED_SPAWNS.with(|slot| slot.get().unwrap_or(0))
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for GitWorkerSpawnRefusal {
+    fn drop(&mut self) {
+        REFUSED_SPAWNS.with(|slot| slot.set(None));
+    }
+}
+
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GitScanStage {
+    ReadDirectory,
+    InspectEntry,
+}
+
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+type GitScanHook = Box<dyn FnMut(GitScanStage, &Path) -> io::Result<()>>;
+
+/// Per-thread interleaving seam; production always uses the real filesystem.
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+pub struct GitScanHookGuard(Option<GitScanHook>);
+
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+impl GitScanHookGuard {
+    pub fn install(hook: impl FnMut(GitScanStage, &Path) -> io::Result<()> + 'static) -> Self {
+        Self(SCAN_HOOK.with(|slot| slot.replace(Some(Box::new(hook)))))
+    }
+}
+
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+impl Drop for GitScanHookGuard {
+    fn drop(&mut self) {
+        SCAN_HOOK.with(|slot| slot.replace(self.0.take()));
+    }
+}
+
 /// Protect the pointer entry as well as the real per-worktree and shared
 /// metadata. Recovery payloads and refs live beneath the shared Git directory.
 /// A symlink in the metadata path can leave a writable alias of its target;
@@ -163,8 +338,6 @@ fn validate_git_tree(root: &Path) -> Result<(), OrbitError> {
     }
 }
 
-type DirectoryIdentities = HashMap<PathBuf, (u64, u64)>;
-
 fn validate_git_tree_ancestors(
     root: &Path,
     directories: &mut DirectoryIdentities,
@@ -220,17 +393,6 @@ fn validate_git_directory_with_pinned(
     Ok(())
 }
 
-enum GitTreeScanError {
-    Disappeared { path: PathBuf, error: io::Error },
-    Denied(OrbitError),
-}
-
-impl From<OrbitError> for GitTreeScanError {
-    fn from(error: OrbitError) -> Self {
-        Self::Denied(error)
-    }
-}
-
 fn scan_error(path: &Path, error: io::Error) -> GitTreeScanError {
     if error.kind() == io::ErrorKind::NotFound {
         GitTreeScanError::Disappeared {
@@ -239,79 +401,6 @@ fn scan_error(path: &Path, error: io::Error) -> GitTreeScanError {
         }
     } else {
         GitTreeScanError::Denied(metadata_error(path, error))
-    }
-}
-
-/// Where a directory sits in the protected tree. Only the object store
-/// directly under the scan root tolerates hard links among its own names.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ScanScope {
-    Root,
-    Metadata,
-    ObjectStore,
-}
-
-/// Git writes an object to a temporary name, links it to the final name and
-/// unlinks the temporary one. A write interrupted between the last two steps
-/// leaves both names, so `objects/` may hold hard links that are Git's own.
-/// They are accepted only when every name of the inode is inside the store.
-#[derive(Default)]
-struct ObjectLinks {
-    inodes: HashMap<(u64, u64), ObjectInode>,
-}
-
-struct ObjectInode {
-    nlink: u64,
-    names_seen: u64,
-    reported: PathBuf,
-    reported_is_temp: bool,
-}
-
-impl ObjectLinks {
-    fn record(&mut self, path: &Path, metadata: &fs::Metadata) {
-        let temp = is_git_temp_name(path);
-        let entry = self
-            .inodes
-            .entry((metadata.dev(), metadata.ino()))
-            .or_insert_with(|| ObjectInode {
-                nlink: metadata.nlink(),
-                names_seen: 0,
-                reported: path.to_path_buf(),
-                reported_is_temp: temp,
-            });
-        entry.names_seen += 1;
-        if temp && !entry.reported_is_temp {
-            entry.reported = path.to_path_buf();
-            entry.reported_is_temp = true;
-        }
-    }
-
-    /// Add the names another scan of the same store counted, as if this scan
-    /// had seen them next: counts add up and a temporary name is preferred.
-    fn absorb(&mut self, other: ObjectLinks) {
-        for (key, inode) in other.inodes {
-            match self.inodes.entry(key) {
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(inode);
-                }
-                std::collections::hash_map::Entry::Occupied(mut slot) => {
-                    let entry = slot.get_mut();
-                    entry.names_seen += inode.names_seen;
-                    if inode.reported_is_temp && !entry.reported_is_temp {
-                        entry.reported = inode.reported;
-                        entry.reported_is_temp = true;
-                    }
-                }
-            }
-        }
-    }
-
-    /// A name of some inode that lives outside the store, if any.
-    fn first_escape(&self) -> Option<OrbitError> {
-        self.inodes
-            .values()
-            .find(|inode| inode.names_seen < inode.nlink)
-            .map(|inode| metadata_entry_refusal(&inode.reported, true))
     }
 }
 
@@ -411,27 +500,6 @@ fn scan_git_tree_with_pinned(
     let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
     validate_git_directory_with_pinned(root, &metadata, directories, pinned)?;
     Ok(())
-}
-
-/// Most threads one object-store scan uses.
-const MAX_OBJECT_SCAN_THREADS: usize = 8;
-
-/// One entry directly under `objects/`, in `read_dir` order.
-enum ObjectStoreEntry {
-    /// A file with several names; recorded in the store's link counts.
-    Linked(PathBuf, fs::Metadata),
-    /// A fan-out, `pack` or `info` directory, scanned as its own subtree.
-    Directory(PathBuf, fs::Metadata),
-    /// The scan stops here, as the sequential walk would.
-    Failed(GitTreeScanError),
-}
-
-/// What one subtree scan found: its outcome, the directory identities it
-/// newly pinned (not already in the shared set) and the object names it counted.
-struct SubtreeScan {
-    result: Result<(), GitTreeScanError>,
-    directories: DirectoryIdentities,
-    links: ObjectLinks,
 }
 
 /// Scan `objects/` as [`scan_git_tree`] would, with its subdirectories (the
@@ -648,41 +716,6 @@ fn spawn_scan_worker<'scope, 'env, T: Send + 'scope>(
 }
 
 #[cfg(any(test, feature = "test-support"))]
-thread_local! {
-    static REFUSED_SPAWNS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-}
-
-/// Per-thread seam that makes every scan worker spawn attempt fail the way an
-/// exhausted thread limit does, without placing load on the host. While held,
-/// an object-store scan takes its threaded path, and so attempts a spawn, only
-/// with two or more object-store subdirectories. With zero or one subdirectory
-/// it scans on the calling thread, attempts no spawn, and `refused` stays at
-/// zero. Outside the seam the thread count is also capped by the host's
-/// available parallelism.
-#[cfg(any(test, feature = "test-support"))]
-pub struct GitWorkerSpawnRefusal;
-
-#[cfg(any(test, feature = "test-support"))]
-impl GitWorkerSpawnRefusal {
-    pub fn install() -> Self {
-        REFUSED_SPAWNS.with(|slot| slot.set(Some(0)));
-        Self
-    }
-
-    /// Worker spawns refused since [`Self::install`].
-    pub fn refused(&self) -> usize {
-        REFUSED_SPAWNS.with(|slot| slot.get().unwrap_or(0))
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl Drop for GitWorkerSpawnRefusal {
-    fn drop(&mut self) {
-        REFUSED_SPAWNS.with(|slot| slot.set(None));
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
 fn worker_spawn_refused_for_test() -> bool {
     REFUSED_SPAWNS.with(|slot| slot.get().is_some())
 }
@@ -702,39 +735,6 @@ fn metadata_error(path: &Path, error: std::io::Error) -> OrbitError {
         "inspect protected Git metadata `{}`: {error}",
         path.display()
     ))
-}
-
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum GitScanStage {
-    ReadDirectory,
-    InspectEntry,
-}
-
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-type GitScanHook = Box<dyn FnMut(GitScanStage, &Path) -> io::Result<()>>;
-
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-thread_local! {
-    static SCAN_HOOK: std::cell::RefCell<Option<GitScanHook>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Per-thread interleaving seam; production always uses the real filesystem.
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-pub struct GitScanHookGuard(Option<GitScanHook>);
-
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-impl GitScanHookGuard {
-    pub fn install(hook: impl FnMut(GitScanStage, &Path) -> io::Result<()> + 'static) -> Self {
-        Self(SCAN_HOOK.with(|slot| slot.replace(Some(Box::new(hook)))))
-    }
-}
-
-#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
-impl Drop for GitScanHookGuard {
-    fn drop(&mut self) {
-        SCAN_HOOK.with(|slot| slot.replace(self.0.take()));
-    }
 }
 
 #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]

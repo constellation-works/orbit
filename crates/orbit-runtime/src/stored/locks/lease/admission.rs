@@ -22,6 +22,10 @@ pub(super) const TOKEN_MAX_ACTIVE_LEASES: u32 = 64;
 /// selector pairs the owner compares.
 pub(super) const TOKEN_MAX_LEASE_SELECTORS: usize = 64;
 
+/// The actor recorded on leases granted through the lease intake socket, and
+/// the tool name of its audit rows.
+pub(super) const LEASE_INTAKE_ACTOR: &str = "lease-intake";
+
 /// What an authenticated lease token allows, as the lease intake socket
 /// delivers it: the principal and class the token names, its id, its
 /// priority ceiling and `hard` permission, and the client address the
@@ -46,10 +50,6 @@ pub struct LeaseTokenGrant {
     /// written, and holder lists are cut to fit (`truncated: true`).
     pub max_response_bytes: usize,
 }
-
-/// The actor recorded on leases granted through the lease intake socket, and
-/// the tool name of its audit rows.
-pub(super) const LEASE_INTAKE_ACTOR: &str = "lease-intake";
 
 /// Record one lease intake operation as `lease.intake.<operation>`.
 ///

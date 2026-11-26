@@ -6,6 +6,8 @@ use orbit_common::OrbitError;
 
 use crate::RuntimeKernel;
 
+pub const CONFIG_TOML_FILE: &str = "config.toml";
+
 /// Select the fixed config leaf from roots owned by an initialized runtime.
 ///
 /// Keeping this as a free-function boundary gives static analysis a precise
@@ -24,8 +26,6 @@ pub(crate) fn validated_runtime_config_path(
 
     Ok(global_root.join(CONFIG_TOML_FILE))
 }
-
-pub const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Resolve an existing config root to the directory selected by the caller.
 ///

@@ -12,14 +12,6 @@ use serde_json::{Value, json};
 
 use super::{BrokerDispatch, BrokerRequest};
 
-/// Keep broker socket fixtures inside the Unix socket path limit on macOS.
-fn short_tempdir() -> tempfile::TempDir {
-    tempfile::Builder::new()
-        .prefix("obk")
-        .tempdir_in("/tmp")
-        .expect("short broker test root")
-}
-
 /// The tool [`EchoDispatch`] refuses, as a run's policy would.
 const REFUSED_TOOL: &str = "fixture.refused";
 
@@ -54,4 +46,12 @@ impl BrokerDispatch for EchoDispatch {
         }
         Ok(json!({"tool": tool, "peer_pid": peer_pid}))
     }
+}
+
+/// Keep broker socket fixtures inside the Unix socket path limit on macOS.
+fn short_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("obk")
+        .tempdir_in("/tmp")
+        .expect("short broker test root")
 }

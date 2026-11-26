@@ -19,6 +19,12 @@ const UNAVAILABLE: &str = RemoteToolCode::PluginBrokerUnavailable.as_str();
 const RESPONSE_BYTES: u32 = 4 * 1024 * 1024;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(310);
 
+/// Which side owns the failure audit row for a broker call.
+pub enum ForwardCallError {
+    CallerAudit(OrbitError),
+    BrokerAudit(OrbitError),
+}
+
 fn unavailable(message: impl Into<String>) -> OrbitError {
     let message = message.into();
     OrbitError::RemoteTool {
@@ -26,12 +32,6 @@ fn unavailable(message: impl Into<String>) -> OrbitError {
         payload: json!({"code": UNAVAILABLE, "message": message, "retryable": false}),
         message,
     }
-}
-
-/// Which side owns the failure audit row for a broker call.
-pub enum ForwardCallError {
-    CallerAudit(OrbitError),
-    BrokerAudit(OrbitError),
 }
 
 /// Refuse a plugin call that has no broker to go to from inside a masked agent

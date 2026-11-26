@@ -25,6 +25,8 @@ const LOCK_TARGET: &str = "orbit.common.fs.file_lock";
 const STILL_WAITING: &str = "still waiting for advisory file lock; a holder may be hung";
 const HELD_PAST_THRESHOLD: &str = "advisory file lock held past its threshold";
 
+type Events = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
+
 /// One activated partition's boundary under `options`.
 fn boundary(options: FileLockOptions) -> (TempDir, Arc<TaskCommitBoundary>) {
     let root = tempfile::tempdir().expect("tempdir");
@@ -60,8 +62,6 @@ fn contending() -> FileLockOptions {
         prefer_exclusive_waiters: true,
     }
 }
-
-type Events = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
 
 /// Every lock diagnostic emitted on this thread while `op` runs, as fields.
 fn lock_events<T>(op: impl FnOnce() -> T) -> (T, Vec<BTreeMap<String, String>>) {

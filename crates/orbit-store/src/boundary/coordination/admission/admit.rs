@@ -261,8 +261,8 @@ impl TaskCommitBoundary {
             perf_lane_holders: &perf_lane_holders,
             lock_modes: self.store.footprint_lock_modes(),
             executor_host_os,
-            tag_label_requirements: &ordering.tag_label_requirements,
             census,
+            tag_label_requirements: &ordering.tag_label_requirements,
         };
         let mut receipt = AdmissionReceipt {
             schema_version: 1,
@@ -381,38 +381,45 @@ impl TaskCommitBoundary {
                 artifacts: guidance.artifacts,
                 ..ClaimEvidence::default()
             };
-            let params = TaskCoordinationCommitParams {
-                task_id: task.id.clone(),
+            let task_id = task.id.clone();
+            let actor = receipt.machine_id.clone();
+            let expected_status = vec![TaskStatus::Backlog];
+            let status_event = Some("pulled_by".into());
+            let status_note = Some(encode(
+                &serde_json::json!({"machine_id":receipt.machine_id,
+                "run_context":request.run_context,"claim_id":claim_id,"request_id":request.request_id}),
+            )?);
+            let reservation = Some(TaskReservationReserveParams {
+                workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
+                workspace_id: Some(self.workspace_id.clone()),
+                task_ids: vec![task.id.clone()],
+                requested_files: footprint.clone(),
+                stored_files: footprint.clone(),
                 actor: receipt.machine_id.clone(),
-                expected_status: vec![TaskStatus::Backlog],
-                status: Some(TaskStatus::InProgress),
-                status_event: Some("pulled_by".into()),
-                status_note: Some(encode(
-                    &serde_json::json!({"machine_id":receipt.machine_id,
-                    "run_context":request.run_context,"claim_id":claim_id,"request_id":request.request_id}),
-                )?),
-                status_decision: None,
-                reservation: Some(TaskReservationReserveParams {
-                    workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
-                    workspace_id: Some(self.workspace_id.clone()),
-                    task_ids: vec![task.id.clone()],
-                    requested_files: footprint.clone(),
-                    stored_files: footprint.clone(),
-                    actor: receipt.machine_id.clone(),
-                    ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
-                    owner_run_id: None,
-                    owner_metadata: Some(ReservationOwnerMetadata {
-                        claim_id: Some(claim_id.clone()),
-                        ..Default::default()
-                    }),
+                ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
+                owner_run_id: None,
+                owner_metadata: Some(ReservationOwnerMetadata {
+                    claim_id: Some(claim_id.clone()),
+                    ..Default::default()
                 }),
-                // [ORB-14338] A kept candidate this claim cannot resume is
-                // never dropped silently: the task's history says why.
-                append_history: offer
-                    .as_ref()
-                    .and_then(|offer| fresh_offer_history(offer, &claim_id, machine_id))
-                    .into_iter()
-                    .collect(),
+            });
+            // [ORB-14338] A kept candidate this claim cannot resume is
+            // never dropped silently: the task's history says why.
+            let append_history = offer
+                .as_ref()
+                .and_then(|offer| fresh_offer_history(offer, &claim_id, machine_id))
+                .into_iter()
+                .collect();
+            let params = TaskCoordinationCommitParams {
+                task_id,
+                actor,
+                expected_status,
+                status: Some(TaskStatus::InProgress),
+                status_event,
+                status_note,
+                status_decision: None,
+                append_history,
+                reservation,
                 rows: vec![
                     row(RECEIPT_KIND, &key, &())?,
                     row(CLAIM_KIND, &claim_id, &())?,
@@ -434,7 +441,6 @@ impl TaskCommitBoundary {
                         executed_on: identity.location().clone(),
                         run_context: request.run_context.clone(),
                         footprint: footprint.clone(),
-                        phase: ExecutionClaimPhase::Claimed,
                         reservation_id: reserved
                             .reservation_id
                             .clone()
@@ -442,6 +448,7 @@ impl TaskCommitBoundary {
                         reservation_expires_at: reserved.expires_at.clone().ok_or_else(|| {
                             OrbitError::Store("reservation expiry missing".into())
                         })?,
+                        phase: ExecutionClaimPhase::Claimed,
                         repair: None,
                     };
                     let mut admitted = receipt.clone();

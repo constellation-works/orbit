@@ -19,6 +19,9 @@ use super::{
     FORGE_QUOTA_CALLER, PullRequestRefreshOutcome, forge_refused_request, view_pull_request,
 };
 
+const GIT_TIMEOUT_MS: u64 = 30_000;
+
+const REFRESH_HEAD_POLL_BACKOFF_SECS: [u64; 5] = [1, 2, 3, 4, 5];
 /// Result of inspecting whether `base_sha` can be merged cleanly into `head_sha`
 /// as one merge commit without rewriting history or resolving conflicts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,9 +42,6 @@ pub enum BaseMergeInspection {
     /// require rewriting published commits.
     UnrelatedHistory,
 }
-
-const GIT_TIMEOUT_MS: u64 = 30_000;
-const REFRESH_HEAD_POLL_BACKOFF_SECS: [u64; 5] = [1, 2, 3, 4, 5];
 
 /// Inspect a merge of `base_sha` into `head_sha` purely in the Git object
 /// store, without modifying the working tree, index or any ref.

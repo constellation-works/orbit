@@ -17,124 +17,11 @@ use std::collections::BTreeSet;
 // [`TaskRegistryStore::seed_allocator_start`] removes it.
 use crate::driver::sqlite::task_index::HIGH_WATER_UNKNOWN_AUTHORITY;
 
-fn high_water_unknown(conn: &Connection) -> Result<bool, OrbitError> {
-    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM allocator_state WHERE authority = ?1)")
-        .map_err(sqlite_store_error)?
-        .query_row([HIGH_WATER_UNKNOWN_AUTHORITY], |row| row.get(0))
-        .map_err(sqlite_store_error)
-}
-
-fn read_allocator_next_number(conn: &Connection) -> Result<u32, OrbitError> {
-    let next: i64 = conn
-        .prepare_cached("SELECT next_number FROM allocator_state WHERE authority = 'local'")
-        .map_err(sqlite_store_error)?
-        .query_row([], |row| row.get(0))
-        .map_err(sqlite_store_error)?;
-    if next > i64::from(ORB_TASK_ID_MAX) {
-        return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
-    }
-    u32::try_from(next).map_err(|e| OrbitError::Store(e.to_string()))
-}
-
-fn set_allocator_next_number(conn: &Connection, value: u32) -> Result<(), OrbitError> {
-    conn.execute(
-        "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
-        params![i64::from(value), now_string()],
-    )
-    .map_err(sqlite_store_error)?;
-    Ok(())
-}
-
-/// Every prefix this registry recognizes, materialized in full.
-///
-/// Only callers that already scan the registry want this — the audit in
-/// [`TaskRegistryStore::unresolved_relation_targets`] tests many edges against
-/// the set, and [`TaskRegistryStore::known_task_prefixes`] exposes it. A write-path
-/// caller checking one target's prefix must use
-/// [`task_prefix_is_registered`] instead, which resolves the same predicate
-/// without reading every binding.
-pub(super) fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>, OrbitError> {
-    let mut prefixes = BTreeSet::from([active_task_prefix(conn)?]);
-    let mut statement = conn
-        .prepare_cached("SELECT task_id FROM task_bundle_bindings")
-        .map_err(sqlite_store_error)?;
-    let ids = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sqlite_store_error)?;
-    for id in ids {
-        let id = id.map_err(sqlite_store_error)?;
-        if let Some(prefix) = task_id_prefix(&id) {
-            prefixes.insert(prefix.to_string());
-        }
-    }
-    Ok(prefixes)
-}
-
-pub(super) fn active_task_prefix(conn: &Connection) -> Result<String, OrbitError> {
-    conn.prepare_cached("SELECT task_prefix FROM allocator_state WHERE authority = 'local'")
-        .map_err(sqlite_store_error)?
-        .query_row([], |row| row.get(0))
-        .map_err(sqlite_store_error)
-}
-
-/// Which of `task_ids` have a registered bundle, resolved by one prepared
-/// statement of primary-key seeks instead of one statement per relation.
-pub(super) fn registered_task_ids(
-    conn: &Connection,
-    task_ids: &BTreeSet<String>,
-) -> Result<BTreeSet<String>, OrbitError> {
-    let placeholders = (1..=task_ids.len())
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT task_id FROM task_bundle_bindings WHERE task_id IN ({placeholders})"
-        ))
-        .map_err(sqlite_store_error)?;
-    let rows = stmt
-        .query_map(params_from_iter(task_ids.iter()), |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(sqlite_store_error)?;
-    let mut registered = BTreeSet::new();
-    for row in rows {
-        registered.insert(row.map_err(sqlite_store_error)?);
-    }
-    Ok(registered)
-}
-
-/// Has this registry ever registered a task under `prefix`?
-///
-/// Probes the `task_bundle_bindings` primary key over the half-open range of
-/// ids beginning `<prefix>-`, rather than reading every binding and re-parsing
-/// its prefix. `'.'` is the byte immediately after `'-'`, so the upper bound
-/// excludes exactly the ids the lower bound admits. `prefix` comes from
-/// [`task_id_prefix`], so it is 2-5 uppercase ASCII letters.
-pub(super) fn task_prefix_is_registered(
-    conn: &Connection,
-    prefix: &str,
-) -> Result<bool, OrbitError> {
-    let exists: i64 = conn
-        .prepare_cached(TASK_PREFIX_PROBE_SQL)
-        .map_err(sqlite_store_error)?
-        .query_row(params![format!("{prefix}-"), format!("{prefix}.")], |row| {
-            row.get(0)
-        })
-        .map_err(sqlite_store_error)?;
-    Ok(exists != 0)
-}
-
 /// The range probe behind [`task_prefix_is_registered`].
 const TASK_PREFIX_PROBE_SQL: &str = "SELECT EXISTS(
      SELECT 1 FROM task_bundle_bindings
      WHERE task_id >= ?1 AND task_id < ?2
  )";
-
-/// Parse the numeric suffix of any canonical task id.
-pub(crate) fn parse_orb_task_number(task_id: &str) -> Option<u32> {
-    parse_task_number(task_id)
-}
 
 impl TaskRegistryStore {
     /// Allocate a monotonic local task ID.
@@ -465,4 +352,117 @@ impl TaskRegistryStore {
             Ok(())
         })
     }
+}
+
+fn high_water_unknown(conn: &Connection) -> Result<bool, OrbitError> {
+    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM allocator_state WHERE authority = ?1)")
+        .map_err(sqlite_store_error)?
+        .query_row([HIGH_WATER_UNKNOWN_AUTHORITY], |row| row.get(0))
+        .map_err(sqlite_store_error)
+}
+
+fn read_allocator_next_number(conn: &Connection) -> Result<u32, OrbitError> {
+    let next: i64 = conn
+        .prepare_cached("SELECT next_number FROM allocator_state WHERE authority = 'local'")
+        .map_err(sqlite_store_error)?
+        .query_row([], |row| row.get(0))
+        .map_err(sqlite_store_error)?;
+    if next > i64::from(ORB_TASK_ID_MAX) {
+        return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
+    }
+    u32::try_from(next).map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+fn set_allocator_next_number(conn: &Connection, value: u32) -> Result<(), OrbitError> {
+    conn.execute(
+        "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
+        params![i64::from(value), now_string()],
+    )
+    .map_err(sqlite_store_error)?;
+    Ok(())
+}
+
+/// Every prefix this registry recognizes, materialized in full.
+///
+/// Only callers that already scan the registry want this — the audit in
+/// [`TaskRegistryStore::unresolved_relation_targets`] tests many edges against
+/// the set, and [`TaskRegistryStore::known_task_prefixes`] exposes it. A write-path
+/// caller checking one target's prefix must use
+/// [`task_prefix_is_registered`] instead, which resolves the same predicate
+/// without reading every binding.
+pub(super) fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>, OrbitError> {
+    let mut prefixes = BTreeSet::from([active_task_prefix(conn)?]);
+    let mut statement = conn
+        .prepare_cached("SELECT task_id FROM task_bundle_bindings")
+        .map_err(sqlite_store_error)?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(sqlite_store_error)?;
+    for id in ids {
+        let id = id.map_err(sqlite_store_error)?;
+        if let Some(prefix) = task_id_prefix(&id) {
+            prefixes.insert(prefix.to_string());
+        }
+    }
+    Ok(prefixes)
+}
+
+pub(super) fn active_task_prefix(conn: &Connection) -> Result<String, OrbitError> {
+    conn.prepare_cached("SELECT task_prefix FROM allocator_state WHERE authority = 'local'")
+        .map_err(sqlite_store_error)?
+        .query_row([], |row| row.get(0))
+        .map_err(sqlite_store_error)
+}
+
+/// Which of `task_ids` have a registered bundle, resolved by one prepared
+/// statement of primary-key seeks instead of one statement per relation.
+pub(super) fn registered_task_ids(
+    conn: &Connection,
+    task_ids: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, OrbitError> {
+    let placeholders = (1..=task_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT task_id FROM task_bundle_bindings WHERE task_id IN ({placeholders})"
+        ))
+        .map_err(sqlite_store_error)?;
+    let rows = stmt
+        .query_map(params_from_iter(task_ids.iter()), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(sqlite_store_error)?;
+    let mut registered = BTreeSet::new();
+    for row in rows {
+        registered.insert(row.map_err(sqlite_store_error)?);
+    }
+    Ok(registered)
+}
+
+/// Has this registry ever registered a task under `prefix`?
+///
+/// Probes the `task_bundle_bindings` primary key over the half-open range of
+/// ids beginning `<prefix>-`, rather than reading every binding and re-parsing
+/// its prefix. `'.'` is the byte immediately after `'-'`, so the upper bound
+/// excludes exactly the ids the lower bound admits. `prefix` comes from
+/// [`task_id_prefix`], so it is 2-5 uppercase ASCII letters.
+pub(super) fn task_prefix_is_registered(
+    conn: &Connection,
+    prefix: &str,
+) -> Result<bool, OrbitError> {
+    let exists: i64 = conn
+        .prepare_cached(TASK_PREFIX_PROBE_SQL)
+        .map_err(sqlite_store_error)?
+        .query_row(params![format!("{prefix}-"), format!("{prefix}.")], |row| {
+            row.get(0)
+        })
+        .map_err(sqlite_store_error)?;
+    Ok(exists != 0)
+}
+
+/// Parse the numeric suffix of any canonical task id.
+pub(crate) fn parse_orb_task_number(task_id: &str) -> Option<u32> {
+    parse_task_number(task_id)
 }
