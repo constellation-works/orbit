@@ -4,9 +4,9 @@ owner: claude
 created_date: 2026-11-26
 updated_date: 2026-11-26
 last_validated: 2026-11-26
-status: Draft
+status: Accepted
 stage: designing
-next: "Daniel reviews the revised proposal; no task is filed until he approves it"
+next: "ORB-28914 (address key) and ORB-28915 (permalinks) wait for approval to build"
 feature: claude-code-mod
 doc_role: scope
 type: design
@@ -16,7 +16,10 @@ tags: [claude-code-mod, plugin, dashboard, host-registry]
 
 # Scope: the Claude Code mod links task and run ids and draws nothing else
 
-Status: a proposal. Nothing here is built or approved.
+Status: design approved by Daniel on 2026-11-26, in the Orbit captain's chat ("yes, I
+approve the revised design"). Phase 1, the Codex Desktop trial, passed ([ORB-28913]). No
+code is built: the tasks for phases 2 to 5 are filed and wait for approval, so the stage
+stays `designing`.
 Bearing: the Orbit plugin's hooks module ([`plugin/hooks/mod`](../../../plugin/hooks/mod/README.md),
 built by [ORB-13862]) draws a band, a status line, toasts and a Board / Ship pane in Claude
 Code, adds a task card to prompts and a trailer to commits. The
@@ -171,10 +174,18 @@ make that cheap:
 This needs no polling and no extra lookup: the address arrives with the record. It covers
 newly written replies only, not earlier rows or messages from other sessions.
 
-It ships only after a trial in Codex Desktop, which needs no code: give the session the
-address of one task and one run by hand, have it reply with each id linked in prose and
+It was to ship only after a trial in Codex Desktop, which needed no code: give the session
+the address of one task and one run by hand, have it reply with each id linked in prose and
 repeated in a command, click both links, and record the host, the workspace and the record
-that open. In Claude Code the mod links ids without the model's help, and it leaves an
+that open.
+
+The trial passed on 2026-11-26 ([ORB-28913]). With a Tailscale Serve address, a Desktop
+reply linked one task and one run in prose and repeated the bare ids in fenced commands;
+both clicks opened the serving host, the right workspace and the right record. With a
+loopback address the task link worked and the run link did not open when clicked, though
+direct navigation reached both. The cause was not established.
+
+In Claude Code the mod links ids without the model's help, and it leaves an
 existing link alone, so a link the model wrote from `url` is kept as written.
 
 ### Configuration
@@ -226,8 +237,11 @@ The plugin has no setting of its own.
   left in a user's configuration are ignored.
 - **A dead link when no dashboard listens.** With the key unset the mod assumes a local
   server or a tunnel. A click then fails in the browser; the mod does not probe.
+- **A loopback run link failed on a click in the trial.** The cause is unknown, so the
+  loopback default is the weaker address until it is found. A set key avoids it.
 - **Codex links cost output and depend on the model.** Each link is about 25 more tokens
-  than the bare id, and the model may skip one. The trial records how often it does.
+  than the bare id, and the model may skip one. The trial linked both of its ids and did
+  not measure how often a model skips one.
 - **The markdown reading is the mod's own.** It is a 274-line scanner, not the engine's
   parser. Where they could disagree it leaves the id plain: a missed link, never broken
   markdown. The 54 cases are the record of what it handles.
@@ -241,20 +255,21 @@ The plugin has no setting of its own.
 
 ## Phasing
 
-1. **Codex Desktop trial.** No code. It decides whether phase 4 is built.
-2. **Dashboard permalinks and the address key.** `GET /t/<id>`, both forms of
-   `GET /r/<id>`, every redirect naming the host, and `machine.web.public_url`.
-3. **Replace the mod.** Move the linking function and its cases into `plugin/hooks/mod`,
-   add the run pattern, read the prefixes and the address at session start, delete the
-   rest, update the docs.
-4. **A result's `url` and the skill line**, if the trial passed.
-5. **Messages from other sessions in Claude Code (a trial first).** A peer's message, a
-   task notification and hook feedback arrive as user rows, and their ids stay plain. The
-   engine documents an assistant message's text as markdown and a user row's as printable
-   text. The trial: rewrite a user row's text with a markdown link, and separately draw
-   the row from the hook's own tree with link elements, on terminal and desktop. Whichever
-   keeps the engine's row and gives a working link ships; if neither does, this phase is
-   dropped.
+1. **Codex Desktop trial** ([ORB-28913], done). No code. It passed, so phase 4 is built.
+2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914]);
+   `GET /t/<id>`, both forms of `GET /r/<id>` and every redirect naming the host
+   ([ORB-28915]).
+3. **Replace the mod** ([ORB-28916]). Move the linking function and its cases into
+   `plugin/hooks/mod`, add the run pattern, read the prefixes and the address at session
+   start, delete the rest, update the docs.
+4. **A result's `url` and the skill line** ([ORB-28917]).
+5. **Messages from other sessions in Claude Code, a trial first** ([ORB-28918]). A
+   peer's message, a task notification and hook feedback arrive as user rows, and their
+   ids stay plain. The engine documents an assistant message's text as markdown and a
+   user row's as printable text. The trial: rewrite a user row's text with a markdown
+   link, and separately draw the row from the hook's own tree with link elements, on
+   terminal and desktop. Whichever keeps the engine's row and gives a working link
+   ships; if neither does, this phase is dropped.
 
 ## Open questions
 
@@ -294,5 +309,11 @@ The plugin has no setting of its own.
 
 - [ORB-13862]: built the mod this scope replaces.
 - [ORB-14448]: built the host registry the prefixes are read from.
+- [ORB-28913]: ran the Codex Desktop trial, which passed.
+- [ORB-28914]: adds the `machine.web.public_url` setting.
+- [ORB-28915]: adds the task and run permalinks.
+- [ORB-28916]: replaces the mod with task and run links.
+- [ORB-28917]: returns exact URLs in results and adds the Codex skill line.
+- [ORB-28918]: trials links in messages from other sessions in Claude Code.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
