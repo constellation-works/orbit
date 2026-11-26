@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::{
     CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
