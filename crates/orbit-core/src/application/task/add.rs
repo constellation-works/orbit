@@ -33,6 +33,9 @@ const TASK_PROVENANCE_TITLE_PREFIXES: &[(&str, &str)] = &[
     ("friction-curation", "[friction-curation] "),
 ];
 
+/// Longest explicit `orchestrator_model` a create accepts.
+const MAX_ORCHESTRATOR_MODEL_LEN: usize = 128;
+
 impl OrbitRuntime {
     /// Validate task-scoped tool requirements against the current registry
     /// and the implementing activity's disallow list.
@@ -473,9 +476,6 @@ fn creation_creator_model(system_created: bool, model: Option<&str>) -> Option<S
         model.len() <= MAX_ORCHESTRATOR_MODEL_LEN && !model.chars().any(char::is_control);
     (!system_created && !bare_family && recordable).then(|| model.to_string())
 }
-
-/// Longest explicit `orchestrator_model` a create accepts.
-const MAX_ORCHESTRATOR_MODEL_LEN: usize = 128;
 
 /// The orchestrator model a new task records, and the rule that supplied
 /// it: an explicit `orchestrator_model` input, else the configured model of

@@ -19,6 +19,33 @@ use orbit_types::workflow::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Status events that put a task in `blocked` because a run judged the work:
+/// the failure is attributed to the task's footprint unless its text names an
+/// infrastructure cause. A before-PR review gate's escalation judged the
+/// candidate too.
+const RUN_BLOCK_EVENTS: &[&str] = &[
+    "workflow_run_failed",
+    "task_blocked_by_agent",
+    "final_recovery_escalated",
+    "review_gate_escalation",
+];
+const RUN_INTERRUPTED_EVENT: &str = "workflow_run_interrupted";
+/// A claimed leaf's failure settlement, recorded on its owner.
+const CLAIM_FAILED_EVENT: &str = "claim_failed";
+/// The failure handoff of a run whose candidate could not be carried onto
+/// its moved base, with the conflicting paths it recorded.
+const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
+/// A run's failure handoff; a base conflict when the step that failed was
+/// `sync_base`, a failure of the work otherwise.
+const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
+/// Required validation could not find a tool: the host, not the candidate.
+const VALIDATION_ENVIRONMENT_EVENT: &str = "validation_environment_blocked";
+/// Status writes an operator, agent session or automation made by hand.
+const MANUAL_BLOCK_EVENTS: &[&str] = &["status_changed", "claim_revoked", "forced"];
+/// How far a claim settlement's time may stand from the `claim_failed` entry
+/// it explains: both are stamped in the same owner commit.
+const SETTLEMENT_MATCH_SECONDS: i64 = 300;
+
 /// A footprint entry: a workspace-relative path and whether it names a
 /// directory (`dir:` selector) rather than a file.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -77,55 +104,6 @@ pub(in crate::application) enum BlockCause {
     Unclassified,
 }
 
-/// Status events that put a task in `blocked` because a run judged the work:
-/// the failure is attributed to the task's footprint unless its text names an
-/// infrastructure cause. A before-PR review gate's escalation judged the
-/// candidate too.
-const RUN_BLOCK_EVENTS: &[&str] = &[
-    "workflow_run_failed",
-    "task_blocked_by_agent",
-    "final_recovery_escalated",
-    "review_gate_escalation",
-];
-const RUN_INTERRUPTED_EVENT: &str = "workflow_run_interrupted";
-/// A claimed leaf's failure settlement, recorded on its owner.
-const CLAIM_FAILED_EVENT: &str = "claim_failed";
-/// The failure handoff of a run whose candidate could not be carried onto
-/// its moved base, with the conflicting paths it recorded.
-const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
-/// A run's failure handoff; a base conflict when the step that failed was
-/// `sync_base`, a failure of the work otherwise.
-const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
-/// Required validation could not find a tool: the host, not the candidate.
-const VALIDATION_ENVIRONMENT_EVENT: &str = "validation_environment_blocked";
-/// Status writes an operator, agent session or automation made by hand.
-const MANUAL_BLOCK_EVENTS: &[&str] = &["status_changed", "claim_revoked", "forced"];
-/// How far a claim settlement's time may stand from the `claim_failed` entry
-/// it explains: both are stamped in the same owner commit.
-const SETTLEMENT_MATCH_SECONDS: i64 = 300;
-
-/// A history entry only a job run writes: worktree setup moving the task to
-/// `in-progress`, or a run outcome naming its run.
-pub(in crate::application) fn entry_marks_run(entry: &TaskHistoryEntry) -> bool {
-    entry.event == "started"
-        || entry.to_status == Some(TaskStatus::InProgress)
-        || entry.note.as_deref().is_some_and(names_run)
-}
-
-/// Whether a note names the run that wrote it: `run_id=<id>` as a run
-/// failure writes it, or `run=<id>` as a run's failure handoff does. A field
-/// that merely ends in `run`, such as `source_run=`, does not count.
-fn names_run(note: &str) -> bool {
-    ["run_id=", "run="].iter().any(|key| {
-        note.match_indices(key).any(|(start, _)| {
-            !note[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-        })
-    })
-}
-
 /// What a claimed leaf's failure settlement recorded: from its owner's
 /// `claim_failed` note, or for an entry older than that note, from the
 /// claim's settlement record.
@@ -158,6 +136,28 @@ impl SettledFailure {
             reason,
         }
     }
+}
+
+/// A history entry only a job run writes: worktree setup moving the task to
+/// `in-progress`, or a run outcome naming its run.
+pub(in crate::application) fn entry_marks_run(entry: &TaskHistoryEntry) -> bool {
+    entry.event == "started"
+        || entry.to_status == Some(TaskStatus::InProgress)
+        || entry.note.as_deref().is_some_and(names_run)
+}
+
+/// Whether a note names the run that wrote it: `run_id=<id>` as a run
+/// failure writes it, or `run=<id>` as a run's failure handoff does. A field
+/// that merely ends in `run`, such as `source_run=`, does not count.
+fn names_run(note: &str) -> bool {
+    ["run_id=", "run="].iter().any(|key| {
+        note.match_indices(key).any(|(start, _)| {
+            !note[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        })
+    })
 }
 
 /// The settlement behind a `claim_failed` entry: the note it carries, else

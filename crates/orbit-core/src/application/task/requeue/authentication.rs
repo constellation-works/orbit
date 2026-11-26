@@ -9,23 +9,6 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
 use crate::application::task::helpers;
 
-/// Whether the newest typed final-recovery decision Orbit recorded for
-/// `task`'s current run is `requeued`, with no discard after it. Such a
-/// requeue keeps the run's publication for the next run to resume, whichever
-/// status event carried it (final recovery, an operator, the cleared-infra
-/// requeue), so the task's moves back to the backlog must not close it.
-pub(crate) fn current_run_requeue_stands(task: &Task, history: &[TaskHistoryEntry]) -> bool {
-    let Some(run_id) = task.job_run_id.as_deref() else {
-        return false;
-    };
-    let after_discard = history
-        .iter()
-        .rposition(|entry| entry.event == CANDIDATE_DISCARDED_EVENT)
-        .map_or(0, |index| index + 1);
-    helpers::authoritative_recovery_outcome(&history[after_discard..], run_id)
-        == Some(&RecordedFinalRecovery::Requeued)
-}
-
 impl OrbitRuntime {
     /// Authenticate a plain blocked/review-to-backlog status update without a
     /// discard, exactly as an operator requeue does. Returns the
@@ -209,4 +192,21 @@ impl OrbitRuntime {
         }
         Ok(None)
     }
+}
+
+/// Whether the newest typed final-recovery decision Orbit recorded for
+/// `task`'s current run is `requeued`, with no discard after it. Such a
+/// requeue keeps the run's publication for the next run to resume, whichever
+/// status event carried it (final recovery, an operator, the cleared-infra
+/// requeue), so the task's moves back to the backlog must not close it.
+pub(crate) fn current_run_requeue_stands(task: &Task, history: &[TaskHistoryEntry]) -> bool {
+    let Some(run_id) = task.job_run_id.as_deref() else {
+        return false;
+    };
+    let after_discard = history
+        .iter()
+        .rposition(|entry| entry.event == CANDIDATE_DISCARDED_EVENT)
+        .map_or(0, |index| index + 1);
+    helpers::authoritative_recovery_outcome(&history[after_discard..], run_id)
+        == Some(&RecordedFinalRecovery::Requeued)
 }

@@ -80,6 +80,17 @@ impl Subject {
     }
 }
 
+/// One triager draw: the crew, where it was drawn from and the weights the
+/// draw ran on.
+struct TriagerDraw {
+    crew: String,
+    /// The complexity tier drawn from; `None` for a purpose-pool draw.
+    tier: Option<TaskComplexity>,
+    /// `purpose:<purpose>`, `pool:<tier>`, or `default`.
+    source: String,
+    eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
 pub(crate) fn prepare(
     runtime: &OrbitRuntime,
     action: &str,
@@ -217,17 +228,6 @@ fn assessment_author(
         .and_then(|state| runtime.pilot_assessment_crew(state)))
 }
 
-/// One triager draw: the crew, where it was drawn from and the weights the
-/// draw ran on.
-struct TriagerDraw {
-    crew: String,
-    /// The complexity tier drawn from; `None` for a purpose-pool draw.
-    tier: Option<TaskComplexity>,
-    /// `purpose:<purpose>`, `pool:<tier>`, or `default`.
-    source: String,
-    eligible_pool: Vec<ActivityCrewPoolMember>,
-}
-
 /// `task`'s triager: a draw from the subject's `workflow.purpose_crews` pool,
 /// when it has one that is set and holds a member that can inspect source
 /// natively, else the hard tier's inspection-capable draw, else the
@@ -271,10 +271,11 @@ fn triager(
         });
     }
     if let Some(assignment) = runtime.draw_finding_verifier(task, TRIAGE_TIER, &avoid)? {
+        let source = format!("pool:{}", assignment.tier);
         return Ok(TriagerDraw {
-            source: format!("pool:{}", assignment.tier),
             crew: assignment.crew,
             tier: Some(assignment.tier),
+            source,
             eligible_pool: assignment.eligible_pool,
         });
     }

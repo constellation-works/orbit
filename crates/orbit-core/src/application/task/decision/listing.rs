@@ -31,66 +31,6 @@ pub enum DecisionListProfile {
     Dashboard,
 }
 
-/// JSON for one request as the decision surfaces serve it: the stored
-/// record with its effective (derived) state.
-pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
-    serde_json::to_value(request).unwrap_or_else(|_| {
-        json!({
-            "id": request.id,
-            "task_id": request.task_id,
-            "gate": request.gate.as_str(),
-            "risk_tier": request.risk_tier,
-            "category": request.category,
-            "state": request.state.as_str(),
-        })
-    })
-}
-
-/// The compact `open_decisions[]` entry `orbit.task.show` carries: the
-/// request id, its gate, the answer ids a surface may offer, expiry, and the
-/// decision card: the short `summary`, the `human_action` of a request only a
-/// person outside Orbit can resolve, and `options` (each answer's id, label,
-/// consequence and whether it is the `recommended` one) so a surface renders
-/// one button per option without a second read.
-pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
-    let recommended = request.recommended.as_deref();
-    let mut entry = json!({
-        "id": request.id,
-        "gate": request.gate.as_str(),
-        "risk_tier": request.risk_tier,
-        "category": request.category,
-        "answers": request
-            .answers
-            .iter()
-            .map(|answer| answer.id.clone())
-            .collect::<Vec<_>>(),
-        "options": request
-            .answers
-            .iter()
-            .map(|answer| {
-                json!({
-                    "id": answer.id,
-                    "label": answer.label,
-                    "consequence": answer.consequence,
-                    "risk_tier": answer.risk_tier,
-                    "recommended": recommended == Some(answer.id.as_str()),
-                })
-            })
-            .collect::<Vec<_>>(),
-        "expires_at": request.expires_at.to_rfc3339(),
-    });
-    if let Some(summary) = &request.summary {
-        entry["summary"] = json!(summary);
-    }
-    if let Some(action) = &request.human_action {
-        entry["human_action"] = json!(action);
-    }
-    if let Some(topic) = &request.topic {
-        entry["topic"] = json!(topic);
-    }
-    entry
-}
-
 impl OrbitRuntime {
     /// Decision requests across the workspace, oldest first. Open requests
     /// only unless `include_closed`; `gate` and `task_id` narrow the list.
@@ -381,4 +321,64 @@ impl OrbitRuntime {
                 .collect(),
         ))
     }
+}
+
+/// JSON for one request as the decision surfaces serve it: the stored
+/// record with its effective (derived) state.
+pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
+    serde_json::to_value(request).unwrap_or_else(|_| {
+        json!({
+            "id": request.id,
+            "task_id": request.task_id,
+            "gate": request.gate.as_str(),
+            "risk_tier": request.risk_tier,
+            "category": request.category,
+            "state": request.state.as_str(),
+        })
+    })
+}
+
+/// The compact `open_decisions[]` entry `orbit.task.show` carries: the
+/// request id, its gate, the answer ids a surface may offer, expiry, and the
+/// decision card: the short `summary`, the `human_action` of a request only a
+/// person outside Orbit can resolve, and `options` (each answer's id, label,
+/// consequence and whether it is the `recommended` one) so a surface renders
+/// one button per option without a second read.
+pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
+    let recommended = request.recommended.as_deref();
+    let mut entry = json!({
+        "id": request.id,
+        "gate": request.gate.as_str(),
+        "risk_tier": request.risk_tier,
+        "category": request.category,
+        "answers": request
+            .answers
+            .iter()
+            .map(|answer| answer.id.clone())
+            .collect::<Vec<_>>(),
+        "options": request
+            .answers
+            .iter()
+            .map(|answer| {
+                json!({
+                    "id": answer.id,
+                    "label": answer.label,
+                    "consequence": answer.consequence,
+                    "risk_tier": answer.risk_tier,
+                    "recommended": recommended == Some(answer.id.as_str()),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "expires_at": request.expires_at.to_rfc3339(),
+    });
+    if let Some(summary) = &request.summary {
+        entry["summary"] = json!(summary);
+    }
+    if let Some(action) = &request.human_action {
+        entry["human_action"] = json!(action);
+    }
+    if let Some(topic) = &request.topic {
+        entry["topic"] = json!(topic);
+    }
+    entry
 }

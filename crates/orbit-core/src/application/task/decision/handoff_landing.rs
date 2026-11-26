@@ -21,15 +21,6 @@ use super::answering::decision_comment;
 /// is the run that published the handoff.
 const HANDOFF_DECISION_MERGE_STEP: &str = "decision.handoff_land";
 
-fn handoff_answer_refused(reason: impl std::fmt::Display) -> OrbitError {
-    OrbitError::decision_refused(
-        DecisionRefusalCode::AnswerNotApplicable,
-        format!(
-            "the handoff cannot land ({reason}); nothing was applied and the request stays open"
-        ),
-    )
-}
-
 impl OrbitRuntime {
     /// Derive the answer without changing old stored requests. Eligibility is
     /// rechecked under the task lock when the human applies it.
@@ -288,15 +279,15 @@ impl OrbitRuntime {
             &task.id,
             TaskRecordUpdateParams {
                 actor: actor.clone(),
-                status: Some(TaskStatus::Done),
-                status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.into()),
-                status_note: Some(note.clone()),
                 execution_summary: task
                     .execution_summary
                     .trim()
                     .is_empty()
                     .then(|| format!("Delivered by {actor}: {note}.")),
+                status: Some(TaskStatus::Done),
                 external_refs: Some(refs.clone()),
+                status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.into()),
+                status_note: Some(note.clone()),
                 append_history: history.clone(),
                 append_comments: vec![TaskComment {
                     at: resolution.answered_at,
@@ -312,4 +303,13 @@ impl OrbitRuntime {
         self.close_task_prs_after_transition(task.status, &updated, Some(&note));
         Ok(())
     }
+}
+
+fn handoff_answer_refused(reason: impl std::fmt::Display) -> OrbitError {
+    OrbitError::decision_refused(
+        DecisionRefusalCode::AnswerNotApplicable,
+        format!(
+            "the handoff cannot land ({reason}); nothing was applied and the request stays open"
+        ),
+    )
 }

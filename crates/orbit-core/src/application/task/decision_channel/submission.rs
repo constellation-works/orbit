@@ -16,92 +16,6 @@ use super::model::{DecisionSubmitCaller, DecisionSubmitParams, MAX_DECISION_RAW_
 use super::registration::ChannelRegistration;
 use super::token;
 
-fn answer_not_allowed(request: &DecisionRequest, why: &str) -> OrbitError {
-    let allowed = request
-        .answers
-        .iter()
-        .map(|answer| answer.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    OrbitError::decision_refused(
-        DecisionRefusalCode::AnswerNotAllowed,
-        format!(
-            "{why} for decision request `{}` (allowed: {allowed}); the token was not consumed and nothing was applied",
-            request.id
-        ),
-    )
-}
-
-/// The channel binding and transport evidence design §3.3 step 4
-/// verifies: the calling plugin is the channel's bound plugin, a plugin
-/// submission presents an allowlisted sender, and the forwarded
-/// `Authentication-Results` passes. The operator's own test submission
-/// may omit sender and evidence; a registered allowlist applies to any
-/// sender presented. Judged before the DKIM lookup and again under the
-/// store lock, so a revoke or rotation between them still refuses.
-fn check_transport_evidence(
-    params: &DecisionSubmitParams,
-    registration: &ChannelRegistration,
-) -> Result<(), OrbitError> {
-    if let DecisionSubmitCaller::PluginCallback { plugin } = &params.caller
-        && plugin != &registration.plugin
-    {
-        return Err(OrbitError::decision_refused(
-            DecisionRefusalCode::ChannelNotRegistered,
-            format!(
-                "decision channel `{}` is not bound to plugin `{plugin}`; nothing was applied",
-                params.channel
-            ),
-        ));
-    }
-    let transport = matches!(params.caller, DecisionSubmitCaller::PluginCallback { .. });
-    let presented = params
-        .sender
-        .as_deref()
-        .map(|sender| sender.trim().to_ascii_lowercase())
-        .filter(|sender| !sender.is_empty());
-    if transport && presented.is_none() {
-        return Err(OrbitError::decision_refused(
-            DecisionRefusalCode::SenderNotAllowed,
-            format!(
-                "the transport presented no sender for decision channel `{}`; nothing was applied",
-                params.channel
-            ),
-        ));
-    }
-    if let Some(sender) = presented.as_deref()
-        && !registration.allowed_senders.is_empty()
-        && !registration
-            .allowed_senders
-            .iter()
-            .any(|allowed| allowed == sender)
-    {
-        return Err(OrbitError::decision_refused(
-            DecisionRefusalCode::SenderNotAllowed,
-            format!(
-                "the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
-                params.channel
-            ),
-        ));
-    }
-    let evidence_passes = match params.auth_results.as_deref() {
-        Some(auth_results) => authentication_results_pass(auth_results),
-        None => !transport,
-    };
-    if !evidence_passes {
-        return Err(OrbitError::decision_refused(
-            DecisionRefusalCode::AuthenticationFailed,
-            "the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied",
-        ));
-    }
-    Ok(())
-}
-
-fn authentication_results_pass(header: &str) -> bool {
-    let header = header.to_ascii_lowercase();
-    header.contains("dkim=pass") && header.contains("spf=pass") && !header.contains("dmarc=fail")
-}
-
 impl OrbitRuntime {
     /// Submit a human's answer through a registered channel, applying it
     /// in core as the registered human when — and only when — every
@@ -387,4 +301,90 @@ impl OrbitRuntime {
         )?;
         Ok(())
     }
+}
+
+fn answer_not_allowed(request: &DecisionRequest, why: &str) -> OrbitError {
+    let allowed = request
+        .answers
+        .iter()
+        .map(|answer| answer.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    OrbitError::decision_refused(
+        DecisionRefusalCode::AnswerNotAllowed,
+        format!(
+            "{why} for decision request `{}` (allowed: {allowed}); the token was not consumed and nothing was applied",
+            request.id
+        ),
+    )
+}
+
+/// The channel binding and transport evidence design §3.3 step 4
+/// verifies: the calling plugin is the channel's bound plugin, a plugin
+/// submission presents an allowlisted sender, and the forwarded
+/// `Authentication-Results` passes. The operator's own test submission
+/// may omit sender and evidence; a registered allowlist applies to any
+/// sender presented. Judged before the DKIM lookup and again under the
+/// store lock, so a revoke or rotation between them still refuses.
+fn check_transport_evidence(
+    params: &DecisionSubmitParams,
+    registration: &ChannelRegistration,
+) -> Result<(), OrbitError> {
+    if let DecisionSubmitCaller::PluginCallback { plugin } = &params.caller
+        && plugin != &registration.plugin
+    {
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::ChannelNotRegistered,
+            format!(
+                "decision channel `{}` is not bound to plugin `{plugin}`; nothing was applied",
+                params.channel
+            ),
+        ));
+    }
+    let transport = matches!(params.caller, DecisionSubmitCaller::PluginCallback { .. });
+    let presented = params
+        .sender
+        .as_deref()
+        .map(|sender| sender.trim().to_ascii_lowercase())
+        .filter(|sender| !sender.is_empty());
+    if transport && presented.is_none() {
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::SenderNotAllowed,
+            format!(
+                "the transport presented no sender for decision channel `{}`; nothing was applied",
+                params.channel
+            ),
+        ));
+    }
+    if let Some(sender) = presented.as_deref()
+        && !registration.allowed_senders.is_empty()
+        && !registration
+            .allowed_senders
+            .iter()
+            .any(|allowed| allowed == sender)
+    {
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::SenderNotAllowed,
+            format!(
+                "the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
+                params.channel
+            ),
+        ));
+    }
+    let evidence_passes = match params.auth_results.as_deref() {
+        Some(auth_results) => authentication_results_pass(auth_results),
+        None => !transport,
+    };
+    if !evidence_passes {
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::AuthenticationFailed,
+            "the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied",
+        ));
+    }
+    Ok(())
+}
+
+fn authentication_results_pass(header: &str) -> bool {
+    let header = header.to_ascii_lowercase();
+    header.contains("dkim=pass") && header.contains("spf=pass") && !header.contains("dmarc=fail")
 }

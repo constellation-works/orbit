@@ -93,6 +93,33 @@ const RESOLUTION_CUES: [&str; 12] = [
     "not a judgment call",
 ];
 
+struct Decision {
+    /// Substring that identifies this decision in an existing finding.
+    name: String,
+    text: String,
+}
+
+/// One source line with its indentation and blockquote markers removed.
+struct Line<'a> {
+    /// The line is inside a blockquote (`>`).
+    quoted: bool,
+    content: &'a str,
+}
+
+impl<'a> Line<'a> {
+    fn from_text(line: &'a str) -> Self {
+        let mut rest = line.trim_start();
+        let quoted = rest.starts_with('>');
+        while let Some(after) = rest.strip_prefix('>') {
+            rest = after.trim_start();
+        }
+        Self {
+            quoted,
+            content: rest.trim_end(),
+        }
+    }
+}
+
 /// Attach holding `utility_warnings` for each consequential decision the
 /// description states and does not resolve. A model finding that already
 /// names the same decision is stamped so it holds; unrelated warnings,
@@ -118,33 +145,29 @@ pub(super) fn attach_undecided_consequential_decisions(assessment: &mut Value, d
     }
 }
 
-struct Decision {
-    /// Substring that identifies this decision in an existing finding.
-    name: String,
-    text: String,
-}
-
 fn decisions_in(description: &str) -> Vec<Decision> {
     let mut decisions = Vec::new();
     if let Some(name) = ownership_name(description) {
-        decisions.push(Decision {
-            text: format!(
-                "Undecided consequential decision: {name}. The spec leaves this choice open, \
+        let text = format!(
+            "Undecided consequential decision: {name}. The spec leaves this choice open, \
                  so the task is held until the description states it. An ordinary implementation \
                  choice (approach, file split, naming, test placement) is not this hold."
-            ),
+        );
+        decisions.push(Decision {
             name: name.to_string(),
+            text,
         });
     }
     if let Some(subject) = surface_subject(description) {
-        decisions.push(Decision {
-            text: format!(
-                "Undecided consequential decision: {subject} is a surface difference the stop \
+        let text = format!(
+            "Undecided consequential decision: {subject} is a surface difference the stop \
                  rule reaches and the spec does not enumerate. The task is held until the \
                  description enumerates it or states that an unlisted difference keeps current \
                  behavior."
-            ),
+        );
+        decisions.push(Decision {
             name: subject,
+            text,
         });
     }
     decisions
@@ -555,27 +578,6 @@ fn sentences(description: &str) -> Vec<String> {
     }
     push_sentence(&mut current, &mut sentences);
     sentences
-}
-
-/// One source line with its indentation and blockquote markers removed.
-struct Line<'a> {
-    /// The line is inside a blockquote (`>`).
-    quoted: bool,
-    content: &'a str,
-}
-
-impl<'a> Line<'a> {
-    fn from_text(line: &'a str) -> Self {
-        let mut rest = line.trim_start();
-        let quoted = rest.starts_with('>');
-        while let Some(after) = rest.strip_prefix('>') {
-            rest = after.trim_start();
-        }
-        Self {
-            quoted,
-            content: rest.trim_end(),
-        }
-    }
 }
 
 /// Whether a line break between two lines ends the sentence. A soft break

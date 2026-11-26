@@ -50,40 +50,6 @@ impl ChannelRegistration {
     }
 }
 
-fn valid_channel_name(channel: &str) -> Result<String, OrbitError> {
-    let channel = channel.trim().to_string();
-    let valid = !channel.is_empty()
-        && channel.len() <= 64
-        && channel
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
-        && channel
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_lowercase());
-    if !valid {
-        return Err(OrbitError::InvalidInput(format!(
-            "'{channel}' is not a valid decision channel name; use lowercase letters, digits, '-' or '_', starting with a letter"
-        )));
-    }
-    Ok(channel)
-}
-
-fn valid_human_label(human: &str) -> Result<String, OrbitError> {
-    let human = human.trim().to_string();
-    if human.is_empty() || human.chars().any(char::is_control) {
-        return Err(OrbitError::InvalidInput(
-            "the human a decision channel speaks for must be a non-empty label".into(),
-        ));
-    }
-    if is_automation_actor(&human) {
-        return Err(OrbitError::InvalidInput(format!(
-            "'{human}' is an automation actor, not a human; a decision channel must speak for a human whose writes count as human decisions"
-        )));
-    }
-    Ok(human)
-}
-
 impl OrbitRuntime {
     /// Register a decision channel on this host: generate its key, mirror
     /// it to the bound plugin's `channel_key` secret, and persist the
@@ -266,4 +232,38 @@ impl OrbitRuntime {
         )?;
         Ok(())
     }
+}
+
+fn valid_channel_name(channel: &str) -> Result<String, OrbitError> {
+    let channel = channel.trim().to_string();
+    let valid = !channel.is_empty()
+        && channel.len() <= 64
+        && channel
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
+        && channel
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_lowercase());
+    if !valid {
+        return Err(OrbitError::InvalidInput(format!(
+            "'{channel}' is not a valid decision channel name; use lowercase letters, digits, '-' or '_', starting with a letter"
+        )));
+    }
+    Ok(channel)
+}
+
+fn valid_human_label(human: &str) -> Result<String, OrbitError> {
+    let human = human.trim().to_string();
+    if human.is_empty() || human.chars().any(char::is_control) {
+        return Err(OrbitError::InvalidInput(
+            "the human a decision channel speaks for must be a non-empty label".into(),
+        ));
+    }
+    if is_automation_actor(&human) {
+        return Err(OrbitError::InvalidInput(format!(
+            "'{human}' is an automation actor, not a human; a decision channel must speak for a human whose writes count as human decisions"
+        )));
+    }
+    Ok(human)
 }

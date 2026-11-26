@@ -9,6 +9,14 @@ pub(super) enum Canon {
     Relaxed,
 }
 
+pub(super) struct Header {
+    pub(super) name: String,
+    /// Everything after the colon, with folding (CRLF + WSP) preserved.
+    pub(super) value: String,
+    /// `name:value` exactly as received, minus the terminating CRLF.
+    pub(super) raw: String,
+}
+
 pub(super) fn canonicalization(value: &str) -> Result<(Canon, Canon), DkimVerifyError> {
     let mut parts = value.split('/');
     let parse = |part: Option<&str>| match part.map(|part| part.trim().to_ascii_lowercase()) {
@@ -20,14 +28,6 @@ pub(super) fn canonicalization(value: &str) -> Result<(Canon, Canon), DkimVerify
         ))),
     };
     Ok((parse(parts.next())?, parse(parts.next())?))
-}
-
-pub(super) struct Header {
-    pub(super) name: String,
-    /// Everything after the colon, with folding (CRLF + WSP) preserved.
-    pub(super) value: String,
-    /// `name:value` exactly as received, minus the terminating CRLF.
-    pub(super) raw: String,
 }
 
 pub(super) fn parse_message(raw: &[u8]) -> (Vec<Header>, &[u8]) {

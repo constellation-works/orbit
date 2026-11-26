@@ -15,44 +15,6 @@ use super::candidate::{Candidate, DeliveryLanding, RevokedHandoff};
 use super::model::{BacklogDelivery, ExternalMergeSettlement};
 use super::{refusal, rescued};
 
-/// How the task landed (`pull request #N, merged into B at T as C outside Orbit`),
-/// and the landing note its settlement records. A merge at a verified base
-/// refresh of the published head names both heads; the merged head is the
-/// delivered candidate.
-fn landing_note(landing: &MergedPullRequest, refreshed_from: Option<&str>) -> (String, String) {
-    let refresh = refreshed_from
-        .map(|published| {
-            format!(
-                " (published head {published}; delivered head {} adds only base merges)",
-                landing.head_sha
-            )
-        })
-        .unwrap_or_default();
-    let landed = format!(
-        "pull request #{}{refresh}, merged into {} at {} as {} outside Orbit",
-        landing.pull.number,
-        landing.base_branch,
-        landing
-            .merged_at
-            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
-        landing.merge_commit
-    );
-    let note = format!("settled from {landed}");
-    (landed, note)
-}
-
-/// The full merge commit a settlement note from [`landing_note`] records;
-/// `None` for any other note or an abbreviated commit.
-pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
-    let landed = note.strip_prefix("settled from pull request #")?;
-    let (_, merged) = landed.split_once(", merged into ")?;
-    let merged = merged
-        .strip_suffix(" outside Orbit")
-        .or_else(|| merged.strip_suffix(" by owner decision"))?;
-    let (_, commit) = merged.rsplit_once(" as ")?;
-    is_sha1_commit_id(commit).then_some(commit)
-}
-
 /// What a settlement's landing note records besides the merge.
 pub(super) enum SettlementNote<'a> {
     /// An operator-rescued follower claim's merge.
@@ -312,11 +274,11 @@ impl OrbitRuntime {
                 id,
                 TaskRecordUpdateParams {
                     actor: history_actor.clone(),
+                    execution_summary,
                     status: Some(TaskStatus::Done),
+                    external_refs: Some(external_refs),
                     status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.to_string()),
                     status_note: Some(note.clone()),
-                    execution_summary,
-                    external_refs: Some(external_refs),
                     expected_status: Some(vec![task.status]),
                     ..TaskRecordUpdateParams::default()
                 },
@@ -341,4 +303,42 @@ impl OrbitRuntime {
             merge_commit: landing.merge_commit.clone(),
         })
     }
+}
+
+/// How the task landed (`pull request #N, merged into B at T as C outside Orbit`),
+/// and the landing note its settlement records. A merge at a verified base
+/// refresh of the published head names both heads; the merged head is the
+/// delivered candidate.
+fn landing_note(landing: &MergedPullRequest, refreshed_from: Option<&str>) -> (String, String) {
+    let refresh = refreshed_from
+        .map(|published| {
+            format!(
+                " (published head {published}; delivered head {} adds only base merges)",
+                landing.head_sha
+            )
+        })
+        .unwrap_or_default();
+    let landed = format!(
+        "pull request #{}{refresh}, merged into {} at {} as {} outside Orbit",
+        landing.pull.number,
+        landing.base_branch,
+        landing
+            .merged_at
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        landing.merge_commit
+    );
+    let note = format!("settled from {landed}");
+    (landed, note)
+}
+
+/// The full merge commit a settlement note from [`landing_note`] records;
+/// `None` for any other note or an abbreviated commit.
+pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
+    let landed = note.strip_prefix("settled from pull request #")?;
+    let (_, merged) = landed.split_once(", merged into ")?;
+    let merged = merged
+        .strip_suffix(" outside Orbit")
+        .or_else(|| merged.strip_suffix(" by owner decision"))?;
+    let (_, commit) = merged.rsplit_once(" as ")?;
+    is_sha1_commit_id(commit).then_some(commit)
 }

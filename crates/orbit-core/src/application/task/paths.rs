@@ -15,60 +15,15 @@ use crate::paths::find_linked_worktree_root;
 
 pub(crate) use crate::runtime::base::path::declared_context::canonicalize_context_files_for_read;
 
-pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&str>) -> PathBuf {
-    workspace_path
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root.to_path_buf())
-}
-
 /// History event written when pruned declarations are restored from
 /// [`CONTEXT_FILES_PRUNED_EVENT`] evidence.
 pub(super) const CONTEXT_FILES_RESTORED_EVENT: &str = "context_files_restored";
 
-/// Build the history entry recording an explicit, evidence-backed restoration.
-pub(super) fn context_files_restored_history_entry(
-    actor: &str,
-    restored: &[String],
-) -> TaskHistoryEntry {
-    TaskHistoryEntry {
-        at: Utc::now(),
-        by: actor.to_string(),
-        event: CONTEXT_FILES_RESTORED_EVENT.to_string(),
-        note: Some(format!(
-            "restored: {} (recorded by an earlier `{CONTEXT_FILES_PRUNED_EVENT}` entry)",
-            restored.join(", ")
-        )),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: None,
-        surface: None,
-        caller: None,
-    }
-}
-
-/// Canonicalize context selectors for a task write, leaving selectors that do
-/// not exist yet in place.
-///
-/// The core write path stays permissive on purpose: task-pilot apply,
-/// automation seeding, and runtime host updates legitimately record targets the
-/// task is about to create, and no read path drops a declaration for a missing
-/// target ([ORB-12490]). Operator surfaces guard typos separately through
-/// [`OrbitRuntime::add_task_screened`] and its update counterparts.
-pub(crate) fn normalize_context_files_for_write(
-    candidates: Vec<String>,
-    workspace_root: &Path,
-) -> Result<Vec<String>, OrbitError> {
-    candidates
-        .into_iter()
-        .map(|entry| {
-            canonical_selector_in_workspace(entry.as_str(), workspace_root)
-                .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-        })
-        .collect()
-}
+/// Appended to a missing-target rejection so the caller learns the escape
+/// instead of retrying blind. Every operator surface spells it as
+/// `allow_missing_context`; the CLI flag is `--allow-missing-context`.
+const MISSING_CONTEXT_ESCAPE_HINT: &str = "If this task will create it, pass \
+     `allow_missing_context: true` (`--allow-missing-context` on the CLI)";
 
 /// What an operator surface's selector screening established for one task
 /// write, carried into the write so it commits with the scope it describes.
@@ -326,27 +281,6 @@ impl OrbitRuntime {
     }
 }
 
-/// True when this runtime opened an explicit data directory with no checkout
-/// to validate against. `repo_root` is the data dir itself, not a repository,
-/// so selector checks must refuse rather than treat Orbit state files as
-/// in-workspace targets.
-fn unbound_explicit_data_dir(paths: &WorkspacePaths, has_checkout_binding: bool) -> bool {
-    if has_checkout_binding {
-        return false;
-    }
-    same_path(&paths.repo_root, &paths.orbit_dir) && same_path(&paths.orbit_dir, &paths.global_dir)
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
 /// The checkouts an operator-supplied context selector may resolve against.
 struct ContextSelectorRoots {
     /// Workspace root inside the registered checkout.
@@ -355,20 +289,6 @@ struct ContextSelectorRoots {
     /// that directory exists there. A managed job run executes in such a
     /// worktree, so a file it just created exists only here until the work merges.
     caller_worktree: Option<PathBuf>,
-}
-
-/// Check only canonical file selectors, against the same checkouts used for
-/// selector resolution. Canonicalization has already enforced containment.
-fn missing_file_has_parent(selector: &str, roots: &ContextSelectorRoots) -> bool {
-    let Some(path) = selector.strip_prefix("file:") else {
-        return false;
-    };
-    let Some(parent) = Path::new(path).parent() else {
-        return false;
-    };
-    std::iter::once(roots.workspace.as_path())
-        .chain(roots.caller_worktree.as_deref())
-        .any(|root| root.join(parent).is_dir())
 }
 
 /// Why an operator-supplied selector was refused.
@@ -392,6 +312,92 @@ impl SelectorRejection {
             Self::Invalid(error) => error,
         }
     }
+}
+
+pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&str>) -> PathBuf {
+    workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+}
+
+/// Build the history entry recording an explicit, evidence-backed restoration.
+pub(super) fn context_files_restored_history_entry(
+    actor: &str,
+    restored: &[String],
+) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at: Utc::now(),
+        by: actor.to_string(),
+        event: CONTEXT_FILES_RESTORED_EVENT.to_string(),
+        note: Some(format!(
+            "restored: {} (recorded by an earlier `{CONTEXT_FILES_PRUNED_EVENT}` entry)",
+            restored.join(", ")
+        )),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: None,
+        surface: None,
+        caller: None,
+    }
+}
+
+/// Canonicalize context selectors for a task write, leaving selectors that do
+/// not exist yet in place.
+///
+/// The core write path stays permissive on purpose: task-pilot apply,
+/// automation seeding, and runtime host updates legitimately record targets the
+/// task is about to create, and no read path drops a declaration for a missing
+/// target ([ORB-12490]). Operator surfaces guard typos separately through
+/// [`OrbitRuntime::add_task_screened`] and its update counterparts.
+pub(crate) fn normalize_context_files_for_write(
+    candidates: Vec<String>,
+    workspace_root: &Path,
+) -> Result<Vec<String>, OrbitError> {
+    candidates
+        .into_iter()
+        .map(|entry| {
+            canonical_selector_in_workspace(entry.as_str(), workspace_root)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+        })
+        .collect()
+}
+
+/// True when this runtime opened an explicit data directory with no checkout
+/// to validate against. `repo_root` is the data dir itself, not a repository,
+/// so selector checks must refuse rather than treat Orbit state files as
+/// in-workspace targets.
+fn unbound_explicit_data_dir(paths: &WorkspacePaths, has_checkout_binding: bool) -> bool {
+    if has_checkout_binding {
+        return false;
+    }
+    same_path(&paths.repo_root, &paths.orbit_dir) && same_path(&paths.orbit_dir, &paths.global_dir)
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Check only canonical file selectors, against the same checkouts used for
+/// selector resolution. Canonicalization has already enforced containment.
+fn missing_file_has_parent(selector: &str, roots: &ContextSelectorRoots) -> bool {
+    let Some(path) = selector.strip_prefix("file:") else {
+        return false;
+    };
+    let Some(parent) = Path::new(path).parent() else {
+        return false;
+    };
+    std::iter::once(roots.workspace.as_path())
+        .chain(roots.caller_worktree.as_deref())
+        .any(|root| root.join(parent).is_dir())
 }
 
 /// Check one operator-supplied selector against the checkouts this call may
@@ -485,12 +491,6 @@ fn resolve_selector_in(
 
     Ok(())
 }
-
-/// Appended to a missing-target rejection so the caller learns the escape
-/// instead of retrying blind. Every operator surface spells it as
-/// `allow_missing_context`; the CLI flag is `--allow-missing-context`.
-const MISSING_CONTEXT_ESCAPE_HINT: &str = "If this task will create it, pass \
-     `allow_missing_context: true` (`--allow-missing-context` on the CLI)";
 
 fn unsupported_selector_kind(entry: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(

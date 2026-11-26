@@ -7,6 +7,29 @@ use crate::OrbitRuntime;
 
 const TOKEN_LEN: usize = 26;
 
+impl OrbitRuntime {
+    /// Mint the token for one request under a channel's current key and
+    /// epoch. Core's half of the token contract: a transport holding the
+    /// mirrored `channel_key` secret mints the same value itself; this
+    /// method serves the operator testing a channel and tests. It is not
+    /// exposed as a tool — a token must never be listable by the agents
+    /// who may read the request it answers.
+    pub fn mint_decision_token(
+        &self,
+        channel: &str,
+        request_id: &str,
+    ) -> Result<String, OrbitError> {
+        let registration = self.active_registration(channel)?;
+        let request = self.get_decision_request(request_id)?.ok_or_else(|| {
+            OrbitError::decision_refused(
+                DecisionRefusalCode::RequestNotFound,
+                format!("no decision request `{request_id}` in this workspace"),
+            )
+        })?;
+        mint_token(&registration.key_hex, registration.epoch, &request)
+    }
+}
+
 pub(super) fn fresh_key_hex() -> Result<String, OrbitError> {
     token::random_hex(32)
 }
@@ -97,27 +120,4 @@ fn base32(bytes: &[u8]) -> String {
         out.push(ALPHABET[((buffer << (5 - bits)) & 0x1f) as usize] as char);
     }
     out
-}
-
-impl OrbitRuntime {
-    /// Mint the token for one request under a channel's current key and
-    /// epoch. Core's half of the token contract: a transport holding the
-    /// mirrored `channel_key` secret mints the same value itself; this
-    /// method serves the operator testing a channel and tests. It is not
-    /// exposed as a tool — a token must never be listable by the agents
-    /// who may read the request it answers.
-    pub fn mint_decision_token(
-        &self,
-        channel: &str,
-        request_id: &str,
-    ) -> Result<String, OrbitError> {
-        let registration = self.active_registration(channel)?;
-        let request = self.get_decision_request(request_id)?.ok_or_else(|| {
-            OrbitError::decision_refused(
-                DecisionRefusalCode::RequestNotFound,
-                format!("no decision request `{request_id}` in this workspace"),
-            )
-        })?;
-        mint_token(&registration.key_hex, registration.epoch, &request)
-    }
 }

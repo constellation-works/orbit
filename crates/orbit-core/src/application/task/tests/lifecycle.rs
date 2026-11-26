@@ -42,8 +42,8 @@ fn seed_status(runtime: &OrbitRuntime, id: &str, status: TaskStatus) {
         .update_task(
             id,
             TaskUpdateParams {
-                status: Some(status),
                 execution_summary: Some("did the thing; verified".to_string()),
+                status: Some(status),
                 ..Default::default()
             },
         )

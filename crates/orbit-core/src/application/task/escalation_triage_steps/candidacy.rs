@@ -67,6 +67,27 @@ impl PilotWarningCandidacy {
     }
 }
 
+impl OrbitRuntime {
+    /// `task`'s pilot-warning candidacy, from its current comments and history.
+    pub(crate) fn pilot_warning_candidacy_of(
+        &self,
+        task: &Task,
+    ) -> Result<PilotWarningCandidacy, OrbitError> {
+        let comments = self.get_task_pilot_comments(&task.id)?;
+        let history = self.get_task_history(&task.id)?;
+        Ok(pilot_warning_candidacy(
+            task,
+            &comments,
+            &history,
+            &|id: &str| self.task_is_done(id),
+        ))
+    }
+
+    fn task_is_done(&self, id: &str) -> bool {
+        self.warning_prerequisite_is_done(id)
+    }
+}
+
 /// Classify `task`'s latest pilot assessment for triage. It qualifies while
 /// [`held_pilot_warnings`] reports holding findings, no trusted operator
 /// decision answers that assessment, and no marker records it triaged.
@@ -118,25 +139,4 @@ pub(crate) fn triaged_at(
                     .is_some_and(|note| note["operation_id"] == operation_id)
         })
         .map(|entry| entry.at)
-}
-
-impl OrbitRuntime {
-    /// `task`'s pilot-warning candidacy, from its current comments and history.
-    pub(crate) fn pilot_warning_candidacy_of(
-        &self,
-        task: &Task,
-    ) -> Result<PilotWarningCandidacy, OrbitError> {
-        let comments = self.get_task_pilot_comments(&task.id)?;
-        let history = self.get_task_history(&task.id)?;
-        Ok(pilot_warning_candidacy(
-            task,
-            &comments,
-            &history,
-            &|id: &str| self.task_is_done(id),
-        ))
-    }
-
-    fn task_is_done(&self, id: &str) -> bool {
-        self.warning_prerequisite_is_done(id)
-    }
 }

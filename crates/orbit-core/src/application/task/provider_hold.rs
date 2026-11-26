@@ -35,6 +35,11 @@ use crate::runtime::run::task_coupling::provider_hold::{
     same_provider, standing_provider_hold_from_history,
 };
 
+thread_local! {
+    static PROVIDER_PASS_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static PROVIDER_PASS: RefCell<Option<ProviderPassState>> = const { RefCell::new(None) };
+}
+
 /// The held draw, its standing hold, and the reason represented in its source.
 type HeldCandidates = (
     Vec<CrewCandidate>,
@@ -48,11 +53,6 @@ type HeldCandidates = (
 struct ProviderPassState {
     outages: Vec<ProviderCrewOutage>,
     holds: BTreeMap<String, Option<ProviderFailureHold>>,
-}
-
-thread_local! {
-    static PROVIDER_PASS_DEPTH: Cell<u32> = const { Cell::new(0) };
-    static PROVIDER_PASS: RefCell<Option<ProviderPassState>> = const { RefCell::new(None) };
 }
 
 /// Keeps one `provider_crew_outages` query for every hold check in a backlog
@@ -98,69 +98,6 @@ impl Drop for AdmissionProviderPass {
             }
         });
     }
-}
-
-fn cached_admission_hold(id: &str) -> Option<Option<ProviderFailureHold>> {
-    if PROVIDER_PASS_DEPTH.with(|depth| depth.get()) == 0 {
-        return None;
-    }
-    PROVIDER_PASS.with(|state| {
-        state
-            .borrow()
-            .as_ref()
-            .and_then(|pass| pass.holds.get(id).cloned())
-    })
-}
-
-fn pass_outages() -> Option<Vec<ProviderCrewOutage>> {
-    if PROVIDER_PASS_DEPTH.with(|depth| depth.get()) == 0 {
-        return None;
-    }
-    PROVIDER_PASS.with(|state| state.borrow().as_ref().map(|pass| pass.outages.clone()))
-}
-
-/// Widen `hold` by `outages`. A hold that already excludes no crew is
-/// returned unchanged: it defers the task, so outages must not narrow it.
-fn widen_with_outages(
-    runtime: &OrbitRuntime,
-    hold: Option<ProviderFailureHold>,
-    outages: &[ProviderCrewOutage],
-) -> Option<ProviderFailureHold> {
-    if hold
-        .as_ref()
-        .is_some_and(|hold| hold.excluded_crews.is_empty())
-    {
-        return hold;
-    }
-    // A crew of the same name configured on another provider is not the
-    // one whose login failed.
-    let registry = runtime.settings().crews();
-    let mut matching = outages.iter().filter(|outage| {
-        outage.provider.is_none()
-            || orbit_types::identity::find_crew(&outage.crew, registry).is_none_or(|crew| {
-                same_provider(Some(&crew.assignment.provider), outage.provider.as_deref())
-            })
-    });
-    let Some(latest) = matching.next() else {
-        return hold;
-    };
-    let mut hold = hold.unwrap_or_else(|| ProviderFailureHold {
-        class: ProviderFailureClass::Unavailable,
-        provider: latest.provider.clone(),
-        account: None,
-        excluded_crews: Vec::new(),
-        machine: None,
-        carried_crews: Vec::new(),
-        not_before: latest.until,
-        run_id: latest.run_id.clone(),
-    });
-    for outage in std::iter::once(latest).chain(matching) {
-        hold.excluded_crews.push(outage.crew.clone());
-        hold.not_before = hold.not_before.max(outage.until);
-    }
-    hold.excluded_crews.sort();
-    hold.excluded_crews.dedup();
-    Some(hold)
 }
 
 impl OrbitRuntime {
@@ -372,4 +309,67 @@ impl OrbitRuntime {
         let (candidates, source) = held.unwrap_or((candidates, source));
         Ok((candidates, source, Some(hold), reason))
     }
+}
+
+fn cached_admission_hold(id: &str) -> Option<Option<ProviderFailureHold>> {
+    if PROVIDER_PASS_DEPTH.with(|depth| depth.get()) == 0 {
+        return None;
+    }
+    PROVIDER_PASS.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .and_then(|pass| pass.holds.get(id).cloned())
+    })
+}
+
+fn pass_outages() -> Option<Vec<ProviderCrewOutage>> {
+    if PROVIDER_PASS_DEPTH.with(|depth| depth.get()) == 0 {
+        return None;
+    }
+    PROVIDER_PASS.with(|state| state.borrow().as_ref().map(|pass| pass.outages.clone()))
+}
+
+/// Widen `hold` by `outages`. A hold that already excludes no crew is
+/// returned unchanged: it defers the task, so outages must not narrow it.
+fn widen_with_outages(
+    runtime: &OrbitRuntime,
+    hold: Option<ProviderFailureHold>,
+    outages: &[ProviderCrewOutage],
+) -> Option<ProviderFailureHold> {
+    if hold
+        .as_ref()
+        .is_some_and(|hold| hold.excluded_crews.is_empty())
+    {
+        return hold;
+    }
+    // A crew of the same name configured on another provider is not the
+    // one whose login failed.
+    let registry = runtime.settings().crews();
+    let mut matching = outages.iter().filter(|outage| {
+        outage.provider.is_none()
+            || orbit_types::identity::find_crew(&outage.crew, registry).is_none_or(|crew| {
+                same_provider(Some(&crew.assignment.provider), outage.provider.as_deref())
+            })
+    });
+    let Some(latest) = matching.next() else {
+        return hold;
+    };
+    let mut hold = hold.unwrap_or_else(|| ProviderFailureHold {
+        class: ProviderFailureClass::Unavailable,
+        provider: latest.provider.clone(),
+        account: None,
+        excluded_crews: Vec::new(),
+        machine: None,
+        carried_crews: Vec::new(),
+        not_before: latest.until,
+        run_id: latest.run_id.clone(),
+    });
+    for outage in std::iter::once(latest).chain(matching) {
+        hold.excluded_crews.push(outage.crew.clone());
+        hold.not_before = hold.not_before.max(outage.until);
+    }
+    hold.excluded_crews.sort();
+    hold.excluded_crews.dedup();
+    Some(hold)
 }

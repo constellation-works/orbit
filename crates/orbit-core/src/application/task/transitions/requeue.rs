@@ -31,21 +31,6 @@ pub struct InfraBlockedTask {
     pub launcher: Option<PathBuf>,
 }
 
-/// The entry that put the task in its current block, when that entry is a
-/// workflow failure naming a missing provider launcher. A later block of any
-/// other kind (an operator's, another run's failure) supersedes it.
-fn launcher_block(history: &[TaskHistoryEntry]) -> Option<(&TaskHistoryEntry, String, String)> {
-    let entry = history
-        .iter()
-        .rev()
-        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))?;
-    if entry.event != WORKFLOW_RUN_FAILED_EVENT {
-        return None;
-    }
-    let missing = missing_launcher_in(entry.note.as_deref()?)?;
-    Some((entry, missing.program, missing.provider))
-}
-
 impl OrbitRuntime {
     /// Blocked tasks in this workspace whose block is a missing provider
     /// launcher, each with where that launcher resolves now. Resolution uses
@@ -72,14 +57,15 @@ impl OrbitRuntime {
         let Some((entry, program, provider)) = launcher_block(&history) else {
             return Ok(None);
         };
+        let launcher = self.locate_provider_launcher(&program);
         Ok(Some(InfraBlockedTask {
             task_id: task.id.clone(),
             title: task.title.clone(),
             blocked_at: entry.at,
             run_id: task.job_run_id.clone(),
-            launcher: self.locate_provider_launcher(&program),
             program,
             provider,
+            launcher,
         }))
     }
 
@@ -142,4 +128,19 @@ impl OrbitRuntime {
         }
         Ok(requeued)
     }
+}
+
+/// The entry that put the task in its current block, when that entry is a
+/// workflow failure naming a missing provider launcher. A later block of any
+/// other kind (an operator's, another run's failure) supersedes it.
+fn launcher_block(history: &[TaskHistoryEntry]) -> Option<(&TaskHistoryEntry, String, String)> {
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))?;
+    if entry.event != WORKFLOW_RUN_FAILED_EVENT {
+        return None;
+    }
+    let missing = missing_launcher_in(entry.note.as_deref()?)?;
+    Some((entry, missing.program, missing.provider))
 }

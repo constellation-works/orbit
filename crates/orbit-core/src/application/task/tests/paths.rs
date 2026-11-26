@@ -100,14 +100,15 @@ fn a_screened_write_is_refused_when_the_grant_it_relied_on_changes() {
         "file:src/main.rs".to_string(),
         "file:src/new.rs".to_string(),
     ];
+    let context_creation = runtime
+        .authorize_missing_context(&declared)
+        .expect("declare");
     let task = runtime
         .add_task(crate::application::task::TaskAddParams {
             title: "Declared target".to_string(),
             description: "Creates src/new.rs.".to_string(),
-            context_creation: runtime
-                .authorize_missing_context(&declared)
-                .expect("declare"),
             context_files: declared.clone(),
+            context_creation,
             ..Default::default()
         })
         .expect("add task");
@@ -116,15 +117,16 @@ fn a_screened_write_is_refused_when_the_grant_it_relied_on_changes() {
         .ensure_context_selectors_exist_for_task_write(&task.id, None, &declared)
         .expect("the declared target passes the strict check");
     let revoke = vec!["file:src/main.rs".to_string()];
+    let context_creation = runtime
+        .ensure_context_selectors_exist_for_task_write(&task.id, None, &revoke)
+        .expect("screen revocation")
+        .1;
     runtime
         .update_task(
             &task.id,
             crate::application::task::TaskUpdateParams {
-                context_creation: runtime
-                    .ensure_context_selectors_exist_for_task_write(&task.id, None, &revoke)
-                    .expect("screen revocation")
-                    .1,
                 context_files: Some(revoke.clone()),
+                context_creation,
                 ..Default::default()
             },
         )

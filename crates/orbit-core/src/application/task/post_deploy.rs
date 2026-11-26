@@ -101,52 +101,6 @@ impl PostDeployOperatorRecord {
     }
 }
 
-fn criterion_not_owed(task_id: &str, criterion: usize) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "task {task_id} owes no criterion {criterion} after deploy"
-    ))
-}
-
-/// The `owed_criteria` section of a task record: each criterion the current
-/// delivery owes after deploy, with its state (`owed`, `met` or `failed`).
-/// `None` when the task has never owed one.
-pub(crate) fn owed_criteria_json(
-    history: &[TaskHistoryEntry],
-) -> Result<Option<Value>, OrbitError> {
-    let Some(record) = OwedRecord::read(history)? else {
-        return Ok(None);
-    };
-    Ok(Some(Value::Array(
-        record
-            .owed
-            .criteria
-            .iter()
-            .zip(&record.recorded)
-            .map(|(owed, recorded)| {
-                let mut entry = json!({
-                    "criterion": owed.criterion,
-                    "host": owed.host,
-                    "command": owed.command,
-                    "target": owed.target,
-                    "state": recorded
-                        .as_ref()
-                        .map_or("owed", |recorded| recorded.result.outcome.as_str()),
-                    "run_id": record.owed.run_id,
-                });
-                if !owed.candidate_evidence.is_empty() {
-                    entry["candidate_evidence"] = json!(owed.candidate_evidence);
-                }
-                if let Some(recorded) = recorded {
-                    entry["evidence"] = json!(recorded.result.evidence);
-                    entry["recorded_by"] = json!(recorded.by);
-                    entry["recorded_at"] = json!(recorded.at);
-                }
-                entry
-            })
-            .collect(),
-    )))
-}
-
 impl OrbitRuntime {
     /// Refuse an owed claim unless the task's current pilot finding typed
     /// its criterion post-deploy for the same host. This is the only way a
@@ -308,4 +262,50 @@ impl OrbitRuntime {
             caller: None,
         }))
     }
+}
+
+fn criterion_not_owed(task_id: &str, criterion: usize) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "task {task_id} owes no criterion {criterion} after deploy"
+    ))
+}
+
+/// The `owed_criteria` section of a task record: each criterion the current
+/// delivery owes after deploy, with its state (`owed`, `met` or `failed`).
+/// `None` when the task has never owed one.
+pub(crate) fn owed_criteria_json(
+    history: &[TaskHistoryEntry],
+) -> Result<Option<Value>, OrbitError> {
+    let Some(record) = OwedRecord::read(history)? else {
+        return Ok(None);
+    };
+    Ok(Some(Value::Array(
+        record
+            .owed
+            .criteria
+            .iter()
+            .zip(&record.recorded)
+            .map(|(owed, recorded)| {
+                let mut entry = json!({
+                    "criterion": owed.criterion,
+                    "host": owed.host,
+                    "command": owed.command,
+                    "target": owed.target,
+                    "state": recorded
+                        .as_ref()
+                        .map_or("owed", |recorded| recorded.result.outcome.as_str()),
+                    "run_id": record.owed.run_id,
+                });
+                if !owed.candidate_evidence.is_empty() {
+                    entry["candidate_evidence"] = json!(owed.candidate_evidence);
+                }
+                if let Some(recorded) = recorded {
+                    entry["evidence"] = json!(recorded.result.evidence);
+                    entry["recorded_by"] = json!(recorded.by);
+                    entry["recorded_at"] = json!(recorded.at);
+                }
+                entry
+            })
+            .collect(),
+    )))
 }

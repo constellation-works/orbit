@@ -21,6 +21,42 @@ use orbit_types::workflow::handoff::HandoffCandidate;
 use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
 
+impl OrbitRuntime {
+    /// This owner's light-delivery decisions for a claimed `task_id`'s
+    /// handed-off candidate, judged in its own checkout against its own
+    /// allow-list [ORB-16855]. A candidate that changes nothing, or a task
+    /// that carries neither tag, has none.
+    pub(crate) fn owner_light_delivery(
+        &self,
+        task_id: &str,
+        candidate: &HandoffCandidate,
+    ) -> Result<Vec<LightDeliveryDecision>, OrbitError> {
+        if candidate.candidate.commit == candidate.base.commit {
+            return Ok(Vec::new());
+        }
+        let tasks = [self.get_task(task_id)?];
+        let mut decisions = Vec::new();
+        for tag in LIGHT_DELIVERY_TAGS {
+            decisions.extend(light_delivery_decision(
+                self,
+                &self.paths().repo_root,
+                &candidate.base.commit,
+                &candidate.candidate.commit,
+                &tasks,
+                tag,
+            )?);
+        }
+        decisions.extend(review_skip_decisions(
+            self,
+            &self.paths().repo_root,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+            &tasks,
+        )?);
+        Ok(decisions)
+    }
+}
+
 /// This host's mapped review-skip decisions for the candidate `head` on
 /// `base`: one per `workflow.review_skip_tags` tag at least one of
 /// `tasks` carries, judged against that tag's paths and guard. On a
@@ -122,40 +158,4 @@ pub(crate) fn record_light_delivery(
         )?;
     }
     Ok(())
-}
-
-impl OrbitRuntime {
-    /// This owner's light-delivery decisions for a claimed `task_id`'s
-    /// handed-off candidate, judged in its own checkout against its own
-    /// allow-list [ORB-16855]. A candidate that changes nothing, or a task
-    /// that carries neither tag, has none.
-    pub(crate) fn owner_light_delivery(
-        &self,
-        task_id: &str,
-        candidate: &HandoffCandidate,
-    ) -> Result<Vec<LightDeliveryDecision>, OrbitError> {
-        if candidate.candidate.commit == candidate.base.commit {
-            return Ok(Vec::new());
-        }
-        let tasks = [self.get_task(task_id)?];
-        let mut decisions = Vec::new();
-        for tag in LIGHT_DELIVERY_TAGS {
-            decisions.extend(light_delivery_decision(
-                self,
-                &self.paths().repo_root,
-                &candidate.base.commit,
-                &candidate.candidate.commit,
-                &tasks,
-                tag,
-            )?);
-        }
-        decisions.extend(review_skip_decisions(
-            self,
-            &self.paths().repo_root,
-            &candidate.base.commit,
-            &candidate.candidate.commit,
-            &tasks,
-        )?);
-        Ok(decisions)
-    }
 }

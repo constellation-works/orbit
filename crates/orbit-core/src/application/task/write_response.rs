@@ -51,6 +51,18 @@ use super::record_json::{task_record_json, task_show_field_json_with_row};
 use super::screened::ScreenedTaskWrite;
 use super::{TaskOsReadout, TaskRow};
 
+const STATUS_ORDER: [TaskStatus; 9] = [
+    TaskStatus::InProgress,
+    TaskStatus::Review,
+    TaskStatus::Blocked,
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::Someday,
+    TaskStatus::Done,
+    TaskStatus::Rejected,
+    TaskStatus::Archived,
+];
+
 /// Which existing write profile a surface serves. See the module docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskWriteResponsePolicy {
@@ -62,6 +74,17 @@ pub enum TaskWriteResponsePolicy {
     Compact,
     /// Only the named show fields.
     Projected(TaskFieldProjection),
+}
+
+impl TaskWriteResponsePolicy {
+    /// The tool host's policy for a write: the requested projection
+    /// when one was supplied, otherwise [`Self::Compact`].
+    pub fn from_fields(fields: Option<&TaskFieldProjection>) -> Self {
+        match fields {
+            Some(projection) => Self::Projected(projection.clone()),
+            None => Self::Compact,
+        }
+    }
 }
 
 /// A caller's `fields`/`field` projection and its single-field shape.
@@ -84,17 +107,6 @@ impl TaskFieldProjection {
         Self {
             fields,
             keyed_single,
-        }
-    }
-}
-
-impl TaskWriteResponsePolicy {
-    /// The tool host's policy for a write: the requested projection
-    /// when one was supplied, otherwise [`Self::Compact`].
-    pub fn from_fields(fields: Option<&TaskFieldProjection>) -> Self {
-        match fields {
-            Some(projection) => Self::Projected(projection.clone()),
-            None => Self::Compact,
         }
     }
 }
@@ -175,6 +187,24 @@ impl TaskWriteMetadata {
             object.insert("redactions".to_string(), redactions.clone());
         }
     }
+}
+
+/// Workspace-wide reads a dashboard page already made for its rows, lent to
+/// the detail it bundles so one request reads each of them once. Every
+/// field left `None` is read by the detail itself, as a standalone detail
+/// does; a lent value must come from the same request and the same runtime.
+#[derive(Default)]
+pub struct DashboardPageReads<'a> {
+    /// The page's origin-remote reader for unlinked pull-request refs.
+    pub pull_request_links: Option<&'a PullRequestLinks>,
+    /// The page's [`active_task_triage_map`].
+    pub active_triage: Option<&'a BTreeMap<String, Value>>,
+    /// The page's [`tasks_in_pilot_preparation`], filled on first use.
+    pub preparing: Option<&'a OnceCell<BTreeSet<String>>>,
+    /// The page's delivery-attention map from the same rows
+    /// ([`OrbitRuntime::delivery_attention_map`]); a task without an entry
+    /// has no attention.
+    pub delivery_attention: Option<&'a BTreeMap<String, Value>>,
 }
 
 /// Build a task write's response: `task` projected under `policy`,
@@ -360,24 +390,6 @@ pub(crate) fn task_reference_status_index(
     let mut status_by_id = runtime.task_status_index_for(&referenced_ids)?;
     runtime.satisfy_completed_archived_dependencies(&mut status_by_id, [task]);
     Ok(status_by_id)
-}
-
-/// Workspace-wide reads a dashboard page already made for its rows, lent to
-/// the detail it bundles so one request reads each of them once. Every
-/// field left `None` is read by the detail itself, as a standalone detail
-/// does; a lent value must come from the same request and the same runtime.
-#[derive(Default)]
-pub struct DashboardPageReads<'a> {
-    /// The page's origin-remote reader for unlinked pull-request refs.
-    pub pull_request_links: Option<&'a PullRequestLinks>,
-    /// The page's [`active_task_triage_map`].
-    pub active_triage: Option<&'a BTreeMap<String, Value>>,
-    /// The page's [`tasks_in_pilot_preparation`], filled on first use.
-    pub preparing: Option<&'a OnceCell<BTreeSet<String>>>,
-    /// The page's delivery-attention map from the same rows
-    /// ([`OrbitRuntime::delivery_attention_map`]); a task without an entry
-    /// has no attention.
-    pub delivery_attention: Option<&'a BTreeMap<String, Value>>,
 }
 
 /// Linked pull requests, lifecycle transitions, run navigability and
@@ -630,18 +642,6 @@ pub fn mark_readiness_preparing(value: &mut Value, preparing: bool) {
         readiness.insert("preparing".to_string(), Value::Bool(preparing));
     }
 }
-
-const STATUS_ORDER: [TaskStatus; 9] = [
-    TaskStatus::InProgress,
-    TaskStatus::Review,
-    TaskStatus::Blocked,
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::Someday,
-    TaskStatus::Done,
-    TaskStatus::Rejected,
-    TaskStatus::Archived,
-];
 
 fn governed_status_targets(task: &Task) -> impl Iterator<Item = TaskStatus> {
     let current = task.status;

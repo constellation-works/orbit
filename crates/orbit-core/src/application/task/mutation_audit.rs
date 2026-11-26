@@ -36,39 +36,6 @@ impl Drop for TaskWriteProvenanceGuard {
     }
 }
 
-/// Run `operation` with `provenance` active on the current thread so every
-/// human-attributed task history event persisted inside `operation` stamps
-/// `surface` and `caller`.
-pub fn with_task_write_provenance<T>(
-    provenance: TaskWriteProvenance,
-    operation: impl FnOnce() -> T,
-) -> T {
-    let previous = CURRENT_TASK_WRITE_PROVENANCE.with(|slot| slot.replace(Some(provenance)));
-    let _guard = TaskWriteProvenanceGuard { previous };
-    operation()
-}
-
-/// Read the active task-write provenance on the current thread, if any.
-pub(crate) fn current_task_write_provenance() -> Option<TaskWriteProvenance> {
-    CURRENT_TASK_WRITE_PROVENANCE.with(|slot| slot.borrow().clone())
-}
-
-/// Classify a task-mutation error into its audit status.
-pub fn audit_status_for_task_mutation_error(error: &OrbitError) -> AuditEventStatus {
-    if error.is_policy_denial()
-        || matches!(
-            error,
-            OrbitError::PolicyDenied(_)
-                | OrbitError::CapabilityDenied(_)
-                | OrbitError::CapabilityRefused(_)
-        )
-    {
-        AuditEventStatus::Denied
-    } else {
-        AuditEventStatus::Failure
-    }
-}
-
 /// One owner-side `task.mutation` audit record.
 pub struct TaskMutationAudit<'a> {
     pub verb: &'a str,
@@ -211,5 +178,38 @@ impl OrbitRuntime {
                 "failed to record task.mutation audit row"
             );
         }
+    }
+}
+
+/// Run `operation` with `provenance` active on the current thread so every
+/// human-attributed task history event persisted inside `operation` stamps
+/// `surface` and `caller`.
+pub fn with_task_write_provenance<T>(
+    provenance: TaskWriteProvenance,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous = CURRENT_TASK_WRITE_PROVENANCE.with(|slot| slot.replace(Some(provenance)));
+    let _guard = TaskWriteProvenanceGuard { previous };
+    operation()
+}
+
+/// Read the active task-write provenance on the current thread, if any.
+pub(crate) fn current_task_write_provenance() -> Option<TaskWriteProvenance> {
+    CURRENT_TASK_WRITE_PROVENANCE.with(|slot| slot.borrow().clone())
+}
+
+/// Classify a task-mutation error into its audit status.
+pub fn audit_status_for_task_mutation_error(error: &OrbitError) -> AuditEventStatus {
+    if error.is_policy_denial()
+        || matches!(
+            error,
+            OrbitError::PolicyDenied(_)
+                | OrbitError::CapabilityDenied(_)
+                | OrbitError::CapabilityRefused(_)
+        )
+    {
+        AuditEventStatus::Denied
+    } else {
+        AuditEventStatus::Failure
     }
 }

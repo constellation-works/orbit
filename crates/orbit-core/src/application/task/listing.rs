@@ -24,24 +24,10 @@ pub use orbit_store::contract::{
     TaskPage, TaskRow,
 };
 
-/// A store-wide scan can omit a corrupt bundle, but must disclose why. Other
-/// failures (including I/O and authorization errors) still fail the scan.
-pub(crate) fn task_bundle_scan_result<T>(
-    result: Result<T, OrbitError>,
-    warnings: &mut Vec<String>,
-) -> Result<Option<T>, OrbitError> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(error @ OrbitError::TaskBundleCorrupt { .. }) => {
-            let warning = error.to_string();
-            if !warnings.contains(&warning) {
-                warnings.push(warning);
-            }
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
-}
+/// Statuses `orbit task eligible` selects candidates from: work not yet taken.
+/// `in-progress` and `review` tasks are the holders a candidate is checked
+/// against, never candidates themselves.
+const ELIGIBILITY_CANDIDATE_STATUSES: [TaskStatus; 2] = [TaskStatus::Backlog, TaskStatus::Proposed];
 
 #[derive(Debug)]
 pub struct TaskListQuery {
@@ -73,11 +59,6 @@ impl Default for TaskListQuery {
     }
 }
 
-/// Statuses `orbit task eligible` selects candidates from: work not yet taken.
-/// `in-progress` and `review` tasks are the holders a candidate is checked
-/// against, never candidates themselves.
-const ELIGIBILITY_CANDIDATE_STATUSES: [TaskStatus; 2] = [TaskStatus::Backlog, TaskStatus::Proposed];
-
 /// Which not-yet-taken tasks can be picked up without colliding with work in
 /// flight.
 pub(crate) struct TaskEligibilityQuery {
@@ -107,96 +88,6 @@ pub(crate) struct TaskEligibility {
     pub(crate) total: usize,
     /// Every conflicting candidate; not limited.
     pub(crate) conflicting: Vec<TaskEligibilityConflict>,
-}
-
-/// Readiness and path matching retain their existing application policy. Both
-/// are decided from envelope metadata, so the store applies them to every
-/// candidate before the limit and hydrates only the rows that fill the page.
-fn query_task_store(
-    runtime: &OrbitRuntime,
-    query: &TaskListQuery,
-    os_readout: Option<&super::TaskOsReadout>,
-) -> Result<TaskPage, OrbitError> {
-    with_task_residual(runtime, query, os_readout, |store, residual, hydration| {
-        store.query_task_rows(&query.filter, query.limit, residual, hydration)
-    })
-}
-
-/// Run `select` with the residual predicate and hydration `query` asks for.
-/// The pilot-warning membership and the reference index are built once, so
-/// every page `select` reads shares them.
-fn with_task_residual<T>(
-    runtime: &OrbitRuntime,
-    query: &TaskListQuery,
-    os_readout: Option<&super::TaskOsReadout>,
-    select: impl FnOnce(
-        &TaskV2Store,
-        orbit_store::contract::TaskResidualFilter<'_>,
-        TaskListHydration,
-    ) -> Result<T, OrbitError>,
-) -> Result<T, OrbitError> {
-    let store = runtime.stores().tasks();
-    // Only the explicit warning filter scans proposed-task audit sidecars.
-    // Resolve membership before pagination so counts and cursors stay accurate.
-    let warning_ids = if query.pilot_warnings {
-        let candidates = store.task_candidates(
-            &TaskListFilter {
-                statuses: Some(vec![TaskStatus::Proposed]),
-                ..Default::default()
-            },
-            usize::MAX,
-        )?;
-        let mut ids = BTreeSet::new();
-        for task in candidates.items {
-            let comments = runtime.get_task_comments(&task.id)?;
-            let task_id = task.id.clone();
-            let task = metadata_task(task);
-            let is_done = |id: &str| runtime.warning_prerequisite_is_done(id);
-            // Same readout the list shows: an unresolvable audit is a held
-            // readout for this task, not an error for the whole page.
-            if !runtime
-                .task_pilot_warning_findings(&task, &comments, &is_done)
-                .is_empty()
-            {
-                ids.insert(task_id);
-            }
-        }
-        Some(ids)
-    } else {
-        None
-    };
-    // One reference index per query rather than per candidate.
-    let reference_index = OnceCell::new();
-    let residual = |task: &Task, statuses: &BTreeMap<String, TaskStatus>| {
-        warning_ids
-            .as_ref()
-            .is_none_or(|ids| ids.contains(&task.id))
-            && query
-                .runs_on
-                .is_none_or(|host| os_readout.is_some_and(|readout| readout.admits(task, host)))
-            && (!query.ready
-                || task_dependencies_ready_with_index(
-                    task,
-                    statuses,
-                    reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
-                ))
-            && query.path.as_deref().is_none_or(|path| {
-                crate::application::task::task_selectors_contain_path(&task.context_files, path)
-            })
-    };
-    // The pilot-warnings filter reads audit sidecars and bundle-backed
-    // comments, so it keeps the hydrating path even for compact callers.
-    let hydration = if query.pilot_warnings {
-        TaskListHydration::Full
-    } else {
-        query.hydration
-    };
-    select(
-        store,
-        (query.pilot_warnings || query.ready || query.path.is_some() || query.runs_on.is_some())
-            .then_some(&residual),
-        hydration,
-    )
 }
 
 impl OrbitRuntime {
@@ -476,4 +367,113 @@ impl OrbitRuntime {
         }
         Ok(eligibility)
     }
+}
+
+/// A store-wide scan can omit a corrupt bundle, but must disclose why. Other
+/// failures (including I/O and authorization errors) still fail the scan.
+pub(crate) fn task_bundle_scan_result<T>(
+    result: Result<T, OrbitError>,
+    warnings: &mut Vec<String>,
+) -> Result<Option<T>, OrbitError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error @ OrbitError::TaskBundleCorrupt { .. }) => {
+            let warning = error.to_string();
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Readiness and path matching retain their existing application policy. Both
+/// are decided from envelope metadata, so the store applies them to every
+/// candidate before the limit and hydrates only the rows that fill the page.
+fn query_task_store(
+    runtime: &OrbitRuntime,
+    query: &TaskListQuery,
+    os_readout: Option<&super::TaskOsReadout>,
+) -> Result<TaskPage, OrbitError> {
+    with_task_residual(runtime, query, os_readout, |store, residual, hydration| {
+        store.query_task_rows(&query.filter, query.limit, residual, hydration)
+    })
+}
+
+/// Run `select` with the residual predicate and hydration `query` asks for.
+/// The pilot-warning membership and the reference index are built once, so
+/// every page `select` reads shares them.
+fn with_task_residual<T>(
+    runtime: &OrbitRuntime,
+    query: &TaskListQuery,
+    os_readout: Option<&super::TaskOsReadout>,
+    select: impl FnOnce(
+        &TaskV2Store,
+        orbit_store::contract::TaskResidualFilter<'_>,
+        TaskListHydration,
+    ) -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
+    let store = runtime.stores().tasks();
+    // Only the explicit warning filter scans proposed-task audit sidecars.
+    // Resolve membership before pagination so counts and cursors stay accurate.
+    let warning_ids = if query.pilot_warnings {
+        let candidates = store.task_candidates(
+            &TaskListFilter {
+                statuses: Some(vec![TaskStatus::Proposed]),
+                ..Default::default()
+            },
+            usize::MAX,
+        )?;
+        let mut ids = BTreeSet::new();
+        for task in candidates.items {
+            let comments = runtime.get_task_comments(&task.id)?;
+            let task_id = task.id.clone();
+            let task = metadata_task(task);
+            let is_done = |id: &str| runtime.warning_prerequisite_is_done(id);
+            // Same readout the list shows: an unresolvable audit is a held
+            // readout for this task, not an error for the whole page.
+            if !runtime
+                .task_pilot_warning_findings(&task, &comments, &is_done)
+                .is_empty()
+            {
+                ids.insert(task_id);
+            }
+        }
+        Some(ids)
+    } else {
+        None
+    };
+    // One reference index per query rather than per candidate.
+    let reference_index = OnceCell::new();
+    let residual = |task: &Task, statuses: &BTreeMap<String, TaskStatus>| {
+        warning_ids
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&task.id))
+            && query
+                .runs_on
+                .is_none_or(|host| os_readout.is_some_and(|readout| readout.admits(task, host)))
+            && (!query.ready
+                || task_dependencies_ready_with_index(
+                    task,
+                    statuses,
+                    reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
+                ))
+            && query.path.as_deref().is_none_or(|path| {
+                crate::application::task::task_selectors_contain_path(&task.context_files, path)
+            })
+    };
+    // The pilot-warnings filter reads audit sidecars and bundle-backed
+    // comments, so it keeps the hydrating path even for compact callers.
+    let hydration = if query.pilot_warnings {
+        TaskListHydration::Full
+    } else {
+        query.hydration
+    };
+    select(
+        store,
+        (query.pilot_warnings || query.ready || query.path.is_some() || query.runs_on.is_some())
+            .then_some(&residual),
+        hydration,
+    )
 }

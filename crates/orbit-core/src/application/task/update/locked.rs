@@ -638,13 +638,13 @@ impl OrbitRuntime {
                 artifact_owner_run_id: artifact_owner.clone(),
                 artifact_writer,
                 actor: effective_label.clone(),
-                crew_source: crew_source.clone(),
                 planned_by: attribution.planned_by.clone(),
                 implemented_by: attribution.implemented_by.clone(),
+                crew_source: crew_source.clone(),
                 status_event: status_event.clone(),
                 status_note,
-                append_comments: append_comments.clone(),
                 append_history: append_history.clone(),
+                append_comments: append_comments.clone(),
                 expected_status: expected_status.map(|status| vec![status]),
                 operator_comment: comment_only
                     && operator_write
