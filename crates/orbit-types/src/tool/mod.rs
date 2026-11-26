@@ -1,7 +1,14 @@
 //! Tool schema, family, invocation, MCP toolset/rules, and application-consent contracts; imports `identity` and `task` within `orbit-types` only (I/O-free).
 
 mod application;
+mod attention;
 mod definition;
+mod error;
+mod family;
+mod invocation;
+mod mcp_rules;
+mod mcp_toolset;
+
 pub use application::{
     APPLICATION_CONSENT_SCHEMA_V1, APPLICATION_CONSENT_SCHEMA_V2, ApplicationAdmissionMatch,
     ApplicationArtifactDigest, ApplicationArtifactEvidence, ApplicationArtifactJson,
@@ -11,11 +18,12 @@ pub use application::{
     ApplicationTaskPredicate, ApplicationTextConstraint, ApplicationTextDigest,
     ApplicationTokenConstraint, ApplicationTransition,
 };
-mod error;
-mod family;
-mod invocation;
-mod mcp_rules;
-mod mcp_toolset;
+pub use attention::*;
+pub use definition::{
+    ExecutionResult, McpCapability, McpToolAnnotations, McpToolDefinition, McpToolDefinitionError,
+    McpToolScope, McpTransport, StoredTool, ToolParam, ToolSchema, ToolSessionContext,
+    is_exact_canonical_tool_name, mcp_advertised_tool_name, validate_mcp_tool_definitions,
+};
 pub use error::{McpToolsetError, WorkerBindingError};
 pub use family::{
     TOOL_ACTION_FIELD, TOOL_ACTION_SEPARATOR, TOOL_FAMILIES, TOOL_MODE_FIELD, ToolFamily,
@@ -32,12 +40,3 @@ pub use mcp_rules::{
     McpToolRules, McpWorkspaceEcho,
 };
 pub use mcp_toolset::{McpRole, McpToolset, McpToolsetSelection};
-
-pub use definition::{
-    ExecutionResult, McpCapability, McpToolAnnotations, McpToolDefinition, McpToolDefinitionError,
-    McpToolScope, McpTransport, StoredTool, ToolParam, ToolSchema, ToolSessionContext,
-    is_exact_canonical_tool_name, mcp_advertised_tool_name, validate_mcp_tool_definitions,
-};
-
-mod attention;
-pub use attention::*;

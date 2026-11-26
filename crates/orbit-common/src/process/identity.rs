@@ -19,6 +19,15 @@
 //! written in* and readers refuse to judge liveness across a namespace
 //! boundary.
 
+#[cfg(all(unix, not(target_os = "linux")))]
+use super::bounded::{BoundedRunError, run_bounded_capped_typed};
+#[cfg(unix)]
+use std::io;
+#[cfg(all(unix, not(target_os = "linux")))]
+use std::process::Command;
+#[cfg(all(unix, not(target_os = "linux")))]
+use std::time::Duration;
+
 /// Prefix on versioned identity tokens. Persisted tokens that start with this
 /// prefix were written by the stable strategy and must match exactly.
 ///
@@ -173,16 +182,6 @@ pub enum ProbeOutcome {
     /// signals.
     Unavailable,
 }
-
-#[cfg(unix)]
-use std::io;
-#[cfg(all(unix, not(target_os = "linux")))]
-use std::process::Command;
-#[cfg(all(unix, not(target_os = "linux")))]
-use std::time::Duration;
-
-#[cfg(all(unix, not(target_os = "linux")))]
-use super::bounded::{BoundedRunError, run_bounded_capped_typed};
 
 /// A `ps -o lstart=` for one pid answers in milliseconds; a `ps` that does not
 /// is unreadable identity, which callers already treat as unavailable.

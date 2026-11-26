@@ -22,6 +22,126 @@
 //! Linux only: `/proc` answers parent, state and start time for every process
 //! in one scan. On other hosts the watch never reports.
 
+#[cfg(target_os = "linux")]
+pub(crate) mod linux {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::os::fd::AsFd;
+    use std::time::Duration;
+
+    use super::{COMMAND_LIMIT_BYTES, StoppedDescendant};
+    use crate::process::identity::{
+        LinuxProcessStat, linux_process_stat, process_start_identity_token,
+    };
+    use crate::process::signal::{pidfd_open, pidfd_send_signal};
+    use crate::security::redaction::{argv_redactor, redact_all};
+
+    /// Every process `/proc` lists, by pid. A process that exits during the
+    /// scan is simply missing.
+    pub(super) fn process_table() -> HashMap<u32, LinuxProcessStat> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return HashMap::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            .filter_map(|pid| Some((pid, linux_process_stat(pid)?)))
+            .collect()
+    }
+
+    /// `root`'s descendants, excluding `root`, walked through parent pids.
+    pub(super) fn descendants(
+        table: &HashMap<u32, LinuxProcessStat>,
+        root: u32,
+    ) -> Vec<(u32, LinuxProcessStat)> {
+        let mut children = HashMap::<u32, Vec<u32>>::new();
+        for (pid, stat) in table {
+            children.entry(stat.parent_pid).or_default().push(*pid);
+        }
+        let mut found = Vec::new();
+        // Parent links form a tree, but a pid reused mid-scan could fake a
+        // cycle; visit each pid once.
+        let mut visited = HashSet::from([root]);
+        let mut queue = VecDeque::from([root]);
+        while let Some(parent) = queue.pop_front() {
+            for child in children.get(&parent).into_iter().flatten() {
+                if !visited.insert(*child) {
+                    continue;
+                }
+                if let Some(stat) = table.get(child) {
+                    found.push((*child, *stat));
+                }
+                queue.push_back(*child);
+            }
+        }
+        found
+    }
+
+    /// `SIGKILL` the process `pid` names, only while it is still the stopped
+    /// process that started at `start_ticks`. `None` when it is not (it
+    /// resumed, exited, or its pid was reused): nothing was signalled and
+    /// nothing is reported.
+    pub(crate) fn end_stopped(
+        pid: u32,
+        start_ticks: u64,
+        stopped_for: Duration,
+    ) -> Option<StoppedDescendant> {
+        let pid_t = libc::pid_t::try_from(pid).ok()?;
+        // A pidfd pins the process: once it is open, `pid` cannot be reused
+        // under it, so the check below holds for the signal that follows.
+        let pidfd = match pidfd_open(pid_t) {
+            Ok(fd) => Some(fd),
+            // Pre-5.3 kernel. A stopped process cannot exit by itself, so its
+            // pid stays its own between the check and `kill` unless someone
+            // else kills it in that window.
+            Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => None,
+            Err(_) => return None,
+        };
+        let current = linux_process_stat(pid)?;
+        if current.start_ticks != start_ticks || current.state != 'T' {
+            return None;
+        }
+        let pid_start_time = process_start_identity_token(pid);
+        let command = command_line(pid);
+        let delivered = match &pidfd {
+            Some(fd) => pidfd_send_signal(fd.as_fd(), libc::SIGKILL),
+            // SAFETY: signals the pid verified just above.
+            None if unsafe { libc::kill(pid_t, libc::SIGKILL) } == 0 => Ok(()),
+            None => Err(std::io::Error::last_os_error()),
+        };
+        let end_error = delivered.err().map(|error| error.to_string());
+        Some(StoppedDescendant {
+            pid,
+            pid_start_time,
+            command,
+            stopped_for,
+            end_error,
+        })
+    }
+
+    /// The process's argv joined by spaces, or its `comm` when argv is empty,
+    /// bounded and redacted: it is persisted and printed.
+    fn command_line(pid: u32) -> String {
+        let argv = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let mut command = argv
+            .split(|byte| *byte == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(String::from_utf8_lossy)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if command.is_empty() {
+            command = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .map(|comm| comm.trim().to_string())
+                .unwrap_or_default();
+        }
+        if command.len() > COMMAND_LIMIT_BYTES {
+            let end = crate::text::floor_char_boundary(&command, COMMAND_LIMIT_BYTES);
+            command.truncate(end);
+            command.push('…');
+        }
+        redact_all(&argv_redactor().apply_str(&command))
+    }
+}
+
 use std::time::{Duration, Instant};
 
 /// Overrides [`DEFAULT_STOPPED_DESCENDANT_THRESHOLD`], in milliseconds.
@@ -193,125 +313,5 @@ impl StoppedDescendantWatch {
                 linux::end_stopped(pid, start_ticks, stopped_for)
             })
             .collect()
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) mod linux {
-    use std::collections::{HashMap, HashSet, VecDeque};
-    use std::os::fd::AsFd;
-    use std::time::Duration;
-
-    use super::{COMMAND_LIMIT_BYTES, StoppedDescendant};
-    use crate::process::identity::{
-        LinuxProcessStat, linux_process_stat, process_start_identity_token,
-    };
-    use crate::process::signal::{pidfd_open, pidfd_send_signal};
-    use crate::security::redaction::{argv_redactor, redact_all};
-
-    /// Every process `/proc` lists, by pid. A process that exits during the
-    /// scan is simply missing.
-    pub(super) fn process_table() -> HashMap<u32, LinuxProcessStat> {
-        let Ok(entries) = std::fs::read_dir("/proc") else {
-            return HashMap::new();
-        };
-        entries
-            .flatten()
-            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-            .filter_map(|pid| Some((pid, linux_process_stat(pid)?)))
-            .collect()
-    }
-
-    /// `root`'s descendants, excluding `root`, walked through parent pids.
-    pub(super) fn descendants(
-        table: &HashMap<u32, LinuxProcessStat>,
-        root: u32,
-    ) -> Vec<(u32, LinuxProcessStat)> {
-        let mut children = HashMap::<u32, Vec<u32>>::new();
-        for (pid, stat) in table {
-            children.entry(stat.parent_pid).or_default().push(*pid);
-        }
-        let mut found = Vec::new();
-        // Parent links form a tree, but a pid reused mid-scan could fake a
-        // cycle; visit each pid once.
-        let mut visited = HashSet::from([root]);
-        let mut queue = VecDeque::from([root]);
-        while let Some(parent) = queue.pop_front() {
-            for child in children.get(&parent).into_iter().flatten() {
-                if !visited.insert(*child) {
-                    continue;
-                }
-                if let Some(stat) = table.get(child) {
-                    found.push((*child, *stat));
-                }
-                queue.push_back(*child);
-            }
-        }
-        found
-    }
-
-    /// `SIGKILL` the process `pid` names, only while it is still the stopped
-    /// process that started at `start_ticks`. `None` when it is not (it
-    /// resumed, exited, or its pid was reused): nothing was signalled and
-    /// nothing is reported.
-    pub(crate) fn end_stopped(
-        pid: u32,
-        start_ticks: u64,
-        stopped_for: Duration,
-    ) -> Option<StoppedDescendant> {
-        let pid_t = libc::pid_t::try_from(pid).ok()?;
-        // A pidfd pins the process: once it is open, `pid` cannot be reused
-        // under it, so the check below holds for the signal that follows.
-        let pidfd = match pidfd_open(pid_t) {
-            Ok(fd) => Some(fd),
-            // Pre-5.3 kernel. A stopped process cannot exit by itself, so its
-            // pid stays its own between the check and `kill` unless someone
-            // else kills it in that window.
-            Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => None,
-            Err(_) => return None,
-        };
-        let current = linux_process_stat(pid)?;
-        if current.start_ticks != start_ticks || current.state != 'T' {
-            return None;
-        }
-        let pid_start_time = process_start_identity_token(pid);
-        let command = command_line(pid);
-        let delivered = match &pidfd {
-            Some(fd) => pidfd_send_signal(fd.as_fd(), libc::SIGKILL),
-            // SAFETY: signals the pid verified just above.
-            None if unsafe { libc::kill(pid_t, libc::SIGKILL) } == 0 => Ok(()),
-            None => Err(std::io::Error::last_os_error()),
-        };
-        let end_error = delivered.err().map(|error| error.to_string());
-        Some(StoppedDescendant {
-            pid,
-            pid_start_time,
-            command,
-            stopped_for,
-            end_error,
-        })
-    }
-
-    /// The process's argv joined by spaces, or its `comm` when argv is empty,
-    /// bounded and redacted: it is persisted and printed.
-    fn command_line(pid: u32) -> String {
-        let argv = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-        let mut command = argv
-            .split(|byte| *byte == 0)
-            .filter(|arg| !arg.is_empty())
-            .map(String::from_utf8_lossy)
-            .collect::<Vec<_>>()
-            .join(" ");
-        if command.is_empty() {
-            command = std::fs::read_to_string(format!("/proc/{pid}/comm"))
-                .map(|comm| comm.trim().to_string())
-                .unwrap_or_default();
-        }
-        if command.len() > COMMAND_LIMIT_BYTES {
-            let end = crate::text::floor_char_boundary(&command, COMMAND_LIMIT_BYTES);
-            command.truncate(end);
-            command.push('…');
-        }
-        redact_all(&argv_redactor().apply_str(&command))
     }
 }

@@ -1,28 +1,26 @@
 //! Activity-job, automation, auto-task, routine, experiment, and delivery workflow contracts; imports sibling `orbit-types` modules only (I/O-free).
 
 pub mod activity_job;
+mod agent_corpus;
 mod auto_concurrency;
 mod auto_task;
-pub use auto_concurrency::*;
+pub mod automation;
 mod child_dispatch;
 mod commit_message;
 mod completion_hold;
 mod crew_purpose;
 mod delivery_conventions;
 mod error;
-mod experiments;
-pub use experiments::*;
 mod executor_def;
+mod experiments;
 mod explore_brief;
-mod fleet_notice_brief;
-mod image_input;
-pub use explore_brief::*;
-pub use fleet_notice_brief::*;
-mod agent_corpus;
 mod final_recovery;
+mod fleet_notice_brief;
 pub mod handoff;
 mod host_evidence;
+mod image_input;
 mod job;
+mod post_deploy;
 mod pr_recovery;
 mod reconciliation;
 mod resident;
@@ -32,11 +30,8 @@ mod routine;
 mod run;
 mod ship;
 mod skill;
+mod source_repair;
 mod tag_instructions;
-pub use agent_corpus::*;
-pub use commit_message::*;
-pub use delivery_conventions::*;
-pub use error::*;
 
 pub use activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, ActivityToolDenyPolicy, ActivityToolPolicyMode, ActivityV2,
@@ -55,17 +50,25 @@ pub use activity_job::{
     validate_activity_tool_allowlist, validate_activity_tool_allowlist_against_registered_tools,
     validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
 };
+pub use agent_corpus::*;
+pub use auto_concurrency::*;
 pub use auto_task::*;
 pub use child_dispatch::*;
+pub use commit_message::*;
 pub use completion_hold::*;
 pub use crew_purpose::*;
+pub use delivery_conventions::*;
+pub use error::*;
 pub use executor_def::*;
+pub use experiments::*;
+pub use explore_brief::*;
 pub use final_recovery::*;
+pub use fleet_notice_brief::*;
 pub use host_evidence::*;
 pub use image_input::*;
 pub use job::*;
+pub use post_deploy::*;
 pub use pr_recovery::*;
-
 pub use reconciliation::*;
 pub use resident::*;
 pub use review::*;
@@ -77,12 +80,5 @@ pub use routine::{
 pub use run::*;
 pub use ship::*;
 pub use skill::*;
-pub use tag_instructions::*;
-
-pub mod automation;
-
-mod source_repair;
 pub use source_repair::*;
-
-mod post_deploy;
-pub use post_deploy::*;
+pub use tag_instructions::*;

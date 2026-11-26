@@ -1,6 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use crate::OrbitError;
+/// Worker-facing scratch directory under a checkout: `<root>/.orbit/tmp`.
+///
+/// Gitignored with the rest of `.orbit/`, inside `workspace_root` so
+/// `orbit.task.artifact.put` accepts it, and run-scoped in a job worktree.
+pub use crate::env_vars::ORBIT_SCRATCH_DIR as ORBIT_SCRATCH_DIR_ENV;
 
 /// The directory that holds `path`, with the empty parent of a bare relative
 /// name (`state.json`) read as the current directory (`.`), as an atomic write
@@ -13,12 +18,6 @@ pub(crate) fn parent_dir_or_current(path: &Path) -> Option<&Path> {
         parent
     })
 }
-
-/// Worker-facing scratch directory under a checkout: `<root>/.orbit/tmp`.
-///
-/// Gitignored with the rest of `.orbit/`, inside `workspace_root` so
-/// `orbit.task.artifact.put` accepts it, and run-scoped in a job worktree.
-pub use crate::env_vars::ORBIT_SCRATCH_DIR as ORBIT_SCRATCH_DIR_ENV;
 
 /// Absolute path of the sanctioned worker scratch directory for `workspace_root`.
 pub fn orbit_scratch_dir(workspace_root: impl AsRef<Path>) -> PathBuf {

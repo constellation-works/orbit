@@ -1,4 +1,15 @@
 use super::OrbitError;
+use orbit_types::identity::{IdentityError, ProviderModelError};
+use orbit_types::plugin::{ArchiveDigestError, PluginGrantError, PluginPinError};
+use orbit_types::policy::PolicyError;
+use orbit_types::record::RecordError;
+use orbit_types::resource::ResourceError;
+use orbit_types::task::TaskError;
+use orbit_types::tool::WorkerBindingError;
+use orbit_types::workflow::{
+    FinalRecoveryError, JobRunStateError, RetiredBackendError, ReviewAdmissionError,
+    ReviewHistoryError, ReviewReportError, WorkflowError,
+};
 
 impl From<std::io::Error> for OrbitError {
     fn from(err: std::io::Error) -> Self {
@@ -11,18 +22,6 @@ impl From<std::io::Error> for OrbitError {
         OrbitError::io_with_context(&err, err.to_string())
     }
 }
-
-use orbit_types::identity::{IdentityError, ProviderModelError};
-use orbit_types::plugin::{ArchiveDigestError, PluginGrantError, PluginPinError};
-use orbit_types::policy::PolicyError;
-use orbit_types::record::RecordError;
-use orbit_types::resource::ResourceError;
-use orbit_types::task::TaskError;
-use orbit_types::tool::WorkerBindingError;
-use orbit_types::workflow::{
-    FinalRecoveryError, JobRunStateError, RetiredBackendError, ReviewAdmissionError,
-    ReviewHistoryError, ReviewReportError, WorkflowError,
-};
 
 // Translators for `orbit-types` errors. The orphan rule puts each `From` impl
 // in this crate, beside `OrbitError`; `scripts/check-error-translation.sh`

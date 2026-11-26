@@ -22,45 +22,6 @@
 //! candidate again before releasing admission, so the authority is never left
 //! unprotected between the pin, the migration and the rest of convergence.
 
-use std::path::Path;
-use std::process::Command;
-
-use super::update::GenerationUpdate;
-use crate::OrbitError;
-
-/// Environment variable naming the generation fences a parent lent to this
-/// process: one line per authority, `<admission fd>:<generation fd>:<root>`.
-pub use crate::env_vars::ORBIT_LENT_GENERATION_FENCE as LENT_FENCE_ENV;
-
-impl GenerationUpdate {
-    /// Take exclusive admission on `root` for a fence, as [`Self::acquire`]
-    /// does, unless this process inherited exactly that fence from the
-    /// process that started it (see the module docs). A pending switch still
-    /// refuses an adopted fence.
-    pub fn acquire_fence(env: &crate::Env, root: &Path) -> Result<Self, OrbitError> {
-        match lent::adopt(env, root) {
-            Some(update) => {
-                update.refuse_pending_switch()?;
-                Ok(update)
-            }
-            None => Self::acquire(env, root),
-        }
-    }
-
-    /// Let the child `command` starts inherit `fences`, for
-    /// [`Self::acquire_fence`] to adopt. Descriptor inheritance is a Unix
-    /// contract; elsewhere nothing is lent and returns `false`, so the caller
-    /// keeps its pins instead of fencing.
-    pub fn lend_fences(command: &mut Command, fences: &[&GenerationUpdate]) -> bool {
-        lent::lend(command, fences)
-    }
-
-    /// Whether fences can be lent to a child on this platform.
-    pub fn can_lend_fences() -> bool {
-        cfg!(unix)
-    }
-}
-
 #[cfg(unix)]
 mod lent {
     use std::fmt::Write as _;
@@ -194,5 +155,44 @@ mod lent {
 
     pub(super) fn adopt(_env: &crate::Env, _root: &Path) -> Option<GenerationUpdate> {
         None
+    }
+}
+
+use std::path::Path;
+use std::process::Command;
+
+use super::update::GenerationUpdate;
+use crate::OrbitError;
+
+/// Environment variable naming the generation fences a parent lent to this
+/// process: one line per authority, `<admission fd>:<generation fd>:<root>`.
+pub use crate::env_vars::ORBIT_LENT_GENERATION_FENCE as LENT_FENCE_ENV;
+
+impl GenerationUpdate {
+    /// Take exclusive admission on `root` for a fence, as [`Self::acquire`]
+    /// does, unless this process inherited exactly that fence from the
+    /// process that started it (see the module docs). A pending switch still
+    /// refuses an adopted fence.
+    pub fn acquire_fence(env: &crate::Env, root: &Path) -> Result<Self, OrbitError> {
+        match lent::adopt(env, root) {
+            Some(update) => {
+                update.refuse_pending_switch()?;
+                Ok(update)
+            }
+            None => Self::acquire(env, root),
+        }
+    }
+
+    /// Let the child `command` starts inherit `fences`, for
+    /// [`Self::acquire_fence`] to adopt. Descriptor inheritance is a Unix
+    /// contract; elsewhere nothing is lent and returns `false`, so the caller
+    /// keeps its pins instead of fencing.
+    pub fn lend_fences(command: &mut Command, fences: &[&GenerationUpdate]) -> bool {
+        lent::lend(command, fences)
+    }
+
+    /// Whether fences can be lent to a child on this platform.
+    pub fn can_lend_fences() -> bool {
+        cfg!(unix)
     }
 }

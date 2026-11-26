@@ -9,7 +9,31 @@
 //! `crews.<name>.<field>` keys are addressable by `orbit config set`/`get`
 //! through [`admit_config_key`].
 
+mod allowed;
+mod key;
+mod settings;
+
 use orbit_common::OrbitError;
+use orbit_common::env_vars::CONSTELLATION_DEFAULT_PROVIDER as CONSTELLATION_DEFAULT_PROVIDER_ENV;
+
+pub use allowed::ConfigAllowedValues;
+pub(crate) use key::GLOBAL_ONLY_KEY_PREFIX;
+pub(crate) use key::{
+    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
+    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
+};
+pub use key::{
+    admit_config_key, admit_settable_config_key, config_key_options, describe, immutable_key_note,
+    is_global_only_key,
+};
+pub(crate) use settings::resolve_bounded_range;
+pub use settings::{
+    AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT, AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
+    AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
+    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot,
+    ExperimentSettings, MachineSettings, MachineWebSettings, MidRunSteeringSettings,
+    ResourceThrottleSettings, StandingDrainSettings, WorkerContainmentSettings,
+};
 
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
@@ -17,7 +41,6 @@ const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 // compat-until: 2026-08-17 (98ebb4c5d0e2)
 const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
-use orbit_common::env_vars::CONSTELLATION_DEFAULT_PROVIDER as CONSTELLATION_DEFAULT_PROVIDER_ENV;
 
 /// Live `[crews.<name>]` fields addressable as `crews.<name>.<field>`.
 ///
@@ -180,27 +203,3 @@ pub struct ConfigKeyDescriptor {
     /// of registry declaration order.
     pub order: u16,
 }
-
-mod allowed;
-mod key;
-mod settings;
-
-pub use allowed::ConfigAllowedValues;
-
-pub(crate) use key::GLOBAL_ONLY_KEY_PREFIX;
-pub(crate) use key::{
-    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
-    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
-};
-pub use key::{
-    admit_config_key, admit_settable_config_key, config_key_options, describe, immutable_key_note,
-    is_global_only_key,
-};
-pub(crate) use settings::resolve_bounded_range;
-pub use settings::{
-    AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT, AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
-    AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
-    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot,
-    ExperimentSettings, MachineSettings, MachineWebSettings, MidRunSteeringSettings,
-    ResourceThrottleSettings, StandingDrainSettings, WorkerContainmentSettings,
-};

@@ -2,6 +2,7 @@
 
 mod audit_actor;
 mod audit_event;
+pub mod incident;
 mod invocation;
 mod pricing;
 mod provider_limit;
@@ -26,5 +27,3 @@ pub use self_reported_actor::{
     ANONYMOUS_ACTOR_LABEL, AuditAttribution, SELF_REPORTED_ACTOR_MAX_LEN,
     normalize_self_reported_actor,
 };
-
-pub mod incident;

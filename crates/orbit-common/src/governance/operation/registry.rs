@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! operation_registry must precede its pub(crate) use re-export in lexical macro scope"
+)]
+
 use super::{CliGroup, OperationSpec};
 
 /// Registration of a noun's tools that have no MCP scope.

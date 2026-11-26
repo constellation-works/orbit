@@ -1,18 +1,3 @@
-use std::path::PathBuf;
-
-use serde::{Deserialize, Serialize};
-
-use super::{ScriptInputFile, ScriptNetwork, ScriptOutputFile};
-
-/// The Linux script profile a `script_execution` record names.
-pub const SCRIPT_PROFILE_LINUX: &str = "linux-bwrap-script-v1";
-
-/// The macOS script profile a `script_execution` record names.
-pub const SCRIPT_PROFILE_MACOS: &str = "macos-sandbox-script-v1";
-
-/// The most stdout a script's JSON answer may be (§4).
-pub const SCRIPT_STDOUT_CAP_BYTES: usize = 1024 * 1024;
-
 /// Refusal codes a script step can stop with before anything is spawned.
 /// Each is non-retryable: another attempt meets the same refusal.
 pub mod script_refusal {
@@ -65,6 +50,21 @@ pub mod script_failure {
     /// no longer matches its producer record or bytes.
     pub const OUTPUTS_UNAVAILABLE: &str = "script_outputs_unavailable";
 }
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use super::{ScriptInputFile, ScriptNetwork, ScriptOutputFile};
+
+/// The Linux script profile a `script_execution` record names.
+pub const SCRIPT_PROFILE_LINUX: &str = "linux-bwrap-script-v1";
+
+/// The macOS script profile a `script_execution` record names.
+pub const SCRIPT_PROFILE_MACOS: &str = "macos-sandbox-script-v1";
+
+/// The most stdout a script's JSON answer may be (§4).
+pub const SCRIPT_STDOUT_CAP_BYTES: usize = 1024 * 1024;
 
 /// What one attempt of a script step recorded on its job run: identity,
 /// what ran and what happened. Refusals record one too, with

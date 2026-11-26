@@ -576,15 +576,6 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
     );
 }
 
-#[path = "review_layers/operation.rs"]
-mod operation;
-
-#[path = "review_layers/machine.rs"]
-mod machine;
-
-#[path = "review_layers/deprecated_aliases.rs"]
-mod deprecated_aliases;
-
 #[test]
 fn build_output_bindings_default_empty_and_workspace_replaces_global() {
     let global = tempfile::tempdir().expect("global");

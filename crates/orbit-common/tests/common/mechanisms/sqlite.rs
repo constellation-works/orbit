@@ -1,243 +1,6 @@
 //! Private SQLite opens refuse redirected paths, and a read-only observation
 //! sees commits another process makes after it opened.
 
-use orbit_common::storage::sqlite::open_private;
-#[cfg(unix)]
-use rusqlite::Connection;
-
-#[test]
-fn private_open_rejects_parent_directory_traversal() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("nested").join("..").join("escape.db");
-
-    let error = match open_private(&path) {
-        Ok(_) => panic!("reject traversal"),
-        Err(error) => error,
-    };
-
-    assert!(error.to_string().contains("parent-directory traversal"));
-    assert!(!dir.path().join("nested").exists());
-    assert!(!dir.path().join("escape.db").exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn private_open_rejects_symlink_database() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let target = dir.path().join("target.db");
-    Connection::open(&target).expect("create target");
-    let link = dir.path().join("link.db");
-    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
-
-    let error = match open_private(&link) {
-        Ok(_) => panic!("reject symlink database"),
-        Err(error) => error,
-    };
-
-    assert!(error.to_string().contains("must not be a symlink"));
-}
-
-#[cfg(unix)]
-#[test]
-fn private_open_rejects_symlinked_sidecars_without_touching_their_targets() {
-    use std::os::unix::fs::PermissionsExt;
-
-    for suffix in ["-wal", "-shm"] {
-        for database_exists in [true, false] {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let path = dir.path().join("linked.db");
-            if database_exists {
-                Connection::open(&path)
-                    .and_then(|connection| connection.execute_batch("CREATE TABLE fixture(v);"))
-                    .expect("create writable database");
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-                    .expect("make database permissive");
-            }
-            let target = dir.path().join("unrelated.txt");
-            std::fs::write(&target, b"unrelated bytes").expect("write target");
-            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
-                .expect("make target permissive");
-            let sidecar = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
-            std::os::unix::fs::symlink(&target, &sidecar).expect("link sidecar");
-
-            let error = match open_private(&path) {
-                Ok(_) => panic!("a {suffix} symlink must fail the writable open"),
-                Err(error) => error,
-            };
-
-            assert!(
-                error.to_string().contains("must not be a symlink"),
-                "{suffix}: {error}"
-            );
-            assert_eq!(
-                std::fs::read(&target).expect("read target"),
-                b"unrelated bytes",
-                "{suffix} target bytes (database existed: {database_exists})"
-            );
-            assert_eq!(
-                std::fs::metadata(&target)
-                    .expect("target metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o644,
-                "{suffix} target mode (database existed: {database_exists})"
-            );
-        }
-    }
-}
-
-/// Header inspection must not start a schema/WAL read before the file set's
-/// observation currency has been selected. All fixtures are valid databases,
-/// including SQLite's valid empty-file initial state.
-#[test]
-fn observing_private_database_headers_creates_no_sidecars() {
-    use orbit_common::storage::sqlite::{ObservationCurrency, open_observational};
-
-    for journal in ["empty", "delete", "wal"] {
-        let directory = tempfile::tempdir().expect("private fixture");
-        let path = directory.path().join("observed.db");
-        if journal == "empty" {
-            std::fs::write(&path, b"").expect("valid empty SQLite database");
-        } else {
-            let connection = rusqlite::Connection::open(&path).expect("fixture writer");
-            connection
-                .pragma_update(None, "journal_mode", journal)
-                .expect("journal mode");
-            connection
-                .execute_batch("CREATE TABLE fixture(value); INSERT INTO fixture VALUES(7);")
-                .expect("valid fixture");
-            if journal == "wal" {
-                connection
-                    .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-                    .expect("checkpoint fixture");
-            }
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
-                .expect("private read-only fixture");
-        }
-        let before = std::fs::read(&path).expect("fixture before opening SQLite");
-        let opened = open_observational(&path).expect("observe valid private database");
-        assert!(opened.read_only);
-        assert_eq!(
-            opened.currency,
-            if journal == "wal" {
-                ObservationCurrency::MainFileOnly
-            } else {
-                ObservationCurrency::Live
-            }
-        );
-        let count: i64 = opened
-            .connection
-            .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
-            .expect("read schema");
-        assert_eq!(count, if journal == "empty" { 0 } else { 1 });
-        opened
-            .connection
-            .execute_batch("CREATE TABLE forbidden(value);")
-            .expect_err("observation never gains write access");
-        drop(opened);
-        assert_eq!(
-            std::fs::read(&path).expect("fixture after SQLite closed"),
-            before
-        );
-        for suffix in ["-wal", "-shm"] {
-            assert!(
-                !std::path::PathBuf::from(format!("{}{suffix}", path.display())).exists(),
-                "{journal}: observation must not create {suffix}"
-            );
-        }
-    }
-}
-
-/// Unsupported platforms must refuse an online repair instead of opening and
-/// closing an ordinary descriptor beside other SQLite users. Generic lock-file
-/// permission repair remains covered independently in the filesystem suite.
-#[cfg(unix)]
-#[test]
-fn sqlite_permission_repair_is_safe_or_explicitly_refused() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = tempfile::tempdir().expect("private fixture");
-    let path = directory.path().join("permissions.db");
-    {
-        let writer = Connection::open(&path).expect("fixture writer");
-        writer
-            .execute_batch("CREATE TABLE fixture(value); INSERT INTO fixture VALUES(7);")
-            .expect("valid fixture");
-    }
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-        .expect("permissive fixture");
-    let before = std::fs::read(&path).expect("closed fixture bytes");
-    let result = open_private(&path);
-    #[cfg(target_os = "linux")]
-    {
-        match result {
-            Ok(opened) => {
-                assert!(!opened.read_only);
-                assert_eq!(
-                    std::fs::metadata(&path)
-                        .expect("hardened file")
-                        .permissions()
-                        .mode()
-                        & 0o7777,
-                    0o600
-                );
-                let value: i64 = opened
-                    .connection
-                    .query_row("SELECT value FROM fixture", [], |row| row.get(0))
-                    .expect("preserved data");
-                assert_eq!(value, 7);
-            }
-            Err(error) => {
-                assert!(
-                    error
-                        .to_string()
-                        .contains("safe SQLite permission repair is unavailable"),
-                    "only the documented unsupported-kernel refusal is accepted: {error}"
-                );
-                assert_eq!(
-                    std::fs::metadata(&path)
-                        .expect("unchanged file")
-                        .permissions()
-                        .mode()
-                        & 0o7777,
-                    0o644
-                );
-                assert_eq!(std::fs::read(&path).expect("unchanged bytes"), before);
-            }
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let error = match result {
-            Ok(_) => panic!("unsafe online repair must be refused"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("safe SQLite permission repair is unavailable"),
-            "{error}"
-        );
-        assert_eq!(
-            std::fs::metadata(&path)
-                .expect("unchanged file")
-                .permissions()
-                .mode()
-                & 0o7777,
-            0o644
-        );
-        assert_eq!(std::fs::read(&path).expect("unchanged bytes"), before);
-        for suffix in ["-wal", "-shm"] {
-            assert!(!std::path::PathBuf::from(format!("{}{suffix}", path.display())).exists());
-        }
-    }
-}
-
 /// Read-only observation fixtures, all built around one shape: a database
 /// another process may commit to while this process only observes it.
 #[cfg(unix)]
@@ -581,6 +344,243 @@ mod read_only_observation {
                 !sqlite_file(&copy, missing).exists(),
                 "refusal must not create the missing companion"
             );
+        }
+    }
+}
+
+use orbit_common::storage::sqlite::open_private;
+#[cfg(unix)]
+use rusqlite::Connection;
+
+#[test]
+fn private_open_rejects_parent_directory_traversal() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("nested").join("..").join("escape.db");
+
+    let error = match open_private(&path) {
+        Ok(_) => panic!("reject traversal"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("parent-directory traversal"));
+    assert!(!dir.path().join("nested").exists());
+    assert!(!dir.path().join("escape.db").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn private_open_rejects_symlink_database() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("target.db");
+    Connection::open(&target).expect("create target");
+    let link = dir.path().join("link.db");
+    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+    let error = match open_private(&link) {
+        Ok(_) => panic!("reject symlink database"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("must not be a symlink"));
+}
+
+#[cfg(unix)]
+#[test]
+fn private_open_rejects_symlinked_sidecars_without_touching_their_targets() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for suffix in ["-wal", "-shm"] {
+        for database_exists in [true, false] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("linked.db");
+            if database_exists {
+                Connection::open(&path)
+                    .and_then(|connection| connection.execute_batch("CREATE TABLE fixture(v);"))
+                    .expect("create writable database");
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+                    .expect("make database permissive");
+            }
+            let target = dir.path().join("unrelated.txt");
+            std::fs::write(&target, b"unrelated bytes").expect("write target");
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+                .expect("make target permissive");
+            let sidecar = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+            std::os::unix::fs::symlink(&target, &sidecar).expect("link sidecar");
+
+            let error = match open_private(&path) {
+                Ok(_) => panic!("a {suffix} symlink must fail the writable open"),
+                Err(error) => error,
+            };
+
+            assert!(
+                error.to_string().contains("must not be a symlink"),
+                "{suffix}: {error}"
+            );
+            assert_eq!(
+                std::fs::read(&target).expect("read target"),
+                b"unrelated bytes",
+                "{suffix} target bytes (database existed: {database_exists})"
+            );
+            assert_eq!(
+                std::fs::metadata(&target)
+                    .expect("target metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o644,
+                "{suffix} target mode (database existed: {database_exists})"
+            );
+        }
+    }
+}
+
+/// Header inspection must not start a schema/WAL read before the file set's
+/// observation currency has been selected. All fixtures are valid databases,
+/// including SQLite's valid empty-file initial state.
+#[test]
+fn observing_private_database_headers_creates_no_sidecars() {
+    use orbit_common::storage::sqlite::{ObservationCurrency, open_observational};
+
+    for journal in ["empty", "delete", "wal"] {
+        let directory = tempfile::tempdir().expect("private fixture");
+        let path = directory.path().join("observed.db");
+        if journal == "empty" {
+            std::fs::write(&path, b"").expect("valid empty SQLite database");
+        } else {
+            let connection = rusqlite::Connection::open(&path).expect("fixture writer");
+            connection
+                .pragma_update(None, "journal_mode", journal)
+                .expect("journal mode");
+            connection
+                .execute_batch("CREATE TABLE fixture(value); INSERT INTO fixture VALUES(7);")
+                .expect("valid fixture");
+            if journal == "wal" {
+                connection
+                    .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                    .expect("checkpoint fixture");
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+                .expect("private read-only fixture");
+        }
+        let before = std::fs::read(&path).expect("fixture before opening SQLite");
+        let opened = open_observational(&path).expect("observe valid private database");
+        assert!(opened.read_only);
+        assert_eq!(
+            opened.currency,
+            if journal == "wal" {
+                ObservationCurrency::MainFileOnly
+            } else {
+                ObservationCurrency::Live
+            }
+        );
+        let count: i64 = opened
+            .connection
+            .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
+            .expect("read schema");
+        assert_eq!(count, if journal == "empty" { 0 } else { 1 });
+        opened
+            .connection
+            .execute_batch("CREATE TABLE forbidden(value);")
+            .expect_err("observation never gains write access");
+        drop(opened);
+        assert_eq!(
+            std::fs::read(&path).expect("fixture after SQLite closed"),
+            before
+        );
+        for suffix in ["-wal", "-shm"] {
+            assert!(
+                !std::path::PathBuf::from(format!("{}{suffix}", path.display())).exists(),
+                "{journal}: observation must not create {suffix}"
+            );
+        }
+    }
+}
+
+/// Unsupported platforms must refuse an online repair instead of opening and
+/// closing an ordinary descriptor beside other SQLite users. Generic lock-file
+/// permission repair remains covered independently in the filesystem suite.
+#[cfg(unix)]
+#[test]
+fn sqlite_permission_repair_is_safe_or_explicitly_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("private fixture");
+    let path = directory.path().join("permissions.db");
+    {
+        let writer = Connection::open(&path).expect("fixture writer");
+        writer
+            .execute_batch("CREATE TABLE fixture(value); INSERT INTO fixture VALUES(7);")
+            .expect("valid fixture");
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+        .expect("permissive fixture");
+    let before = std::fs::read(&path).expect("closed fixture bytes");
+    let result = open_private(&path);
+    #[cfg(target_os = "linux")]
+    {
+        match result {
+            Ok(opened) => {
+                assert!(!opened.read_only);
+                assert_eq!(
+                    std::fs::metadata(&path)
+                        .expect("hardened file")
+                        .permissions()
+                        .mode()
+                        & 0o7777,
+                    0o600
+                );
+                let value: i64 = opened
+                    .connection
+                    .query_row("SELECT value FROM fixture", [], |row| row.get(0))
+                    .expect("preserved data");
+                assert_eq!(value, 7);
+            }
+            Err(error) => {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("safe SQLite permission repair is unavailable"),
+                    "only the documented unsupported-kernel refusal is accepted: {error}"
+                );
+                assert_eq!(
+                    std::fs::metadata(&path)
+                        .expect("unchanged file")
+                        .permissions()
+                        .mode()
+                        & 0o7777,
+                    0o644
+                );
+                assert_eq!(std::fs::read(&path).expect("unchanged bytes"), before);
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let error = match result {
+            Ok(_) => panic!("unsafe online repair must be refused"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("safe SQLite permission repair is unavailable"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("unchanged file")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o644
+        );
+        assert_eq!(std::fs::read(&path).expect("unchanged bytes"), before);
+        for suffix in ["-wal", "-shm"] {
+            assert!(!std::path::PathBuf::from(format!("{}{suffix}", path.display())).exists());
         }
     }
 }

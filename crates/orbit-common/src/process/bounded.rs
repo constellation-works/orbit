@@ -19,6 +19,9 @@ use super::supervisor::{
     OutputSink, SinkVerdict, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
 use crate::OrbitError;
+// Preserve the existing bounded-boundary fault fixtures on the shared loop.
+#[cfg(all(test, unix))]
+pub(super) use super::supervisor::seam::{SupervisionFailure, with_supervision_failure};
 
 /// How long a SIGTERM may take before the group is SIGKILL'd.
 const TERM_GRACE: Duration = Duration::from_millis(200);
@@ -212,7 +215,3 @@ pub(crate) fn isolate_process_group(command: &mut Command) {
 
 #[cfg(not(unix))]
 pub(crate) fn isolate_process_group(_command: &mut Command) {}
-
-// Preserve the existing bounded-boundary fault fixtures on the shared loop.
-#[cfg(all(test, unix))]
-pub(super) use super::supervisor::seam::{SupervisionFailure, with_supervision_failure};

@@ -1,3 +1,20 @@
+// The key list is split at setting-family boundaries across `.rs` modules:
+// The CodeQL Rust extractor expands `macro_rules` only from `.rs`
+// sources, and `include!` of a non-`.rs` file is outside its source set.
+// `key_tail` retains `with_tail_keys!`; housekeeping and workflow fragments
+// preserve token order, and `key_head` defines the assembler.
+// The parent calls `assemble_config_settings!()` below so edition 2024
+// resolves the key tokens beside `define_config_settings!`, and the generated
+// items stay on `table::`.
+#[macro_use]
+mod workflow_key;
+#[macro_use]
+mod housekeeping_key;
+#[macro_use]
+mod key_tail;
+#[macro_use]
+mod key_head;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -282,21 +299,5 @@ macro_rules! define_config_settings {
     (@detail $detail:literal) => { Some($detail) };
     (@detail) => { None };
 }
-
-// The key list is split at setting-family boundaries across `.rs` modules:
-// The CodeQL Rust extractor expands `macro_rules` only from `.rs`
-// sources, and `include!` of a non-`.rs` file is outside its source set.
-// `key_tail` retains `with_tail_keys!`; housekeeping and workflow fragments
-// preserve token order, and `key_head` defines the assembler.
-// The parent calls the assembler so edition 2024 resolves the key tokens here,
-// beside `define_config_settings!`, and the generated items stay on `table::`.
-#[macro_use]
-mod workflow_key;
-#[macro_use]
-mod housekeeping_key;
-#[macro_use]
-mod key_tail;
-#[macro_use]
-mod key_head;
 
 assemble_config_settings!();

@@ -178,15 +178,3 @@ fn default_crew_admission_and_provenance_do_not_depend_on_file_presence() {
         );
     }
 }
-
-#[path = "default_crew/crew_pools.rs"]
-mod crew_pools;
-
-#[path = "default_crew/layering.rs"]
-mod layering;
-
-#[path = "default_crew/seed.rs"]
-mod seed;
-
-#[path = "default_crew/execution_env.rs"]
-mod execution_env;

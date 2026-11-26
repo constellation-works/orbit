@@ -9,6 +9,11 @@
 //! under the write lock. A database created before the ledger adopts it
 //! through the first registry entry, which owns the legacy schema rules.
 
+mod compatibility;
+mod engine;
+
+pub use compatibility::{evaluate_newer_database, read_compat_record};
+pub use engine::{applied_migrations, current_schema_version, run_database_migrations};
 use rusqlite::Connection;
 
 use crate::OrbitError;
@@ -57,9 +62,3 @@ pub struct AppliedMigration {
     /// Application timestamp in RFC 3339 format.
     pub applied_at: String,
 }
-
-mod compatibility;
-mod engine;
-
-pub use compatibility::{evaluate_newer_database, read_compat_record};
-pub use engine::{applied_migrations, current_schema_version, run_database_migrations};

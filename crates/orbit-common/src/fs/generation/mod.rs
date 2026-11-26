@@ -125,8 +125,6 @@
 //! them would only stall). [`GenerationGuard::acquire`] pins an exact digest
 //! under v1 rules alone, as a v1 process would.
 
-use std::time::Duration;
-
 mod admission;
 mod clock_hold;
 mod fence_loan;
@@ -144,6 +142,11 @@ mod update;
 #[cfg(test)]
 mod tests;
 
+use std::time::Duration;
+
+/// Environment variable bounding how long a breaking upgrade waits for live
+/// participants to yield, in seconds.
+pub use crate::env_vars::ORBIT_UPGRADE_QUIESCE_SECS as QUIESCE_TIMEOUT_ENV;
 pub use admission::{
     GenerationGuard, Participant, pending_switch_for_this_process, process_handover,
     process_participation, quiesce_bound,
@@ -177,10 +180,6 @@ pub const GENERATION_CONTRACT: &str = "compatibility-generation-v2";
 /// The executable-digest protocol every v2 binary still honours toward v1
 /// participants and v1 updaters.
 pub const LEGACY_GENERATION_CONTRACT: &str = "executable-generation-v1";
-
-/// Environment variable bounding how long a breaking upgrade waits for live
-/// participants to yield, in seconds.
-pub use crate::env_vars::ORBIT_UPGRADE_QUIESCE_SECS as QUIESCE_TIMEOUT_ENV;
 
 /// Default [`QUIESCE_TIMEOUT_ENV`].
 pub const DEFAULT_QUIESCE_TIMEOUT: Duration = Duration::from_secs(120);
