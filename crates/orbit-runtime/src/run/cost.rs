@@ -14,6 +14,11 @@ use serde::{Deserialize, Serialize};
 /// input semantics and keeps model attribution beside each bucket.
 pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 2;
 
+/// Invocation `activity_id`s that implement a task. Invocations store the
+/// pipeline step id; the activity name stays for records written by older
+/// callers, so no backfill is needed.
+pub const IMPLEMENT_INVOCATION_IDS: &[&str] = &["implement_one", "agent_implement"];
+
 /// Time window for a windowed dashboard metric. `All` is the lifetime view;
 /// every other variant carries a finite [`MetricsWindow::duration`].
 ///
@@ -139,11 +144,6 @@ pub struct NormalizedTokenSummary {
     pub linked_normalized_token_total: u64,
     pub unknown_input_basis_or_model_count: u64,
 }
-
-/// Invocation `activity_id`s that implement a task. Invocations store the
-/// pipeline step id; the activity name stays for records written by older
-/// callers, so no backfill is needed.
-pub const IMPLEMENT_INVOCATION_IDS: &[&str] = &["implement_one", "agent_implement"];
 
 /// Normalized token spend over a set of invocations linked to one task.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -72,64 +72,6 @@ impl ConstraintRefusal {
     }
 }
 
-/// Evaluate a constrained operation's `fields` against the call input on
-/// current state: an entry when `callback` is `None`, otherwise a callback
-/// against the entry's bindings. `Ok(Err(_))` is a refusal; `Err(_)` is a
-/// host failure.
-pub(crate) fn evaluate_constrained(
-    kernel: &RuntimeKernel,
-    consent: &ApplicationConsent,
-    fields: &BTreeMap<String, ApplicationConstraint>,
-    input: &Value,
-    callback: Option<CallbackBindings<'_>>,
-) -> Result<Result<ConstrainedAdmission, ConstraintRefusal>, OrbitError> {
-    let Some(object) = input.as_object() else {
-        return Ok(Err(ConstraintRefusal {
-            field: None,
-            constraint: "object",
-        }));
-    };
-    if object.keys().any(|key| !fields.contains_key(key)) {
-        return Ok(Err(ConstraintRefusal {
-            field: None,
-            constraint: "unlisted",
-        }));
-    }
-    let mut admitted = ConstrainedAdmission::default();
-    for (field, constraint) in fields {
-        let Some(value) = object.get(field) else {
-            if matches!(constraint, ApplicationConstraint::Optional(_)) {
-                continue;
-            }
-            return Ok(Err(ConstraintRefusal::new(field, "missing")));
-        };
-        let required = constraint.required_form();
-        let check = FieldCheck {
-            kernel,
-            consent,
-            input,
-            field,
-            callback,
-        };
-        if let Err(refusal) = check.value(required, value, &mut admitted)? {
-            return Ok(Err(refusal));
-        }
-        // Bindings are the entry's; a callback is held to them, not adding.
-        if callback.is_none()
-            && (IDENTITY_FIELDS.contains(&field.as_str())
-                || matches!(
-                    required,
-                    ApplicationConstraint::Task(_)
-                        | ApplicationConstraint::Sha256(_)
-                        | ApplicationConstraint::Token(_)
-                ))
-        {
-            admitted.bindings.insert(field.clone(), value.clone());
-        }
-    }
-    Ok(Ok(admitted))
-}
-
 struct FieldCheck<'a> {
     kernel: &'a RuntimeKernel,
     consent: &'a ApplicationConsent,
@@ -374,6 +316,64 @@ impl FieldCheck<'_> {
         }
         Ok(true)
     }
+}
+
+/// Evaluate a constrained operation's `fields` against the call input on
+/// current state: an entry when `callback` is `None`, otherwise a callback
+/// against the entry's bindings. `Ok(Err(_))` is a refusal; `Err(_)` is a
+/// host failure.
+pub(crate) fn evaluate_constrained(
+    kernel: &RuntimeKernel,
+    consent: &ApplicationConsent,
+    fields: &BTreeMap<String, ApplicationConstraint>,
+    input: &Value,
+    callback: Option<CallbackBindings<'_>>,
+) -> Result<Result<ConstrainedAdmission, ConstraintRefusal>, OrbitError> {
+    let Some(object) = input.as_object() else {
+        return Ok(Err(ConstraintRefusal {
+            field: None,
+            constraint: "object",
+        }));
+    };
+    if object.keys().any(|key| !fields.contains_key(key)) {
+        return Ok(Err(ConstraintRefusal {
+            field: None,
+            constraint: "unlisted",
+        }));
+    }
+    let mut admitted = ConstrainedAdmission::default();
+    for (field, constraint) in fields {
+        let Some(value) = object.get(field) else {
+            if matches!(constraint, ApplicationConstraint::Optional(_)) {
+                continue;
+            }
+            return Ok(Err(ConstraintRefusal::new(field, "missing")));
+        };
+        let required = constraint.required_form();
+        let check = FieldCheck {
+            kernel,
+            consent,
+            input,
+            field,
+            callback,
+        };
+        if let Err(refusal) = check.value(required, value, &mut admitted)? {
+            return Ok(Err(refusal));
+        }
+        // Bindings are the entry's; a callback is held to them, not adding.
+        if callback.is_none()
+            && (IDENTITY_FIELDS.contains(&field.as_str())
+                || matches!(
+                    required,
+                    ApplicationConstraint::Task(_)
+                        | ApplicationConstraint::Sha256(_)
+                        | ApplicationConstraint::Token(_)
+                ))
+        {
+            admitted.bindings.insert(field.clone(), value.clone());
+        }
+    }
+    Ok(Ok(admitted))
 }
 
 /// Bounded free text: at most `max_chars` scalar values, no control

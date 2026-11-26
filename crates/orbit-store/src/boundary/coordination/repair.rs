@@ -63,16 +63,6 @@ use std::path::Path;
 /// owner's local drain may take it.
 const REPAIR_OWNER_FALLBACK_SECONDS: i64 = 30 * 60;
 
-/// The fallback window as this thread sees it: a test may treat it as
-/// already passed.
-fn repair_owner_fallback_seconds() -> i64 {
-    #[cfg(feature = "test-support")]
-    if fallback_hook::elapsed() {
-        return 0;
-    }
-    REPAIR_OWNER_FALLBACK_SECONDS
-}
-
 /// A `repair_pending` claim this pull may take, with what its repair carries.
 struct RepairCandidate<'a> {
     state: ClaimInspection,
@@ -139,11 +129,14 @@ impl TaskCommitBoundary {
                 .live_claim_states_locked()?
                 .into_iter()
                 .filter(|state| state.claim.phase == ExecutionClaimPhase::RepairPending)
-                .map(|state| PendingRepair {
-                    wait: repair_executor_wait(owner, &state),
-                    task_id: state.claim.task_id,
-                    claim_id: state.claim.claim_id,
-                    original_executor: state.claim.executed_on,
+                .map(|state| {
+                    let wait = repair_executor_wait(owner, &state);
+                    PendingRepair {
+                        task_id: state.claim.task_id,
+                        claim_id: state.claim.claim_id,
+                        original_executor: state.claim.executed_on,
+                        wait,
+                    }
                 })
                 .collect())
         })
@@ -247,15 +240,16 @@ impl TaskCommitBoundary {
                         .to_string()
                 })
                 .unwrap_or_default();
+            let repair = ClaimRepair {
+                repairs_claim_id: state.claim.claim_id.clone(),
+                handoff_id: accepted.handoff_id,
+                candidate: accepted.handoff.candidate,
+                stop_evidence,
+            };
             candidates.push(RepairCandidate {
-                repair: ClaimRepair {
-                    repairs_claim_id: state.claim.claim_id.clone(),
-                    handoff_id: accepted.handoff_id,
-                    candidate: accepted.handoff.candidate,
-                    stop_evidence,
-                },
                 state,
                 task,
+                repair,
             });
         }
         Ok(candidates)
@@ -354,7 +348,6 @@ impl TaskCommitBoundary {
                     executed_on: identity.location().clone(),
                     run_context: request.run_context.clone(),
                     footprint: footprint.clone(),
-                    phase: ExecutionClaimPhase::Claimed,
                     reservation_id: reserved
                         .reservation_id
                         .clone()
@@ -363,6 +356,7 @@ impl TaskCommitBoundary {
                         .expires_at
                         .clone()
                         .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
+                    phase: ExecutionClaimPhase::Claimed,
                     repair: Some(repair.clone()),
                 };
                 let mut admitted = receipt.clone();
@@ -423,6 +417,16 @@ impl TaskCommitBoundary {
             )),
         }
     }
+}
+
+/// The fallback window as this thread sees it: a test may treat it as
+/// already passed.
+fn repair_owner_fallback_seconds() -> i64 {
+    #[cfg(feature = "test-support")]
+    if fallback_hook::elapsed() {
+        return 0;
+    }
+    REPAIR_OWNER_FALLBACK_SECONDS
 }
 
 /// Why `identity` may not take this pending repair yet, or `None` when it may:

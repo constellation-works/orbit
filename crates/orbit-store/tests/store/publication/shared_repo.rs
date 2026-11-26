@@ -28,25 +28,25 @@ const BRANCH_A: &str = "ws/alpha";
 const BRANCH_B: &str = "ws/beta";
 const BRANCH_FOREIGN: &str = "ws/foreign";
 
-struct Lineage {
-    workspace_id: &'static str,
-    publication_id: &'static str,
-    fingerprint: &'static str,
-    branch: &'static str,
-}
-
 const LINEAGE_A: Lineage = Lineage {
     workspace_id: "ws_shared_alpha",
     publication_id: "pub_shared_alpha",
     fingerprint: "ssh://source.test/alpha.git",
     branch: BRANCH_A,
 };
+
 const LINEAGE_B: Lineage = Lineage {
     workspace_id: "ws_shared_beta",
     publication_id: "pub_shared_beta",
     fingerprint: "ssh://source.test/beta.git",
     branch: BRANCH_B,
 };
+struct Lineage {
+    workspace_id: &'static str,
+    publication_id: &'static str,
+    fingerprint: &'static str,
+    branch: &'static str,
+}
 
 struct Fixture {
     registry: TaskRegistryStore,

@@ -44,57 +44,22 @@ const SIDECAR_READ_STEP: &str = "sidecar read";
 /// the lease's lock, inside the task's bundle lock, for the whole commit.
 pub(crate) const COMMIT_LEASE_DIR: &str = ".task-commit-applying";
 
-/// The commit lease for the task whose bundle is `bundle_dir`.
-pub(crate) fn commit_lease_path(bundle_dir: &Path) -> Option<PathBuf> {
-    Some(
-        bundle_dir
-            .parent()?
-            .join(COMMIT_LEASE_DIR)
-            .join(bundle_dir.file_name()?),
-    )
-}
-
-/// Refuse a bundle whose coordinated commit died between its decision and
-/// its apply. Its committer held the bundle lock for as long as it held the
-/// lease, so a lease nobody holds, seen under that bundle lock, outlived it:
-/// reading would show a half-applied transition, and writing would add rows
-/// the commit's replay then truncates. The partition replays the commit the
-/// next time any section enters it, so the caller can retry.
-fn refuse_interrupted_commit(bundle_dir: &Path) -> Result<(), OrbitError> {
-    if has_interrupted_commit(bundle_dir)? {
-        return Err(OrbitError::Store(format!(
-            "task bundle '{}' has an interrupted commit awaiting replay; retry once its \
-             partition has recovered",
-            bundle_dir.display()
-        )));
-    }
-    Ok(())
-}
-
-/// Whether this bundle's commit lease outlived its committer; see
-/// [`refuse_interrupted_commit`].
-fn has_interrupted_commit(bundle_dir: &Path) -> Result<bool, OrbitError> {
-    let Some(lease) = commit_lease_path(bundle_dir) else {
-        return Ok(false);
-    };
-    Ok(
-        probe_file_lock(&lease).map_err(|err| OrbitError::from_write_io(&lease, err))?
-            == FileLockProbe::Free,
-    )
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Listing-path bundle reads on this thread, so tests can bound what a
+    /// read costs while the generated index is degraded.
+    pub(crate) static LISTING_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Every lightweight bundle read on this thread, listing or by id, so
+    /// tests can bound how many bundles an admission section opens.
+    pub(crate) static LIGHTWEIGHT_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Canonical (artifact-hashing) bundle reads on this thread.
+    pub(crate) static CANONICAL_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// This task's exclusive bundle lock, held until the guard drops. See
 /// [`TaskBundleStoreV2::hold_bundle_write_lock`].
 pub(crate) struct BundleWriteHold {
     _lock: HeldFileLock,
-}
-
-fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::Store(format!("path has no parent directory: {}", path.display()))
-    })?;
-    let parent_dir = File::open(parent).map_err(|err| OrbitError::from_write_io(path, err))?;
-    sync_parent_dir(&parent_dir).map_err(|err| OrbitError::from_write_io(path, err))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -718,6 +683,53 @@ impl TaskBundleStoreV2 {
     }
 }
 
+/// The commit lease for the task whose bundle is `bundle_dir`.
+pub(crate) fn commit_lease_path(bundle_dir: &Path) -> Option<PathBuf> {
+    Some(
+        bundle_dir
+            .parent()?
+            .join(COMMIT_LEASE_DIR)
+            .join(bundle_dir.file_name()?),
+    )
+}
+
+/// Refuse a bundle whose coordinated commit died between its decision and
+/// its apply. Its committer held the bundle lock for as long as it held the
+/// lease, so a lease nobody holds, seen under that bundle lock, outlived it:
+/// reading would show a half-applied transition, and writing would add rows
+/// the commit's replay then truncates. The partition replays the commit the
+/// next time any section enters it, so the caller can retry.
+fn refuse_interrupted_commit(bundle_dir: &Path) -> Result<(), OrbitError> {
+    if has_interrupted_commit(bundle_dir)? {
+        return Err(OrbitError::Store(format!(
+            "task bundle '{}' has an interrupted commit awaiting replay; retry once its \
+             partition has recovered",
+            bundle_dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Whether this bundle's commit lease outlived its committer; see
+/// [`refuse_interrupted_commit`].
+fn has_interrupted_commit(bundle_dir: &Path) -> Result<bool, OrbitError> {
+    let Some(lease) = commit_lease_path(bundle_dir) else {
+        return Ok(false);
+    };
+    Ok(
+        probe_file_lock(&lease).map_err(|err| OrbitError::from_write_io(&lease, err))?
+            == FileLockProbe::Free,
+    )
+}
+
+fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::Store(format!("path has no parent directory: {}", path.display()))
+    })?;
+    let parent_dir = File::open(parent).map_err(|err| OrbitError::from_write_io(path, err))?;
+    sync_parent_dir(&parent_dir).map_err(|err| OrbitError::from_write_io(path, err))
+}
+
 /// A published deletion is retained here until registry/projection removal and
 /// cleanup finish. Canonical and tombstone coexistence is ambiguous and retained.
 pub(crate) fn deletion_path(bundle_dir: &Path) -> PathBuf {
@@ -801,18 +813,6 @@ fn read_artifact_manifest_consistently(
             read_artifact_manifest_at(bundle_dir)
         })
     })
-}
-
-#[cfg(any(test, feature = "test-support"))]
-thread_local! {
-    /// Listing-path bundle reads on this thread, so tests can bound what a
-    /// read costs while the generated index is degraded.
-    pub(crate) static LISTING_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    /// Every lightweight bundle read on this thread, listing or by id, so
-    /// tests can bound how many bundles an admission section opens.
-    pub(crate) static LIGHTWEIGHT_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    /// Canonical (artifact-hashing) bundle reads on this thread.
-    pub(crate) static CANONICAL_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {

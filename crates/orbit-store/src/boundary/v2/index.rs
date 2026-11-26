@@ -36,6 +36,14 @@ const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(60);
 
+/// Partition size from which a freshness scan stamps envelopes on helper
+/// threads. Smaller partitions finish faster than the threads would start.
+const PARALLEL_STAMP_MIN_ROWS: usize = 256;
+
+/// Most threads one freshness scan stamps envelopes on. Aggregate reads scan
+/// workspaces concurrently, so this stays well below the host's core count.
+const MAX_STAMP_THREADS: usize = 4;
+
 /// What an accepted freshness scan leaves the selection to handle.
 pub(super) struct IndexUsable {
     /// The registry snapshot the freshness scan just validated.
@@ -47,7 +55,6 @@ pub(super) struct IndexUsable {
     /// Empty unless the scan tolerates stale rows.
     pub(super) stale: Vec<String>,
 }
-
 /// What one freshness scan found.
 enum IndexFreshness {
     /// The index serves; these registered tasks' bundles are in flight.
@@ -68,13 +75,6 @@ enum IndexFreshness {
     /// This task's index row disagrees with its envelope.
     Mismatch(String),
 }
-
-/// Partition size from which a freshness scan stamps envelopes on helper
-/// threads. Smaller partitions finish faster than the threads would start.
-const PARALLEL_STAMP_MIN_ROWS: usize = 256;
-/// Most threads one freshness scan stamps envelopes on. Aggregate reads scan
-/// workspaces concurrently, so this stays well below the host's core count.
-const MAX_STAMP_THREADS: usize = 4;
 
 impl TaskV2Store {
     /// Enumerate the authoritative registrations, retaining listing order

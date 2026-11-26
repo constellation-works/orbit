@@ -18,37 +18,14 @@ const OWNER_READ_LOCK_BUSY_RETRY_DELAYS: [Duration; 2] =
     [Duration::from_secs(1), Duration::from_secs(3)];
 
 #[cfg(feature = "test-support")]
-type TestWait = fn(Duration);
-
-#[cfg(feature = "test-support")]
 thread_local! {
     static TEST_RETRY_WAIT: std::cell::Cell<Option<TestWait>> = const {
         std::cell::Cell::new(None)
     };
 }
 
-/// Substitute only the owner-read retry wait on this thread, restoring it on
-/// return or unwind. Retry count, error handling and production delays stay intact.
 #[cfg(feature = "test-support")]
-pub fn with_owner_read_retry_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
-    struct Restore(Option<TestWait>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            TEST_RETRY_WAIT.with(|slot| slot.set(self.0));
-        }
-    }
-    let _restore = Restore(TEST_RETRY_WAIT.with(|slot| slot.replace(Some(wait))));
-    operation()
-}
-
-fn retry_wait(delay: Duration) {
-    #[cfg(feature = "test-support")]
-    if let Some(wait) = TEST_RETRY_WAIT.with(std::cell::Cell::get) {
-        wait(delay);
-        return;
-    }
-    std::thread::sleep(delay);
-}
+type TestWait = fn(Duration);
 
 /// A claimed worker's route to the drain owner: its authenticated invocation
 /// and the coordinator composition attached for it.
@@ -212,6 +189,29 @@ impl OwnerRoute {
         };
         decode_owner_read(value)
     }
+}
+
+/// Substitute only the owner-read retry wait on this thread, restoring it on
+/// return or unwind. Retry count, error handling and production delays stay intact.
+#[cfg(feature = "test-support")]
+pub fn with_owner_read_retry_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<TestWait>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_RETRY_WAIT.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_RETRY_WAIT.with(|slot| slot.replace(Some(wait))));
+    operation()
+}
+
+fn retry_wait(delay: Duration) {
+    #[cfg(feature = "test-support")]
+    if let Some(wait) = TEST_RETRY_WAIT.with(std::cell::Cell::get) {
+        wait(delay);
+        return;
+    }
+    std::thread::sleep(delay);
 }
 
 /// The refusal of an owner call made by a process that is not a claimed

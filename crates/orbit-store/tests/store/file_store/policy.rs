@@ -13,19 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tempfile::tempdir;
 
-fn baseline_def(name: &str) -> PolicyDef {
-    let now = PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp");
-    PolicyDef {
-        name: name.to_string(),
-        description: Some("test policy".to_string()),
-        deny_read: Vec::new(),
-        deny_modify: Vec::new(),
-        fs_profiles: HashMap::new(),
-        created_at: Some(now),
-        updated_at: Some(now),
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct LegacyPolicyResourceSpec {
@@ -45,6 +32,19 @@ struct LegacyPolicyResourceSpec {
     created_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     updated_at: Option<DateTime<Utc>>,
+}
+
+fn baseline_def(name: &str) -> PolicyDef {
+    let now = PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp");
+    PolicyDef {
+        name: name.to_string(),
+        description: Some("test policy".to_string()),
+        deny_read: Vec::new(),
+        deny_modify: Vec::new(),
+        fs_profiles: HashMap::new(),
+        created_at: Some(now),
+        updated_at: Some(now),
+    }
 }
 
 #[test]

@@ -666,18 +666,19 @@ impl TaskCommitBoundary {
             HandoffDelivery::PullRequest { number } => Some(number.to_string()),
             _ => None,
         };
+        // A pull request's head branch is on `origin`, so a run on
+        // any host can fetch the candidate from it.
+        let published = pull_request.is_some();
         let kept = Box::new(PreservedClaimCandidate {
             candidate: ClaimCandidateRef {
                 branch: candidate.source_branch.clone(),
                 head_sha: candidate.candidate.commit.clone(),
-                // A pull request's head branch is on `origin`, so a run on
-                // any host can fetch the candidate from it.
-                published: pull_request.is_some(),
                 pull_request,
                 pull_request_head: None,
                 source_run_id: state.bound_run.as_ref().map(|run| run.run_id.clone()),
                 // The leaf delivered it: the candidate is complete.
                 failed_step_id: None,
+                published,
                 durable_ref: None,
                 carry_failure: None,
                 interrupted_review: None,
@@ -731,6 +732,26 @@ impl TaskCommitBoundary {
     }
 }
 
+/// What a landing stop did to its claim.
+pub(super) enum LandingStop {
+    /// The claim stays handed off and the task in `review`.
+    Stopped,
+    /// The claim waits for one automatic repair leaf.
+    Repair,
+    /// The automatic repair is spent: the claim fails and the task blocks with
+    /// this comment.
+    Blocked(String),
+    /// [ORB-16890] The claim ends and the task returns to the backlog; the
+    /// claim keeps this candidate for the task's next run.
+    Requeue(Box<PreservedClaimCandidate>),
+    /// [ORB-16890] The landing repair budget is spent: the claim fails, the
+    /// task blocks with this comment, and the claim keeps the candidate.
+    RepairBudgetExhausted {
+        comment: String,
+        kept: Box<PreservedClaimCandidate>,
+    },
+}
+
 /// The notes of the landing repair requeues the budget counted, oldest first.
 fn requeued_since_exhaustion(events: &[orbit_types::task::TaskEventRowV2]) -> Vec<String> {
     let mut notes = Vec::new();
@@ -773,26 +794,6 @@ fn repair_budget_comment(
 
 fn retry_id(handoff_id: &str, request_key: &str) -> String {
     orbit_common::security::release::sha256_hex(format!("{handoff_id}\0{request_key}").as_bytes())
-}
-
-/// What a landing stop did to its claim.
-pub(super) enum LandingStop {
-    /// The claim stays handed off and the task in `review`.
-    Stopped,
-    /// The claim waits for one automatic repair leaf.
-    Repair,
-    /// The automatic repair is spent: the claim fails and the task blocks with
-    /// this comment.
-    Blocked(String),
-    /// [ORB-16890] The claim ends and the task returns to the backlog; the
-    /// claim keeps this candidate for the task's next run.
-    Requeue(Box<PreservedClaimCandidate>),
-    /// [ORB-16890] The landing repair budget is spent: the claim fails, the
-    /// task blocks with this comment, and the claim keeps the candidate.
-    RepairBudgetExhausted {
-        comment: String,
-        kept: Box<PreservedClaimCandidate>,
-    },
 }
 
 /// The blocked task's comment: both attempts' candidates and the human

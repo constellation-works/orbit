@@ -116,37 +116,6 @@ pub struct PublicationPublishOutcome {
     pub omitted_attachment_bytes: u64,
 }
 
-/// Publish this workspace's validated task snapshot to its dedicated
-/// publication repository.
-///
-/// Fails closed — leaving the remote branch and the caller's last-success
-/// record untouched — when the caller is not the declared owner, the registered
-/// workspace or source fingerprint disagrees, the bound branch carries content
-/// that is not this lineage's matching publication envelope, the branch moved,
-/// or any bundle fails validation. Lineages are branch-scoped: an absent bound
-/// branch initializes generation 1 even when other branches exist, and other
-/// branches are never read, written, or validated. There is deliberately no
-/// repo-wide foreign-repository guard (for example against a default branch
-/// carrying ordinary source commits): such a guard would require inspecting
-/// branches outside this lineage, and the bound branch plus its
-/// compare-and-swap creation already prevent adopting or overwriting anything
-/// Orbit did not create for this lineage.
-pub fn publish_task_snapshot(
-    env: &orbit_common::Env,
-    registry: &TaskRegistryStore,
-    request: PublicationPublishRequest,
-    policy: &AttachmentPolicy,
-) -> Result<PublicationPublishOutcome, OrbitError> {
-    publish_task_snapshot_inner(
-        env,
-        registry,
-        request,
-        policy,
-        #[cfg(test)]
-        None,
-    )
-}
-
 /// Deterministic interleaving seam around durable evidence and remote CAS.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -157,81 +126,6 @@ pub(super) enum PendingWriteStage {
 
 #[cfg(test)]
 type PendingHook<'a> = dyn Fn(PendingWriteStage, &str) + 'a;
-
-pub(super) fn publish_task_snapshot_inner(
-    env: &orbit_common::Env,
-    registry: &TaskRegistryStore,
-    request: PublicationPublishRequest,
-    policy: &AttachmentPolicy,
-    #[cfg(test)] pending_hook: Option<&PendingHook<'_>>,
-) -> Result<PublicationPublishOutcome, OrbitError> {
-    let request = validate_request(request)?;
-    assert_registered_workspace(registry, &request)?;
-    let cache = PublicationCache::open(env, registry, &request)?;
-    let observed = cache.observe_remote(&request)?;
-    let action = decide_action(&cache, &request, &observed)?;
-    let (generation, previous) = match action {
-        PublishAction::Reconcile(outcome) => return Ok(*outcome),
-        PublishAction::Initialize => (1, None),
-        PublishAction::Advance {
-            generation,
-            previous,
-        } => (generation, Some(previous)),
-    };
-
-    let staged = cache.stage_snapshot(registry, &request, generation, previous.clone(), policy)?;
-    let observed_tip = observed.tip.as_ref().map(|tip| tip.commit.clone());
-    if let Some(tip) = &observed.tip
-        && tip.tasks_tree == staged.tasks_tree
-        && same_publication_content(&tip.envelope, &staged.envelope)
-    {
-        return Ok(PublicationPublishOutcome {
-            status: PublicationPublishStatus::Unchanged,
-            branch: request.publication_branch.clone(),
-            commit_id: tip.commit.clone(),
-            generation: tip.envelope.generation,
-            previous_publication: tip.envelope.previous_publication.clone(),
-            observed_tip,
-            included_attachment_bytes: staged.included_attachment_bytes,
-            omitted_attachment_bytes: staged.omitted_attachment_bytes,
-        });
-    }
-
-    let commit = cache.commit_snapshot(&request, &staged, generation, previous.as_deref())?;
-    #[cfg(test)]
-    if let Some(hook) = pending_hook {
-        hook(PendingWriteStage::Before, &commit);
-    }
-    cache.write_pending(&PendingPublication {
-        format_version: PENDING_FORMAT_VERSION,
-        publication_id: request.publication_id.clone(),
-        workspace_id: request.workspace_id.clone(),
-        publication_branch: request.publication_branch.clone(),
-        generation,
-        commit: commit.clone(),
-        previous_publication: previous.clone(),
-    })?;
-    #[cfg(test)]
-    if let Some(hook) = pending_hook {
-        hook(PendingWriteStage::After, &commit);
-    }
-    cache.push_fast_forward(&request, &commit, observed_tip.as_deref())?;
-
-    Ok(PublicationPublishOutcome {
-        status: if previous.is_none() {
-            PublicationPublishStatus::Initialized
-        } else {
-            PublicationPublishStatus::Advanced
-        },
-        branch: request.publication_branch.clone(),
-        commit_id: commit,
-        generation,
-        previous_publication: previous,
-        observed_tip,
-        included_attachment_bytes: staged.included_attachment_bytes,
-        omitted_attachment_bytes: staged.omitted_attachment_bytes,
-    })
-}
 
 struct ValidatedRequest {
     workspace_id: String,
@@ -244,102 +138,6 @@ struct ValidatedRequest {
     cache_dir: PathBuf,
     published_at: DateTime<Utc>,
     last_success: Option<PublicationLastSuccess>,
-}
-
-fn validate_request(request: PublicationPublishRequest) -> Result<ValidatedRequest, OrbitError> {
-    if request.caller_role != PublicationCallerRole::Owner {
-        return Err(OrbitError::PolicyDenied(format!(
-            "{PUBLISH_LABEL}: workspace '{}' is a replica checkout; only the declared owner may publish",
-            request.workspace_id
-        )));
-    }
-    validate_registry_identifier("workspace_id", &request.workspace_id).map_err(identity_error)?;
-    validate_registry_identifier("task_workspace_id", &request.task_workspace_id)
-        .map_err(identity_error)?;
-    validate_registry_identifier("publication_id", &request.publication_id)
-        .map_err(identity_error)?;
-    validate_machine_id(&request.authority_machine_id).map_err(identity_error)?;
-    validate_machine_id(&request.local_machine_id).map_err(identity_error)?;
-    if request.local_machine_id != request.authority_machine_id {
-        return Err(OrbitError::PolicyDenied(format!(
-            "{PUBLISH_LABEL}: workspace '{}' is owned by '{}', not local machine '{}'",
-            request.workspace_id, request.authority_machine_id, request.local_machine_id
-        )));
-    }
-    validate_source_repository_fingerprint(&request.source_repository_fingerprint)
-        .map_err(workspace_error)?;
-    if request.publication_remote.trim().is_empty() {
-        return Err(publish_error("publication remote must not be empty"));
-    }
-    if remote_has_password(&request.publication_remote) {
-        return Err(publish_error(format!(
-            "publication remote '{}' must not contain credentials",
-            redact_git_remote(&request.publication_remote)
-        )));
-    }
-    let publication_branch =
-        canonicalize_publication_branch(&request.publication_branch).map_err(workspace_error)?;
-    if request.cache_dir.as_os_str().is_empty() {
-        return Err(publish_error("publication cache directory is required"));
-    }
-    let last_success = match request.last_success {
-        Some(last) => {
-            validate_last_success(Some(last.generation), Some(&last.commit))
-                .map_err(workspace_error)?;
-            Some(PublicationLastSuccess {
-                generation: last.generation,
-                commit: last.commit.to_ascii_lowercase(),
-            })
-        }
-        None => None,
-    };
-    Ok(ValidatedRequest {
-        workspace_id: request.workspace_id,
-        task_workspace_id: request.task_workspace_id,
-        source_repository_fingerprint: request.source_repository_fingerprint,
-        publication_id: request.publication_id,
-        authority_machine_id: request.authority_machine_id,
-        publication_remote: request.publication_remote,
-        publication_branch,
-        cache_dir: request.cache_dir,
-        published_at: request.published_at,
-        last_success,
-    })
-}
-
-/// The coordination registry — not the caller — decides which workspace and
-/// source repository this publication belongs to.
-fn assert_registered_workspace(
-    registry: &TaskRegistryStore,
-    request: &ValidatedRequest,
-) -> Result<(), OrbitError> {
-    let binding = registry
-        .find_workspace_binding(&request.task_workspace_id)?
-        .ok_or_else(|| {
-            publish_error(format!(
-                "task workspace '{}' is not registered in the coordination registry",
-                request.task_workspace_id
-            ))
-        })?;
-    if binding.partition_id != request.task_workspace_id {
-        return Err(publish_error(format!(
-            "task workspace selector '{}' resolved to unexpected workspace '{}'",
-            request.task_workspace_id, binding.partition_id
-        )));
-    }
-    match binding.repo_fingerprint.as_deref() {
-        Some(fingerprint) if remotes_match(fingerprint, &request.source_repository_fingerprint) => {
-            Ok(())
-        }
-        Some(_) => Err(publish_error(format!(
-            "task workspace '{}' publication fingerprint does not match its registered source remote",
-            request.task_workspace_id
-        ))),
-        None => Err(publish_error(format!(
-            "task workspace '{}' has no registered source-repository identity",
-            request.task_workspace_id
-        ))),
-    }
 }
 
 /// Orbit-owned private clone plus object cache for one publication lineage.
@@ -367,12 +165,15 @@ impl<'a> PublicationCache<'a> {
             .join(&request.publication_id)
             .join("publish");
         create_private_dir_all(&root).map_err(|error| OrbitError::from_write_io(&root, error))?;
+        let git_dir = root.join("origin.git");
+        let pending_path = root.join(PENDING_FILE_NAME);
+        let pending_dir = root.join(PENDING_DIR_NAME);
         let cache = Self {
             process_env: env,
-            git_dir: root.join("origin.git"),
-            pending_path: root.join(PENDING_FILE_NAME),
-            pending_dir: root.join(PENDING_DIR_NAME),
             root,
+            git_dir,
+            pending_path,
+            pending_dir,
         };
         if cache.git_dir.join("HEAD").is_file() {
             cache.assert_cache_origin(&request.publication_remote)?;
@@ -454,11 +255,12 @@ impl<'a> PublicationCache<'a> {
         let parent = self.runner().single_parent(self.git_dir_str()?, &commit)?;
         assert_pairing(request, &envelope)?;
         assert_envelope_parent_lineage(&envelope, parent.as_deref(), PUBLISH_LABEL)?;
+        let tasks_tree = self.read_tasks_tree(&commit)?;
         Ok(RemoteState {
             tip: Some(RemoteTip {
-                tasks_tree: self.read_tasks_tree(&commit)?,
                 commit,
                 envelope,
+                tasks_tree,
             }),
         })
     }
@@ -552,9 +354,10 @@ impl<'a> PublicationCache<'a> {
         let tree_oid = indexed
             .run(&["--git-dir", git_dir, "write-tree"])?
             .to_ascii_lowercase();
+        let tasks_tree = self.read_tasks_tree(&tree_oid)?;
         Ok(StagedSnapshot {
-            tasks_tree: self.read_tasks_tree(&tree_oid)?,
             tree_oid,
+            tasks_tree,
             envelope: outcome.envelope,
             included_attachment_bytes: outcome.included_attachment_bytes,
             omitted_attachment_bytes: outcome.omitted_attachment_bytes,
@@ -803,6 +606,226 @@ enum PublishAction {
     Reconcile(Box<PublicationPublishOutcome>),
 }
 
+/// Private record of a push that was issued but not yet confirmed as recorded
+/// by the owner. It lets the next run reconcile by commit id instead of
+/// publishing a duplicate or divergent generation, and it survives
+/// reconciliation until durable last-success acknowledges its generation.
+/// Records are keyed by commit so concurrent attempts cannot overwrite them;
+/// even a record based on the current tip may belong to a push still in flight.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingPublication {
+    format_version: u32,
+    publication_id: String,
+    workspace_id: String,
+    publication_branch: String,
+    generation: u64,
+    commit: String,
+    previous_publication: Option<String>,
+}
+
+/// Publish this workspace's validated task snapshot to its dedicated
+/// publication repository.
+///
+/// Fails closed — leaving the remote branch and the caller's last-success
+/// record untouched — when the caller is not the declared owner, the registered
+/// workspace or source fingerprint disagrees, the bound branch carries content
+/// that is not this lineage's matching publication envelope, the branch moved,
+/// or any bundle fails validation. Lineages are branch-scoped: an absent bound
+/// branch initializes generation 1 even when other branches exist, and other
+/// branches are never read, written, or validated. There is deliberately no
+/// repo-wide foreign-repository guard (for example against a default branch
+/// carrying ordinary source commits): such a guard would require inspecting
+/// branches outside this lineage, and the bound branch plus its
+/// compare-and-swap creation already prevent adopting or overwriting anything
+/// Orbit did not create for this lineage.
+pub fn publish_task_snapshot(
+    env: &orbit_common::Env,
+    registry: &TaskRegistryStore,
+    request: PublicationPublishRequest,
+    policy: &AttachmentPolicy,
+) -> Result<PublicationPublishOutcome, OrbitError> {
+    publish_task_snapshot_inner(
+        env,
+        registry,
+        request,
+        policy,
+        #[cfg(test)]
+        None,
+    )
+}
+
+pub(super) fn publish_task_snapshot_inner(
+    env: &orbit_common::Env,
+    registry: &TaskRegistryStore,
+    request: PublicationPublishRequest,
+    policy: &AttachmentPolicy,
+    #[cfg(test)] pending_hook: Option<&PendingHook<'_>>,
+) -> Result<PublicationPublishOutcome, OrbitError> {
+    let request = validate_request(request)?;
+    assert_registered_workspace(registry, &request)?;
+    let cache = PublicationCache::open(env, registry, &request)?;
+    let observed = cache.observe_remote(&request)?;
+    let action = decide_action(&cache, &request, &observed)?;
+    let (generation, previous) = match action {
+        PublishAction::Reconcile(outcome) => return Ok(*outcome),
+        PublishAction::Initialize => (1, None),
+        PublishAction::Advance {
+            generation,
+            previous,
+        } => (generation, Some(previous)),
+    };
+
+    let staged = cache.stage_snapshot(registry, &request, generation, previous.clone(), policy)?;
+    let observed_tip = observed.tip.as_ref().map(|tip| tip.commit.clone());
+    if let Some(tip) = &observed.tip
+        && tip.tasks_tree == staged.tasks_tree
+        && same_publication_content(&tip.envelope, &staged.envelope)
+    {
+        return Ok(PublicationPublishOutcome {
+            status: PublicationPublishStatus::Unchanged,
+            branch: request.publication_branch.clone(),
+            commit_id: tip.commit.clone(),
+            generation: tip.envelope.generation,
+            previous_publication: tip.envelope.previous_publication.clone(),
+            observed_tip,
+            included_attachment_bytes: staged.included_attachment_bytes,
+            omitted_attachment_bytes: staged.omitted_attachment_bytes,
+        });
+    }
+
+    let commit = cache.commit_snapshot(&request, &staged, generation, previous.as_deref())?;
+    #[cfg(test)]
+    if let Some(hook) = pending_hook {
+        hook(PendingWriteStage::Before, &commit);
+    }
+    cache.write_pending(&PendingPublication {
+        format_version: PENDING_FORMAT_VERSION,
+        publication_id: request.publication_id.clone(),
+        workspace_id: request.workspace_id.clone(),
+        publication_branch: request.publication_branch.clone(),
+        generation,
+        commit: commit.clone(),
+        previous_publication: previous.clone(),
+    })?;
+    #[cfg(test)]
+    if let Some(hook) = pending_hook {
+        hook(PendingWriteStage::After, &commit);
+    }
+    cache.push_fast_forward(&request, &commit, observed_tip.as_deref())?;
+
+    Ok(PublicationPublishOutcome {
+        status: if previous.is_none() {
+            PublicationPublishStatus::Initialized
+        } else {
+            PublicationPublishStatus::Advanced
+        },
+        branch: request.publication_branch.clone(),
+        commit_id: commit,
+        generation,
+        previous_publication: previous,
+        observed_tip,
+        included_attachment_bytes: staged.included_attachment_bytes,
+        omitted_attachment_bytes: staged.omitted_attachment_bytes,
+    })
+}
+
+fn validate_request(request: PublicationPublishRequest) -> Result<ValidatedRequest, OrbitError> {
+    if request.caller_role != PublicationCallerRole::Owner {
+        return Err(OrbitError::PolicyDenied(format!(
+            "{PUBLISH_LABEL}: workspace '{}' is a replica checkout; only the declared owner may publish",
+            request.workspace_id
+        )));
+    }
+    validate_registry_identifier("workspace_id", &request.workspace_id).map_err(identity_error)?;
+    validate_registry_identifier("task_workspace_id", &request.task_workspace_id)
+        .map_err(identity_error)?;
+    validate_registry_identifier("publication_id", &request.publication_id)
+        .map_err(identity_error)?;
+    validate_machine_id(&request.authority_machine_id).map_err(identity_error)?;
+    validate_machine_id(&request.local_machine_id).map_err(identity_error)?;
+    if request.local_machine_id != request.authority_machine_id {
+        return Err(OrbitError::PolicyDenied(format!(
+            "{PUBLISH_LABEL}: workspace '{}' is owned by '{}', not local machine '{}'",
+            request.workspace_id, request.authority_machine_id, request.local_machine_id
+        )));
+    }
+    validate_source_repository_fingerprint(&request.source_repository_fingerprint)
+        .map_err(workspace_error)?;
+    if request.publication_remote.trim().is_empty() {
+        return Err(publish_error("publication remote must not be empty"));
+    }
+    if remote_has_password(&request.publication_remote) {
+        return Err(publish_error(format!(
+            "publication remote '{}' must not contain credentials",
+            redact_git_remote(&request.publication_remote)
+        )));
+    }
+    let publication_branch =
+        canonicalize_publication_branch(&request.publication_branch).map_err(workspace_error)?;
+    if request.cache_dir.as_os_str().is_empty() {
+        return Err(publish_error("publication cache directory is required"));
+    }
+    let last_success = match request.last_success {
+        Some(last) => {
+            validate_last_success(Some(last.generation), Some(&last.commit))
+                .map_err(workspace_error)?;
+            Some(PublicationLastSuccess {
+                generation: last.generation,
+                commit: last.commit.to_ascii_lowercase(),
+            })
+        }
+        None => None,
+    };
+    Ok(ValidatedRequest {
+        workspace_id: request.workspace_id,
+        task_workspace_id: request.task_workspace_id,
+        source_repository_fingerprint: request.source_repository_fingerprint,
+        publication_id: request.publication_id,
+        authority_machine_id: request.authority_machine_id,
+        publication_remote: request.publication_remote,
+        publication_branch,
+        cache_dir: request.cache_dir,
+        published_at: request.published_at,
+        last_success,
+    })
+}
+
+/// The coordination registry — not the caller — decides which workspace and
+/// source repository this publication belongs to.
+fn assert_registered_workspace(
+    registry: &TaskRegistryStore,
+    request: &ValidatedRequest,
+) -> Result<(), OrbitError> {
+    let binding = registry
+        .find_workspace_binding(&request.task_workspace_id)?
+        .ok_or_else(|| {
+            publish_error(format!(
+                "task workspace '{}' is not registered in the coordination registry",
+                request.task_workspace_id
+            ))
+        })?;
+    if binding.partition_id != request.task_workspace_id {
+        return Err(publish_error(format!(
+            "task workspace selector '{}' resolved to unexpected workspace '{}'",
+            request.task_workspace_id, binding.partition_id
+        )));
+    }
+    match binding.repo_fingerprint.as_deref() {
+        Some(fingerprint) if remotes_match(fingerprint, &request.source_repository_fingerprint) => {
+            Ok(())
+        }
+        Some(_) => Err(publish_error(format!(
+            "task workspace '{}' publication fingerprint does not match its registered source remote",
+            request.task_workspace_id
+        ))),
+        None => Err(publish_error(format!(
+            "task workspace '{}' has no registered source-repository identity",
+            request.task_workspace_id
+        ))),
+    }
+}
+
 /// Reconcile the observed branch tip with the owner-local last-success record
 /// and any pending push, or refuse the run.
 fn decide_action(
@@ -960,24 +983,6 @@ fn assert_outside_source_checkout(
         }
     }
     Ok(())
-}
-
-/// Private record of a push that was issued but not yet confirmed as recorded
-/// by the owner. It lets the next run reconcile by commit id instead of
-/// publishing a duplicate or divergent generation, and it survives
-/// reconciliation until durable last-success acknowledges its generation.
-/// Records are keyed by commit so concurrent attempts cannot overwrite them;
-/// even a record based on the current tip may belong to a push still in flight.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PendingPublication {
-    format_version: u32,
-    publication_id: String,
-    workspace_id: String,
-    publication_branch: String,
-    generation: u64,
-    commit: String,
-    previous_publication: Option<String>,
 }
 
 /// Branch-scoped expected-old-object lease. An empty expect (`<branch>:`)

@@ -13,19 +13,6 @@ use super::schema::open::{assert_readable_schema, migrate_writable};
 use crate::driver::sqlite::host::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
-/// Root of the per-workspace bundle trees, derived from the canonical
-/// registry directory. `workspaces/` is created lazily, so normalizing it
-/// directly would keep a symlinked spelling on a fresh root and canonicalize
-/// it once the directory exists. The task repair gate keys on this path, so
-/// every open of one root must produce the same spelling.
-fn workspaces_dir_of(path: &Path) -> PathBuf {
-    let registry_dir = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    normalize_path(&registry_dir).join("workspaces")
-}
-
 /// Task index database handle: one writer connection behind a mutex plus a
 /// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
 /// readers on their own connections never queue behind the writer, so a
@@ -270,4 +257,17 @@ impl CacheWriteSettings {
                 )
             })
     }
+}
+
+/// Root of the per-workspace bundle trees, derived from the canonical
+/// registry directory. `workspaces/` is created lazily, so normalizing it
+/// directly would keep a symlinked spelling on a fresh root and canonicalize
+/// it once the directory exists. The task repair gate keys on this path, so
+/// every open of one root must produce the same spelling.
+fn workspaces_dir_of(path: &Path) -> PathBuf {
+    let registry_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    normalize_path(&registry_dir).join("workspaces")
 }

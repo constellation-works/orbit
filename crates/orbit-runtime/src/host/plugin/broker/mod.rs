@@ -47,11 +47,6 @@ const HOST_CREDENTIALED_READS: [&str; 5] = [
     "github.run.view",
 ];
 
-/// Whether `tool` is a built-in read the broker runs on the host.
-pub fn is_host_credentialed_read(tool: &str) -> bool {
-    HOST_CREDENTIALED_READS.contains(&tool)
-}
-
 /// The built-in a sandboxed resident cycle starts a leaf run through. The
 /// broker submits it on the host, so the leaf's worker starts beside the
 /// cycle's read-only sandbox instead of inside it, where it could neither write
@@ -90,27 +85,6 @@ pub const BROKERED_RESIDENT_REQUEUE_TOOL: &str = crate::base::policy::TASK_REQUE
 /// The built-in a resident cycle starts a recovery leaf through.
 pub const BROKERED_RESIDENT_RESUME_DELIVERY_TOOL: &str =
     crate::base::policy::TASK_RESUME_DELIVERY_OPERATION_ID;
-
-/// Whether `tool` is a built-in the broker runs for a resident cycle's run,
-/// whatever its input.
-pub fn is_brokered_resident_tool(tool: &str) -> bool {
-    tool == BROKERED_RESIDENT_SHIP_TOOL
-        || tool == BROKERED_RESIDENT_RAISE_TOOL
-        || tool == BROKERED_RESIDENT_LAND_TOOL
-        || tool == BROKERED_RESIDENT_REFRESH_TOOL
-        || tool == BROKERED_RESIDENT_REPILOT_TOOL
-        || tool == BROKERED_RESIDENT_REQUEUE_TOOL
-        || tool == BROKERED_RESIDENT_RESUME_DELIVERY_TOOL
-}
-
-/// Whether this call is a resident cycle's move of a task to `done`.
-pub fn is_brokered_resident_completion(tool: &str, input: &serde_json::Value) -> bool {
-    tool == BROKERED_RESIDENT_TASK_UPDATE_TOOL
-        && input
-            .get("status")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|status| status.trim() == "done")
-}
 
 /// Executes one authenticated request for the run a broker serves.
 ///
@@ -228,6 +202,32 @@ impl Drop for PluginBroker {
             );
         }
     }
+}
+
+/// Whether `tool` is a built-in read the broker runs on the host.
+pub fn is_host_credentialed_read(tool: &str) -> bool {
+    HOST_CREDENTIALED_READS.contains(&tool)
+}
+
+/// Whether `tool` is a built-in the broker runs for a resident cycle's run,
+/// whatever its input.
+pub fn is_brokered_resident_tool(tool: &str) -> bool {
+    tool == BROKERED_RESIDENT_SHIP_TOOL
+        || tool == BROKERED_RESIDENT_RAISE_TOOL
+        || tool == BROKERED_RESIDENT_LAND_TOOL
+        || tool == BROKERED_RESIDENT_REFRESH_TOOL
+        || tool == BROKERED_RESIDENT_REPILOT_TOOL
+        || tool == BROKERED_RESIDENT_REQUEUE_TOOL
+        || tool == BROKERED_RESIDENT_RESUME_DELIVERY_TOOL
+}
+
+/// Whether this call is a resident cycle's move of a task to `done`.
+pub fn is_brokered_resident_completion(tool: &str, input: &serde_json::Value) -> bool {
+    tool == BROKERED_RESIDENT_TASK_UPDATE_TOOL
+        && input
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|status| status.trim() == "done")
 }
 
 #[cfg(test)]

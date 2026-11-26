@@ -29,6 +29,12 @@ pub(super) const MAX_TASK_ARCHIVE_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
 /// millions of empty files cannot exhaust inodes before the size bound trips.
 pub(super) const MAX_TASK_ARCHIVE_ENTRIES: usize = 20_000;
 
+/// Archive-relative directory that holds the per-task bundle trees.
+pub(super) const BUNDLES_DIR: &str = "bundles";
+
+/// Archive-relative path of the manifest entry.
+pub(super) const MANIFEST_ENTRY: &str = "manifest.json";
+
 /// The bounds one task-archive extraction runs under, carried as a value
 /// so both bounds are stated once at the extraction call site.
 #[derive(Debug, Clone, Copy)]
@@ -38,7 +44,6 @@ pub(super) struct TaskArchiveLimits {
     /// Number of members an archive may carry.
     pub(super) entries: usize,
 }
-
 impl TaskArchiveLimits {
     /// What every import extracts under.
     pub(super) const DEFAULT: Self = Self {
@@ -46,11 +51,6 @@ impl TaskArchiveLimits {
         entries: MAX_TASK_ARCHIVE_ENTRIES,
     };
 }
-
-/// Archive-relative directory that holds the per-task bundle trees.
-pub(super) const BUNDLES_DIR: &str = "bundles";
-/// Archive-relative path of the manifest entry.
-pub(super) const MANIFEST_ENTRY: &str = "manifest.json";
 
 /// Pack `manifest_json` plus each `(task_id, canonical_dir)` bundle tree into a
 /// tar.zst archive at `out_path`. Replace the destination only after the staged

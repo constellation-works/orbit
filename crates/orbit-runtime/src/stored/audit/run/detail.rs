@@ -175,13 +175,13 @@ impl RuntimeKernel {
         let windows = Self::read_progress_windows(&mut reader)?;
         let projection = Self::project_bounded_progress(&mut reader, &windows, &[], run_id, probe)?;
         Ok(BoundedRunProgress {
+            progress: projection.progress,
+            steps: projection.steps,
+            steps_complete: windows.steps_complete,
             complete: windows.steps_complete
                 && windows.structural_complete
                 && windows.samples_complete
                 && projection.ancestry_complete,
-            steps_complete: windows.steps_complete,
-            progress: projection.progress,
-            steps: projection.steps,
             rows_read: reader.rows_read,
             live_activity_names: projection.live_activity_names,
         })
@@ -398,9 +398,9 @@ impl RuntimeKernel {
 
         Ok(BoundedRunDetail {
             state: "observed",
+            progress: projection.progress,
             steps: projection.steps,
             steps_complete: windows.steps_complete,
-            progress: projection.progress,
             logs_total,
             logs,
             complete: windows.steps_complete
@@ -512,6 +512,14 @@ impl TrailReader<'_, '_> {
     }
 }
 
+/// An envelope row whose payload parsed and names its `event_id`.
+struct ParsedRow {
+    id: i64,
+    ts: chrono::DateTime<chrono::Utc>,
+    event_id: String,
+    row: RunTrailRow,
+}
+
 /// The `activity_name` of the nearest `activity.started` ancestor.
 ///
 /// Pipeline steps record the step id there. A recovery dispatch records the
@@ -544,14 +552,6 @@ fn push_parent(
     {
         frontier.push(parent.to_string());
     }
-}
-
-/// An envelope row whose payload parsed and names its `event_id`.
-struct ParsedRow {
-    id: i64,
-    ts: chrono::DateTime<chrono::Utc>,
-    event_id: String,
-    row: RunTrailRow,
 }
 
 fn parse_rows(rows: Vec<V2AuditEventRow>) -> Vec<ParsedRow> {

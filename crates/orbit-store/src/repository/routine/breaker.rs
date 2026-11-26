@@ -77,31 +77,6 @@ impl<Access> RoutineRepository<'_, Access> {
     }
 }
 
-fn breaker_from_row(row: &Row<'_>) -> rusqlite::Result<Result<RoutineBreakerRecord, OrbitError>> {
-    let state: String = row.get(2)?;
-    let Some(state) = RoutineBreakerState::parse(&state) else {
-        return Ok(Err(OrbitError::Store(format!(
-            "unknown routine breaker state '{state}'"
-        ))));
-    };
-    Ok(Ok(RoutineBreakerRecord {
-        routine_name: row.get(0)?,
-        source_workspace: row.get(1)?,
-        state,
-        error_class: row.get(3)?,
-        last_run_id: row.get(4)?,
-        tripped_at: row.get(5)?,
-        trips: row.get(6)?,
-        next_trial_at: row.get(7)?,
-        orbit_build: row.get(8)?,
-        trial_started_at: row.get(9)?,
-        trial_reason: row.get(10)?,
-        bypass_requested_at: row.get(11)?,
-        floor_at: row.get(12)?,
-        updated_at: row.get(13)?,
-    }))
-}
-
 impl RoutineRepository<'_, Tx<'_>> {
     /// Insert or replace one breaker row.
     pub fn put_breaker(&self, breaker: &RoutineBreakerRecord) -> Result<(), OrbitError> {
@@ -150,4 +125,29 @@ impl RoutineRepository<'_, Tx<'_>> {
         .map_err(sqlite_store_error)?;
         Ok(())
     }
+}
+
+fn breaker_from_row(row: &Row<'_>) -> rusqlite::Result<Result<RoutineBreakerRecord, OrbitError>> {
+    let state: String = row.get(2)?;
+    let Some(state) = RoutineBreakerState::parse(&state) else {
+        return Ok(Err(OrbitError::Store(format!(
+            "unknown routine breaker state '{state}'"
+        ))));
+    };
+    Ok(Ok(RoutineBreakerRecord {
+        routine_name: row.get(0)?,
+        source_workspace: row.get(1)?,
+        state,
+        error_class: row.get(3)?,
+        last_run_id: row.get(4)?,
+        tripped_at: row.get(5)?,
+        trips: row.get(6)?,
+        next_trial_at: row.get(7)?,
+        orbit_build: row.get(8)?,
+        trial_started_at: row.get(9)?,
+        trial_reason: row.get(10)?,
+        bypass_requested_at: row.get(11)?,
+        floor_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    }))
 }

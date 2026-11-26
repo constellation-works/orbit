@@ -1,7 +1,423 @@
 // Identity allocation and coordinated admission through the store's public composition: task ids are monotonic, never wrapped past the ceiling and exhausted cleanly (including an imported maximum); job-run ids are never reminted after archive/delete; local pull admission holds one slot per request under the drain's live ceiling; the commit boundary admits at most one claim per request/task under concurrent pulls; a handoff is authorized only by its admission policy over unchanged evidence; settled claims' receipts are pruned past retention while claim/lifecycle rows stay (pruned replays are refused); claimed evidence stores canonical paths and racing report revisions are each retained; typed mutation receipts replay (text receipts still do); a pull is granted only listed, executor-runnable work (census rows land with receipts and stay live while claiming); a hard path lease defers and names itself, an advisory one holds nothing. Every test re-runs itself in a child with inherited Orbit authority cleared, a disposable `HOME`, a bounded wait.
 
+// Keep each test's exact-name child and deadline; only its setup guard is shared.
+macro_rules! allocation_test {
+    ($name:ident, $body:block) => {
+        #[test]
+        fn $name() {
+            if allocation_admission_isolated(stringify!($name)) $body
+        }
+    };
+}
+
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
+// --------------------------------------------------------------------------- Task id allocation
+// ---------------------------------------------------------------------------
+const PARTITION_ID: &str = "orbit-test-123456";
+const OWNER_POLICY: &str = "workspace-config:workflow.distributed_completion";
+const REPOSITORY: &str = "owner/repository";
+const REVIEW_CREW: &str = "reviewer";
+
+// The store integration binary includes this fragment first. Keep the fixture
+// declarations here so the later includes can share the crate's function group.
+const VALIDATE_FAILURE: &str =
+    "required check 'make check' did not pass on candidate 9f8e7d6c5b4a: check exited 2";
+
+/// The retention batch size the runtime applies.
+const BATCH_ROWS: usize = 1_000;
+
+const LEDGER_PARTITION: &str = "ws_prior";
+
+/// The registry ledger this binary ships, as `(version, name)`. Every entry
+/// is additive, so adoption applies all of them and keeps the pre-ledger fence.
+const SHIPPED: [(u32, &str); 3] = [
+    (1, "registry_baseline"),
+    (2, "index_task_type"),
+    (3, "decision_snapshots"),
+];
+
+/// The ledger version a newer binary would add after [`SHIPPED`].
+const NEWER: u32 = SHIPPED.len() as u32 + 1;
+
+type ClaimResult = Result<ClaimMutationResult, OrbitError>;
+/// One owner composition over a root; a second open on the same root is a second process/restart.
+struct Coordinated {
+    registry: TaskRegistryStore,
+    backends: CoordinatedWorkspaceBackends,
+    orbit_dir: PathBuf,
+    _root: Option<TempDir>,
+}
+impl Coordinated {
+    fn fixture() -> Self {
+        let root = TempDir::new().unwrap();
+        let mut owner = Self::open(root.path());
+        owner._root = Some(root);
+        owner
+    }
+    fn open(root: &Path) -> Self {
+        Self::open_bound(root, PARTITION_ID, None)
+    }
+    fn open_with_fingerprint(root: &Path, partition_id: &str, fingerprint: &str) -> Self {
+        Self::open_bound(root, partition_id, Some(fingerprint))
+    }
+    fn open_bound(root: &Path, partition_id: &str, fingerprint: Option<&str>) -> Self {
+        let registry = registry_at(root);
+        let binding = bind_workspace(&registry, root, partition_id, fingerprint);
+        let store = Store::open(&root.join("state.sqlite")).unwrap();
+        let backends =
+            workspace_coordinated_backends(registry.clone(), binding.partition_id, store)
+                .expect("compose");
+        Self {
+            registry,
+            backends,
+            orbit_dir: binding.orbit_dir,
+            _root: None,
+        }
+    }
+    fn root(&self) -> &Path {
+        self.orbit_dir.parent().unwrap().parent().unwrap()
+    }
+    fn reopen(&self) -> Self {
+        Self::open(self.root())
+    }
+    fn task_store(&self) -> &Arc<orbit_store::TaskV2Store> {
+        &self.backends.task.task
+    }
+    fn artifact_store(&self) -> &orbit_store::TaskArtifactRepository {
+        &self.backends.task.artifact
+    }
+    fn task(&self, id: &str) -> orbit_types::task::Task {
+        self.task_store().get_task(id).unwrap().unwrap()
+    }
+    fn artifacts(&self, id: &str) -> Vec<TaskArtifact> {
+        self.artifact_store()
+            .get_task_artifacts(id)
+            .unwrap()
+            .unwrap()
+    }
+    fn artifact(&self, id: &str, path: &str) -> Option<TaskArtifact> {
+        self.artifact_store().get_task_artifact(id, path).unwrap()
+    }
+    fn mutate(&self, auth: &ClaimInvocation, id: &str, mutation: &ClaimMutation) -> ClaimResult {
+        let boundary = &self.backends.commit_boundary;
+        boundary.mutate_execution_claim(Some(auth), id, mutation)
+    }
+    fn put_evidence(
+        &self,
+        auth: &ClaimInvocation,
+        id: &str,
+        arts: Vec<TaskArtifact>,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Evidence(claim_evidence(arts));
+        self.mutate(auth, id, &mutation)
+    }
+    fn bind_claim(
+        &self,
+        auth: &ClaimInvocation,
+        claim: &ExecutionClaim,
+        ship: AdmissionShipContract,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Bind {
+            run: leaf_run(claim),
+            ship,
+        };
+        self.mutate(auth, "bind", &mutation)
+    }
+    fn create_task(&self, title: &str) -> orbit_types::task::Task {
+        self.create_task_in(title, &["src/lib.rs"])
+    }
+    fn create_task_in(&self, title: &str, selectors: &[&str]) -> orbit_types::task::Task {
+        self.create_task_with_status(title, selectors, TaskStatus::Backlog, None)
+    }
+    fn create_task_with_status(
+        &self,
+        title: &str,
+        selectors: &[&str],
+        status: TaskStatus,
+        parent_id: Option<String>,
+    ) -> orbit_types::task::Task {
+        let params = TaskCreateParams {
+            parent_id,
+            status,
+            ..task_params(title, selectors)
+        };
+        self.task_store().create_task(params).expect("create task")
+    }
+    fn task_status(&self, id: &str) -> TaskStatus {
+        self.task(id).status
+    }
+    fn active_reservations(&self) -> Vec<ActiveTaskReservation> {
+        self.backends
+            .reservation
+            .inspect_active_task_reservations(&self.orbit_dir.to_string_lossy(), Some(PARTITION_ID))
+            .unwrap()
+    }
+    fn claims(&self) -> Vec<ExecutionClaim> {
+        self.backends.commit_boundary.execution_claims().unwrap()
+    }
+    fn try_pull(&self, request: &AdmissionRequest) -> Result<AdmissionLookup, OrbitError> {
+        self.try_pull_with_ordering(request, &AdmissionOrdering::default())
+    }
+    fn try_pull_with_ordering(
+        &self,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.try_pull_as("machine-a", request, ordering)
+    }
+    fn try_pull_as(
+        &self,
+        machine_id: &str,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        let location = ExecutionLocation {
+            machine_id: machine_id.into(),
+            machine_name: Some("display".into()),
+        };
+        self.backends.commit_boundary.admit_task(
+            &AdmissionIdentity::trusted_remote(location),
+            request,
+            ordering,
+            "test",
+            self.orbit_dir.parent().unwrap(),
+            &self.orbit_dir,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &|_, _, _| Ok(None),
+        )
+    }
+    fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {
+        match self.try_pull(request).expect("pull") {
+            AdmissionLookup::Found { receipt, .. } => *receipt,
+            other => panic!("expected a receipt: {other:?}"),
+        }
+    }
+    fn landing_starts(&self) -> Vec<LandingStartRequest> {
+        self.task_store().landing_start_requests().unwrap()
+    }
+    fn stored_task(&self, id: &str) -> Option<orbit_types::task::Task> {
+        self.task_store().get_task(id).unwrap()
+    }
+    fn bundle_path(&self, task_id: &str) -> PathBuf {
+        self.registry
+            .canonical_task_bundle_path(PARTITION_ID, task_id)
+            .unwrap()
+    }
+    fn update_evidence(
+        &self,
+        auth: &ClaimInvocation,
+        id: &str,
+        arts: Vec<TaskArtifact>,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Update(ClaimWorkerUpdate {
+            evidence: claim_evidence(arts),
+            ..Default::default()
+        });
+        self.mutate(auth, id, &mutation)
+    }
+    fn upsert_artifacts(
+        &self,
+        task_id: &str,
+        artifacts: Vec<TaskArtifact>,
+    ) -> Result<(), OrbitError> {
+        let params = TaskArtifactUpdateParams {
+            write_provenance: None,
+            origin: None,
+            actor: "codex".to_string(),
+            owner_run_id: None,
+            writer: None,
+            upsert_artifacts: artifacts,
+        };
+        self.artifact_store().upsert_task_artifacts(task_id, params)
+    }
+    fn fail_claim(
+        &self,
+        auth: &ClaimInvocation,
+        id: &str,
+        summary: &str,
+        artifacts: Vec<TaskArtifact>,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Fail(ClaimEvidence {
+            summary: Some(summary.to_string()),
+            artifacts,
+            ..Default::default()
+        });
+        self.mutate(auth, id, &mutation)
+    }
+}
+/// One way a handoff's review evidence is spoiled before acceptance.
+type Tamper = fn(&mut Delivery);
+/// An admitted, bound claim with owner-held validation logs and its worker handoff.
+struct Delivery {
+    owner: Coordinated,
+    claim: ExecutionClaim,
+    handoff: TaskHandoff,
+    /// The owner's `workflow.required_validation_commands`.
+    required: Vec<String>,
+    /// The owner's own judgement of the handoff's known-red logs.
+    known_red: Vec<KnownRedObservation>,
+}
+impl Delivery {
+    fn admit(ship: AdmissionShipContract) -> Self {
+        Self::admit_requiring(ship, &["src/lib.rs"], &["build", "test"])
+    }
+    /// Admit a claim whose owner requires `required`, with one passing log per command.
+    fn admit_requiring(ship: AdmissionShipContract, selectors: &[&str], required: &[&str]) -> Self {
+        let owner = Coordinated::fixture();
+        owner.create_task_in("typed handoff", selectors);
+        let mut request = owner_request("first");
+        request.ship = ship.clone();
+        request.review_gate = ship.before_pr || ship.before_landing;
+        let claim = owner.pull(&request).claim.expect("claim");
+        let unbound = claim_worker(&claim, false);
+        owner.bind_claim(&unbound, &claim, ship).expect("bind");
+        let handoff = handoff_with_logs(&owner, &claim, required);
+        Self {
+            owner,
+            claim,
+            handoff,
+            required: required.iter().map(ToString::to_string).collect(),
+            known_red: Vec::new(),
+        }
+    }
+    fn assert_status(&self, status: TaskStatus) {
+        let got = self.owner.task_status(&self.claim.task_id);
+        assert_eq!(got, status, "{}", self.claim.task_id);
+    }
+    fn observation(&self, policy: Option<&str>) -> HandoffObservation {
+        let review = self
+            .handoff
+            .review
+            .evidence()
+            .map(|evidence| HandoffReviewObservation {
+                reviewed_base_sha: evidence.reviewed_base_sha.clone(),
+                reviewed_base_is_ancestor: true,
+                repository: REPOSITORY.into(),
+            });
+        HandoffObservation {
+            footprint_widening: self.handoff.footprint_widening.clone(),
+            candidate: self.handoff.candidate.clone(),
+            required_commands: self.required.clone(),
+            owner_completion_authority: policy.map(str::to_string),
+            review,
+            known_red: self.known_red.clone(),
+            light_delivery: Vec::new(),
+        }
+    }
+    fn worker(&self) -> ClaimInvocation {
+        claim_worker(&self.claim, true)
+    }
+    fn operator(&self) -> ClaimInvocation {
+        ClaimInvocation::trusted_operator(
+            self.claim.task_id.clone(),
+            self.claim.claim_id.clone(),
+            "owner-operator".into(),
+        )
+    }
+    fn accept(&self, policy: Option<&str>) -> ClaimResult {
+        self.accept_observed(self.observation(policy))
+    }
+    fn accept_observed(&self, observation: HandoffObservation) -> ClaimResult {
+        let worker = self.worker().with_handoff_observation(observation);
+        let mutation = ClaimMutation::AcceptHandoff(self.handoff.clone());
+        self.owner.mutate(&worker, "handoff", &mutation)
+    }
+    /// Persist `certificate` as claim evidence and carry it as the handoff's before-PR review.
+    fn reviewed(&mut self, certificate: &ReviewCertificate) {
+        let content = serde_json::to_vec(certificate).unwrap();
+        let reference = HandoffArtifactRef {
+            path: REVIEW_GATE_ARTIFACT.into(),
+            sha256: lower_hex(Sha256::digest(&content)),
+        };
+        let artifacts = vec![json_artifact(reference.path.clone(), content)];
+        let id = format!("review-certificate-{}", certificate.verdict.as_str());
+        self.owner
+            .put_evidence(&self.worker(), &id, artifacts)
+            .expect("persist the certificate on the owner");
+        let evidence = HandoffReviewEvidence {
+            attempt_id: certificate.attempt_id.clone(),
+            verdict: certificate.verdict,
+            reviewed_head_sha: self.handoff.candidate.candidate.commit.clone(),
+            reviewed_base_sha: certificate.base.commit.clone(),
+            reviewer_commit: certificate
+                .repair_commits
+                .last()
+                .map(|repair| repair.commit.clone()),
+            reviewer_crew: certificate.reviewer.crew.clone(),
+            reviewer_run_id: "leaf".into(),
+            certificate: reference,
+            artifacts: vec![],
+            host_evidence: vec![],
+        };
+        self.handoff.review = HandoffReview {
+            selective_receipt: None,
+            policy: ReviewTiming::BeforePr,
+            disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+        };
+    }
+    fn review_evidence(&mut self) -> &mut HandoffReviewEvidence {
+        match &mut self.handoff.review.disposition {
+            HandoffReviewDisposition::BeforePr(evidence)
+            | HandoffReviewDisposition::BeforeLanding(evidence) => evidence,
+            HandoffReviewDisposition::NotRequired => panic!("the handoff carries no review"),
+        }
+    }
+    fn approve(&self) -> ClaimResult {
+        let boundary = &self.owner.backends.commit_boundary;
+        let accepted = boundary.accepted_handoff(&self.claim.claim_id)?;
+        let operator = self
+            .operator()
+            .with_handoff_observation(self.observation(None));
+        let mutation = ClaimMutation::ApproveHandoff {
+            handoff_id: accepted.handoff_id,
+            candidate: self.handoff.candidate.clone(),
+        };
+        self.owner.mutate(&operator, "approval", &mutation)
+    }
+    fn merge_intent(&self, policy: Option<&str>) -> ClaimResult {
+        let operator = self
+            .operator()
+            .with_handoff_observation(self.observation(policy));
+        let mutation = ClaimMutation::MergeIntent {
+            intent_id: "sent-merge".into(),
+            resolved: false,
+            evidence: "pinned provider request".into(),
+        };
+        self.owner.mutate(&operator, "merge-intent", &mutation)
+    }
+}
+
+struct IncidentRow<'a> {
+    surface: &'a str,
+    role: &'a str,
+    run: &'a str,
+    minute: i64,
+    message: Option<&'a str>,
+    activity: Option<&'a str>,
+    denied: bool,
+}
+
+impl<'a> IncidentRow<'a> {
+    fn new(surface: &'a str, run: &'a str, minute: i64, message: &'a str) -> Self {
+        Self {
+            surface,
+            role: "codex",
+            run,
+            minute,
+            message: Some(message),
+            activity: None,
+            denied: false,
+        }
+    }
+}
+
+struct Snapshot {
+    envelope: TaskEnvelopeV2,
+    events: Vec<TaskEventRowV2>,
+}
+
 /// Run `test` alone in a child with authority cleared and a disposable `HOME`; `true` inside the child.
 fn allocation_admission_isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_STORE_ALLOCATION_CHILD";
@@ -24,16 +440,6 @@ fn allocation_admission_isolated(test: &str) -> bool {
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }
-// Keep each test's exact-name child and deadline; only its setup guard is shared.
-macro_rules! allocation_test {
-    ($name:ident, $body:block) => {
-        #[test]
-        fn $name() {
-            if allocation_admission_isolated(stringify!($name)) $body
-        }
-    };
-}
-type ClaimResult = Result<ClaimMutationResult, OrbitError>;
 fn registry_at(root: &Path) -> TaskRegistryStore {
     TaskRegistryStore::open(&task_registry_path(root)).unwrap()
 }
@@ -61,9 +467,6 @@ fn json_artifact(path: String, content: Vec<u8>) -> TaskArtifact {
 fn is_exhausted<T: std::fmt::Debug>(result: Result<T, OrbitError>) -> bool {
     matches!(result, Err(OrbitError::Store(ref message)) if message.contains("exhausted"))
 }
-// --------------------------------------------------------------------------- Task id allocation
-// ---------------------------------------------------------------------------
-const PARTITION_ID: &str = "orbit-test-123456";
 fn bind(registry: &TaskRegistryStore, root: &Path, partition_id: &str) -> WorkspaceCheckoutBinding {
     bind_workspace(registry, root, partition_id, None)
 }
@@ -422,212 +825,6 @@ allocation_test!(reserved_key_publishes_a_new_bundle_before_replaying, {
     }
     assert_eq!(owner.task_store().list_tasks().unwrap().len(), 2);
 });
-/// One owner composition over a root; a second open on the same root is a second process/restart.
-struct Coordinated {
-    registry: TaskRegistryStore,
-    backends: CoordinatedWorkspaceBackends,
-    orbit_dir: PathBuf,
-    _root: Option<TempDir>,
-}
-impl Coordinated {
-    fn fixture() -> Self {
-        let root = TempDir::new().unwrap();
-        let mut owner = Self::open(root.path());
-        owner._root = Some(root);
-        owner
-    }
-    fn open(root: &Path) -> Self {
-        Self::open_bound(root, PARTITION_ID, None)
-    }
-    fn open_with_fingerprint(root: &Path, partition_id: &str, fingerprint: &str) -> Self {
-        Self::open_bound(root, partition_id, Some(fingerprint))
-    }
-    fn open_bound(root: &Path, partition_id: &str, fingerprint: Option<&str>) -> Self {
-        let registry = registry_at(root);
-        let binding = bind_workspace(&registry, root, partition_id, fingerprint);
-        let store = Store::open(&root.join("state.sqlite")).unwrap();
-        let backends =
-            workspace_coordinated_backends(registry.clone(), binding.partition_id, store)
-                .expect("compose");
-        Self {
-            registry,
-            backends,
-            orbit_dir: binding.orbit_dir,
-            _root: None,
-        }
-    }
-    fn root(&self) -> &Path {
-        self.orbit_dir.parent().unwrap().parent().unwrap()
-    }
-    fn reopen(&self) -> Self {
-        Self::open(self.root())
-    }
-    fn task_store(&self) -> &Arc<orbit_store::TaskV2Store> {
-        &self.backends.task.task
-    }
-    fn artifact_store(&self) -> &orbit_store::TaskArtifactRepository {
-        &self.backends.task.artifact
-    }
-    fn task(&self, id: &str) -> orbit_types::task::Task {
-        self.task_store().get_task(id).unwrap().unwrap()
-    }
-    fn artifacts(&self, id: &str) -> Vec<TaskArtifact> {
-        self.artifact_store()
-            .get_task_artifacts(id)
-            .unwrap()
-            .unwrap()
-    }
-    fn artifact(&self, id: &str, path: &str) -> Option<TaskArtifact> {
-        self.artifact_store().get_task_artifact(id, path).unwrap()
-    }
-    fn mutate(&self, auth: &ClaimInvocation, id: &str, mutation: &ClaimMutation) -> ClaimResult {
-        let boundary = &self.backends.commit_boundary;
-        boundary.mutate_execution_claim(Some(auth), id, mutation)
-    }
-    fn put_evidence(
-        &self,
-        auth: &ClaimInvocation,
-        id: &str,
-        arts: Vec<TaskArtifact>,
-    ) -> ClaimResult {
-        let mutation = ClaimMutation::Evidence(claim_evidence(arts));
-        self.mutate(auth, id, &mutation)
-    }
-    fn bind_claim(
-        &self,
-        auth: &ClaimInvocation,
-        claim: &ExecutionClaim,
-        ship: AdmissionShipContract,
-    ) -> ClaimResult {
-        let mutation = ClaimMutation::Bind {
-            run: leaf_run(claim),
-            ship,
-        };
-        self.mutate(auth, "bind", &mutation)
-    }
-    fn create_task(&self, title: &str) -> orbit_types::task::Task {
-        self.create_task_in(title, &["src/lib.rs"])
-    }
-    fn create_task_in(&self, title: &str, selectors: &[&str]) -> orbit_types::task::Task {
-        self.create_task_with_status(title, selectors, TaskStatus::Backlog, None)
-    }
-    fn create_task_with_status(
-        &self,
-        title: &str,
-        selectors: &[&str],
-        status: TaskStatus,
-        parent_id: Option<String>,
-    ) -> orbit_types::task::Task {
-        let params = TaskCreateParams {
-            parent_id,
-            status,
-            ..task_params(title, selectors)
-        };
-        self.task_store().create_task(params).expect("create task")
-    }
-    fn task_status(&self, id: &str) -> TaskStatus {
-        self.task(id).status
-    }
-    fn active_reservations(&self) -> Vec<ActiveTaskReservation> {
-        self.backends
-            .reservation
-            .inspect_active_task_reservations(&self.orbit_dir.to_string_lossy(), Some(PARTITION_ID))
-            .unwrap()
-    }
-    fn claims(&self) -> Vec<ExecutionClaim> {
-        self.backends.commit_boundary.execution_claims().unwrap()
-    }
-    fn try_pull(&self, request: &AdmissionRequest) -> Result<AdmissionLookup, OrbitError> {
-        self.try_pull_with_ordering(request, &AdmissionOrdering::default())
-    }
-    fn try_pull_with_ordering(
-        &self,
-        request: &AdmissionRequest,
-        ordering: &AdmissionOrdering,
-    ) -> Result<AdmissionLookup, OrbitError> {
-        self.try_pull_as("machine-a", request, ordering)
-    }
-    fn try_pull_as(
-        &self,
-        machine_id: &str,
-        request: &AdmissionRequest,
-        ordering: &AdmissionOrdering,
-    ) -> Result<AdmissionLookup, OrbitError> {
-        let location = ExecutionLocation {
-            machine_id: machine_id.into(),
-            machine_name: Some("display".into()),
-        };
-        self.backends.commit_boundary.admit_task(
-            &AdmissionIdentity::trusted_remote(location),
-            request,
-            ordering,
-            "test",
-            self.orbit_dir.parent().unwrap(),
-            &self.orbit_dir,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &|_, _, _| Ok(None),
-        )
-    }
-    fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {
-        match self.try_pull(request).expect("pull") {
-            AdmissionLookup::Found { receipt, .. } => *receipt,
-            other => panic!("expected a receipt: {other:?}"),
-        }
-    }
-    fn landing_starts(&self) -> Vec<LandingStartRequest> {
-        self.task_store().landing_start_requests().unwrap()
-    }
-    fn stored_task(&self, id: &str) -> Option<orbit_types::task::Task> {
-        self.task_store().get_task(id).unwrap()
-    }
-    fn bundle_path(&self, task_id: &str) -> PathBuf {
-        self.registry
-            .canonical_task_bundle_path(PARTITION_ID, task_id)
-            .unwrap()
-    }
-    fn update_evidence(
-        &self,
-        auth: &ClaimInvocation,
-        id: &str,
-        arts: Vec<TaskArtifact>,
-    ) -> ClaimResult {
-        let mutation = ClaimMutation::Update(ClaimWorkerUpdate {
-            evidence: claim_evidence(arts),
-            ..Default::default()
-        });
-        self.mutate(auth, id, &mutation)
-    }
-    fn upsert_artifacts(
-        &self,
-        task_id: &str,
-        artifacts: Vec<TaskArtifact>,
-    ) -> Result<(), OrbitError> {
-        let params = TaskArtifactUpdateParams {
-            write_provenance: None,
-            origin: None,
-            actor: "codex".to_string(),
-            owner_run_id: None,
-            writer: None,
-            upsert_artifacts: artifacts,
-        };
-        self.artifact_store().upsert_task_artifacts(task_id, params)
-    }
-    fn fail_claim(
-        &self,
-        auth: &ClaimInvocation,
-        id: &str,
-        summary: &str,
-        artifacts: Vec<TaskArtifact>,
-    ) -> ClaimResult {
-        let mutation = ClaimMutation::Fail(ClaimEvidence {
-            summary: Some(summary.to_string()),
-            artifacts,
-            ..Default::default()
-        });
-        self.mutate(auth, id, &mutation)
-    }
-}
 fn task_params(title: &str, selectors: &[&str]) -> TaskCreateParams {
     TaskCreateParams {
         actor: "codex".into(),
@@ -705,150 +902,6 @@ allocation_test!(
         assert_eq!(owner.claims().len(), 1);
     }
 );
-const OWNER_POLICY: &str = "workspace-config:workflow.distributed_completion";
-const REPOSITORY: &str = "owner/repository";
-const REVIEW_CREW: &str = "reviewer";
-/// One way a handoff's review evidence is spoiled before acceptance.
-type Tamper = fn(&mut Delivery);
-/// An admitted, bound claim with owner-held validation logs and its worker handoff.
-struct Delivery {
-    owner: Coordinated,
-    claim: ExecutionClaim,
-    handoff: TaskHandoff,
-    /// The owner's `workflow.required_validation_commands`.
-    required: Vec<String>,
-    /// The owner's own judgement of the handoff's known-red logs.
-    known_red: Vec<KnownRedObservation>,
-}
-impl Delivery {
-    fn admit(ship: AdmissionShipContract) -> Self {
-        Self::admit_requiring(ship, &["src/lib.rs"], &["build", "test"])
-    }
-    /// Admit a claim whose owner requires `required`, with one passing log per command.
-    fn admit_requiring(ship: AdmissionShipContract, selectors: &[&str], required: &[&str]) -> Self {
-        let owner = Coordinated::fixture();
-        owner.create_task_in("typed handoff", selectors);
-        let mut request = owner_request("first");
-        request.ship = ship.clone();
-        request.review_gate = ship.before_pr || ship.before_landing;
-        let claim = owner.pull(&request).claim.expect("claim");
-        let unbound = claim_worker(&claim, false);
-        owner.bind_claim(&unbound, &claim, ship).expect("bind");
-        let handoff = handoff_with_logs(&owner, &claim, required);
-        Self {
-            owner,
-            claim,
-            handoff,
-            required: required.iter().map(ToString::to_string).collect(),
-            known_red: Vec::new(),
-        }
-    }
-    fn assert_status(&self, status: TaskStatus) {
-        let got = self.owner.task_status(&self.claim.task_id);
-        assert_eq!(got, status, "{}", self.claim.task_id);
-    }
-    fn observation(&self, policy: Option<&str>) -> HandoffObservation {
-        let review = self
-            .handoff
-            .review
-            .evidence()
-            .map(|evidence| HandoffReviewObservation {
-                reviewed_base_sha: evidence.reviewed_base_sha.clone(),
-                reviewed_base_is_ancestor: true,
-                repository: REPOSITORY.into(),
-            });
-        HandoffObservation {
-            footprint_widening: self.handoff.footprint_widening.clone(),
-            candidate: self.handoff.candidate.clone(),
-            required_commands: self.required.clone(),
-            owner_completion_authority: policy.map(str::to_string),
-            review,
-            known_red: self.known_red.clone(),
-            light_delivery: Vec::new(),
-        }
-    }
-    fn worker(&self) -> ClaimInvocation {
-        claim_worker(&self.claim, true)
-    }
-    fn operator(&self) -> ClaimInvocation {
-        ClaimInvocation::trusted_operator(
-            self.claim.task_id.clone(),
-            self.claim.claim_id.clone(),
-            "owner-operator".into(),
-        )
-    }
-    fn accept(&self, policy: Option<&str>) -> ClaimResult {
-        self.accept_observed(self.observation(policy))
-    }
-    fn accept_observed(&self, observation: HandoffObservation) -> ClaimResult {
-        let worker = self.worker().with_handoff_observation(observation);
-        let mutation = ClaimMutation::AcceptHandoff(self.handoff.clone());
-        self.owner.mutate(&worker, "handoff", &mutation)
-    }
-    /// Persist `certificate` as claim evidence and carry it as the handoff's before-PR review.
-    fn reviewed(&mut self, certificate: &ReviewCertificate) {
-        let content = serde_json::to_vec(certificate).unwrap();
-        let reference = HandoffArtifactRef {
-            path: REVIEW_GATE_ARTIFACT.into(),
-            sha256: lower_hex(Sha256::digest(&content)),
-        };
-        let artifacts = vec![json_artifact(reference.path.clone(), content)];
-        let id = format!("review-certificate-{}", certificate.verdict.as_str());
-        self.owner
-            .put_evidence(&self.worker(), &id, artifacts)
-            .expect("persist the certificate on the owner");
-        let evidence = HandoffReviewEvidence {
-            attempt_id: certificate.attempt_id.clone(),
-            verdict: certificate.verdict,
-            reviewed_head_sha: self.handoff.candidate.candidate.commit.clone(),
-            reviewed_base_sha: certificate.base.commit.clone(),
-            reviewer_commit: certificate
-                .repair_commits
-                .last()
-                .map(|repair| repair.commit.clone()),
-            reviewer_crew: certificate.reviewer.crew.clone(),
-            reviewer_run_id: "leaf".into(),
-            certificate: reference,
-            artifacts: vec![],
-            host_evidence: vec![],
-        };
-        self.handoff.review = HandoffReview {
-            selective_receipt: None,
-            policy: ReviewTiming::BeforePr,
-            disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
-        };
-    }
-    fn review_evidence(&mut self) -> &mut HandoffReviewEvidence {
-        match &mut self.handoff.review.disposition {
-            HandoffReviewDisposition::BeforePr(evidence)
-            | HandoffReviewDisposition::BeforeLanding(evidence) => evidence,
-            HandoffReviewDisposition::NotRequired => panic!("the handoff carries no review"),
-        }
-    }
-    fn approve(&self) -> ClaimResult {
-        let boundary = &self.owner.backends.commit_boundary;
-        let accepted = boundary.accepted_handoff(&self.claim.claim_id)?;
-        let operator = self
-            .operator()
-            .with_handoff_observation(self.observation(None));
-        let mutation = ClaimMutation::ApproveHandoff {
-            handoff_id: accepted.handoff_id,
-            candidate: self.handoff.candidate.clone(),
-        };
-        self.owner.mutate(&operator, "approval", &mutation)
-    }
-    fn merge_intent(&self, policy: Option<&str>) -> ClaimResult {
-        let operator = self
-            .operator()
-            .with_handoff_observation(self.observation(policy));
-        let mutation = ClaimMutation::MergeIntent {
-            intent_id: "sent-merge".into(),
-            resolved: false,
-            evidence: "pinned provider request".into(),
-        };
-        self.owner.mutate(&operator, "merge-intent", &mutation)
-    }
-}
 fn claim_worker(claim: &ExecutionClaim, bound: bool) -> ClaimInvocation {
     ClaimInvocation::trusted_worker(
         claim.task_id.clone(),

@@ -101,20 +101,17 @@ const OPERATION_STEP: &str = "operation";
 /// The step that settles an interrupted commit before a section runs.
 const PENDING_RECOVERY_STEP: &str = "pending recovery";
 
-/// Lock policy for the host and partition locks. Shared holders record
-/// themselves, so a waiter blocked by ordinary sections can name them, and a
-/// queued admission or recovery holds back ordinary sections that arrive
-/// after it. Without that priority an exclusive waiter got the partition only
-/// at an instant when no ordinary section held it, and under drain load
-/// admissions waited past the 3 s warning behind a stream of overlapping
-/// readers (ORB-15107).
-fn boundary_lock_options() -> FileLockOptions {
-    FileLockOptions {
-        record_shared_holders: true,
-        warn_held_after: Some(SECTION_HOLD_WARN_AFTER),
-        prefer_exclusive_waiters: true,
-        ..FileLockOptions::default()
-    }
+thread_local! {
+    /// Depth of boundary sections this thread is inside. Recovery must never
+    /// run *inside* a commit this thread is performing: that commit's own
+    /// journal row is legitimately unsettled.
+    static BOUNDARY_DEPTH: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    /// Whether this thread is inside
+    /// [`TaskCommitBoundary::observe_for_status`].
+    static STATUS_OBSERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The boundary section taking a lock: its kind and the call site that
@@ -145,47 +142,6 @@ impl Section {
     }
 }
 
-fn shared_section<T>(
-    target: &Path,
-    section: Section,
-    mut options: FileLockOptions,
-    op: impl FnOnce() -> Result<T, OrbitError>,
-) -> Result<T, OrbitError> {
-    #[cfg(feature = "test-support")]
-    {
-        options = lock_timeout_hook::applied(options);
-    }
-    // A section nested inside another partition's section already holds that
-    // partition, which a writer queued here may be waiting behind indirectly:
-    // queueing this read behind that writer could close a cycle that plain
-    // shared locks never had. Only an outermost section yields to a writer.
-    // The depth counts partition sections only, so the host lock every
-    // section takes first does not exempt its partition read. A status-only
-    // observation never yields ([`TaskCommitBoundary::observe_for_status`]).
-    if BoundaryDepth::any() || StatusObservation::active() {
-        options.prefer_exclusive_waiters = false;
-    }
-    with_shared_file_lock_options(target, &section.label(), options, op)
-}
-
-fn exclusive_section<T>(
-    target: &Path,
-    section: Section,
-    options: FileLockOptions,
-    op: impl FnOnce() -> Result<T, OrbitError>,
-) -> Result<T, OrbitError> {
-    #[cfg(feature = "test-support")]
-    let options = lock_timeout_hook::applied(options);
-    with_exclusive_file_lock_options(target, &section.label(), options, op)
-}
-
-thread_local! {
-    /// Depth of boundary sections this thread is inside. Recovery must never
-    /// run *inside* a commit this thread is performing: that commit's own
-    /// journal row is legitimately unsettled.
-    static BOUNDARY_DEPTH: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 pub(super) struct BoundaryDepth;
 
 impl BoundaryDepth {
@@ -212,12 +168,6 @@ impl Drop for BoundaryDepth {
     }
 }
 
-thread_local! {
-    /// Whether this thread is inside
-    /// [`TaskCommitBoundary::observe_for_status`].
-    static STATUS_OBSERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 struct StatusObservation {
     outer: bool,
 }
@@ -240,16 +190,6 @@ impl Drop for StatusObservation {
     }
 }
 
-fn host_lock_for_partition(partition: &Path) -> PathBuf {
-    // Partitions are tasks/workspaces/<id>. Keep host metadata beside the
-    // registry database, outside the directory enumerated as workspaces.
-    partition
-        .ancestors()
-        .nth(2)
-        .unwrap_or(partition)
-        .join("host-task-commit")
-}
-
 impl TaskCommitBoundary {
     pub fn new(
         store: Store,
@@ -259,10 +199,11 @@ impl TaskCommitBoundary {
         let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
         create_private_dir_all(&partition_dir)
             .map_err(|error| OrbitError::from_write_io(&partition_dir, error))?;
+        let bundle_store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
         let boundary = Self {
-            bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             store,
             registry,
+            bundle_store,
             workspace_id,
             partition_dir,
             lock_options: boundary_lock_options(),
@@ -316,10 +257,11 @@ impl TaskCommitBoundary {
         workspace_id: String,
     ) -> Result<Self, OrbitError> {
         let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
+        let bundle_store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
         let boundary = Self {
-            bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             store,
             registry,
+            bundle_store,
             workspace_id,
             partition_dir,
             lock_options: boundary_lock_options(),
@@ -631,6 +573,66 @@ impl TaskCommitBoundary {
     }
 }
 
+/// Lock policy for the host and partition locks. Shared holders record
+/// themselves, so a waiter blocked by ordinary sections can name them, and a
+/// queued admission or recovery holds back ordinary sections that arrive
+/// after it. Without that priority an exclusive waiter got the partition only
+/// at an instant when no ordinary section held it, and under drain load
+/// admissions waited past the 3 s warning behind a stream of overlapping
+/// readers (ORB-15107).
+fn boundary_lock_options() -> FileLockOptions {
+    FileLockOptions {
+        record_shared_holders: true,
+        warn_held_after: Some(SECTION_HOLD_WARN_AFTER),
+        prefer_exclusive_waiters: true,
+        ..FileLockOptions::default()
+    }
+}
+
+fn shared_section<T>(
+    target: &Path,
+    section: Section,
+    mut options: FileLockOptions,
+    op: impl FnOnce() -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
+    #[cfg(feature = "test-support")]
+    {
+        options = lock_timeout_hook::applied(options);
+    }
+    // A section nested inside another partition's section already holds that
+    // partition, which a writer queued here may be waiting behind indirectly:
+    // queueing this read behind that writer could close a cycle that plain
+    // shared locks never had. Only an outermost section yields to a writer.
+    // The depth counts partition sections only, so the host lock every
+    // section takes first does not exempt its partition read. A status-only
+    // observation never yields ([`TaskCommitBoundary::observe_for_status`]).
+    if BoundaryDepth::any() || StatusObservation::active() {
+        options.prefer_exclusive_waiters = false;
+    }
+    with_shared_file_lock_options(target, &section.label(), options, op)
+}
+
+fn exclusive_section<T>(
+    target: &Path,
+    section: Section,
+    options: FileLockOptions,
+    op: impl FnOnce() -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
+    #[cfg(feature = "test-support")]
+    let options = lock_timeout_hook::applied(options);
+    with_exclusive_file_lock_options(target, &section.label(), options, op)
+}
+
+fn host_lock_for_partition(partition: &Path) -> PathBuf {
+    // Partitions are tasks/workspaces/<id>. Keep host metadata beside the
+    // registry database, outside the directory enumerated as workspaces.
+    partition
+        .ancestors()
+        .nth(2)
+        .unwrap_or(partition)
+        .join("host-task-commit")
+}
+
 /// What each outermost admission section on this thread cost, so tests can
 /// bound the work done while other task writers wait, and tell a
 /// partition-scoped section from a host-wide one.
@@ -641,6 +643,11 @@ pub(crate) mod section_probe {
     use orbit_common::fs::io::durability_syncs_requested;
     use std::cell::{Cell, RefCell};
     use std::time::{Duration, Instant};
+
+    thread_local! {
+        static DEPTH: Cell<u32> = const { Cell::new(0) };
+        pub(crate) static SECTIONS: RefCell<Vec<SectionCost>> = const { RefCell::new(Vec::new()) };
+    }
 
     /// One exclusive section: its kind (`admission` holds the host lock
     /// shared, `host admission` exclusively), how long it was held, the
@@ -654,11 +661,6 @@ pub(crate) mod section_probe {
         pub(crate) canonical_reads: u64,
         pub(crate) durability_syncs: u64,
         pub(crate) state_decodes: u64,
-    }
-
-    thread_local! {
-        static DEPTH: Cell<u32> = const { Cell::new(0) };
-        pub(crate) static SECTIONS: RefCell<Vec<SectionCost>> = const { RefCell::new(Vec::new()) };
     }
 
     pub(super) struct SectionProbe {

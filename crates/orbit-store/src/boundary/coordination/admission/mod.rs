@@ -23,19 +23,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
+
+const CLAIM_KIND: &str = "distributed-execution-claim-v1";
+
+pub const ADMISSION_RESERVATION_TTL_SECONDS: u32 = 14_400;
 /// The in-section re-check of assessment-scoped holds a caller gives
 /// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
 /// history read with it, to the hold's diagnostic, or `None` when it is free.
 pub type ValidationHold<'a> =
     dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
-
 /// Owner callback invoked only for the selected task, before claim persistence.
 pub type AdmissionGuidanceCapture<'a> =
     dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
-
-pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
-const CLAIM_KIND: &str = "distributed-execution-claim-v1";
-pub const ADMISSION_RESERVATION_TTL_SECONDS: u32 = 14_400;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]

@@ -4,6 +4,17 @@ use orbit_types::workflow::JobRunState;
 
 use crate::contract::{JobRunOrder, JobRunQuery};
 
+/// Columns [`row_to_job_run`] reads, in its order.
+///
+/// Every listing, show and filter path selects these, so none may sit behind
+/// an unbounded payload in the stored record: SQLite reaches a column only by
+/// walking the overflow-page chain of every large value stored before it.
+/// Pipeline state lives in `job_run_states` for that reason.
+pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
+     started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
+     retry_source_run_id, knowledge_metrics_json, resolved_crew, \
+     crew_model, executed_on_json, build_json";
+
 /// The run-row `SELECT` and its bound parameters for a [`JobRunQuery`]:
 /// filter, order, and `LIMIT`. Steps are read separately.
 pub(super) fn job_run_list_sql(
@@ -147,17 +158,6 @@ fn live_states_only(query: &JobRunQuery) -> bool {
 fn names_success(query: &JobRunQuery) -> bool {
     query.state == Some(JobRunState::Success) || query.states.contains(&JobRunState::Success)
 }
-
-/// Columns [`row_to_job_run`] reads, in its order.
-///
-/// Every listing, show and filter path selects these, so none may sit behind
-/// an unbounded payload in the stored record: SQLite reaches a column only by
-/// walking the overflow-page chain of every large value stored before it.
-/// Pipeline state lives in `job_run_states` for that reason.
-pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
-     started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
-     retry_source_run_id, knowledge_metrics_json, resolved_crew, \
-     crew_model, executed_on_json, build_json";
 
 /// Probe the existing per-job created index once per requested ID, then
 /// hydrate only that run. A window over all history would scan old runs to

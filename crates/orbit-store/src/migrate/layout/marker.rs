@@ -31,6 +31,12 @@ const WRITER_FILE: &str = "layout.writer";
 /// Advisory lock serializing concurrent upgraders, relative to `state/`.
 const UPGRADE_LOCK_FILE: &str = "layout.lock";
 
+#[derive(Serialize, Deserialize)]
+struct LayoutWriter {
+    layout_version: u32,
+    executable: PathBuf,
+}
+
 fn marker_path(orbit_dir: &Path) -> PathBuf {
     orbit_dir.join("state").join(MARKER_FILE)
 }
@@ -41,12 +47,6 @@ pub(super) fn upgrade_lock_path(orbit_dir: &Path) -> PathBuf {
 
 fn writer_path(orbit_dir: &Path) -> PathBuf {
     orbit_dir.join("state").join(WRITER_FILE)
-}
-
-#[derive(Serialize, Deserialize)]
-struct LayoutWriter {
-    layout_version: u32,
-    executable: PathBuf,
 }
 
 /// Record this executable as the one that advanced the layout to `version`.

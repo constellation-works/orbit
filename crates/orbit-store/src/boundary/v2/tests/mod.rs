@@ -52,9 +52,6 @@ pub(super) fn bound_store_at(
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskCreateParams {
-        write_provenance: None,
-        granted_tools: Vec::new(),
-        requires_labels: Vec::new(),
         actor: "codex:gpt-5.5".to_string(),
         parent_id: None,
         title: title.to_string(),
@@ -67,11 +64,15 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         relations: Vec::new(),
         tags: vec!["task-artifacts".to_string(), "v2".to_string()],
         required_tools: Vec::new(),
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
+        not_before: None,
         plan: "1. Do the work".to_string(),
         execution_summary: String::new(),
         context_files: vec!["docs/design/task-artifacts/1_overview.md".to_string()],
         repo_root: None,
         created_by: Some("codex:gpt-5.5".to_string()),
+        created_by_model: None,
         planned_by: None,
         implemented_by: None,
         status,
@@ -87,7 +88,6 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
-        created_by_model: None,
         origin: None,
         rule_fingerprint: None,
         comments: vec![TaskComment {
@@ -98,6 +98,6 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         }],
         context_creation: Vec::new(),
         creation_decision: None,
-        not_before: None,
+        write_provenance: None,
     }
 }

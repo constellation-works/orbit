@@ -682,8 +682,8 @@ fn register_installed_plugin(
         tools,
         diagnostic: None,
         grants_authorized: true,
-        config_values: backend.spec().config_values(),
         loaded: Some(plugin),
+        config_values: backend.spec().config_values(),
         disabled_by: None,
     }
 }

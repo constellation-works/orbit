@@ -135,6 +135,12 @@ impl<'a, 'tx> SessionLogRepository<'a, FileTx<'tx, SessionLogDir>> {
     }
 }
 
+struct SessionLogScan {
+    entries: Vec<SessionLogEntry>,
+    truncate_at: usize,
+    missing_newline: bool,
+}
+
 fn next_id(entries: &[SessionLogEntry]) -> Result<String, OrbitError> {
     let current = entries
         .iter()
@@ -164,12 +170,6 @@ fn read_entries_for_append(dir: &SessionLogDir) -> Result<Vec<SessionLogEntry>, 
     let scan = scan_entries(&dir.log_path(), &raw)?;
     persist_scan_repair(dir, raw.len(), &scan)?;
     Ok(scan.entries)
-}
-
-struct SessionLogScan {
-    entries: Vec<SessionLogEntry>,
-    truncate_at: usize,
-    missing_newline: bool,
 }
 
 fn scan_entries(path: &Path, raw: &[u8]) -> Result<SessionLogScan, OrbitError> {

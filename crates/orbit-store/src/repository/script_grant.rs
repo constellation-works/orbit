@@ -23,63 +23,6 @@ const SCRIPT_GRANT_COLUMNS: &str = "workspace_id, name, grant_id, digest, manife
      entry_digest, interpreter_paths_json, network, read_roots_json, write_roots_json, \
      env_pass_json, limits_json, host_role, grantor, granted_at, provenance, expires_at";
 
-fn json_column<T: serde::de::DeserializeOwned>(row: &Row<'_>, index: usize) -> rusqlite::Result<T> {
-    let raw: String = row.get(index)?;
-    serde_json::from_str(&raw).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            index,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
-    })
-}
-
-fn script_grant_from_row(row: &Row<'_>) -> rusqlite::Result<ScriptGrant> {
-    let network_raw: String = row.get(7)?;
-    let host_role_raw: String = row.get(12)?;
-    // An unparseable stored limits blob reads as the default ceilings
-    // rather than as no limits; the witness check above this layer is
-    // what refuses a tampered row, and it digests the typed record.
-    let limits_raw: String = row.get(11)?;
-    let limits: ScriptGrantLimits = serde_json::from_str(&limits_raw).unwrap_or_default();
-    Ok(ScriptGrant {
-        workspace_id: row.get(0)?,
-        name: row.get(1)?,
-        grant_id: row.get(2)?,
-        digest: row.get(3)?,
-        manifest_digest: row.get(4)?,
-        entry_digest: row.get(5)?,
-        interpreter_paths: json_column(row, 6)?,
-        network: ScriptNetwork::parse(&network_raw).ok_or_else(|| {
-            rusqlite::Error::FromSqlConversionFailure(
-                7,
-                rusqlite::types::Type::Text,
-                format!("unknown script network `{network_raw}`").into(),
-            )
-        })?,
-        read_roots: json_column(row, 8)?,
-        write_roots: json_column(row, 9)?,
-        env_pass: json_column(row, 10)?,
-        limits,
-        host_role: ScriptHostRole::parse(&host_role_raw).ok_or_else(|| {
-            rusqlite::Error::FromSqlConversionFailure(
-                12,
-                rusqlite::types::Type::Text,
-                format!("unknown script host role `{host_role_raw}`").into(),
-            )
-        })?,
-        grantor: row.get(13)?,
-        granted_at: row.get(14)?,
-        provenance: row.get(15)?,
-        expires_at: row.get(16)?,
-    })
-}
-
-fn serialize_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String, OrbitError> {
-    serde_json::to_string(value)
-        .map_err(|error| OrbitError::Store(format!("serialize script grant {what}: {error}")))
-}
-
 /// Concrete script grant repository scoped to a [`Snapshot`] (read-only) or a
 /// [`Tx`] (read-write).
 pub struct ScriptGrantRepository<'a, Access> {
@@ -196,4 +139,61 @@ impl<'a, 'tx> ScriptGrantRepository<'a, Tx<'tx>> {
             .map_err(sqlite_store_error)?;
         Ok(affected > 0)
     }
+}
+
+fn json_column<T: serde::de::DeserializeOwned>(row: &Row<'_>, index: usize) -> rusqlite::Result<T> {
+    let raw: String = row.get(index)?;
+    serde_json::from_str(&raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+fn script_grant_from_row(row: &Row<'_>) -> rusqlite::Result<ScriptGrant> {
+    let network_raw: String = row.get(7)?;
+    let host_role_raw: String = row.get(12)?;
+    // An unparseable stored limits blob reads as the default ceilings
+    // rather than as no limits; the witness check above this layer is
+    // what refuses a tampered row, and it digests the typed record.
+    let limits_raw: String = row.get(11)?;
+    let limits: ScriptGrantLimits = serde_json::from_str(&limits_raw).unwrap_or_default();
+    Ok(ScriptGrant {
+        workspace_id: row.get(0)?,
+        name: row.get(1)?,
+        grant_id: row.get(2)?,
+        digest: row.get(3)?,
+        manifest_digest: row.get(4)?,
+        entry_digest: row.get(5)?,
+        interpreter_paths: json_column(row, 6)?,
+        network: ScriptNetwork::parse(&network_raw).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                7,
+                rusqlite::types::Type::Text,
+                format!("unknown script network `{network_raw}`").into(),
+            )
+        })?,
+        read_roots: json_column(row, 8)?,
+        write_roots: json_column(row, 9)?,
+        env_pass: json_column(row, 10)?,
+        limits,
+        host_role: ScriptHostRole::parse(&host_role_raw).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                12,
+                rusqlite::types::Type::Text,
+                format!("unknown script host role `{host_role_raw}`").into(),
+            )
+        })?,
+        grantor: row.get(13)?,
+        granted_at: row.get(14)?,
+        provenance: row.get(15)?,
+        expires_at: row.get(16)?,
+    })
+}
+
+fn serialize_json<T: serde::Serialize>(value: &T, what: &str) -> Result<String, OrbitError> {
+    serde_json::to_string(value)
+        .map_err(|error| OrbitError::Store(format!("serialize script grant {what}: {error}")))
 }

@@ -30,24 +30,6 @@ use crate::driver::sqlite::codec::{
 };
 use crate::store::{Snapshot, Tx};
 
-/// SQLite integers are signed; a byte count past `i64::MAX` saturates.
-fn bytes(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-fn encode<T: serde::Serialize>(value: &T, what: &str) -> Result<String, OrbitError> {
-    serde_json::to_string(value)
-        .map_err(|error| OrbitError::Store(format!("encode {what}: {error}")))
-}
-
-/// A JSON column read back; a value this binary cannot read is a
-/// conversion failure of that column.
-fn decode<T: serde::de::DeserializeOwned>(index: usize, raw: &str) -> rusqlite::Result<T> {
-    serde_json::from_str(raw).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, error.into())
-    })
-}
-
 /// Concrete resource-usage repository scoped to a [`Snapshot`] (read-only)
 /// or a [`Tx`] (read-write).
 pub struct ResourceUsageRepository<'a, Access> {
@@ -547,6 +529,24 @@ impl<Access> WorkerResourceLimitRepository<'_, Access> {
             |row| decode(0, &row.get::<_, String>(0)?),
         ).optional().map_err(sqlite_store_error)
     }
+}
+
+/// SQLite integers are signed; a byte count past `i64::MAX` saturates.
+fn bytes(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn encode<T: serde::Serialize>(value: &T, what: &str) -> Result<String, OrbitError> {
+    serde_json::to_string(value)
+        .map_err(|error| OrbitError::Store(format!("encode {what}: {error}")))
+}
+
+/// A JSON column read back; a value this binary cannot read is a
+/// conversion failure of that column.
+fn decode<T: serde::de::DeserializeOwned>(index: usize, raw: &str) -> rusqlite::Result<T> {
+    serde_json::from_str(raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, error.into())
+    })
 }
 
 fn resource_retention_timestamp(table: ResourceMinutesTable) -> &'static str {

@@ -169,6 +169,13 @@ impl RuntimeKernel {
     }
 }
 
+#[derive(Clone, Copy)]
+enum V2ActivityCatalogDirKind {
+    Explicit,
+    Global,
+    WorkspaceLocal,
+}
+
 fn warn_skipped_retired_activity_assets(dir: &Path, skipped: Vec<PathBuf>) {
     if skipped.is_empty() {
         return;
@@ -179,13 +186,6 @@ fn warn_skipped_retired_activity_assets(dir: &Path, skipped: Vec<PathBuf>) {
         dir = %dir.display(),
         "skipped retired schemaVersion 1 activity assets while loading",
     );
-}
-
-#[derive(Clone, Copy)]
-enum V2ActivityCatalogDirKind {
-    Explicit,
-    Global,
-    WorkspaceLocal,
 }
 
 fn is_default_activity_name(name: &str) -> bool {

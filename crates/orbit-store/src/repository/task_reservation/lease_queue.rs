@@ -34,6 +34,11 @@ use crate::contract::{
 };
 use crate::{Store, StoreTx};
 
+/// JSON `null`, the fixed token answer's `deadlock` value. A real cycle
+/// replaces those four bytes and spends the rest of the expansion's
+/// `deadlock_budget_bytes`.
+const ABSENT_DEADLOCK_BYTES: usize = 4;
+
 /// One waiting request or expansion with its effective rank.
 struct QueuedLease {
     record: LeaseRecord,
@@ -49,6 +54,225 @@ impl QueuedLease {
             .cmp(&self.rank)
             .then(self.queued_at.cmp(&other.queued_at))
             .then(self.record.lease_id.cmp(&other.record.lease_id))
+    }
+}
+
+impl Store {
+    /// Grant, in queue order, every waiting request whose paths are now free
+    /// and every free selector of a waiting expansion. Entries without an
+    /// entry in `task_conflicts` stay queued and still rank ahead. A grant
+    /// can close a deadlock cycle the queueing expansion did not (a lease
+    /// gains a path another expansion waits on while still waiting on the
+    /// first lease), so any cycle present after the pass is broken.
+    pub fn grant_queued_leases(
+        &self,
+        params: &LeaseQueueGrantParams,
+    ) -> Result<LeaseQueueGrantResult, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let dir = params.workspace_orbit_dir.as_str();
+            let workspace_id = params.workspace_id.as_deref();
+            let expired_leases = expire_leases(tx, dir, workspace_id, &crate::now_string())?;
+            let lock_modes = tx.lock_modes.clone();
+            let mut waiting: Vec<Vec<String>> = Vec::new();
+            let mut granted = Vec::new();
+            for entry in load_queue(tx, dir, workspace_id, params.aging_minutes)? {
+                let lease = &entry.record;
+                let wanted = &lease.queued_selectors;
+                let Some(tasks) = params.task_conflicts.get(&lease.lease_id) else {
+                    waiting.push(wanted.clone());
+                    continue;
+                };
+                let mut held = BTreeSet::new();
+                visit_holder_conflicts(tx, dir, workspace_id, wanted, &lease.lease_id, &mut |c| {
+                    held.insert(c.file);
+                })?;
+                let (free, rest): (Vec<String>, Vec<String>) = match entry.kind {
+                    LeaseQueueKind::Request => {
+                        let blocked = !tasks.is_empty()
+                            || !held.is_empty()
+                            || waiting
+                                .iter()
+                                .any(|ahead| lock_modes.footprints_block(wanted, ahead));
+                        if blocked {
+                            (Vec::new(), wanted.clone())
+                        } else {
+                            (wanted.clone(), Vec::new())
+                        }
+                    }
+                    LeaseQueueKind::Expansion => wanted.iter().cloned().partition(|selector| {
+                        !held.contains(selector)
+                            && !tasks.iter().any(|conflict| &conflict.file == selector)
+                    }),
+                };
+                if !free.is_empty() {
+                    let queued_at = lease.queued_at.clone().unwrap_or_default();
+                    store_lease_surface(
+                        tx,
+                        &lease.lease_id,
+                        &union(&lease.selectors, &free),
+                        &rest,
+                        entry.kind,
+                        &queued_at,
+                    )?;
+                    notify_grant(tx, dir, workspace_id, lease, &free, entry.kind, &rest)?;
+                    granted.push(LeaseQueueGrant {
+                        lease_id: lease.lease_id.clone(),
+                        kind: entry.kind,
+                        selectors: free,
+                        still_queued: rest.clone(),
+                    });
+                }
+                if !rest.is_empty() {
+                    waiting.push(rest);
+                }
+            }
+            let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
+            append_deadlock_notices(tx, &deadlocks)?;
+            Ok(LeaseQueueGrantResult {
+                granted,
+                deadlocks,
+                expired_leases,
+            })
+        })
+    }
+
+    /// Add selectors to a granted lease. An advisory lease takes them all; a
+    /// hard lease takes the free ones and queues the rest as an expansion,
+    /// keeping what it holds, then any deadlock this closes is broken.
+    pub fn expand_lease(
+        &self,
+        params: &LeaseExpandParams,
+    ) -> Result<LeaseExpandResult, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let dir = params.workspace_orbit_dir.as_str();
+            let workspace_id = params.workspace_id.as_deref();
+            let now = crate::now_string();
+            let expired_leases = expire_leases(tx, dir, workspace_id, &now)?;
+            let mut result = LeaseExpandResult {
+                lease: None,
+                added: Vec::new(),
+                queued: Vec::new(),
+                conflicts: Vec::new(),
+                queue_position: None,
+                deadlocks: Vec::new(),
+                expired_leases,
+                selector_limit_exceeded: false,
+                holders_truncated: false,
+            };
+            let Some(lease) =
+                load_lease(tx, dir, workspace_id, &params.lease_id)?.filter(|lease| {
+                    lease.released_at.is_none()
+                        && lease.queue_kind != Some(LeaseQueueKind::Request)
+                        && lease.expires_at > now
+                })
+            else {
+                return Ok(result);
+            };
+            let selectors = params
+                .selectors
+                .iter()
+                .filter(|selector| {
+                    !lease.selectors.contains(selector)
+                        && !lease.queued_selectors.contains(selector)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Some(max) = params.max_selectors
+                && lease.selectors.len() + lease.queued_selectors.len() + selectors.len()
+                    > max as usize
+            {
+                result.selector_limit_exceeded = true;
+                return Ok(result);
+            }
+            // Which selectors wait is decided from every holder; the answer
+            // and the queued notice show only the prefix
+            // `holder_list_bytes` fits.
+            let mut shown = HolderList::new(params.holder_list_bytes);
+            let (added, queued, conflicts) = if lease.mode == LeaseMode::Hard {
+                let mut blocked = BTreeSet::new();
+                for conflict in &params.task_conflicts {
+                    if selectors.contains(&conflict.file) {
+                        blocked.insert(conflict.file.clone());
+                        shown.offer(conflict.clone());
+                    }
+                }
+                visit_holder_conflicts(
+                    tx,
+                    dir,
+                    workspace_id,
+                    &selectors,
+                    &lease.lease_id,
+                    &mut |conflict| {
+                        blocked.insert(conflict.file.clone());
+                        shown.offer(conflict);
+                    },
+                )?;
+                let (added, queued): (Vec<String>, Vec<String>) = selectors
+                    .into_iter()
+                    .partition(|selector| !blocked.contains(selector));
+                (added, queued, shown.take_conflicts())
+            } else {
+                (selectors, Vec::new(), Vec::new())
+            };
+            let waiting = union(&lease.queued_selectors, &queued);
+            let queued_at = lease.queued_at.clone().unwrap_or_else(|| now.clone());
+            store_lease_surface(
+                tx,
+                &lease.lease_id,
+                &union(&lease.selectors, &added),
+                &waiting,
+                LeaseQueueKind::Expansion,
+                &queued_at,
+            )?;
+            if !added.is_empty() {
+                notify_grant(
+                    tx,
+                    dir,
+                    workspace_id,
+                    &lease,
+                    &added,
+                    LeaseQueueKind::Expansion,
+                    &waiting,
+                )?;
+            }
+            let mut holders_truncated = shown.truncated();
+            let mut conflicts = conflicts;
+            if !queued.is_empty() {
+                // Position while this expansion is still queued. Breaking a
+                // deadlock clears the victim before the answer is built.
+                let position =
+                    queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
+                let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
+                (conflicts, holders_truncated) =
+                    bound_deadlock_answer(params, &deadlocks, conflicts, holders_truncated)?;
+                let mut payload = json!({
+                    "selectors": queued,
+                    "expansion": true,
+                    "holders": conflicts,
+                    "position": position,
+                });
+                if holders_truncated {
+                    payload["truncated"] = json!(true);
+                }
+                notices::append_lease_notice(
+                    tx,
+                    &lease.lease_id,
+                    "queued",
+                    &payload,
+                    &format!("queued:expansion:{}", unique_row_id("")),
+                )?;
+                append_deadlock_notices(tx, &deadlocks)?;
+                result.deadlocks = deadlocks;
+            }
+            result.queue_position =
+                queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
+            result.lease = load_lease(tx, dir, workspace_id, &lease.lease_id)?;
+            result.added = added;
+            result.queued = queued;
+            result.conflicts = conflicts;
+            result.holders_truncated = holders_truncated;
+            Ok(result)
+        })
     }
 }
 
@@ -119,11 +343,12 @@ fn load_queue(
             .as_deref()
             .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
             .map_or(now, |at| at.with_timezone(&Utc));
+        let rank = effective_rank(record.priority, queued_at, now, aging_minutes);
         queue.push(QueuedLease {
-            rank: effective_rank(record.priority, queued_at, now, aging_minutes),
-            kind,
-            queued_at,
             record,
+            kind,
+            rank,
+            queued_at,
         });
     }
     queue.sort_by(QueuedLease::queue_order);
@@ -402,11 +627,6 @@ fn break_deadlocks(
     }
 }
 
-/// JSON `null`, the fixed token answer's `deadlock` value. A real cycle
-/// replaces those four bytes and spends the rest of the expansion's
-/// `deadlock_budget_bytes`.
-const ABSENT_DEADLOCK_BYTES: usize = 4;
-
 fn serialized_len(value: &impl serde::Serialize) -> usize {
     serde_json::to_vec(value).map_or(usize::MAX / 2, |encoded| encoded.len())
 }
@@ -479,223 +699,4 @@ fn append_deadlock_notices(
         )?;
     }
     Ok(())
-}
-
-impl Store {
-    /// Grant, in queue order, every waiting request whose paths are now free
-    /// and every free selector of a waiting expansion. Entries without an
-    /// entry in `task_conflicts` stay queued and still rank ahead. A grant
-    /// can close a deadlock cycle the queueing expansion did not (a lease
-    /// gains a path another expansion waits on while still waiting on the
-    /// first lease), so any cycle present after the pass is broken.
-    pub fn grant_queued_leases(
-        &self,
-        params: &LeaseQueueGrantParams,
-    ) -> Result<LeaseQueueGrantResult, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let dir = params.workspace_orbit_dir.as_str();
-            let workspace_id = params.workspace_id.as_deref();
-            let expired_leases = expire_leases(tx, dir, workspace_id, &crate::now_string())?;
-            let lock_modes = tx.lock_modes.clone();
-            let mut waiting: Vec<Vec<String>> = Vec::new();
-            let mut granted = Vec::new();
-            for entry in load_queue(tx, dir, workspace_id, params.aging_minutes)? {
-                let lease = &entry.record;
-                let wanted = &lease.queued_selectors;
-                let Some(tasks) = params.task_conflicts.get(&lease.lease_id) else {
-                    waiting.push(wanted.clone());
-                    continue;
-                };
-                let mut held = BTreeSet::new();
-                visit_holder_conflicts(tx, dir, workspace_id, wanted, &lease.lease_id, &mut |c| {
-                    held.insert(c.file);
-                })?;
-                let (free, rest): (Vec<String>, Vec<String>) = match entry.kind {
-                    LeaseQueueKind::Request => {
-                        let blocked = !tasks.is_empty()
-                            || !held.is_empty()
-                            || waiting
-                                .iter()
-                                .any(|ahead| lock_modes.footprints_block(wanted, ahead));
-                        if blocked {
-                            (Vec::new(), wanted.clone())
-                        } else {
-                            (wanted.clone(), Vec::new())
-                        }
-                    }
-                    LeaseQueueKind::Expansion => wanted.iter().cloned().partition(|selector| {
-                        !held.contains(selector)
-                            && !tasks.iter().any(|conflict| &conflict.file == selector)
-                    }),
-                };
-                if !free.is_empty() {
-                    let queued_at = lease.queued_at.clone().unwrap_or_default();
-                    store_lease_surface(
-                        tx,
-                        &lease.lease_id,
-                        &union(&lease.selectors, &free),
-                        &rest,
-                        entry.kind,
-                        &queued_at,
-                    )?;
-                    notify_grant(tx, dir, workspace_id, lease, &free, entry.kind, &rest)?;
-                    granted.push(LeaseQueueGrant {
-                        lease_id: lease.lease_id.clone(),
-                        kind: entry.kind,
-                        selectors: free,
-                        still_queued: rest.clone(),
-                    });
-                }
-                if !rest.is_empty() {
-                    waiting.push(rest);
-                }
-            }
-            let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
-            append_deadlock_notices(tx, &deadlocks)?;
-            Ok(LeaseQueueGrantResult {
-                granted,
-                deadlocks,
-                expired_leases,
-            })
-        })
-    }
-
-    /// Add selectors to a granted lease. An advisory lease takes them all; a
-    /// hard lease takes the free ones and queues the rest as an expansion,
-    /// keeping what it holds, then any deadlock this closes is broken.
-    pub fn expand_lease(
-        &self,
-        params: &LeaseExpandParams,
-    ) -> Result<LeaseExpandResult, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let dir = params.workspace_orbit_dir.as_str();
-            let workspace_id = params.workspace_id.as_deref();
-            let now = crate::now_string();
-            let expired_leases = expire_leases(tx, dir, workspace_id, &now)?;
-            let mut result = LeaseExpandResult {
-                lease: None,
-                added: Vec::new(),
-                queued: Vec::new(),
-                conflicts: Vec::new(),
-                queue_position: None,
-                deadlocks: Vec::new(),
-                expired_leases,
-                selector_limit_exceeded: false,
-                holders_truncated: false,
-            };
-            let Some(lease) =
-                load_lease(tx, dir, workspace_id, &params.lease_id)?.filter(|lease| {
-                    lease.released_at.is_none()
-                        && lease.queue_kind != Some(LeaseQueueKind::Request)
-                        && lease.expires_at > now
-                })
-            else {
-                return Ok(result);
-            };
-            let selectors = params
-                .selectors
-                .iter()
-                .filter(|selector| {
-                    !lease.selectors.contains(selector)
-                        && !lease.queued_selectors.contains(selector)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if let Some(max) = params.max_selectors
-                && lease.selectors.len() + lease.queued_selectors.len() + selectors.len()
-                    > max as usize
-            {
-                result.selector_limit_exceeded = true;
-                return Ok(result);
-            }
-            // Which selectors wait is decided from every holder; the answer
-            // and the queued notice show only the prefix
-            // `holder_list_bytes` fits.
-            let mut shown = HolderList::new(params.holder_list_bytes);
-            let (added, queued, conflicts) = if lease.mode == LeaseMode::Hard {
-                let mut blocked = BTreeSet::new();
-                for conflict in &params.task_conflicts {
-                    if selectors.contains(&conflict.file) {
-                        blocked.insert(conflict.file.clone());
-                        shown.offer(conflict.clone());
-                    }
-                }
-                visit_holder_conflicts(
-                    tx,
-                    dir,
-                    workspace_id,
-                    &selectors,
-                    &lease.lease_id,
-                    &mut |conflict| {
-                        blocked.insert(conflict.file.clone());
-                        shown.offer(conflict);
-                    },
-                )?;
-                let (added, queued): (Vec<String>, Vec<String>) = selectors
-                    .into_iter()
-                    .partition(|selector| !blocked.contains(selector));
-                (added, queued, shown.take_conflicts())
-            } else {
-                (selectors, Vec::new(), Vec::new())
-            };
-            let waiting = union(&lease.queued_selectors, &queued);
-            let queued_at = lease.queued_at.clone().unwrap_or_else(|| now.clone());
-            store_lease_surface(
-                tx,
-                &lease.lease_id,
-                &union(&lease.selectors, &added),
-                &waiting,
-                LeaseQueueKind::Expansion,
-                &queued_at,
-            )?;
-            if !added.is_empty() {
-                notify_grant(
-                    tx,
-                    dir,
-                    workspace_id,
-                    &lease,
-                    &added,
-                    LeaseQueueKind::Expansion,
-                    &waiting,
-                )?;
-            }
-            let mut holders_truncated = shown.truncated();
-            let mut conflicts = conflicts;
-            if !queued.is_empty() {
-                // Position while this expansion is still queued. Breaking a
-                // deadlock clears the victim before the answer is built.
-                let position =
-                    queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
-                let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
-                (conflicts, holders_truncated) =
-                    bound_deadlock_answer(params, &deadlocks, conflicts, holders_truncated)?;
-                let mut payload = json!({
-                    "selectors": queued,
-                    "expansion": true,
-                    "holders": conflicts,
-                    "position": position,
-                });
-                if holders_truncated {
-                    payload["truncated"] = json!(true);
-                }
-                notices::append_lease_notice(
-                    tx,
-                    &lease.lease_id,
-                    "queued",
-                    &payload,
-                    &format!("queued:expansion:{}", unique_row_id("")),
-                )?;
-                append_deadlock_notices(tx, &deadlocks)?;
-                result.deadlocks = deadlocks;
-            }
-            result.queue_position =
-                queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
-            result.lease = load_lease(tx, dir, workspace_id, &lease.lease_id)?;
-            result.added = added;
-            result.queued = queued;
-            result.conflicts = conflicts;
-            result.holders_truncated = holders_truncated;
-            Ok(result)
-        })
-    }
 }

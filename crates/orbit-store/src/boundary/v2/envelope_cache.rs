@@ -87,29 +87,6 @@ impl EnvelopeStamp {
     }
 }
 
-/// [`EnvelopeStamp::persisted`] for any store file the same writes replace
-/// or append to, such as a bundle's event and comment logs.
-pub(super) fn persisted_file_stamp(path: &Path) -> Option<String> {
-    file_stamp(path)?.persisted()
-}
-
-/// [`persisted_file_stamp`] from metadata the caller already holds.
-pub(super) fn persisted_metadata_stamp(metadata: &Metadata) -> Option<String> {
-    metadata_stamp(metadata).persisted()
-}
-
-fn file_stamp(path: &Path) -> Option<EnvelopeStamp> {
-    Some(metadata_stamp(&fs::metadata(path).ok()?))
-}
-
-fn metadata_stamp(metadata: &Metadata) -> EnvelopeStamp {
-    EnvelopeStamp {
-        len: metadata.len(),
-        modified: metadata.modified().ok(),
-        identity: file_identity(metadata),
-    }
-}
-
 #[derive(Default)]
 pub(super) struct EnvelopeCache {
     entries: Mutex<HashMap<String, CachedEnvelope>>,
@@ -124,27 +101,6 @@ struct CachedEnvelope {
 struct CachedIndexProof {
     row: Weak<TaskIndexProofRow>,
     pending: Option<EnvelopeStampRecord>,
-}
-
-/// A proof absent from the immutable registry snapshot. Retrying the same
-/// pending proof on later scans preserves best-effort recording under contention.
-pub(super) fn pending_envelope_proof(
-    stamp: &EnvelopeStamp,
-    row: &TaskIndexProofRow,
-) -> Option<EnvelopeStampRecord> {
-    let stamp = stamp.persisted()?;
-    if row
-        .recorded
-        .as_ref()
-        .is_some_and(|recorded| recorded.stamp == stamp && recorded.fingerprint == row.fingerprint)
-    {
-        return None;
-    }
-    Some(EnvelopeStampRecord {
-        task_id: row.task_id.clone(),
-        stamp,
-        fingerprint: row.fingerprint.clone(),
-    })
 }
 
 impl EnvelopeCache {
@@ -236,6 +192,50 @@ impl EnvelopeCache {
     fn entries(&self) -> MutexGuard<'_, HashMap<String, CachedEnvelope>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// [`EnvelopeStamp::persisted`] for any store file the same writes replace
+/// or append to, such as a bundle's event and comment logs.
+pub(super) fn persisted_file_stamp(path: &Path) -> Option<String> {
+    file_stamp(path)?.persisted()
+}
+
+/// [`persisted_file_stamp`] from metadata the caller already holds.
+pub(super) fn persisted_metadata_stamp(metadata: &Metadata) -> Option<String> {
+    metadata_stamp(metadata).persisted()
+}
+
+fn file_stamp(path: &Path) -> Option<EnvelopeStamp> {
+    Some(metadata_stamp(&fs::metadata(path).ok()?))
+}
+
+fn metadata_stamp(metadata: &Metadata) -> EnvelopeStamp {
+    EnvelopeStamp {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        identity: file_identity(metadata),
+    }
+}
+
+/// A proof absent from the immutable registry snapshot. Retrying the same
+/// pending proof on later scans preserves best-effort recording under contention.
+pub(super) fn pending_envelope_proof(
+    stamp: &EnvelopeStamp,
+    row: &TaskIndexProofRow,
+) -> Option<EnvelopeStampRecord> {
+    let stamp = stamp.persisted()?;
+    if row
+        .recorded
+        .as_ref()
+        .is_some_and(|recorded| recorded.stamp == stamp && recorded.fingerprint == row.fingerprint)
+    {
+        return None;
+    }
+    Some(EnvelopeStampRecord {
+        task_id: row.task_id.clone(),
+        stamp,
+        fingerprint: row.fingerprint.clone(),
+    })
 }
 
 #[cfg(unix)]

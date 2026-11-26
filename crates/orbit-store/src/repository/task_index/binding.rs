@@ -13,33 +13,6 @@ use orbit_types::task::validate_orb_task_id;
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
-fn upsert_task_binding(
-    tx: &Connection,
-    task_id: &str,
-    partition_id: &str,
-    canonical_path: &Path,
-    now: &str,
-) -> Result<(), OrbitError> {
-    tx.prepare_cached(
-        "INSERT INTO task_bundle_bindings (
-            task_id, workspace_id, canonical_path, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?4)
-        ON CONFLICT(task_id) DO UPDATE SET
-            workspace_id = excluded.workspace_id,
-            canonical_path = excluded.canonical_path,
-            updated_at = excluded.updated_at",
-    )
-    .map_err(sqlite_store_error)?
-    .execute(params![
-        task_id,
-        partition_id,
-        path_to_string(canonical_path),
-        now
-    ])
-    .map_err(sqlite_store_error)?;
-    Ok(())
-}
-
 impl TaskRegistryStore {
     pub fn canonical_task_bundle_path(
         &self,
@@ -212,4 +185,31 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         task_bundle_by_id(&conn, task_id)
     }
+}
+
+fn upsert_task_binding(
+    tx: &Connection,
+    task_id: &str,
+    partition_id: &str,
+    canonical_path: &Path,
+    now: &str,
+) -> Result<(), OrbitError> {
+    tx.prepare_cached(
+        "INSERT INTO task_bundle_bindings (
+            task_id, workspace_id, canonical_path, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?4)
+        ON CONFLICT(task_id) DO UPDATE SET
+            workspace_id = excluded.workspace_id,
+            canonical_path = excluded.canonical_path,
+            updated_at = excluded.updated_at",
+    )
+    .map_err(sqlite_store_error)?
+    .execute(params![
+        task_id,
+        partition_id,
+        path_to_string(canonical_path),
+        now
+    ])
+    .map_err(sqlite_store_error)?;
+    Ok(())
 }

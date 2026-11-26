@@ -11,10 +11,10 @@ fn ticks(millis: i64, counters: [u32; 4]) -> super::super::platform::CpuTickSamp
 fn cpu_window_reuses_advancing_or_repeated_ticks_without_refreshing_the_baseline() {
     use super::super::HostCpuTickHistory;
     let mut history = HostCpuTickHistory {
-        #[cfg(target_os = "linux")]
-        proc: None,
         previous: Some(ticks(0, [10, 10, 60, 10])),
         latest: Some(ticks(1100, [20, 20, 120, 20])),
+        #[cfg(target_os = "linux")]
+        proc: None,
     };
     // Repeated counters use the previous end of the last real window, even
     // across multiple rapid processes. That end must still expire at 15s.
@@ -60,10 +60,10 @@ fn cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window() {
         (Some(-100), [10, 10, 60, 10]),
     ] {
         let mut history = HostCpuTickHistory {
-            #[cfg(target_os = "linux")]
-            proc: None,
             previous: None,
             latest: baseline_at.map(|at| ticks(at, counters)),
+            #[cfg(target_os = "linux")]
+            proc: None,
         };
         let mut reads = [
             Some(ticks(0, [10, 10, 60, 10])),
@@ -83,10 +83,10 @@ fn cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window() {
     }
     // A fresh latest end cannot make the older end usable once it has expired.
     let mut history = HostCpuTickHistory {
-        #[cfg(target_os = "linux")]
-        proc: None,
         previous: Some(ticks(-15001, [1; 4])),
         latest: Some(ticks(-100, [10, 10, 60, 10])),
+        #[cfg(target_os = "linux")]
+        proc: None,
     };
     let mut reads = [
         Some(ticks(0, [10, 10, 60, 10])),
@@ -116,10 +116,10 @@ fn cpu_window_native_failures_clock_reversal_and_stalls_remain_unknown() {
         assert_eq!(history.measure(|| reads.next().unwrap(), |_| {}), None);
     }
     let mut history = HostCpuTickHistory {
-        #[cfg(target_os = "linux")]
-        proc: None,
         previous: None,
         latest: Some(ticks(0, [10; 4])),
+        #[cfg(target_os = "linux")]
+        proc: None,
     };
     assert_eq!(
         history.measure(|| None, |_| panic!("failed read must not wait")),
@@ -133,10 +133,10 @@ fn cpu_window_handles_tick_wrap_and_the_freshness_boundary() {
     use super::super::HostCpuTickHistory;
     for age in [1, 15000] {
         let mut history = HostCpuTickHistory {
-            #[cfg(target_os = "linux")]
-            proc: None,
             previous: None,
             latest: Some(ticks(-age, [u32::MAX - 9; 4])),
+            #[cfg(target_os = "linux")]
+            proc: None,
         };
         assert_eq!(
             history.measure(

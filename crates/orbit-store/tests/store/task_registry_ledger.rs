@@ -12,17 +12,6 @@
 //  Every test re-runs itself in a child of this binary with inherited Orbit
 //  authority cleared and a disposable `HOME`.
 
-
-const PARTITION: &str = "ws_prior";
-
-/// The registry ledger this binary ships, as `(version, name)`. Every entry
-/// is additive, so adoption applies all of them and keeps the pre-ledger fence.
-const SHIPPED: [(u32, &str); 3] = [
-    (1, "registry_baseline"),
-    (2, "index_task_type"),
-    (3, "decision_snapshots"),
-];
-
 fn task_registry_ledger_isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TASK_REGISTRY_LEDGER_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -66,14 +55,14 @@ fn bind_registry(registry: &TaskRegistryStore, root: &Path, partition: &str) -> 
 fn populated(root: &Path) -> PathBuf {
     let path = task_registry_path(root);
     let registry = TaskRegistryStore::open(&path).unwrap();
-    bind_registry(&registry, root, PARTITION).unwrap();
-    let task = registry.allocate_task_id(PARTITION).unwrap();
+    bind_registry(&registry, root, LEDGER_PARTITION).unwrap();
+    let task = registry.allocate_task_id(LEDGER_PARTITION).unwrap();
     drop(registry);
     Connection::open(&path)
         .unwrap()
         .execute(
             "INSERT INTO task_action_keys VALUES (?1, 'delivery-batch', ?2, 'digest')",
-            [PARTITION, task.as_str()],
+            [LEDGER_PARTITION, task.as_str()],
         )
         .unwrap();
     path
@@ -97,16 +86,6 @@ fn as_pre_ledger(path: &Path, user_version: u32, action_keys: bool) {
     conn.pragma_update(None, "user_version", user_version)
         .unwrap();
 }
-
-const RETAINED: [&str; 7] = [
-    "allocator_state",
-    "workspace_bindings",
-    "workspace_checkout_bindings",
-    "task_bundle_bindings",
-    "task_bundle_index",
-    "task_bundle_tags",
-    "task_bundle_relations",
-];
 
 fn rows(conn: &Connection, table: &str) -> Vec<Vec<Value>> {
     let mut statement = conn
@@ -203,6 +182,15 @@ fn assert_adopted(conn: &Connection) {
 
 #[test]
 fn every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows() {
+    const RETAINED: [&str; 7] = [
+        "allocator_state",
+        "workspace_bindings",
+        "workspace_checkout_bindings",
+        "task_bundle_bindings",
+        "task_bundle_index",
+        "task_bundle_tags",
+        "task_bundle_relations",
+    ];
     if !task_registry_ledger_isolated(
         "every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows",
     ) {
@@ -232,7 +220,7 @@ fn every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows() {
         let conn = Connection::open(&path).unwrap();
         assert_eq!(retained(&conn), before, "{shape}: adoption keeps every row");
         assert_adopted(&conn);
-        registry.allocate_task_id(PARTITION).unwrap();
+        registry.allocate_task_id(LEDGER_PARTITION).unwrap();
         drop(registry);
 
         // Reopening an adopted registry applies nothing.
@@ -412,7 +400,7 @@ fn an_adopted_registry_passes_the_pre_ledger_acceptance_rules() {
         .unwrap();
         conn.execute(
             "INSERT INTO task_action_keys VALUES (?1, 'older-binary', 'ORB-900', 'digest')",
-            [PARTITION],
+            [LEDGER_PARTITION],
         )
         .unwrap();
         drop(conn);
@@ -439,10 +427,10 @@ fn a_pre_ledger_registry_with_action_keys_stays_readable_read_only() {
     let path = populated(&root.join("readable"));
     as_pre_ledger(&path, 5, true);
     let registry = TaskRegistryStore::open_read_only(&path).unwrap();
-    assert!(registry.partition_ids().unwrap().contains(PARTITION));
+    assert!(registry.partition_ids().unwrap().contains(LEDGER_PARTITION));
     assert!(
         registry
-            .envelope_stamps_for_workspace(PARTITION)
+            .envelope_stamps_for_workspace(LEDGER_PARTITION)
             .unwrap()
             .is_empty(),
         "a registry that never recorded a stamp has none to read"
@@ -465,9 +453,6 @@ fn a_pre_ledger_registry_with_action_keys_stays_readable_read_only() {
         "{error}"
     );
 }
-
-/// The ledger version a newer binary would add after [`SHIPPED`].
-const NEWER: u32 = SHIPPED.len() as u32 + 1;
 
 /// Leave the record a newer binary would: ledger entry [`NEWER`] of the given
 /// class, with the `user_version` fence it keeps for pre-ledger binaries.
@@ -523,14 +508,14 @@ fn a_newer_registry_is_decided_from_its_compatibility_record() {
     let path = populated(&read_compatible);
     advance_as_newer_binary(&path, MigrationCompatibility::ReadCompatible);
     let registry = TaskRegistryStore::open(&path).unwrap();
-    assert!(registry.partition_ids().unwrap().contains(PARTITION));
+    assert!(registry.partition_ids().unwrap().contains(LEDGER_PARTITION));
     let refused = bind_registry(&registry, &read_compatible, "ws_read_compatible")
         .expect_err("read-compatible-newer opens read-only");
     assert!(refused.contains("readonly"), "{refused}");
-    assert!(registry.allocate_task_id(PARTITION).is_err());
+    assert!(registry.allocate_task_id(LEDGER_PARTITION).is_err());
     drop(registry);
     let observer = TaskRegistryStore::open_read_only(&path).unwrap();
-    assert!(observer.partition_ids().unwrap().contains(PARTITION));
+    assert!(observer.partition_ids().unwrap().contains(LEDGER_PARTITION));
 
     let breaking = root.join("breaking");
     let path = populated(&breaking);

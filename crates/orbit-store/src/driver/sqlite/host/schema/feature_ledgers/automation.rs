@@ -54,6 +54,10 @@ pub(super) const MIGRATIONS: &[FeatureMigration] = &[
     ),
 ];
 
+/// The global step index `apply` held in `task_pilot_pipeline` until a step
+/// was inserted before it, and where the member host kept reading it.
+const MISREAD_APPLY_INDEX: u32 = 2;
+
 /// One-time repair [ORB-14476]. Before a source move could supersede an
 /// attempt, a task-pilot claim whose branch moved under its material failed,
 /// retried against the same frozen source, failed again and was retired at
@@ -69,10 +73,6 @@ fn release_stale_source_failures(conn: &Connection) -> Result<(), OrbitError> {
         Ok(shelved_by_source(members, key, failed))
     })
 }
-
-/// The global step index `apply` held in `task_pilot_pipeline` until a step
-/// was inserted before it, and where the member host kept reading it.
-const MISREAD_APPLY_INDEX: u32 = 2;
 
 /// One-time repair [ORB-15197]. The member host read `task_pilot_pipeline`
 /// steps by position. Once a step was inserted before `apply`, it took the

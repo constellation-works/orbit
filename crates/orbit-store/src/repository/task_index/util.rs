@@ -3,6 +3,11 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use orbit_types::task::{TaskRelationType, TaskStatus};
 
+/// The statuses `TaskStatus::is_terminal` defines as terminal, in the order
+/// the index's SQL binds them as parameters.
+pub(super) const TERMINAL_STATUSES: [TaskStatus; 3] =
+    [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected];
+
 pub(super) fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -10,11 +15,6 @@ pub(super) fn path_to_string(path: &Path) -> String {
 pub(super) fn now_string() -> String {
     Utc::now().to_rfc3339()
 }
-
-/// The statuses `TaskStatus::is_terminal` defines as terminal, in the order
-/// the index's SQL binds them as parameters.
-pub(super) const TERMINAL_STATUSES: [TaskStatus; 3] =
-    [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected];
 
 pub(super) fn terminal_month(status: TaskStatus, updated_at: DateTime<Utc>) -> Option<String> {
     status

@@ -9,28 +9,6 @@ use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 
-/// Policy engine and child-execution policies held by [`crate::base::Base`].
-#[derive(Clone)]
-pub(crate) struct OrbitPolicyContext {
-    pub(crate) policy: PolicyEngine,
-    pub(crate) execution_env_policy: ExecutionEnvPolicy,
-    pub(crate) codex_execution_policy: CodexExecutionPolicy,
-}
-
-impl OrbitPolicyContext {
-    pub(crate) fn new(
-        policy: PolicyEngine,
-        execution_env_policy: ExecutionEnvPolicy,
-        codex_execution_policy: CodexExecutionPolicy,
-    ) -> Self {
-        Self {
-            policy,
-            execution_env_policy,
-            codex_execution_policy,
-        }
-    }
-}
-
 /// Canonical tool name of the delegated-human decision submission, named once for its admission.
 pub(crate) const DECISION_SUBMIT_OPERATION_ID: &str = "orbit.decision.submit";
 
@@ -70,6 +48,37 @@ const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 6] = [
     TASK_RESUME_DELIVERY_OPERATION_ID,
 ];
 
+/// Policy engine and child-execution policies held by [`crate::base::Base`].
+#[derive(Clone)]
+pub(crate) struct OrbitPolicyContext {
+    pub(crate) policy: PolicyEngine,
+    pub(crate) execution_env_policy: ExecutionEnvPolicy,
+    pub(crate) codex_execution_policy: CodexExecutionPolicy,
+}
+
+impl OrbitPolicyContext {
+    pub(crate) fn new(
+        policy: PolicyEngine,
+        execution_env_policy: ExecutionEnvPolicy,
+        codex_execution_policy: CodexExecutionPolicy,
+    ) -> Self {
+        Self {
+            policy,
+            execution_env_policy,
+            codex_execution_policy,
+        }
+    }
+}
+
+/// Identity facts retained after operator admission.
+#[derive(Debug)]
+pub struct OperatorAuthorizer {
+    pub provenance: CallerProvenance,
+    /// Caller label an SSH-originated MCP session forwarded, for attribution
+    /// in the durable admission. Never a grant [ORB-12564].
+    pub remote_caller_machine_id: Option<String>,
+}
+
 /// Whether `tool` is an operator-row tool a resident cycle reaches through
 /// its mandate's rights rather than the operator capability.
 pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
@@ -91,15 +100,6 @@ pub fn route_resident_delivery_recovery_to_broker(env: &orbit_common::Env, tool:
     tool == TASK_RESUME_DELIVERY_OPERATION_ID
         && env.orbit_plugin_broker().is_some()
         && crate::base::managed_env::managed_run_context_run_id_from_env(env).is_some()
-}
-
-/// Identity facts retained after operator admission.
-#[derive(Debug)]
-pub struct OperatorAuthorizer {
-    pub provenance: CallerProvenance,
-    /// Caller label an SSH-originated MCP session forwarded, for attribution
-    /// in the durable admission. Never a grant [ORB-12564].
-    pub remote_caller_machine_id: Option<String>,
 }
 
 /// What a caller the chokepoint has already admitted actually holds.

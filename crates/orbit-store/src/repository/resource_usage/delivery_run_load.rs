@@ -33,6 +33,11 @@ const MINUTE_COLUMNS: &str = "workspace_id, run_id, task_id, work_class, complex
     delivery_admitted_at, minute_started_at, cpu_cores, memory_bytes,
     cpu_accounting, samples, crew_model, orbit_version";
 
+/// What the earlier load holds for one current run: `Some` while the run's
+/// shape is unchanged (with `None` inside when that load read no minute of
+/// it), `None` when its minutes must be read again.
+type HeldRun = Option<Option<DeliveryRunResources>>;
+
 /// Every run with a minute admitted at or after `since`, with its minutes
 /// oldest first, ordered by workspace then run id.
 pub(super) fn load_delivery_runs(
@@ -84,11 +89,6 @@ pub(super) fn reload_delivery_runs(
     };
     Ok(DeliveryRunsLoad { runs, shapes })
 }
-
-/// What the earlier load holds for one current run: `Some` while the run's
-/// shape is unchanged (with `None` inside when that load read no minute of
-/// it), `None` when its minutes must be read again.
-type HeldRun = Option<Option<DeliveryRunResources>>;
 
 /// [`HeldRun`] for each of `shapes`, in order.
 fn held_runs(shapes: &[DeliveryRunShape], previous: DeliveryRunsLoad) -> Vec<HeldRun> {
@@ -215,12 +215,17 @@ fn push_rows(
         if let Some(version) = optional_text(row, 13)? {
             replace_if_changed(&mut run.orbit_version, version);
         }
+        let minute_started_at = parse_stamp(text(row, 7)?)?;
+        let cpu_cores = row.get(8).map_err(sqlite_store_error)?;
+        let memory_bytes = unsigned(row.get(9).map_err(sqlite_store_error)?);
+        let cpu_accounting = row.get(10).map_err(sqlite_store_error)?;
+        let samples = row.get(11).map_err(sqlite_store_error)?;
         run.minutes.push(ResourceMinuteLoad {
-            minute_started_at: parse_stamp(text(row, 7)?)?,
-            cpu_cores: row.get(8).map_err(sqlite_store_error)?,
-            memory_bytes: unsigned(row.get(9).map_err(sqlite_store_error)?),
-            cpu_accounting: row.get(10).map_err(sqlite_store_error)?,
-            samples: row.get(11).map_err(sqlite_store_error)?,
+            minute_started_at,
+            samples,
+            cpu_cores,
+            cpu_accounting,
+            memory_bytes,
         });
     }
     Ok(())

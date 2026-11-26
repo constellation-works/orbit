@@ -9,6 +9,36 @@ use super::{ClaimCandidateRef, ExecutionClaim};
 
 pub use orbit_types::task::ExecutionLocation;
 
+/// Wire-protocol version of pull, probe, and lifecycle request/response shapes.
+///
+/// It versions the distributed-drain protocol alone, not the Cost page's
+/// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
+/// Retained for persisted requests and lifecycle semantics. Pull request field
+/// compatibility is now derived by [`distributed_drain_protocol_fingerprint`],
+/// so an additive field needs no manual bump to detect skew. Revision 2 adds executor crew capabilities;
+/// revision 3 adds handoff footprint widening; revision 4 adds the executor's
+/// host OS; revision 5 replaces both endpoints' review-policy labels with
+/// their captured before-PR review switch [ORB-13992]; revision 6 adds the
+/// ship contract's captured `review`, the executor's `review_gate` and the
+/// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
+/// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
+/// [ORB-13908]; revision 8 captures the owner's required validation
+/// commands in the before-PR review contract [ORB-14192]; revision 9 adds
+/// NoDiff claim delivery and owner-verified clean-base completion [ORB-14259];
+/// revision 10 adds the settlement's typed failure, the `leaf_released` crew
+/// exclusion source and the receipt's resumable candidate [ORB-14257].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 10;
+
+/// The first protocol revision whose claimed leaf hands off `NoDiff`
+/// [ORB-14259]. Admission offers `no-diff-expected` work only to an executor
+/// at this revision or later.
+pub const NO_DIFF_HANDOFF_PROTOCOL_SCHEMA: u32 = 9;
+
+/// Receipt-lookup schema, versioned independently of admission so a client
+/// upgraded to the owner's binary can reconcile an old request without
+/// rewriting the input that request was made with.
+pub const ADMISSION_RECEIPT_LOOKUP_SCHEMA: u32 = 1;
+
 /// Task-specific guidance captured immediately before claim persistence.
 #[derive(Debug, Clone)]
 pub struct AdmissionTaskGuidance {
@@ -223,69 +253,6 @@ impl AdmissionShipContract {
         }
     }
 }
-
-/// Wire-protocol version of pull, probe, and lifecycle request/response shapes.
-///
-/// It versions the distributed-drain protocol alone, not the Cost page's
-/// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
-/// Retained for persisted requests and lifecycle semantics. Pull request field
-/// compatibility is now derived by [`distributed_drain_protocol_fingerprint`],
-/// so an additive field needs no manual bump to detect skew. Revision 2 adds executor crew capabilities;
-/// revision 3 adds handoff footprint widening; revision 4 adds the executor's
-/// host OS; revision 5 replaces both endpoints' review-policy labels with
-/// their captured before-PR review switch [ORB-13992]; revision 6 adds the
-/// ship contract's captured `review`, the executor's `review_gate` and the
-/// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
-/// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
-/// [ORB-13908]; revision 8 captures the owner's required validation
-/// commands in the before-PR review contract [ORB-14192]; revision 9 adds
-/// NoDiff claim delivery and owner-verified clean-base completion [ORB-14259];
-/// revision 10 adds the settlement's typed failure, the `leaf_released` crew
-/// exclusion source and the receipt's resumable candidate [ORB-14257].
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 10;
-
-/// The first protocol revision whose claimed leaf hands off `NoDiff`
-/// [ORB-14259]. Admission offers `no-diff-expected` work only to an executor
-/// at this revision or later.
-pub const NO_DIFF_HANDOFF_PROTOCOL_SCHEMA: u32 = 9;
-
-/// The pull wire shape, derived from the same request and nested types that
-/// admission deserializes. No field list or manually bumped revision can drift
-/// from these types. Keep the draft explicit across generator upgrades.
-pub fn admission_request_schema() -> &'static serde_json::Value {
-    static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        schemars::generate::SchemaSettings::draft07()
-            // Prose edits must not create wire skew. Transform schema nodes,
-            // preserving request properties actually named title/description.
-            .with_transform(schemars::transform::RecursiveTransform(
-                |schema: &mut schemars::Schema| {
-                    schema.remove("title");
-                    schema.remove("description");
-                },
-            ))
-            .into_generator()
-            .into_root_schema_for::<AdmissionRequest>()
-            .to_value()
-    })
-}
-
-/// SHA-256 of the generated pull request schema, including nested contracts.
-/// Both endpoints compute this from their running build, independently of the
-/// release version and the legacy protocol revision.
-pub fn distributed_drain_protocol_fingerprint() -> &'static str {
-    static FINGERPRINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    FINGERPRINT.get_or_init(|| {
-        orbit_common::security::release::sha256_hex(
-            admission_request_schema().to_string().as_bytes(),
-        )
-    })
-}
-
-/// Receipt-lookup schema, versioned independently of admission so a client
-/// upgraded to the owner's binary can reconcile an old request without
-/// rewriting the input that request was made with.
-pub const ADMISSION_RECEIPT_LOOKUP_SCHEMA: u32 = 1;
 
 /// Ordered pre-admission refusal classes, in the order a caller sees them.
 ///
@@ -591,10 +558,6 @@ pub struct AdmissionRequest {
     pub admissible: Option<AdmissionWorkFit>,
 }
 
-fn is_zero_visual_resolution(version: &u32) -> bool {
-    *version == 0
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionDiagnostic {
     pub task_id: String,
@@ -771,4 +734,41 @@ impl OwnerWaveAdmission {
             perf_lane_held_by: None,
         }
     }
+}
+
+/// The pull wire shape, derived from the same request and nested types that
+/// admission deserializes. No field list or manually bumped revision can drift
+/// from these types. Keep the draft explicit across generator upgrades.
+pub fn admission_request_schema() -> &'static serde_json::Value {
+    static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        schemars::generate::SchemaSettings::draft07()
+            // Prose edits must not create wire skew. Transform schema nodes,
+            // preserving request properties actually named title/description.
+            .with_transform(schemars::transform::RecursiveTransform(
+                |schema: &mut schemars::Schema| {
+                    schema.remove("title");
+                    schema.remove("description");
+                },
+            ))
+            .into_generator()
+            .into_root_schema_for::<AdmissionRequest>()
+            .to_value()
+    })
+}
+
+/// SHA-256 of the generated pull request schema, including nested contracts.
+/// Both endpoints compute this from their running build, independently of the
+/// release version and the legacy protocol revision.
+pub fn distributed_drain_protocol_fingerprint() -> &'static str {
+    static FINGERPRINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FINGERPRINT.get_or_init(|| {
+        orbit_common::security::release::sha256_hex(
+            admission_request_schema().to_string().as_bytes(),
+        )
+    })
+}
+
+fn is_zero_visual_resolution(version: &u32) -> bool {
+    *version == 0
 }

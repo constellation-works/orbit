@@ -80,6 +80,17 @@ impl RecordedDefinitionRead {
     }
 }
 
+/// Reads definition files for one [`load_plugin_definitions_recording`] call.
+struct DefinitionReadLog<'a> {
+    reads: Option<&'a mut Vec<RecordedDefinitionRead>>,
+}
+
+impl DefinitionReadLog<'_> {
+    fn read(&mut self, path: &Path) -> Result<String, String> {
+        read_definition(path, self.reads.as_deref_mut())
+    }
+}
+
 /// Stamp one definition file by reading it.
 ///
 /// `None` when the file cannot be read or statted. This is the cache's
@@ -280,17 +291,6 @@ fn collect_step_activity_references<'a>(
         }
     }
     Ok(())
-}
-
-/// Reads definition files for one [`load_plugin_definitions_recording`] call.
-struct DefinitionReadLog<'a> {
-    reads: Option<&'a mut Vec<RecordedDefinitionRead>>,
-}
-
-impl DefinitionReadLog<'_> {
-    fn read(&mut self, path: &Path) -> Result<String, String> {
-        read_definition(path, self.reads.as_deref_mut())
-    }
 }
 
 /// Read one definition file.

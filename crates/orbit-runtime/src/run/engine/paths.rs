@@ -3,15 +3,6 @@ use orbit_types::workspace::WorkspacePaths;
 
 use crate::RuntimeKernel;
 
-pub fn current_repo_root(runtime: &RuntimeKernel) -> Result<String, OrbitError> {
-    Ok(runtime
-        .base()
-        .paths()
-        .repo_root
-        .to_string_lossy()
-        .to_string())
-}
-
 /// Workspace `.orbit` stores a nested Orbit process writes on Codex's behalf.
 const CODEX_WORKSPACE_STORES: [&str; 5] = [
     "tasks",
@@ -23,6 +14,15 @@ const CODEX_WORKSPACE_STORES: [&str; 5] = [
 
 /// Global `~/.orbit` stores a nested Orbit process or a build writes.
 const CODEX_GLOBAL_STORES: [&str; 4] = ["tasks", "state/audit", "state/logs", "cache"];
+
+pub fn current_repo_root(runtime: &RuntimeKernel) -> Result<String, OrbitError> {
+    Ok(runtime
+        .base()
+        .paths()
+        .repo_root
+        .to_string_lossy()
+        .to_string())
+}
 
 /// Codex `--add-dir` roots for its `workspace-write` sandbox.
 ///

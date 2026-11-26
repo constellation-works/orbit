@@ -41,17 +41,18 @@ impl ClaimDecision {
         bundle: TaskBundleV2,
         expected_status: TaskStatus,
     ) -> Self {
+        let params = TaskCoordinationCommitParams {
+            task_id: claim.task_id.clone(),
+            actor: auth.machine_id.clone(),
+            expected_status: vec![expected_status],
+            ..Default::default()
+        };
         Self {
-            params: TaskCoordinationCommitParams {
-                task_id: claim.task_id.clone(),
-                actor: auth.machine_id.clone(),
-                expected_status: vec![expected_status],
-                ..Default::default()
-            },
             claim,
             bundle,
             expected_status,
             state,
+            params,
             evidence: ClaimEvidence::default(),
             binding: None,
             release: false,
@@ -60,10 +61,6 @@ impl ClaimDecision {
             handoff_effects: ClaimCommitEffects::default(),
         }
     }
-}
-
-pub(super) fn stale_claim() -> OrbitError {
-    OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)
 }
 
 impl TaskCommitBoundary {
@@ -415,6 +412,10 @@ impl TaskCommitBoundary {
         state.last_event = "claim_revoked".into();
         Ok(())
     }
+}
+
+pub(super) fn stale_claim() -> OrbitError {
+    OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)
 }
 
 fn decide_steering(

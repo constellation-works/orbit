@@ -86,19 +86,6 @@ pub trait HostSignalProbe: Send + Sync {
     fn scheduled_shutdown(&self) -> Option<ScheduledShutdown>;
 }
 
-/// The probe for this platform: logind's schedule file on Linux, nothing
-/// elsewhere. This crate's own unit tests never read the real host schedule —
-/// a reboot pending on the machine running them must not change their
-/// outcome — so they exercise the hold through injected probes instead.
-#[must_use]
-pub fn default_host_signal_probe() -> Arc<dyn HostSignalProbe> {
-    if cfg!(all(target_os = "linux", not(test))) {
-        Arc::new(SystemdScheduledShutdownProbe)
-    } else {
-        Arc::new(FixedHostSignals::none())
-    }
-}
-
 /// Reads a logind `scheduled` file. A missing file is "nothing scheduled";
 /// an unreadable or malformed one is logged and treated the same way, because
 /// the hold is a courtesy to the next boot and must not wedge admission on a
@@ -109,6 +96,47 @@ pub struct SystemdScheduledShutdownProbe;
 impl HostSignalProbe for SystemdScheduledShutdownProbe {
     fn scheduled_shutdown(&self) -> Option<ScheduledShutdown> {
         scheduled_shutdown_from_read(std::fs::read_to_string(SYSTEMD_SCHEDULED_SHUTDOWN_PATH))
+    }
+}
+
+/// A probe with a fixed answer: no host signals, or an injected schedule.
+#[derive(Debug, Clone, Default)]
+pub struct FixedHostSignals {
+    shutdown: Option<ScheduledShutdown>,
+}
+
+impl FixedHostSignals {
+    /// Reports no pending shutdown.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Reports `shutdown` as pending.
+    #[must_use]
+    pub fn scheduled(shutdown: ScheduledShutdown) -> Self {
+        Self {
+            shutdown: Some(shutdown),
+        }
+    }
+}
+
+impl HostSignalProbe for FixedHostSignals {
+    fn scheduled_shutdown(&self) -> Option<ScheduledShutdown> {
+        self.shutdown.clone()
+    }
+}
+
+/// The probe for this platform: logind's schedule file on Linux, nothing
+/// elsewhere. This crate's own unit tests never read the real host schedule —
+/// a reboot pending on the machine running them must not change their
+/// outcome — so they exercise the hold through injected probes instead.
+#[must_use]
+pub fn default_host_signal_probe() -> Arc<dyn HostSignalProbe> {
+    if cfg!(all(target_os = "linux", not(test))) {
+        Arc::new(SystemdScheduledShutdownProbe)
+    } else {
+        Arc::new(FixedHostSignals::none())
     }
 }
 
@@ -138,34 +166,6 @@ fn scheduled_shutdown_from_read(contents: io::Result<String>) -> Option<Schedule
         );
     }
     parsed
-}
-
-/// A probe with a fixed answer: no host signals, or an injected schedule.
-#[derive(Debug, Clone, Default)]
-pub struct FixedHostSignals {
-    shutdown: Option<ScheduledShutdown>,
-}
-
-impl FixedHostSignals {
-    /// Reports no pending shutdown.
-    #[must_use]
-    pub fn none() -> Self {
-        Self::default()
-    }
-
-    /// Reports `shutdown` as pending.
-    #[must_use]
-    pub fn scheduled(shutdown: ScheduledShutdown) -> Self {
-        Self {
-            shutdown: Some(shutdown),
-        }
-    }
-}
-
-impl HostSignalProbe for FixedHostSignals {
-    fn scheduled_shutdown(&self) -> Option<ScheduledShutdown> {
-        self.shutdown.clone()
-    }
 }
 
 /// Parse logind's `KEY=value` schedule file. `USEC` is the wall-clock

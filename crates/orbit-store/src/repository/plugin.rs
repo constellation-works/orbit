@@ -21,44 +21,6 @@ const PLUGIN_COLUMNS: &str = "name, version, source, install_path, manifest_dige
      grants_json, first_party, installed_at, updated_at, certified_orbit_version, archive_digest, \
      build_json";
 
-fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
-    let grants_json: String = row.get(6)?;
-    let grants = serde_json::from_str(&grants_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
-    })?;
-    Ok(InstalledPlugin {
-        name: row.get(0)?,
-        version: row.get(1)?,
-        source: row.get(2)?,
-        install_path: row.get(3)?,
-        manifest_digest: row.get(4)?,
-        enabled: row.get::<_, i32>(5)? != 0,
-        grants,
-        first_party: row.get::<_, i32>(7)? != 0,
-        installed_at: row.get(8)?,
-        updated_at: row.get(9)?,
-        certified_orbit_version: row.get(10)?,
-        archive_digest: row.get(11)?,
-        build: build_record_from_column(row.get(12)?)?,
-    })
-}
-
-/// A stored build record that no longer parses is a conversion failure, not
-/// an absent record: reading it as `None` would describe a built tree as one
-/// no build produced.
-fn build_record_from_column(raw: Option<String>) -> rusqlite::Result<Option<PluginBuildRecord>> {
-    raw.map(|raw| {
-        serde_json::from_str(&raw).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                12,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })
-    })
-    .transpose()
-}
-
 /// Concrete plugin repository scoped to a [`Snapshot`] (read-only) or a [`Tx`]
 /// (read-write).
 pub struct PluginRepository<'a, Access> {
@@ -206,4 +168,42 @@ impl<'a, 'tx> PluginRepository<'a, Tx<'tx>> {
             .map_err(sqlite_store_error)?;
         Ok(affected > 0)
     }
+}
+
+fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
+    let grants_json: String = row.get(6)?;
+    let grants = serde_json::from_str(&grants_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(InstalledPlugin {
+        name: row.get(0)?,
+        version: row.get(1)?,
+        source: row.get(2)?,
+        install_path: row.get(3)?,
+        manifest_digest: row.get(4)?,
+        enabled: row.get::<_, i32>(5)? != 0,
+        grants,
+        first_party: row.get::<_, i32>(7)? != 0,
+        installed_at: row.get(8)?,
+        updated_at: row.get(9)?,
+        certified_orbit_version: row.get(10)?,
+        archive_digest: row.get(11)?,
+        build: build_record_from_column(row.get(12)?)?,
+    })
+}
+
+/// A stored build record that no longer parses is a conversion failure, not
+/// an absent record: reading it as `None` would describe a built tree as one
+/// no build produced.
+fn build_record_from_column(raw: Option<String>) -> rusqlite::Result<Option<PluginBuildRecord>> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                12,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
+    })
+    .transpose()
 }

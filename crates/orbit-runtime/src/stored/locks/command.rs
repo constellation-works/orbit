@@ -25,6 +25,11 @@ use super::index::{
 use super::prepared::PreparedGrant;
 use crate::RuntimeKernel;
 
+/// A reservation's or lease's lifetime when the request names none.
+const DEFAULT_TASK_RESERVATION_TTL_SECONDS: u32 = 1800;
+
+const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 86400;
+
 /// Whether a task-scope reservation that resolves to zero files is a mistake
 /// to refuse, or a legitimate no-op to admit.
 ///
@@ -60,7 +65,6 @@ pub enum ReservationOutcome {
         conflicts: Vec<TaskLockConflict>,
     },
 }
-
 impl ReservationOutcome {
     pub(crate) fn into_tool_output(self) -> Value {
         match self {
@@ -107,9 +111,11 @@ impl ReservationOutcome {
     }
 }
 
-/// A reservation's or lease's lifetime when the request names none.
-const DEFAULT_TASK_RESERVATION_TTL_SECONDS: u32 = 1800;
-const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 86400;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TaskLockReservationScope {
+    TaskIds(Vec<String>),
+    Files(Vec<String>),
+}
 
 /// `ttl_seconds` from tool input, defaulted and held to the reservation
 /// bounds that reservations and leases share.
@@ -573,12 +579,6 @@ pub fn runs_holding_file_reservations(
         .filter(|reservation| !reservation.files.is_empty())
         .filter_map(|reservation| reservation.owner_run_id)
         .collect())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TaskLockReservationScope {
-    TaskIds(Vec<String>),
-    Files(Vec<String>),
 }
 
 fn parse_task_lock_reservation_scope(

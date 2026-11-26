@@ -57,6 +57,53 @@ impl CrewAllowlist {
     }
 }
 
+impl RuntimeKernel {
+    /// Build the run-scoped allowlist for `names` [ORB-11242].
+    ///
+    /// Validation happens here, before any run record exists, so a typo or a
+    /// crew this host does not configure fails the submission instead of
+    /// silently narrowing what a live drain will admit. An empty selection is
+    /// `None` — the option was omitted, and behavior is unchanged.
+    pub fn crew_allowlist(&self, names: &[String]) -> Result<Option<CrewAllowlist>, OrbitError> {
+        let crew_settings = self.admission_crew_settings();
+        let mut allowed_names = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        for name in names {
+            // A human crew permits nothing: its name joins the list as named,
+            // with no agent identity, so its tasks report `human_crew` rather
+            // than an unknown crew. Names cannot collide with agent crews.
+            if let Some(human) = find_human_crew(Some(name), &crew_settings.human_crews) {
+                allowed_names.insert(human.name.clone());
+                continue;
+            }
+            let crew = resolve_crew(name.trim(), &crew_settings.crews)?;
+            identities.insert(crew_identity(&crew));
+            allowed_names.insert(crew.name);
+        }
+        Ok((!allowed_names.is_empty()).then_some(CrewAllowlist {
+            names: allowed_names,
+            identities,
+        }))
+    }
+
+    /// Whether the configured crew `name` is one `allowlist` permits, by name
+    /// or by the identity it resolves to. A name that no longer resolves is
+    /// not permitted.
+    pub fn crew_allowlist_permits(&self, allowlist: &CrewAllowlist, name: &str) -> bool {
+        resolve_crew(name.trim(), &self.admission_crew_settings().crews)
+            .is_ok_and(|crew| allowlist.permits(&crew))
+    }
+
+    /// The allowlist carried by a run/activity input, or `None` when the run
+    /// placed no restriction on its window.
+    pub fn crew_allowlist_from_input(
+        &self,
+        input: &Value,
+    ) -> Result<Option<CrewAllowlist>, OrbitError> {
+        self.crew_allowlist(&crew_allowlist_names_from_input(input)?)
+    }
+}
+
 /// Refuse a resolved crew the run's window does not permit [ORB-11242].
 ///
 /// `origin` names where the crew came from (the task, an explicit activity
@@ -126,52 +173,5 @@ pub fn crew_allowlist_names_from_input(input: &Value) -> Result<Vec<String>, Orb
         other => Err(OrbitError::InvalidInput(format!(
             "`{ALLOWED_CREWS_INPUT_KEY}` must be a list of crew names, got {other}"
         ))),
-    }
-}
-
-impl RuntimeKernel {
-    /// Build the run-scoped allowlist for `names` [ORB-11242].
-    ///
-    /// Validation happens here, before any run record exists, so a typo or a
-    /// crew this host does not configure fails the submission instead of
-    /// silently narrowing what a live drain will admit. An empty selection is
-    /// `None` — the option was omitted, and behavior is unchanged.
-    pub fn crew_allowlist(&self, names: &[String]) -> Result<Option<CrewAllowlist>, OrbitError> {
-        let crew_settings = self.admission_crew_settings();
-        let mut allowed_names = BTreeSet::new();
-        let mut identities = BTreeSet::new();
-        for name in names {
-            // A human crew permits nothing: its name joins the list as named,
-            // with no agent identity, so its tasks report `human_crew` rather
-            // than an unknown crew. Names cannot collide with agent crews.
-            if let Some(human) = find_human_crew(Some(name), &crew_settings.human_crews) {
-                allowed_names.insert(human.name.clone());
-                continue;
-            }
-            let crew = resolve_crew(name.trim(), &crew_settings.crews)?;
-            identities.insert(crew_identity(&crew));
-            allowed_names.insert(crew.name);
-        }
-        Ok((!allowed_names.is_empty()).then_some(CrewAllowlist {
-            names: allowed_names,
-            identities,
-        }))
-    }
-
-    /// Whether the configured crew `name` is one `allowlist` permits, by name
-    /// or by the identity it resolves to. A name that no longer resolves is
-    /// not permitted.
-    pub fn crew_allowlist_permits(&self, allowlist: &CrewAllowlist, name: &str) -> bool {
-        resolve_crew(name.trim(), &self.admission_crew_settings().crews)
-            .is_ok_and(|crew| allowlist.permits(&crew))
-    }
-
-    /// The allowlist carried by a run/activity input, or `None` when the run
-    /// placed no restriction on its window.
-    pub fn crew_allowlist_from_input(
-        &self,
-        input: &Value,
-    ) -> Result<Option<CrewAllowlist>, OrbitError> {
-        self.crew_allowlist(&crew_allowlist_names_from_input(input)?)
     }
 }

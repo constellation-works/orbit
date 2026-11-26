@@ -15,6 +15,8 @@ use serde_json::Value;
 
 use crate::RuntimeKernel;
 
+static ACTIVE_CHECKOUT_ROOT_CACHE: OnceLock<Mutex<ActiveCheckoutRootCache>> = OnceLock::new();
+
 /// Which trusted inputs Core may use when applying its capability registry.
 ///
 /// Ordinary in-process and CLI calls may resolve capabilities from both their
@@ -182,6 +184,16 @@ impl RuntimeKernel {
     }
 }
 
+/// Memoised positively verified checkout roots, keyed by `(canonical cwd,
+/// canonical repo root)`. A verified root does not change for the life of a
+/// process, so a long-lived MCP server pays any git fallback once per cwd
+/// instead of on every tool call. A `None` result is never memoised: the
+/// git probes collapse a timeout or execution failure into `None`, so a
+/// cached `None` would poison the pair for the process lifetime after one
+/// transient outage. Re-probing an unrecognised checkout costs git spawns
+/// but always falls back to the registered root, as before.
+type ActiveCheckoutRootCache = HashMap<(PathBuf, PathBuf), PathBuf>;
+
 fn resident_cycle_run_id(tool_context: &ToolContext) -> Option<String> {
     tool_context
         .orbit_host
@@ -343,18 +355,6 @@ fn canonical_repo_root(runtime: &RuntimeKernel) -> PathBuf {
         .canonicalize()
         .unwrap_or_else(|_| runtime.base().paths().repo_root.clone())
 }
-
-/// Memoised positively verified checkout roots, keyed by `(canonical cwd,
-/// canonical repo root)`. A verified root does not change for the life of a
-/// process, so a long-lived MCP server pays any git fallback once per cwd
-/// instead of on every tool call. A `None` result is never memoised: the
-/// git probes collapse a timeout or execution failure into `None`, so a
-/// cached `None` would poison the pair for the process lifetime after one
-/// transient outage. Re-probing an unrecognised checkout costs git spawns
-/// but always falls back to the registered root, as before.
-type ActiveCheckoutRootCache = HashMap<(PathBuf, PathBuf), PathBuf>;
-
-static ACTIVE_CHECKOUT_ROOT_CACHE: OnceLock<Mutex<ActiveCheckoutRootCache>> = OnceLock::new();
 
 fn active_checkout_root_cache() -> MutexGuard<'static, ActiveCheckoutRootCache> {
     ACTIVE_CHECKOUT_ROOT_CACHE

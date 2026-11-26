@@ -14,28 +14,6 @@ use orbit_types::tool::McpToolDefinition;
 
 use super::host::{self, PluginHostLoad};
 
-/// Every active plugin tool this host serves, with the scope its manifest
-/// declares.
-///
-/// Host-global by construction: plugin installs are per host, so this answers
-/// without a workspace runtime and is what lets the MCP surface advertise
-/// plugin tools to a session that has not named a workspace yet.
-///
-/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
-/// sections (config layered over itself, no workspace); without it a plugin
-/// whose config schema requires a key only `config.toml` sets is refused
-/// here even though the workspace runtime loads it fine.
-pub fn host_plugin_mcp_definitions(
-    global_root: &Path,
-    store: &Store,
-    plugin_config: &BTreeMap<String, Value>,
-) -> Result<Vec<McpToolDefinition>, OrbitError> {
-    let registry = host_plugin_registry(global_root, store, plugin_config)?.0;
-    registry
-        .mcp_tool_definitions()
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-}
-
 /// One `orbit <ns>` command group, derived from an active plugin's manifest
 /// (design §4.6).
 ///
@@ -64,6 +42,28 @@ pub struct PluginCliVerb {
     /// `cli.positional`, in manifest order.
     pub positional: Vec<String>,
     pub mutating: bool,
+}
+
+/// Every active plugin tool this host serves, with the scope its manifest
+/// declares.
+///
+/// Host-global by construction: plugin installs are per host, so this answers
+/// without a workspace runtime and is what lets the MCP surface advertise
+/// plugin tools to a session that has not named a workspace yet.
+///
+/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
+/// sections (config layered over itself, no workspace); without it a plugin
+/// whose config schema requires a key only `config.toml` sets is refused
+/// here even though the workspace runtime loads it fine.
+pub fn host_plugin_mcp_definitions(
+    global_root: &Path,
+    store: &Store,
+    plugin_config: &BTreeMap<String, Value>,
+) -> Result<Vec<McpToolDefinition>, OrbitError> {
+    let registry = host_plugin_registry(global_root, store, plugin_config)?.0;
+    registry
+        .mcp_tool_definitions()
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
 
 /// Every `orbit <ns>` group this host serves.

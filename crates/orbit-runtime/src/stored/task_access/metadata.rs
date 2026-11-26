@@ -14,6 +14,64 @@ use serde_json::{Value, json};
 use super::OwnerRead;
 use crate::RuntimeKernel;
 
+// Leave ample room for MCP's text/structured result framing under its 64 MiB cap.
+const MAX_METADATA_ROWS: usize = 128;
+
+const MAX_METADATA_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetadataCursor {
+    created_at: DateTime<Utc>,
+    id: String,
+}
+
+impl MetadataCursor {
+    fn of(task: &TaskEnvelopeV2) -> Self {
+        Self {
+            created_at: task.created_at,
+            id: task.id.clone(),
+        }
+    }
+
+    fn precedes(&self, next: &Self) -> bool {
+        self.created_at > next.created_at
+            || (self.created_at == next.created_at && self.id < next.id)
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetadataRequest {
+    schema_version: u32,
+    ids: Option<BTreeSet<String>>,
+    scan_id: Option<String>,
+    cursor: Option<MetadataCursor>,
+    max_rows: usize,
+    max_bytes: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetadataPage {
+    schema_version: u32,
+    scan_id: String,
+    total: usize,
+    remaining: usize,
+    complete: bool,
+    next: Option<MetadataCursor>,
+    items: Vec<TaskEnvelopeV2>,
+}
+
+impl RuntimeKernel {
+    /// Serve one page of the owner's body-less task metadata. Serve only
+    /// through the authenticated host projection, after owner/workspace
+    /// checks. A stale/unavailable index is a refusal, never a full-bundle
+    /// fallback.
+    pub fn owner_task_metadata_page(&self, input: &Value) -> Result<Value, OrbitError> {
+        owner_metadata_page(self, input)
+    }
+}
+
 /// Every task `store` lists, newest first, without body documents:
 /// `description`, `acceptance_criteria`, `plan` and `execution_summary` are
 /// empty and every envelope field is populated as a full read populates it.
@@ -50,70 +108,12 @@ pub fn metadata_task(envelope: TaskEnvelopeV2) -> Task {
     )
 }
 
-// Leave ample room for MCP's text/structured result framing under its 64 MiB cap.
-const MAX_METADATA_ROWS: usize = 128;
-const MAX_METADATA_BYTES: usize = 1024 * 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MetadataCursor {
-    created_at: DateTime<Utc>,
-    id: String,
-}
-
-impl MetadataCursor {
-    fn of(task: &TaskEnvelopeV2) -> Self {
-        Self {
-            created_at: task.created_at,
-            id: task.id.clone(),
-        }
-    }
-
-    fn precedes(&self, next: &Self) -> bool {
-        self.created_at > next.created_at
-            || (self.created_at == next.created_at && self.id < next.id)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MetadataRequest {
-    schema_version: u32,
-    ids: Option<BTreeSet<String>>,
-    scan_id: Option<String>,
-    cursor: Option<MetadataCursor>,
-    max_rows: usize,
-    max_bytes: usize,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MetadataPage {
-    schema_version: u32,
-    scan_id: String,
-    total: usize,
-    remaining: usize,
-    complete: bool,
-    next: Option<MetadataCursor>,
-    items: Vec<TaskEnvelopeV2>,
-}
-
 fn invalid_metadata(message: &str) -> OrbitError {
     OrbitError::Store(format!("owner task metadata unavailable: {message}"))
 }
 
 fn encode_metadata<T: Serialize>(value: &T) -> Result<Vec<u8>, OrbitError> {
     serde_json::to_vec(value).map_err(|_| invalid_metadata("could not encode page"))
-}
-
-impl RuntimeKernel {
-    /// Serve one page of the owner's body-less task metadata. Serve only
-    /// through the authenticated host projection, after owner/workspace
-    /// checks. A stale/unavailable index is a refusal, never a full-bundle
-    /// fallback.
-    pub fn owner_task_metadata_page(&self, input: &Value) -> Result<Value, OrbitError> {
-        owner_metadata_page(self, input)
-    }
 }
 
 fn owner_metadata_page(runtime: &RuntimeKernel, input: &Value) -> Result<Value, OrbitError> {

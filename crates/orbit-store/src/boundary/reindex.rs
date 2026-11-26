@@ -16,6 +16,11 @@ use crate::driver::file::task_bundle::{
 };
 use crate::repository::task_index::{TaskRegistryStore, parse_orb_task_number};
 
+/// Most bundle locks one reindex holds at once. Each held lock keeps a file
+/// descriptor open and a stack frame live, so this bounds both regardless of
+/// workspace size while still amortizing registry commits across a batch.
+pub(crate) const REINDEX_LOCK_BATCH: usize = 64;
+
 /// Result of [`reindex_workspace`].
 #[derive(Debug, Clone)]
 pub struct ReindexOutcome {
@@ -202,11 +207,6 @@ pub fn reindex_workspace(
         removed_stale,
     })
 }
-
-/// Most bundle locks one reindex holds at once. Each held lock keeps a file
-/// descriptor open and a stack frame live, so this bounds both regardless of
-/// workspace size while still amortizing registry commits across a batch.
-pub(crate) const REINDEX_LOCK_BATCH: usize = 64;
 
 /// Run `op` while holding the bundle lock of every candidate, acquired in
 /// slice order. Callers pass at most [`REINDEX_LOCK_BATCH`] candidates.

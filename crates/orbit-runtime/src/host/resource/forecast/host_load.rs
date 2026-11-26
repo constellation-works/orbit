@@ -20,51 +20,28 @@ use super::{HostCapacity, HostLoad, SustainedCpu};
 use crate::host::resource::{HostUsageReading, read_host_usage};
 
 #[cfg(feature = "test-support")]
-type HostLoadSamplingWait = fn(Duration);
-
-#[cfg(feature = "test-support")]
 thread_local! {
     static HOST_LOAD_SAMPLING_WAIT: std::cell::Cell<Option<HostLoadSamplingWait>> = const {
         std::cell::Cell::new(None)
     };
 }
 
-/// Substitute sampling waits for an explicitly supplied immutable proc fixture.
-/// Raw reads, real timestamps, CPU unknowns and admission/reservation logic stay
-/// intact. Native proc reads and unopted threads retain the production interval.
-#[cfg(feature = "test-support")]
-pub fn with_host_load_sampling_wait<T>(
-    wait: HostLoadSamplingWait,
-    operation: impl FnOnce() -> T,
-) -> T {
-    struct Restore(Option<HostLoadSamplingWait>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            HOST_LOAD_SAMPLING_WAIT.with(|slot| slot.set(self.0));
-        }
-    }
-    let previous = HOST_LOAD_SAMPLING_WAIT.with(|slot| slot.replace(Some(wait)));
-    let _restore = Restore(previous);
-    operation()
-}
-
-#[cfg(feature = "test-support")]
-fn host_load_sampling_wait_override() -> Option<HostLoadSamplingWait> {
-    HOST_LOAD_SAMPLING_WAIT.with(std::cell::Cell::get)
-}
-
 /// Shortest interval CPU utilization is measured over.
 const MIN_CPU_WINDOW: Duration = Duration::from_millis(250);
+
 /// A previous reading older than this no longer says what the host does now.
 const MAX_CPU_WINDOW: Duration = Duration::from_secs(120);
+
 /// Shortest interval the sustained CPU reading covers.
 const SUSTAINED_CPU_WINDOW: TimeDelta = TimeDelta::seconds(60);
+
 /// Longest interval the sustained CPU reading covers.
 const MAX_SUSTAINED_CPU_WINDOW: TimeDelta = TimeDelta::seconds(120);
 /// Readings closer together than this are not all kept for the sustained
 /// window, which bounds how many are.
 const SUSTAINED_READING_SPACING: TimeDelta = TimeDelta::seconds(5);
-
+#[cfg(feature = "test-support")]
+type HostLoadSamplingWait = fn(Duration);
 /// Reads the host's load. Utilization needs two tick readings, so the probe
 /// keeps the previous one, and the readings of the last two minutes for the
 /// sustained window; the load itself is computed fresh on every call.
@@ -74,7 +51,6 @@ pub(crate) struct HostLoadProbe {
     /// Readings `measure` took, oldest first, stamped with its `now`.
     kept: Mutex<VecDeque<(DateTime<Utc>, HostUsageReading)>>,
 }
-
 impl Default for HostLoadProbe {
     fn default() -> Self {
         Self::new(PathBuf::from("/proc"))
@@ -210,4 +186,28 @@ impl HostLoadProbe {
             memory_total_bytes: reading.memory_total_bytes,
         })
     }
+}
+
+/// Substitute sampling waits for an explicitly supplied immutable proc fixture.
+/// Raw reads, real timestamps, CPU unknowns and admission/reservation logic stay
+/// intact. Native proc reads and unopted threads retain the production interval.
+#[cfg(feature = "test-support")]
+pub fn with_host_load_sampling_wait<T>(
+    wait: HostLoadSamplingWait,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<HostLoadSamplingWait>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOST_LOAD_SAMPLING_WAIT.with(|slot| slot.set(self.0));
+        }
+    }
+    let previous = HOST_LOAD_SAMPLING_WAIT.with(|slot| slot.replace(Some(wait)));
+    let _restore = Restore(previous);
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+fn host_load_sampling_wait_override() -> Option<HostLoadSamplingWait> {
+    HOST_LOAD_SAMPLING_WAIT.with(std::cell::Cell::get)
 }

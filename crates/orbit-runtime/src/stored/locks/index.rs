@@ -17,121 +17,12 @@ use crate::RuntimeKernel;
 use crate::base::config::unlocked::UnlockedContextPaths;
 use crate::base::path::declared_context::{DeclaredContextFiles, declared_context_files};
 
-/// An `in-progress` or `review` task holds its context against other work,
-/// unless it carries [`NO_DIFF_EXPECTED_TAG`] [ORB-14247].
-pub(super) fn holds_context_lock(status: TaskStatus, tags: &[String]) -> bool {
-    matches!(status, TaskStatus::InProgress | TaskStatus::Review) && !context_lock_exempt(tags)
-}
-
-pub(super) fn context_lock_exempt(tags: &[String]) -> bool {
-    tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
-}
-
-/// Return the effective lock surface for one task.
-///
-/// Every task — leaf, child, or `epic`-tagged root — reserves exactly what it
-/// declares. Hierarchy is metadata: a parent never inherits a child's
-/// footprint, so conflict admission excludes only the work that genuinely
-/// overlaps [ORB-12491]. Declarations `unlocked` matches are left out unless
-/// the task declares nothing else (`UnlockedContextPaths::lock_surface`).
-pub fn lock_context_files_for_task(
-    task: &Task,
-    workspace_root: &Path,
-    unlocked: &UnlockedContextPaths,
-) -> Vec<String> {
-    canonical_lock_surface(
-        declared_context_files(&task.context_files, workspace_root).retained,
-        unlocked,
-    )
-}
-
-/// Apply admission's unlocked rules to canonical declarations, retaining the
-/// docs-only fallback and a stable, deduplicated surface for every consumer.
-pub(super) fn canonical_lock_surface(
-    declarations: impl IntoIterator<Item = String>,
-    unlocked: &UnlockedContextPaths,
-) -> Vec<String> {
-    unlocked.lock_surface(
-        declarations
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-    )
-}
-
 /// One requested selector of a candidate that overlaps a selector an
 /// `in-progress` / `review` task holds.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct TaskLockOverlap {
     pub requested_file: String,
     pub locking_task_id: String,
-}
-
-/// Selector -> the `in-progress` / `review` tasks holding it.
-///
-/// Expand each active surface exactly once. Expansion is the expensive half —
-/// every selector is checked against the filesystem — so automatic admission
-/// and `orbit task eligible` both build this map once and read it rather than
-/// expanding again. Holder lists are sorted and deduplicated.
-///
-/// A task tagged [`NO_DIFF_EXPECTED_TAG`] is not a holder [ORB-14247]. It
-/// still waits on its own dependencies, on locks other tasks hold, and on
-/// its claim.
-pub fn active_task_lock_holders<'a>(
-    tasks: impl IntoIterator<Item = &'a Task>,
-    workspace_root: &Path,
-    unlocked: &UnlockedContextPaths,
-) -> BTreeMap<String, Vec<String>> {
-    let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for task in tasks {
-        if holds_context_lock(task.status, &task.tags) {
-            for file in lock_context_files_for_task(task, workspace_root, unlocked) {
-                holders.entry(file).or_default().push(task.id.clone());
-            }
-        }
-    }
-    for locking_task_ids in holders.values_mut() {
-        locking_task_ids.sort();
-        locking_task_ids.dedup();
-    }
-    holders
-}
-
-/// The holders keyed by anchor, so one candidate's overlap check is a prefix
-/// lookup per requested selector rather than a pass over every held one.
-pub fn lock_holder_index(lock_holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<&[String]> {
-    let mut index = OverlapIndex::new();
-    for (selector, locking_task_ids) in lock_holders {
-        index.insert(selector, locking_task_ids.as_slice());
-    }
-    index
-}
-
-/// Every (requested selector, holder) pair where `task`'s lock surface
-/// overlaps a held selector at a point `lock_modes` does not share, sorted
-/// and deduplicated. Empty means the task collides with no active work.
-pub fn task_lock_overlaps(
-    task: &Task,
-    holders: &OverlapIndex<&[String]>,
-    workspace_root: &Path,
-    unlocked: &UnlockedContextPaths,
-    lock_modes: &FootprintLockModes,
-) -> Vec<TaskLockOverlap> {
-    let mut conflicts = Vec::new();
-    for requested_file in lock_context_files_for_task(task, workspace_root, unlocked) {
-        for (_, locking_task_ids) in holders.overlapping(&requested_file, lock_modes) {
-            for locking_task_id in locking_task_ids.iter() {
-                conflicts.push(TaskLockOverlap {
-                    requested_file: requested_file.clone(),
-                    locking_task_id: locking_task_id.clone(),
-                });
-            }
-        }
-    }
-    conflicts.sort();
-    conflicts.dedup();
-    conflicts
 }
 
 /// Envelope metadata indexed for lock-surface expansion: active tasks,
@@ -326,6 +217,115 @@ impl TaskLockIndex {
     pub(crate) fn is_inherited_only_epic_root(&self, task_id: &str) -> bool {
         self.inherited_only_epic_root_ids.contains(task_id)
     }
+}
+
+/// An `in-progress` or `review` task holds its context against other work,
+/// unless it carries [`NO_DIFF_EXPECTED_TAG`] [ORB-14247].
+pub(super) fn holds_context_lock(status: TaskStatus, tags: &[String]) -> bool {
+    matches!(status, TaskStatus::InProgress | TaskStatus::Review) && !context_lock_exempt(tags)
+}
+
+pub(super) fn context_lock_exempt(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+}
+
+/// Return the effective lock surface for one task.
+///
+/// Every task — leaf, child, or `epic`-tagged root — reserves exactly what it
+/// declares. Hierarchy is metadata: a parent never inherits a child's
+/// footprint, so conflict admission excludes only the work that genuinely
+/// overlaps [ORB-12491]. Declarations `unlocked` matches are left out unless
+/// the task declares nothing else (`UnlockedContextPaths::lock_surface`).
+pub fn lock_context_files_for_task(
+    task: &Task,
+    workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
+) -> Vec<String> {
+    canonical_lock_surface(
+        declared_context_files(&task.context_files, workspace_root).retained,
+        unlocked,
+    )
+}
+
+/// Apply admission's unlocked rules to canonical declarations, retaining the
+/// docs-only fallback and a stable, deduplicated surface for every consumer.
+pub(super) fn canonical_lock_surface(
+    declarations: impl IntoIterator<Item = String>,
+    unlocked: &UnlockedContextPaths,
+) -> Vec<String> {
+    unlocked.lock_surface(
+        declarations
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    )
+}
+
+/// Selector -> the `in-progress` / `review` tasks holding it.
+///
+/// Expand each active surface exactly once. Expansion is the expensive half —
+/// every selector is checked against the filesystem — so automatic admission
+/// and `orbit task eligible` both build this map once and read it rather than
+/// expanding again. Holder lists are sorted and deduplicated.
+///
+/// A task tagged [`NO_DIFF_EXPECTED_TAG`] is not a holder [ORB-14247]. It
+/// still waits on its own dependencies, on locks other tasks hold, and on
+/// its claim.
+pub fn active_task_lock_holders<'a>(
+    tasks: impl IntoIterator<Item = &'a Task>,
+    workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
+) -> BTreeMap<String, Vec<String>> {
+    let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for task in tasks {
+        if holds_context_lock(task.status, &task.tags) {
+            for file in lock_context_files_for_task(task, workspace_root, unlocked) {
+                holders.entry(file).or_default().push(task.id.clone());
+            }
+        }
+    }
+    for locking_task_ids in holders.values_mut() {
+        locking_task_ids.sort();
+        locking_task_ids.dedup();
+    }
+    holders
+}
+
+/// The holders keyed by anchor, so one candidate's overlap check is a prefix
+/// lookup per requested selector rather than a pass over every held one.
+pub fn lock_holder_index(lock_holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<&[String]> {
+    let mut index = OverlapIndex::new();
+    for (selector, locking_task_ids) in lock_holders {
+        index.insert(selector, locking_task_ids.as_slice());
+    }
+    index
+}
+
+/// Every (requested selector, holder) pair where `task`'s lock surface
+/// overlaps a held selector at a point `lock_modes` does not share, sorted
+/// and deduplicated. Empty means the task collides with no active work.
+pub fn task_lock_overlaps(
+    task: &Task,
+    holders: &OverlapIndex<&[String]>,
+    workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
+    lock_modes: &FootprintLockModes,
+) -> Vec<TaskLockOverlap> {
+    let mut conflicts = Vec::new();
+    for requested_file in lock_context_files_for_task(task, workspace_root, unlocked) {
+        for (_, locking_task_ids) in holders.overlapping(&requested_file, lock_modes) {
+            for locking_task_id in locking_task_ids.iter() {
+                conflicts.push(TaskLockOverlap {
+                    requested_file: requested_file.clone(),
+                    locking_task_id: locking_task_id.clone(),
+                });
+            }
+        }
+    }
+    conflicts.sort();
+    conflicts.dedup();
+    conflicts
 }
 
 fn envelope_parent_id(task: &TaskEnvelopeV2) -> Option<&str> {

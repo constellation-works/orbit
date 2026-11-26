@@ -39,6 +39,189 @@ const TARGET_ENV: &str = "ORBIT_BROKER_TEST_TARGET";
 const HOLD_ENV: &str = "ORBIT_BROKER_TEST_HOLD";
 const WAIT: Duration = Duration::from_secs(60);
 
+/// Paths the sandboxed provider reads and writes. The root is disk-backed
+/// outside `/tmp`, which Bubblewrap replaces with a private tmpfs, and short
+/// enough to keep the socket inside macOS's 104-byte `sun_path`.
+struct Scratch {
+    kind: ExecutorSandboxKind,
+    root: PathBuf,
+    _dir: TempDir,
+}
+
+impl Scratch {
+    fn new(kind: ExecutorSandboxKind) -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("obk")
+            .tempdir_in("/var/tmp")
+            .expect("scratch under /var/tmp");
+        let root = dir.path().canonicalize().expect("canonical scratch");
+        fs::create_dir(root.join("results")).expect("results dir");
+        Self {
+            kind,
+            root,
+            _dir: dir,
+        }
+    }
+
+    fn result(&self, name: &str) -> PathBuf {
+        self.root.join("results").join(name)
+    }
+
+    fn host(&self, global_root: PathBuf, provider: &str) -> BrokerHost {
+        BrokerHost {
+            global_root,
+            worktree: self.root.clone(),
+            command: self.root.join(provider),
+            audit_root: self.root.join("audit"),
+            sandbox: ResolvedSandbox {
+                kind: self.kind,
+                fs_profile: ResolvedFsProfile {
+                    name: "broker-test".to_string(),
+                    read: vec!["/**".to_string()],
+                    modify: vec![format!("{}/**", self.root.join("results").display())],
+                },
+                allow_fallback: false,
+                managed_worktree: false,
+                runtime_write_authority: Vec::new(),
+                mask: None,
+            },
+            sockets: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Write a provider that runs [`broker_client`] and requires its result.
+    fn client_provider(&self, name: &str, env: &[(&str, &Path)]) {
+        orbit_common::test_env::assert_child_test_exists(CLIENT_TEST);
+        let result = env
+            .iter()
+            .find_map(|(key, path)| (*key == RESULT_ENV).then_some(*path))
+            .expect("broker client result sentinel");
+        // The provider starts from the runner's cleared environment, so the
+        // child half would not inherit the scrub marker and its pre-`main`
+        // scrub would remove the `ORBIT_PLUGIN_BROKER` the runner exported.
+        let mut assignments = format!(
+            "{CLIENT_ENV}=1 {}=1",
+            orbit_common::test_env::SCRUBBED_MARKER_ENV
+        );
+        for (key, value) in env {
+            assignments.push_str(&format!(" {key}={}", quote(value)));
+        }
+        let exe = std::env::current_exe().expect("test binary");
+        self.provider(
+            name,
+            &format!(
+                "set -e\ncat > /dev/null\n{assignments} {} --ignored --exact {CLIENT_TEST} \
+                 --test-threads=1 >&2\n[ -f {} ] || {{ \
+                 printf '%s\\n' 'child test {CLIENT_TEST} did not write its result sentinel' >&2; \
+                 exit 1; }}\n",
+                quote(&exe),
+                quote(result)
+            ),
+        );
+    }
+
+    fn provider(&self, name: &str, body: &str) {
+        let path = self.root.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write provider");
+        let mut permissions = fs::metadata(&path).expect("provider").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        fs::set_permissions(&path, permissions).expect("make provider executable");
+    }
+}
+
+/// The engine seam with the real broker behind it. Every other host call
+/// keeps its default.
+struct BrokerHost {
+    global_root: PathBuf,
+    /// The run's worktree; a broker serves only a run that has one.
+    worktree: PathBuf,
+    command: PathBuf,
+    audit_root: PathBuf,
+    sandbox: ResolvedSandbox,
+    sockets: Mutex<Vec<PathBuf>>,
+}
+
+impl BrokerHost {
+    fn run(&self, run_id: &str, timeout: Duration) -> Result<DispatchOutcome, DispatchError> {
+        let audit = V2AuditWriter::with_disk_sinks(
+            &self.audit_root.join(run_id),
+            orbit_store::Store::open_in_memory().expect("audit store"),
+            "ws_test",
+            run_id,
+            "codex:test",
+            None,
+        )
+        .expect("audit writer");
+        let spec = AgentLoopSpec {
+            require_completion_envelope: false,
+            ..AgentLoopSpec::for_provider(String::new(), Provider::Codex, timeout.as_secs())
+        };
+        run_cli_backend(
+            self,
+            &spec,
+            "broker_probe",
+            run_id,
+            audit,
+            &json!({"prompt": "probe the plugin broker"}),
+            None,
+        )
+    }
+
+    fn socket(&self) -> PathBuf {
+        self.sockets
+            .lock()
+            .expect("sockets")
+            .last()
+            .cloned()
+            .expect("a broker was started")
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for BrokerHost {
+    fn start_plugin_broker(
+        &self,
+        run: &PluginBrokerRun,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        let broker = PluginBroker::start(&self.global_root, &run.run_id, EchoDispatch::shared())?;
+        self.sockets
+            .lock()
+            .expect("sockets")
+            .push(broker.socket_path().to_path_buf());
+        Ok(Some(Box::new(broker)))
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> ToolContext {
+        ToolContext {
+            workspace_root: Some(self.worktree.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        Ok(ResolvedCliExecutor {
+            command: self.command.display().to_string(),
+            args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
+        })
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        _provider: &str,
+        _fs_profile: Option<&str>,
+        _subprocess_cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        Ok(Some(self.sandbox.clone()))
+    }
+}
+
 /// The in-sandbox half, invoked by `client_provider` with an exact test filter.
 #[test]
 #[ignore = "client half of the sandboxed broker test; runs inside the agent sandbox"]
@@ -139,191 +322,8 @@ fn scratch_or_skip(test: &str) -> Option<Scratch> {
     }
 }
 
-/// Paths the sandboxed provider reads and writes. The root is disk-backed
-/// outside `/tmp`, which Bubblewrap replaces with a private tmpfs, and short
-/// enough to keep the socket inside macOS's 104-byte `sun_path`.
-struct Scratch {
-    kind: ExecutorSandboxKind,
-    root: PathBuf,
-    _dir: TempDir,
-}
-
-impl Scratch {
-    fn new(kind: ExecutorSandboxKind) -> Self {
-        let dir = tempfile::Builder::new()
-            .prefix("obk")
-            .tempdir_in("/var/tmp")
-            .expect("scratch under /var/tmp");
-        let root = dir.path().canonicalize().expect("canonical scratch");
-        fs::create_dir(root.join("results")).expect("results dir");
-        Self {
-            kind,
-            root,
-            _dir: dir,
-        }
-    }
-
-    fn result(&self, name: &str) -> PathBuf {
-        self.root.join("results").join(name)
-    }
-
-    fn host(&self, global_root: PathBuf, provider: &str) -> BrokerHost {
-        BrokerHost {
-            global_root,
-            worktree: self.root.clone(),
-            command: self.root.join(provider),
-            audit_root: self.root.join("audit"),
-            sandbox: ResolvedSandbox {
-                kind: self.kind,
-                fs_profile: ResolvedFsProfile {
-                    name: "broker-test".to_string(),
-                    read: vec!["/**".to_string()],
-                    modify: vec![format!("{}/**", self.root.join("results").display())],
-                },
-                allow_fallback: false,
-                managed_worktree: false,
-                runtime_write_authority: Vec::new(),
-                mask: None,
-            },
-            sockets: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// Write a provider that runs [`broker_client`] and requires its result.
-    fn client_provider(&self, name: &str, env: &[(&str, &Path)]) {
-        orbit_common::test_env::assert_child_test_exists(CLIENT_TEST);
-        let result = env
-            .iter()
-            .find_map(|(key, path)| (*key == RESULT_ENV).then_some(*path))
-            .expect("broker client result sentinel");
-        // The provider starts from the runner's cleared environment, so the
-        // child half would not inherit the scrub marker and its pre-`main`
-        // scrub would remove the `ORBIT_PLUGIN_BROKER` the runner exported.
-        let mut assignments = format!(
-            "{CLIENT_ENV}=1 {}=1",
-            orbit_common::test_env::SCRUBBED_MARKER_ENV
-        );
-        for (key, value) in env {
-            assignments.push_str(&format!(" {key}={}", quote(value)));
-        }
-        let exe = std::env::current_exe().expect("test binary");
-        self.provider(
-            name,
-            &format!(
-                "set -e\ncat > /dev/null\n{assignments} {} --ignored --exact {CLIENT_TEST} \
-                 --test-threads=1 >&2\n[ -f {} ] || {{ \
-                 printf '%s\\n' 'child test {CLIENT_TEST} did not write its result sentinel' >&2; \
-                 exit 1; }}\n",
-                quote(&exe),
-                quote(result)
-            ),
-        );
-    }
-
-    fn provider(&self, name: &str, body: &str) {
-        let path = self.root.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write provider");
-        let mut permissions = fs::metadata(&path).expect("provider").permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-        fs::set_permissions(&path, permissions).expect("make provider executable");
-    }
-}
-
 fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
-}
-
-/// The engine seam with the real broker behind it. Every other host call
-/// keeps its default.
-struct BrokerHost {
-    global_root: PathBuf,
-    /// The run's worktree; a broker serves only a run that has one.
-    worktree: PathBuf,
-    command: PathBuf,
-    audit_root: PathBuf,
-    sandbox: ResolvedSandbox,
-    sockets: Mutex<Vec<PathBuf>>,
-}
-
-impl BrokerHost {
-    fn run(&self, run_id: &str, timeout: Duration) -> Result<DispatchOutcome, DispatchError> {
-        let audit = V2AuditWriter::with_disk_sinks(
-            &self.audit_root.join(run_id),
-            orbit_store::Store::open_in_memory().expect("audit store"),
-            "ws_test",
-            run_id,
-            "codex:test",
-            None,
-        )
-        .expect("audit writer");
-        let spec = AgentLoopSpec {
-            require_completion_envelope: false,
-            ..AgentLoopSpec::for_provider(String::new(), Provider::Codex, timeout.as_secs())
-        };
-        run_cli_backend(
-            self,
-            &spec,
-            "broker_probe",
-            run_id,
-            audit,
-            &json!({"prompt": "probe the plugin broker"}),
-            None,
-        )
-    }
-
-    fn socket(&self) -> PathBuf {
-        self.sockets
-            .lock()
-            .expect("sockets")
-            .last()
-            .cloned()
-            .expect("a broker was started")
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for BrokerHost {
-    fn start_plugin_broker(
-        &self,
-        run: &PluginBrokerRun,
-    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        let broker = PluginBroker::start(&self.global_root, &run.run_id, EchoDispatch::shared())?;
-        self.sockets
-            .lock()
-            .expect("sockets")
-            .push(broker.socket_path().to_path_buf());
-        Ok(Some(Box::new(broker)))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> ToolContext {
-        ToolContext {
-            workspace_root: Some(self.worktree.clone()),
-            ..Default::default()
-        }
-    }
-
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(Some(self.sandbox.clone()))
-    }
 }
 
 fn read_result(path: &Path) -> String {

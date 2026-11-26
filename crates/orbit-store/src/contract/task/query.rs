@@ -108,14 +108,14 @@ impl TaskListFilter {
 
     pub(crate) fn normalized(&self) -> Self {
         Self {
-            tags: normalize_task_tags(self.tags.clone()),
-            any_tags: normalize_task_tags(self.any_tags.clone()),
             search: self
                 .search
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_lowercase),
+            tags: normalize_task_tags(self.tags.clone()),
+            any_tags: normalize_task_tags(self.any_tags.clone()),
             ..self.clone()
         }
     }
@@ -226,46 +226,6 @@ impl TaskListFilter {
             task.created_at < *at || (task.created_at == *at && task.id > *id)
         })
     }
-}
-
-/// Shared canonical ordering for snapshot selection and generated-index reads.
-pub(crate) fn sort_task_created_desc_id_asc<T>(
-    items: &mut [T],
-    created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
-    id: impl Fn(&T) -> &str,
-) {
-    items.sort_by(|a, b| {
-        created_at(b)
-            .cmp(created_at(a))
-            .then_with(|| id(a).cmp(id(b)))
-    });
-}
-
-fn select_task_snapshot_items<T>(
-    snapshot: impl IntoIterator<Item = T>,
-    filter: &TaskListFilter,
-    limit: usize,
-    envelope: impl Fn(&T) -> &TaskEnvelopeV2,
-    into_envelope: impl Fn(T) -> TaskEnvelopeV2,
-) -> TaskCandidates {
-    let filter = filter.normalized();
-    let unbounded = filter.without_cursor();
-    let mut candidates = TaskCandidates::default();
-    for item in snapshot {
-        let task = envelope(&item);
-        if !unbounded.matches(task) {
-            continue;
-        }
-        candidates.total_without_cursor += 1;
-        if !filter.matches_cursor(task) {
-            continue;
-        }
-        candidates.total += 1;
-        if candidates.items.len() < limit {
-            candidates.items.push(into_envelope(item));
-        }
-    }
-    candidates
 }
 
 /// How `query_task_rows` materializes the rows that fill a page.
@@ -400,3 +360,43 @@ pub enum RegisteredTaskResolution {
 /// `Ok(None)` when the task does not exist, or `Err` when its bundle or event
 /// log is corrupt or unreadable.
 pub type TaskHistoryReadOutcome = Result<Option<Vec<TaskHistoryEntry>>, orbit_common::OrbitError>;
+
+/// Shared canonical ordering for snapshot selection and generated-index reads.
+pub(crate) fn sort_task_created_desc_id_asc<T>(
+    items: &mut [T],
+    created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+    id: impl Fn(&T) -> &str,
+) {
+    items.sort_by(|a, b| {
+        created_at(b)
+            .cmp(created_at(a))
+            .then_with(|| id(a).cmp(id(b)))
+    });
+}
+
+fn select_task_snapshot_items<T>(
+    snapshot: impl IntoIterator<Item = T>,
+    filter: &TaskListFilter,
+    limit: usize,
+    envelope: impl Fn(&T) -> &TaskEnvelopeV2,
+    into_envelope: impl Fn(T) -> TaskEnvelopeV2,
+) -> TaskCandidates {
+    let filter = filter.normalized();
+    let unbounded = filter.without_cursor();
+    let mut candidates = TaskCandidates::default();
+    for item in snapshot {
+        let task = envelope(&item);
+        if !unbounded.matches(task) {
+            continue;
+        }
+        candidates.total_without_cursor += 1;
+        if !filter.matches_cursor(task) {
+            continue;
+        }
+        candidates.total += 1;
+        if candidates.items.len() < limit {
+            candidates.items.push(into_envelope(item));
+        }
+    }
+    candidates
+}

@@ -7,43 +7,6 @@ use orbit_types::task::{
     named_friction_targets, pending_resolves_entries, task_fields_updated_note,
 };
 
-/// The `tags_changed` event a write appends when it leaves different tags
-/// than it found, carrying both lists so a reader can replay the tags in
-/// force at any earlier time.
-fn tags_changed_event(
-    bundle: &TaskBundleV2,
-    actor: &str,
-    at: chrono::DateTime<Utc>,
-    previous: Vec<String>,
-    tags: Vec<String>,
-) -> TaskEventRowV2 {
-    let render = |list: &[String]| {
-        if list.is_empty() {
-            "(none)".to_string()
-        } else {
-            list.join(", ")
-        }
-    };
-    TaskEventRowV2 {
-        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-        event_id: next_event_id(&bundle.events),
-        at,
-        by: actor.to_string(),
-        event_type: TAGS_CHANGED_EVENT.to_string(),
-        note: Some(format!(
-            "tags changed: {} → {}",
-            render(&previous),
-            render(&tags)
-        )),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: Some(TaskDecision::TagsChanged(TagsChanged { previous, tags })),
-        surface: None,
-        caller: None,
-    }
-}
-
 impl TaskV2Store {
     pub fn apply_atomic_task_mutation(
         &self,
@@ -912,5 +875,42 @@ impl TaskV2Store {
         } else {
             self.with_task_lock(id, || write(false))
         }
+    }
+}
+
+/// The `tags_changed` event a write appends when it leaves different tags
+/// than it found, carrying both lists so a reader can replay the tags in
+/// force at any earlier time.
+fn tags_changed_event(
+    bundle: &TaskBundleV2,
+    actor: &str,
+    at: chrono::DateTime<Utc>,
+    previous: Vec<String>,
+    tags: Vec<String>,
+) -> TaskEventRowV2 {
+    let render = |list: &[String]| {
+        if list.is_empty() {
+            "(none)".to_string()
+        } else {
+            list.join(", ")
+        }
+    };
+    TaskEventRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        event_id: next_event_id(&bundle.events),
+        at,
+        by: actor.to_string(),
+        event_type: TAGS_CHANGED_EVENT.to_string(),
+        note: Some(format!(
+            "tags changed: {} → {}",
+            render(&previous),
+            render(&tags)
+        )),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(TaskDecision::TagsChanged(TagsChanged { previous, tags })),
+        surface: None,
+        caller: None,
     }
 }

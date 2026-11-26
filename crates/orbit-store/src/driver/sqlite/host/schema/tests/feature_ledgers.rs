@@ -19,6 +19,13 @@ use super::super::feature_schema_meta::{FeatureMigration, apply_feature_registry
 use crate::Store;
 use orbit_common::storage::sqlite::ledger::Migration;
 
+/// `(feature, version, name)` ledger rows and `(key, value)` compatibility
+/// records: what a feature open records, minus timestamps.
+type FeatureFootprint = (Vec<(String, u32, String)>, Vec<(String, String)>);
+
+/// `(step index, pipeline output id, output)` a run checkpointed.
+type Checkpoint = (u32, &'static str, serde_json::Value);
+
 /// The store registry up to, not including, v49.
 fn before_absorption() -> &'static [Migration] {
     let before = MIGRATIONS
@@ -66,10 +73,6 @@ fn feature_rows(conn: &Connection) -> Vec<(String, u32, String, String)> {
         .collect::<Result<Vec<_>, _>>()
         .expect("collect feature rows")
 }
-
-/// `(feature, version, name)` ledger rows and `(key, value)` compatibility
-/// records: what a feature open records, minus timestamps.
-type FeatureFootprint = (Vec<(String, u32, String)>, Vec<(String, String)>);
 
 fn feature_footprint(conn: &Connection) -> FeatureFootprint {
     let rows = feature_rows(conn)
@@ -315,9 +318,6 @@ fn absorbed_repair_releases_members_shelved_at_a_source_the_branch_left() {
     // Applied once: the next open leaves the repaired state alone.
     assert_eq!(after_absorption(&path, &state.consumer).generation, 8);
 }
-
-/// `(step index, pipeline output id, output)` a run checkpointed.
-type Checkpoint = (u32, &'static str, serde_json::Value);
 
 /// Automation v5 [ORB-15197], as v49 runs it: a task-pilot member settled
 /// from the checkpoint at apply's former position after a step was inserted

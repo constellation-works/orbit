@@ -38,6 +38,45 @@ pub struct WorkspaceTaskBackends {
     pub artifact: TaskArtifactRepository,
 }
 
+impl WorkspaceTaskBackends {
+    fn new(store: TaskV2Store, coordination: TaskCoordination) -> Self {
+        let task = Arc::new(store);
+        let document = TaskDocumentRepository {
+            store: task.clone(),
+        };
+        let history = TaskHistoryRepository {
+            store: task.clone(),
+        };
+        let artifact = TaskArtifactRepository {
+            store: task.clone(),
+        };
+        Self {
+            task,
+            coordination,
+            document,
+            history,
+            artifact,
+        }
+    }
+}
+
+/// One workspace's task backends, reservation store, and the commit boundary
+/// they share.
+///
+/// Returned together on purpose: the boundary only serializes what holds the
+/// same instance, so a caller that composed the task backends here must take
+/// its reservation store from here too.
+pub struct CoordinatedWorkspaceBackends {
+    pub task: WorkspaceTaskBackends,
+    pub reservation: TaskReservationRepository,
+    /// The durable commit/recovery authority. Admission publishes a task
+    /// transition, its history, a reservation, and dependent coordination rows
+    /// through [`TaskCommitBoundary::commit_task_transition`], optionally
+    /// inside a [`TaskCommitBoundary::with_admission`] section that also
+    /// covers its readiness reads.
+    pub commit_boundary: Arc<TaskCommitBoundary>,
+}
+
 pub fn workspace_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
@@ -46,25 +85,6 @@ pub fn workspace_task_backends(
         TaskV2Store::new(registry, workspace_id),
         TaskCoordination::default(),
     )
-}
-
-impl WorkspaceTaskBackends {
-    fn new(store: TaskV2Store, coordination: TaskCoordination) -> Self {
-        let task = Arc::new(store);
-        Self {
-            document: TaskDocumentRepository {
-                store: task.clone(),
-            },
-            history: TaskHistoryRepository {
-                store: task.clone(),
-            },
-            artifact: TaskArtifactRepository {
-                store: task.clone(),
-            },
-            task,
-            coordination,
-        }
-    }
 }
 
 /// Run the explicit, idempotent legacy friction import. A read-only store
@@ -133,23 +153,6 @@ pub fn global_executor_def_store(root: PathBuf) -> FileStore<ExecutorDefDir> {
 /// The session log of the workspace whose `.orbit` directory is `orbit_dir`.
 pub fn workspace_session_log_store(orbit_dir: PathBuf) -> FileStore<SessionLogDir> {
     FileStore::new(SessionLogDir::new(orbit_dir))
-}
-
-/// One workspace's task backends, reservation store, and the commit boundary
-/// they share.
-///
-/// Returned together on purpose: the boundary only serializes what holds the
-/// same instance, so a caller that composed the task backends here must take
-/// its reservation store from here too.
-pub struct CoordinatedWorkspaceBackends {
-    pub task: WorkspaceTaskBackends,
-    pub reservation: TaskReservationRepository,
-    /// The durable commit/recovery authority. Admission publishes a task
-    /// transition, its history, a reservation, and dependent coordination rows
-    /// through [`TaskCommitBoundary::commit_task_transition`], optionally
-    /// inside a [`TaskCommitBoundary::with_admission`] section that also
-    /// covers its readiness reads.
-    pub commit_boundary: Arc<TaskCommitBoundary>,
 }
 
 /// Compose one workspace's task and reservation persistence over an

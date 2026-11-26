@@ -103,6 +103,168 @@ pub struct DispatchEffortBackfill {
     pub launch_only_unmatched: usize,
 }
 
+/// Completed invocation with no dispatch identity and its candidate launches.
+struct UnidentifiedInvocationLaunch {
+    invocation_id: i64,
+    activity_id: String,
+    run_resolved_crew: Option<String>,
+    launches: Vec<InvocationLaunchEvent>,
+}
+
+/// One `cli.invocation.started` event that may have launched an invocation.
+#[derive(Debug, Clone)]
+struct InvocationLaunchEvent {
+    event_id: String,
+    started_at: DateTime<Utc>,
+    argv_redacted: Option<Vec<String>>,
+    reasoning_effort: Option<ReasoningEffort>,
+    effort_unreadable: bool,
+}
+
+/// Launches of one run, step, provider and model that the dispatch-effort
+/// backfill may still record, one row per launch.
+struct UnrecordedLaunchGroup {
+    run_id: String,
+    activity_id: String,
+    provider: String,
+    model: Option<String>,
+    run_resolved_crew: Option<String>,
+    launches: Vec<InvocationLaunchEvent>,
+}
+
+#[derive(Default)]
+struct UnrecordedLaunchOmissions {
+    no_step: usize,
+    no_provider: usize,
+}
+
+/// One step's audit interval in a run: `step.started` to its `step.finished`.
+struct StepInterval {
+    step_id: String,
+    started_at: DateTime<Utc>,
+    finished_at: Option<DateTime<Utc>>,
+}
+
+/// A run's `step.started` and `activity.started` audit events by event id:
+/// the causal links from a launch to the step or run-level activity that ran
+/// it.
+struct CausalEvents {
+    by_id: HashMap<String, CausalEvent>,
+}
+
+/// One causal link: its parent, and the step id (`step.started`) or
+/// activity name (`activity.started`) it names.
+struct CausalEvent {
+    step: bool,
+    parent: Option<String>,
+    name: Option<String>,
+}
+
+impl CausalEvents {
+    fn from_rows(rows: Vec<V2AuditRunEventRow>) -> Self {
+        let by_id = rows
+            .into_iter()
+            .map(|row| {
+                let step = row.event_type == "step.started";
+                let payload = serde_json::from_str::<serde_json::Value>(&row.payload_json).ok();
+                let name = payload
+                    .as_ref()
+                    .and_then(|payload| payload.get(if step { "step_id" } else { "activity_name" }))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .map(str::to_string);
+                (
+                    row.event_id,
+                    CausalEvent {
+                        step,
+                        parent: row.parent_event_id,
+                        name,
+                    },
+                )
+            })
+            .collect();
+        Self { by_id }
+    }
+
+    /// The step, else the run-level activity, a launch whose parent is
+    /// `parent` ran under: the first `step.started` up its causal chain, or,
+    /// when the chain ends at an `activity.started` with no parent, that
+    /// activity's name. `None` when the chain is absent, broken, unnamed or
+    /// too long: the launch is then not proven by its links.
+    fn activity_of(&self, parent: Option<&str>) -> Option<&str> {
+        let mut current = parent?;
+        for _ in 0..CAUSAL_CHAIN_LIMIT {
+            let event = self.by_id.get(current)?;
+            if event.step {
+                return event.name.as_deref();
+            }
+            match event.parent.as_deref() {
+                Some(next) => current = next,
+                None => return event.name.as_deref(),
+            }
+        }
+        None
+    }
+}
+
+/// A launch event with the model it launched, before matching.
+struct RecordedLaunch {
+    model: Option<String>,
+    provider: Option<String>,
+    event: InvocationLaunchEvent,
+}
+
+impl RecordedLaunch {
+    /// A payload with neither an argv nor a recorded effort is no evidence:
+    /// launch events before argv capture (2026-09-10) and before the
+    /// recorded effort (2026-10-29) carry neither, and stay unknown.
+    fn parse(event_id: String, ts: &str, payload: &str) -> Option<Self> {
+        let started_at = crate::parse_timestamp(ts).ok()?;
+        let payload: serde_json::Value = serde_json::from_str(payload).ok()?;
+        let argv_redacted = match payload.get("argv_redacted") {
+            Some(argv) => Some(
+                argv.as_array()?
+                    .iter()
+                    .map(|arg| arg.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            None => None,
+        };
+        let (reasoning_effort, effort_unreadable) = match payload
+            .get("reasoning_effort")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(raw) => match raw.parse::<ReasoningEffort>() {
+                Ok(effort) => (Some(effort), false),
+                Err(_) => (None, true),
+            },
+            None => (None, false),
+        };
+        if argv_redacted.is_none() && reasoning_effort.is_none() && !effort_unreadable {
+            return None;
+        }
+        let model = payload
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let provider = payload
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        Some(Self {
+            model,
+            provider,
+            event: InvocationLaunchEvent {
+                event_id,
+                started_at,
+                argv_redacted,
+                reasoning_effort,
+                effort_unreadable,
+            },
+        })
+    }
+}
+
 /// Record a dispatch identity, read from the launch argv, for every
 /// invocation of `workspace_id` that has none.
 ///
@@ -225,41 +387,6 @@ pub fn backfill_dispatch_effort(
         }
     }
     Ok(report)
-}
-
-/// Completed invocation with no dispatch identity and its candidate launches.
-struct UnidentifiedInvocationLaunch {
-    invocation_id: i64,
-    activity_id: String,
-    run_resolved_crew: Option<String>,
-    launches: Vec<InvocationLaunchEvent>,
-}
-
-/// One `cli.invocation.started` event that may have launched an invocation.
-#[derive(Debug, Clone)]
-struct InvocationLaunchEvent {
-    event_id: String,
-    started_at: DateTime<Utc>,
-    argv_redacted: Option<Vec<String>>,
-    reasoning_effort: Option<ReasoningEffort>,
-    effort_unreadable: bool,
-}
-
-/// Launches of one run, step, provider and model that the dispatch-effort
-/// backfill may still record, one row per launch.
-struct UnrecordedLaunchGroup {
-    run_id: String,
-    activity_id: String,
-    provider: String,
-    model: Option<String>,
-    run_resolved_crew: Option<String>,
-    launches: Vec<InvocationLaunchEvent>,
-}
-
-#[derive(Default)]
-struct UnrecordedLaunchOmissions {
-    no_step: usize,
-    no_provider: usize,
 }
 
 /// Match every unidentified invocation of `workspace_id` to candidate
@@ -533,13 +660,6 @@ fn dispatch_row_covers_launch(
     })
 }
 
-/// One step's audit interval in a run: `step.started` to its `step.finished`.
-struct StepInterval {
-    step_id: String,
-    started_at: DateTime<Utc>,
-    finished_at: Option<DateTime<Utc>>,
-}
-
 fn step_intervals_from_rows(rows: Vec<V2AuditRunEventRow>) -> Vec<StepInterval> {
     let mut intervals: Vec<StepInterval> = Vec::new();
     for row in rows {
@@ -571,126 +691,6 @@ fn step_intervals_from_rows(rows: Vec<V2AuditRunEventRow>) -> Vec<StepInterval> 
         }
     }
     intervals
-}
-
-/// A run's `step.started` and `activity.started` audit events by event id:
-/// the causal links from a launch to the step or run-level activity that ran
-/// it.
-struct CausalEvents {
-    by_id: HashMap<String, CausalEvent>,
-}
-
-/// One causal link: its parent, and the step id (`step.started`) or
-/// activity name (`activity.started`) it names.
-struct CausalEvent {
-    step: bool,
-    parent: Option<String>,
-    name: Option<String>,
-}
-
-impl CausalEvents {
-    fn from_rows(rows: Vec<V2AuditRunEventRow>) -> Self {
-        let by_id = rows
-            .into_iter()
-            .map(|row| {
-                let step = row.event_type == "step.started";
-                let payload = serde_json::from_str::<serde_json::Value>(&row.payload_json).ok();
-                let name = payload
-                    .as_ref()
-                    .and_then(|payload| payload.get(if step { "step_id" } else { "activity_name" }))
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|name| !name.trim().is_empty())
-                    .map(str::to_string);
-                (
-                    row.event_id,
-                    CausalEvent {
-                        step,
-                        parent: row.parent_event_id,
-                        name,
-                    },
-                )
-            })
-            .collect();
-        Self { by_id }
-    }
-
-    /// The step, else the run-level activity, a launch whose parent is
-    /// `parent` ran under: the first `step.started` up its causal chain, or,
-    /// when the chain ends at an `activity.started` with no parent, that
-    /// activity's name. `None` when the chain is absent, broken, unnamed or
-    /// too long: the launch is then not proven by its links.
-    fn activity_of(&self, parent: Option<&str>) -> Option<&str> {
-        let mut current = parent?;
-        for _ in 0..CAUSAL_CHAIN_LIMIT {
-            let event = self.by_id.get(current)?;
-            if event.step {
-                return event.name.as_deref();
-            }
-            match event.parent.as_deref() {
-                Some(next) => current = next,
-                None => return event.name.as_deref(),
-            }
-        }
-        None
-    }
-}
-
-/// A launch event with the model it launched, before matching.
-struct RecordedLaunch {
-    model: Option<String>,
-    provider: Option<String>,
-    event: InvocationLaunchEvent,
-}
-
-impl RecordedLaunch {
-    /// A payload with neither an argv nor a recorded effort is no evidence:
-    /// launch events before argv capture (2026-09-10) and before the
-    /// recorded effort (2026-10-29) carry neither, and stay unknown.
-    fn parse(event_id: String, ts: &str, payload: &str) -> Option<Self> {
-        let started_at = crate::parse_timestamp(ts).ok()?;
-        let payload: serde_json::Value = serde_json::from_str(payload).ok()?;
-        let argv_redacted = match payload.get("argv_redacted") {
-            Some(argv) => Some(
-                argv.as_array()?
-                    .iter()
-                    .map(|arg| arg.as_str().map(str::to_string))
-                    .collect::<Option<Vec<_>>>()?,
-            ),
-            None => None,
-        };
-        let (reasoning_effort, effort_unreadable) = match payload
-            .get("reasoning_effort")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some(raw) => match raw.parse::<ReasoningEffort>() {
-                Ok(effort) => (Some(effort), false),
-                Err(_) => (None, true),
-            },
-            None => (None, false),
-        };
-        if argv_redacted.is_none() && reasoning_effort.is_none() && !effort_unreadable {
-            return None;
-        }
-        let model = payload
-            .get("model")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        let provider = payload
-            .get("provider")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        Some(Self {
-            model,
-            provider,
-            event: InvocationLaunchEvent {
-                event_id,
-                started_at,
-                argv_redacted,
-                reasoning_effort,
-                effort_unreadable,
-            },
-        })
-    }
 }
 
 /// The one effort every launch rendered (`Some(None)` for the provider

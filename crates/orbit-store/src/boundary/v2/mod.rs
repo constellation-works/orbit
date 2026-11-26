@@ -65,39 +65,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-#[cfg(test)]
-mod tests;
-
-pub(crate) fn task_from_bundle(bundle: TaskBundleV2) -> Task {
-    let _span = orbit_common::tracing::trace_span!(
-        target: "orbit.store.task_query",
-        "task_bundle_materialization",
-        task_id = %bundle.envelope.id,
-    )
-    .entered();
-    Task::from_envelope_parts(
-        bundle.envelope,
-        bundle.description,
-        parse_acceptance(&bundle.acceptance),
-        bundle.plan,
-        bundle.execution_summary,
-    )
-}
-
-pub(super) fn stamp_pending_events(
-    bundle_events: &mut [TaskEventRowV2],
-    pending_events: &mut [TaskEventRowV2],
-    provenance: Option<&orbit_types::task::TaskWriteProvenance>,
-) {
-    for event in pending_events.iter_mut() {
-        event.stamp_human_provenance(provenance);
-    }
-    let start = bundle_events.len().saturating_sub(pending_events.len());
-    for event in &mut bundle_events[start..] {
-        event.stamp_human_provenance(provenance);
-    }
-}
-
 pub struct TaskV2Store {
     registry: TaskRegistryStore,
     bundle_store: TaskBundleStoreV2,
@@ -128,9 +95,10 @@ impl TaskV2Store {
     }
 
     pub(crate) fn new(registry: TaskRegistryStore, workspace_id: String) -> Self {
+        let bundle_store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
         Self {
-            bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             registry,
+            bundle_store,
             workspace_id,
             envelope_cache: EnvelopeCache::default(),
             row_cache: RowCache::default(),
@@ -177,3 +145,36 @@ impl TaskV2Store {
         }
     }
 }
+
+pub(crate) fn task_from_bundle(bundle: TaskBundleV2) -> Task {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query",
+        "task_bundle_materialization",
+        task_id = %bundle.envelope.id,
+    )
+    .entered();
+    Task::from_envelope_parts(
+        bundle.envelope,
+        bundle.description,
+        parse_acceptance(&bundle.acceptance),
+        bundle.plan,
+        bundle.execution_summary,
+    )
+}
+
+pub(super) fn stamp_pending_events(
+    bundle_events: &mut [TaskEventRowV2],
+    pending_events: &mut [TaskEventRowV2],
+    provenance: Option<&orbit_types::task::TaskWriteProvenance>,
+) {
+    for event in pending_events.iter_mut() {
+        event.stamp_human_provenance(provenance);
+    }
+    let start = bundle_events.len().saturating_sub(pending_events.len());
+    for event in &mut bundle_events[start..] {
+        event.stamp_human_provenance(provenance);
+    }
+}
+
+#[cfg(test)]
+mod tests;

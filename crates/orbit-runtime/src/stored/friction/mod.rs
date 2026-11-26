@@ -18,20 +18,6 @@ use crate::workspace::catalog::WorkspaceScope;
 pub use workspace::WorkspaceFrictions;
 use workspace::validate_workspace_id;
 
-/// Friction operations scoped to this runtime's workspace identity.
-pub fn store_for(runtime: &RuntimeKernel) -> Result<WorkspaceFrictions, OrbitError> {
-    let store = runtime.sqlite_store()?;
-    let workspace_id = runtime.workspace_id()?;
-    let files_root = files_root(runtime);
-    prepare_workspace_frictions(&store, &workspace_id, &files_root)?;
-    WorkspaceFrictions::open(store, workspace_id, files_root)
-}
-
-/// Where this runtime's workspace keeps its friction tag taxonomy.
-pub(crate) fn files_root(runtime: &RuntimeKernel) -> PathBuf {
-    runtime.data_root().join("frictions")
-}
-
 impl RuntimeKernel {
     /// Permit resolution of a replica's existing host-local friction corpus.
     ///
@@ -152,4 +138,18 @@ impl RuntimeKernel {
             rehomed_at: Utc::now(),
         })
     }
+}
+
+/// Friction operations scoped to this runtime's workspace identity.
+pub fn store_for(runtime: &RuntimeKernel) -> Result<WorkspaceFrictions, OrbitError> {
+    let store = runtime.sqlite_store()?;
+    let workspace_id = runtime.workspace_id()?;
+    let files_root = files_root(runtime);
+    prepare_workspace_frictions(&store, &workspace_id, &files_root)?;
+    WorkspaceFrictions::open(store, workspace_id, files_root)
+}
+
+/// Where this runtime's workspace keeps its friction tag taxonomy.
+pub(crate) fn files_root(runtime: &RuntimeKernel) -> PathBuf {
+    runtime.data_root().join("frictions")
 }

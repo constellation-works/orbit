@@ -33,8 +33,10 @@ pub use refresh::{BaseMergeInspection, inspect_base_merge};
 /// shared with the delivery pipeline's base-inherited refresh [ORB-26860].
 pub use orbit_types::workflow::PullRequestRefreshOutcome;
 
-#[cfg(test)]
-mod tests;
+/// The forge drives a task's own pull request through leasing, landing, merge
+/// and its terminal close, so it spends the host's GitHub quota as delivery.
+pub(super) const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
+    orbit_tools::github_quota::GithubCaller::Delivery;
 
 /// One open pull request as the closure policy matches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,18 +302,6 @@ pub trait TaskPrForge: Send + Sync {
         number: u64,
         comment: &str,
     ) -> Result<(), OrbitError>;
-}
-
-/// The forge for a host-bound runtime. This crate's own unit tests never
-/// reach a real forge: a done or rejected fixture task must not touch a
-/// repository's PRs from whichever checkout the tests run in.
-#[must_use]
-pub fn default_task_pr_forge(env: &orbit_common::Env) -> Arc<dyn TaskPrForge> {
-    if cfg!(test) {
-        Arc::new(NoTaskPrForge)
-    } else {
-        Arc::new(GhTaskPrForge::new(env))
-    }
 }
 
 /// A forge with no PRs, for runtimes that are not bound to a repository.
@@ -684,6 +674,18 @@ impl TaskPrForge for GhTaskPrForge {
     }
 }
 
+/// The forge for a host-bound runtime. This crate's own unit tests never
+/// reach a real forge: a done or rejected fixture task must not touch a
+/// repository's PRs from whichever checkout the tests run in.
+#[must_use]
+pub fn default_task_pr_forge(env: &orbit_common::Env) -> Arc<dyn TaskPrForge> {
+    if cfg!(test) {
+        Arc::new(NoTaskPrForge)
+    } else {
+        Arc::new(GhTaskPrForge::new(env))
+    }
+}
+
 pub(super) fn view_pull_request(
     env: &orbit_common::Env,
     repo_root: &Path,
@@ -716,11 +718,6 @@ fn has_state(entry: &Value, state: &str) -> bool {
         .and_then(Value::as_str)
         .is_some_and(|reported| reported.eq_ignore_ascii_case(state))
 }
-
-/// The forge drives a task's own pull request through leasing, landing, merge
-/// and its terminal close, so it spends the host's GitHub quota as delivery.
-pub(super) const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
-    orbit_tools::github_quota::GithubCaller::Delivery;
 
 /// Run one forge `gh` request in `repo_root` under the host's GitHub quota
 /// guard. A local refusal or GitHub's authenticated rate limit stays typed,
@@ -1000,3 +997,6 @@ fn populate_requires_status_checks(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

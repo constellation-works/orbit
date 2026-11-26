@@ -259,6 +259,32 @@ impl TaskRegistryStore {
     }
 }
 
+impl TaskRegistryStore {
+    /// Every indexed task of `partition_id` with its status and last update,
+    /// read from the generated index alone. A change watcher compares two
+    /// reads; the index row is rewritten with its envelope on every commit,
+    /// whichever process made it.
+    ///
+    /// Writable registries return the same snapshot until another connection
+    /// commits. A failed read leaves that snapshot in place and returns the
+    /// error. Read-only registries read the index directly.
+    pub fn task_change_stamps(
+        &self,
+        partition_id: &str,
+    ) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        // Read-only admission may have fallen back to an immutable main-file
+        // connection on a mount without writable WAL sidecars. Preserve that
+        // connection's read semantics instead of requiring another live one.
+        if self.is_read_only()? {
+            let conn = self.read()?;
+            return Ok(Arc::new(read_task_change_stamps(&conn, &partition_id)?));
+        }
+        self.change_stamps
+            .change_stamps_for(&self.db, &partition_id)
+    }
+}
+
 /// `WHERE` predicate and its bound values for `filter` within one workspace.
 fn index_filter_sql(partition_id: &str, filter: &TaskIndexFilter) -> (String, Vec<Value>) {
     let mut sql = String::from("workspace_id = ?");
@@ -334,32 +360,6 @@ fn push_placeholders(sql: &mut String, count: usize) {
             sql.push_str(", ");
         }
         sql.push('?');
-    }
-}
-
-impl TaskRegistryStore {
-    /// Every indexed task of `partition_id` with its status and last update,
-    /// read from the generated index alone. A change watcher compares two
-    /// reads; the index row is rewritten with its envelope on every commit,
-    /// whichever process made it.
-    ///
-    /// Writable registries return the same snapshot until another connection
-    /// commits. A failed read leaves that snapshot in place and returns the
-    /// error. Read-only registries read the index directly.
-    pub fn task_change_stamps(
-        &self,
-        partition_id: &str,
-    ) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
-        let partition_id = validate_partition_id(partition_id)?;
-        // Read-only admission may have fallen back to an immutable main-file
-        // connection on a mount without writable WAL sidecars. Preserve that
-        // connection's read semantics instead of requiring another live one.
-        if self.is_read_only()? {
-            let conn = self.read()?;
-            return Ok(Arc::new(read_task_change_stamps(&conn, &partition_id)?));
-        }
-        self.change_stamps
-            .change_stamps_for(&self.db, &partition_id)
     }
 }
 

@@ -120,16 +120,6 @@ pub struct PublicationInspection {
     pub tasks: Vec<InspectedPublicationTask>,
 }
 
-/// Fetch a publication branch into `request.cache_dir` and render labelled
-/// read-only task state. Fail closed before returning any task when pairing,
-/// schema, lineage, or content-integrity checks fail.
-pub fn inspect_publication(
-    env: &orbit_common::Env,
-    request: PublicationInspectRequest,
-) -> Result<PublicationInspection, OrbitError> {
-    Ok(load_validated_publication(env, request)?.inspection)
-}
-
 /// Fully validated publication content retained for recovery. The public
 /// inspection surface deliberately omits append streams and attachment bytes;
 /// restore consumes this internal result so it cannot bypass the read-only
@@ -145,6 +135,35 @@ pub(super) struct ValidatedPublicationSnapshot {
 pub(super) struct ValidatedPublicationBundle {
     pub bundle: TaskBundleV2,
     pub source_dir: PathBuf,
+}
+
+struct ValidatedRequest {
+    workspace_id: String,
+    source_repository_fingerprint: String,
+    publication_id: String,
+    authority_machine_id: String,
+    publication_remote: String,
+    publication_branch: String,
+    cache_dir: PathBuf,
+    commit: Option<String>,
+}
+
+struct FetchedSnapshot {
+    tree: TempDir,
+    branch: String,
+    commit_id: String,
+    git_parent: Option<String>,
+    freshness: PublicationFreshness,
+}
+
+/// Fetch a publication branch into `request.cache_dir` and render labelled
+/// read-only task state. Fail closed before returning any task when pairing,
+/// schema, lineage, or content-integrity checks fail.
+pub fn inspect_publication(
+    env: &orbit_common::Env,
+    request: PublicationInspectRequest,
+) -> Result<PublicationInspection, OrbitError> {
+    Ok(load_validated_publication(env, request)?.inspection)
 }
 
 pub(super) fn load_validated_publication(
@@ -191,25 +210,6 @@ pub(super) fn load_validated_publication(
         bundles: tasks,
         _tree: fetched.tree,
     })
-}
-
-struct ValidatedRequest {
-    workspace_id: String,
-    source_repository_fingerprint: String,
-    publication_id: String,
-    authority_machine_id: String,
-    publication_remote: String,
-    publication_branch: String,
-    cache_dir: PathBuf,
-    commit: Option<String>,
-}
-
-struct FetchedSnapshot {
-    tree: TempDir,
-    branch: String,
-    commit_id: String,
-    git_parent: Option<String>,
-    freshness: PublicationFreshness,
 }
 
 fn validate_request(request: PublicationInspectRequest) -> Result<ValidatedRequest, OrbitError> {

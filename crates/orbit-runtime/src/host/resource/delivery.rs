@@ -31,15 +31,6 @@ pub const CLAIMED_LEAF_JOBS: &[&str] = workflow::CLAIMED_DELIVERY_LEAF_JOBS;
 /// profile rather than counting as a separate forecast delivery.
 pub const ATTRIBUTED_CHILD_JOBS: &[&str] = &["agent_explore_pipeline"];
 
-/// Every job definition whose runs belong to a delivery.
-pub(crate) fn delivery_jobs() -> Vec<&'static str> {
-    SUBMITTED_DELIVERY_JOBS
-        .iter()
-        .chain(CLAIMED_LEAF_JOBS)
-        .copied()
-        .collect()
-}
-
 /// One delivery's profile key and clock, fixed when it was admitted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveryResourceClass {
@@ -53,6 +44,15 @@ pub struct DeliveryResourceClass {
     /// through, so profiles exclude it.
     #[serde(default)]
     pub resumed: bool,
+}
+
+/// Every job definition whose runs belong to a delivery.
+pub(crate) fn delivery_jobs() -> Vec<&'static str> {
+    SUBMITTED_DELIVERY_JOBS
+        .iter()
+        .chain(CLAIMED_LEAF_JOBS)
+        .copied()
+        .collect()
 }
 
 /// The class `input` carries for `task_id`, if any.

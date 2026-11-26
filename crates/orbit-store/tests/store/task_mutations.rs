@@ -1,7 +1,5 @@
 //  Existing task mutation cases through exported workspace backends.
 
-
-
 fn store(temp: &TempDir) -> WorkspaceTaskBackends {
     let registry =
         TaskRegistryStore::open(&task_registry_path(&std::env::current_dir().unwrap())).unwrap();
@@ -20,6 +18,7 @@ fn store(temp: &TempDir) -> WorkspaceTaskBackends {
         .unwrap();
     workspace_task_backends(registry, binding.partition_id)
 }
+
 // Disk snapshots are fixture evidence, not a copy of the bundle reader.
 fn bundle_path(id: &str) -> std::path::PathBuf {
     let registry =
@@ -31,10 +30,6 @@ fn bundle_path(id: &str) -> std::path::PathBuf {
         .canonical_path
 }
 
-struct Snapshot {
-    envelope: TaskEnvelopeV2,
-    events: Vec<TaskEventRowV2>,
-}
 fn snapshot(id: &str) -> Snapshot {
     let path = bundle_path(id);
     Snapshot {

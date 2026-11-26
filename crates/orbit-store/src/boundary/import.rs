@@ -45,6 +45,81 @@ struct ImportTarget {
     register: Option<RegisterWorkspaceParams>,
 }
 
+/// What owner-wins does with one colliding id.
+enum MirrorVerdict {
+    /// The id is under the local prefix, so the local copy is authoritative.
+    LocalOwned,
+    /// The owner's copy supersedes the local mirror at this bundle directory.
+    Replace(PathBuf),
+}
+
+/// Tracks filesystem/registry writes so a mid-import failure can be rolled back.
+struct WriteGuard<'a> {
+    registry: &'a TaskRegistryStore,
+    written_dirs: Vec<PathBuf>,
+    registered_ids: Vec<String>,
+    registered_workspace: Option<String>,
+    armed: bool,
+}
+
+impl<'a> WriteGuard<'a> {
+    fn new(registry: &'a TaskRegistryStore) -> Self {
+        Self {
+            registry,
+            written_dirs: Vec::new(),
+            registered_ids: Vec::new(),
+            registered_workspace: None,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    /// Best-effort undo of everything written so far. Registry rows are removed
+    /// first (they reference the dirs), then the bundle directories. Failures
+    /// are logged, not propagated — the caller is already returning the original
+    /// error.
+    ///
+    /// Owner-wins replacements are deliberately *not* undone: the bundle they
+    /// overwrote was a mirror, the copy now on disk is the owner's current one,
+    /// and restoring the stale mirror would be the wrong direction. Their index
+    /// rows can be left behind the bundle until the next successful sync (or
+    /// `orbit task reindex`) rebuilds them.
+    fn rollback(&mut self) {
+        if let Some(workspace_id) = self.registered_workspace.take() {
+            log_rollback_failure(
+                "unbind workspace",
+                self.registry.unbind_workspace(&workspace_id),
+            );
+        }
+        for id in self.registered_ids.drain(..) {
+            // The partition id is not needed to look up the (global) binding,
+            // but the API takes it; recover it from the binding.
+            if let Ok(Some(binding)) = self.registry.find_task_binding(&id) {
+                log_rollback_failure(
+                    "unregister imported task",
+                    self.registry
+                        .unregister_task_bundle(&id, &binding.partition_id),
+                );
+            }
+        }
+        for dir in self.written_dirs.drain(..) {
+            log_rollback_failure("remove imported bundle", std::fs::remove_dir_all(&dir));
+        }
+        self.armed = false;
+    }
+}
+
+impl Drop for WriteGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.rollback();
+        }
+    }
+}
+
 pub(crate) fn commit_import(
     registry: &TaskRegistryStore,
     archive_path: &Path,
@@ -357,14 +432,6 @@ pub(crate) fn commit_import(
     })
 }
 
-/// What owner-wins does with one colliding id.
-enum MirrorVerdict {
-    /// The id is under the local prefix, so the local copy is authoritative.
-    LocalOwned,
-    /// The owner's copy supersedes the local mirror at this bundle directory.
-    Replace(PathBuf),
-}
-
 /// Decide a colliding id from its prefix alone: this host's own ids are never
 /// overwritten, and any other host's id is refreshed in place.
 fn owner_wins_verdict(
@@ -557,71 +624,4 @@ fn write_id_map(
         .map_err(|e| OrbitError::Store(format!("failed to encode id map: {e}")))?;
     atomic_write_bytes(&path, &json).map_err(|e| OrbitError::Io(e.to_string()))?;
     Ok(path)
-}
-
-/// Tracks filesystem/registry writes so a mid-import failure can be rolled back.
-struct WriteGuard<'a> {
-    registry: &'a TaskRegistryStore,
-    written_dirs: Vec<PathBuf>,
-    registered_ids: Vec<String>,
-    registered_workspace: Option<String>,
-    armed: bool,
-}
-
-impl<'a> WriteGuard<'a> {
-    fn new(registry: &'a TaskRegistryStore) -> Self {
-        Self {
-            registry,
-            written_dirs: Vec::new(),
-            registered_ids: Vec::new(),
-            registered_workspace: None,
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-
-    /// Best-effort undo of everything written so far. Registry rows are removed
-    /// first (they reference the dirs), then the bundle directories. Failures
-    /// are logged, not propagated — the caller is already returning the original
-    /// error.
-    ///
-    /// Owner-wins replacements are deliberately *not* undone: the bundle they
-    /// overwrote was a mirror, the copy now on disk is the owner's current one,
-    /// and restoring the stale mirror would be the wrong direction. Their index
-    /// rows can be left behind the bundle until the next successful sync (or
-    /// `orbit task reindex`) rebuilds them.
-    fn rollback(&mut self) {
-        if let Some(workspace_id) = self.registered_workspace.take() {
-            log_rollback_failure(
-                "unbind workspace",
-                self.registry.unbind_workspace(&workspace_id),
-            );
-        }
-        for id in self.registered_ids.drain(..) {
-            // The partition id is not needed to look up the (global) binding,
-            // but the API takes it; recover it from the binding.
-            if let Ok(Some(binding)) = self.registry.find_task_binding(&id) {
-                log_rollback_failure(
-                    "unregister imported task",
-                    self.registry
-                        .unregister_task_bundle(&id, &binding.partition_id),
-                );
-            }
-        }
-        for dir in self.written_dirs.drain(..) {
-            log_rollback_failure("remove imported bundle", std::fs::remove_dir_all(&dir));
-        }
-        self.armed = false;
-    }
-}
-
-impl Drop for WriteGuard<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            self.rollback();
-        }
-    }
 }

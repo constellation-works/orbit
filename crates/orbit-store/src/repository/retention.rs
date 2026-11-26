@@ -50,25 +50,6 @@ const ARCHIVABLE_RUN_STATES: [JobRunState; 5] = [
     JobRunState::Interrupted,
 ];
 
-fn archivable_states_sql() -> String {
-    ARCHIVABLE_RUN_STATES
-        .iter()
-        .map(|state| format!("'{state}'"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The selection predicate shared by a run-state plan and an archive batch.
-fn archivable_runs_sql() -> String {
-    format!(
-        "FROM job_runs r JOIN job_run_states s \
-           ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
-         WHERE r.workspace_id = ?1 AND r.state IN ({}) \
-           AND COALESCE(r.finished_at, r.created_at) < ?2",
-        archivable_states_sql()
-    )
-}
-
 /// One workspace's prunable journal rows: applied before `?2`, less each
 /// task's newest applied row. The index on `(workspace_id, state, created_at)`
 /// finds the applied rows; one window pass ranks them per task, so the cost
@@ -396,6 +377,25 @@ impl<Access> RetentionRepository<'_, Access> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)
     }
+}
+
+fn archivable_states_sql() -> String {
+    ARCHIVABLE_RUN_STATES
+        .iter()
+        .map(|state| format!("'{state}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The selection predicate shared by a run-state plan and an archive batch.
+fn archivable_runs_sql() -> String {
+    format!(
+        "FROM job_runs r JOIN job_run_states s \
+           ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+         WHERE r.workspace_id = ?1 AND r.state IN ({}) \
+           AND COALESCE(r.finished_at, r.created_at) < ?2",
+        archivable_states_sql()
+    )
 }
 
 /// Call `visit` with every stored text that can name an audit blob: run audit

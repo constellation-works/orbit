@@ -179,15 +179,18 @@ impl ResourcePressureEvaluator {
         let disks: Vec<_> = sample
             .disks
             .into_iter()
-            .map(|disk| DiskReading {
-                reading: reading(
+            .map(|disk| {
+                let reading = reading(
                     format!("disk {}", disk.path.display()),
                     disk.used_percent,
                     settings.disk_high_percent,
                     settings.disk_resume_percent,
                     false,
-                ),
-                path: disk.path,
+                );
+                DiskReading {
+                    path: disk.path,
+                    reading,
+                }
             })
             .collect();
         let disk = disks

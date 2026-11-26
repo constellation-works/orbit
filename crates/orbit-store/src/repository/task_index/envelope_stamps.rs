@@ -22,15 +22,6 @@ use crate::contract::EnvelopeStampRecord;
 
 const ENVELOPE_STAMPS_TABLE: &str = "task_envelope_stamps";
 
-fn has_envelope_stamps(conn: &Connection) -> Result<bool, OrbitError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
-        [ENVELOPE_STAMPS_TABLE],
-        |row| row.get(0),
-    )
-    .map_err(sqlite_store_error)
-}
-
 impl TaskRegistryStore {
     /// Every stamp recorded for `partition_id`, by task id; empty when none
     /// was ever recorded.
@@ -89,6 +80,15 @@ impl TaskRegistryStore {
         self.db
             .cache_write(|conn| write_envelope_stamps(conn, &partition_id, records))
     }
+}
+
+fn has_envelope_stamps(conn: &Connection) -> Result<bool, OrbitError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
+        [ENVELOPE_STAMPS_TABLE],
+        |row| row.get(0),
+    )
+    .map_err(sqlite_store_error)
 }
 
 /// Upsert `records` in one transaction. `Ok(false)` when another connection

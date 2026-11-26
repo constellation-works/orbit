@@ -110,17 +110,6 @@ impl OwnerRead<'_> {
     }
 }
 
-/// Whether `error` is an older owner's refusal of an unavailable dependency
-/// projection, which a current owner answers as `null` instead.
-fn is_legacy_dependency_unavailable(error: &OrbitError) -> bool {
-    let text = error.to_string();
-    text.contains("owner dependency unavailable")
-}
-
-fn task_not_found(id: &str) -> OrbitError {
-    OrbitError::not_found(NotFoundKind::Task, id.to_string())
-}
-
 enum Chosen<'a> {
     Local(&'a OrbitStores),
     Owner(OwnerRead<'a>),
@@ -772,4 +761,15 @@ impl<'a> TaskAccess<'a> {
             Chosen::Local(_) => Err(worker_binding_missing()),
         }
     }
+}
+
+/// Whether `error` is an older owner's refusal of an unavailable dependency
+/// projection, which a current owner answers as `null` instead.
+fn is_legacy_dependency_unavailable(error: &OrbitError) -> bool {
+    let text = error.to_string();
+    text.contains("owner dependency unavailable")
+}
+
+fn task_not_found(id: &str) -> OrbitError {
+    OrbitError::not_found(NotFoundKind::Task, id.to_string())
 }

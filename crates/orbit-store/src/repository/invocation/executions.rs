@@ -48,6 +48,8 @@ struct StoredAgentExecutionIdentity {
     backfill: Option<AgentExecutionBackfill>,
 }
 
+type RawExecutionRow = (i64, String, String, String, Option<String>, String, String);
+
 pub(super) fn insert_agent_execution(
     conn: &Connection,
     workspace: &str,
@@ -280,8 +282,6 @@ pub(super) fn agent_executions_for_slot(
     })
     .collect()
 }
-
-type RawExecutionRow = (i64, String, String, String, Option<String>, String, String);
 
 fn decode_execution_row(
     row: rusqlite::Result<RawExecutionRow>,

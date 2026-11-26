@@ -16,6 +16,26 @@ use crate::contract::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEvent
 
 const WORKSPACE: &str = "ws-tail";
 
+struct RendezvousGuard;
+
+impl RendezvousGuard {
+    fn idle() -> Self {
+        clear_tail_snapshot_rendezvous();
+        Self
+    }
+
+    fn arm(hook: impl FnOnce() + 'static) -> Self {
+        set_tail_snapshot_rendezvous(hook);
+        Self
+    }
+}
+
+impl Drop for RendezvousGuard {
+    fn drop(&mut self) {
+        clear_tail_snapshot_rendezvous();
+    }
+}
+
 /// A delayed insert between the counted tail window and the page read must
 /// not change page ranks relative to the reported total, and must not drop
 /// the newest event already in that snapshot.
@@ -212,24 +232,4 @@ fn expected_page(run_id: &str) -> Vec<String> {
 
 fn page_ids(page: &V2AuditEventTailPage) -> Vec<String> {
     page.events.iter().map(|row| row.event_id.clone()).collect()
-}
-
-struct RendezvousGuard;
-
-impl RendezvousGuard {
-    fn idle() -> Self {
-        clear_tail_snapshot_rendezvous();
-        Self
-    }
-
-    fn arm(hook: impl FnOnce() + 'static) -> Self {
-        set_tail_snapshot_rendezvous(hook);
-        Self
-    }
-}
-
-impl Drop for RendezvousGuard {
-    fn drop(&mut self) {
-        clear_tail_snapshot_rendezvous();
-    }
 }

@@ -9,6 +9,11 @@ use super::{
     TaskCoordinationRow,
 };
 
+/// Largest reason a [`ClaimSettlementRecord`] keeps.
+const MAX_SETTLEMENT_REASON_BYTES: usize = 1024;
+
+const CLAIM_FAILED_NOTE_PREFIX: &str = "claimed leaf failed: ";
+
 /// A typed release the owner applied, kept on the claim's lifecycle state so
 /// the task's release budget can count it [ORB-14257].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,9 +112,6 @@ pub struct ClaimSettlementRecord {
     pub settled_at: String,
 }
 
-/// Largest reason a [`ClaimSettlementRecord`] keeps.
-const MAX_SETTLEMENT_REASON_BYTES: usize = 1024;
-
 impl ClaimSettlementRecord {
     /// The record of `evidence`. Crew and model come from the evidence's own
     /// report first, then from what the follower `reported` beside it, and
@@ -180,8 +182,6 @@ pub struct ClaimFailedNote {
     /// The settlement's bounded reason, redacted when rendered.
     pub reason: String,
 }
-
-const CLAIM_FAILED_NOTE_PREFIX: &str = "claimed leaf failed: ";
 
 impl ClaimFailedNote {
     #[must_use]
