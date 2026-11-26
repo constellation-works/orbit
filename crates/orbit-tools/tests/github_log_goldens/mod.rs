@@ -725,6 +725,7 @@ impl CachedLogRead {
             "status": status,
             "run_attempt": run_attempt,
             "url": run_url,
+            "extra": true,
         });
         std::fs::write(self.root.path().join("run_metadata"), run_body.to_string()).unwrap();
     }
@@ -733,7 +734,8 @@ impl CachedLogRead {
     /// the run that owns it.
     fn set_job(&self, status: &str, repository: &str) {
         let job_url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
-        let job_body = json!({"id": 9, "run_id": 123, "status": status, "url": job_url});
+        let job_body =
+            json!({"id": 9, "run_id": 123, "status": status, "url": job_url, "extra": true});
         std::fs::write(self.root.path().join("job_metadata"), job_body.to_string()).unwrap();
     }
 
@@ -1146,4 +1148,74 @@ fn a_fallback_job_log_that_is_not_complete_or_not_readable_is_never_cached() {
     let read = failed.run_read(window()).unwrap();
     assert!(log_text(&read).contains("later line 2"));
     assert_eq!(failed.cache_entries().len(), 1);
+}
+
+/// Malformed or mismatched status metadata must never authorize a cache hit.
+#[test]
+#[cfg(unix)]
+fn invalid_cache_metadata_is_a_miss() {
+    if !isolated("public_tool_surface::github_log_goldens::invalid_cache_metadata_is_a_miss") {
+        return;
+    }
+    for job in [Some("9"), None] {
+        let (read, env) = CachedLogRead::new("first", job);
+        let valid = if job.is_some() {
+            json!({"id": 9, "run_id": 123, "status": "completed", "url": "https://api.github.com/repos/acme/orbit/actions/jobs/9"})
+        } else {
+            json!({"id": 123, "run_attempt": 1, "status": "completed", "url": "https://api.github.com/repos/acme/orbit/actions/runs/123"})
+        };
+        let file = if job.is_some() {
+            "job_metadata"
+        } else {
+            "run_metadata"
+        };
+        let mut cases = Vec::new();
+        for key in [
+            "id",
+            "status",
+            "url",
+            if job.is_some() {
+                "run_id"
+            } else {
+                "run_attempt"
+            },
+        ] {
+            let mut absent = valid.clone();
+            absent.as_object_mut().unwrap().remove(key);
+            cases.push(absent);
+            let mut wrong_type = valid.clone();
+            wrong_type[key] = json!(false);
+            cases.push(wrong_type);
+        }
+        let endpoint = if job.is_some() { "jobs/9" } else { "runs/123" };
+        for (key, value) in [
+            ("id", json!(999)),
+            ("status", json!("unknown")),
+            (
+                "url",
+                json!(format!(
+                    "ftp://api.github.com/repos/acme/orbit/actions/{endpoint}"
+                )),
+            ),
+            (
+                "url",
+                json!("https://api.github.com/repos/acme/orbit/actions/runs/999"),
+            ),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = value;
+            cases.push(invalid);
+        }
+        if job.is_some() {
+            let mut invalid = valid.clone();
+            invalid["run_id"] = json!(999);
+            cases.push(invalid);
+        }
+        for body in cases {
+            std::fs::write(read.root.path().join(file), body.to_string()).unwrap();
+            read.read(json!({"line_start": 5, "line_end": 8})).unwrap();
+            assert!(read.cache_entries().is_empty(), "job={job:?}, body={body}");
+        }
+        drop(env);
+    }
 }
