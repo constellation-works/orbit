@@ -21,14 +21,13 @@ use crate::application::task::{
 use super::validation::{bounded_text, criteria, invalid};
 use crate::application::task::TaskRecords;
 
-fn sanitize(fields: &mut DesktopTaskFields) {
-    fields.title = fields.title.as_ref().map(|v| redact_all(v));
-    fields.description = fields.description.as_ref().map(|v| redact_all(v));
-    if let Some(v) = &mut fields.acceptance_criteria {
-        for c in v {
-            *c = redact_all(c);
-        }
-    }
+/// Task history event recording that the PR closure of a desktop request's
+/// terminal transition ran. Its note is `desktop_request=<id>`.
+const DESKTOP_PR_CLOSURE_EVENT: &str = "desktop_pr_closure";
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_SIDE_EFFECT_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl OrbitRuntime {
@@ -128,8 +127,8 @@ impl OrbitRuntime {
                     description,
                     acceptance_criteria,
                     priority,
-                    crew,
                     status: Some(TaskStatus::Proposed),
+                    crew,
                     ..Default::default()
                 },
                 agent,
@@ -473,11 +472,12 @@ impl OrbitRuntime {
     }
 }
 
-/// Task history event recording that the PR closure of a desktop request's
-/// terminal transition ran. Its note is `desktop_request=<id>`.
-const DESKTOP_PR_CLOSURE_EVENT: &str = "desktop_pr_closure";
-
-#[cfg(test)]
-thread_local! {
-    pub(super) static FAIL_SIDE_EFFECT_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+fn sanitize(fields: &mut DesktopTaskFields) {
+    fields.title = fields.title.as_ref().map(|v| redact_all(v));
+    fields.description = fields.description.as_ref().map(|v| redact_all(v));
+    if let Some(v) = &mut fields.acceptance_criteria {
+        for c in v {
+            *c = redact_all(c);
+        }
+    }
 }

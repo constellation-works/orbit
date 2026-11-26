@@ -21,6 +21,9 @@ use orbit_types::task::HostOs;
 use super::gate_source::{self, GateSource};
 use super::source::SourceSnapshot;
 
+/// Guide files that carry a workspace's repository validation rules.
+const GUIDE_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
+
 /// Whether evidence cites a guide rule this check can admit.
 pub(super) enum GuideGateDecision {
     /// Evidence does not name CodeQL, so it cites no guide validation rule.
@@ -40,9 +43,6 @@ pub(super) struct GuideGateCheck<'a> {
     pub(super) workspace_root: &'a Path,
     pub(super) source: Option<&'a SourceSnapshot>,
 }
-
-/// Guide files that carry a workspace's repository validation rules.
-const GUIDE_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
 
 /// Admit `check`, leave it to the caller, or refuse a malformed citation.
 pub(super) fn admit_guide_gate(

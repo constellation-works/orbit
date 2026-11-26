@@ -96,44 +96,6 @@ pub(in crate::application::task) enum TaskFieldWriter {
     Machinery,
 }
 
-/// Classify `writer` for shared field admission.
-///
-/// A non-empty canonical agent, or a model that names or infers an agent
-/// family, is an agent writer. A bare label such as `human` is not: trusted
-/// in-process callers store that label in the model slot without attributing
-/// an agent.
-pub(in crate::application::task) fn task_field_writer(
-    operator_decision_authority: bool,
-    canonical_agent: Option<&str>,
-    canonical_model: Option<&str>,
-    actor_label: &str,
-) -> TaskFieldWriter {
-    if agent_context_declared(&orbit_common::Env::capture())
-        || attributed_agent_identity(canonical_agent, canonical_model)
-    {
-        TaskFieldWriter::Agent
-    } else if operator_decision_authority
-        && !super::super::helpers::is_automation_actor(actor_label)
-    {
-        TaskFieldWriter::Operator
-    } else {
-        TaskFieldWriter::Machinery
-    }
-}
-
-/// Whether this identity is an agent family or a model string that infers one.
-pub(super) fn attributed_agent_identity(agent: Option<&str>, model: Option<&str>) -> bool {
-    let names_agent = |value: &str| {
-        let value = value.trim();
-        !value.is_empty()
-            && (all_agent_families()
-                .iter()
-                .any(|family| value.eq_ignore_ascii_case(family))
-                || infer_agent_family_from_model(value).is_some())
-    };
-    agent.is_some_and(names_agent) || model.is_some_and(names_agent)
-}
-
 impl OrbitRuntime {
     /// The in-crate task setter. Status changes are *not* checked against the
     /// lifecycle table here: callers are Core's own use cases, which either
@@ -179,17 +141,18 @@ impl OrbitRuntime {
         status_note: Option<String>,
     ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        let operator_decision_authority = agent.is_none()
+            && model.is_none()
+            && self.actor().kind == crate::runtime::context::ActorKind::Human;
         self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
                 status_note,
-                operator_decision_authority: agent.is_none()
-                    && model.is_none()
-                    && self.actor().kind == crate::runtime::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Lifecycle,
+                operator_decision_authority,
                 guard_work_start: true,
                 ..Default::default()
             },
@@ -211,8 +174,8 @@ impl OrbitRuntime {
             params,
             TaskUpdateContext {
                 actor_override: Some(actor_label),
-                operator_decision_authority: true,
                 status_authority: StatusAuthority::Lifecycle,
+                operator_decision_authority: true,
                 ..Default::default()
             },
         )
@@ -238,8 +201,8 @@ impl OrbitRuntime {
                 status_note: note,
                 actor_override: Some(actor_label),
                 expected_status,
-                operator_decision_authority: true,
                 status_authority: StatusAuthority::Lifecycle,
+                operator_decision_authority: true,
                 ..Default::default()
             },
         )
@@ -321,17 +284,18 @@ impl OrbitRuntime {
         status_note: Option<String>,
     ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        let operator_decision_authority = agent.is_none()
+            && model.is_none()
+            && self.actor().kind == crate::runtime::context::ActorKind::Human;
         self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
                 status_note,
-                operator_decision_authority: agent.is_none()
-                    && model.is_none()
-                    && self.actor().kind == crate::runtime::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Forced,
+                operator_decision_authority,
                 ..Default::default()
             },
         )
@@ -374,9 +338,9 @@ impl OrbitRuntime {
             id,
             params,
             TaskUpdateContext {
+                status_note,
                 agent,
                 model,
-                status_note,
                 artifact_owner: owner,
                 status_authority: StatusAuthority::Lifecycle,
                 ..Default::default()
@@ -421,4 +385,42 @@ impl OrbitRuntime {
             },
         )
     }
+}
+
+/// Classify `writer` for shared field admission.
+///
+/// A non-empty canonical agent, or a model that names or infers an agent
+/// family, is an agent writer. A bare label such as `human` is not: trusted
+/// in-process callers store that label in the model slot without attributing
+/// an agent.
+pub(in crate::application::task) fn task_field_writer(
+    operator_decision_authority: bool,
+    canonical_agent: Option<&str>,
+    canonical_model: Option<&str>,
+    actor_label: &str,
+) -> TaskFieldWriter {
+    if agent_context_declared(&orbit_common::Env::capture())
+        || attributed_agent_identity(canonical_agent, canonical_model)
+    {
+        TaskFieldWriter::Agent
+    } else if operator_decision_authority
+        && !super::super::helpers::is_automation_actor(actor_label)
+    {
+        TaskFieldWriter::Operator
+    } else {
+        TaskFieldWriter::Machinery
+    }
+}
+
+/// Whether this identity is an agent family or a model string that infers one.
+pub(super) fn attributed_agent_identity(agent: Option<&str>, model: Option<&str>) -> bool {
+    let names_agent = |value: &str| {
+        let value = value.trim();
+        !value.is_empty()
+            && (all_agent_families()
+                .iter()
+                .any(|family| value.eq_ignore_ascii_case(family))
+                || infer_agent_family_from_model(value).is_some())
+    };
+    agent.is_some_and(names_agent) || model.is_some_and(names_agent)
 }

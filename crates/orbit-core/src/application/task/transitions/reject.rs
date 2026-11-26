@@ -164,8 +164,8 @@ impl OrbitRuntime {
                     status: Some(TaskStatus::Rejected),
                     status_event: Some(status_event.to_string()),
                     status_note: Some(reason.clone()),
-                    append_comments: append_comments.clone(),
                     append_history: append_history.clone(),
+                    append_comments: append_comments.clone(),
                     expected_status: Some(vec![task.status]),
                     ..Default::default()
                 },

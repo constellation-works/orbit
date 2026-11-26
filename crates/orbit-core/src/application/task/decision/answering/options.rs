@@ -15,16 +15,6 @@ use crate::application::task::{
     PilotAdmissionHold, TaskJobPort, TaskRecords, TriageTarget, pilot_assessable_status,
 };
 
-/// Whether a block-triage option returns the blocked task to `backlog`.
-/// Reject, land and archive take another status and do not resume a
-/// published candidate.
-fn option_returns_blocked_task_to_backlog(action: &Option<DecisionAction>) -> bool {
-    !matches!(
-        action,
-        Some(DecisionAction::Reject | DecisionAction::Land | DecisionAction::Archive)
-    )
-}
-
 impl OrbitRuntime {
     /// Apply a one-click option as the human: its rewrite, then its action,
     /// then the move out of `blocked` (or the approval or re-pilot of a held
@@ -200,13 +190,13 @@ impl OrbitRuntime {
                         target: task.id.clone(),
                         regression: None,
                     }],
-                    context_files: task.context_files.clone(),
-                    priority: task.priority,
-                    status: Some(TaskStatus::Proposed),
                     comment: Some(format!(
                         "Filed by decision request {} on {} (option {}: {}).",
                         request.id, task.id, answer.id, option.summary
                     )),
+                    context_files: task.context_files.clone(),
+                    priority: task.priority,
+                    status: Some(TaskStatus::Proposed),
                     ..TaskAddParams::default()
                 })?;
                 params.comment = Some(format!(
@@ -469,6 +459,16 @@ impl OrbitRuntime {
             criteria,
         })
     }
+}
+
+/// Whether a block-triage option returns the blocked task to `backlog`.
+/// Reject, land and archive take another status and do not resume a
+/// published candidate.
+fn option_returns_blocked_task_to_backlog(action: &Option<DecisionAction>) -> bool {
+    !matches!(
+        action,
+        Some(DecisionAction::Reject | DecisionAction::Land | DecisionAction::Archive)
+    )
 }
 
 /// The hold classification a refusal names, in the vocabulary drain

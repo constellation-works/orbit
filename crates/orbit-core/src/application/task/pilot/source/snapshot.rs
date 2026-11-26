@@ -13,6 +13,13 @@ use super::git::{
     is_git_work_tree, publish_remote_tracking_ref, rev_parse_commit, tree_of,
 };
 
+/// The prepared-checkpoint key that marks a run admitted under the
+/// observed-revision proof contract. Its results must carry the proof.
+/// A checkpoint without it was prepared before the proof existed: its
+/// results are checked only when they report one, so the upgrade keeps the
+/// verdicts of runs already in flight rather than dropping them.
+pub(crate) const INSPECTION_PROOF_KEY: &str = "inspection_proof_required";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SourceSnapshot {
     pub base_branch: String,
@@ -21,14 +28,6 @@ pub(crate) struct SourceSnapshot {
     // Retained in prepared checkpoints for compatibility with earlier runs.
     // New preparations never move the primary and always emit false.
     pub fast_forwarded: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GitPathKind {
-    Blob,
-    Tree,
-    Missing,
-    Other,
 }
 
 impl SourceSnapshot {
@@ -282,16 +281,12 @@ impl SourceSnapshot {
     }
 }
 
-/// The prepared-checkpoint key that marks a run admitted under the
-/// observed-revision proof contract. Its results must carry the proof.
-/// A checkpoint without it was prepared before the proof existed: its
-/// results are checked only when they report one, so the upgrade keeps the
-/// verdicts of runs already in flight rather than dropping them.
-pub(crate) const INSPECTION_PROOF_KEY: &str = "inspection_proof_required";
-
-/// Whether `prepared` was admitted under the proof contract.
-pub(crate) fn inspection_proof_required(prepared: &Value) -> bool {
-    prepared.get(INSPECTION_PROOF_KEY).and_then(Value::as_bool) == Some(true)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GitPathKind {
+    Blob,
+    Tree,
+    Missing,
+    Other,
 }
 
 /// Why an inspection result's observed-revision proof does not establish
@@ -312,6 +307,11 @@ impl std::fmt::Display for InspectionProofError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
+}
+
+/// Whether `prepared` was admitted under the proof contract.
+pub(crate) fn inspection_proof_required(prepared: &Value) -> bool {
+    prepared.get(INSPECTION_PROOF_KEY).and_then(Value::as_bool) == Some(true)
 }
 
 /// Check an inspection result's observed-revision proof, or `None` when it

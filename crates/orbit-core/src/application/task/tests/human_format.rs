@@ -40,8 +40,8 @@ fn file(runtime: &crate::OrbitRuntime, description: &str) -> Vec<String> {
                 title: "Operator task".into(),
                 description: description.into(),
                 acceptance_criteria: vec!["The operator can run it.".into()],
-                crew: Some("operator".into()),
                 status: Some(TaskStatus::Proposed),
+                crew: Some("operator".into()),
                 ..Default::default()
             },
             &TaskWriteScreen::unbound(true),

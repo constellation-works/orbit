@@ -60,12 +60,12 @@ fn landing_keeps_every_named_target_through_a_failed_history_read() {
             title: "Landing resolves its frictions".to_string(),
             description: format!("Fix {}; {} is already settled.", described.id, settled.id),
             acceptance_criteria: vec![format!("Friction {} is resolved.", criterion.id)],
-            plan: "1) implement 2) validate".to_string(),
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::Resolves,
                 target: related.id.clone(),
                 regression: None,
             }],
+            plan: "1) implement 2) validate".to_string(),
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })

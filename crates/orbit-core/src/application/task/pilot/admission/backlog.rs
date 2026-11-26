@@ -34,25 +34,6 @@ const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
 const HOST_OPERATIONAL_RESOLVED: &str = "host_operational_resolved";
 const NATIVE_OS_RESOLVED: &str = "native_os_requirement_resolved";
 
-/// Typed operator requirements derived directly from positive mentions of registered tools
-/// that are governed operations reserved for non-agent capabilities.
-pub(crate) fn operator_validation_requirements(
-    task: &Task,
-    registered: &[String],
-) -> Vec<OperatorValidationRequirement> {
-    positive_validation_tools(task, registered)
-        .into_iter()
-        .filter(|(_, tool)| {
-            governed_tool(tool)
-                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent))
-        })
-        .map(|(criterion, tool)| OperatorValidationRequirement {
-            criterion,
-            tool: tool.into(),
-        })
-        .collect()
-}
-
 /// Assessment field in which the pilot classifies each detected operator-only
 /// tool mention [ORB-21291]: `invoke` when validating the criterion means
 /// running the tool, `subject` when the criterion names it only as what the
@@ -67,248 +48,6 @@ struct OperatorToolClassification {
     classification: String,
     #[serde(default)]
     reason: Option<String>,
-}
-
-/// Whether `assessment` classifies `requirement` as the change's subject.
-///
-/// Fails safe: a missing field, no reasoned `subject` entry, a `subject`
-/// without a reason, or any well-formed `invoke` (or unknown) classification
-/// for the same mention keeps the requirement, so the task holds as before.
-/// A malformed entry is skipped: it cannot keep a requirement that a
-/// well-formed, reasoned `subject` entry for the same mention drops.
-fn classified_as_subject(assessment: &Value, requirement: &OperatorValidationRequirement) -> bool {
-    let Some(entries) = assessment
-        .get(OPERATOR_TOOL_CLASSIFICATIONS)
-        .and_then(Value::as_array)
-    else {
-        return false;
-    };
-    let mut subject = false;
-    for entry in entries {
-        let Ok(entry) = OperatorToolClassification::deserialize(entry) else {
-            continue;
-        };
-        if entry.criterion != requirement.criterion || entry.tool != requirement.tool {
-            continue;
-        }
-        let reasoned = entry
-            .reason
-            .as_deref()
-            .is_some_and(|reason| !reason.trim().is_empty());
-        if entry.classification == "subject" && reasoned {
-            subject = true;
-        } else {
-            return false;
-        }
-    }
-    subject
-}
-
-/// The detected operator requirements the pilot did not classify as the
-/// change's subject: only those hold admission as an operator handoff.
-pub(crate) fn invoked_operator_requirements(
-    assessment: &Value,
-    requirements: Vec<OperatorValidationRequirement>,
-) -> Vec<OperatorValidationRequirement> {
-    requirements
-        .into_iter()
-        .filter(|requirement| !classified_as_subject(assessment, requirement))
-        .collect()
-}
-
-/// Status, priority, attribution, comments and execution evidence are not
-/// assessed validation material; editing them must not release a hold.
-pub(in super::super) fn validation_material(task: &Task) -> String {
-    sha256_hex(
-        json!({
-            "title": task.title, "description": task.description,
-            "acceptance_criteria": task.acceptance_criteria, "plan": task.plan,
-            "context_files": task.context_files, "complexity": task.complexity,
-            "tags": task.tags, "required_tools": task.required_tools,
-            "relations": task.relations,
-        })
-        .to_string()
-        .as_bytes(),
-    )
-}
-
-/// The `no-pilot` tag changes pilot policy, not the owner-side work a
-/// `host_operational` finding requires, so it cannot rescope that hold.
-pub(in super::super) fn host_operational_material(task: &Task) -> String {
-    let mut assessed = task.clone();
-    assessed.tags.retain(|tag| tag != "no-pilot");
-    validation_material(&assessed)
-}
-
-/// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
-/// re-scope that releases it.
-pub(in super::super) fn criteria_digest(task: &Task) -> String {
-    sha256_hex(json!(task.acceptance_criteria).to_string().as_bytes())
-}
-
-/// Whether `history` holds a trusted operator resolution `event` of the hold
-/// that `operation_id`'s receipt persisted, while `scope` (a field of that
-/// hold and its current value) still matches.
-fn operator_resolved(
-    history: &[TaskHistoryEntry],
-    event: &str,
-    operation_id: &str,
-    (field, current): (&str, &str),
-) -> bool {
-    history
-        .iter()
-        .filter_map(|entry| trusted_operator_resolution(entry, event))
-        .any(|(answered, hold)| answered == operation_id && hold[field] == current)
-}
-
-/// Native-host decisions answer the finding, independently of its pilot pass.
-fn native_os_resolved(history: &[TaskHistoryEntry], hold: &NativeOsHold) -> bool {
-    history
-        .iter()
-        .filter_map(|entry| trusted_operator_resolution(entry, NATIVE_OS_RESOLVED))
-        .filter_map(|(_, hold)| serde_json::from_value::<NativeOsHold>(hold).ok())
-        .any(|resolved| hold.same_finding(&resolved))
-}
-
-/// An operator's resolution `event` that decided its hold: the pilot receipt
-/// it answers and the hold it resolved.
-fn trusted_operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value)> {
-    let (operation_id, hold, decided) = operator_resolution(entry, event)?;
-    decided.then_some((operation_id, hold))
-}
-
-/// An operator's resolution `event`, decided or a rescope: the pilot receipt
-/// it answers, the hold it recorded, and whether it decided that hold.
-fn operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value, bool)> {
-    if entry.event != event || entry.by.trim().is_empty() || is_automation_actor(&entry.by) {
-        return None;
-    }
-    match &entry.decision {
-        Some(TaskDecision::PilotAdmission {
-            operation_id,
-            verdict,
-            hold,
-        }) => Some((
-            operation_id.clone(),
-            hold.clone().unwrap_or_default(),
-            *verdict != PilotAdmissionVerdict::Rescope,
-        )),
-        _ => None,
-    }
-}
-
-/// The pilot receipt and hold an operator handoff `event` entry records: its
-/// typed decision, or the JSON note of an entry an older binary wrote.
-fn operator_handoff_record(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value)> {
-    if entry.event != event {
-        return None;
-    }
-    match &entry.decision {
-        Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) => {
-            Some((operation_id.clone(), hold.clone()))
-        }
-        Some(_) => None,
-        None => legacy_decisions::pilot_operator_handoff_note(entry),
-    }
-}
-
-/// Whether `entry` already records the operator handoff `handoff` would
-/// append: the same event, pilot receipt and hold.
-fn records_operator_handoff(entry: &TaskHistoryEntry, handoff: &TaskHistoryEntry) -> bool {
-    let Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) = &handoff.decision else {
-        return false;
-    };
-    operator_handoff_record(entry, &handoff.event).is_some_and(|(recorded, recorded_hold)| {
-        recorded == *operation_id && recorded_hold == *hold
-    })
-}
-
-/// Whether `hold`'s operator handoff is already in `history`. A hold with no
-/// handoff event counts as recorded. Missing the receipt counts as not, so
-/// the locked write still runs and reports that.
-fn handoff_recorded_in(
-    comments: &[TaskComment],
-    history: &[TaskHistoryEntry],
-    hold: &PilotAdmissionHold,
-) -> bool {
-    let Some(operation_id) = super::super::latest_pilot_operation_id(comments) else {
-        return false;
-    };
-    let Some((event, _)) = hold.operator_handoff(operation_id) else {
-        return true;
-    };
-    history
-        .iter()
-        .any(|entry| records_operator_handoff(entry, &event))
-}
-
-/// Whether `row` already has an open decision request for its latest pilot
-/// receipt. No receipt is not open: the locked raise then reports it.
-fn pilot_decision_request_open(row: &TaskRow) -> bool {
-    let Some(operation_id) = super::super::latest_pilot_operation_id(&row.comments) else {
-        return false;
-    };
-    let binding = DecisionBinding::PilotOperation {
-        operation_id: operation_id.to_string(),
-    };
-    decision_requests_from_history(
-        &row.task,
-        &row.history,
-        Some(operation_id),
-        chrono::Utc::now(),
-    )
-    .iter()
-    .any(|request| request.binding == binding && request.state == DecisionRequestState::Open)
-}
-
-/// Backlog ids in listing order, from the index when it can answer and
-/// otherwise from envelopes. Neither reads a task bundle.
-fn backlog_ids_for_handoff(runtime: &OrbitRuntime) -> Result<Vec<String>, OrbitError> {
-    let filter = TaskListFilter {
-        statuses: Some(vec![TaskStatus::Backlog]),
-        ..Default::default()
-    };
-    if let Some(keys) = runtime.task_candidate_keys(&filter, usize::MAX)? {
-        let mut items = keys.items;
-        items.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        return Ok(items.into_iter().map(|key| key.id).collect());
-    }
-    let mut tasks = runtime.list_task_metadata()?;
-    tasks.retain(|task| task.status == TaskStatus::Backlog);
-    tasks.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    Ok(tasks.into_iter().map(|task| task.id).collect())
-}
-
-/// Whether an operator's `approve-anyway` or `clear` answers the pilot
-/// receipt `operation_id`, releasing its duplicate and already-landed findings.
-fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
-    history.iter().any(|entry| {
-        !entry.by.trim().is_empty()
-            && !is_automation_actor(&entry.by)
-            && matches!(
-                &entry.decision,
-                Some(TaskDecision::PilotAdmission { operation_id: answered, verdict, .. })
-                    if answered == operation_id && verdict.overrides_findings()
-            )
-    })
-}
-
-/// The verdict an operator's decision comment states on its first line, and
-/// whether evidence follows it.
-fn stated_verdict(message: &str) -> Option<(PilotAdmissionVerdict, bool)> {
-    let mut lines = message.lines();
-    let verdict = PilotAdmissionVerdict::from_header(lines.next().unwrap_or_default())?;
-    Some((verdict, lines.any(|line| !line.trim().is_empty())))
 }
 
 impl OrbitRuntime {
@@ -631,21 +370,19 @@ impl OrbitRuntime {
                     return Ok(());
                 }
                 event.by = "system".into();
+                let append_comments = vec![TaskComment {
+                    at: event.at,
+                    by: event.by.clone(),
+                    message: format!("{header}\n{}", event.note.as_deref().unwrap_or_default()),
+                    operation_id: None,
+                }];
                 self.stores().task_records().update(
                     task_id,
                     super::super::super::TaskRecordUpdateParams {
                         actor: "system".into(),
-                        expected_status: Some(vec![TaskStatus::Backlog]),
-                        append_comments: vec![TaskComment {
-                            at: event.at,
-                            by: event.by.clone(),
-                            message: format!(
-                                "{header}\n{}",
-                                event.note.as_deref().unwrap_or_default()
-                            ),
-                            operation_id: None,
-                        }],
                         append_history: vec![event],
+                        append_comments,
+                        expected_status: Some(vec![TaskStatus::Backlog]),
                         ..Default::default()
                     },
                 )?;
@@ -936,4 +673,265 @@ impl OrbitRuntime {
         let comments = self.get_task_comments(task_id)?;
         Ok(super::super::pilot_receipts(&comments).next().is_some())
     }
+}
+
+/// Typed operator requirements derived directly from positive mentions of registered tools
+/// that are governed operations reserved for non-agent capabilities.
+pub(crate) fn operator_validation_requirements(
+    task: &Task,
+    registered: &[String],
+) -> Vec<OperatorValidationRequirement> {
+    positive_validation_tools(task, registered)
+        .into_iter()
+        .filter(|(_, tool)| {
+            governed_tool(tool)
+                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent))
+        })
+        .map(|(criterion, tool)| OperatorValidationRequirement {
+            criterion,
+            tool: tool.into(),
+        })
+        .collect()
+}
+
+/// Whether `assessment` classifies `requirement` as the change's subject.
+///
+/// Fails safe: a missing field, no reasoned `subject` entry, a `subject`
+/// without a reason, or any well-formed `invoke` (or unknown) classification
+/// for the same mention keeps the requirement, so the task holds as before.
+/// A malformed entry is skipped: it cannot keep a requirement that a
+/// well-formed, reasoned `subject` entry for the same mention drops.
+fn classified_as_subject(assessment: &Value, requirement: &OperatorValidationRequirement) -> bool {
+    let Some(entries) = assessment
+        .get(OPERATOR_TOOL_CLASSIFICATIONS)
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let mut subject = false;
+    for entry in entries {
+        let Ok(entry) = OperatorToolClassification::deserialize(entry) else {
+            continue;
+        };
+        if entry.criterion != requirement.criterion || entry.tool != requirement.tool {
+            continue;
+        }
+        let reasoned = entry
+            .reason
+            .as_deref()
+            .is_some_and(|reason| !reason.trim().is_empty());
+        if entry.classification == "subject" && reasoned {
+            subject = true;
+        } else {
+            return false;
+        }
+    }
+    subject
+}
+
+/// The detected operator requirements the pilot did not classify as the
+/// change's subject: only those hold admission as an operator handoff.
+pub(crate) fn invoked_operator_requirements(
+    assessment: &Value,
+    requirements: Vec<OperatorValidationRequirement>,
+) -> Vec<OperatorValidationRequirement> {
+    requirements
+        .into_iter()
+        .filter(|requirement| !classified_as_subject(assessment, requirement))
+        .collect()
+}
+
+/// Status, priority, attribution, comments and execution evidence are not
+/// assessed validation material; editing them must not release a hold.
+pub(in super::super) fn validation_material(task: &Task) -> String {
+    sha256_hex(
+        json!({
+            "title": task.title, "description": task.description,
+            "acceptance_criteria": task.acceptance_criteria, "plan": task.plan,
+            "context_files": task.context_files, "complexity": task.complexity,
+            "tags": task.tags, "required_tools": task.required_tools,
+            "relations": task.relations,
+        })
+        .to_string()
+        .as_bytes(),
+    )
+}
+
+/// The `no-pilot` tag changes pilot policy, not the owner-side work a
+/// `host_operational` finding requires, so it cannot rescope that hold.
+pub(in super::super) fn host_operational_material(task: &Task) -> String {
+    let mut assessed = task.clone();
+    assessed.tags.retain(|tag| tag != "no-pilot");
+    validation_material(&assessed)
+}
+
+/// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
+/// re-scope that releases it.
+pub(in super::super) fn criteria_digest(task: &Task) -> String {
+    sha256_hex(json!(task.acceptance_criteria).to_string().as_bytes())
+}
+
+/// Whether `history` holds a trusted operator resolution `event` of the hold
+/// that `operation_id`'s receipt persisted, while `scope` (a field of that
+/// hold and its current value) still matches.
+fn operator_resolved(
+    history: &[TaskHistoryEntry],
+    event: &str,
+    operation_id: &str,
+    (field, current): (&str, &str),
+) -> bool {
+    history
+        .iter()
+        .filter_map(|entry| trusted_operator_resolution(entry, event))
+        .any(|(answered, hold)| answered == operation_id && hold[field] == current)
+}
+
+/// Native-host decisions answer the finding, independently of its pilot pass.
+fn native_os_resolved(history: &[TaskHistoryEntry], hold: &NativeOsHold) -> bool {
+    history
+        .iter()
+        .filter_map(|entry| trusted_operator_resolution(entry, NATIVE_OS_RESOLVED))
+        .filter_map(|(_, hold)| serde_json::from_value::<NativeOsHold>(hold).ok())
+        .any(|resolved| hold.same_finding(&resolved))
+}
+
+/// An operator's resolution `event` that decided its hold: the pilot receipt
+/// it answers and the hold it resolved.
+fn trusted_operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value)> {
+    let (operation_id, hold, decided) = operator_resolution(entry, event)?;
+    decided.then_some((operation_id, hold))
+}
+
+/// An operator's resolution `event`, decided or a rescope: the pilot receipt
+/// it answers, the hold it recorded, and whether it decided that hold.
+fn operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value, bool)> {
+    if entry.event != event || entry.by.trim().is_empty() || is_automation_actor(&entry.by) {
+        return None;
+    }
+    match &entry.decision {
+        Some(TaskDecision::PilotAdmission {
+            operation_id,
+            verdict,
+            hold,
+        }) => Some((
+            operation_id.clone(),
+            hold.clone().unwrap_or_default(),
+            *verdict != PilotAdmissionVerdict::Rescope,
+        )),
+        _ => None,
+    }
+}
+
+/// The pilot receipt and hold an operator handoff `event` entry records: its
+/// typed decision, or the JSON note of an entry an older binary wrote.
+fn operator_handoff_record(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value)> {
+    if entry.event != event {
+        return None;
+    }
+    match &entry.decision {
+        Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) => {
+            Some((operation_id.clone(), hold.clone()))
+        }
+        Some(_) => None,
+        None => legacy_decisions::pilot_operator_handoff_note(entry),
+    }
+}
+
+/// Whether `entry` already records the operator handoff `handoff` would
+/// append: the same event, pilot receipt and hold.
+fn records_operator_handoff(entry: &TaskHistoryEntry, handoff: &TaskHistoryEntry) -> bool {
+    let Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) = &handoff.decision else {
+        return false;
+    };
+    operator_handoff_record(entry, &handoff.event).is_some_and(|(recorded, recorded_hold)| {
+        recorded == *operation_id && recorded_hold == *hold
+    })
+}
+
+/// Whether `hold`'s operator handoff is already in `history`. A hold with no
+/// handoff event counts as recorded. Missing the receipt counts as not, so
+/// the locked write still runs and reports that.
+fn handoff_recorded_in(
+    comments: &[TaskComment],
+    history: &[TaskHistoryEntry],
+    hold: &PilotAdmissionHold,
+) -> bool {
+    let Some(operation_id) = super::super::latest_pilot_operation_id(comments) else {
+        return false;
+    };
+    let Some((event, _)) = hold.operator_handoff(operation_id) else {
+        return true;
+    };
+    history
+        .iter()
+        .any(|entry| records_operator_handoff(entry, &event))
+}
+
+/// Whether `row` already has an open decision request for its latest pilot
+/// receipt. No receipt is not open: the locked raise then reports it.
+fn pilot_decision_request_open(row: &TaskRow) -> bool {
+    let Some(operation_id) = super::super::latest_pilot_operation_id(&row.comments) else {
+        return false;
+    };
+    let binding = DecisionBinding::PilotOperation {
+        operation_id: operation_id.to_string(),
+    };
+    decision_requests_from_history(
+        &row.task,
+        &row.history,
+        Some(operation_id),
+        chrono::Utc::now(),
+    )
+    .iter()
+    .any(|request| request.binding == binding && request.state == DecisionRequestState::Open)
+}
+
+/// Backlog ids in listing order, from the index when it can answer and
+/// otherwise from envelopes. Neither reads a task bundle.
+fn backlog_ids_for_handoff(runtime: &OrbitRuntime) -> Result<Vec<String>, OrbitError> {
+    let filter = TaskListFilter {
+        statuses: Some(vec![TaskStatus::Backlog]),
+        ..Default::default()
+    };
+    if let Some(keys) = runtime.task_candidate_keys(&filter, usize::MAX)? {
+        let mut items = keys.items;
+        items.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        return Ok(items.into_iter().map(|key| key.id).collect());
+    }
+    let mut tasks = runtime.list_task_metadata()?;
+    tasks.retain(|task| task.status == TaskStatus::Backlog);
+    tasks.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(tasks.into_iter().map(|task| task.id).collect())
+}
+
+/// Whether an operator's `approve-anyway` or `clear` answers the pilot
+/// receipt `operation_id`, releasing its duplicate and already-landed findings.
+fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
+    history.iter().any(|entry| {
+        !entry.by.trim().is_empty()
+            && !is_automation_actor(&entry.by)
+            && matches!(
+                &entry.decision,
+                Some(TaskDecision::PilotAdmission { operation_id: answered, verdict, .. })
+                    if answered == operation_id && verdict.overrides_findings()
+            )
+    })
+}
+
+/// The verdict an operator's decision comment states on its first line, and
+/// whether evidence follows it.
+fn stated_verdict(message: &str) -> Option<(PilotAdmissionVerdict, bool)> {
+    let mut lines = message.lines();
+    let verdict = PilotAdmissionVerdict::from_header(lines.next().unwrap_or_default())?;
+    Some((verdict, lines.any(|line| !line.trim().is_empty())))
 }

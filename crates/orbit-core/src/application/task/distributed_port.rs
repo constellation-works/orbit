@@ -10,19 +10,6 @@
 use orbit_store::contract::ExecutionClaimPhase;
 use orbit_types::workflow::PipelineState;
 
-/// The persisted label accepted by operator claim-recovery commands.
-pub(crate) fn execution_claim_phase_label(phase: ExecutionClaimPhase) -> &'static str {
-    match phase {
-        ExecutionClaimPhase::Claimed => "claimed",
-        ExecutionClaimPhase::Running => "running",
-        ExecutionClaimPhase::HandedOff => "handed_off",
-        ExecutionClaimPhase::RepairPending => "repair_pending",
-        ExecutionClaimPhase::Failed => "failed",
-        ExecutionClaimPhase::Revoked => "revoked",
-        ExecutionClaimPhase::Landed => "landed",
-    }
-}
-
 /// The crew-accounting and owner-authority reads task code calls,
 /// implemented by `distributed`.
 pub(in crate::application) trait TaskDistributedPort {
@@ -34,4 +21,17 @@ pub(in crate::application) trait TaskDistributedPort {
     /// external merge settles, or `None` when each waits for an operator's
     /// approval.
     fn external_merge_completion_authority(&self) -> Option<String>;
+}
+
+/// The persisted label accepted by operator claim-recovery commands.
+pub(crate) fn execution_claim_phase_label(phase: ExecutionClaimPhase) -> &'static str {
+    match phase {
+        ExecutionClaimPhase::Claimed => "claimed",
+        ExecutionClaimPhase::Running => "running",
+        ExecutionClaimPhase::HandedOff => "handed_off",
+        ExecutionClaimPhase::RepairPending => "repair_pending",
+        ExecutionClaimPhase::Failed => "failed",
+        ExecutionClaimPhase::Revoked => "revoked",
+        ExecutionClaimPhase::Landed => "landed",
+    }
 }

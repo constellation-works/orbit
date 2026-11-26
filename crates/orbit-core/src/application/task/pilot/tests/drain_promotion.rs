@@ -71,9 +71,9 @@ fn qualifying_task(runtime: &OrbitRuntime) -> Task {
             description: "Ship the README change.".to_string(),
             acceptance_criteria: vec!["The change is in place.".to_string()],
             plan: "Edit README.md.".to_string(),
-            status: Some(TaskStatus::Proposed),
             context_files: vec!["file:README.md".to_string()],
             complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Proposed),
             ..Default::default()
         })
         .expect("add task")
@@ -573,9 +573,9 @@ fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
             description: "Already landed.".to_string(),
             acceptance_criteria: vec!["Done.".to_string()],
             plan: "Nothing.".to_string(),
-            status: Some(TaskStatus::Done),
             context_files: vec!["file:README.md".to_string()],
             complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Done),
             ..Default::default()
         })
         .expect("done task");

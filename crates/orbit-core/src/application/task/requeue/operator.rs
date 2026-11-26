@@ -15,28 +15,6 @@ use crate::application::task::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
 use crate::application::task::{TaskJobPort, TaskRecords};
 
-/// How a refused requeue offers to start over instead: the supported operator
-/// CLI discard route, or the discard option of a blocked task's requeue, which
-/// the dashboard and the CLI's `orbit task requeue` carry. `orbit.task.update`
-/// MCP does not accept `discard_candidate`, which is CLI-only.
-pub(super) fn operator_discard_hint(id: &str, status: TaskStatus) -> String {
-    if status == TaskStatus::Blocked {
-        format!(
-            "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
-             on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`), or \
-             requeue the blocked task with the discard option (the dashboard's requeue, or \
-             `orbit task requeue {id} --discard-candidate`), to close it and let the next run \
-             implement fresh"
-        )
-    } else {
-        format!(
-            "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
-             on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`) to \
-             close it and let the next run implement fresh"
-        )
-    }
-}
-
 impl OrbitRuntime {
     /// Return `task` to the backlog with `requeue`'s records, in one
     /// compare-and-set write. Called under the task write lock. The run the
@@ -84,13 +62,13 @@ impl OrbitRuntime {
                 status: Some(TaskStatus::Backlog),
                 status_event: Some(requeue.status_event.to_string()),
                 status_note: Some(requeue.status_note.clone()),
-                append_comments: requeue.comment.clone().into_iter().collect(),
                 append_history: decided
                     .clone()
                     .into_iter()
                     .chain(requeue.preserved.clone())
                     .chain(requeue.history.clone())
                     .collect(),
+                append_comments: requeue.comment.clone().into_iter().collect(),
                 expected_status: Some(vec![task.status]),
                 ..Default::default()
             },
@@ -566,5 +544,27 @@ impl OrbitRuntime {
             )));
         }
         Ok(())
+    }
+}
+
+/// How a refused requeue offers to start over instead: the supported operator
+/// CLI discard route, or the discard option of a blocked task's requeue, which
+/// the dashboard and the CLI's `orbit task requeue` carry. `orbit.task.update`
+/// MCP does not accept `discard_candidate`, which is CLI-only.
+pub(super) fn operator_discard_hint(id: &str, status: TaskStatus) -> String {
+    if status == TaskStatus::Blocked {
+        format!(
+            "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
+             on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`), or \
+             requeue the blocked task with the discard option (the dashboard's requeue, or \
+             `orbit task requeue {id} --discard-candidate`), to close it and let the next run \
+             implement fresh"
+        )
+    } else {
+        format!(
+            "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
+             on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`) to \
+             close it and let the next run implement fresh"
+        )
     }
 }

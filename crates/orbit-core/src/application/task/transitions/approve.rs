@@ -272,9 +272,9 @@ impl OrbitRuntime {
                     id,
                     StoreTaskUpdateParams {
                         actor: effective_label.clone(),
+                        implemented_by: implemented_by.clone().map(Some),
                         status_event: Some("review_approved".to_string()),
                         status_note: note.clone(),
-                        implemented_by: implemented_by.clone().map(Some),
                         append_comments: append_comments.clone(),
                         expected_status: Some(vec![task.status]),
                         ..StoreTaskUpdateParams::from(TaskUpdateParams {

@@ -33,6 +33,12 @@ pub const BLOCKED_TASK_TRIAGED_EVENT: &str = "blocked_task_triaged";
 /// run. The requeue bound still counts old ones.
 pub const BLOCKED_TASK_TRIAGE_RESUMED_EVENT: &str = "blocked_task_triage_resumed";
 
+/// Lead of the comment the retired triage wrote beside its marker.
+const TRIAGE_COMMENT_LEAD: &str = "blocked_task_triage ";
+/// Decision kind on the typed final-recovery event a triage requeue recorded.
+/// That typed decision, not the marker note, names the run.
+const TRIAGE_REQUEUE_DECISION: &str = "blocked_task_triage_requeue";
+
 /// Why a block episode qualifies for triage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,10 +74,6 @@ impl TriageEpisode {
     pub fn key(&self) -> String {
         episode_key(self.blocked_at)
     }
-}
-
-fn episode_key(blocked_at: DateTime<Utc>) -> String {
-    blocked_at.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
 /// Whether a task's current block episode awaits triage, and why not.
@@ -143,6 +145,132 @@ impl TriageCandidacy {
             }
         }
     }
+}
+
+/// One blocked task as the triage reads it.
+#[derive(Debug, Clone)]
+pub struct BlockedTriageView {
+    /// The blocked task.
+    pub task: Task,
+    /// Its current episode's candidacy.
+    pub candidacy: TriageCandidacy,
+}
+
+impl OrbitRuntime {
+    /// `task`'s current block episode candidacy at `now`, from its current
+    /// history, comments and artifacts: `triage_candidacy`.
+    pub fn block_triage_candidacy_of(
+        &self,
+        task: &Task,
+        now: DateTime<Utc>,
+    ) -> Result<TriageCandidacy, OrbitError> {
+        let history = self.get_task_history(&task.id)?;
+        let comments = self.get_task_comments(&task.id)?;
+        let artifacts = self.get_task_artifact_manifest(&task.id)?;
+        Ok(triage_candidacy(task, &history, &comments, &artifacts, now))
+    }
+
+    /// Every blocked task with its current episode's candidacy, oldest block
+    /// first.
+    pub fn blocked_triage_view(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<BlockedTriageView>, OrbitError> {
+        let mut views = Vec::new();
+        for task in
+            self.list_tasks_filtered(Some(TaskStatus::Blocked), None, None, None, None, None)?
+        {
+            let candidacy = self.block_triage_candidacy_of(&task, now)?;
+            views.push(BlockedTriageView { task, candidacy });
+        }
+        views.sort_by_key(|view| match &view.candidacy {
+            TriageCandidacy::Qualifies(episode) => (0, episode.blocked_at),
+            _ => (1, view.task.updated_at),
+        });
+        Ok(views)
+    }
+}
+
+/// The task field a retired triage proposal's option rewrote, as its comment
+/// spelled it. Answering a `block_triage` request raised before options
+/// carried their own payload still reads it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriageTarget {
+    /// The whole acceptance-criteria list, one criterion per line.
+    AcceptanceCriteria,
+    /// The whole description.
+    Description,
+}
+
+impl TriageTarget {
+    /// The spelling a proposal carried and its comment recorded.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AcceptanceCriteria => "acceptance_criteria",
+            Self::Description => "description",
+        }
+    }
+
+    /// The target `value` spells, if any.
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::AcceptanceCriteria, Self::Description]
+            .into_iter()
+            .find(|target| target.as_str() == value)
+    }
+}
+
+/// What a retired blocked-task triage marker recorded as its outcome.
+///
+/// `Requeued` is the only outcome handled-by treats as a recovery. Any other
+/// spelled value is `Other`; a marker that names no outcome is `Missing`.
+/// A missing outcome does not discard a decision disposition on the same marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LegacyBlockedTriageOutcome {
+    /// The marker's note contains the token `outcome=requeued`.
+    Requeued,
+    /// The marker spells an outcome this reader does not classify.
+    Other(String),
+    /// The marker names no outcome.
+    Missing,
+}
+
+/// What a retired blocked-task triage marker recorded as its disposition.
+///
+/// `Decision` is the only disposition pilot-warning settlement treats as a
+/// missed scope block. Any other spelled value is `Other`; a marker that
+/// names no disposition is `Missing`. A missing actor does not discard a
+/// requeue outcome on the same marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LegacyBlockedTriageDisposition {
+    /// The marker's note contains the token `disposition=decision`.
+    Decision,
+    /// The marker spells a disposition this reader does not classify.
+    Other(String),
+    /// The marker names no disposition.
+    Missing,
+}
+
+/// One retired `blocked_task_triaged` marker and the `blocked_task_triage`
+/// comment written at the same instant, decoded. Not a stored payload:
+/// history notes and comments stay as they were written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LegacyBlockedTriageRecord {
+    /// When the marker was written.
+    pub(crate) at: DateTime<Utc>,
+    /// The marker note's outcome.
+    pub(crate) outcome: LegacyBlockedTriageOutcome,
+    /// The marker note's disposition.
+    pub(crate) disposition: LegacyBlockedTriageDisposition,
+    /// Who triaged, from the same-time comment's `by=`. Absent when that
+    /// comment or field is missing.
+    pub(crate) actor: Option<String>,
+    /// The run the same-time typed final-recovery decision binds. Absent when
+    /// that decision was not recorded.
+    pub(crate) run_id: Option<String>,
+}
+
+fn episode_key(blocked_at: DateTime<Utc>) -> String {
+    blocked_at.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
 /// Classify `task`'s current block episode for triage at `now`.
@@ -246,134 +374,6 @@ pub fn triage_candidacy(
             .unwrap_or_default(),
         escalation,
     })
-}
-
-/// One blocked task as the triage reads it.
-#[derive(Debug, Clone)]
-pub struct BlockedTriageView {
-    /// The blocked task.
-    pub task: Task,
-    /// Its current episode's candidacy.
-    pub candidacy: TriageCandidacy,
-}
-
-impl OrbitRuntime {
-    /// `task`'s current block episode candidacy at `now`, from its current
-    /// history, comments and artifacts: `triage_candidacy`.
-    pub fn block_triage_candidacy_of(
-        &self,
-        task: &Task,
-        now: DateTime<Utc>,
-    ) -> Result<TriageCandidacy, OrbitError> {
-        let history = self.get_task_history(&task.id)?;
-        let comments = self.get_task_comments(&task.id)?;
-        let artifacts = self.get_task_artifact_manifest(&task.id)?;
-        Ok(triage_candidacy(task, &history, &comments, &artifacts, now))
-    }
-
-    /// Every blocked task with its current episode's candidacy, oldest block
-    /// first.
-    pub fn blocked_triage_view(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<BlockedTriageView>, OrbitError> {
-        let mut views = Vec::new();
-        for task in
-            self.list_tasks_filtered(Some(TaskStatus::Blocked), None, None, None, None, None)?
-        {
-            let candidacy = self.block_triage_candidacy_of(&task, now)?;
-            views.push(BlockedTriageView { task, candidacy });
-        }
-        views.sort_by_key(|view| match &view.candidacy {
-            TriageCandidacy::Qualifies(episode) => (0, episode.blocked_at),
-            _ => (1, view.task.updated_at),
-        });
-        Ok(views)
-    }
-}
-
-/// The task field a retired triage proposal's option rewrote, as its comment
-/// spelled it. Answering a `block_triage` request raised before options
-/// carried their own payload still reads it back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TriageTarget {
-    /// The whole acceptance-criteria list, one criterion per line.
-    AcceptanceCriteria,
-    /// The whole description.
-    Description,
-}
-
-impl TriageTarget {
-    /// The spelling a proposal carried and its comment recorded.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AcceptanceCriteria => "acceptance_criteria",
-            Self::Description => "description",
-        }
-    }
-
-    /// The target `value` spells, if any.
-    pub fn parse(value: &str) -> Option<Self> {
-        [Self::AcceptanceCriteria, Self::Description]
-            .into_iter()
-            .find(|target| target.as_str() == value)
-    }
-}
-
-/// Lead of the comment the retired triage wrote beside its marker.
-const TRIAGE_COMMENT_LEAD: &str = "blocked_task_triage ";
-/// Decision kind on the typed final-recovery event a triage requeue recorded.
-/// That typed decision, not the marker note, names the run.
-const TRIAGE_REQUEUE_DECISION: &str = "blocked_task_triage_requeue";
-
-/// What a retired blocked-task triage marker recorded as its outcome.
-///
-/// `Requeued` is the only outcome handled-by treats as a recovery. Any other
-/// spelled value is `Other`; a marker that names no outcome is `Missing`.
-/// A missing outcome does not discard a decision disposition on the same marker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LegacyBlockedTriageOutcome {
-    /// The marker's note contains the token `outcome=requeued`.
-    Requeued,
-    /// The marker spells an outcome this reader does not classify.
-    Other(String),
-    /// The marker names no outcome.
-    Missing,
-}
-
-/// What a retired blocked-task triage marker recorded as its disposition.
-///
-/// `Decision` is the only disposition pilot-warning settlement treats as a
-/// missed scope block. Any other spelled value is `Other`; a marker that
-/// names no disposition is `Missing`. A missing actor does not discard a
-/// requeue outcome on the same marker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LegacyBlockedTriageDisposition {
-    /// The marker's note contains the token `disposition=decision`.
-    Decision,
-    /// The marker spells a disposition this reader does not classify.
-    Other(String),
-    /// The marker names no disposition.
-    Missing,
-}
-
-/// One retired `blocked_task_triaged` marker and the `blocked_task_triage`
-/// comment written at the same instant, decoded. Not a stored payload:
-/// history notes and comments stay as they were written.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LegacyBlockedTriageRecord {
-    /// When the marker was written.
-    pub(crate) at: DateTime<Utc>,
-    /// The marker note's outcome.
-    pub(crate) outcome: LegacyBlockedTriageOutcome,
-    /// The marker note's disposition.
-    pub(crate) disposition: LegacyBlockedTriageDisposition,
-    /// Who triaged, from the same-time comment's `by=`. Absent when that
-    /// comment or field is missing.
-    pub(crate) actor: Option<String>,
-    /// The run the same-time typed final-recovery decision binds. Absent when
-    /// that decision was not recorded.
-    pub(crate) run_id: Option<String>,
 }
 
 /// Decode `entry` when it is a retired `blocked_task_triaged` marker.

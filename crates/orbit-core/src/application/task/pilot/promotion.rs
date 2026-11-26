@@ -37,14 +37,29 @@ pub(super) const WARNING_FIELDS: [&str; 7] = [
     VALIDATION_TOOL_WARNINGS,
 ];
 
-/// A held proposal must have no warnings, including advisory findings.
-pub(super) fn has_warning_findings(assessment: &Value) -> bool {
-    WARNING_FIELDS.iter().any(|field| {
-        assessment
-            .get(*field)
-            .is_some_and(|value| !value.as_array().is_some_and(Vec::is_empty))
-    })
-}
+/// The `hold` marker on the `utility_warnings` finding the apply boundary
+/// writes when the pilot could not establish a task's lock footprint and so
+/// returned `unassessed` for a task that keeps its assessed tier [ORB-22153].
+/// The finding is independent of the tier and of the selectors, so it holds
+/// promotion however either is set.
+pub(crate) const FOOTPRINT_UNRESOLVED: &str = "footprint_unresolved";
+
+/// The `hold` marker on the `utility_warnings` finding apply writes when the
+/// description leaves an ownership or policy choice, or an unenumerated
+/// surface a stop rule reaches, undecided [ORB-23255]. The finding holds
+/// even when its text names a done or dependency task.
+pub(crate) const UNDECIDED_CONSEQUENTIAL_DECISION: &str = "undecided_consequential_decision";
+
+/// Findings whose named prerequisites may already be enforced or completed.
+const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
+
+/// What clears a pilot warning or hold without an operator, for the attention
+/// items' next action. `task repilot` is only the operator route.
+pub(crate) const PILOT_HOLD_CLEARANCE_SUMMARY: &str = "Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`";
+
+/// `kind` of the readout finding for a proposed task whose pilot audit cannot
+/// be resolved.
+const PILOT_ASSESSMENT_UNAVAILABLE_KIND: &str = "pilot_assessment_unavailable";
 
 impl crate::OrbitRuntime {
     /// Certify the latest assessment while the caller holds the proposal's
@@ -80,18 +95,65 @@ impl crate::OrbitRuntime {
     }
 }
 
-/// The `hold` marker on the `utility_warnings` finding the apply boundary
-/// writes when the pilot could not establish a task's lock footprint and so
-/// returned `unassessed` for a task that keeps its assessed tier [ORB-22153].
-/// The finding is independent of the tier and of the selectors, so it holds
-/// promotion however either is set.
-pub(crate) const FOOTPRINT_UNRESOLVED: &str = "footprint_unresolved";
+pub(crate) struct PromotionFindings<'a> {
+    pub(crate) duplicate_of: &'a Value,
+    pub(crate) already_landed: &'a Value,
+    /// One `{field, value}` entry per warning finding.
+    pub(crate) warnings: Vec<Value>,
+}
 
-/// The `hold` marker on the `utility_warnings` finding apply writes when the
-/// description leaves an ownership or policy choice, or an unenumerated
-/// surface a stop rule reaches, undecided [ORB-23255]. The finding holds
-/// even when its text names a done or dependency task.
-pub(crate) const UNDECIDED_CONSEQUENTIAL_DECISION: &str = "undecided_consequential_decision";
+impl crate::OrbitRuntime {
+    /// Holding pilot findings for a task, resolving assessment artifacts as
+    /// well as historical inline audits before classifying its latest receipt.
+    /// An audit that cannot be resolved (missing artifact, digest mismatch,
+    /// undecodable evidence) is reported as one unavailable finding for this
+    /// task alone, so list and show readers keep serving every other task.
+    /// Drain admission still fails closed on the same resolution.
+    pub fn task_pilot_warning_findings(
+        &self,
+        task: &orbit_types::task::Task,
+        comments: &[TaskComment],
+        is_done: &dyn Fn(&str) -> bool,
+    ) -> Vec<DrainHoldFinding> {
+        if task.status != TaskStatus::Proposed {
+            return Vec::new();
+        }
+        match self.resolve_task_pilot_comments(&task.id, comments) {
+            Ok(resolved) => task_pilot_warnings(
+                task.status,
+                &resolved,
+                &task.dependencies(),
+                is_done,
+            ),
+            Err(_) => vec![DrainHoldFinding {
+                kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
+                text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not match its receipt; re-pilot the task to rebuild it".into(),
+            }],
+        }
+    }
+}
+
+/// The assessment whose warning findings hold a `proposed` task's promotion:
+/// the receipt that persisted it, the pilot run that wrote it, and the
+/// findings that hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeldPilotWarnings {
+    /// Operation id of the task-pilot receipt carrying the assessment.
+    pub(crate) operation_id: String,
+    /// The task-pilot run that wrote the assessment, when the audit names it.
+    pub(crate) pilot_run_id: Option<String>,
+    /// Every holding finding, never empty.
+    pub(crate) findings: Vec<DrainHoldFinding>,
+}
+
+/// A held proposal must have no warnings, including advisory findings.
+pub(super) fn has_warning_findings(assessment: &Value) -> bool {
+    WARNING_FIELDS.iter().any(|field| {
+        assessment
+            .get(*field)
+            .is_some_and(|value| !value.as_array().is_some_and(Vec::is_empty))
+    })
+}
 
 /// The footprint hold in an applied assessment, if the apply boundary wrote
 /// one or the pilot declared the same unread source in a form applied
@@ -118,9 +180,6 @@ fn assessment_evidence_gaps(assessment: &Value) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
-
-/// Findings whose named prerequisites may already be enforced or completed.
-const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 
 /// Whether a finding is an unresolved-footprint hold. The host marker is
 /// this wrapper's fast path and is not part of
@@ -288,13 +347,6 @@ pub(crate) fn auto_approval_hold_classification(tags: &[String]) -> &'static str
     }
 }
 
-pub(crate) struct PromotionFindings<'a> {
-    pub(crate) duplicate_of: &'a Value,
-    pub(crate) already_landed: &'a Value,
-    /// One `{field, value}` entry per warning finding.
-    pub(crate) warnings: Vec<Value>,
-}
-
 /// Read the withholding findings from one validated assessment. A duplicate
 /// or already-landed finding without concrete evidence is malformed output,
 /// not a clean result.
@@ -341,10 +393,6 @@ pub(crate) fn promotion_findings<'a>(
         warnings,
     })
 }
-
-/// What clears a pilot warning or hold without an operator, for the attention
-/// items' next action. `task repilot` is only the operator route.
-pub(crate) const PILOT_HOLD_CLEARANCE_SUMMARY: &str = "Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`";
 
 /// The warning findings an approval hold can show: one entry per warning-field
 /// item, with the original kind and full text.
@@ -403,41 +451,6 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
     }
 }
 
-/// `kind` of the readout finding for a proposed task whose pilot audit cannot
-/// be resolved.
-const PILOT_ASSESSMENT_UNAVAILABLE_KIND: &str = "pilot_assessment_unavailable";
-
-impl crate::OrbitRuntime {
-    /// Holding pilot findings for a task, resolving assessment artifacts as
-    /// well as historical inline audits before classifying its latest receipt.
-    /// An audit that cannot be resolved (missing artifact, digest mismatch,
-    /// undecodable evidence) is reported as one unavailable finding for this
-    /// task alone, so list and show readers keep serving every other task.
-    /// Drain admission still fails closed on the same resolution.
-    pub fn task_pilot_warning_findings(
-        &self,
-        task: &orbit_types::task::Task,
-        comments: &[TaskComment],
-        is_done: &dyn Fn(&str) -> bool,
-    ) -> Vec<DrainHoldFinding> {
-        if task.status != TaskStatus::Proposed {
-            return Vec::new();
-        }
-        match self.resolve_task_pilot_comments(&task.id, comments) {
-            Ok(resolved) => task_pilot_warnings(
-                task.status,
-                &resolved,
-                &task.dependencies(),
-                is_done,
-            ),
-            Err(_) => vec![DrainHoldFinding {
-                kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
-                text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not match its receipt; re-pilot the task to rebuild it".into(),
-            }],
-        }
-    }
-}
-
 /// Holding warnings from the task's latest durable pilot verification.
 /// Ordinary edits and comments preserve the last findings until re-piloted;
 /// a clean verification or leaving proposed clears the readout. No live
@@ -453,19 +466,6 @@ pub fn task_pilot_warnings(
     held_pilot_warnings(status, comments, dependencies, is_done)
         .map(|held| held.findings)
         .unwrap_or_default()
-}
-
-/// The assessment whose warning findings hold a `proposed` task's promotion:
-/// the receipt that persisted it, the pilot run that wrote it, and the
-/// findings that hold.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HeldPilotWarnings {
-    /// Operation id of the task-pilot receipt carrying the assessment.
-    pub(crate) operation_id: String,
-    /// The task-pilot run that wrote the assessment, when the audit names it.
-    pub(crate) pilot_run_id: Option<String>,
-    /// Every holding finding, never empty.
-    pub(crate) findings: Vec<DrainHoldFinding>,
 }
 
 /// [`task_pilot_warnings`] with the assessment it read: `None` unless the

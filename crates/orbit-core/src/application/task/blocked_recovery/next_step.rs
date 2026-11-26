@@ -27,16 +27,6 @@ pub struct BlockedNextStep {
     pub requeue_command: String,
 }
 
-fn is_resumable(run: &orbit_types::workflow::JobRun) -> bool {
-    matches!(
-        run.state,
-        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-    ) || orbit_types::workflow::is_operator_stopped(
-        run.state,
-        run.steps.last().and_then(|step| step.error_code.as_deref()),
-    )
-}
-
 impl OrbitRuntime {
     /// Guidance for a `blocked` task, or `None` for any other status or a
     /// block no run failure or final-recovery escalation caused. Reads the run without reconciling it: a
@@ -65,11 +55,22 @@ impl OrbitRuntime {
             && self
                 .observed_job_run(&run_id)
                 .is_ok_and(|run| is_resumable(&run));
+        let resume_command = resumable.then(|| format!("orbit job resume {run_id}"));
         Some(BlockedNextStep {
-            resume_command: resumable.then(|| format!("orbit job resume {run_id}")),
+            run_id,
+            resume_command,
             requeue_command: requeue_override
                 .unwrap_or_else(|| format!("orbit task update {} --status backlog", task.id)),
-            run_id,
         })
     }
+}
+
+fn is_resumable(run: &orbit_types::workflow::JobRun) -> bool {
+    matches!(
+        run.state,
+        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+    ) || orbit_types::workflow::is_operator_stopped(
+        run.state,
+        run.steps.last().and_then(|step| step.error_code.as_deref()),
+    )
 }

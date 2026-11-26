@@ -68,9 +68,9 @@ fn unparseable_or_unsupported_newest_verdict_revives_no_older_verdict() {
             title: "A review finding".into(),
             description: "The review claims a defect.".into(),
             acceptance_criteria: vec!["The defect is gone.".into()],
-            status: Some(TaskStatus::Proposed),
-            task_type: Some(TaskType::Bug),
             tags: vec!["code-review".into()],
+            task_type: Some(TaskType::Bug),
+            status: Some(TaskStatus::Proposed),
             ..Default::default()
         })
         .expect("add task");

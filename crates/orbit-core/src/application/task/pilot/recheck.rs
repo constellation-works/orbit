@@ -109,6 +109,9 @@ const HOST_FIELDS: [&str; 16] = [
     RECHECK_KEPT_FIELDS,
 ];
 
+/// The single-valued finding that the work is already on the base.
+const ALREADY_LANDED: &str = "already_landed";
+
 /// What the run asked for: a forced full pilot, and the age bound.
 pub(super) struct RecheckRequest {
     pub(super) full: bool,
@@ -275,9 +278,6 @@ pub(super) fn holding_findings(assessment: &Value) -> Vec<Value> {
     }
     findings
 }
-
-/// The single-valued finding that the work is already on the base.
-const ALREADY_LANDED: &str = "already_landed";
 
 /// Repository paths the assessment's selectors anchor.
 fn footprint_paths(assessment: &Value) -> Vec<String> {

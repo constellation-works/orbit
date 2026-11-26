@@ -14,6 +14,10 @@ use crate::OrbitRuntime;
 /// Upper bound on `recheck_max_age_hours`: one year.
 const HARD_MAX_RECHECK_AGE_HOURS: u64 = 24 * 365;
 
+/// Discovery exclusion for a task whose pilot assessment artifact is missing,
+/// oversized or fails its digest check. It holds that task alone.
+pub(super) const PILOT_ASSESSMENT_UNAVAILABLE: &str = "pilot_assessment_unavailable";
+
 /// The run's re-check request: `full_pilot` forces a full assessment, and
 /// `recheck_max_age_hours` bounds a prior assessment's age (0 disables
 /// re-checks).
@@ -243,10 +247,6 @@ pub(super) fn already_piloted(
     let no_target_assessment = persist::no_target_pilot_assessment(applied, &comments);
     Ok(Some(no_target_assessment.is_some()))
 }
-
-/// Discovery exclusion for a task whose pilot assessment artifact is missing,
-/// oversized or fails its digest check. It holds that task alone.
-pub(super) const PILOT_ASSESSMENT_UNAVAILABLE: &str = "pilot_assessment_unavailable";
 
 /// `task_id`'s comments with pilot audits resolved, or `None` when an
 /// assessment artifact cannot be resolved. A failed comment read still fails

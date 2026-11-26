@@ -91,16 +91,6 @@ pub struct AgentDecisionRaised {
     pub deduplicated: bool,
 }
 
-/// A question in its comparison form: case and spacing never make two
-/// otherwise identical open questions distinct.
-fn question_key(question: &str) -> String {
-    question
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
 impl OrbitRuntime {
     /// Raise an agent's multiple-choice decision request on a human-crew
     /// task, or return the open request that already holds the same question.
@@ -296,4 +286,14 @@ impl OrbitRuntime {
         })?;
         Ok(raised)
     }
+}
+
+/// A question in its comparison form: case and spacing never make two
+/// otherwise identical open questions distinct.
+fn question_key(question: &str) -> String {
+    question
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }

@@ -18,6 +18,19 @@ pub(crate) struct CiSweepFilingSource {
     pub(crate) actual_checkout_shas: Value,
 }
 
+impl CiSweepFilingSource {
+    /// Project a legacy run snapshot into its fixed filing row, including nulls.
+    pub(crate) fn decode_legacy(run: &Value) -> Self {
+        Self {
+            run_id: CiSweepFilingScalar::decode_legacy(&run["run_id"]),
+            job_id: CiSweepFilingScalar::decode_legacy(&run["job_id"]),
+            workflow: CiSweepFilingScalar::decode_legacy(&run["workflow"]),
+            failed_jobs: run["failed_jobs"].clone(),
+            actual_checkout_shas: run["actual_checkout_shas"].clone(),
+        }
+    }
+}
+
 /// Source identifiers preserve GitHub's numeric and textual spellings.
 #[derive(Clone, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -41,19 +54,6 @@ impl CiSweepFilingScalar {
             Self::Text(text) => text.trim().to_string(),
             Self::Number(number) => number.to_string(),
             Self::Opaque(_) => String::new(),
-        }
-    }
-}
-
-impl CiSweepFilingSource {
-    /// Project a legacy run snapshot into its fixed filing row, including nulls.
-    pub(crate) fn decode_legacy(run: &Value) -> Self {
-        Self {
-            run_id: CiSweepFilingScalar::decode_legacy(&run["run_id"]),
-            job_id: CiSweepFilingScalar::decode_legacy(&run["job_id"]),
-            workflow: CiSweepFilingScalar::decode_legacy(&run["workflow"]),
-            failed_jobs: run["failed_jobs"].clone(),
-            actual_checkout_shas: run["actual_checkout_shas"].clone(),
         }
     }
 }
@@ -88,30 +88,6 @@ pub(crate) struct CiSweepFilingEvidence {
     pub(crate) run_urls_error: Option<CiSweepFilingRunUrlsError>,
     /// Never used for field decisions.
     pub(crate) legacy_echo: Option<Value>,
-}
-
-/// The only ref-kind distinction admission needs, alongside its verbatim echo.
-#[derive(Clone, Default)]
-pub(crate) struct CiSweepFilingRefKinds {
-    echo: Value,
-    release: bool,
-    integration: bool,
-}
-
-impl CiSweepFilingRefKinds {
-    fn decode_legacy(echo: Value) -> Self {
-        let kinds = echo.as_array();
-        Self {
-            release: kinds
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("release"))),
-            integration: kinds.is_some_and(|kinds| {
-                kinds
-                    .iter()
-                    .any(|kind| kind.as_str() == Some("integration"))
-            }),
-            echo,
-        }
-    }
 }
 
 impl CiSweepFilingEvidence {
@@ -236,22 +212,6 @@ impl CiSweepFilingEvidence {
     }
 }
 
-fn required_filing_text<'a>(
-    text: &'a str,
-    field: &str,
-    action: &str,
-) -> Result<&'a str, DispatchError> {
-    let text = text.trim();
-    if text.is_empty() {
-        Err(DispatchError::action_failed(
-            action,
-            format!("`{field}` must be a non-empty string"),
-        ))
-    } else {
-        Ok(text)
-    }
-}
-
 impl<'de> Deserialize<'de> for CiSweepFilingEvidence {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Self::decode_legacy(Value::deserialize(deserializer)?))
@@ -293,5 +253,47 @@ impl Serialize for CiSweepFilingEvidence {
             record.serialize_field("failed_covers", value)?;
         }
         record.end()
+    }
+}
+
+/// The only ref-kind distinction admission needs, alongside its verbatim echo.
+#[derive(Clone, Default)]
+pub(crate) struct CiSweepFilingRefKinds {
+    echo: Value,
+    release: bool,
+    integration: bool,
+}
+
+impl CiSweepFilingRefKinds {
+    fn decode_legacy(echo: Value) -> Self {
+        let kinds = echo.as_array();
+        let release =
+            kinds.is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("release")));
+        let integration = kinds.is_some_and(|kinds| {
+            kinds
+                .iter()
+                .any(|kind| kind.as_str() == Some("integration"))
+        });
+        Self {
+            echo,
+            release,
+            integration,
+        }
+    }
+}
+
+fn required_filing_text<'a>(
+    text: &'a str,
+    field: &str,
+    action: &str,
+) -> Result<&'a str, DispatchError> {
+    let text = text.trim();
+    if text.is_empty() {
+        Err(DispatchError::action_failed(
+            action,
+            format!("`{field}` must be a non-empty string"),
+        ))
+    } else {
+        Ok(text)
     }
 }

@@ -44,35 +44,6 @@ const BASE_RED_EVENTS: [&str; 2] = [PR_AUTO_FIX_BASE_RED_EVENT, CI_BASE_SUSPECT_
 /// Tags whose tasks only an operator requeues.
 const OPERATOR_ONLY_TAGS: [&str; 2] = ["security", "security-review"];
 
-/// Why only an operator may requeue `task`, when only one may: a security
-/// tag, or a run another machine executed whose evidence this owner cannot
-/// read.
-pub(in crate::application::task) fn operator_only_requeue(
-    runtime: &OrbitRuntime,
-    task: &Task,
-) -> Option<String> {
-    if let Some(tag) = task
-        .tags
-        .iter()
-        .find(|tag| OPERATOR_ONLY_TAGS.contains(&tag.as_str()))
-    {
-        return Some(format!(
-            "requeue refused: the task is tagged `{tag}`, which only an operator requeues"
-        ));
-    }
-    if !runtime.task_run_is_local(task) {
-        let machine = task
-            .job_run_machine
-            .as_ref()
-            .map_or("another machine", |location| location.machine_id.as_str());
-        return Some(format!(
-            "requeue refused: the blocking run executed on `{machine}`, not this host, so its \
-             evidence cannot be read here"
-        ));
-    }
-    None
-}
-
 /// What a step produced: its plan, or why it did not run.
 type Step = Result<Plan, String>;
 
@@ -402,6 +373,35 @@ pub(super) enum FrictionRef<'a> {
     Existing(&'a str),
     /// A new record, filed during the task.
     File { title: &'a str, body: &'a str },
+}
+
+/// Why only an operator may requeue `task`, when only one may: a security
+/// tag, or a run another machine executed whose evidence this owner cannot
+/// read.
+pub(in crate::application::task) fn operator_only_requeue(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<String> {
+    if let Some(tag) = task
+        .tags
+        .iter()
+        .find(|tag| OPERATOR_ONLY_TAGS.contains(&tag.as_str()))
+    {
+        return Some(format!(
+            "requeue refused: the task is tagged `{tag}`, which only an operator requeues"
+        ));
+    }
+    if !runtime.task_run_is_local(task) {
+        let machine = task
+            .job_run_machine
+            .as_ref()
+            .map_or("another machine", |location| location.machine_id.as_str());
+        return Some(format!(
+            "requeue refused: the blocking run executed on `{machine}`, not this host, so its \
+             evidence cannot be read here"
+        ));
+    }
+    None
 }
 
 /// The escalation a refused step records: nothing else changed.

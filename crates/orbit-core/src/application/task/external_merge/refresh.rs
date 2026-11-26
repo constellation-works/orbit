@@ -67,26 +67,6 @@ pub struct TaskPullRequestRefresh {
     pub checks_started: bool,
 }
 
-fn refresh_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
-    OrbitError::PolicyDenied(format!(
-        "{TASK_REFRESH_REFUSED}: task '{id}' did not refresh: {reason}"
-    ))
-}
-
-fn remap_landing_refusal(id: &str, error: OrbitError) -> OrbitError {
-    match error {
-        OrbitError::PolicyDenied(message) => {
-            let prefix = format!("{TASK_LANDING_REFUSED}: task '{id}' did not land: ");
-            if let Some(reason) = message.strip_prefix(&prefix) {
-                refresh_refused(id, reason)
-            } else {
-                OrbitError::PolicyDenied(message)
-            }
-        }
-        other => other,
-    }
-}
-
 impl OrbitRuntime {
     /// Successful refresh edges from the observed head back to the published
     /// head, in newest-first order. Completion independently checks each edge
@@ -429,6 +409,26 @@ impl OrbitRuntime {
             merged_fields(request_detail, extra),
         );
         outcome
+    }
+}
+
+fn refresh_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
+    OrbitError::PolicyDenied(format!(
+        "{TASK_REFRESH_REFUSED}: task '{id}' did not refresh: {reason}"
+    ))
+}
+
+fn remap_landing_refusal(id: &str, error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::PolicyDenied(message) => {
+            let prefix = format!("{TASK_LANDING_REFUSED}: task '{id}' did not land: ");
+            if let Some(reason) = message.strip_prefix(&prefix) {
+                refresh_refused(id, reason)
+            } else {
+                OrbitError::PolicyDenied(message)
+            }
+        }
+        other => other,
     }
 }
 

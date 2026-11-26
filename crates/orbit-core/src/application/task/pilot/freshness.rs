@@ -91,48 +91,6 @@ impl OrbitRuntime {
     }
 }
 
-pub(super) fn pilot_requirements_stale(
-    task: &Task,
-    audit: &Value,
-    operation_id: &str,
-    history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
-) -> Result<bool, OrbitError> {
-    if let Some(sealed) = audit["assessed_requirements"].as_str() {
-        return Ok(sealed != pilot_requirements_material(task));
-    }
-    // Pre-seal atomic receipts carry the same per-field hashes. Compare only
-    // recorded requirements, preserving historical receipt compatibility.
-    for (key, current) in [
-        ("description", json!(task.description.trim())),
-        ("criteria", json!(task.acceptance_criteria)),
-    ] {
-        if let Some(sealed) = audit["applied_material"]["material_components"][key].as_str() {
-            let digest = orbit_automation::delivery::definition_epoch(&current)
-                .map_err(orbit_automation::automation_error_to_orbit)?;
-            if sealed != digest {
-                return Ok(true);
-            }
-        }
-    }
-    if ["description", "criteria"].iter().any(|key| {
-        audit["applied_material"]["material_components"][key]
-            .as_str()
-            .is_none()
-    }) {
-        return Ok(history()?.iter().any(|entry| {
-            entry.event == PILOT_REQUIREMENTS_EDITED_EVENT
-                && entry
-                    .note
-                    .as_deref()
-                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                    .is_some_and(|record| {
-                        record["pilot_operation_id"].as_str() == Some(operation_id)
-                    })
-        }));
-    }
-    Ok(false)
-}
-
 impl OrbitRuntime {
     /// Preserve unchanged pre-seal receipts, while recording future edits to
     /// requirements they did not seal. The task update persists this marker
@@ -188,19 +146,6 @@ impl OrbitRuntime {
     }
 }
 
-/// Whether `history` records a `context_files` edit that followed the pilot
-/// receipt `operation_id`.
-pub(super) fn pilot_context_files_edited(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
-    history.iter().any(|entry| {
-        entry.event == PILOT_CONTEXT_FILES_EDITED_EVENT
-            && entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                .is_some_and(|record| record["pilot_operation_id"].as_str() == Some(operation_id))
-    })
-}
-
 impl OrbitRuntime {
     /// Record an ordinary writer's change to `context_files` against the
     /// task's latest pilot receipt, so the next preparation pass re-pilots a
@@ -241,6 +186,61 @@ impl OrbitRuntime {
             caller: None,
         }))
     }
+}
+
+pub(super) fn pilot_requirements_stale(
+    task: &Task,
+    audit: &Value,
+    operation_id: &str,
+    history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+) -> Result<bool, OrbitError> {
+    if let Some(sealed) = audit["assessed_requirements"].as_str() {
+        return Ok(sealed != pilot_requirements_material(task));
+    }
+    // Pre-seal atomic receipts carry the same per-field hashes. Compare only
+    // recorded requirements, preserving historical receipt compatibility.
+    for (key, current) in [
+        ("description", json!(task.description.trim())),
+        ("criteria", json!(task.acceptance_criteria)),
+    ] {
+        if let Some(sealed) = audit["applied_material"]["material_components"][key].as_str() {
+            let digest = orbit_automation::delivery::definition_epoch(&current)
+                .map_err(orbit_automation::automation_error_to_orbit)?;
+            if sealed != digest {
+                return Ok(true);
+            }
+        }
+    }
+    if ["description", "criteria"].iter().any(|key| {
+        audit["applied_material"]["material_components"][key]
+            .as_str()
+            .is_none()
+    }) {
+        return Ok(history()?.iter().any(|entry| {
+            entry.event == PILOT_REQUIREMENTS_EDITED_EVENT
+                && entry
+                    .note
+                    .as_deref()
+                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                    .is_some_and(|record| {
+                        record["pilot_operation_id"].as_str() == Some(operation_id)
+                    })
+        }));
+    }
+    Ok(false)
+}
+
+/// Whether `history` records a `context_files` edit that followed the pilot
+/// receipt `operation_id`.
+pub(super) fn pilot_context_files_edited(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
+    history.iter().any(|entry| {
+        entry.event == PILOT_CONTEXT_FILES_EDITED_EVENT
+            && entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                .is_some_and(|record| record["pilot_operation_id"].as_str() == Some(operation_id))
+    })
 }
 
 pub(super) fn pilot_requirements_material(task: &Task) -> String {

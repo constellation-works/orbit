@@ -349,24 +349,28 @@ impl ProviderLimitsView {
                 let shares_default_login = account.as_ref().is_some_and(|name| {
                     shares_default_login.contains(&(provider.clone(), name.clone()))
                 });
+                let usage = provider_weekly_pressure(
+                    observations,
+                    |reading| {
+                        canonical_provider(&reading.provider) == provider
+                            && reading.account == account
+                    },
+                    now,
+                );
+                let reports_usage = USAGE_REPORTING_PROVIDERS.contains(&provider.as_str());
+                let threshold = policy.account_threshold(&provider, account.as_deref());
+                let gated = readings.iter().any(|reading| {
+                    reading.gated && reading.provider == provider && reading.account == account
+                });
                 ProviderUsageStatus {
-                    usage: provider_weekly_pressure(
-                        observations,
-                        |reading| {
-                            canonical_provider(&reading.provider) == provider
-                                && reading.account == account
-                        },
-                        now,
-                    ),
-                    reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
-                    threshold: policy.account_threshold(&provider, account.as_deref()),
-                    gated: readings.iter().any(|reading| {
-                        reading.gated && reading.provider == provider && reading.account == account
-                    }),
-                    crews: crews.into_iter().collect(),
-                    shares_default_login,
                     provider,
                     account,
+                    reports_usage,
+                    threshold,
+                    gated,
+                    usage,
+                    crews: crews.into_iter().collect(),
+                    shares_default_login,
                 }
             })
             .collect::<Vec<_>>();
@@ -605,27 +609,28 @@ fn usage_bar_pressures(
             .filter(|status| status.provider == provider && status.shares_default_login)
             .filter_map(|status| status.account.as_deref())
             .collect();
+        let usage = provider_weekly_pressure(
+            observations,
+            |reading| {
+                canonical_provider(&reading.provider) == provider
+                    && reading
+                        .account
+                        .as_deref()
+                        .is_none_or(|account| sharing_accounts.contains(&account))
+            },
+            now,
+        );
         bar.push(ProviderUsageStatus {
-            usage: provider_weekly_pressure(
-                observations,
-                |reading| {
-                    canonical_provider(&reading.provider) == provider
-                        && reading
-                            .account
-                            .as_deref()
-                            .is_none_or(|account| sharing_accounts.contains(&account))
-                },
-                now,
-            ),
+            provider: provider.to_string(),
+            account: None,
             reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider),
             threshold: policy.account_threshold(provider, None),
             gated: readings.iter().any(|reading| {
                 reading.gated && reading.provider == provider && reading.account.is_none()
             }),
+            usage,
             crews: Vec::new(),
             shares_default_login: false,
-            provider: provider.to_string(),
-            account: None,
         });
     }
     bar

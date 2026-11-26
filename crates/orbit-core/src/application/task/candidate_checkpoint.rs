@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::OrbitError;
 
-type Checkpoint = Arc<dyn Fn() -> Result<(), OrbitError> + Send + Sync>;
-
 static CHECKPOINT: Mutex<Option<Checkpoint>> = Mutex::new(None);
+
+type Checkpoint = Arc<dyn Fn() -> Result<(), OrbitError> + Send + Sync>;
 
 /// Run the installed checkpoint, if any, on the calling thread. A failing
 /// checkpoint fails the selection it guards.

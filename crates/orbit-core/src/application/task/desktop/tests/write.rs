@@ -159,12 +159,12 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
             title: "Complete through desktop".to_string(),
             description: format!("Exercise desktop completion replay; cites {text_friction}."),
             acceptance_criteria: vec!["Side effects finish once.".to_string()],
-            plan: "1) implement 2) validate".to_string(),
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::Resolves,
                 target: friction.clone(),
                 regression: None,
             }],
+            plan: "1) implement 2) validate".to_string(),
             external_refs: vec![ExternalRef::github_pr("17").expect("PR reference")],
             ..Default::default()
         })
@@ -174,8 +174,8 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
             .update_task(
                 &task.id,
                 TaskUpdateParams {
-                    status: Some(status),
                     execution_summary: Some("Delivered.".to_string()),
+                    status: Some(status),
                     ..Default::default()
                 },
             )

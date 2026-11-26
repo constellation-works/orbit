@@ -31,6 +31,8 @@ use crate::application::task::{
     EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord, TaskAddParams, TaskUpdateParams,
 };
 
+const EDITED_PLAN: &str = "1) fix the fixture by hand 2) requeue";
+
 /// A runtime whose repository has one commit on `main` and whose
 /// `workflow.purpose_crews.final_recovery` is `pool`.
 fn recovery_runtime(pool: &str) -> (tempfile::TempDir, OrbitRuntime) {
@@ -417,8 +419,6 @@ fn activity_by_a_human_after_the_block_suppresses_recovery() {
         vec![automated.id.as_str()]
     );
 }
-
-const EDITED_PLAN: &str = "1) fix the fixture by hand 2) requeue";
 
 /// ORB-14228: modern field edits have attributed semantic history. Exercise
 /// the dashboard's human surface rather than relying on the process actor.
@@ -1066,8 +1066,8 @@ fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
     init_workspace_at_root(
         &runtime.global_root(),
         InitOptions {
-            global_only: true,
             refresh_defaults: true,
+            global_only: true,
             ..Default::default()
         },
     )

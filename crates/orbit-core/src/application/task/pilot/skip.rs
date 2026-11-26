@@ -29,35 +29,6 @@ const NO_PILOT_TAG: &str = "no-pilot";
 /// History event an operator's pilot skip records.
 const PILOT_SKIPPED_EVENT: &str = "pilot_skipped";
 
-/// Whether `tags` carry the operator's pilot skip.
-pub(super) fn skips_pilot(tags: &[String]) -> bool {
-    tags.iter().any(|tag| tag == NO_PILOT_TAG)
-}
-
-/// The remedy text naming both ways past a pilot hold on `task`: a new
-/// assessment, or the operator's skip.
-pub(super) fn pilot_hold_remedies(task: &Task) -> String {
-    let mut tags = task
-        .tags
-        .iter()
-        .filter(|tag| tag.as_str() != NO_PILOT_TAG)
-        .cloned()
-        .collect::<Vec<_>>();
-    tags.push(NO_PILOT_TAG.to_string());
-    format!(
-        "Run `orbit task repilot {id}` on the owner, or have an operator skip the pilot by \
-         adding the `no-pilot` tag (`orbit task update {id} --tag {tags}`; `--tag` replaces \
-         the list).",
-        id = task.id,
-        tags = tags.join(","),
-    )
-}
-
-/// Whether `params` adds `no-pilot` to `task`.
-fn adds_no_pilot(task: &Task, tags: Option<&[String]>) -> bool {
-    tags.is_some_and(skips_pilot) && !skips_pilot(&task.tags)
-}
-
 /// What an operator's skip bypasses: the latest receipt and the requirements
 /// it sealed, and the live runs preparing the task.
 struct PilotSkipTarget {
@@ -159,4 +130,33 @@ impl OrbitRuntime {
             caller: None,
         }))
     }
+}
+
+/// Whether `tags` carry the operator's pilot skip.
+pub(super) fn skips_pilot(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag == NO_PILOT_TAG)
+}
+
+/// The remedy text naming both ways past a pilot hold on `task`: a new
+/// assessment, or the operator's skip.
+pub(super) fn pilot_hold_remedies(task: &Task) -> String {
+    let mut tags = task
+        .tags
+        .iter()
+        .filter(|tag| tag.as_str() != NO_PILOT_TAG)
+        .cloned()
+        .collect::<Vec<_>>();
+    tags.push(NO_PILOT_TAG.to_string());
+    format!(
+        "Run `orbit task repilot {id}` on the owner, or have an operator skip the pilot by \
+         adding the `no-pilot` tag (`orbit task update {id} --tag {tags}`; `--tag` replaces \
+         the list).",
+        id = task.id,
+        tags = tags.join(","),
+    )
+}
+
+/// Whether `params` adds `no-pilot` to `task`.
+fn adds_no_pilot(task: &Task, tags: Option<&[String]>) -> bool {
+    tags.is_some_and(skips_pilot) && !skips_pilot(&task.tags)
 }
