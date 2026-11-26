@@ -486,6 +486,74 @@ fn a_held_run_without_a_review_decision_refuses_the_split() {
     );
 }
 
+/// A held review-decision run whose pull request now conflicts with its base,
+/// with its block-triage request still open: the requeue answer is refused for
+/// the conflict, and the refusal names the source repair that works. That
+/// repair supersedes the request and starts a run on the kept candidate.
+fn a_conflicting_held_pull_request_is_repaired_through_source_repair() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let forge = super::escalated_publication::green_forge(&mut f);
+    park_source(&mut f, JobRunState::Held, true);
+    let request = raise_block_triage(&f);
+    forge.set_conflicting(true);
+    let history = f.runtime.get_task_history(&f.task).unwrap().len();
+
+    let error = answer(&f, &request, "2").unwrap_err().to_string();
+
+    assert!(
+        error.contains("conflicts with its base")
+            && error.contains("explicit source repair")
+            && error.contains(&f.source.run_id)
+            && error.contains("`orbit.run` action `resume`"),
+        "the refusal names the source repair route for the run: {error}"
+    );
+    assert!(
+        !error.contains("requeue again when they pass"),
+        "the refusal does not send the operator back to a requeue the conflict refuses: {error}"
+    );
+    assert!(
+        error.contains("--discard-candidate"),
+        "the discard route stays named: {error}"
+    );
+    assert_eq!(status(&f), TaskStatus::Blocked);
+    assert_eq!(f.runtime.get_task_history(&f.task).unwrap().len(), history);
+
+    // Rework fields are refused on a held source, and the refusal says to
+    // resubmit without them.
+    let binding = f.inspect();
+    let mut with_rework = f.submit(binding.clone());
+    with_rework["source_repair"]["request_key"] = json!("repair-2");
+    with_rework["source_repair"]["unmet_acceptance"] = json!("the PR conflicts with its base");
+    with_rework["source_repair"]["policy_digest"] = json!("policy");
+    let refusal = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", with_rework)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("do not authorize this source state")
+            && refusal.contains("resubmit without unmet_acceptance and policy_digest"),
+        "the refusal names the route that works: {refusal}"
+    );
+
+    // The named route: inspect, then submit without rework fields.
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.submit(binding))
+        .unwrap();
+    assert_eq!(admitted["retry_source_run_id"], f.source.run_id);
+    assert_eq!(status(&f), TaskStatus::InProgress);
+    assert_eq!(
+        f.runtime
+            .get_decision_request(&request.id)
+            .unwrap()
+            .unwrap()
+            .state,
+        DecisionRequestState::Superseded,
+        "the started repair supersedes the open requeue request"
+    );
+}
+
 fn plant_open_low_finding(f: &Fixture) {
     let settlement = RecordedReviewSettlement {
         gate: ReviewSettlementGate::BeforeLanding,
@@ -736,5 +804,6 @@ crate::scenario_table!(
     an_open_finding_on_a_green_pipeline_publication_is_accepted_and_the_candidate_resumes,
     a_rewrite_of_a_red_pipeline_publication_discards_instead_of_refusing,
     a_rewrite_of_a_held_handoff_discards_instead_of_refusing_on_the_specification,
-    a_running_handoff_rewrite_refuses_because_the_run_is_live
+    a_running_handoff_rewrite_refuses_because_the_run_is_live,
+    a_conflicting_held_pull_request_is_repaired_through_source_repair
 );

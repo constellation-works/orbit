@@ -20,7 +20,8 @@ const CLASS_PREFIXES: [&str; 3] = [
 const WRAPPER_MARKERS: [&str; 2] = [". Nothing was changed", ". The requeue resumes"];
 
 /// Remedy menus inside a cause. The cut keeps what failed and why.
-const MENU_MARKERS: [&str; 6] = [
+const MENU_MARKERS: [&str; 7] = [
+    "; resubmit without",
     "; stop any newer",
     "; inspect explicit",
     ", or discard",
@@ -161,7 +162,12 @@ fn next_step(raw: &str) -> &'static str {
         return "Settle the task if the pull request merged.";
     }
     if cause.contains("conflicts with its base") {
-        return "Resolve the pull request conflict, then requeue.";
+        // A requeue refuses a conflicting pull request, so waiting for the
+        // conflict to clear never ends: source repair resolves it.
+        return "Resolve the conflict with explicit source repair (inspect, then submit).";
+    }
+    if cause.contains("rework fields do not authorize") {
+        return "Resubmit without unmet_acceptance and policy_digest.";
     }
     if cause.contains("explicit source repair") || cause.contains("stop any newer") {
         return "Inspect the source again before retrying.";
