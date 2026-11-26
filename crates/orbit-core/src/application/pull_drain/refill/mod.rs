@@ -106,11 +106,14 @@
 
 mod cancel;
 mod crews;
+mod gate;
 mod input;
 mod owner;
 mod pass;
 mod record;
 mod refusal;
+mod request;
+mod settle;
 
 pub(crate) use crews::crew_window;
 pub(crate) use pass::pull_refill;

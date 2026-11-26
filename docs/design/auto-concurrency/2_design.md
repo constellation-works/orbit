@@ -70,7 +70,7 @@ two workspaces draining on one host each take their full ceiling.
 A pass that dispatched re-lists at once. An idle pass sleeps 30 s when work is
 waiting or the host is throttled, and 60 s otherwise. A pull drain instead
 requests one claim per free slot from the owner, and the owner chooses the
-task (`pull_drain/refill/pass.rs`, `pull_drain/drain/refill_pass.rs`).
+task (`pull_drain/refill/request.rs`, `pull_drain/drain/refill_pass.rs`).
 
 **The reactive guard.** The resource throttle (`runtime/host_resource/`)
 samples host CPU, memory, disk and, on Linux, I/O every 5 s while admission is
@@ -1162,7 +1162,7 @@ assumes the worst, so the forecast never treats unknown work as free.
 ## 6. Pull drains
 
 Implemented in `application/distributed/work_fit.rs` and the pull refill
-(`application/pull_drain/refill/pass.rs`); the owner's filter is in the store's admission selection.
+(`application/pull_drain/refill/request.rs`); the owner's filter is in the store's admission selection.
 
 A follower does not pick its task; the owner does. So the follower cannot run
 gap fit on a specific candidate. Instead, before every request, under the host
