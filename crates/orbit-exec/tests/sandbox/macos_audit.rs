@@ -5,6 +5,55 @@ use orbit_exec::compile_macos_sandbox_profile;
 use orbit_exec::{MacosLoginKeychainAccess, macos_login_keychain_access};
 use orbit_types::policy::ResolvedFsProfile;
 
+/// A disposable `$HOME` holding a stand-in login keychain, so keychain tests
+/// exercise the real clause set without touching operator credentials.
+#[cfg(target_os = "macos")]
+struct SyntheticKeychainHome {
+    // Declaration order is drop order: the tempdir must go before the guard
+    // that removes its parent.
+    home: tempfile::TempDir,
+    _cleanup: tempfile::TempDir,
+    credential: std::path::PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl SyntheticKeychainHome {
+    fn create(label: &str) -> Self {
+        let _cleanup = super::macos_sandbox::fixture_root_outside_profile_write_grants();
+        let parent = _cleanup.path().to_path_buf();
+        let home = tempfile::Builder::new()
+            .prefix(&format!("synthetic-home-{label}-"))
+            .tempdir_in(&parent)
+            .expect("synthetic home tempdir");
+        let keychains = home.path().join("Library/Keychains");
+        std::fs::create_dir_all(&keychains).expect("synthetic keychain dir");
+        let credential = keychains.join("login.keychain-db");
+        std::fs::write(&credential, b"synthetic-credential").expect("write synthetic credential");
+        Self {
+            home,
+            _cleanup,
+            credential,
+        }
+    }
+
+    fn home_text(&self) -> String {
+        self.home.path().to_string_lossy().into_owned()
+    }
+
+    fn credential_readable(&self, resolved: &ResolvedFsProfile, provider: &str) -> bool {
+        let home = self.home_text();
+        let profile_text = compile_with_env(
+            resolved,
+            provider,
+            EnvOverrides {
+                home: Some(&home),
+                ..Default::default()
+            },
+        );
+        can_read_under_profile(&profile_text, &self.credential)
+    }
+}
+
 #[test]
 fn keychain_access_diagnostic_grants_antigravity_and_keeps_unknown_providers_denied() {
     let resolved = ResolvedFsProfile {
@@ -205,55 +254,6 @@ fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials()
         !can_read_under_profile(&denied_profile, &public_ca),
         "an explicit denyRead must still outrank the public CA default"
     );
-}
-
-/// A disposable `$HOME` holding a stand-in login keychain, so keychain tests
-/// exercise the real clause set without touching operator credentials.
-#[cfg(target_os = "macos")]
-struct SyntheticKeychainHome {
-    // Declaration order is drop order: the tempdir must go before the guard
-    // that removes its parent.
-    home: tempfile::TempDir,
-    _cleanup: tempfile::TempDir,
-    credential: std::path::PathBuf,
-}
-
-#[cfg(target_os = "macos")]
-impl SyntheticKeychainHome {
-    fn create(label: &str) -> Self {
-        let _cleanup = super::macos_sandbox::fixture_root_outside_profile_write_grants();
-        let parent = _cleanup.path().to_path_buf();
-        let home = tempfile::Builder::new()
-            .prefix(&format!("synthetic-home-{label}-"))
-            .tempdir_in(&parent)
-            .expect("synthetic home tempdir");
-        let keychains = home.path().join("Library/Keychains");
-        std::fs::create_dir_all(&keychains).expect("synthetic keychain dir");
-        let credential = keychains.join("login.keychain-db");
-        std::fs::write(&credential, b"synthetic-credential").expect("write synthetic credential");
-        Self {
-            home,
-            _cleanup,
-            credential,
-        }
-    }
-
-    fn home_text(&self) -> String {
-        self.home.path().to_string_lossy().into_owned()
-    }
-
-    fn credential_readable(&self, resolved: &ResolvedFsProfile, provider: &str) -> bool {
-        let home = self.home_text();
-        let profile_text = compile_with_env(
-            resolved,
-            provider,
-            EnvOverrides {
-                home: Some(&home),
-                ..Default::default()
-            },
-        );
-        can_read_under_profile(&profile_text, &self.credential)
-    }
 }
 
 #[cfg(target_os = "macos")]

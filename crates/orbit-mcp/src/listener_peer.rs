@@ -165,6 +165,132 @@ mod macos {
     /// `SOCK_MAXADDRLEN` in `<sys/socket.h>`.
     const SOCK_MAXADDRLEN: usize = 255;
 
+    #[repr(C)]
+    struct SocketFdInfo {
+        _pfi: ProcFileInfo,
+        psi: SocketInfo,
+    }
+
+    #[repr(C)]
+    struct ProcFileInfo {
+        _fi_openflags: u32,
+        _fi_status: u32,
+        _fi_offset: libc::off_t,
+        _fi_type: i32,
+        _fi_guardflags: u32,
+    }
+
+    #[repr(C)]
+    struct SocketInfo {
+        _soi_stat: libc::vinfo_stat,
+        _soi_so: u64,
+        _soi_pcb: u64,
+        _soi_type: libc::c_int,
+        _soi_protocol: libc::c_int,
+        _soi_family: libc::c_int,
+        _soi_options: libc::c_short,
+        _soi_linger: libc::c_short,
+        _soi_state: libc::c_short,
+        _soi_qlen: libc::c_short,
+        _soi_incqlen: libc::c_short,
+        _soi_qlimit: libc::c_short,
+        _soi_timeo: libc::c_short,
+        _soi_error: libc::c_ushort,
+        _soi_oobmark: u32,
+        _soi_rcv: SockBufInfo,
+        _soi_snd: SockBufInfo,
+        soi_kind: libc::c_int,
+        _rfu_1: u32,
+        soi_proto: SocketInfoProto,
+    }
+
+    #[repr(C)]
+    struct SockBufInfo {
+        _sbi_cc: u32,
+        _sbi_hiwat: u32,
+        _sbi_mbcnt: u32,
+        _sbi_mbmax: u32,
+        _sbi_lowat: u32,
+        _sbi_flags: libc::c_short,
+        _sbi_timeo: libc::c_short,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    union SocketInfoProto {
+        pri_tcp: TcpSockInfo,
+        /// Largest member of the kernel union. Present so `size_of` matches
+        /// `socket_fdinfo` even though the bytes are not read.
+        _pri_un: UnSockInfo,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct TcpSockInfo {
+        tcpsi_ini: InSockInfo,
+        tcpsi_state: libc::c_int,
+        _tcpsi_timer: [libc::c_int; 4],
+        _tcpsi_mss: libc::c_int,
+        _tcpsi_flags: u32,
+        _rfu_1: u32,
+        _tcpsi_tp: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct InSockInfo {
+        insi_fport: libc::c_int,
+        insi_lport: libc::c_int,
+        _insi_gencnt: u64,
+        _insi_flags: u32,
+        _insi_flow: u32,
+        insi_vflag: u8,
+        _insi_ip_ttl: u8,
+        _rfu_1: u32,
+        insi_faddr: InSiAddr,
+        insi_laddr: InSiAddr,
+        _insi_v4: InSiV4,
+        _insi_v6: InSiV6,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct InSiV4 {
+        _in4_tos: u8,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct InSiV6 {
+        _in6_hlim: u8,
+        _in6_cksum: libc::c_int,
+        _in6_ifindex: libc::c_ushort,
+        _in6_hops: libc::c_short,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    union InSiAddr {
+        ina_46: In4In6Addr,
+        ina_6: libc::in6_addr,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct In4In6Addr {
+        _i46a_pad32: [u32; 3],
+        addr4: libc::in_addr,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct UnSockInfo {
+        _unsi_conn_so: u64,
+        _unsi_conn_pcb: u64,
+        _unsi_addr: [u8; SOCK_MAXADDRLEN],
+        _unsi_caddr: [u8; SOCK_MAXADDRLEN],
+    }
+
     pub(super) fn client_uid(local: SocketAddr, peer: SocketAddr) -> ClientUid {
         let pids = match list_pids() {
             Ok(pids) => pids,
@@ -337,132 +463,6 @@ mod macos {
 
     fn same_endpoint(left: StdSocketAddr, right: SocketAddr) -> bool {
         left.port() == right.port() && left.ip() == right.ip()
-    }
-
-    #[repr(C)]
-    struct SocketFdInfo {
-        _pfi: ProcFileInfo,
-        psi: SocketInfo,
-    }
-
-    #[repr(C)]
-    struct ProcFileInfo {
-        _fi_openflags: u32,
-        _fi_status: u32,
-        _fi_offset: libc::off_t,
-        _fi_type: i32,
-        _fi_guardflags: u32,
-    }
-
-    #[repr(C)]
-    struct SocketInfo {
-        _soi_stat: libc::vinfo_stat,
-        _soi_so: u64,
-        _soi_pcb: u64,
-        _soi_type: libc::c_int,
-        _soi_protocol: libc::c_int,
-        _soi_family: libc::c_int,
-        _soi_options: libc::c_short,
-        _soi_linger: libc::c_short,
-        _soi_state: libc::c_short,
-        _soi_qlen: libc::c_short,
-        _soi_incqlen: libc::c_short,
-        _soi_qlimit: libc::c_short,
-        _soi_timeo: libc::c_short,
-        _soi_error: libc::c_ushort,
-        _soi_oobmark: u32,
-        _soi_rcv: SockBufInfo,
-        _soi_snd: SockBufInfo,
-        soi_kind: libc::c_int,
-        _rfu_1: u32,
-        soi_proto: SocketInfoProto,
-    }
-
-    #[repr(C)]
-    struct SockBufInfo {
-        _sbi_cc: u32,
-        _sbi_hiwat: u32,
-        _sbi_mbcnt: u32,
-        _sbi_mbmax: u32,
-        _sbi_lowat: u32,
-        _sbi_flags: libc::c_short,
-        _sbi_timeo: libc::c_short,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    union SocketInfoProto {
-        pri_tcp: TcpSockInfo,
-        /// Largest member of the kernel union. Present so `size_of` matches
-        /// `socket_fdinfo` even though the bytes are not read.
-        _pri_un: UnSockInfo,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct TcpSockInfo {
-        tcpsi_ini: InSockInfo,
-        tcpsi_state: libc::c_int,
-        _tcpsi_timer: [libc::c_int; 4],
-        _tcpsi_mss: libc::c_int,
-        _tcpsi_flags: u32,
-        _rfu_1: u32,
-        _tcpsi_tp: u64,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct InSockInfo {
-        insi_fport: libc::c_int,
-        insi_lport: libc::c_int,
-        _insi_gencnt: u64,
-        _insi_flags: u32,
-        _insi_flow: u32,
-        insi_vflag: u8,
-        _insi_ip_ttl: u8,
-        _rfu_1: u32,
-        insi_faddr: InSiAddr,
-        insi_laddr: InSiAddr,
-        _insi_v4: InSiV4,
-        _insi_v6: InSiV6,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct InSiV4 {
-        _in4_tos: u8,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct InSiV6 {
-        _in6_hlim: u8,
-        _in6_cksum: libc::c_int,
-        _in6_ifindex: libc::c_ushort,
-        _in6_hops: libc::c_short,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    union InSiAddr {
-        ina_46: In4In6Addr,
-        ina_6: libc::in6_addr,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct In4In6Addr {
-        _i46a_pad32: [u32; 3],
-        addr4: libc::in_addr,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct UnSockInfo {
-        _unsi_conn_so: u64,
-        _unsi_conn_pcb: u64,
-        _unsi_addr: [u8; SOCK_MAXADDRLEN],
-        _unsi_caddr: [u8; SOCK_MAXADDRLEN],
     }
 }
 

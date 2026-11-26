@@ -73,73 +73,56 @@ const HOST_KEY_SECRET: &str = "owner-host ssh-ed25519 FIXTURE-HOST-KEY-SECRET";
 const PRIVATE_KEY_SECRET: &str =
     "-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTURE-PRIVATE-KEY-SECRET\n";
 
-#[test]
-fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
-    if !orbit_exec::macos_sandbox_test_guard(
-        &orbit_common::Env::capture(),
-        "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
-    ) {
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    if let Some(reason) = sandbox_unavailable() {
-        orbit_exec::report_bwrap_deferral(
-            "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
-            &reason,
-        );
-        return;
-    }
-    // Short and outside the per-user temp directory, which the sandbox may
-    // replace with its own; canonical, because a macOS profile names real
-    // paths and `/var` is a link there.
-    let root = tempfile::Builder::new()
-        .prefix("ocr")
-        .tempdir_in("/var/tmp")
-        .expect("sandbox-visible fixture root");
-    let base = root.path().canonicalize().expect("resolve fixture root");
-    let follower_home = base.join("follower/home");
-    let path = std::env::join_paths(
-        [base.join("bin"), follower_home.join("stub-bin")]
-            .into_iter()
-            .chain(std::env::split_paths(
-                &std::env::var_os("PATH").unwrap_or_default(),
-            )),
-    )
-    .expect("PATH");
-    let mut child = Command::new(std::env::current_exe().expect("test binary"));
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        child.env_remove(name);
-    });
-    child
-        .env(CHILD, &base)
-        .env("HOME", &follower_home)
-        .env("USERPROFILE", &follower_home)
-        .env("PATH", path)
-        .current_dir(&base)
-        .args([
-            "--ignored",
-            "--exact",
-            "claimed_review_bridge_sandbox::sandbox_fixture",
-            "--nocapture",
-        ]);
-    let output = orbit_common::test_env::run_child_test(
-        &mut child,
-        "claimed_review_bridge_sandbox::sandbox_fixture",
-        &base,
-    );
-    orbit_common::test_env::assert_child_test_passed(
-        "claimed_review_bridge_sandbox::sandbox_fixture",
-        output.status,
-        &output.stdout,
-        &output.stderr,
-    );
-}
+/// Exec'd around the owner runtime. `PR_SET_PDEATHSIG`/`SIGKILL` survives
+/// `exec`, so the runtime dies with the stand-in even when the broker's
+/// session drop SIGKILLs that pid and cannot run a reaper. The `getppid()==1`
+/// recheck covers the parent dying between `fork` and `prctl`.
+///
+/// The wrapper also holds `ORBIT_FIXTURE_RUNTIME_LOCK` across that exec. The
+/// fd stays open for the runtime's whole life, including while the process
+/// is stuck in an uninterruptible write and has not yet honored SIGKILL.
+/// The next session blocks on the same flock until this process has exited,
+/// so it does not spend the store's busy budget on a lock the kernel still
+/// holds. Parent-death is armed before the wait: a session killed while this
+/// process is only waiting must not become the lock holder.
+const DIE_WITH_PARENT_WRAPPER: &str = r#"#!/usr/bin/env python3
+import ctypes, fcntl, os, sys
+if sys.platform.startswith("linux") and os.environ.get("ORBIT_FIXTURE_DIE_WITH_PARENT") == "1":
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = libc.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(1, 9) != 0:
+        os._exit(1)
+    if os.getppid() == 1:
+        os._exit(1)
+lock = os.environ.get("ORBIT_FIXTURE_RUNTIME_LOCK")
+if lock:
+    held = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    os.set_inheritable(held, True)
+os.execv(sys.argv[1], sys.argv[1:])
+"#;
 
+/// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
+/// that surfaces `database is locked` once the busy timeout expires. The
+/// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
+/// stand-in keeps the store locked for the whole wait; the test kills it after.
 #[cfg(target_os = "linux")]
-fn sandbox_unavailable() -> Option<String> {
-    let probe = orbit_exec::probe_bwrap();
-    (!probe.available).then_some(probe.detail)
-}
+const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
+import os, sqlite3, sys, time
+db = os.environ["ORBIT_FIXTURE_DB"]
+ready = os.environ["ORBIT_FIXTURE_READY"]
+connection = sqlite3.connect(db, isolation_level=None, timeout=0)
+connection.execute("BEGIN EXCLUSIVE")
+connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
+connection.execute("INSERT INTO held VALUES (1)")
+with open(ready, "w") as handle:
+    handle.write(str(os.getpid()))
+sys.stdin.buffer.read(1)
+time.sleep(600)
+connection.execute("COMMIT")
+"#;
 
 /// One Orbit machine: its own home, global root and registered checkout.
 struct Node {
@@ -229,56 +212,73 @@ impl Node {
     }
 }
 
-/// Exec'd around the owner runtime. `PR_SET_PDEATHSIG`/`SIGKILL` survives
-/// `exec`, so the runtime dies with the stand-in even when the broker's
-/// session drop SIGKILLs that pid and cannot run a reaper. The `getppid()==1`
-/// recheck covers the parent dying between `fork` and `prctl`.
-///
-/// The wrapper also holds `ORBIT_FIXTURE_RUNTIME_LOCK` across that exec. The
-/// fd stays open for the runtime's whole life, including while the process
-/// is stuck in an uninterruptible write and has not yet honored SIGKILL.
-/// The next session blocks on the same flock until this process has exited,
-/// so it does not spend the store's busy budget on a lock the kernel still
-/// holds. Parent-death is armed before the wait: a session killed while this
-/// process is only waiting must not become the lock holder.
-const DIE_WITH_PARENT_WRAPPER: &str = r#"#!/usr/bin/env python3
-import ctypes, fcntl, os, sys
-if sys.platform.startswith("linux") and os.environ.get("ORBIT_FIXTURE_DIE_WITH_PARENT") == "1":
-    libc = ctypes.CDLL(None, use_errno=True)
-    prctl = libc.prctl
-    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong]
-    prctl.restype = ctypes.c_int
-    if prctl(1, 9) != 0:
-        os._exit(1)
-    if os.getppid() == 1:
-        os._exit(1)
-lock = os.environ.get("ORBIT_FIXTURE_RUNTIME_LOCK")
-if lock:
-    held = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
-    fcntl.flock(held, fcntl.LOCK_EX)
-    os.set_inheritable(held, True)
-os.execv(sys.argv[1], sys.argv[1:])
-"#;
+#[test]
+fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
+    ) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(reason) = sandbox_unavailable() {
+        orbit_exec::report_bwrap_deferral(
+            "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
+            &reason,
+        );
+        return;
+    }
+    // Short and outside the per-user temp directory, which the sandbox may
+    // replace with its own; canonical, because a macOS profile names real
+    // paths and `/var` is a link there.
+    let root = tempfile::Builder::new()
+        .prefix("ocr")
+        .tempdir_in("/var/tmp")
+        .expect("sandbox-visible fixture root");
+    let base = root.path().canonicalize().expect("resolve fixture root");
+    let follower_home = base.join("follower/home");
+    let path = std::env::join_paths(
+        [base.join("bin"), follower_home.join("stub-bin")]
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .expect("PATH");
+    let mut child = Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    child
+        .env(CHILD, &base)
+        .env("HOME", &follower_home)
+        .env("USERPROFILE", &follower_home)
+        .env("PATH", path)
+        .current_dir(&base)
+        .args([
+            "--ignored",
+            "--exact",
+            "claimed_review_bridge_sandbox::sandbox_fixture",
+            "--nocapture",
+        ]);
+    let output = orbit_common::test_env::run_child_test(
+        &mut child,
+        "claimed_review_bridge_sandbox::sandbox_fixture",
+        &base,
+    );
+    orbit_common::test_env::assert_child_test_passed(
+        "claimed_review_bridge_sandbox::sandbox_fixture",
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+}
 
-/// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
-/// that surfaces `database is locked` once the busy timeout expires. The
-/// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
-/// stand-in keeps the store locked for the whole wait; the test kills it after.
 #[cfg(target_os = "linux")]
-const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
-import os, sqlite3, sys, time
-db = os.environ["ORBIT_FIXTURE_DB"]
-ready = os.environ["ORBIT_FIXTURE_READY"]
-connection = sqlite3.connect(db, isolation_level=None, timeout=0)
-connection.execute("BEGIN EXCLUSIVE")
-connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
-connection.execute("INSERT INTO held VALUES (1)")
-with open(ready, "w") as handle:
-    handle.write(str(os.getpid()))
-sys.stdin.buffer.read(1)
-time.sleep(600)
-connection.execute("COMMIT")
-"#;
+fn sandbox_unavailable() -> Option<String> {
+    let probe = orbit_exec::probe_bwrap();
+    (!probe.available).then_some(probe.detail)
+}
 
 /// An `ssh` stand-in for the follower: it needs the caller's
 /// `~/.ssh/known_hosts`, as the real client does to verify the owner, then

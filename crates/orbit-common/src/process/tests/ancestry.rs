@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 use crate::process::OwnedChild;
 use crate::process::ancestry::{self, ProcessTreeProcess};
 
+struct DirectRusage {
+    phys_footprint: u64,
+    resident_size: u64,
+    lifetime_max: u64,
+}
+
 #[test]
 fn a_child_is_in_the_process_tree_until_it_exits() {
     const TEST: &str = "process::tests::ancestry::a_child_is_in_the_process_tree_until_it_exits";
@@ -300,12 +306,6 @@ fn session_cpu_counts_a_child_once_when_orphaned_during_a_walk() {
         25,
         "an orphan reaped outside the tree must not hide the root's unrelated reaped CPU"
     );
-}
-
-struct DirectRusage {
-    phys_footprint: u64,
-    resident_size: u64,
-    lifetime_max: u64,
 }
 
 fn direct_rusage(pid: u32) -> DirectRusage {

@@ -31,6 +31,41 @@ const FIXTURE_PASS_CONFIG: &str = r#"[execution.env]
 pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING", "CLAUDE_CODE_OAUTH_TOKEN"]
 "#;
 
+const FIXTURE_SHARED_VALUE: &str = "fixture-shared-value";
+
+/// Two Claude crews on one provider and model: `opus` uses the shared OAuth
+/// token `pass` admits, `opus-credits` maps its own API key from a source no
+/// CLI reads. `opus-extra` forwards one bare name; `opus-unset` maps a
+/// source the launching environment does not hold.
+const CREW_ENV_CONFIG: &str = r#"[execution.env]
+pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING", "CLAUDE_CODE_OAUTH_TOKEN"]
+
+[workflow]
+default_crew = "opus"
+
+[crews.opus]
+provider = "claude"
+model = "claude-opus-4-8"
+
+[crews.opus-credits]
+provider = "claude"
+model = "claude-opus-4-8"
+env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
+
+[crews.opus-extra]
+provider = "claude"
+model = "claude-opus-4-8"
+env = ["EXTRA_SHARED_VAR"]
+
+[crews.opus-unset]
+provider = "claude"
+model = "claude-opus-4-8"
+env = ["ANTHROPIC_API_KEY=ANTHROPIC_UNSET_SOURCE"]
+"#;
+
+/// Synthetic values for the crew `env` fixture; none is a real credential.
+const FIXTURE_CREDITS_KEY: &str = "fixture-credits-api-key";
+
 /// Final `result` document of a turn that ended with the envelope in
 /// `structured_output`, as `claude -p --json-schema` writes it.
 fn envelope_turn() -> String {
@@ -258,40 +293,6 @@ fn orbit_runtime_refuses_claude_without_a_worker_credential_before_launch() {
         "the provider binary must not start without a worker credential"
     );
 }
-
-/// Synthetic values for the crew `env` fixture; none is a real credential.
-const FIXTURE_CREDITS_KEY: &str = "fixture-credits-api-key";
-const FIXTURE_SHARED_VALUE: &str = "fixture-shared-value";
-
-/// Two Claude crews on one provider and model: `opus` uses the shared OAuth
-/// token `pass` admits, `opus-credits` maps its own API key from a source no
-/// CLI reads. `opus-extra` forwards one bare name; `opus-unset` maps a
-/// source the launching environment does not hold.
-const CREW_ENV_CONFIG: &str = r#"[execution.env]
-pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING", "CLAUDE_CODE_OAUTH_TOKEN"]
-
-[workflow]
-default_crew = "opus"
-
-[crews.opus]
-provider = "claude"
-model = "claude-opus-4-8"
-
-[crews.opus-credits]
-provider = "claude"
-model = "claude-opus-4-8"
-env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
-
-[crews.opus-extra]
-provider = "claude"
-model = "claude-opus-4-8"
-env = ["EXTRA_SHARED_VAR"]
-
-[crews.opus-unset]
-provider = "claude"
-model = "claude-opus-4-8"
-env = ["ANTHROPIC_API_KEY=ANTHROPIC_UNSET_SOURCE"]
-"#;
 
 /// Dispatch the fixture activity as `crew`, resolved the way the engine
 /// resolves an activity's crew, and return the environment the provider

@@ -66,213 +66,6 @@ const ROOT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_ROOT";
 const CHILD_TEST: &str = "render_compiled_profiles_in_a_pinned_environment";
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
-#[test]
-fn compiled_sandbox_profiles_match_their_goldens() {
-    // Under `/tmp` on every platform so the Linux scratch-anchor mounts, which
-    // depend on where the fixture sits relative to `/tmp`, render the same on
-    // every host whatever its `TMPDIR`.
-    let root = tempfile::tempdir_in("/tmp").expect("fixture root");
-    let output = tempfile::tempdir().expect("render output");
-    run_child(root.path(), output.path());
-
-    let mut rendered = Vec::new();
-    for entry in std::fs::read_dir(output.path()).expect("rendered cases") {
-        let entry = entry.expect("rendered case");
-        let platform = entry.file_name().to_string_lossy().into_owned();
-        for case in std::fs::read_dir(entry.path()).expect("platform cases") {
-            let case = case.expect("case");
-            rendered.push(format!("{platform}/{}", case.file_name().to_string_lossy()));
-        }
-    }
-    rendered.sort();
-    assert!(
-        !rendered.is_empty(),
-        "the child rendered no cases from {}",
-        output.path().display()
-    );
-
-    let mut drifted = Vec::new();
-    for name in &rendered {
-        let actual = std::fs::read_to_string(output.path().join(name)).expect("rendered case");
-        if !golden_matches(name, &actual) {
-            drifted.push(name.clone());
-        }
-    }
-    assert!(
-        drifted.is_empty(),
-        "{drifted:?} drifted from the checked-in sandbox goldens (diffs above). If the policy \
-         change is intended, regenerate with `make goldens UPDATE=1` and explain the diff in \
-         the PR."
-    );
-
-    // A golden whose case was removed would otherwise go stale unnoticed.
-    for platform in rendered_platforms(&rendered) {
-        let dir = golden_dir().join(&platform);
-        for entry in std::fs::read_dir(&dir).expect("golden dir") {
-            let name = format!(
-                "{platform}/{}",
-                entry.expect("golden").file_name().to_string_lossy()
-            );
-            assert!(
-                rendered.contains(&name),
-                "{name} has no case any more; delete it (or regenerate with `make goldens \
-                 UPDATE=1`)"
-            );
-        }
-    }
-}
-
-/// Re-executed by [`compiled_sandbox_profiles_match_their_goldens`] with a
-/// cleared environment. Does nothing when run any other way.
-#[test]
-#[ignore = "child of compiled_sandbox_profiles_match_their_goldens"]
-fn render_compiled_profiles_in_a_pinned_environment() {
-    let (Some(output), Some(root)) = (std::env::var_os(OUTPUT_ENV), std::env::var_os(ROOT_ENV))
-    else {
-        return;
-    };
-    let fixture = Fixture::create(Path::new(&root));
-    let output = PathBuf::from(output);
-    let macos = output.join("macos");
-    std::fs::create_dir_all(&macos).expect("macos output");
-    for case in fixture.cases() {
-        let text = fixture.render_macos(&case);
-        std::fs::write(macos.join(format!("{}.sbpl", case.name)), text).expect("write sbpl");
-    }
-    let text = fixture.render_build_macos(BuildPhaseNetwork::None);
-    std::fs::write(macos.join("plugin_build_offline.sbpl"), text).expect("write build sbpl");
-    for (name, cwd_writable) in SCRIPT_CASES {
-        let text = fixture.render_script_macos(cwd_writable);
-        std::fs::write(macos.join(format!("{name}.sbpl")), text).expect("write script sbpl");
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let linux = output.join("linux");
-        std::fs::create_dir_all(&linux).expect("linux output");
-        for case in fixture.cases() {
-            let text = fixture.render_linux(&case);
-            std::fs::write(linux.join(format!("{}.txt", case.name)), text).expect("write plan");
-        }
-        for (name, network) in BUILD_CASES {
-            let text = fixture.render_build_linux(network);
-            std::fs::write(linux.join(format!("{name}.txt")), text).expect("write build plan");
-        }
-    }
-}
-
-fn run_child(root: &Path, output: &Path) {
-    let root = root.canonicalize().expect("canonical fixture root");
-    let logs = tempfile::tempdir().expect("child logs");
-    let stdout_path = logs.path().join("stdout.log");
-    let stderr_path = logs.path().join("stderr.log");
-    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
-    command
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        .env("HOME", root.join("home"))
-        .env("XDG_RUNTIME_DIR", root.join("runtime"))
-        .env(OUTPUT_ENV, output)
-        .env(ROOT_ENV, &root)
-        .args([
-            "--exact",
-            CHILD_TEST,
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .current_dir(&root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout_path).expect("stdout log"))
-        .stderr(std::fs::File::create(&stderr_path).expect("stderr log"));
-    let mut child = ChildGuard(command.spawn().expect("spawn renderer"));
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait().expect("poll renderer") {
-            break Some(status);
-        }
-        if started.elapsed() > CHILD_DEADLINE {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    drop(child);
-    let read = |path: &Path| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .and_then(|mut file| file.read_to_string(&mut text))
-            .expect("read child log");
-        text
-    };
-    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
-    let status = status
-        .unwrap_or_else(|| panic!("renderer ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    orbit_common::test_env::assert_child_test_passed(CHILD_TEST, status, stdout, stderr);
-}
-
-/// Kills and reaps the renderer however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn golden_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sandbox_profile_goldens")
-}
-
-fn rendered_platforms(rendered: &[String]) -> Vec<String> {
-    let mut platforms: Vec<String> = rendered
-        .iter()
-        .filter_map(|name| {
-            name.split_once('/')
-                .map(|(platform, _)| platform.to_string())
-        })
-        .collect();
-    platforms.dedup();
-    platforms
-}
-
-/// Compare with (or, under [`UPDATE_ENV`], overwrite) one golden. Prints a
-/// line diff on drift so every mismatching case shows in one run.
-fn golden_matches(name: &str, actual: &str) -> bool {
-    let path = golden_dir().join(name);
-    if std::env::var(UPDATE_ENV).as_deref() == Ok("1") {
-        std::fs::create_dir_all(path.parent().expect("golden parent")).expect("golden dir");
-        std::fs::write(&path, actual)
-            .unwrap_or_else(|error| panic!("write golden {}: {error}", path.display()));
-        return true;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_default();
-    if expected == actual {
-        return true;
-    }
-    eprintln!("--- {name} (golden)\n+++ {name} (compiled)");
-    let expected_lines: Vec<&str> = expected.lines().collect();
-    let actual_lines: Vec<&str> = actual.lines().collect();
-    for line in &expected_lines {
-        if !actual_lines.contains(line) {
-            eprintln!("-{line}");
-        }
-    }
-    for line in &actual_lines {
-        if !expected_lines.contains(line) {
-            eprintln!("+{line}");
-        }
-    }
-    false
-}
-
-/// The Linux install-time plugin build profile, one case per phase
-/// (`docs/design/plugins/3_install_time_build.md` §3.2–§3.3).
-#[cfg(target_os = "linux")]
-const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
-    ("plugin_build_fetch", BuildPhaseNetwork::Https),
-    ("plugin_build_offline", BuildPhaseNetwork::None),
-];
-
 /// The macOS script profile (`docs/design/script-steps/1_scope.md` §3), for a
 /// run worktree cwd and for the workspace root read-only.
 const SCRIPT_CASES: [(&str, bool); 2] =
@@ -820,6 +613,213 @@ impl Fixture {
         text
     }
 }
+
+#[test]
+fn compiled_sandbox_profiles_match_their_goldens() {
+    // Under `/tmp` on every platform so the Linux scratch-anchor mounts, which
+    // depend on where the fixture sits relative to `/tmp`, render the same on
+    // every host whatever its `TMPDIR`.
+    let root = tempfile::tempdir_in("/tmp").expect("fixture root");
+    let output = tempfile::tempdir().expect("render output");
+    run_child(root.path(), output.path());
+
+    let mut rendered = Vec::new();
+    for entry in std::fs::read_dir(output.path()).expect("rendered cases") {
+        let entry = entry.expect("rendered case");
+        let platform = entry.file_name().to_string_lossy().into_owned();
+        for case in std::fs::read_dir(entry.path()).expect("platform cases") {
+            let case = case.expect("case");
+            rendered.push(format!("{platform}/{}", case.file_name().to_string_lossy()));
+        }
+    }
+    rendered.sort();
+    assert!(
+        !rendered.is_empty(),
+        "the child rendered no cases from {}",
+        output.path().display()
+    );
+
+    let mut drifted = Vec::new();
+    for name in &rendered {
+        let actual = std::fs::read_to_string(output.path().join(name)).expect("rendered case");
+        if !golden_matches(name, &actual) {
+            drifted.push(name.clone());
+        }
+    }
+    assert!(
+        drifted.is_empty(),
+        "{drifted:?} drifted from the checked-in sandbox goldens (diffs above). If the policy \
+         change is intended, regenerate with `make goldens UPDATE=1` and explain the diff in \
+         the PR."
+    );
+
+    // A golden whose case was removed would otherwise go stale unnoticed.
+    for platform in rendered_platforms(&rendered) {
+        let dir = golden_dir().join(&platform);
+        for entry in std::fs::read_dir(&dir).expect("golden dir") {
+            let name = format!(
+                "{platform}/{}",
+                entry.expect("golden").file_name().to_string_lossy()
+            );
+            assert!(
+                rendered.contains(&name),
+                "{name} has no case any more; delete it (or regenerate with `make goldens \
+                 UPDATE=1`)"
+            );
+        }
+    }
+}
+
+/// Re-executed by [`compiled_sandbox_profiles_match_their_goldens`] with a
+/// cleared environment. Does nothing when run any other way.
+#[test]
+#[ignore = "child of compiled_sandbox_profiles_match_their_goldens"]
+fn render_compiled_profiles_in_a_pinned_environment() {
+    let (Some(output), Some(root)) = (std::env::var_os(OUTPUT_ENV), std::env::var_os(ROOT_ENV))
+    else {
+        return;
+    };
+    let fixture = Fixture::create(Path::new(&root));
+    let output = PathBuf::from(output);
+    let macos = output.join("macos");
+    std::fs::create_dir_all(&macos).expect("macos output");
+    for case in fixture.cases() {
+        let text = fixture.render_macos(&case);
+        std::fs::write(macos.join(format!("{}.sbpl", case.name)), text).expect("write sbpl");
+    }
+    let text = fixture.render_build_macos(BuildPhaseNetwork::None);
+    std::fs::write(macos.join("plugin_build_offline.sbpl"), text).expect("write build sbpl");
+    for (name, cwd_writable) in SCRIPT_CASES {
+        let text = fixture.render_script_macos(cwd_writable);
+        std::fs::write(macos.join(format!("{name}.sbpl")), text).expect("write script sbpl");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let linux = output.join("linux");
+        std::fs::create_dir_all(&linux).expect("linux output");
+        for case in fixture.cases() {
+            let text = fixture.render_linux(&case);
+            std::fs::write(linux.join(format!("{}.txt", case.name)), text).expect("write plan");
+        }
+        for (name, network) in BUILD_CASES {
+            let text = fixture.render_build_linux(network);
+            std::fs::write(linux.join(format!("{name}.txt")), text).expect("write build plan");
+        }
+    }
+}
+
+fn run_child(root: &Path, output: &Path) {
+    let root = root.canonicalize().expect("canonical fixture root");
+    let logs = tempfile::tempdir().expect("child logs");
+    let stdout_path = logs.path().join("stdout.log");
+    let stderr_path = logs.path().join("stderr.log");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", root.join("home"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env(OUTPUT_ENV, output)
+        .env(ROOT_ENV, &root)
+        .args([
+            "--exact",
+            CHILD_TEST,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .current_dir(&root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path).expect("stdout log"))
+        .stderr(std::fs::File::create(&stderr_path).expect("stderr log"));
+    let mut child = ChildGuard(command.spawn().expect("spawn renderer"));
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.0.try_wait().expect("poll renderer") {
+            break Some(status);
+        }
+        if started.elapsed() > CHILD_DEADLINE {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(child);
+    let read = |path: &Path| {
+        let mut text = String::new();
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read_to_string(&mut text))
+            .expect("read child log");
+        text
+    };
+    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
+    let status = status
+        .unwrap_or_else(|| panic!("renderer ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
+    orbit_common::test_env::assert_child_test_passed(CHILD_TEST, status, stdout, stderr);
+}
+
+/// Kills and reaps the renderer however the parent leaves.
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn golden_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sandbox_profile_goldens")
+}
+
+fn rendered_platforms(rendered: &[String]) -> Vec<String> {
+    let mut platforms: Vec<String> = rendered
+        .iter()
+        .filter_map(|name| {
+            name.split_once('/')
+                .map(|(platform, _)| platform.to_string())
+        })
+        .collect();
+    platforms.dedup();
+    platforms
+}
+
+/// Compare with (or, under [`UPDATE_ENV`], overwrite) one golden. Prints a
+/// line diff on drift so every mismatching case shows in one run.
+fn golden_matches(name: &str, actual: &str) -> bool {
+    let path = golden_dir().join(name);
+    if std::env::var(UPDATE_ENV).as_deref() == Ok("1") {
+        std::fs::create_dir_all(path.parent().expect("golden parent")).expect("golden dir");
+        std::fs::write(&path, actual)
+            .unwrap_or_else(|error| panic!("write golden {}: {error}", path.display()));
+        return true;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_default();
+    if expected == actual {
+        return true;
+    }
+    eprintln!("--- {name} (golden)\n+++ {name} (compiled)");
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let actual_lines: Vec<&str> = actual.lines().collect();
+    for line in &expected_lines {
+        if !actual_lines.contains(line) {
+            eprintln!("-{line}");
+        }
+    }
+    for line in &actual_lines {
+        if !expected_lines.contains(line) {
+            eprintln!("+{line}");
+        }
+    }
+    false
+}
+
+/// The Linux install-time plugin build profile, one case per phase
+/// (`docs/design/plugins/3_install_time_build.md` §3.2–§3.3).
+#[cfg(target_os = "linux")]
+const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
+    ("plugin_build_fetch", BuildPhaseNetwork::Https),
+    ("plugin_build_offline", BuildPhaseNetwork::None),
+];
 
 fn profile(name: &str, read: Vec<String>, modify: Vec<String>) -> ResolvedFsProfile {
     ResolvedFsProfile {

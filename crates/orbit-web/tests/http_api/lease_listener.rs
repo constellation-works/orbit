@@ -36,6 +36,11 @@ const SUN_PATH_BYTES: usize = 108;
 const UNKNOWN_SECRET: &str =
     "orbl_0000000000000000000000000000000000000000000000000000000000000000";
 
+/// `sun_path` size with the NUL: 104 bytes on macOS, 108 on Linux. A socket
+/// path must be shorter than this.
+#[cfg(target_os = "macos")]
+const SUN_PATH_BYTES: usize = 104;
+
 /// A scripted intake socket that owns its accept loop and every connection
 /// handler. `serve` runs once per accepted connection on its own thread.
 /// Dropping the guard stops accepting, shuts down each open connection, and
@@ -153,11 +158,6 @@ pub(super) fn mint(
         minted.secret.expose_secret().to_string(),
     )
 }
-
-/// `sun_path` size with the NUL: 104 bytes on macOS, 108 on Linux. A socket
-/// path must be shorter than this.
-#[cfg(target_os = "macos")]
-const SUN_PATH_BYTES: usize = 104;
 
 /// An intake socket path that fits `sun_path`, and the directory that holds
 /// it, which the caller keeps alive. A managed run's TMPDIR can be too long for
