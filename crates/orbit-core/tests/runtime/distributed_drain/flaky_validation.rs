@@ -1,7 +1,7 @@
 //! Accepted claimed evidence uses the same owner friction dedupe as local delivery.
 
 use super::*;
-use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
+use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_store::contract::FrictionListFilter;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};

@@ -13,7 +13,7 @@ use super::claim_holders::ClaimHolders;
 use crate::OrbitRuntime;
 use crate::application::contracts::PublishedDelivery;
 use crate::application::job::JobAdmissionPort;
-use crate::runtime::task::locks::ReservationOutcome;
+use crate::runtime::stored::locks::ReservationOutcome;
 
 impl JobAdmissionPort for OrbitRuntime {
     fn preview_named_ship(&self, input: &Value) -> Result<Value, OrbitError> {

@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Proposed mechanics for path leases: lease rows on the owner's reservation store and lock index, advisory and hard modes, a priority queue, TTL plus heartbeat and release on landing, durable notices read by poll or SSE, MCP/CLI/REST surfaces, and a lease-only token listener, run as its own OS user with credential code in an orbit-auth crate, so several people and their agents coordinate on one owner."
 tags: [path-leases, locks, admission, reservations, notifications, authentication]
-paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/repository/task_reservation/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**", "crates/orbit-auth/**"]
+paths: ["crates/orbit-runtime/src/stored/locks/**", "crates/orbit-store/src/repository/task_reservation/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**", "crates/orbit-auth/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
 related_artifacts: []
 ---
@@ -31,13 +31,13 @@ are implemented; preemption remains later work. §1 is what exists today and wha
 - **Task reservations.** `orbit.task.locks.reserve` reserves either a task's surface or a list of
   file selectors, with `ttl_seconds` (default 1,800, at most 86,400), and
   `orbit.task.locks.release` releases one by its `reservation-<id>`
-  ([command.rs](../../../crates/orbit-runtime/src/task/locks/command.rs)). A refused reserve is
+  ([command.rs](../../../crates/orbit-runtime/src/stored/locks/command.rs)). A refused reserve is
   written to the denial log that `orbit codebase` and the pilot scorecard read; 832 such denials
   were recorded on ws_orbit between 2026-10-11 and 2026-10-25, some naming a `reservation` rather
   than a task as the holder.
 - **Task context locks.** An `in-progress` or `review` task holds its declared context unless it
   is tagged `no-diff-expected` (`holds_context_lock` in
-  [index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs)). Admission for local waves and
+  [index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs)). Admission for local waves and
   owner pull reads the same index.
 - **Path policy.** `workflow.unlocked_context_paths` takes no lock and `workflow.generated_paths`
   regenerates a conflicting file at landing ([CONFIG.md](../../CONFIG.md)). The conflict budget
@@ -101,7 +101,7 @@ The migration is additive. A binary without it reads every lease row, advisory o
 exclusive file reservation and refuses overlapping reserves (checked against 0.33.0, the
 previous release), and the rows it writes read here as hard task reservations.
 
-**Runtime operations.** `crates/orbit-runtime/src/task/locks/lease/` holds one function per
+**Runtime operations.** `crates/orbit-runtime/src/stored/locks/lease/` holds one function per
 verb: `request` in `lease/request.rs`, and `renew`, `release`, `show`, `list`, `check` and
 `notices` in `lease/operation.rs`, each refused naming `lease.enabled` while it is false, and
 `lease/queue.rs` holds `expand` and the grant pass.

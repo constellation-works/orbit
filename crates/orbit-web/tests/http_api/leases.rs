@@ -1,8 +1,8 @@
-use orbit_core::runtime::task::locks::lease;
+use orbit_core::runtime::stored::locks::lease;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, error_code, isolated, json_ok, leases_enabled};
-use orbit_core::runtime::task::locks::lease::install_test_lease_policy;
+use orbit_core::runtime::stored::locks::lease::install_test_lease_policy;
 
 #[test]
 fn notice_poll_and_sse_resume_share_durable_sequence() {

@@ -92,6 +92,7 @@ pub(crate) struct Operation {
     target_id: Option<String>,
     job_run_id: Option<String>,
     native_operator_refusal: Option<&'static str>,
+    audit_role: Option<&'static str>,
 }
 
 impl Operation {
@@ -103,6 +104,7 @@ impl Operation {
         let spec = verb.spec();
         Self {
             native_operator_refusal: None,
+            audit_role: None,
             job_run_id: None,
             command: noun.cli_name,
             subcommand: spec.cli_path.join("-"),
@@ -121,6 +123,7 @@ impl Operation {
         Self {
             command,
             native_operator_refusal: None,
+            audit_role: None,
             job_run_id: None,
             subcommand: subcommand.into(),
             tool_name: None,
@@ -148,6 +151,12 @@ impl Operation {
     ) -> Self {
         self.target_type = target_type;
         self.target_id = target_id;
+        self
+    }
+
+    /// Preserve the command's explicit audit attribution.
+    pub(crate) fn audit_role(mut self, role: &'static str) -> Self {
+        self.audit_role = Some(role);
         self
     }
 
@@ -328,7 +337,10 @@ impl<'a> AuditGuard<'a> {
             tool_name: None,
             target_type: self.operation.target_type.map(ToOwned::to_owned),
             target_id: self.operation.target_id.clone(),
-            role: runtime.actor().audit_role().to_string(),
+            role: self
+                .operation
+                .audit_role
+                .map_or_else(|| runtime.actor().audit_role().to_string(), str::to_owned),
             status: self.status,
             exit_code: self.exit_code,
             duration_ms: self.start.elapsed().as_millis() as i64,
@@ -422,4 +434,102 @@ fn dashboard_caller(operator_session: bool) -> CallerCapabilities {
     // (an SSH `-tt` tunnel, or a terminal-started `web serve`) stays
     // read-only, and a granted write is audited as the session [ORB-23047].
     CallerCapabilities::resolve(&CallerEnvelope::dashboard_session(&session))
+}
+
+/// The arguments and authenticated session of a governed dashboard write.
+pub(super) struct DashboardOperation<'a> {
+    pub(super) operation: &'static GovernedOperation,
+    pub(super) target: &'a str,
+    pub(super) arguments: Value,
+    pub(super) operator_session: bool,
+    pub(super) host: Option<String>,
+}
+
+/// Run a dashboard operation and record its one dashboard audit row.
+/// A missing target carries the same message as the dashboard response.
+pub(super) fn run_dashboard<T>(
+    core: &Core,
+    operation: DashboardOperation<'_>,
+    run: impl FnOnce() -> Result<T, Error>,
+    failure: impl FnOnce(&T) -> Option<String>,
+) -> Result<Result<T, AuthorizationDenial>, Error> {
+    let started = Instant::now();
+    let runtime = core.runtime();
+    let workspace = runtime
+        .workspace_id()
+        .unwrap_or_else(|_| runtime.shared_root().display().to_string());
+    let (result, status, provenance, capabilities, error_message) =
+        match dashboard_authorize(operation.operation, operation.operator_session) {
+            Ok(caller) => {
+                let result = run();
+                let message = match &result {
+                    Ok(value) => failure(value),
+                    Err(error) => Some(error.to_string()),
+                };
+                (
+                    result.map(Ok),
+                    if message.is_some() {
+                        AuditEventStatus::Failure
+                    } else {
+                        AuditEventStatus::Success
+                    },
+                    caller.provenance(),
+                    caller.grants().clone(),
+                    message,
+                )
+            }
+            Err(denial) => {
+                let provenance = denial.provenance;
+                let message = denial.to_string();
+                (
+                    Ok(Err(denial)),
+                    AuditEventStatus::Denied,
+                    provenance,
+                    Default::default(),
+                    Some(message),
+                )
+            }
+        };
+    let row = AuditEventInsertParams {
+        execution_id: audit_execution_id("dashboard-operations"),
+        command: "dashboard.operations".to_string(),
+        subcommand: Some(provenance.to_string()),
+        tool_name: None,
+        target_type: Some(operation.operation.id.to_string()),
+        target_id: Some(operation.target.to_string()),
+        role: "operator".to_string(),
+        status,
+        exit_code: i32::from(status != AuditEventStatus::Success),
+        duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        working_directory: runtime
+            .workspace_runtime_binding()
+            .map(|binding| binding.repo_root.display().to_string())
+            .unwrap_or_else(|| runtime.shared_root().display().to_string()),
+        arguments_json: serde_json::to_string(&operation.arguments).ok(),
+        stdout_truncated: None,
+        stderr_truncated: None,
+        error_message,
+        host: operation.host,
+        pid: std::process::id(),
+        session_id: None,
+        workspace_id: Some(workspace),
+        caller_machine_id: None,
+        caller_machine_name: Some(String::new()),
+        process_machine_id: None,
+        process_machine_name: Some(String::new()),
+        transport: None,
+        effective_capabilities: capabilities,
+        origin_session_id: None,
+        mcp_call_id: None,
+        lease_id: None,
+        task_id: None,
+        job_run_id: None,
+        activity_id: None,
+        step_index: None,
+    };
+    if let Err(error) = runtime.record_audit_event(&row) {
+        tracing::error!(operation = operation.operation.id, target = operation.target, %error,
+            "failed to persist dashboard operation audit");
+    }
+    result
 }

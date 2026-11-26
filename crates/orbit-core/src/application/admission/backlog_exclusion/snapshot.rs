@@ -39,7 +39,7 @@ use crate::application::job::PublishedResume;
 use crate::application::job::crew_pools::{AdmissionModelAccessPass, CapturedCrewPools};
 use crate::application::task::{AdmissionProviderPass, standing_baseline_hold_from_history};
 use crate::runtime::engine::crew::CrewAllowlist;
-use crate::runtime::task::locks::{
+use crate::runtime::stored::locks::{
     active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
 

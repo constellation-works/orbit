@@ -19,21 +19,20 @@ mod holder;
 mod input;
 mod lifetime;
 mod operation;
-mod policy;
 mod queue;
 mod request;
 mod response;
 
-pub use admission::{LeaseTokenGrant, record_lease_intake_audit};
-pub use lifetime::sweep_lease_lifetimes;
-pub use operation::{check, list, notices, release, renew, renew_with_token, show};
-pub use orbit_store::contract::{LeasePrincipalClass, LeasePriority};
 #[cfg(feature = "test-support")]
-pub use policy::install_test_lease_policy;
-pub use policy::{
+pub use crate::base::config::lease_policy::install_test_lease_policy;
+pub use crate::base::config::lease_policy::{
     LEASE_AGING_MINUTES, LEASE_DEFAULT_MODE, LEASE_HARD_ALLOWED_AGENT, LEASE_HARD_ALLOWED_HUMAN,
     LEASE_MAX_PRIORITY_AGENT, LEASE_MAX_PRIORITY_HUMAN, LeasePolicy, PATH_LEASES_ENABLED,
     lease_principal_class,
 };
+pub use admission::{LeaseTokenGrant, record_lease_intake_audit};
+pub use lifetime::sweep_lease_lifetimes;
+pub use operation::{check, list, notices, release, renew, renew_with_token, show};
+pub use orbit_store::contract::{LeasePrincipalClass, LeasePriority};
 pub use queue::{expand, expand_with_token};
 pub use request::{request, request_with_token};

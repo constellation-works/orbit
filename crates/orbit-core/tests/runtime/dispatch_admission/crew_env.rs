@@ -102,7 +102,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
     let run = runtime.show_job_run_observed(&drain).unwrap();
     let shown = orbit_core::application::job::job_run_to_json(&run, Some(&state));
     assert_eq!(shown["crew_pool_warnings"], readiness["crew_pool_warnings"]);
-    let frictions = orbit_core::runtime::friction::WorkspaceFrictions::open(
+    let frictions = orbit_core::runtime::stored::friction::WorkspaceFrictions::open(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
         runtime.data_root().join("frictions"),
@@ -646,7 +646,7 @@ model = "fixture-beta"
         2,
         "the run still reports both sustained quota exclusions"
     );
-    let frictions = orbit_core::runtime::friction::WorkspaceFrictions::open(
+    let frictions = orbit_core::runtime::stored::friction::WorkspaceFrictions::open(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
         runtime.data_root().join("frictions"),
@@ -742,7 +742,7 @@ model = "fixture-beta"
         2,
         "the run still reports both intentional restrictions"
     );
-    let frictions = orbit_core::runtime::friction::WorkspaceFrictions::open(
+    let frictions = orbit_core::runtime::stored::friction::WorkspaceFrictions::open(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
         runtime.data_root().join("frictions"),
@@ -824,7 +824,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
             && warning.contains("outside this drain's allowed window")),
         "[ORB-25555] the intentional restriction stays visible beside the failure: {warnings:?}"
     );
-    let frictions = orbit_core::runtime::friction::WorkspaceFrictions::open(
+    let frictions = orbit_core::runtime::stored::friction::WorkspaceFrictions::open(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
         runtime.data_root().join("frictions"),

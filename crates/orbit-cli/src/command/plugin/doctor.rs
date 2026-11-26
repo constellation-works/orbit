@@ -1,13 +1,20 @@
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 use orbit_types::plugin::PluginStatus;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
 use crate::output::color::{Domain, Role};
 
-pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
-    let results = runtime.plugin_doctor()?;
-    let stale_callbacks = runtime.stale_plugin_callback_session_count()?;
+pub(super) fn execute_doctor(core: &Core) -> CommandOut {
+    let Outcome::Diagnosed {
+        results,
+        stale_callbacks,
+        issues,
+    } = exec(core, Command::Doctor)?
+    else {
+        unreachable!("plugin command returned an unrelated outcome");
+    };
 
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
@@ -17,18 +24,13 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("NEXT STEP"),
     ])
     .empty_message("no plugins installed or pinned");
-    let mut issues = 0;
     let mut switched_off = std::collections::BTreeSet::new();
     for result in &results {
         // A plugin switched off in this workspace, or a build the operator
         // consented to, is their choice: shown, so the state stays visible,
         // but not counted as a finding.
-        if result.intentional {
-            if result.status == PluginStatus::Disabled {
-                switched_off.insert(&result.plugin);
-            }
-        } else if !result.message.is_empty() {
-            issues += 1;
+        if result.intentional && result.status == PluginStatus::Disabled {
+            switched_off.insert(&result.plugin);
         }
         table.add_row(vec![
             Cell::new(&result.plugin),
@@ -48,7 +50,6 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
         })
         .collect::<Vec<_>>();
     if stale_callbacks > 0 {
-        issues += 1;
         let message = format!(
             "{stale_callbacks} stale plugin callback session record(s); they will be removed when a plugin backend starts"
         );

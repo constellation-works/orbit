@@ -1,15 +1,10 @@
 # Changelog — STD-01 CLI surface
 
-Version history of [STD-01](STD-01.md). Adopting repos pin the `version:` in its
-frontmatter as `STD-01@<version>`; a version changes only when a rule is added,
-removed or changed in meaning.
+Version history of [STD-01](STD-01.md). Adopting repos pin the `version:` in its frontmatter as `STD-01@<version>`; a version changes only when a rule is added, removed or changed in meaning.
 
 - **v4 (2026-11-25):** Clarify command grammar for top-level cross-resource and tool-wide verbs (scribe standard-5).
 - **v3 (2026-11-25):** v3 (2026-11-24): R25 also covers environment variables and configuration keys. Each environment variable a program reads is one documented constant, the environment is read only through those constants, and the usage doc's table is generated from that list (scribe standard-17, ORB-28029).
-- **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-01.md`
-  keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*,
-  *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and
-  `CHANGELOG.md`. No rule changed.
+- **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-01.md` keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*, *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and `CHANGELOG.md`. No rule changed.
 - **v2 (2026-09-26):**
   - Added:
     - R26: argument ids never shadow a global argument, as a clap note (C1).
@@ -26,18 +21,12 @@ removed or changed in meaning.
     - A new "Inputs and effects" cluster.
   - Clarified:
     - R3 and R35: renaming or removing a flag is explicitly a breaking change.
-    - R3 and R7: `--json` is the one sanctioned shorthand for `--format json`, and a
-      conflicting pair is a usage error checked after parse.
+    - R3 and R7: `--json` is the one sanctioned shorthand for `--format json`, and a conflicting pair is a usage error checked after parse.
     - R10: a top-level shape change is breaking.
-    - R15 and R17: the width comes from the one resolver, no width means no truncation,
-      `COLUMNS`-only is compliant, and clap is built without `color`/`wrap_help`.
-    - R16: it governs list-shaped output, a `show` detail view MAY be key-value, and an
-      empty list is `[]` under `--json` and nothing under NDJSON.
-    - R19: a usage error may be multi-line and plain when the mode cannot yet be
-      resolved; pre-scanning the raw arguments is how to get JSON usage errors.
-  - Editorial: `###` cluster headings, the shared "Applies to" form, and deviation
-    examples using `STD-01@<version>`.
-  - Sources: ORB-13088 (candidate disposition), ORB-13117 (template-author feedback),
-    ORB-13118 (skill-author feedback).
+    - R15 and R17: the width comes from the one resolver, no width means no truncation, `COLUMNS`-only is compliant, and clap is built without `color`/`wrap_help`.
+    - R16: it governs list-shaped output, a `show` detail view MAY be key-value, and an empty list is `[]` under `--json` and nothing under NDJSON.
+    - R19: a usage error may be multi-line and plain when the mode cannot yet be resolved; pre-scanning the raw arguments is how to get JSON usage errors.
+  - Editorial: `###` cluster headings, the shared "Applies to" form, and deviation examples using `STD-01@<version>`.
+  - Sources: ORB-13088 (candidate disposition), ORB-13117 (template-author feedback), ORB-13118 (skill-author feedback).
 - **v1 (2026-09-26):** initial publication, R1–R25.
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).

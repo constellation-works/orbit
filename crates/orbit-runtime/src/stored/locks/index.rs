@@ -13,9 +13,9 @@ use orbit_types::task::{
 };
 use serde::Serialize;
 
-use super::unlocked::UnlockedContextPaths;
 use crate::RuntimeKernel;
-use crate::task::{DeclaredContextFiles, declared_context_files};
+use crate::base::config::unlocked::UnlockedContextPaths;
+use crate::base::path::declared_context::{DeclaredContextFiles, declared_context_files};
 
 /// An `in-progress` or `review` task holds its context against other work,
 /// unless it carries [`NO_DIFF_EXPECTED_TAG`] [ORB-14247].

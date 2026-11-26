@@ -1,8 +1,6 @@
 # Exemplars — STD-02 Rust architecture and errors
 
-Worked examples of the rules in [STD-02](STD-02.md), as pointers into the Orbit
-codebase. Orbit is the example, not the audience: this file is optional reading, and
-useful only with an Orbit checkout.
+Worked examples of the rules in [STD-02](STD-02.md), as pointers into the Orbit codebase. Orbit is the example, not the audience: this file is optional reading, and useful only with an Orbit checkout.
 
 Paths are relative to `codebases/orbit/`.
 

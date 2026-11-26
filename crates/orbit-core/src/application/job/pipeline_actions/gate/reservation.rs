@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::JobAdmissionPort;
-use crate::runtime::task::locks::{
+use crate::runtime::stored::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, emit_expired_reservation_events,
     merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed,
     reserve_deferred_footprint, reserve_with_index, task_lock_conflicts_indexed,

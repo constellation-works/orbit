@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Design: options compared, threat model, consent schema v2 with typed field constraints, admission algorithm, office action map, audit record, migration and implementation slices for bounded application approvals"
 tags: [application-approvals, application-authority, plugins, security]
-paths: ["crates/orbit-runtime/src/application_consent/**", "crates/orbit-types/src/tool/application.rs", "crates/orbit-common/src/governance/authorization/catalog/application.rs", "crates/orbit-core/src/application/application_authority.rs", "crates/orbit-tools/src/plugin/callback/**"]
+paths: ["crates/orbit-runtime/src/host/application_consent/**", "crates/orbit-types/src/tool/application.rs", "crates/orbit-common/src/governance/authorization/catalog/application.rs", "crates/orbit-core/src/application/application_authority.rs", "crates/orbit-tools/src/plugin/callback/**"]
 related_features: [plugins, human-decision-channel, auditability, state-compatibility]
 related_artifacts: [ORB-20852, ORB-20362, ORB-20363]
 ---
@@ -30,7 +30,7 @@ paths are from that repository at `b5654763e`, written as `orbit-office/<path>`.
 ## 1. What admission does today
 
 The flow has four parts. The runtime implementation is grouped under
-`crates/orbit-runtime/src/application_consent/`: `authority.rs` owns consent and
+`crates/orbit-runtime/src/host/application_consent/`: `authority.rs` owns consent and
 revocation, `validation.rs` owns operation validation, `admission.rs` evaluates
 constraints, and `invocation.rs` owns call admission, audit, rate charging and
 witnesses. The snapshot line references below describe the original

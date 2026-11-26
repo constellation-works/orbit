@@ -70,7 +70,7 @@ pub(super) fn update(runtime: &OrbitRuntime, input: &OperationInput) -> Result<V
         let outcome = runtime.rehome_friction(&id, to_workspace, has_edits.then_some(edits))?;
         return rehome_to_json(outcome, substitutions);
     }
-    let stored = crate::runtime::friction::store_for(runtime)?
+    let stored = crate::runtime::stored::friction::store_for(runtime)?
         .update(&id, FrictionUpdateParams { rehome_to, ..edits })?;
     record_to_json_with_tag_normalizations(stored, substitutions)
 }

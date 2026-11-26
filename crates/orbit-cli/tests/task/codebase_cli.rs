@@ -272,7 +272,7 @@ fn codebase_cli_marks_the_absent_partner_in_a_path_show() {
                 ..Default::default()
             })
             .unwrap();
-        let reservation = orbit_core::runtime::task::locks::reserve(
+        let reservation = orbit_core::runtime::stored::locks::reserve(
             &runtime,
             json!({"task_ids": [task.id.to_string()], "ttl_seconds": 600}),
             None,
@@ -565,7 +565,7 @@ fn run_coupling_pairs_analytics(
                 })
                 .unwrap();
             let id = task.id.to_string();
-            let reservation = orbit_core::runtime::task::locks::reserve(
+            let reservation = orbit_core::runtime::stored::locks::reserve(
                 &runtime,
                 json!({"task_ids": [id], "ttl_seconds": 600}),
                 None,
@@ -577,7 +577,7 @@ fn run_coupling_pairs_analytics(
             // History keeps released rows, so release at once: later pairs
             // may share a file without tripping the live lock.
             let reservation_id = reservation["reservation_id"].as_str().unwrap().to_string();
-            let released = orbit_core::runtime::task::locks::release(
+            let released = orbit_core::runtime::stored::locks::release(
                 &runtime,
                 json!({ "reservation_id": reservation_id }),
                 None,

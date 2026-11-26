@@ -119,7 +119,7 @@ where
     // backend did with `secret_updates`: names and applied/refused only.
     let _ = take_delivered_plugin_secret_names();
     let _ = take_plugin_secret_updates();
-    let _ = crate::runtime::application_authority::take_application_audit();
+    let _ = crate::runtime::host::application_consent::take_application_audit();
     // Minted before the tool runs so a callback it binds can record this
     // row's id as `entry_execution_id`. The frame pops when this dispatch
     // ends, including when the tool fails.
@@ -128,8 +128,8 @@ where
     // copy is kept for the refusal row alone.
     let refused_input = input.clone();
     let result = dispatch(input);
-    let application = crate::runtime::application_authority::take_application_audit();
-    crate::runtime::application_authority::finish_application_dispatch();
+    let application = crate::runtime::host::application_consent::take_application_audit();
+    crate::runtime::host::application_consent::finish_application_dispatch();
     let plugin_secrets = take_delivered_plugin_secret_names();
     let plugin_secret_updates = take_plugin_secret_updates();
     let plugin = take_callback_plugin_provenance().or(plugin);

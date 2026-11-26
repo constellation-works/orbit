@@ -1,8 +1,9 @@
 use clap::Args;
+use orbit_core::Core;
 use orbit_core::adapter::command::PluginEnableOptions;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::plugin::{Command, Outcome, exec};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::support;
 
@@ -40,37 +41,32 @@ pub struct PluginEnableArgs {
     pub scope: PluginScope,
 }
 
-impl Execute for PluginEnableArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        if self.scope == PluginScope::Workspace && !self.grants.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "--grant is only valid with host scope; workspace scope never records grants"
-                    .to_string(),
-            ));
-        }
-
-        let (result, mut text) = match self.scope {
-            PluginScope::Host => {
-                let options = PluginEnableOptions {
+impl ExecuteCore for PluginEnableArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Enabled(result) = exec(
+            core,
+            Command::Enable {
+                name: self.name,
+                options: PluginEnableOptions {
                     grants: self.grants,
                     force: self.force,
-                };
-                let result = runtime.enable_plugin(&self.name, &options)?;
-                let text = format!(
-                    "Enabled plugin '{}' v{}. Its tools register on the next Orbit command.",
-                    result.summary.name, result.summary.version
-                );
-                (result, text)
-            }
-            PluginScope::Workspace => {
-                let result = runtime.enable_plugin_in_workspace(&self.name, self.force)?;
-                let text = format!(
-                    "Enabled plugin '{}' v{} in this workspace. Its tools register here on the \
-                     next Orbit command.",
-                    result.summary.name, result.summary.version
-                );
-                (result, text)
-            }
+                },
+                workspace: self.scope == PluginScope::Workspace,
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
+        let mut text = match self.scope {
+            PluginScope::Host => format!(
+                "Enabled plugin '{}' v{}. Its tools register on the next Orbit command.",
+                result.summary.name, result.summary.version
+            ),
+            PluginScope::Workspace => format!(
+                "Enabled plugin '{}' v{} in this workspace. Its tools register here on the \
+                 next Orbit command.",
+                result.summary.name, result.summary.version
+            ),
         };
         let summary = &result.summary;
         support::append_agent_tool_consent_text(&mut text, summary);

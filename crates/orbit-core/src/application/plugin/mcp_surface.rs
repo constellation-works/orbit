@@ -265,3 +265,25 @@ fn ensure_cached_host<'a>(
     }
     Ok(host)
 }
+
+/// This host's config with no workspace layered over it: `~/.orbit/config.toml`
+/// alone, read via `ConfigRoots::global_only`. Every host-global plugin
+/// surface (CLI groups, MCP `tools/list`, global tool execution) resolves its
+/// `[plugins.<ns>]` sections and audit db path from this, never a bare
+/// `BTreeMap::new()`, so a schema-required key set only in `config.toml`
+/// still lets the plugin load here exactly as it does under a workspace
+/// runtime (design §1, §4.7).
+pub(crate) fn global_only_config(
+    global_root: &Path,
+) -> Result<orbit_config::ResolvedConfig, OrbitError> {
+    global_only_config_with_env(&orbit_common::Env::capture(), global_root)
+}
+
+/// Same as [`global_only_config`], using the caller-supplied environment
+/// snapshot rather than recapturing the ambient process environment.
+pub(crate) fn global_only_config_with_env(
+    env: &orbit_common::Env,
+    global_root: &Path,
+) -> Result<orbit_config::ResolvedConfig, OrbitError> {
+    orbit_config::ResolvedConfig::load(env, &orbit_config::ConfigRoots::global_only(global_root))
+}

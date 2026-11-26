@@ -255,15 +255,15 @@ The plugin has no setting of its own.
 
 ## Phasing
 
-1. **Codex Desktop trial** ([ORB-28913], done). No code. It passed, so phase 4 is built.
-2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914]);
+1. **Codex Desktop trial** ([ORB-28913], done). No code. It passed, so phase 4 may be built.
+2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914], proposed);
    `GET /t/<id>`, both forms of `GET /r/<id>` and every redirect naming the host
-   ([ORB-28915]).
-3. **Replace the mod** ([ORB-28916]). Move the linking function and its cases into
+   ([ORB-28915], proposed).
+3. **Replace the mod** ([ORB-28916], proposed, blocked by phase 2). Move the linking function and its cases into
    `plugin/hooks/mod`, add the run pattern, read the prefixes and the address at session
    start, delete the rest, update the docs.
-4. **A result's `url` and the skill line** ([ORB-28917]).
-5. **Messages from other sessions in Claude Code, a trial first** ([ORB-28918]). A
+4. **A result's `url` and the skill line** ([ORB-28917], proposed, blocked by the trial and phase 2).
+5. **Messages from other sessions in Claude Code, a trial first** ([ORB-28918], proposed, blocked by phase 3). A
    peer's message, a task notification and hook feedback arrive as user rows, and their
    ids stay plain. The engine documents an assistant message's text as markdown and a
    user row's as printable text. The trial: rewrite a user row's text with a markdown

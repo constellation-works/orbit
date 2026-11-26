@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::color::Domain;
 
 #[derive(Args)]
@@ -16,9 +17,18 @@ pub struct PluginSyncArgs {
     pub grants: Vec<String>,
 }
 
-impl Execute for PluginSyncArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let outcomes = runtime.sync_plugins(self.dry_run, &self.grants)?;
+impl ExecuteCore for PluginSyncArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Synced(outcomes) = exec(
+            core,
+            Command::Sync {
+                dry_run: self.dry_run,
+                grants: self.grants,
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let records = outcomes
             .iter()
             .map(|outcome| {

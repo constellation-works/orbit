@@ -1,15 +1,10 @@
 # Machine checks — STD-07 UI and UX
 
-The gate that enforces each rule in [STD-07](STD-07.md), or `review-only`. Ship a change
-with the gate its rule names, or say it is review-only.
+The gate that enforces each rule in [STD-07](STD-07.md), or `review-only`. Ship a change with the gate its rule names, or say it is review-only.
 
-The automated gates are Orbit's UI rule set, `scripts/ux-rules/ui/*.mjs`. It runs by hand
-with `node scripts/ux-rules/run.mjs --surface ui` against a live URL or a fixture, and in
-the QA full sweep's `ux-measurement-browser` scenario. A project without that runner does
-the same review by hand at 375px, 768px and 1440px in each theme it ships.
+The automated gates are Orbit's UI rule set, `scripts/ux-rules/ui/*.mjs`. It runs by hand with `node scripts/ux-rules/run.mjs --surface ui` against a live URL or a fixture, and in the QA full sweep's `ux-measurement-browser` scenario. A project without that runner does the same review by hand at 375px, 768px and 1440px in each theme it ships.
 
-The principles (P1–P8) have no gate of their own. They are checked through the rules each
-one lists and, for a case no rule covers, in review, citing `STD-07 §Pn`.
+The principles (P1–P8) have no gate of their own. They are checked through the rules each one lists and, for a case no rule covers, in review, citing `STD-07 §Pn`.
 
 | Rule | Gate |
 |---|---|

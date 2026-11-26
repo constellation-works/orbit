@@ -8,11 +8,14 @@ use super::record::record_to_json;
 use crate::OrbitRuntime;
 
 pub(super) fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    show_in(&crate::runtime::friction::store_for(runtime)?, input)
+    show_in(
+        &crate::runtime::stored::friction::store_for(runtime)?,
+        input,
+    )
 }
 
 fn show_in(
-    store: &crate::runtime::friction::WorkspaceFrictions,
+    store: &crate::runtime::stored::friction::WorkspaceFrictions,
     input: &OperationInput,
 ) -> Result<Value, OrbitError> {
     let id = input.required_string("id")?;

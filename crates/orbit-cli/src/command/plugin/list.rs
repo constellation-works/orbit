@@ -1,7 +1,8 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::color::Domain;
 
 use super::support;
@@ -11,9 +12,11 @@ use super::support::{host_state, plugin_record, state_reason};
 #[derive(Args)]
 pub struct PluginListArgs {}
 
-impl Execute for PluginListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let plugins = runtime.list_plugins()?;
+impl ExecuteCore for PluginListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Listed(plugins) = exec(core, Command::List)? else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let records = plugins.iter().map(plugin_record).collect::<Vec<_>>();
 
         use crate::output::table::{Column, Table};

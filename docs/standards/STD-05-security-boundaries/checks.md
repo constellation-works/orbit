@@ -1,7 +1,6 @@
 # Machine checks — STD-05 Security boundaries
 
-The gate that enforces each rule in [STD-05](STD-05.md), or `review-only`. Ship a change
-with the gate its rule names, or say it is review-only.
+The gate that enforces each rule in [STD-05](STD-05.md), or `review-only`. Ship a change with the gate its rule names, or say it is review-only.
 
 Each gate below is real and can be adopted. "Orbit:" says what Orbit runs today.
 

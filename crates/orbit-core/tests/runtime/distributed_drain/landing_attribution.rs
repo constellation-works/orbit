@@ -4,7 +4,7 @@
 use super::*;
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
+use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::{HandoffLandingStep, HandoffLandingUpdate, TaskAutomationUpdate};
 use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::FrictionStatus;

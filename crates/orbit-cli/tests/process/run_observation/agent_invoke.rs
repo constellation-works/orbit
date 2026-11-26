@@ -445,7 +445,7 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
     }
     let usage = serde_json::to_value(
         runtime
-            .managed_execution_cost(orbit_core::runtime::cost::MetricsWindow::Month)
+            .managed_execution_cost(orbit_core::runtime::run::cost::MetricsWindow::Month)
             .unwrap(),
     )
     .unwrap();

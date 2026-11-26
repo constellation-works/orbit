@@ -2,8 +2,8 @@
 title: Fleet Notices — Overview
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-15
-last_validated: 2026-11-15
+updated_date: 2026-11-26
+last_validated: 2026-11-26
 status: Draft
 stage: shipped
 next: "—"
@@ -106,12 +106,12 @@ Notices view and the `notice_open` attention kind ([2_design.md §8](./2_design.
 | Follower CLI owner routing | [host_route.rs](../../../crates/orbit-cli/src/command/host_route.rs) | [ORB-21214] |
 | Cross-workspace closure sweep | [sweep/tick.rs](../../../crates/orbit-core/src/application/routines/sweep/tick.rs) | [ORB-21214] |
 | Slices and dependencies | [2_design.md §8](./2_design.md#8-slices) | [ORB-21207] |
-| Proposed client: Orbit Office scribe `#board` routing | — (separate repository) | [ORB-21208] |
+| Proposed client: Orbit Office scribe `#board` routing, parked as someday work | — (separate repository) | [ORB-21208] |
 
 ## Task References
 
 - [ORB-21207] — designed fleet notices and filed the implementation slices
-- [ORB-21208] — proposes Orbit Office scribe `#board` routing to the notice tools
+- [ORB-21208] — proposes Orbit Office scribe `#board` routing to the notice tools (someday)
 - [ORB-21164] — designed `orbit attention`, which lists open notices as a kind
 - [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset (done)
 - [ORB-21212] — slice 2: brief delivery as untrusted data (done)

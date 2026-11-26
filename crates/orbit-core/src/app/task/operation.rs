@@ -58,15 +58,15 @@ pub(super) fn dispatch(
             caller.session_context,
             &input,
         )),
-        TaskVerb::LocksList => read(crate::runtime::task::locks::list(runtime)),
-        TaskVerb::LocksReserve => read(crate::runtime::task::locks::reserve(
+        TaskVerb::LocksList => read(crate::runtime::stored::locks::list(runtime)),
+        TaskVerb::LocksReserve => read(crate::runtime::stored::locks::reserve(
             runtime,
             input.into_value(),
             caller.agent,
             caller.model,
             caller.reservation_owner,
         )),
-        TaskVerb::LocksRelease => read(crate::runtime::task::locks::release(
+        TaskVerb::LocksRelease => read(crate::runtime::stored::locks::release(
             runtime,
             input.into_value(),
             caller.agent,

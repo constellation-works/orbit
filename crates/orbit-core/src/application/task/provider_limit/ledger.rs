@@ -27,7 +27,7 @@ use orbit_types::workflow::Provider;
 
 use super::gate::reading_lifetime;
 use crate::OrbitRuntime;
-use crate::runtime::task::provider_hold::same_provider;
+use crate::runtime::run::task_coupling::provider_hold::same_provider;
 
 /// What a surface adds to a reading that undercounts.
 pub(crate) const PARTIAL_NOTE: &str = "partial: some invocations report no cost";

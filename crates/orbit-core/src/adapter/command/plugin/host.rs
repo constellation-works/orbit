@@ -1,6 +1,6 @@
 //! Host-level plugin operations that run outside of a workspace runtime.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::InstalledPlugin;
@@ -8,7 +8,7 @@ use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
 
 use crate::adapter::command::ToolEntryPoint;
-use crate::application::plugin::{self, PluginMigrateRequest};
+use crate::application::plugin::{global_only_config, global_only_config_with_env};
 use crate::application::store_opener::StoreOpener;
 use crate::runtime::plugin::discovery::{self, PluginCliGroup};
 
@@ -21,14 +21,6 @@ pub fn host_plugin_cli_groups(
     let config = global_only_config(global_root)?;
     let store = opener.open_read_only(&config.persistence.audit_db)?;
     discovery::host_plugin_cli_groups(global_root, &store, &config.plugins)
-}
-
-/// Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. No
-/// runtime is involved: this reads files and writes one.
-pub fn migrate_plugin_sidecars(
-    request: &PluginMigrateRequest,
-) -> Result<(String, Option<PathBuf>), OrbitError> {
-    plugin::migrate_plugin_sidecars(request)
 }
 
 /// MCP definitions for this host's active plugin tools.
@@ -85,26 +77,4 @@ pub fn execute_global_plugin_tool(
         session_context,
         registry,
     )
-}
-
-/// This host's config with no workspace layered over it: `~/.orbit/config.toml`
-/// alone, read via `ConfigRoots::global_only`. Every host-global plugin
-/// surface (CLI groups, MCP `tools/list`, global tool execution) resolves its
-/// `[plugins.<ns>]` sections and audit db path from this, never a bare
-/// `BTreeMap::new()`, so a schema-required key set only in `config.toml`
-/// still lets the plugin load here exactly as it does under a workspace
-/// runtime (design §1, §4.7).
-pub(crate) fn global_only_config(
-    global_root: &Path,
-) -> Result<orbit_config::ResolvedConfig, OrbitError> {
-    global_only_config_with_env(&orbit_common::Env::capture(), global_root)
-}
-
-/// Same as [`global_only_config`], using the caller-supplied environment
-/// snapshot rather than recapturing the ambient process environment.
-pub(crate) fn global_only_config_with_env(
-    env: &orbit_common::Env,
-    global_root: &Path,
-) -> Result<orbit_config::ResolvedConfig, OrbitError> {
-    orbit_config::ResolvedConfig::load(env, &orbit_config::ConfigRoots::global_only(global_root))
 }

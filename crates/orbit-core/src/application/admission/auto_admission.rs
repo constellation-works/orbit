@@ -40,7 +40,7 @@ use super::gap_fit::GapFit;
 use super::perf_lane::{needs_perf_lane, perf_lane_detail, perf_lane_holder};
 use super::unknown_footprint::{FootprintGuard, FootprintWave};
 use crate::application::job::PublishedResume;
-use crate::runtime::task::locks::{UnlockedContextPaths, lock_context_files_for_task};
+use crate::runtime::stored::locks::{UnlockedContextPaths, lock_context_files_for_task};
 
 /// The stand-in selector a perf-lane deferral names on both sides: the lane
 /// is one host-wide resource, not a path.

@@ -46,8 +46,8 @@ use crate::application::contracts::{
     CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted,
 };
 use crate::application::task::{CrewPools, TaskExperimentPort, TaskJobPort};
+use crate::runtime::run::task_coupling::provider_hold::{base_backoff, same_provider};
 use crate::runtime::run_input::non_empty;
-use crate::runtime::task::provider_hold::{base_backoff, same_provider};
 
 /// How long a reading that reported neither a reset nor its window's length
 /// counts.

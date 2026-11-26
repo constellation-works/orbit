@@ -2,11 +2,11 @@
 title: Architecture Restructure — Overview
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-25
+updated_date: 2026-11-26
 last_validated: 2026-11-25
 status: Accepted
-stage: designing
-next: "Approve and land the ratchet check [ORB-28362] and the app table [ORB-28364]"
+stage: building
+next: "Finish routing surface commands through exec: ORB-28400, then ORB-28401 to ORB-28407"
 feature: architecture-restructure
 doc_role: overview
 type: design
@@ -19,7 +19,7 @@ related_artifacts: [ORB-28318, ORB-28362, ORB-28364, ORB-27886, ORB-17906, ORB-1
 
 # Architecture Restructure — Overview
 
-Daniel approved this design on 2026-11-25; nothing in it is built yet. It describes the shape Orbit's code is moved to, a step at a time, so that five things become true: a surface (the CLI, the dashboard, the MCP server) never holds the runtime; every subject a user can name is one unit in `orbit-core` with one entry point; the runtime is four layers, and each operation names the lowest one it needs; `orbit-store` has one repository per record behind one write path; and the process environment is read in one place. It changes no behaviour, no persisted format and no crate list. It is the restructure that [the recorded STD-02 deviations](../orbit-core/4_decisions.md#standing-against-std-025-r2-r6-r18-r39r44) defer to, and it gives the handlers of [operations as data](../operations-as-data/1_overview.md) a home.
+Daniel approved this design on 2026-11-25, and the work is under way: the ratchet check, the environment capture, the store restructure and the runtime layers have landed, and the surface boundary is half done (the friction, task, run and plugin apps; [ORB-28400] is in progress and [ORB-28401] to [ORB-28407] follow). The inside of `orbit-core` and the engine host are not started. It describes the shape Orbit's code is moved to, a step at a time, so that five things become true: a surface (the CLI, the dashboard, the MCP server) never holds the runtime; every subject a user can name is one unit in `orbit-core` with one entry point; the runtime is four layers, and each operation names the lowest one it needs; `orbit-store` has one repository per record behind one write path; and the process environment is read in one place. It changes no behaviour, no persisted format and no crate list. It is the restructure that [the recorded STD-02 deviations](../orbit-core/4_decisions.md#standing-against-std-025-r2-r6-r18-r39r44) defer to, and it gives the handlers of [operations as data](../operations-as-data/1_overview.md) a home.
 
 Daniel set the direction on 2026-11-25: "I want to slowly start fixing up orbit", naming the runtime god trait, `orbit-store` on the store design the Rust CLI template now uses, and one place for environment variables; and "runtime can stay in orbit-runtime crate. and runtime is used in orbit-core, not orbit-cli". On the first draft he added: "I think we need layers of runtime. the lowest level runtime will encompass all operations. […] each layer can be thought of as bestowing certain capabilities to operations", and asked for a crate structure "clear enough to suggest this layers of runtime" [ORB-28318].
 
@@ -43,7 +43,7 @@ Daniel approved all eleven as proposed: "let's take it easy and go with your cur
 
 ## 1. Motivation
 
-Orbit's crate graph is sound: twenty crates in declared layers, enforced by `scripts/check-dependency-direction.sh`, with a machine-checked map. The problem is inside and across three of them. All counts below are from `agent-main` at `b81eca83` (2026-11-25), outside test files unless noted.
+Orbit's crate graph is sound: twenty crates in declared layers, enforced by `scripts/check-dependency-direction.sh`, with a machine-checked map. The problem is inside and across three of them. All counts below are from `agent-main` at `b81eca83` (2026-11-25), before the work began, outside test files unless noted.
 
 | What | Measured | What it costs |
 |---|---|---|
@@ -57,7 +57,7 @@ Orbit's crate graph is sound: twenty crates in declared layers, enforced by `scr
 | The environment is declared once but read everywhere | `env_vars.rs` declares 136 names and generates the reference in `docs/CONFIG.md`; there are 232 `env::var` calls in 12 crates, 88 of them through a local constant or a computed name; nothing forbids a new one | The declaration is not the only way in, so it cannot be trusted to be complete, and code far below composition reads the environment (STD-02 §R3). |
 | A command is declared in five places | the Clap enum, the `operation()` match, the help tables, 13 noun registries, and plugin manifests | Adding a command means five edits that the compiler only partly links. |
 
-Two earlier designs already point here. [Orbit core](../orbit-core/1_overview.md) made the direction `runtime ← application ← adapter` and moved the kernel into its own crate [ORB-17906]. [Operations as data](../operations-as-data/1_overview.md) made each operation's surface contract one spec [ORB-10358], and decided the remaining nouns migrate on a plan [ORB-15932]. The STD-02 standing entry [ORB-27886] then recorded seven deviations "deferred until restructure". This proposal is that restructure: it says what is behind a registry handler, and what a handler may reach.
+Two earlier designs already point here. [Orbit core](../orbit-core/1_overview.md) made the direction `runtime ← application ← adapter` and moved the kernel into its own crate [ORB-17906]; [ORB-10016] had already split the CLI-facing command layer into `orbit-cmd`. [Operations as data](../operations-as-data/1_overview.md) made each operation's surface contract one spec [ORB-10358], and decided the remaining nouns migrate on a plan [ORB-15932]. The STD-02 standing entry [ORB-27886] then recorded seven deviations "deferred until restructure". This proposal is that restructure: it says what is behind a registry handler, and what a handler may reach.
 
 ## 2. Core Concepts
 
@@ -81,26 +81,26 @@ Two earlier designs already point here. [Orbit core](../orbit-core/1_overview.md
 
 ## 3. At a Glance
 
-Nothing is built, so the Task column is empty. The File column is where each concern lives after the restructure.
+The File column is where each concern lives after the restructure. The Task column names the task that builds it; a done task means the concern is in place at that path, and `—` means no task is filed yet. The table of which module becomes which app is in `docs/architecture/orbit-core.md` [ORB-28364].
 
 | Concern | File | Task |
 |---|---|---|
-| What a surface may name | `crates/orbit-core/src/lib.rs` (exports `app`, `Core`, `Error` only) | — |
-| One unit per subject | `crates/orbit-core/src/app/<subject>/` | — |
-| The entry point, authorization and audit | crates/orbit-core/src/app/exec.rs | — |
-| What every operation has | `crates/orbit-runtime/src/base/` | — |
-| The opened workspace and the store | `crates/orbit-runtime/src/stored/` | — |
-| This machine as a place work runs | `crates/orbit-runtime/src/host/` | — |
-| The run a process carries | `crates/orbit-runtime/src/run/` | — |
-| Port bindings between apps | crates/orbit-core/src/app/port.rs | — |
-| Engine host, as five traits | `crates/orbit-engine/src/context/hosts/`, implemented in `crates/orbit-core/src/adapter/engine_host/` | — |
-| Opening a `Core` for a registered workspace | `crates/orbit-cmd/src/registry/` | — |
-| Record shapes | `crates/orbit-store/src/contract/` | — |
-| One repository per record | `crates/orbit-store/src/repository/<record>.rs` | — |
-| One driver per storage mechanism, and its schema | `crates/orbit-store/src/driver/sqlite/<database>/schema/` | — |
-| The read and write facade | crates/orbit-store/src/store.rs | — |
-| Environment declaration and capture | `crates/orbit-common/src/env_vars.rs`, crates/orbit-common/src/env.rs | — |
-| Ratchet baselines | scripts/architecture-ratchet-baseline.json | — |
+| What a surface may name | `crates/orbit-core/src/lib.rs` (exports `app`, `Core`, `Error` only) | [ORB-28417] closes the exports (backlog) |
+| One unit per subject | `crates/orbit-core/src/app/<subject>/` | [ORB-28397], [ORB-28398] and [ORB-28399] built the task, run and plugin apps; [ORB-28418] to [ORB-28454] move the rest (proposed) |
+| The entry point, authorization and audit | crates/orbit-core/src/app/exec.rs | [ORB-28396] added it with `Core` and the friction app (done) |
+| What every operation has | `crates/orbit-runtime/src/base/` | [ORB-28388] laid it out (done) |
+| The opened workspace and the store | `crates/orbit-runtime/src/stored/` | [ORB-28388] laid it out (done) |
+| This machine as a place work runs | `crates/orbit-runtime/src/host/` | [ORB-28389] laid it out (done) |
+| The run a process carries | `crates/orbit-runtime/src/run/` | [ORB-28389] laid it out (done) |
+| Port bindings between apps | crates/orbit-core/src/app/port.rs | [ORB-28395] empties the kernel port (backlog) |
+| Engine host, as five traits | `crates/orbit-engine/src/context/hosts/`, implemented in `crates/orbit-core/src/adapter/engine_host/` | [ORB-28408] splits `RuntimeHost` (proposed) |
+| Opening a `Core` for a registered workspace | `crates/orbit-cmd/src/registry/` | [ORB-28416] reduces `orbit-cmd` to this (backlog) |
+| Record shapes | `crates/orbit-store/src/contract/` | [ORB-28386] deleted the backend traits and closed the store (done) |
+| One repository per record | `crates/orbit-store/src/repository/<record>.rs` | [ORB-28374] to [ORB-28380] converted the records (done) |
+| One driver per storage mechanism, and its schema | `crates/orbit-store/src/driver/sqlite/<database>/schema/` | [ORB-28373], [ORB-28381], [ORB-28384] and [ORB-28385] built the schemas, drivers and shared ledger (done) |
+| The read and write facade | crates/orbit-store/src/store.rs | [ORB-28372] added `Store::read` and `Store::write` (done) |
+| Environment declaration and capture | `crates/orbit-common/src/env_vars.rs`, crates/orbit-common/src/env.rs | [ORB-28365] added the capture and [ORB-28371] banned other reads (done) |
+| Ratchet baselines | scripts/architecture-ratchet-baseline.json | [ORB-28362] added the check (done) |
 
 ## What does not change
 
@@ -113,8 +113,33 @@ Nothing is built, so the Task column is empty. The File column is where each con
 ## Task References
 
 - [ORB-28318] — carried this proposal to Daniel's approval.
-- [ORB-28362] — adds the ratchet check; the first of the 95 filed tasks (`orbit task list --tag architecture-restructure`).
-- [ORB-28364] — writes the app and unit table.
+- [ORB-28362] — added the ratchet check; the first of the filed tasks (`orbit task list --tag architecture-restructure`).
+- [ORB-28364] — wrote the app and unit table.
+- [ORB-28365] — captured the process environment once in `main`.
+- [ORB-28371] — bans environment reads outside the capture with Clippy.
+- [ORB-28372] — added `Store::read` and `Store::write`.
+- [ORB-28373] — moved the `orbit.db` schema steps to one module per table.
+- [ORB-28374] — converted six small records to repositories, the first of seven record conversions.
+- [ORB-28380] — converted the job run record, the last of those conversions.
+- [ORB-28381] — gave the task index its own SQLite driver.
+- [ORB-28384] — moved `authority.db` under `orbit-store`.
+- [ORB-28385] — shared one migration ledger across the SQLite files.
+- [ORB-28386] — deleted the store's backend traits and closed it.
+- [ORB-28388] — laid out the base and stored layers of `orbit-runtime`.
+- [ORB-28389] — laid out its host and run layers.
+- [ORB-28395] — will empty the kernel's `ApplicationPort`.
+- [ORB-28396] — added `Core`, `exec` and the friction app.
+- [ORB-28397] — routed task commands through `app::task::exec`.
+- [ORB-28398] — routed run and job commands through `app::run`.
+- [ORB-28399] — routed plugin commands through `app::plugin`.
+- [ORB-28400] — is routing workspace commands through `app::workspace`.
+- [ORB-28401] — will route config, skill and audit commands through `exec`.
+- [ORB-28407] — will remove authorization and audit from the CLI entry, the last task of the CLI family.
+- [ORB-28408] — will split `RuntimeHost` into five traits.
+- [ORB-28416] — will reduce `orbit-cmd` to opening a `Core`.
+- [ORB-28417] — will close `orbit-core`'s exports to `app`, `Core` and `Error`.
+- [ORB-28418] — will move agent operations into `app::agent`, the first of the first-wave moves.
+- [ORB-28454] — will end pass B by narrowing the remaining flows to `&Run`.
 - [ORB-27886] — recorded Orbit's standing against STD-02@5 and the deviations deferred until a restructure.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — started the planned noun-by-noun migration to the operation registry.

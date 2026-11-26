@@ -29,7 +29,7 @@ impl OrbitRuntime {
         dispatch_effort::backfill_dispatch_effort(
             &self.sqlite_store()?,
             &workspace_id,
-            orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS,
+            orbit_runtime::run::cost::IMPLEMENT_INVOCATION_IDS,
         )
     }
 }

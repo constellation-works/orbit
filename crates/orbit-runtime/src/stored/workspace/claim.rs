@@ -38,7 +38,7 @@ use serde_json::{Value, json};
 
 use crate::RuntimeKernel;
 use crate::stored::audit::coordination::{CoordinationAuditEvent, record_coordination_audit_event};
-use crate::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
+use crate::stored::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
 /// Environment fallback for the holder's token, so an operator shell does not
 /// have to repeat `--claim-token` on every dispatch. An explicit argument always

@@ -7,7 +7,7 @@
 //! delivery tail (F2026-07-121 / F2026-07-122):
 //!
 //! 1. **Blocked tasks.** A terminal run failure or interruption blocks every
-//!    coupled task (`runtime::task::block_on_run_failure`; `workflow_run_failed`
+//!    coupled task (`runtime::run::task_coupling::block_on_run_failure`; `workflow_run_failed`
 //!    or `workflow_run_interrupted`). The run's own failure handoff can block
 //!    the task first (`pr_failure_handoff`, `pr_conflict_blocked`,
 //!    `validation_environment_blocked`, `review_gate_escalation`), and

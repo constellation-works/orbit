@@ -13,13 +13,16 @@ use crate::OrbitRuntime;
 use crate::application::search::whitespace_query_note;
 
 pub(super) fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    list_in(&crate::runtime::friction::store_for(runtime)?, input)
+    list_in(
+        &crate::runtime::stored::friction::store_for(runtime)?,
+        input,
+    )
 }
 
 /// Translate the wire filter into the store filter, including the page, so
 /// SQLite decides which rows exist before any body is decoded.
 fn list_in(
-    store: &crate::runtime::friction::WorkspaceFrictions,
+    store: &crate::runtime::stored::friction::WorkspaceFrictions,
     input: &OperationInput,
 ) -> Result<Value, OrbitError> {
     let response_mode = input.optional_string("response_mode")?;

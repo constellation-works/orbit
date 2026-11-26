@@ -2,7 +2,7 @@
 //! must land exactly between a committed transition into done and its
 //! post-commit effects, which no public boundary can time deterministically.
 
-use crate::runtime::friction::WorkspaceFrictions as FrictionStore;
+use crate::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use chrono::Utc;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contract::FrictionAddParams;

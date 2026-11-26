@@ -338,7 +338,7 @@ impl OrbitRuntime {
     ) -> Plan {
         let attempt = || -> Step {
             const STEP: &str = "friction_reported";
-            let store = crate::runtime::friction::store_for(self)
+            let store = crate::runtime::stored::friction::store_for(self)
                 .map_err(|error| format!("{STEP} refused: {error}"))?;
             let (record, filed) = match friction {
                 FrictionRef::Existing(id) => (

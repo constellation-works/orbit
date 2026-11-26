@@ -14,31 +14,32 @@
 //! That is what makes a panel safe to serve to any dashboard session while
 //! the dashboard's mutations still require an operator session.
 
+use std::ffi::OsStr;
 use std::path::Path as FsPath;
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::authorization::{
-    DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE, GovernedOperation,
-};
+use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
 use orbit_core::adapter::command::{self, PluginSummary};
+use orbit_core::app::plugin::{Command, DashboardScope, DashboardToggle, Outcome, exec};
+use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 
-use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
-use super::{blocking, not_found, validate_id, workspace_label};
-use crate::state::{DashboardState, Ws};
+use super::routines::{action_capability, authorization_denied};
+use super::{blocking, not_found, validate_id};
+use crate::state::{DashboardState, PluginPanelWs, WsCore};
 
 /// Maximum serialized tool output retained or returned for one panel.
 pub(crate) const PANEL_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 
-pub(super) async fn list_plugins(State(state): State<DashboardState>, Ws(runtime): Ws) -> Response {
+pub(super) async fn list_plugins(
+    State(state): State<DashboardState>,
+    WsCore(core): WsCore,
+) -> Response {
     let operator = state.operator_session();
-    match blocking("list plugins", move || runtime.list_plugins()).await {
-        Ok(plugins) => Json(Value::Array({
+    match blocking("list plugins", move || exec(&core, Command::List)).await {
+        Ok(Outcome::Listed(plugins)) => Json(Value::Array({
             let home =
                 orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
             plugins
@@ -54,121 +55,74 @@ pub(super) async fn list_plugins(State(state): State<DashboardState>, Ws(runtime
                 .collect()
         }))
         .into_response(),
+        Ok(_) => unreachable!("list plugins returned an unrelated outcome"),
         Err(response) => *response,
     }
 }
 
 pub(super) async fn enable_plugin(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(namespace): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    mutate_plugin(state, runtime, namespace, body, true).await
+    mutate_plugin(state, core, namespace, body, true).await
 }
 
 pub(super) async fn disable_plugin(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(namespace): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    mutate_plugin(state, runtime, namespace, body, false).await
+    mutate_plugin(state, core, namespace, body, false).await
 }
 
 async fn mutate_plugin(
     state: DashboardState,
-    runtime: Arc<orbit_core::OrbitRuntime>,
+    core: std::sync::Arc<Core>,
     namespace: String,
     body: Value,
     enable: bool,
 ) -> Response {
-    let operation: &'static GovernedOperation = if enable {
-        &DASHBOARD_PLUGIN_ENABLE
-    } else {
-        &DASHBOARD_PLUGIN_DISABLE
-    };
-    let started = Instant::now();
-    let workspace = workspace_label(&runtime).await;
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        operation.id,
-        namespace.as_str(),
-        body.clone(),
-    );
-    let caller = match authorized_caller(operation, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, started).await;
-            return authorization_denied(denial);
-        }
-    };
-    let result = if let Err(message) = validate_id(&namespace) {
-        Err(orbit_core::OrbitError::InvalidInput(format!(
-            "plugin {message}"
-        )))
-    } else {
-        match body.get("scope").and_then(Value::as_str) {
-            Some("host" | "workspace") => {
-                let scope = body["scope"].as_str().unwrap_or_default().to_string();
-                let runtime_for_write = Arc::clone(&runtime);
-                let name = namespace.clone();
-                match tokio::task::spawn_blocking(move || {
-                    if !runtime_for_write
-                        .list_plugins()?
-                        .iter()
-                        .any(|plugin| plugin.name == name)
-                    {
-                        return Ok(None);
-                    }
-                    let summary = match (enable, scope.as_str()) {
-                        (true, "host") => {
-                            runtime_for_write
-                                .enable_plugin_from_dashboard(&name)?
-                                .summary
-                        }
-                        (false, "host") => runtime_for_write.disable_plugin(&name)?,
-                        (true, _) => {
-                            runtime_for_write
-                                .enable_plugin_in_workspace(&name, false)?
-                                .summary
-                        }
-                        (false, _) => runtime_for_write.disable_plugin_in_workspace(&name)?,
-                    };
-                    Ok(Some(summary))
-                })
-                .await
-                {
-                    Ok(result) => result,
-                    Err(error) => Err(orbit_core::OrbitError::Execution(format!(
-                        "plugin write panicked: {error}"
-                    ))),
-                }
-            }
-            _ => Err(orbit_core::OrbitError::InvalidInput(
+    let scope = validate_id(&namespace)
+        .map_err(|message| OrbitError::InvalidInput(format!("plugin {message}")))
+        .and_then(|_| match body.get("scope").and_then(Value::as_str) {
+            Some("host") => Ok(DashboardScope::Host),
+            Some("workspace") => Ok(DashboardScope::Workspace),
+            _ => Err(OrbitError::InvalidInput(
                 "scope must be `workspace` or `host`".to_string(),
             )),
-        }
+        });
+    let toggle = DashboardToggle {
+        namespace: namespace.clone(),
+        scope,
+        enable,
+        operator_session: state.operator_session(),
+        arguments: body,
+        host: state
+            .env()
+            .hostname()
+            .and_then(OsStr::to_str)
+            .map(str::to_string),
     };
+    let result =
+        tokio::task::spawn_blocking(move || exec(&core, Command::DashboardToggle(toggle))).await;
     match result {
-        Ok(Some(summary)) => {
-            audit.succeeded(&caller, started).await;
+        Ok(Ok(Outcome::DashboardToggled(Ok(Some(summary))))) => {
             let home =
                 orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
             Json(json!({"plugin": plugin_to_json(&summary, home.as_deref())})).into_response()
         }
-        Ok(None) => {
-            let failure = format!("plugin not found: {namespace}");
-            audit.failed(&caller, &failure, started).await;
-            not_found(failure)
+        Ok(Ok(Outcome::DashboardToggled(Ok(None)))) => {
+            not_found(format!("plugin not found: {namespace}"))
         }
-        Err(error) => {
-            let failure = error.to_string();
-            audit.failed(&caller, &failure, started).await;
-            plugin_write_error(error)
-        }
+        Ok(Ok(Outcome::DashboardToggled(Err(denial)))) => authorization_denied(denial),
+        Ok(Ok(_)) => unreachable!("dashboard plugin write returned an unrelated outcome"),
+        Ok(Err(error)) => plugin_write_error(error),
+        Err(error) => plugin_write_error(OrbitError::Execution(format!(
+            "plugin write panicked: {error}"
+        ))),
     }
 }
 
@@ -197,7 +151,7 @@ fn plugin_write_error(error: orbit_core::OrbitError) -> Response {
 
 pub(super) async fn read_panel(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    workspace: PluginPanelWs,
     Path((namespace, panel)): Path<(String, String)>,
 ) -> Response {
     // Both are manifest-shaped identifiers; rejecting anything else keeps a
@@ -211,26 +165,22 @@ pub(super) async fn read_panel(
     // asks for what a previous `/api/plugins` listed, and a plugin disabled
     // since then is exactly this answer. `map_runtime_error` only knows the
     // task/job kinds, so the projection happens here.
-    let refresh_ms = match runtime.plugin_panel_refresh_ms(&namespace, &panel) {
-        Ok(refresh_ms) => refresh_ms,
-        Err(orbit_core::OrbitError::NotFound { id, .. }) => return not_found(id),
+    let read = match exec(
+        &workspace.core,
+        Command::ReadPanel {
+            namespace: namespace.clone(),
+            panel: panel.clone(),
+        },
+    ) {
+        Ok(Outcome::Panel(read)) => read,
+        Ok(_) => unreachable!("read plugin panel returned an unrelated outcome"),
+        Err(OrbitError::NotFound { id, .. }) => return not_found(id),
         Err(error) => return super::map_runtime_error(error),
     };
-    let compute_runtime = Arc::clone(&runtime);
-    let compute_namespace = namespace.clone();
-    let compute_panel = panel.clone();
-    match state
-        .plugin_panel_memo()
-        .get_or_compute(
-            &runtime,
-            (namespace, panel),
-            Duration::from_millis(refresh_ms),
-            move || {
-                compute_runtime
-                    .read_plugin_panel(&compute_namespace, &compute_panel)
-                    .map(bounded_panel_response)
-            },
-        )
+    match workspace
+        .read_cached(&state, (namespace, panel), read.ttl(), move || {
+            read.read().map(bounded_panel_response)
+        })
         .await
     {
         Ok(served) => Json((*served.body).clone()).into_response(),

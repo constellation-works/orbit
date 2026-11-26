@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::runtime::friction::WorkspaceFrictions as FrictionStore;
+use crate::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use chrono::{TimeZone, Utc};
 use orbit_automation::delivery::stall::StallReport;
 use orbit_store::Store;

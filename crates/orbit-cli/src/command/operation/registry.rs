@@ -685,9 +685,8 @@ impl Commands {
                     }),
                     Some(false),
                     |command, context| match command {
-                        Commands::PluginGroup(invocation) => {
-                            (*invocation).execute_with_env(context.runtime()?, context.env)
-                        }
+                        Commands::PluginGroup(invocation) => invocation
+                            .execute(|args| args.execute_with_env(context.runtime()?, context.env)),
                         _ => dispatch_mismatch("PluginGroup"),
                     },
                 )
@@ -748,7 +747,12 @@ impl Commands {
                         target_id.as_deref(),
                     )),
                     None,
-                    runtime_env_dispatch!(Plugin),
+                    |command, context| match command {
+                        Commands::Plugin(command) => {
+                            command.execute_with_env(context.core()?, context.env)
+                        }
+                        _ => dispatch_mismatch("Plugin"),
+                    },
                 )
             }
             Commands::Mcp(command) => {

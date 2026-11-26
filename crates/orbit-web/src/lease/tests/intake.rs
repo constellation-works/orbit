@@ -7,7 +7,7 @@ use orbit_auth::scope::{
 };
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::runtime::task::locks::lease;
+use orbit_core::runtime::stored::locks::lease;
 use orbit_types::task::TaskStatus;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};

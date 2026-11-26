@@ -1,7 +1,8 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::support::{PluginScope, plugin_record};
 
@@ -18,27 +19,29 @@ pub struct PluginDisableArgs {
     pub scope: PluginScope,
 }
 
-impl Execute for PluginDisableArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let (summary, text) = match self.scope {
-            PluginScope::Host => {
-                let summary = runtime.disable_plugin(&self.name)?;
-                let text = format!(
-                    "Disabled plugin '{}'. Its tools leave the tool surface on the next Orbit \
-                     command.",
-                    summary.name
-                );
-                (summary, text)
-            }
-            PluginScope::Workspace => {
-                let summary = runtime.disable_plugin_in_workspace(&self.name)?;
-                let text = format!(
-                    "Disabled plugin '{}' in this workspace. Its tools leave this workspace's \
-                     tool surface on the next Orbit command; other workspaces are unchanged.",
-                    summary.name
-                );
-                (summary, text)
-            }
+impl ExecuteCore for PluginDisableArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Disabled(summary) = exec(
+            core,
+            Command::Disable {
+                name: self.name,
+                workspace: self.scope == PluginScope::Workspace,
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
+        let text = match self.scope {
+            PluginScope::Host => format!(
+                "Disabled plugin '{}'. Its tools leave the tool surface on the next Orbit \
+                 command.",
+                summary.name
+            ),
+            PluginScope::Workspace => format!(
+                "Disabled plugin '{}' in this workspace. Its tools leave this workspace's \
+                 tool surface on the next Orbit command; other workspaces are unchanged.",
+                summary.name
+            ),
         };
         Ok(Payload::detail(plugin_record(&summary), text).into())
     }

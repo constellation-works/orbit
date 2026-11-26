@@ -16,7 +16,7 @@ use orbit_types::task::Task;
 use serde_json::Value;
 
 use crate::application::contracts::PublishedDelivery;
-use crate::runtime::task::locks::ReservationOutcome;
+use crate::runtime::stored::locks::ReservationOutcome;
 
 /// The run-input key an operator's explicit ship sets, so its listing step
 /// skips the readiness gates and its gate the lock waits the operator

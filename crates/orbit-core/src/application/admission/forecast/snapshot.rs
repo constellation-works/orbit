@@ -9,7 +9,7 @@ use crate::application::admission::backlog_exclusion::{
 };
 use crate::application::admission::surface_reservation::reserves_surface;
 use crate::application::admission::unknown_footprint::{FootprintWait, footprint_waits};
-use crate::runtime::task::locks::{
+use crate::runtime::stored::locks::{
     active_task_lock_holders, lock_context_files_for_task, lock_holder_index, task_lock_overlaps,
 };
 

@@ -27,10 +27,10 @@ const FIXTURE_ROOT: &str = "ORBIT_HTTP_FIXTURE_ROOT";
 const LEASES_ENABLED: &str = "ORBIT_HTTP_LEASES_ENABLED";
 
 /// The fixed lease policy with path leases enabled.
-pub(super) fn leases_enabled() -> orbit_core::runtime::task::locks::lease::LeasePolicy {
-    orbit_core::runtime::task::locks::lease::LeasePolicy {
+pub(super) fn leases_enabled() -> orbit_core::runtime::stored::locks::lease::LeasePolicy {
+    orbit_core::runtime::stored::locks::lease::LeasePolicy {
         enabled: true,
-        ..orbit_core::runtime::task::locks::lease::LeasePolicy::FIXED
+        ..orbit_core::runtime::stored::locks::lease::LeasePolicy::FIXED
     }
 }
 
@@ -821,7 +821,7 @@ pub(super) fn serve_fixture() {
     }
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
     if std::env::var(LEASES_ENABLED).as_deref() == Ok("1") {
-        orbit_core::runtime::task::locks::lease::install_test_lease_policy(
+        orbit_core::runtime::stored::locks::lease::install_test_lease_policy(
             &root.join("repo/.orbit"),
             leases_enabled(),
         );
