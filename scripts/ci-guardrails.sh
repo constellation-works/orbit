@@ -664,6 +664,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-installer-pubkey.sh"
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
   run_guard "$repo_root/scripts/check-architecture-ratchet.py"
+  run_guard "$repo_root/scripts/check-rust-module-order.py"
   run_guard "$repo_root/scripts/check-too-many-arguments.py"
   run_guard "$repo_root/scripts/check-rust-source-order.py" --check-baseline
   run_guard "$repo_root/scripts/check-architecture-map.py"

@@ -713,7 +713,12 @@ Production Clippy checks lib and bin targets and writes no test binary nextest
 executes. The production check, folded test build and documentation use
 `clippy-driver` through [with-test-build-lint.sh](../scripts/with-test-build-lint.sh).
 Its checked modes reject compiler warnings outside the source-order baseline,
-including Cargo's replay of diagnostics for fresh units. Production code denies
+including Cargo's replay of diagnostics for fresh units. The repository
+guardrails also run [the Rust module-order check](../scripts/check-rust-module-order.py)
+on changed files in both Rust workspaces, including declarations in inactive
+`cfg` branches. See [the source-order decision](design/architecture-restructure/4_decisions.md#source-order-and-review-coverage)
+for the tests-last rule, macro expectations and literal review checks.
+Production code denies
 `clippy::disallowed_methods` through crate-root attributes that override the
 command-line `-A`. Cargo fingerprints the lint environment, so
 `cargo doc` reuses that check of every workspace library and only runs rustdoc. Their records time each
