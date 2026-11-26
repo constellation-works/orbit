@@ -10,25 +10,25 @@ Orbit is a local-first Rust coding-agent runtime. `CLAUDE.md` imports this file;
 
 ## Rules
 
-- Work only on authorized scope. In a managed activity, leave commits and delivery transitions to the pipeline. Neither implementation nor a PR request authorizes merging.
-- Get task IDs from `orbit.task.add` and change tasks with `orbit.task.update`; never invent IDs or edit task files.
+- Stay in scope. In managed activities, the pipeline owns commits and delivery transitions. Implementation and PR requests don't authorize merges.
+- Use `orbit.task.add` for IDs and `orbit.task.update` for edits. Never invent IDs or edit task files.
 - Don't add cross-crate deps without updating [`ARCHITECTURE.md`](ARCHITECTURE.md).
 - Historical ADRs are not an authority; judge from current code, tests and requirements.
 - Don't touch `CHANGELOG.md`; compiled at release time ([`RELEASING.md`](RELEASING.md)).
-- A breaking change by [`RELEASING.md` Versioning](RELEASING.md#versioning) gets the `breaking-change` task tag and one execution-summary line `Breaking: <x removed → use y>`. The implementer sets both and the reviewer confirms them; release tooling derives the version bump and changelog bullet from them.
-- Update affected docs in the same PR as the code. Stale docs are a review blocker.
-- Edit an `AGENTS.md` only when a change adds, changes or removes a rule, a command or a pointer in it; delete or rewrite a rule whose subject a change removes. New features get their own docs.
+- For [breaking changes](RELEASING.md#versioning), the implementer tags the task `breaking-change` and adds one execution-summary line `Breaking: <x removed → use y>`. The reviewer confirms both for release tooling to derive the version bump and changelog bullet.
+- Update affected docs in the code PR. Stale docs block review.
+- Edit `AGENTS.md` only to add, revise or remove an affected rule, command or pointer. Delete or rewrite rules whose subject disappears. Give new features their own docs.
 - Never list `docs/CONFIG.md` in a task's `context_files`: shared reference doc; the implementer updates it in the same PR.
-- The `doc-duties` auto-task also validates the root `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `ARCHITECTURE.md` and `RELEASING.md`; keep their `last_validated` frontmatter.
-- Report commands and outcomes at handoff — passed, failed, not run — never "tested". Never report unavailable capabilities as passing checks.
+- The `doc-duties` auto-task validates root `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `ARCHITECTURE.md` and `RELEASING.md`; keep their `last_validated` frontmatter.
+- At handoff list commands as passed, failed or not run. Never say "tested" or count unavailable checks as passes.
 
 ## Branching
 
-`main` is the release branch (release merges and hotfixes only). `agent-main` is the dev integration branch every task PR targets. Promotion and hotfixes: [`RELEASING.md`](RELEASING.md).
+Reserve `main` for release merges and hotfixes. Target every task PR at the dev integration branch, `agent-main`. For promotion and hotfixes see [`RELEASING.md`](RELEASING.md).
 
 ## Gates
 
-- No required local full-suite gate for a diff. The required PR checks (Check/Clippy/Test, Test shards 1–3) cover formatting, lint, goldens and the full suite; repair red checks through the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci).
+- Local full-suite checks are optional. Required PR checks (Check/Clippy/Test, Test shards 1–3) cover format, lint, goldens and the full suite. Fix failures in the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci).
 - Anchor focused `cargo test -p <crate> …` on `-p orbit-cli` so they share one workspace feature set and reuse the cached build.
 - Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
 - Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s; a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
@@ -51,7 +51,7 @@ Orbit is a local-first Rust coding-agent runtime. `CLAUDE.md` imports this file;
 
 ## Local Rust CodeQL
 
-Owed only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Linux-only: only Linux extracts every module; elsewhere the script exits 3 and the check is owed by a Linux run recorded as `codeql` external evidence. Procedure: [gate rules, Local Rust CodeQL](docs/agents/gate-rules.md#local-rust-codeql).
+Required only for CodeQL fixes, tasks tagged `security` or `security-review`, or edits to `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Only Linux extracts every module. Elsewhere the script exits 3. Record the required Linux run as `codeql` external evidence. See [gate rules, Local Rust CodeQL](docs/agents/gate-rules.md#local-rust-codeql).
 
 <!-- constellation-standards:begin -->
 <!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
@@ -67,6 +67,7 @@ This repository adopts these constellation standards, vendored read-only in `doc
 - `STD-06@2` — [docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md](docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md): Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated…
 - `STD-07@20` — [docs/standards/STD-07-ui-ux/STD-07.md](docs/standards/STD-07-ui-ux/STD-07.md): UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts…
 - `STD-08@3` — [docs/standards/STD-08-economy/STD-08.md](docs/standards/STD-08-economy/STD-08.md): Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors…
+- `STD-12@4` — [docs/standards/STD-12-source-style/STD-12.md](docs/standards/STD-12-source-style/STD-12.md): Source style — names, vertical spacing, line width and the formatter gate, as a language-neutral core with one profile…
 
 Follow them; they are normative. To deviate from a rule, record a decision in `docs/design/<feature>/4_decisions.md` citing `STD-nn@<version> §Rn`; never edit `docs/standards/` (`sh docs/standards/check.sh` enforces this).
 Reviewers check every change against the adopted standards and report violations as `STD-nn §Rn` with file:line evidence.
