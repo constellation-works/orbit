@@ -557,6 +557,7 @@ fn add_task(fixture: &Fixture, params: TaskAddParams) -> orbit_types::task::Task
 fn send_ok(server: &Server, method: &str, path: &str, body: Value) -> Value {
     json_ok(server.send(method, path, body))
 }
+
 fn seed_cli_failure(fixture: &Fixture, id: &str, ts: DateTime<Utc>, blob_ref: &str) {
     let payload = json!({"event_id": id, "ts": ts.to_rfc3339(), "body_kind": "cli_invocation_finished", "run_id": "jrun-friction-fixture", "step_id": "implement", "provider": id, "exit_code": 1, "stderr_blob_ref": blob_ref});
     let params = V2AuditEventInsertParams {

@@ -95,13 +95,6 @@ struct ConnectionState {
     forward_writes: Value,
 }
 
-struct ForwardedBody {
-    inner: axum::body::BodyDataStream,
-    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
-    closing: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
-    _lease: Lease,
-}
-
 impl ConnectionState {
     fn reached(
         host: String,
@@ -149,6 +142,13 @@ impl ConnectionState {
             forward_writes: Value::Null,
         }
     }
+}
+
+struct ForwardedBody {
+    inner: axum::body::BodyDataStream,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    closing: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    _lease: Lease,
 }
 
 impl Stream for ForwardedBody {

@@ -480,13 +480,6 @@ pub(crate) struct ActivitySnapshot {
     pub(crate) refusals: Vec<RefusalSnapshot>,
 }
 
-#[derive(Debug)]
-struct Refusals {
-    /// (minute since epoch, refusals) over [`REFUSAL_WINDOW`].
-    counts: VecDeque<(i64, u64)>,
-    last_at: DateTime<Utc>,
-}
-
 impl ActivitySnapshot {
     /// Devices with a request in the request window or an open stream.
     pub(crate) fn active_devices(&self) -> usize {
@@ -497,6 +490,13 @@ impl ActivitySnapshot {
     }
 }
 
+#[derive(Debug)]
+struct Refusals {
+    /// (minute since epoch, refusals) over [`REFUSAL_WINDOW`].
+    counts: VecDeque<(i64, u64)>,
+    last_at: DateTime<Utc>,
+}
+
 /// A rolling window counted in fixed-width buckets of unix time.
 #[derive(Debug, Clone, Copy)]
 struct Window {
@@ -504,16 +504,6 @@ struct Window {
     bucket_secs: i64,
     /// Seconds the window reaches back from now.
     span_secs: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct DeviceSnapshot {
-    /// The tailnet IP Serve forwarded for, or null when it sent none.
-    pub(crate) ip: Option<String>,
-    pub(crate) login: String,
-    pub(crate) open_streams: u32,
-    pub(crate) requests_15m: u64,
-    pub(crate) last_seen: DateTime<Utc>,
 }
 
 impl Window {
@@ -528,6 +518,16 @@ impl Window {
     fn is_live(self, slot: i64, now: i64) -> bool {
         slot.saturating_add(1).saturating_mul(self.bucket_secs) > now.saturating_sub(self.span_secs)
     }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DeviceSnapshot {
+    /// The tailnet IP Serve forwarded for, or null when it sent none.
+    pub(crate) ip: Option<String>,
+    pub(crate) login: String,
+    pub(crate) open_streams: u32,
+    pub(crate) requests_15m: u64,
+    pub(crate) last_seen: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]

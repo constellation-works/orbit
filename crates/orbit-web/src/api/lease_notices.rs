@@ -45,11 +45,6 @@ pub(super) struct LeaseNoticeQuery {
     limit: Option<u32>,
 }
 
-struct LeaseNoticeFrames {
-    first: Option<Value>,
-    pages: LeaseNoticePages,
-}
-
 impl LeaseNoticeQuery {
     fn input(&self) -> Value {
         let mut input = json!({"after": self.after.unwrap_or(0)});
@@ -61,6 +56,11 @@ impl LeaseNoticeQuery {
         }
         input
     }
+}
+
+struct LeaseNoticeFrames {
+    first: Option<Value>,
+    pages: LeaseNoticePages,
 }
 
 impl Stream for LeaseNoticeFrames {

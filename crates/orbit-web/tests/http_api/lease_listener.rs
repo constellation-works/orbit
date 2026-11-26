@@ -47,16 +47,6 @@ pub(super) struct ScriptedIntake {
     accept: Option<JoinHandle<()>>,
 }
 
-#[derive(Debug)]
-pub(super) struct RefusalAudit {
-    pub(super) key: String,
-    pub(super) reason: String,
-    pub(super) count: u64,
-}
-
-/// A TCP peer, its forwarding headers and the expected status.
-type ProxyCase<'a> = (&'a str, &'a [(&'a str, &'a str)], StatusCode);
-
 impl ScriptedIntake {
     pub(super) fn bind(
         path: &Path,
@@ -114,6 +104,16 @@ impl Drop for ScriptedIntake {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct RefusalAudit {
+    pub(super) key: String,
+    pub(super) reason: String,
+    pub(super) count: u64,
+}
+
+/// A TCP peer, its forwarding headers and the expected status.
+type ProxyCase<'a> = (&'a str, &'a [(&'a str, &'a str)], StatusCode);
+
 pub(super) fn provisioned_store(home: &Path) -> LeaseTokenStore {
     std::fs::create_dir_all(home).unwrap();
     std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -158,6 +158,7 @@ pub(super) fn mint(
 /// path must be shorter than this.
 #[cfg(target_os = "macos")]
 const SUN_PATH_BYTES: usize = 104;
+
 /// An intake socket path that fits `sun_path`, and the directory that holds
 /// it, which the caller keeps alive. A managed run's TMPDIR can be too long for
 /// that, so the socket takes the first of the process temp dir, `/dev/shm`
