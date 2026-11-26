@@ -182,14 +182,14 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
 
 ### The remote command gets its own app
 
-`crates/orbit-core/src/app/run/command.rs` (96 lines, [ORB-28398]) is not the run app's `Command`. That type is in `app/run/mod.rs`, where this section puts it. The file is the `orbit.command.exec` tool operation: it checks `argv`, the working directory, the claim token and the timeout, and calls the runtime's `execute_remote_command`. Read at `a802e0fcbc`. Daniel, 2026-11-26: "crates/orbit-core/src/app/run/command.rs doesn't this belong is crates/orbit-core/src/app/run/mod.rs?"; asked whether its placement should go to this design: "Yes, send it". Proposed, not built, and no task is filed.
+`crates/orbit-core/src/app/run/command.rs` (96 lines, [ORB-28398]) is not the run app's `Command`. That type is in `app/run/mod.rs`, where this section puts it. The file is the `orbit.command.exec` tool operation: it checks `argv`, the working directory, the claim token and the timeout, and calls the runtime's `execute_remote_command`. Read at `a802e0fcbc`. Daniel, 2026-11-26: "crates/orbit-core/src/app/run/command.rs doesn't this belong is crates/orbit-core/src/app/run/mod.rs?"; asked whether its placement should go to this design: "Yes, send it". Proposed and not built; filed as [ORB-28971].
 
 - **It is another subject.** Its operation is `Operation::command("command", "exec")`: the noun is `command`, not `run`, and nothing in the file reads or writes a run. Its one caller is the tool handler `adapter/tool_host/command_tools.rs`. It is in the run app only because the run app's `Command` could carry it.
 - **Why that was possible.** `run::Command<'a, T>` is an operation paired with a closure, so any flow can become a run command without the app's type saying so. The run app's operations name seven nouns today: `run` (31 operations), `job` (10), `lease` (6), `script` (5), `pipeline` (2), `command` (1) and `task` (1). `job`, `pipeline` and `script` belong to the run subject by the app table. `command` is placed here. `lease` and the one `task` operation (lock contention, in `inspection.rs`) are not decided here.
 - **Not folded into `mod.rs`.** `mod.rs` holds an app's `Command`, `Outcome`, `Error` and `exec`. A flow is a private child module, and this flow is another subject's, so moving it into `mod.rs` would put two subjects in the file that defines the run app.
 - **Proposed: `app/remote_command/`.** `mod.rs` holds `Command::Exec`, `Outcome`, `Error` and `exec`; one private child holds the flow and the `argv` check. The tool handler calls `app::remote_command::exec`. It is a move: the body does not change, and the operation keeps its names, so its governance and audit rows are the same.
 - **Why that name.** The app owns the noun `command`, as `app::doctor` owns `health`. It is not called `command` because every app has a `Command` and `adapter/command/` is the command-line adapter: a third thing of that name is how the file came to be misread. `remote_command` is what the runtime already calls the mechanism (`execute_remote_command`, `RemoteCommandParams`).
-- **Order.** The move shares `app/run/mod.rs` with [ORB-28962] and [ORB-28415], and `app/mod.rs` with the chokepoint split above [ORB-28970], so a dependency has to order it against each (§11, one writer per set of files). It needs none of them. It is cheapest before [ORB-28970]: it is 96 lines with one caller, and the split then meets one more small app instead of a seventh noun in the run app.
+- **Order.** The move shares `app/run/mod.rs` with [ORB-28962] and [ORB-28415], and `app/mod.rs` with the chokepoint split above [ORB-28970], so the shared modules change one task at a time (§11, one writer per set of files): the CLI entry [ORB-28407], then this move [ORB-28971], then the metrics types [ORB-28962], then the chokepoint split [ORB-28970], then the dashboard [ORB-28415]. The move goes early because it is 96 lines with one caller, and the split then meets one more small app instead of a seventh noun in the run app.
 
 ### `metrics` dissolves into the run app
 
@@ -506,6 +506,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28962] — will expose run metrics through `app::run`.
 - [ORB-28963] — will move core metrics into the run app.
 - [ORB-28970] — will route every app through one `exec` path and split caller, admission and audit.
+- [ORB-28971] — will move the `command.exec` flow out of `app::run` into `app::remote_command`.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
