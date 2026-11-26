@@ -1417,7 +1417,16 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                          "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
         # The unit-test ratchet's baseline is read only by its always-run
         # guard, and no CI job reads the plugin's eval cases.
-        for path in ("scripts/unit-test-baseline.json", "plugin/evals/README.md",
+        for path in ("scripts/unit-test-baseline.json",
+                     "scripts/too-many-arguments-baseline.json",
+                     "scripts/rust-source-order-baseline.tsv",
+                     "scripts/architecture-ratchet-baseline.json",
+                     "scripts/test-child-runner-allowlist.json",
+                     "scripts/test-shell-waits-allowlist.json",
+                     "scripts/dashboard-css-literals-baseline.json",
+                     "scripts/removed-dashboard-labels-allowlist.json",
+                     "scripts/removed-code-identifiers-allowlist.json",
+                     "plugin/evals/README.md",
                      "plugin/evals/file-task/graders/add-has-acceptance.md"):
             self.assertEqual(self.pull_request(path), "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
         self.assertEqual(self.pull_request("scripts/unit-test-baseline.json", "crates/orbit-store/src/lib.rs"),

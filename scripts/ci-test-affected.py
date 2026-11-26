@@ -132,6 +132,18 @@ FILE_READERS = (
     # [ORB-21420] Read only by scripts/unit-test-inventory.py --check, a
     # repository guard every CI guardrails run executes. No Cargo test reads it.
     (Path("scripts/unit-test-baseline.json"), ()),
+    # Guard baselines and allowlists read only by their scripts/check-*.py
+    # guards in CI guardrails. No Cargo test reads them; declaring () readers
+    # prevents baseline-ratchet updates alongside crate edits from forcing a
+    # full 20-crate build and full suite.
+    (Path("scripts/too-many-arguments-baseline.json"), ()),
+    (Path("scripts/rust-source-order-baseline.tsv"), ()),
+    (Path("scripts/architecture-ratchet-baseline.json"), ()),
+    (Path("scripts/test-child-runner-allowlist.json"), ()),
+    (Path("scripts/test-shell-waits-allowlist.json"), ()),
+    (Path("scripts/dashboard-css-literals-baseline.json"), ()),
+    (Path("scripts/removed-dashboard-labels-allowlist.json"), ()),
+    (Path("scripts/removed-code-identifiers-allowlist.json"), ()),
     # The `claude plugin eval` suite runs outside CI. No Cargo test, guard
     # or CI job reads its cases, graders or mocks.
     (Path("plugin/evals"), ()),

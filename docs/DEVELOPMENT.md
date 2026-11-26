@@ -515,13 +515,14 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   compare pack/restore time and transfer bytes together on hosted candidates.
   This captures repeated linked executable sections beyond the native
   archive's 2 MiB window. It requires the runner's `zstd` CLI; the decoder
-  is capped at the same 512 MiB window the encoder may emit. The job then
-  starts `ci-guardrails.sh --test-partitions PATH` in the background and
-  uploads each part as its own one-day artifact while it runs; after the
-  uploads, `Prove the shards cover every test` waits for it (using a lock
-  acquired before the worker starts and held until it exits), prints its
-  output and exits with its status, or fails if it recorded none. The proof
-  reads only the original archive:
+  is capped at the same 512 MiB window the encoder may emit. As soon as the
+  original archive exists, the job starts `ci-guardrails.sh --test-partitions
+  PATH` in the background, leaving the original archive intact, and runs
+  `ci-repack-nextest.py pack` and the one-day part uploads concurrently while it
+  runs; after the uploads, `Prove the shards cover every test` waits for it
+  (using a lock acquired before the worker starts and held until it exits),
+  prints its output and exits with its status, or fails if it recorded none. The
+  proof reads only the original archive:
   it extracts the archive once, and
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
   that extraction (`--binaries-metadata` and `--cargo-metadata`) once
@@ -849,7 +850,7 @@ It runs every test instead (`full`) when any of these holds:
 - every workspace crate is selected anyway (for example, a change to `orbit-types` or `orbit-common`);
 - the PR file listing is incomplete, or the selection fails for any reason, including unreadable Cargo metadata.
 
-Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source and `orbit-core`'s default catalog test reads, the configuration reference page, `docs/design/auto-tasks/1_overview.md`, the QA sweep script and its inventory, the unit-test baseline, the plugin evals, and the UX rule files named above); any other such path runs the full suite.
+Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source and `orbit-core`'s default catalog test reads, the configuration reference page, `docs/design/auto-tasks/1_overview.md`, the QA sweep script and its inventory, the guard baselines and allowlists (`scripts/unit-test-baseline.json`, `scripts/too-many-arguments-baseline.json`, `scripts/rust-source-order-baseline.tsv`, `scripts/architecture-ratchet-baseline.json`, `scripts/test-child-runner-allowlist.json`, `scripts/test-shell-waits-allowlist.json`, `scripts/dashboard-css-literals-baseline.json`, `scripts/removed-dashboard-labels-allowlist.json`, `scripts/removed-code-identifiers-allowlist.json`), the plugin evals, and the UX rule files named above); any other such path runs the full suite.
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in nearly every selection, and its dev-dependencies name the features only other crates' tests enable (`tokio`'s `test-util`, `rusqlite`'s `hooks`, the `test-support` of `orbit-exec` and `orbit-mcp`), so it normally needs no anchor: an anchor compiles its unit-test harness, which no target flag excludes. A new gap adds an anchor at that compile cost, and the build's reason line names it. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 

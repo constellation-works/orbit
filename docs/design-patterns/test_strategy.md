@@ -1871,6 +1871,96 @@ and the "Finish the pinned toolchain install" and download step spans from the
 shard logs against the 6.4–9.9 s baseline. Hosted compliance is **not run, owed
 after publication**.
 
+### Guard-baseline scope narrowing and build-proof overlap (2026-11-26)
+
+In the 2026-11-26 rolling 20-PR measurement, all 20 completed `ci.yml` PR runs
+executed `Check / Clippy / Test`, with nearest-rank p90 `541 s`, median
+`457.5 s`, and maximum `592 s` against the `400 s` budget. Across the 10
+downloaded run records (runs `45780267006`–`45793911881`), `Check`'s own
+checks finished in `184–265 s` and `CI guardrails` in `91–436 s`, so the
+binding critical path was `Test build` (`299–423 s`) plus the slowest
+`Test partition` (`133–169 s`; `Test partition 6` in 6 of 10 runs, `Test
+partition 12` at `151 s` in the p90 run `45788714126`). Baseline-ratchet PRs
+such as `45783111706` (`592 s`, STD-02 §R51 gate) and `45787828869` (`480 s`,
+`orbit-web` parameter-count cleanup touching `scripts/too-many-arguments-baseline.json`)
+were forced into `full` 20-crate builds and suites because `FILE_READERS` did
+not declare those guard baselines.
+
+**Changes implemented:**
+
+1. **Declare 8 guard baselines and allowlists with `()` readers (`scripts/ci-test-affected.py`).**
+   Adds `scripts/too-many-arguments-baseline.json`,
+   `scripts/rust-source-order-baseline.tsv`,
+   `scripts/architecture-ratchet-baseline.json`,
+   `scripts/test-child-runner-allowlist.json`,
+   `scripts/test-shell-waits-allowlist.json`,
+   `scripts/dashboard-css-literals-baseline.json`,
+   `scripts/removed-dashboard-labels-allowlist.json`, and
+   `scripts/removed-code-identifiers-allowlist.json` to `FILE_READERS` with
+   empty Cargo test readers. All 8 are verified unread by Cargo tests and
+   remain enforced unconditionally by `ci-guardrails.sh --guards-core`.
+   `ALWAYS_RUN` security/recovery crates (`orbit-auth`, `orbit-exec`,
+   `orbit-policy`, `orbit-store`) and Linux sandbox gates are unchanged.
+   For a ratchet PR like `45787828869`, `Change scope` now returns
+   `affected:` (12 crates, `feature anchors: none`, `3,215` of `4,486` archive
+   tests; `Partition 6` drops from `347` to `249` tests) instead of `full`.
+   **Expected hosted effect (not measured live):** reduces `Test build` compile
+   targets (`20 -> 12` crates, omitting `orbit-engine`) and all shard runtimes
+   on non-workspace baseline-ratchet PRs; does not change `full`-scope PRs.
+2. **Start the shard coverage proof before transfer repack (`.github/workflows/ci.yml`).**
+   Moves `Start the shard coverage proof` ahead of `Pack nextest archive for
+   transfer` in `Test build` (and updates `docs/DEVELOPMENT.md`), because
+   `ci-repack-nextest.py pack` leaves `$RUNNER_TEMP/nextest-archive.tar.zst`
+   intact. Hosted logs show `Pack` takes `11.7–15.0 s`, `Upload` parts `1..4`
+   take `~8–10 s`, and the background proof takes `10.5–12.6 s` (previously
+   trailing `Upload 4/4` by `3–5 s`). **Expected hosted effect (not measured
+   live):** lets the proof overlap both `Pack` and `Upload`, moving downstream
+   `Test partition` start earlier by `~3–5 s` without changing the proof itself.
+
+**Local AC 2 replay evidence:**
+
+Replayed sequentially on `dk-server-2` pinned to `taskset -c 0,1,16,17` with no
+concurrent task build, using disposable checkouts and target/temp dirs under
+`.orbit/tmp` from base commit `be2bcfec0caa9e97cec61461bfe4a076bf5721d9` and
+candidate code tree `e6986014dea6b2e2a7435cd4e67249b5708a058e` (`.orbit/tmp/run_ac2_replay.py`
+and `.orbit/tmp/run_ac2_followup.py`), pre-warmed archive `.orbit/tmp/diag-archive-warm.tar.zst`
+(`1.6G`), `.github/workflows/ci.yml` env (`CARGO_INCREMENTAL=0`,
+`NEXTEST_PARTITIONS=13`, `NEXTEST_ARCHIVE_PARTS=4`), discarding 1 warmup per
+arm before 3 alternating base/candidate samples plus a 3-pair base-against-base
+control:
+
+| Phase (replayed `ci.yml` command) | Warmups (base, cand, ctl a, ctl b) | Base samples (s) | Cand samples (s) | Control samples (s) | Median delta | Control spread |
+|---|---|---|---|---|---|---|
+| `Start` + `Pack` + `Wait` (staged archive + `sync`) | 15.633, 13.074, 14.581, 12.288 | 15.656, 14.312, 12.849 (`14.312`) | 10.987, 15.837, 10.095 (`10.987`) | ctl\_a: 14.563, 12.738, 14.076; ctl\_b: 12.456, 13.655, 15.198 | **-3.325 s** | `2.742 s` (pass) |
+| `Partition 6` (`count:6/13`) with `Change scope` on PR `45787828869` paths | 77.705, 50.263, 75.972, 69.484 | 75.578, 73.919, 86.979 (`75.578`, `full`) | 47.053, 57.102, 53.003 (`53.003`, `affected:12`) | ctl\_a: 74.374, 69.506, 70.339; ctl\_b: 69.840, 72.410, 70.036 | **-22.575 s** | `4.868 s` (pass) |
+
+An earlier `Pack+Proof` pass that copied the `1.6 GiB` archive inside each
+iteration had a dirty-writeback stall on `ctl_a[0]` (`28.361 s`, median delta
+`4.354 s`, control spread `14.479 s`); staging `$RUNNER_TEMP/nextest-archive.tar.zst`
+once per checkout (matching `Test build`) and syncing between iterations
+removed the copy artifact. `Change scope` (`scripts/ci-test-affected.py --pull-request-scope`)
+itself stayed flat (`0.1771, 0.1780, 0.1769 s` vs `0.1807, 0.1853, 0.1887 s`).
+
+**Alternatives tested and rejected/reverted:**
+
+| Option | Measured local result | Outcome |
+|---|---|---|
+| `.config/nextest.toml` `priority = 100` for 16 `>10 s` Partition 6/12/1 tests | Warmup 101.709, 85.797; base `[84.104, 78.888, 80.306]` (`80.306 s`) vs cand `[80.102, 78.807, 79.387]` (`79.387 s`), delta `-0.919 s`, control spread `17.415 s` | Reverted (failed AC 2 bound under shared-host contention) |
+| `zstd -1 --long=29` in `ci-repack-nextest.py pack` | Pack `-1.69 s` (`9.18 -> 7.49 s`), archive `+46.6 MB` (`669.5 -> 716.1 MB`), downstream extract `+50%` (`6.46 -> 9.80 s`) | Rejected |
+| Moving `--all-targets` `clippy-driver` out of `Test build` | `cargo check --workspace --all-targets` `135.50 s` vs warm `clippy-driver` overhead `12.58 s` (`234.97 s` vs `222.39 s`) | Rejected |
+
+**Retirements and limits:** No test, assertion, retry (`retries` stays 0), sleep,
+skip, required check name, or partition proof changed, and no test was retired.
+Measured local reductions apply on `4`-thread `taskset` slices for ratchet-PR
+shard scope and `Test build` proof overlap; hosted `400 s` `Check` p90
+restoration is **not run, owed after publication**. Once 20 completed PR CI
+runs carry the merged revision, the operator measures compliance under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with:
+
+```bash
+python3 scripts/ci-p90.py --limit 20 --budget-seconds 400
+```
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
