@@ -88,6 +88,12 @@ mod linux {
         }
     }
 
+    /// What each overlapping installer returned.
+    struct Overlap {
+        verified: Result<Outcome, String>,
+        partial: Result<Outcome, String>,
+    }
+
     fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
         if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             std::fs::DirBuilder::new()
@@ -162,12 +168,6 @@ mod linux {
             version: "0.29.0".to_string(),
             bundle: name.to_string(),
         }
-    }
-
-    /// What each overlapping installer returned.
-    struct Overlap {
-        verified: Result<Outcome, String>,
-        partial: Result<Outcome, String>,
     }
 
     /// Run the verified attempt and, once it has written, the partial one.

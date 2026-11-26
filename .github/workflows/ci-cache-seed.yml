@@ -149,13 +149,10 @@ jobs:
       # partially seeded archive.
       - name: Compile Check dependencies
         if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
-        env:
-          RUSTC_WORKSPACE_WRAPPER: clippy-driver
-          CLIPPY_ARGS: '-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
         run: |
           set -euo pipefail
-          cargo check --locked --workspace --lib --bins
-          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --workspace
+          scripts/with-test-build-lint.sh --check cargo check --locked --workspace --lib --bins --message-format=json
+          RUSTDOCFLAGS="-D warnings" scripts/with-test-build-lint.sh --check cargo doc --locked --no-deps --workspace --message-format=json
           CC_aarch64_apple_darwin="${GITHUB_WORKSPACE:-.}/scripts/ci-apple-target-cc.sh" \
             env -u RUSTC_WORKSPACE_WRAPPER -u CLIPPY_ARGS \
             cargo check --locked --workspace --lib --bins --tests --target aarch64-apple-darwin
@@ -202,4 +199,4 @@ jobs:
 
       - name: Compile Test build dependencies
         if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
-        run: scripts/with-test-build-lint.sh cargo test --no-run --locked --workspace --lib --bins --tests --examples
+        run: scripts/with-test-build-lint.sh --check cargo test --no-run --locked --workspace --lib --bins --tests --examples --message-format=json

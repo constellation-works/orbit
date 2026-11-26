@@ -14,6 +14,7 @@ on:
     paths:
       - "desktop/**"
       - ".github/workflows/desktop.yml"
+      - "clippy.toml"
       - "deny.toml"
       - "scripts/cargo-deny.sh"
       - "scripts/ci-download-verified.sh"
@@ -22,6 +23,7 @@ on:
     paths:
       - "desktop/**"
       - ".github/workflows/desktop.yml"
+      - "clippy.toml"
       - "deny.toml"
       - "scripts/cargo-deny.sh"
       - "scripts/ci-download-verified.sh"

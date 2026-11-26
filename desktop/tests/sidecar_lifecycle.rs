@@ -12,21 +12,6 @@
 //! and the deadline for a server that never finishes draining.
 
 #[cfg(unix)]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.starts_with(&["web".into(), "serve".into()]) {
-        return fake::serve();
-    }
-    handover::follows_a_new_address_in_the_same_process()?;
-    starting::quitting_while_a_server_starts_stops_it()?;
-    draining::overlapping_shutdowns_wait_for_reaping()?;
-    draining::unresponsive_server_is_killed()
-}
-
-#[cfg(not(unix))]
-fn main() {}
-
-#[cfg(unix)]
 mod handover {
     use std::error::Error;
     use std::path::PathBuf;
@@ -422,6 +407,10 @@ mod fake {
     const PREVIOUS_PORT: &str = "ORBIT_DESKTOP_FAKE_PREVIOUS_PORT";
 
     /// Serve until stopped, replacing this image on `GET /handover`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the fake child reads the previous port passed by its own handover"
+    )]
     pub(crate) fn serve() -> Result<(), Box<dyn Error>> {
         let previous = std::env::var(PREVIOUS_PORT).ok();
         let mut listener = TcpListener::bind("127.0.0.1:0")?;
@@ -516,3 +505,18 @@ mod fake {
         Ok(body.trim().parse()?)
     }
 }
+
+#[cfg(unix)]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.starts_with(&["web".into(), "serve".into()]) {
+        return fake::serve();
+    }
+    handover::follows_a_new_address_in_the_same_process()?;
+    starting::quitting_while_a_server_starts_stops_it()?;
+    draining::overlapping_shutdowns_wait_for_reaping()?;
+    draining::unresponsive_server_is_killed()
+}
+
+#[cfg(not(unix))]
+fn main() {}

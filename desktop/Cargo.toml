@@ -61,9 +61,12 @@ harness = false
 missing_docs = "warn"
 
 [lints.clippy]
+arbitrary_source_item_ordering = "warn"
 await_holding_lock = "deny"
 dbg_macro = "deny"
 expect_used = "warn"
+inconsistent_struct_constructor = "warn"
+items_after_test_module = "warn"
 min_ident_chars = "warn"
 print_stderr = "warn"
 print_stdout = "warn"

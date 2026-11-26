@@ -13,19 +13,6 @@ use rsa::signature::Verifier;
 use sha2::{Digest, Sha256};
 use time::{Date, Month};
 
-/// One release signing key. Dates are `YYYY-MM-DD`.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TrustedReleaseKey {
-    /// Stable key label, e.g. `orbit-release-key-3`.
-    pub(crate) id: &'static str,
-    /// Last day this key may verify a release, inclusive.
-    pub(crate) not_after: &'static str,
-    /// Set once a key is withdrawn; a matching signature then fails closed.
-    pub(crate) revoked_at: Option<&'static str>,
-    /// PKCS#8 SubjectPublicKeyInfo PEM block.
-    pub(crate) public_key_pem: &'static str,
-}
-
 /// Keep byte-identical to the same constant in
 /// `crates/orbit-common/src/security/release.rs`.
 const ORBIT_RELEASE_KEY_3_PEM: &str = r#"-----BEGIN PUBLIC KEY-----
@@ -47,6 +34,19 @@ pub(crate) const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[TrustedReleaseKe
     revoked_at: None,
     public_key_pem: ORBIT_RELEASE_KEY_3_PEM,
 }];
+
+/// One release signing key. Dates are `YYYY-MM-DD`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TrustedReleaseKey {
+    /// Stable key label, e.g. `orbit-release-key-3`.
+    pub(crate) id: &'static str,
+    /// Last day this key may verify a release, inclusive.
+    pub(crate) not_after: &'static str,
+    /// Set once a key is withdrawn; a matching signature then fails closed.
+    pub(crate) revoked_at: Option<&'static str>,
+    /// PKCS#8 SubjectPublicKeyInfo PEM block.
+    pub(crate) public_key_pem: &'static str,
+}
 
 /// Parse a strict `YYYY-MM-DD` calendar date, rejecting invalid dates.
 pub(crate) fn parse_trust_date(text: &str) -> Result<Date, String> {

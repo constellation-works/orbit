@@ -518,21 +518,6 @@ run_exclusive_guard() {
   drain_pool
 }
 
-# The one lint environment: what `cargo clippy --workspace --lib --bins --
-# -D warnings -A clippy::disallowed_methods` sets for its `cargo check`,
-# spelled out the way with-test-build-lint.sh spells out the folded build's
-# (the same string). Production code denies clippy::disallowed_methods
-# through the crate-root `deny` attributes, which override this `-A`;
-# test and test-feature code stays exempt. Documentation runs under it
-# too. Cargo fingerprints it, so documentation reuses Clippy's check of
-# every workspace library instead of checking the workspace again with
-# plain rustc before rustdoc can start.
-with_production_lint() {
-  RUSTC_WORKSPACE_WRAPPER=clippy-driver \
-    CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__' \
-    "$@"
-}
-
 # Production clippy, then documentation. Each takes the Cargo build
 # lock, so they run in sequence; a failure still reports the later phases, and
 # the first failure is the chain's status. The crate-root attributes deny
@@ -551,9 +536,11 @@ with_production_lint() {
 # and no cfg pairs target_os = "macos" with a single target_arch.
 run_check_chain() {
   local status=0 next=0
-  run_phase clippy-production with_production_lint run_lowered cargo check --workspace --lib --bins || status=$?
+  run_phase clippy-production run_lowered "$lint" --check \
+    cargo check --workspace --lib --bins --message-format=json || status=$?
   next=0
-  RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint run_lowered cargo doc --no-deps --workspace || next=$?
+  RUSTDOCFLAGS="-D warnings" run_phase documentation run_lowered "$lint" --check \
+    cargo doc --no-deps --workspace --message-format=json || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
   if [[ "$checks" == true ]]; then
     next=0
@@ -618,6 +605,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-await-jobs.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
+    run_exclusive_guard "$repo_root/scripts/test-rust-source-order.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
     run_exclusive_guard "$repo_root/scripts/test-installer-security.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
@@ -677,6 +665,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
   run_guard "$repo_root/scripts/check-architecture-ratchet.py"
   run_guard "$repo_root/scripts/check-too-many-arguments.py"
+  run_guard "$repo_root/scripts/check-rust-source-order.py" --check-baseline
   run_guard "$repo_root/scripts/check-architecture-map.py"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"
   run_guard "$repo_root/scripts/check-test-shell-waits.py"

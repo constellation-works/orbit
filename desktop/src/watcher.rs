@@ -203,6 +203,28 @@ struct Item {
     recency: String,
 }
 
+impl Item {
+    fn new(host: &str, workspace: &str, id: &str, label: &str, workspace_name: &str) -> Self {
+        Self {
+            key: ItemKey {
+                host: host.to_string(),
+                workspace: workspace.to_string(),
+                id: id.to_string(),
+            },
+            label: label.to_string(),
+            workspace: workspace_name.to_string(),
+            route: None,
+            recency: String::new(),
+        }
+    }
+
+    fn opened(mut self, route: DashboardRoute, recency: &str) -> Self {
+        self.route = Some(route);
+        self.recency = recency.to_string();
+        self
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ItemKey {
     host: String,
@@ -263,10 +285,6 @@ impl Seen {
             unavailable: listing.unavailable.clone(),
         }
     }
-}
-
-fn scope(key: &ItemKey) -> (String, String) {
-    (key.host.clone(), key.workspace.clone())
 }
 
 /// The last successful read of one host. A host that returns nothing keeps
@@ -504,6 +522,10 @@ impl Watcher {
     }
 }
 
+fn scope(key: &ItemKey) -> (String, String) {
+    (key.host.clone(), key.workspace.clone())
+}
+
 /// Sum every host that answered. One missing answer makes the total
 /// unavailable: omitting that host would count it as zero.
 fn sum_optional<T>(parts: impl Iterator<Item = Option<T>>) -> Option<T>
@@ -663,9 +685,9 @@ fn fleet_baseline_red_holds(row: &Value, workspace: &Item) -> Option<TaskHolds> 
         }
     }
     Some(TaskHolds {
-        complete: true,
-        observed,
         items,
+        observed,
+        complete: true,
     })
 }
 
@@ -687,12 +709,13 @@ fn task_holds(body: &Value, workspace: &Item) -> Option<TaskHolds> {
             ));
         }
     }
+    let complete = body["total"]
+        .as_u64()
+        .is_some_and(|total| total <= observed.len() as u64);
     Some(TaskHolds {
-        complete: body["total"]
-            .as_u64()
-            .is_some_and(|total| total <= observed.len() as u64),
-        observed,
         items,
+        observed,
+        complete,
     })
 }
 
@@ -767,10 +790,12 @@ fn failed_runs(body: &Value, host: &PollHost) -> Listing {
             items.push(item);
         }
     }
+    let total = Some(items.len() as u64);
+    let unavailable = unavailable_scopes(body, &host.name);
     Listing {
-        total: Some(items.len() as u64),
-        unavailable: unavailable_scopes(body, &host.name),
         items,
+        total,
+        unavailable,
     }
 }
 
@@ -943,28 +968,6 @@ fn review_tasks(body: &Value, host: &PollHost) -> Listing {
         items,
         total: body["total"].as_u64(),
         unavailable: unavailable_scopes(body, &host.name),
-    }
-}
-
-impl Item {
-    fn new(host: &str, workspace: &str, id: &str, label: &str, workspace_name: &str) -> Self {
-        Self {
-            key: ItemKey {
-                host: host.to_string(),
-                workspace: workspace.to_string(),
-                id: id.to_string(),
-            },
-            label: label.to_string(),
-            workspace: workspace_name.to_string(),
-            route: None,
-            recency: String::new(),
-        }
-    }
-
-    fn opened(mut self, route: DashboardRoute, recency: &str) -> Self {
-        self.route = Some(route);
-        self.recency = recency.to_string();
-        self
     }
 }
 

@@ -326,7 +326,7 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
     # The all-targets lint flags come from the shared wrapper. The nextest run
     # and the sandbox gate use it too, so they reuse these artifacts.
     build = run_listing(
-        [str(repo_root / "scripts/with-test-build-lint.sh"),
+        [str(repo_root / "scripts/with-test-build-lint.sh"), "--check-json",
          "cargo", "test", *selection, "--bins", "--tests", "--examples",
          "--locked", "--no-run", "--timings", "--message-format", "json"],
         "workspace test build failed",

@@ -363,10 +363,12 @@ extract_release_rs() {
       print "revoked_at=" krev
       printf "%s", const_pem[kpem]
       in_key = 0
+      # A one-record array can close on the same line as its record.
+      if ($0 ~ /^[[:space:]]*\}[[:space:]]*\];/) in_list = 0
       next
     }
 
-    in_list && /^];/ { in_list = 0 }
+    in_list && /^[[:space:]]*\];/ { in_list = 0 }
   ' "$1"
 }
 

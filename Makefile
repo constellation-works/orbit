@@ -182,8 +182,8 @@ ci-test-affected:
 	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" ORBIT_VALIDATION_GATE="make ci-test-affected" python3 ./scripts/ci-test-affected.py
 
 # Compile-time pre-handoff gate for agents. Every pass runs under the one
-# folded-build lint environment (`-D warnings -A
-# clippy::disallowed_methods`), so all three reuse the same checked units
+# folded-build lint environment, with warnings checked against the source-order
+# baseline, so all three reuse the same checked units
 # instead of invalidating each other through CLIPPY_ARGS. Production code
 # still denies clippy::disallowed_methods (unbounded channels) through the
 # crate-root `deny` attributes, which override the command-line `-A`;
@@ -202,9 +202,9 @@ ci-lint:
 	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh
 	./scripts/check-architecture-ratchet.py
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -A clippy::disallowed_methods
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
-	RUSTDOCFLAGS="-D warnings" ./scripts/with-test-build-lint.sh $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
+	$(BUILD_BUDGET) -- ./scripts/with-test-build-lint.sh --check $(CARGO) check $(WORKSPACE) --lib --bins --message-format=json
+	$(BUILD_BUDGET) -- ./scripts/with-test-build-lint.sh --check $(CARGO) check $(WORKSPACE) --all-targets --message-format=json
+	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- ./scripts/with-test-build-lint.sh --check $(CARGO) doc --no-deps $(WORKSPACE) --message-format=json
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
 # MCP tools/list snapshot, CI/GitHub log fixtures, sandbox profiles, and store and

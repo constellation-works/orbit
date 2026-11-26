@@ -235,6 +235,20 @@ else:
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The lint wrapper is the environment under test, not a guard.
         shutil.copy2(SCRIPTS / "with-test-build-lint.sh", self.scripts / "with-test-build-lint.sh")
+        source_order = self.scripts / "check-rust-source-order.py"
+        shutil.copy2(SCRIPTS / source_order.name, self.scripts / "source_order_under_test.py")
+        self.write_executable(source_order, '''#!/usr/bin/env python3
+import os, runpy, sys
+from pathlib import Path
+script = Path(__file__)
+if sys.argv[1:] == ["--check-baseline"]:
+    (Path(os.environ["GUARD_TEST_CALLS"]) / script.name).write_text("--check-baseline\\n")
+    with (Path(os.environ["GUARD_TEST_COUNTS"]) / (script.name + ".count")).open("a") as log:
+        log.write("call\\n")
+    raise SystemExit(0)
+runpy.run_path(str(script.with_name("source_order_under_test.py")), run_name="__main__")
+''')
+        (self.scripts / "rust-source-order-baseline.tsv").touch()
         # The pool sizes itself from the real budget query, so keep the real script.
         shutil.copy2(SCRIPTS / "build-budget.py", self.scripts / "build-budget.py")
         # The full run wraps nextest in the real sampler. A stub would swallow
@@ -588,7 +602,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
             r"iowait_pct=\d+\.\d+|unavailable=(unchanged|decreased|proc_stat))",
         )
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        production_clippy = ["check", "--workspace", "--lib", "--bins"]
+        production_clippy = ["check", "--workspace", "--lib", "--bins", "--message-format=json"]
         self.assertIn(production_clippy, calls)
         self.assertFalse(any("--all-targets" in call for call in calls))
         listing = ["nextest", "list", "--list-type", "binaries-only", "--message-format", "json",
@@ -611,7 +625,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
                         calls.index(run), calls)
         clippy = calls.index(production_clippy)
         self.assertLess(calls.index(listing), clippy, calls)
-        self.assertLess(clippy, calls.index(["doc", "--no-deps", "--workspace"]), calls)
+        self.assertLess(clippy, calls.index(["doc", "--no-deps", "--workspace", "--message-format=json"]), calls)
         self.assertIn(("documentation", "0"), phases)
         self.assertFalse(any("--doc" in call for call in calls), calls)
         # A background check failure must keep its status and timing in the
@@ -1272,10 +1286,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
         lint = {
             "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
-            "CLIPPY_ARGS": (
-                "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-                "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
-            ),
+            "CLIPPY_ARGS": "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__",
         }
         builds = [row for row in observed if row["argv"] == folded]
         self.assertEqual([{key: row[key] for key in ("argv", *lint)} for row in builds],
@@ -1423,10 +1434,11 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
         apple = ["check", "--workspace", "--lib", "--bins", "--tests", "--target", "aarch64-apple-darwin"]
-        for expected in (["fmt", "--all", "--", "--check"], ["check", "--workspace", "--lib", "--bins"],
-                         ["doc", "--no-deps", "--workspace"], apple):
+        production = ["check", "--workspace", "--lib", "--bins", "--message-format=json"]
+        documentation = ["doc", "--no-deps", "--workspace", "--message-format=json"]
+        for expected in (["fmt", "--all", "--", "--check"], production, documentation, apple):
             self.assertIn(expected, calls)
-        self.assertLess(calls.index(["doc", "--no-deps", "--workspace"]), calls.index(apple))
+        self.assertLess(calls.index(documentation), calls.index(apple))
         self.assertFalse(any("--doc" in call for call in calls), calls)
         checks_env = [json.loads(line) for line in env_log.read_text().splitlines()]
         apple_rows = [row for row in checks_env if row["argv"] == apple]
@@ -1633,7 +1645,8 @@ import json, os, sys
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
     raise SystemExit(0)
-print(json.dumps({"reason": "compiler-message", "message": {"rendered": os.environ["GUARD_TEST_RENDERED"]}}))
+print(json.dumps({"reason": "compiler-message", "message": {
+    "level": "error", "rendered": os.environ["GUARD_TEST_RENDERED"]}}))
 print("error: could not compile `orbit-types` (lib test) due to 1 previous error", file=sys.stderr)
 raise SystemExit(101)
 ''')
