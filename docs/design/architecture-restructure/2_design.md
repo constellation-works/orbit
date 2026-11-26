@@ -127,7 +127,7 @@ pub fn exec(core: &Core, command: Command) -> Result<Outcome, Error> {
 
 ### The chokepoint's structure
 
-`app/exec.rs` was to be written once (above). It has instead grown with each surface converted: 235 lines with friction [ORB-28396], 350 with task, 425 with run and 535 with plugin [ORB-28399], read at `17eff13d45`. Each task added what its surface needed, and the file now holds more than the chokepoint. Daniel, 2026-11-26: "this is turning into a dump of various things. can you propose a better design"; shown the proposal below, to "Write the exec.rs split into the restructure design?": "Yes, write it". Proposed, not built, and no task is filed.
+`app/exec.rs` was to be written once (above). It has instead grown with each surface converted: 235 lines with friction [ORB-28396], 350 with task, 425 with run and 535 with plugin [ORB-28399], read at `17eff13d45`. Each task added what its surface needed, and the file now holds more than the chokepoint. Daniel, 2026-11-26: "this is turning into a dump of various things. can you propose a better design"; shown the proposal below, to "Write the exec.rs split into the restructure design?": "Yes, write it". Proposed and not built; filed as [ORB-28970].
 
 **Today.**
 
@@ -178,7 +178,7 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
 - **`Operation` in three parts:** its identity (command, subcommand, tool row), what it requires, and how its row is attributed (target, run, role, the declared row). `admit` reads the first two and `audit` the first and third, so an option added for one stage is not in the other's way.
 - **`App` shrinks** to `operation`, `run`, `exit_code` and one session-audit hook, which only the task app implements. `mutation_audit` and `written_id` fold into the task app's writer.
 - **It is a move plus one error variant.** Every audit row keeps its fields and every refusal its text. The frozen surface fixtures and `crates/orbit-web/tests/http_api/guards.rs` are the net.
-- **When.** Each surface family still to convert adds to this file: workspace [ORB-28400], config, skill and audit [ORB-28401], the CLI entry [ORB-28407] and the dashboard [ORB-28415]. The dashboard task is also where `orbit-web`'s own copy of the dashboard row (`OperationAudit` in `api/routines.rs`) and its direct calls to `dashboard_authorize` need a home. The split is cheapest before [ORB-28415], and it must be ordered against whichever of those tasks is in flight, since they declare the same file.
+- **When.** Each surface family still to convert adds to this file: workspace [ORB-28400], config, skill and audit [ORB-28401], the CLI entry [ORB-28407] and the dashboard [ORB-28415]. The dashboard task is also where `orbit-web`'s own copy of the dashboard row (`OperationAudit` in `api/routines.rs`) and its direct calls to `dashboard_authorize` need a home. The split is [ORB-28970]: it waits for [ORB-28407] and [ORB-28962], and [ORB-28415] waits for it.
 
 ### The remote command gets its own app
 
@@ -189,7 +189,7 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
 - **Not folded into `mod.rs`.** `mod.rs` holds an app's `Command`, `Outcome`, `Error` and `exec`. A flow is a private child module, and this flow is another subject's, so moving it into `mod.rs` would put two subjects in the file that defines the run app.
 - **Proposed: `app/remote_command/`.** `mod.rs` holds `Command::Exec`, `Outcome`, `Error` and `exec`; one private child holds the flow and the `argv` check. The tool handler calls `app::remote_command::exec`. It is a move: the body does not change, and the operation keeps its names, so its governance and audit rows are the same.
 - **Why that name.** The app owns the noun `command`, as `app::doctor` owns `health`. It is not called `command` because every app has a `Command` and `adapter/command/` is the command-line adapter: a third thing of that name is how the file came to be misread. `remote_command` is what the runtime already calls the mechanism (`execute_remote_command`, `RemoteCommandParams`).
-- **Order.** The move shares `app/run/mod.rs` with [ORB-28962] and [ORB-28415], and `app/mod.rs` with the chokepoint split above, so a dependency has to order it against each (§11, one writer per set of files). It needs none of them. It is cheapest first: it is 96 lines with one caller, and the others then meet one more small app instead of a seventh noun in the run app.
+- **Order.** The move shares `app/run/mod.rs` with [ORB-28962] and [ORB-28415], and `app/mod.rs` with the chokepoint split above [ORB-28970], so a dependency has to order it against each (§11, one writer per set of files). It needs none of them. It is cheapest before [ORB-28970]: it is 96 lines with one caller, and the split then meets one more small app instead of a seventh noun in the run app.
 
 ### `metrics` dissolves into the run app
 
@@ -505,6 +505,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28670] — routed the routine scheduler's store open through composition.
 - [ORB-28962] — will expose run metrics through `app::run`.
 - [ORB-28963] — will move core metrics into the run app.
+- [ORB-28970] — will route every app through one `exec` path and split caller, admission and audit.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
