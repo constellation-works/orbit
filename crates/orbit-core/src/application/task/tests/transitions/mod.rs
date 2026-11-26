@@ -1,5 +1,8 @@
 //! Human task transitions and deletion guard against stale status reads.
 
+mod approve;
+mod reject;
+
 use orbit_types::task::TaskStatus;
 
 use super::{enter_isolated_child, test_runtime};
@@ -36,6 +39,3 @@ pub(super) fn with_changed_status(runtime: &crate::OrbitRuntime, id: &str, test:
     test();
     runtime.set_transition_read_hook_status(None, None);
 }
-
-mod approve;
-mod reject;

@@ -12,6 +12,8 @@
 mod message;
 mod model;
 mod resolver;
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
 mod verification;
 
 pub use model::DkimTxtResolver;
@@ -19,5 +21,3 @@ pub(crate) use model::DkimVerifyError;
 pub(crate) use resolver::SystemDkimTxtResolver;
 pub use verification::sender_domain_of;
 pub use verification::verify_dkim;
-#[cfg(feature = "test-support")]
-pub(crate) mod test_support;

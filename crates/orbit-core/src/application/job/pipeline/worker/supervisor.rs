@@ -15,6 +15,50 @@
 //! must not own — so its failure paths can be exercised against a store alone.
 //! [`OrbitRuntime`] keeps its worker methods as thin delegations.
 
+/// A rendezvous on the startup observer's thread around reaping and the
+/// durable exit record, for deterministic teardown and reconciliation races.
+#[cfg(feature = "test-support")]
+pub(crate) mod worker_reap_hook {
+    use std::sync::{Mutex, PoisonError};
+
+    /// Where the observer stops around reaping its worker.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum WorkerReapPhase {
+        /// Before any wait can reap the child, including an already-exited child.
+        BeforeReap,
+        /// Before the exit is recorded: reconciliation finds no exit record.
+        BeforeExitRecorded,
+        /// After the exit is recorded, before the run is settled.
+        AfterExitRecorded,
+    }
+
+    type Hook = Box<dyn FnOnce(&str) + Send>;
+
+    static HOOK: Mutex<Option<(WorkerReapPhase, Hook)>> = Mutex::new(None);
+
+    /// Run `hook` with the run ID the next time any observer in this process
+    /// reaches `phase`. One hook at a time; the last install wins.
+    pub fn install_worker_reap_hook<F>(phase: WorkerReapPhase, hook: F)
+    where
+        F: FnOnce(&str) + Send + 'static,
+    {
+        *HOOK.lock().unwrap_or_else(PoisonError::into_inner) = Some((phase, Box::new(hook)));
+    }
+
+    pub(crate) fn run(phase: WorkerReapPhase, run_id: &str) {
+        let hook = {
+            let mut slot = HOOK.lock().unwrap_or_else(PoisonError::into_inner);
+            match slot.as_ref() {
+                Some((installed, _)) if *installed == phase => slot.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, hook)) = hook {
+            hook(run_id);
+        }
+    }
+}
+
 use orbit_common::env_vars;
 use std::sync::Arc;
 
@@ -882,50 +926,6 @@ impl PipelineWorkerSupervisor {
                 workspace_id: None,
             },
         )
-    }
-}
-
-/// A rendezvous on the startup observer's thread around reaping and the
-/// durable exit record, for deterministic teardown and reconciliation races.
-#[cfg(feature = "test-support")]
-pub(crate) mod worker_reap_hook {
-    use std::sync::{Mutex, PoisonError};
-
-    /// Where the observer stops around reaping its worker.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum WorkerReapPhase {
-        /// Before any wait can reap the child, including an already-exited child.
-        BeforeReap,
-        /// Before the exit is recorded: reconciliation finds no exit record.
-        BeforeExitRecorded,
-        /// After the exit is recorded, before the run is settled.
-        AfterExitRecorded,
-    }
-
-    type Hook = Box<dyn FnOnce(&str) + Send>;
-
-    static HOOK: Mutex<Option<(WorkerReapPhase, Hook)>> = Mutex::new(None);
-
-    /// Run `hook` with the run ID the next time any observer in this process
-    /// reaches `phase`. One hook at a time; the last install wins.
-    pub fn install_worker_reap_hook<F>(phase: WorkerReapPhase, hook: F)
-    where
-        F: FnOnce(&str) + Send + 'static,
-    {
-        *HOOK.lock().unwrap_or_else(PoisonError::into_inner) = Some((phase, Box::new(hook)));
-    }
-
-    pub(crate) fn run(phase: WorkerReapPhase, run_id: &str) {
-        let hook = {
-            let mut slot = HOOK.lock().unwrap_or_else(PoisonError::into_inner);
-            match slot.as_ref() {
-                Some((installed, _)) if *installed == phase => slot.take(),
-                _ => None,
-            }
-        };
-        if let Some((_, hook)) = hook {
-            hook(run_id);
-        }
     }
 }
 

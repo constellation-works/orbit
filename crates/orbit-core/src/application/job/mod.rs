@@ -1,5 +1,3 @@
-pub(crate) mod scripts;
-pub(crate) use scripts::{attach as script_attach, outputs as script_outputs, step as script_step};
 mod activity_tool_requirements;
 mod admission_port;
 mod agent;
@@ -25,10 +23,9 @@ mod resume;
 mod review_hold;
 mod review_hook;
 mod run;
-#[cfg(feature = "test-support")]
-pub use run::with_run_root_cause_write_hook;
 mod run_stage;
 mod run_worktree;
+pub(crate) mod scripts;
 mod standing_drain_keeper;
 mod task_port;
 mod triage_submit;
@@ -37,25 +34,9 @@ mod upgrade_resume;
 #[cfg(test)]
 mod tests;
 
-/// Report a failed follow-up (diagnostic step, audit row, cancellation) that
-/// must not replace the outcome the caller is already returning. Discarding
-/// the result would leave the run without the record and without a trace of
-/// why.
-pub(crate) fn log_best_effort<T>(
-    operation: &'static str,
-    run_id: &str,
-    result: Result<T, orbit_common::OrbitError>,
-) {
-    if let Err(error) = result {
-        tracing::warn!(
-            target: "orbit.core.job_run",
-            run_id,
-            operation,
-            error = %error,
-            "best-effort run bookkeeping failed",
-        );
-    }
-}
+#[cfg(feature = "test-support")]
+pub use run::with_run_root_cause_write_hook;
+pub(crate) use scripts::{attach as script_attach, outputs as script_outputs, step as script_step};
 
 #[cfg(test)]
 pub(crate) use activity_tool_requirements::set_grant_classification_override;
@@ -120,3 +101,23 @@ pub(crate) use run::{
 pub(crate) use run::{kept_candidate, kept_clause};
 pub(crate) use standing_drain_keeper::KeeperDecision;
 pub use triage_submit::{EscalationTriageRefusal, EscalationTriageSubmitError};
+
+/// Report a failed follow-up (diagnostic step, audit row, cancellation) that
+/// must not replace the outcome the caller is already returning. Discarding
+/// the result would leave the run without the record and without a trace of
+/// why.
+pub(crate) fn log_best_effort<T>(
+    operation: &'static str,
+    run_id: &str,
+    result: Result<T, orbit_common::OrbitError>,
+) {
+    if let Err(error) = result {
+        tracing::warn!(
+            target: "orbit.core.job_run",
+            run_id,
+            operation,
+            error = %error,
+            "best-effort run bookkeeping failed",
+        );
+    }
+}

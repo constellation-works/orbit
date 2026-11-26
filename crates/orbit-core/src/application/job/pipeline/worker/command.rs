@@ -7,6 +7,72 @@
 //! through the `test-support` override. The old Cargo path heuristic was
 //! removed because filename layout does not prove which entry point ran.
 
+/// Test-only substitute for the detached worker program.
+///
+/// Production re-execs `current_exe` at `job run-pipeline-worker <run_id>`. A
+/// test binary must never re-exec itself: libtest reads the worker argv as test
+/// filters and recurses through the whole suite. Tests whose submissions reach
+/// the spawn on another thread (e.g. a dashboard handler's blocking pool)
+/// install one for the whole process with [`install_process_wide`] through the
+/// `test-support` feature [ORB-12902].
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod worker_command_override {
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::sync::{Mutex, PoisonError};
+
+    /// Replaced with the submitted run id in every argv entry.
+    pub const RUN_ID_PLACEHOLDER: &str = "{run_id}";
+
+    static PROCESS_ARGV: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+    /// Launch `argv` instead of this binary for every pipeline worker the
+    /// process spawns from now on, on any thread. Each entry has
+    /// [`RUN_ID_PLACEHOLDER`] replaced by the run id and the program runs from
+    /// the run's workspace with the worker's usual log redirection.
+    ///
+    /// Last install wins, so a test binary should install one argv for all of
+    /// its tests.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
+    pub fn install_process_wide<I, S>(argv: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
+        *PROCESS_ARGV.lock().unwrap_or_else(PoisonError::into_inner) = Some(argv);
+    }
+
+    /// Whether a downstream test binary substituted the worker program.
+    pub(crate) fn installed_process_wide() -> bool {
+        PROCESS_ARGV
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn installed_argv() -> Option<Vec<String>> {
+        PROCESS_ARGV
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn command(workspace: &Path, run_id: &str) -> Option<Command> {
+        let argv = installed_argv()?;
+        let mut parts = argv
+            .iter()
+            .map(|part| part.replace(RUN_ID_PLACEHOLDER, run_id));
+        let program = parts.next()?;
+        let mut command = Command::new(program);
+        command
+            .args(parts)
+            .current_dir(workspace)
+            .stdin(Stdio::null());
+        Some(command)
+    }
+}
+
 #[cfg(test)]
 use super::scope::contain_worker_command_with_availability;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
@@ -175,72 +241,6 @@ pub(crate) fn workspace_auto_run_input(
         input.insert("auto_fix".to_string(), json!(true));
     }
     Ok(Value::Object(input))
-}
-
-/// Test-only substitute for the detached worker program.
-///
-/// Production re-execs `current_exe` at `job run-pipeline-worker <run_id>`. A
-/// test binary must never re-exec itself: libtest reads the worker argv as test
-/// filters and recurses through the whole suite. Tests whose submissions reach
-/// the spawn on another thread (e.g. a dashboard handler's blocking pool)
-/// install one for the whole process with [`install_process_wide`] through the
-/// `test-support` feature [ORB-12902].
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) mod worker_command_override {
-    use std::path::Path;
-    use std::process::{Command, Stdio};
-    use std::sync::{Mutex, PoisonError};
-
-    /// Replaced with the submitted run id in every argv entry.
-    pub const RUN_ID_PLACEHOLDER: &str = "{run_id}";
-
-    static PROCESS_ARGV: Mutex<Option<Vec<String>>> = Mutex::new(None);
-
-    /// Launch `argv` instead of this binary for every pipeline worker the
-    /// process spawns from now on, on any thread. Each entry has
-    /// [`RUN_ID_PLACEHOLDER`] replaced by the run id and the program runs from
-    /// the run's workspace with the worker's usual log redirection.
-    ///
-    /// Last install wins, so a test binary should install one argv for all of
-    /// its tests.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub fn install_process_wide<I, S>(argv: I)
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
-        *PROCESS_ARGV.lock().unwrap_or_else(PoisonError::into_inner) = Some(argv);
-    }
-
-    /// Whether a downstream test binary substituted the worker program.
-    pub(crate) fn installed_process_wide() -> bool {
-        PROCESS_ARGV
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
-    }
-
-    fn installed_argv() -> Option<Vec<String>> {
-        PROCESS_ARGV
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    pub(crate) fn command(workspace: &Path, run_id: &str) -> Option<Command> {
-        let argv = installed_argv()?;
-        let mut parts = argv
-            .iter()
-            .map(|part| part.replace(RUN_ID_PLACEHOLDER, run_id));
-        let program = parts.next()?;
-        let mut command = Command::new(program);
-        command
-            .args(parts)
-            .current_dir(workspace)
-            .stdin(Stdio::null());
-        Some(command)
-    }
 }
 
 /// Whether a downstream test binary substituted the worker program, so worker

@@ -6,21 +6,18 @@ pub mod artifact_put_result;
 mod automation_port;
 pub(in crate::application) mod base_revision;
 mod baseline_hold;
-pub(crate) use baseline_hold::standing_baseline_hold_from_history;
 mod baseline_repair;
 pub(crate) mod batch_prepare;
 mod block_cause;
-pub(crate) mod candidate_checkpoint;
-pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
 pub(crate) mod blocked_recovery;
+pub(crate) mod candidate_checkpoint;
+mod ci_sweep_filing;
 pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod corpus_port;
 mod decision;
 mod decision_channel;
-use decision::raise as decision_raise;
-pub(crate) use decision::rules as decision_rules;
 mod desktop;
 mod distributed_port;
 pub(crate) mod escalation_triage_steps;
@@ -28,13 +25,6 @@ mod evolution_port;
 mod executor_host_os;
 mod experiment_port;
 mod external_merge;
-mod proposed;
-pub use proposed::ProposedTaskInput;
-mod provider_hold;
-mod readiness_waiver;
-pub(crate) use provider_hold::AdmissionProviderPass;
-pub(crate) mod provider_limit;
-pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod finding_verification;
 mod grants;
@@ -57,31 +47,45 @@ mod paths;
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;
+mod proposed;
+mod provider_hold;
+pub(crate) mod provider_limit;
 mod pull_request_links;
 mod query;
+mod readiness_waiver;
 mod record_json;
 mod records;
 mod requeue;
+mod resident_port;
 mod resolves;
 mod retained_candidate;
-mod schedule;
-pub(crate) use schedule::schedule_hold_in;
-mod terminal_dates;
-pub(in crate::application) use terminal_dates::latest_status_entry_at;
-mod resident_port;
 mod review_port;
-pub(crate) use retained_candidate::RetainedCandidate;
-mod ci_sweep_filing;
+mod schedule;
 mod screened;
 mod selector_match;
 mod steering;
 mod sweep_filing_port;
+mod terminal_dates;
 mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
 mod workspace_auto_port;
 mod write_response;
+
+#[cfg(test)]
+mod tests;
+
+pub(crate) use baseline_hold::standing_baseline_hold_from_history;
+pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
+use decision::raise as decision_raise;
+pub(crate) use decision::rules as decision_rules;
+pub(crate) use desktop::HandoffPullRequest;
+pub use proposed::ProposedTaskInput;
+pub(crate) use provider_hold::AdmissionProviderPass;
+pub(crate) use retained_candidate::RetainedCandidate;
+pub(crate) use schedule::schedule_hold_in;
+pub(in crate::application) use terminal_dates::latest_status_entry_at;
 
 /// The shared non-pruning footprint calculation. Task reads, projections,
 /// reservations, status-derived locks, and the admission work that freezes a
@@ -246,6 +250,3 @@ pub(in crate::application) trait TaskCodebasePort {
         task: &orbit_types::task::Task,
     );
 }
-
-#[cfg(test)]
-mod tests;

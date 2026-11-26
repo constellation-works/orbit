@@ -56,8 +56,6 @@ mod recorded;
 mod rescue_candidate;
 mod root_cause;
 mod standing_drain;
-#[cfg(feature = "test-support")]
-pub use root_cause::with_run_root_cause_write_hook;
 mod state_write;
 mod step_recovery;
 mod types;
@@ -66,13 +64,11 @@ pub(super) mod worker_exit;
 mod worker_limit;
 pub(super) mod worker_scope;
 
-/// A claimed worker conclusively exited without a recorded cancellation.
-/// The reconciler cannot reap its exit signal once the process is gone; it
-/// names the exit the worker's supervisor recorded, if any [ORB-17179].
-pub(crate) const WORKER_TERMINATED_ERROR_CODE: &str = "worker_terminated";
-
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "test-support")]
+pub use root_cause::with_run_root_cause_write_hook;
 
 #[cfg(unix)]
 pub(crate) use actions::{CANCELLATION_WORKER_EXIT_AUDIT, active_cancellation_request};
@@ -113,3 +109,8 @@ pub use worker_limit::{
     DrainWorkerLimitChange, DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome,
     DrainWorkerLimitRequest,
 };
+
+/// A claimed worker conclusively exited without a recorded cancellation.
+/// The reconciler cannot reap its exit signal once the process is gone; it
+/// names the exit the worker's supervisor recorded, if any [ORB-17179].
+pub(crate) const WORKER_TERMINATED_ERROR_CODE: &str = "worker_terminated";

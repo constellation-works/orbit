@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use crate::OrbitRuntime;
 use crate::paths::find_linked_worktree_root;
 
+pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;
+
 pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&str>) -> PathBuf {
     workspace_path
         .map(str::trim)
@@ -495,8 +497,6 @@ fn unsupported_selector_kind(entry: &str) -> OrbitError {
         "selector `{entry}` must use file:, dir:, or symbol:"
     ))
 }
-
-pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;
 
 /// Compute advisory warnings for a screened task add from the raw
 /// `context_files` values the caller supplied and the created task. Warnings

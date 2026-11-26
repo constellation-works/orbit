@@ -1,3 +1,9 @@
+mod admission;
+mod approve;
+mod reject;
+mod requeue;
+mod start;
+
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
@@ -19,12 +25,6 @@ use orbit_types::identity::is_valid_friction_id;
 use orbit_types::task::{
     Task, TaskDecision, TaskRelationType, TaskStatus, unmet_task_dependencies,
 };
-
-mod admission;
-mod approve;
-mod reject;
-mod requeue;
-mod start;
 
 pub(crate) use approve::DeferredApprovalEffects;
 pub(crate) use requeue::INFRA_BLOCK_CLEARED_EVENT;

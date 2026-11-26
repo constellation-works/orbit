@@ -11,6 +11,43 @@
 //! and per filer, the same open question on a task is deduplicated to the
 //! request that already holds it, and a task holds one open request.
 
+/// A deterministic interleaving at the raise path: a hook runs at the
+/// raise lock boundary, so a test can synchronize concurrent raises.
+#[cfg(feature = "test-support")]
+pub(crate) mod raise_checkpoint {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Take the hook before running it, so a hook that raises again does
+    /// not run itself a second time.
+    pub(super) fn notify() {
+        let hook = HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Run `operation` with `hook` called once, on this thread, at the
+    /// decision raise lock boundary.
+    pub fn with_decision_raise_checkpoint<T>(
+        hook: impl FnOnce() + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                HOOK.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        let _clear = Clear;
+        operation()
+    }
+}
+
 use orbit_common::OrbitError;
 use orbit_types::task::{
     AgentDecisionOptionInput, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
@@ -52,43 +89,6 @@ pub struct AgentDecisionRaised {
     pub request: DecisionRequest,
     /// Whether the request already existed, so nothing was written.
     pub deduplicated: bool,
-}
-
-/// A deterministic interleaving at the raise path: a hook runs at the
-/// raise lock boundary, so a test can synchronize concurrent raises.
-#[cfg(feature = "test-support")]
-pub(crate) mod raise_checkpoint {
-    use std::cell::RefCell;
-
-    thread_local! {
-        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    }
-
-    /// Take the hook before running it, so a hook that raises again does
-    /// not run itself a second time.
-    pub(super) fn notify() {
-        let hook = HOOK.with(|slot| slot.borrow_mut().take());
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
-
-    /// Run `operation` with `hook` called once, on this thread, at the
-    /// decision raise lock boundary.
-    pub fn with_decision_raise_checkpoint<T>(
-        hook: impl FnOnce() + 'static,
-        operation: impl FnOnce() -> T,
-    ) -> T {
-        struct Clear;
-        impl Drop for Clear {
-            fn drop(&mut self) {
-                HOOK.with(|slot| *slot.borrow_mut() = None);
-            }
-        }
-        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-        let _clear = Clear;
-        operation()
-    }
 }
 
 /// A question in its comparison form: case and spacing never make two

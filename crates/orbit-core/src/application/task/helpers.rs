@@ -9,9 +9,9 @@ use orbit_types::task::{
 use crate::application::contracts::CreationCrewAssignment;
 use crate::runtime::context::resolve_write_actor_label;
 
-pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
-
 pub(crate) use orbit_types::identity::is_automation_actor;
+
+pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 
 /// Latest typed final-recovery outcome in vector order recorded by Orbit for `run_id`.
 pub(super) fn authoritative_recovery_outcome<'a>(

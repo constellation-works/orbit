@@ -3,6 +3,8 @@ mod exec;
 mod pipeline;
 mod scripts;
 
+mod delivery_attention;
+
 /// Deterministic audit-insert fault plus the existing detached-worker seam.
 /// The child and automation admission APIs are crate-private, so this fixture
 /// keeps their regression coverage at the owning application boundary.
@@ -98,5 +100,3 @@ impl SubmissionAuditFault {
         );
     }
 }
-
-mod delivery_attention;

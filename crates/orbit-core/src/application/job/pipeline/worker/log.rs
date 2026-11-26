@@ -1,3 +1,67 @@
+#[cfg(all(any(test, feature = "test-support"), unix))]
+pub(crate) mod pipeline_worker_log_test_hook {
+    use std::cell::RefCell;
+    use std::path::Path;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Phase {
+        AuthorityValidated,
+        DirectoryReady,
+        BeforeLogOpen,
+    }
+
+    type Hook = Box<dyn FnOnce(&Path)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<(Phase, Hook)>> = RefCell::new(None);
+    }
+
+    pub(crate) fn install<F>(phase: Phase, hook: F)
+    where
+        F: FnOnce(&Path) + 'static,
+    {
+        HOOK.with(|slot| *slot.borrow_mut() = Some((phase, Box::new(hook))));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    /// Rendezvous immediately before a worker log is created or opened.
+    #[cfg(feature = "test-support")]
+    pub fn with_pipeline_worker_log_open_hook<T>(
+        hook: impl FnOnce(&Path) + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                clear();
+            }
+        }
+        install(Phase::BeforeLogOpen, hook);
+        let _guard = Clear;
+        operation()
+    }
+
+    pub(super) fn run(phase: Phase, path: &Path) {
+        let hook = HOOK.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|(expected, _)| *expected == phase)
+            {
+                slot.take().map(|(_, hook)| hook)
+            } else {
+                None
+            }
+        });
+        if let Some(hook) = hook {
+            hook(path);
+        }
+    }
+}
+
 use super::*;
 use crate::application::job::run::definition::pipeline_worker_file_name;
 use orbit_common::env_vars;
@@ -310,70 +374,6 @@ fn worker_log_open_error(
         display_path.display(),
         error.raw_os_error(),
     ))
-}
-
-#[cfg(all(any(test, feature = "test-support"), unix))]
-pub(crate) mod pipeline_worker_log_test_hook {
-    use std::cell::RefCell;
-    use std::path::Path;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum Phase {
-        AuthorityValidated,
-        DirectoryReady,
-        BeforeLogOpen,
-    }
-
-    type Hook = Box<dyn FnOnce(&Path)>;
-
-    thread_local! {
-        static HOOK: RefCell<Option<(Phase, Hook)>> = RefCell::new(None);
-    }
-
-    pub(crate) fn install<F>(phase: Phase, hook: F)
-    where
-        F: FnOnce(&Path) + 'static,
-    {
-        HOOK.with(|slot| *slot.borrow_mut() = Some((phase, Box::new(hook))));
-    }
-
-    pub(crate) fn clear() {
-        HOOK.with(|slot| *slot.borrow_mut() = None);
-    }
-
-    /// Rendezvous immediately before a worker log is created or opened.
-    #[cfg(feature = "test-support")]
-    pub fn with_pipeline_worker_log_open_hook<T>(
-        hook: impl FnOnce(&Path) + 'static,
-        operation: impl FnOnce() -> T,
-    ) -> T {
-        struct Clear;
-        impl Drop for Clear {
-            fn drop(&mut self) {
-                clear();
-            }
-        }
-        install(Phase::BeforeLogOpen, hook);
-        let _guard = Clear;
-        operation()
-    }
-
-    pub(super) fn run(phase: Phase, path: &Path) {
-        let hook = HOOK.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if slot
-                .as_ref()
-                .is_some_and(|(expected, _)| *expected == phase)
-            {
-                slot.take().map(|(_, hook)| hook)
-            } else {
-                None
-            }
-        });
-        if let Some(hook) = hook {
-            hook(path);
-        }
-    }
 }
 
 /// Perform path-shape checks before the value reaches filesystem APIs.
