@@ -1,6 +1,7 @@
 //! Reuse only the successful prefix of this worker's unchanged publication.
 use super::*;
 use crate::application::job::ReviewAdmissionHook;
+use crate::runtime::recovery_authority::RecoveryAuthority;
 use orbit_engine::{
     CompletionObservationAdmission, CompletionOwnerLiveness, PublishedCompletionObservation,
     admit_published_completion_observation,
@@ -191,7 +192,52 @@ impl OrbitRuntime {
                             && checkpoint["head_sha"] == initial["head_sha"]
                             && checkpoint["head_sha_before"] == initial["head_sha"]
                     });
-            if !preparation && !refreshed_preparation {
+            // A completed host-certified sync recovery is safe only when the
+            // later successful sync receipt names exactly its final candidate.
+            // All publication, validation and review bindings are checked below.
+            let managed_sync = if step_id == "sync_base"
+                && publication
+                    .is_some_and(|index| job.steps[..index].iter().any(|step| step.id == *step_id))
+            {
+                let sync =
+                    observation::authenticated_checkpoint(&job, &state, "sync_base", "git_rebase")?;
+                let worktree = observation::authenticated_checkpoint(
+                    &job,
+                    &state,
+                    "worktree",
+                    "worktree_setup",
+                )?;
+                let exact_sha = |key: &str| {
+                    checkpoint[key]
+                        .as_str()
+                        .is_some_and(observation::is_exact_sha)
+                };
+                matches!(
+                    sync["decision"].as_str(),
+                    Some("reused_recovery" | "chased_recovery")
+                ) && checkpoint["run_id"] == run_id
+                    && checkpoint["step_id"] == step_id.as_str()
+                    && checkpoint["task_ids"] == json!([task_id])
+                    && checkpoint["workspace_path"] == worktree["workspace_path"]
+                    && checkpoint["head"] == sync["head"]
+                    && checkpoint["head_sha"] == sync["head_sha"]
+                    && checkpoint["head_sha_before"] == sync["head_sha_before"]
+                    && checkpoint["base_sha"] == sync["base_sha"]
+                    && checkpoint["base_ref"] == sync["base_ref"]
+                    && ["head_sha", "head_sha_before", "base_sha", "target_base_sha"]
+                        .iter()
+                        .all(|key| exact_sha(key))
+                    && checkpoint["rewritten"] == true
+                    && checkpoint["recovery_attempt"]
+                        .as_u64()
+                        .is_some_and(|n| n > 0)
+                    && checkpoint["absorbed"].is_null()
+                    && RecoveryAuthority::open(&self.global_root())?
+                        .verify(run_id, step_id, checkpoint)?
+            } else {
+                false
+            };
+            if !preparation && !refreshed_preparation && !managed_sync {
                 return Err(refuse(format!(
                     "rebase recovery checkpoint at `{step_id}` requires governed candidate recovery"
                 )));

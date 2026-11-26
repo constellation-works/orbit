@@ -286,6 +286,106 @@ fn insert_refreshed_preparation(f: &Fixture) {
     f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
 }
 
+fn insert_managed_sync_recovery(f: &Fixture) {
+    use orbit_core::runtime::recovery_authority::RecoveryAuthority;
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.pipeline["sync_base"]["decision"] = json!("reused_recovery");
+    let sync_index = 3;
+    state
+        .step_outputs
+        .insert(sync_index, state.pipeline["sync_base"].clone());
+    let sync = &state.pipeline["sync_base"];
+    let workspace = state.pipeline["worktree"]["workspace_path"]
+        .as_str()
+        .unwrap();
+    let before = sync["head_sha_before"].as_str().unwrap();
+    let base = sync["base_sha"].as_str().unwrap();
+    let authority = RecoveryAuthority::open(&f.runtime.global_root()).unwrap();
+    let attempt = authority
+        .begin_attempt(
+            &f.source.run_id,
+            "sync_base",
+            &orbit_engine::RebaseRecoveryAttemptScope {
+                workspace_path: workspace.into(),
+                head_sha_before: before.into(),
+                target_base_sha: base.into(),
+            },
+        )
+        .unwrap();
+    let checkpoint = json!({"run_id":f.source.run_id,"step_id":"sync_base", "task_ids":[f.task],
+        "workspace_path":workspace,"head":sync["head"],"head_sha_before":before,
+        "original_base_sha":f.base,"base_ref":sync["base_ref"],"target_base_sha":base,
+        "base_sha":base,"remote_sha_before":null,"head_sha":sync["head_sha"],
+        "companion_paths":[],"regenerated_paths":[],"rewritten":true,"recovery_attempt":attempt});
+    authority
+        .issue(&f.source.run_id, "sync_base", &checkpoint)
+        .unwrap();
+    state
+        .rebase_recovery_checkpoints
+        .insert("sync_base".into(), checkpoint);
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+}
+
+pub(super) fn managed_sync_recovery_refuses_unproven_or_changed_evidence() {
+    let (f, _) = fixture();
+    insert_managed_sync_recovery(&f);
+    admit(&f);
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .unwrap()
+    );
+    let original = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    for key in [
+        "head_sha",
+        "head_sha_before",
+        "base_sha",
+        "target_base_sha",
+        "run_id",
+        "task_ids",
+        "workspace_path",
+        "recovery_attempt",
+    ] {
+        let mut changed = original.clone();
+        changed
+            .rebase_recovery_checkpoints
+            .get_mut("sync_base")
+            .unwrap()[key] = if key == "target_base_sha" {
+            json!(f.head)
+        } else {
+            json!("foreign")
+        };
+        f.runtime
+            .write_run_state(&f.source.run_id, &changed)
+            .unwrap();
+        assert!(
+            f.runtime
+                .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+                .is_err(),
+            "{key}"
+        );
+    }
+    let mut changed = original.clone();
+    let checkpoint = changed
+        .rebase_recovery_checkpoints
+        .remove("sync_base")
+        .unwrap();
+    changed
+        .rebase_recovery_checkpoints
+        .insert("complete_pr".into(), checkpoint);
+    f.runtime
+        .write_run_state(&f.source.run_id, &changed)
+        .unwrap();
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .is_err()
+    );
+    f.runtime
+        .write_run_state(&f.source.run_id, &original)
+        .unwrap();
+}
+
 /// A published candidate whose only preparation history is the host's
 /// refreshed preparation, and whose `pr_complete` then loses its VCS read
 /// (TLS/SIGPIPE), is re-admitted by final recovery on the unchanged
