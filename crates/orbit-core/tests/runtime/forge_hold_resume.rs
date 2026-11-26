@@ -294,6 +294,7 @@ impl Fixture {
 
     fn tick(&self) {
         let sweep = run_sweep_at_with_providers(
+            orbit_core::composition::store_opener(),
             &self.global,
             SweepOptions::default(),
             RoutineMachineIdentity {

@@ -102,6 +102,7 @@ impl RoutineWorkspaceProvider for SingleWorkspace {
 /// One owner clock tick over the fixture's workspace.
 fn tick(f: &Fixture) {
     let sweep = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &f._root.path().join("global"),
         SweepOptions::default(),
         RoutineMachineIdentity {

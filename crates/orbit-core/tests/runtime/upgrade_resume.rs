@@ -347,6 +347,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
 
     // Clock tick during pending generation switch must NOT resume anything.
     let sweep = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &ctx.global,
         SweepOptions::default(),
         machine.clone(),
@@ -370,6 +371,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
 
     // Clock tick after generation settles must resume the upgrade run.
     let sweep = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &ctx.global,
         SweepOptions::default(),
         machine.clone(),
@@ -413,6 +415,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
     // ---- Phase 3: Repeat clock sweep (second tick) ----
     // Subsequent clock ticks must NOT re-resume the already-resumed run.
     let sweep2 = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &ctx.global,
         SweepOptions::default(),
         machine.clone(),
@@ -450,6 +453,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
     record_upgrade_interruption(ctx.jobs.as_ref(), &run_dry.run_id);
 
     let dry_sweep = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
         &ctx.global,
         SweepOptions {
             dry_run: true,
@@ -672,6 +676,7 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
     };
     let tick = || {
         let sweep = run_sweep_at_with_providers(
+            orbit_core::composition::store_opener(),
             &ctx.global,
             SweepOptions::default(),
             machine.clone(),
@@ -812,6 +817,7 @@ fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
     let provider = SingleWorkspace(ctx.runtime.clone());
     let tick = || {
         let sweep = run_sweep_at_with_providers(
+            orbit_core::composition::store_opener(),
             &ctx.global,
             SweepOptions::default(),
             RoutineMachineIdentity {
@@ -934,8 +940,14 @@ fn upgrade_quiesced_runs_stay_resumable_outside_the_failure_count() {
         machine_id: "test-mach".into(),
         machine_name: "test-host".into(),
     };
-    run_sweep_at_with_providers(&ctx.global, SweepOptions::default(), machine, &provider)
-        .expect("sweep runs");
+    run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
+        &ctx.global,
+        SweepOptions::default(),
+        machine,
+        &provider,
+    )
+    .expect("sweep runs");
     assert_eq!(
         ctx.jobs.job_run_retries(&paused, 1).unwrap().len(),
         1,
@@ -969,6 +981,7 @@ fn clock_sweep_caps_successful_upgrade_resumes_per_tick() {
     };
     let tick = || {
         let sweep = run_sweep_at_with_providers(
+            orbit_core::composition::store_opener(),
             &ctx.global,
             SweepOptions::default(),
             machine.clone(),
@@ -1018,6 +1031,7 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     };
     let tick = || {
         let sweep = run_sweep_at_with_providers(
+            orbit_core::composition::store_opener(),
             &ctx.global,
             SweepOptions::default(),
             machine.clone(),
@@ -1104,9 +1118,14 @@ fn clock_sweep_defers_one_unreadable_upgrade_run_and_resumes_the_later_page() {
         machine_id: "test-mach".into(),
         machine_name: "test-host".into(),
     };
-    let sweep =
-        run_sweep_at_with_providers(&ctx.global, SweepOptions::default(), machine, &provider)
-            .expect("one unreadable run does not fail the sweep");
+    let sweep = run_sweep_at_with_providers(
+        orbit_core::composition::store_opener(),
+        &ctx.global,
+        SweepOptions::default(),
+        machine,
+        &provider,
+    )
+    .expect("one unreadable run does not fail the sweep");
     assert!(!sweep.lock_busy);
 
     assert!(

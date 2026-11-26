@@ -996,7 +996,13 @@ projections_test!(
             );
             fs::write(routines.join(format!("{name}.yaml")), yaml).unwrap();
         }
-        pause_routine(&fixture.global, "paused", "http-fixture").unwrap();
+        pause_routine(
+            orbit_core::composition::store_opener(),
+            &fixture.global,
+            "paused",
+            "http-fixture",
+        )
+        .unwrap();
         let server = fixture.server(false);
         let before = Utc::now();
         let auto = get_ok(&server, "/api/auto-tasks?workspace=ws_http_fixture");

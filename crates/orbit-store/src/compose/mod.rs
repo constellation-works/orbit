@@ -105,12 +105,6 @@ pub fn workspace_session_log_store(orbit_dir: PathBuf) -> FileStore<SessionLogDi
     FileStore::new(SessionLogDir::new(orbit_dir))
 }
 
-// Not yet routed through composition: Core's routine pause and breaker writes still open here.
-#[allow(clippy::disallowed_methods)]
-pub fn routine_store(database: &std::path::Path) -> Result<Store, orbit_common::OrbitError> {
-    Store::open(database)
-}
-
 /// One workspace's task backends, reservation store, and the commit boundary
 /// they share.
 ///

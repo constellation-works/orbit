@@ -21,11 +21,13 @@ use super::{
 use crate::application::auto_tasks::SchedulerOptions;
 use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
 use crate::application::automation::SourceCache;
+use crate::application::store_opener::StoreOpener;
 use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
 
 /// Run one sweep pass against the default global root with a caller-supplied
 /// workspace provider.
 pub fn run_sweep_with_providers(
+    opener: StoreOpener,
     env: &orbit_common::Env,
     options: SweepOptions,
     local_machine: RoutineMachineIdentity,
@@ -43,18 +45,26 @@ pub fn run_sweep_with_providers(
         &super::super::clock::sweep_log_path(&global_root),
         &LogRotationConfig::default(),
     );
-    run_sweep_at_with_providers(&global_root, options, local_machine, workspace_provider)
+    run_sweep_at_with_providers(
+        opener,
+        &global_root,
+        options,
+        local_machine,
+        workspace_provider,
+    )
 }
 
 /// Run one sweep pass against an explicit global root using injected
 /// composition. Provider calls occur only after the sweep lock is held.
 pub fn run_sweep_at_with_providers(
+    opener: StoreOpener,
     global_root: &Path,
     options: SweepOptions,
     local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
     run_sweep_at_with_providers_at(
+        opener,
         global_root,
         options,
         local_machine,
@@ -67,6 +77,7 @@ pub fn run_sweep_at_with_providers(
 /// Test seam for one scheduler tick at an explicit instant, with an injected
 /// host-signal probe.
 pub(crate) fn run_sweep_at_with_providers_at(
+    opener: StoreOpener,
     global_root: &Path,
     options: SweepOptions,
     local_machine: RoutineMachineIdentity,
@@ -97,7 +108,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
         });
     };
 
-    let store = super::super::open_routine_store(global_root)?;
+    let store = super::super::open_routine_store(opener, global_root)?;
     // The OS unit and due calculation share this host-local setting. A
     // configured five-minute clock therefore keeps a slot natural for two
     // five-minute intervals instead of retaining the old 120-second default.

@@ -40,7 +40,12 @@ impl RoutinePauseArgs {
                 self.name
             )));
         }
-        let changed = pause_routine(global_root, &self.name, "human")?;
+        let changed = pause_routine(
+            orbit_core::composition::store_opener(),
+            global_root,
+            &self.name,
+            "human",
+        )?;
         let text = if changed {
             format!(
                 "paused '{}' on this host (host-local; resume with `orbit routine resume {}`)",

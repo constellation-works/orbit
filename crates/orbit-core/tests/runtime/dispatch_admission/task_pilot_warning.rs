@@ -108,7 +108,15 @@ fn a_drain_warns_until_a_task_pilot_is_enabled_on_this_machine() {
     );
 
     write_pilot(&repo, MACHINE, true);
-    assert!(pause_routine(&runtime.global_root(), ROUTINE, "fixture").unwrap());
+    assert!(
+        pause_routine(
+            orbit_core::composition::store_opener(),
+            &runtime.global_root(),
+            ROUTINE,
+            "fixture"
+        )
+        .unwrap()
+    );
     let paused = observed(&runtime, &drain).expect("a paused pilot warns");
     names_workspace_and_machine(&paused);
     assert!(
@@ -116,7 +124,14 @@ fn a_drain_warns_until_a_task_pilot_is_enabled_on_this_machine() {
         "{paused}"
     );
 
-    assert!(resume_routine(&runtime.global_root(), ROUTINE).unwrap());
+    assert!(
+        resume_routine(
+            orbit_core::composition::store_opener(),
+            &runtime.global_root(),
+            ROUTINE
+        )
+        .unwrap()
+    );
     assert_eq!(
         observed(&runtime, &drain),
         None,
