@@ -227,6 +227,41 @@ impl FromRequestParts<DashboardState> for WsCore {
     }
 }
 
+/// A panel request's opaque Core and the cache identity of its selected runtime.
+pub(crate) struct PluginPanelWs {
+    pub(crate) core: Arc<Core>,
+    runtime: Arc<OrbitRuntime>,
+}
+
+impl PluginPanelWs {
+    /// Reuse cached panel output for this runtime generation.
+    pub(crate) async fn read_cached(
+        &self,
+        state: &DashboardState,
+        key: (String, String),
+        ttl: std::time::Duration,
+        read: impl FnOnce() -> Result<serde_json::Value, orbit_core::Error> + Send + 'static,
+    ) -> Result<crate::runtime_memo::Served<serde_json::Value>, orbit_core::Error> {
+        state
+            .plugin_panel_memo()
+            .get_or_compute(&self.runtime, key, ttl, read)
+            .await
+    }
+}
+
+impl FromRequestParts<DashboardState> for PluginPanelWs {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
+        let WsCore(core) = WsCore::over(&runtime);
+        Ok(Self { core, runtime })
+    }
+}
+
 /// Stale-tolerant workspace extractor for `GET /api/config/file` only.
 ///
 /// A broken layered config must stay repairable through the file view (400

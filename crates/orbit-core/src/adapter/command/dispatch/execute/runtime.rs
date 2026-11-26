@@ -435,12 +435,31 @@ impl OrbitRuntime {
                     ToolEntryPoint::Cli => CapabilityEnforcement::Enforce,
                     ToolEntryPoint::Mcp => CapabilityEnforcement::McpSessionOnly,
                 };
-                self.run_tool_with_context_and_capability(
-                    name,
-                    input,
-                    tool_context,
-                    capability_enforcement,
-                )
+                if self.tool_registry().plugin_binding(name).is_some() {
+                    use crate::app::plugin::{Command, Outcome, ToolCall, exec};
+
+                    let core = crate::Core::within_tool_entry(self.clone());
+                    let Outcome::ToolOutput(output) = exec(
+                        &core,
+                        Command::InvokeTool(Box::new(ToolCall {
+                            name,
+                            input,
+                            context: tool_context,
+                            enforcement: capability_enforcement,
+                        })),
+                    )?
+                    else {
+                        unreachable!("plugin tool returned an unrelated outcome");
+                    };
+                    Ok(output)
+                } else {
+                    self.run_tool_with_context_and_capability(
+                        name,
+                        input,
+                        tool_context,
+                        capability_enforcement,
+                    )
+                }
             },
         )
     }

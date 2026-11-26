@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::adapter::command::PluginAddOptions;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::support;
 
@@ -42,19 +43,25 @@ pub struct PluginAddArgs {
     pub allow_build: bool,
 }
 
-impl Execute for PluginAddArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = runtime.add_plugin(
-            &self.source,
-            &PluginAddOptions {
-                force: self.force,
-                digest: self.digest,
-                enable: self.enable,
-                grants: self.grants,
-                allow_build: self.allow_build,
-                show_build_plan: Some(show_build_plan),
+impl ExecuteCore for PluginAddArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Added(result) = exec(
+            core,
+            Command::Add {
+                source: self.source,
+                options: PluginAddOptions {
+                    force: self.force,
+                    digest: self.digest,
+                    enable: self.enable,
+                    grants: self.grants,
+                    allow_build: self.allow_build,
+                    show_build_plan: Some(show_build_plan),
+                },
             },
-        )?;
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let summary = &result.summary;
         let mut text = format!(
             "Installed plugin '{}' v{} to {}",

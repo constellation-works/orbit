@@ -1,8 +1,8 @@
 use clap::{Args, Subcommand};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::add::PluginAddArgs;
 use super::disable::PluginDisableArgs;
@@ -49,8 +49,8 @@ pub struct PluginCommand {
 }
 
 impl PluginCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        self.command.execute_with_env(runtime, env)
+    pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
+        self.command.execute_with_env(core, env)
     }
 }
 
@@ -87,22 +87,22 @@ pub enum PluginSubcommand {
 }
 
 impl PluginSubcommand {
-    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         match self {
-            PluginSubcommand::Add(args) => args.execute(runtime),
-            PluginSubcommand::Upgrade(args) => args.execute(runtime),
-            PluginSubcommand::Enable(args) => args.execute(runtime),
-            PluginSubcommand::Disable(args) => args.execute(runtime),
-            PluginSubcommand::Remove(args) => args.execute(runtime),
-            PluginSubcommand::List(args) => args.execute(runtime),
-            PluginSubcommand::Show(args) => args.execute(runtime),
-            PluginSubcommand::Doctor => execute_doctor(runtime),
-            PluginSubcommand::Secret(command) => command.execute(runtime),
-            PluginSubcommand::Validate(args) => args.execute(runtime),
-            PluginSubcommand::Test(args) => args.execute_with_env(runtime, env),
-            PluginSubcommand::Scaffold(args) => args.execute(runtime),
-            PluginSubcommand::Sync(args) => args.execute(runtime),
-            PluginSubcommand::Migrate(args) => args.execute(runtime),
+            PluginSubcommand::Add(args) => args.execute(core),
+            PluginSubcommand::Upgrade(args) => args.execute(core),
+            PluginSubcommand::Enable(args) => args.execute(core),
+            PluginSubcommand::Disable(args) => args.execute(core),
+            PluginSubcommand::Remove(args) => args.execute(core),
+            PluginSubcommand::List(args) => args.execute(core),
+            PluginSubcommand::Show(args) => args.execute(core),
+            PluginSubcommand::Doctor => execute_doctor(core),
+            PluginSubcommand::Secret(command) => command.execute(core),
+            PluginSubcommand::Validate(args) => args.execute(core),
+            PluginSubcommand::Test(args) => args.execute_with_env(core, env),
+            PluginSubcommand::Scaffold(args) => args.execute(core),
+            PluginSubcommand::Sync(args) => args.execute(core),
+            PluginSubcommand::Migrate(args) => args.execute(core),
         }
     }
 }

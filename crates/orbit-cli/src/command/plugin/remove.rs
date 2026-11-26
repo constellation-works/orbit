@@ -1,9 +1,10 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::adapter::command::PluginRemoveOptions;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload, require_confirmation};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct PluginRemoveArgs {
@@ -22,17 +23,22 @@ pub struct PluginRemoveArgs {
     pub purge_state: bool,
 }
 
-impl Execute for PluginRemoveArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        require_confirmation(self.confirm, &format!("removing plugin '{}'", self.name))?;
-        let state_dir = runtime.global_root().join("state/plugins").join(&self.name);
-        runtime.remove_plugin(
-            &self.name,
-            &PluginRemoveOptions {
-                record_only: self.record_only,
-                purge_state: self.purge_state,
+impl ExecuteCore for PluginRemoveArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Removed(state_dir) = exec(
+            core,
+            Command::Remove {
+                name: self.name.clone(),
+                options: PluginRemoveOptions {
+                    record_only: self.record_only,
+                    purge_state: self.purge_state,
+                },
+                confirmed: self.confirm,
             },
-        )?;
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
         let state_message = if self.purge_state {
             format!("Plugin state at {} was removed.", state_dir.display())
         } else {

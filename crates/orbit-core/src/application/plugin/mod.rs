@@ -19,7 +19,9 @@ mod conformance;
 mod inspect;
 mod install;
 pub(crate) mod lifecycle;
+pub(crate) mod mcp_surface;
 mod panels;
+mod runtime;
 mod secrets;
 pub(crate) mod seed;
 pub(crate) mod skills;
@@ -58,6 +60,8 @@ pub use lifecycle::{
     enable_plugin_from_dashboard, enable_plugin_in_workspace, load_sidecar_manifest,
     migrate_plugin_sidecars, remove_plugin, sync_plugins,
 };
+pub use mcp_surface::{HostPluginMcpCache, HostPluginMcpSurface};
+pub(crate) use mcp_surface::{global_only_config, global_only_config_with_env};
 pub use panels::{
     PluginLinkSummary, PluginPanelSummary, plugin_panel_refresh_ms, read_plugin_panel,
 };
@@ -65,6 +69,20 @@ pub use secrets::{
     PluginSecretStatus, list_plugin_secrets, remove_plugin_secret, set_plugin_secret,
 };
 pub use seed::{PluginSeedAction, PluginSeedOutcome, seed_plugin_definitions};
+use skills::PluginSkillLink;
 pub use visibility::{
     InactivePlugin, InactivePluginScope, PluginActivity, inactive_plugin, is_listed,
 };
+
+/// What `orbit plugin add --enable` produced, kept alongside the install
+/// summary rather than collapsed into it, so the CLI can render seeded
+/// schedules, linked skills and warnings the same way `orbit plugin enable`
+/// does. `seeded`, `skills` and `warnings` are empty when `--enable` was not
+/// set.
+#[derive(Debug, Clone)]
+pub struct PluginAddResult {
+    pub summary: PluginSummary,
+    pub seeded: Vec<PluginSeedOutcome>,
+    pub skills: Vec<PluginSkillLink>,
+    pub warnings: Vec<String>,
+}

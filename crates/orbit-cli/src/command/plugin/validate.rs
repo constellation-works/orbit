@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::Core;
+use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct PluginValidateArgs {
@@ -22,24 +23,18 @@ pub struct PluginValidateArgs {
     pub render: bool,
 }
 
-impl Execute for PluginValidateArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = if self.render {
-            runtime.validate_plugin_dir_rendered(
-                &self.dir,
-                self.first_party,
-                &runtime.paths().repo_root,
-            ).map_err(|error| {
-                if runtime.shared_root() == runtime.global_root() {
-                    OrbitError::InvalidInput(format!(
-                        "{error}; use --workspace <SELECTOR> if rendering needs workspace config"
-                    ))
-                } else {
-                    error
-                }
-            })?
-        } else {
-            runtime.validate_plugin_dir(&self.dir, self.first_party)?
+impl ExecuteCore for PluginValidateArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Validated(report) = exec(
+            core,
+            Command::Validate {
+                dir: self.dir,
+                first_party: self.first_party,
+                render: self.render,
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
         };
         let mut text = format!(
             "Valid plugin '{}' v{}\n  root:   {}\n  digest: {}\n  tools:",
