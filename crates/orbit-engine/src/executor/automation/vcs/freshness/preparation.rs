@@ -15,6 +15,7 @@ use super::rebase::prepare_pr_handoff_inner;
 use super::rebase_recovery::{RecoveredRewrite, ensure_clean_for_rewrite, recovered_rewrite};
 use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 const PREPARE: &str = "prepare_branch";
@@ -40,6 +41,15 @@ fn preparation(input: &Value) -> Option<&Value> {
         .get("preparation")?
         .get("preparation")
         .filter(|value| !value.is_null())
+}
+
+fn exhausted(reason: impl std::fmt::Display) -> OrbitError {
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::BaseChaseExhausted,
+        message: format!(
+            "base_chase_exhausted: {reason}; the candidate is preserved for a later delivery"
+        ),
+    }
 }
 
 fn refusal(reason: impl std::fmt::Display) -> OrbitError {
@@ -160,24 +170,11 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
         return rebase(input, &mut false);
     }
     let (mut effective, mut latest) = effective_input(host, input, context)?;
+    let process_env = host.process_env();
     loop {
         validate_owner(host, recovery_run_id(input, context), context)?;
-        if !rebase_in_progress(&host.process_env(), &context.workspace_path)? {
-            let current = commit_sha(&host.process_env(), &context.workspace_path, "HEAD")?;
-            if let Some(latest) = &latest
-                && latest["source_preparation"]
-                    == *preparation(input).ok_or_else(|| refusal("missing preparation"))?
-                && current == required_input_string(&effective, "head_sha")?
-                && now_ms()?
-                    >= latest["deadline_ms"]
-                        .as_u64()
-                        .ok_or_else(|| refusal("refresh lost its deadline"))?
-            {
-                return Err(refusal(format!(
-                    "fresh preparation deadline exhausted; original stale preparation error: {}; attempt trace: {}",
-                    latest["original_error"], latest["attempt_trace"]
-                )));
-            }
+        if !rebase_in_progress(&process_env, &context.workspace_path)? {
+            let current = commit_sha(&process_env, &context.workspace_path, "HEAD")?;
             if current != required_input_string(&effective, "head_sha")?
                 && !matches!(
                     recovered_rewrite(host, &effective, context, &current)?,
@@ -192,12 +189,28 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
             }
         }
         if remote_branch_sha(
-            &host.process_env(),
+            &process_env,
             &context.workspace_path,
             required_input_string(&effective, "head")?,
         )? != effective["remote_sha"].as_str().map(ToOwned::to_owned)
         {
             return Err(refusal("remote candidate lease changed"));
+        }
+        if !rebase_in_progress(&process_env, &context.workspace_path)?
+            && let Some(latest) = &latest
+            && latest["source_preparation"]
+                == *preparation(input).ok_or_else(|| refusal("missing preparation"))?
+            && commit_sha(&process_env, &context.workspace_path, "HEAD")?
+                == required_input_string(&effective, "head_sha")?
+            && now_ms()?
+                >= latest["deadline_ms"]
+                    .as_u64()
+                    .ok_or_else(|| refusal("refresh lost its deadline"))?
+        {
+            return Err(exhausted(format!(
+                "fresh preparation deadline exhausted; original stale preparation error: {}; attempt trace: {}",
+                latest["original_error"], latest["attempt_trace"]
+            )));
         }
         let mut stale = false;
         match rebase(&effective, &mut stale) {
@@ -225,7 +238,7 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
                         latest = Some(next);
                     }
                     Err(reason) => {
-                        return Err(refusal(format!(
+                        let detail = format!(
                             "{reason}; original stale preparation error: {}; attempt trace: {}",
                             latest
                                 .as_ref()
@@ -235,7 +248,21 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
                                 .as_ref()
                                 .map(|value| &value["attempt_trace"])
                                 .unwrap_or(&Value::Null),
-                        )));
+                        );
+                        return Err(match reason {
+                            OrbitError::DeliveryRefused {
+                                refusal: DeliveryRefusal::BaseChaseExhausted,
+                                ..
+                            } => exhausted(detail),
+                            OrbitError::Execution(ref message)
+                                if latest.is_some()
+                                    && message
+                                        == "prepared_base_refresh_refused: fresh preparation deadline exhausted" =>
+                            {
+                                exhausted(detail)
+                            }
+                            _ => refusal(detail),
+                        });
                     }
                 }
             }
@@ -255,7 +282,7 @@ fn refresh<H: RuntimeHost + ?Sized>(
     let run_id = recovery_run_id(input, context);
     let attempts = host.rebase_recovery_attempts(run_id, REFRESH)?;
     if attempts.len() >= MAX_REFRESHES {
-        return Err(refusal(format!(
+        return Err(exhausted(format!(
             "exhausted {MAX_REFRESHES} fresh preparation attempts"
         )));
     }
@@ -268,7 +295,7 @@ fn refresh<H: RuntimeHost + ?Sized>(
     let remaining = deadline
         .checked_sub(now_ms()?)
         .filter(|ms| *ms > 0)
-        .ok_or_else(|| refusal("fresh preparation deadline exhausted"))?;
+        .ok_or_else(|| exhausted("fresh preparation deadline exhausted"))?;
     // Fetches and reads share one remaining deadline. No Git rewrite occurs
     // under this guard; normal rebase timeout cleanup keeps its own budget.
     let _deadline = GitDeadlineGuard::install(std::time::Duration::from_millis(remaining));
@@ -338,11 +365,11 @@ fn refresh<H: RuntimeHost + ?Sized>(
     if next["head"] != head
         || next["head_sha"] != head_sha
         || next["remote_sha"] != effective["remote_sha"]
-        || now_ms()? >= deadline
     {
-        return Err(refusal(
-            "preparation changed candidate/lease or exhausted its deadline",
-        ));
+        return Err(refusal("preparation changed candidate/lease"));
+    }
+    if now_ms()? >= deadline {
+        return Err(exhausted("fresh preparation deadline exhausted"));
     }
     let mut trace = latest
         .and_then(|value| value["attempt_trace"].as_array())

@@ -426,7 +426,9 @@ fn post_recovery_attempt(
         }
         // A typed stop the retry met is attributed as the stop it is, as a
         // direct one is on `step.finished`.
-        Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
+        Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::DeliveryRefused { .. }) => {
+            ("held", None)
+        }
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
         }
