@@ -8,13 +8,13 @@ use std::time::Instant;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-#[cfg(not(test))]
-use super as gh;
 use super::CheckRerunOutcome;
 #[cfg(test)]
 use super::tests::pr_forge_rerun as gh;
 #[cfg(test)]
 use super::tests::pr_forge_rerun::{workflow_rerun_now, workflow_rerun_sleep};
+#[cfg(not(test))]
+use crate::host::forge as gh;
 #[cfg(not(test))]
 use std::thread::sleep as workflow_rerun_sleep;
 
