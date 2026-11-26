@@ -53,6 +53,11 @@ impl ChecksForge {
         blockers.pending_required_checks = names(pending);
         blockers.passed_required_checks = names(passed);
     }
+
+    /// Report the pull request as conflicting (or not) with its base.
+    pub(super) fn set_conflicting(&self, conflicting: bool) {
+        self.0.lock().unwrap().conflicting = conflicting;
+    }
 }
 
 /// A required-checks case: its name, the head the checks describe, the

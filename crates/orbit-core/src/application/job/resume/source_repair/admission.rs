@@ -458,7 +458,9 @@ impl OrbitRuntime {
             }
         } else if request.unmet_acceptance.is_some() || request.policy_digest.is_some() {
             return Err(refuse(
-                "publication rework fields do not authorize this source state",
+                "publication rework fields do not authorize this source state; resubmit without \
+                 unmet_acceptance and policy_digest, which apply only to a successful or kept \
+                 inline publication",
             ));
         }
         // The same lifecycle predicate as automation readmission, under the

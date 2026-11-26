@@ -319,6 +319,30 @@ fn source_repair_reader_next_step_follows_the_cause_it_names() {
     );
 }
 
+/// A requeue cannot resume a conflicting pull request and a rework-field
+/// submit is refused on a state that takes none: each line names the source
+/// repair route that works, never a requeue that the conflict itself refuses.
+#[test]
+fn source_repair_reader_conflict_and_rework_lines_name_the_working_route() {
+    let conflict = "invalid input: source repair refused: pull request #17 conflicts with its \
+         base. Nothing was changed. A requeue cannot resume a conflicting pull request.";
+    let shown = orbit_common::source_repair_reader_text(conflict).expect("conflict refusal");
+    assert_eq!(
+        shown.line,
+        "source repair refused: pull request #17 conflicts with its base. Resolve the conflict with explicit source repair (inspect, then submit)."
+    );
+
+    let rework = "job validation failed: source repair refused: publication rework fields do not \
+         authorize this source state; resubmit without unmet_acceptance and policy_digest, which \
+         apply only to a successful or kept inline publication";
+    let shown = orbit_common::source_repair_reader_text(rework).expect("rework refusal");
+    assert_eq!(
+        shown.line,
+        "source repair refused: publication rework fields do not authorize this source state. Resubmit without unmet_acceptance and policy_digest."
+    );
+    assert_eq!(shown.detail, rework);
+}
+
 /// A terminal record whose worker is not conclusively gone refuses with
 /// "still running" and no cancel command (ORB-25168). Cancel reports already
 /// terminal and does not stop that worker, so the line must not tell the

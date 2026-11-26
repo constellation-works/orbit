@@ -173,6 +173,22 @@ impl OrbitRuntime {
                             "{refusal}. Nothing was changed. To {discard_hint}."
                         ))
                     }
+                    // A requeue cannot resume a conflicting pull request and
+                    // waiting does not clear a conflict: source repair is the
+                    // route that resolves it, and it supersedes an open
+                    // requeue request.
+                    Some(refusal) if refusal.contains("conflicts with its base") => {
+                        let run = task.job_run_id.as_deref().unwrap_or("<publishing-run>");
+                        OrbitError::InvalidInput(format!(
+                            "{refusal}. Nothing was changed. A requeue cannot resume a conflicting \
+                             pull request. Resolve the conflict with explicit source repair on run \
+                             `{run}`: `orbit.run` action `resume` with `source_repair` action \
+                             `inspect` for this task, then `submit` the returned binding with a \
+                             `request_key` and a `diagnosis` naming the conflict, leaving \
+                             `unmet_acceptance` and `policy_digest` unset. It supersedes an open \
+                             requeue request. Otherwise, {discard_hint}."
+                        ))
+                    }
                     Some(refusal) => OrbitError::InvalidInput(format!(
                         "{refusal}. Nothing was changed. The requeue resumes the pull request its \
                      run published once it is open at the recorded head with every required \

@@ -1034,6 +1034,15 @@ positively confirms the base branch configures no required status checks):
   `orbit task update <task-id> --status backlog` (or append
   `--discard-candidate` to close the pull request and implement fresh).
 
+A pull request that conflicts with its base is refused by both entry points, and
+by a `block_triage` decision's requeue answer, whatever else holds; waiting does
+not clear it. Resolve the conflict with explicit source repair on the publishing
+run (`orbit.run` action `resume`, `source_repair` `inspect`, then `submit` the
+returned binding with a `request_key` and a `diagnosis`, without
+`unmet_acceptance` or `policy_digest`: only a `success` or kept-inline `failed`
+source takes them, and any other source refuses them). The started repair supersedes an
+open requeue decision and keeps the candidate.
+
 Both entry points apply the same publication authentication, preserve PR repair
 attempts, and cannot authorize repair or renew an expired completion deadline.
 A `review` task with failed, pending, missing, or stale required checks stays in
