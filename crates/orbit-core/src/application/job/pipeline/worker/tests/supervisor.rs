@@ -193,7 +193,7 @@ fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
 
 #[test]
 fn store_read_faults_retain_supervision_and_reap_in_a_live_parent() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &store_read_faults_retain_supervision_and_reap_in_a_live_parent,
     )) {
         return;
@@ -375,7 +375,7 @@ sys.exit(7)
 
 #[test]
 fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing,
     )) {
         return;
@@ -440,7 +440,7 @@ fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
 
 #[test]
 fn a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing,
     )) {
         return;

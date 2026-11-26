@@ -25,7 +25,7 @@ use super::super::MAX_ACTIVE_BLOCKED_RECOVERIES;
 use super::super::input::BlockedRecoveryTick;
 use crate::OrbitRuntime;
 use crate::application::task::blocked_recovery::ATTRIBUTION_SLACK_MS;
-use crate::application::task::tests::{assert_isolated_child, enter_isolated_child};
+use crate::application::task::tests::task::{assert_isolated_child, enter_isolated_child};
 use crate::application::task::{
     BLOCKED_TASK_RECOVERY_JOB, BlockedRecoveryInput, BlockedRecoveryPreparation,
     EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord, TaskAddParams, TaskUpdateParams,

@@ -1,6 +1,7 @@
 //! Security invariant: inject an arbitrary alias bind before credential masking.
 //! The public compiler cannot specify this constructed bind destination.
-use super::*;
+
+use super::linux_sandbox::*;
 use crate::credential_paths::credential_read_denies;
 use credentials::append_credential_masks;
 

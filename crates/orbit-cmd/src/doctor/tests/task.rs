@@ -39,7 +39,7 @@ fn stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers() {
 
     use crate::doctor::task::remove_stale_lock_file_after_acquire;
 
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
         &stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers,
     )) {
         return;

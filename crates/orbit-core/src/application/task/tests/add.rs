@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 
 /// Fault injection: the crew provenance write after the insert fails once.
 /// The insert has committed, so every create must report that task,

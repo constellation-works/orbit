@@ -59,8 +59,7 @@ pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
 pub mod task;
 pub mod task_bundle;
-#[cfg(test)]
-pub(crate) mod test_support;
+
 pub(crate) mod tool_name_migration;
 pub mod vision_probe;
 pub(crate) mod workflow;
@@ -73,14 +72,19 @@ pub use workspace::{
 // The env variant's only caller is the Linux-only process-cleanup test, so
 // its re-export carries the same target gate.
 #[cfg(all(test, target_os = "linux"))]
-pub(crate) use tests::run_isolated_test_with_env;
+pub(crate) use tests::application::run_isolated_test_with_env;
+
+// Mutable adapter fixtures share the application fixtures' isolation launcher.
+#[cfg(test)]
+pub(crate) use tests::application::run_isolated_test;
+
 /// Audit identity used for system-initiated (non-agent) mutations.
 /// `pub` because the direct v2 activity runner moved to `orbit-cmd`
 /// [ORB-10016] and stamps the same identity.
 pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 
 #[cfg(test)]
-mod tests;
-// Mutable adapter fixtures share the application fixtures' isolation launcher.
+pub(crate) mod test_support;
+
 #[cfg(test)]
-pub(crate) use tests::run_isolated_test;
+mod tests;

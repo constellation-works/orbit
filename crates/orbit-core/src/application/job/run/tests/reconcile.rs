@@ -22,10 +22,10 @@ use super::super::owner::signal_run_owner_process;
 use super::super::root_cause::{RunFailureContextProfile, RunFailureRead};
 use super::super::types::JobRunCancelOutcome;
 use super::drain_cancel::in_progress_task;
-use super::{insert_pending_run, test_runtime};
+use super::run::{insert_pending_run, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::job::run::worker_exit::WORKER_EXIT_AUDIT;
-use crate::application::tests::run_isolated_test;
+use crate::application::tests::application::run_isolated_test;
 
 /// What preservation must not change: the branch, both distinct file versions,
 /// and the status that names them.

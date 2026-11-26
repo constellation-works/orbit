@@ -3,7 +3,7 @@
 use orbit_types::task::TaskStatus;
 use serde_json::json;
 
-use crate::application::task::tests::{enter_isolated_child, test_runtime};
+use crate::application::task::tests::task::{enter_isolated_child, test_runtime};
 use crate::application::task::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryRequest,
     FinalRecoveryRequeueBound, TaskAddParams, TaskUpdateParams,

@@ -627,7 +627,7 @@ fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
 
 #[test]
 fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
-    if crate::application::tests::run_isolated_test(
+    if crate::application::tests::application::run_isolated_test(
         "application::task::pilot::tests::drain_promotion::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay",
     ) {
         return;
@@ -834,7 +834,7 @@ fn contract_conflict_holds_promotion_and_advisory_matching_criterion_does_not() 
 
 #[test]
 fn completed_prerequisite_lost_before_approval_still_holds() {
-    if crate::application::tests::run_isolated_test(
+    if crate::application::tests::application::run_isolated_test(
         "application::task::pilot::tests::drain_promotion::completed_prerequisite_lost_before_approval_still_holds",
     ) {
         return;

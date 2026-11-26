@@ -1,7 +1,7 @@
 //! Path-filtered task listing matches Windows-style separators in the
 //! query path against canonical selectors.
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::listing::TaskListQuery;
 

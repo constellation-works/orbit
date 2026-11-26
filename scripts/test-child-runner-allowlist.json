@@ -217,7 +217,7 @@
     "reason": "Isolated child; the parent inspects stdout and stderr itself. Baselined raw .output()."
   },
   {
-    "path": "crates/orbit-core/src/application/task/tests/mod.rs",
+    "path": "crates/orbit-core/src/application/task/tests/task.rs",
     "function": "enter_isolated_child",
     "call": ".output()",
     "ordinal": 0,
@@ -385,7 +385,7 @@
     "reason": "Second isolated re-exec after the namespace binding, waited with .output() and assert_child_test_passed."
   },
   {
-    "path": "crates/orbit-runtime/src/tests/mod.rs",
+    "path": "crates/orbit-runtime/src/tests/lib.rs",
     "function": "run_isolated_test",
     "call": ".output()",
     "ordinal": 0,

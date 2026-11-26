@@ -91,7 +91,7 @@ mod git_spawns {
 
     #[test]
     fn linked_worktree_roots_resolve_without_spawning_git() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &linked_worktree_roots_resolve_without_spawning_git,
         )) {
             return;
@@ -150,7 +150,7 @@ mod git_spawns {
 
     #[test]
     fn ordinary_checkout_roots_still_spawn_no_git() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &ordinary_checkout_roots_still_spawn_no_git,
         )) {
             return;
@@ -181,7 +181,7 @@ mod git_spawns {
 
     #[test]
     fn submodule_gitfile_still_defers_to_git() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &submodule_gitfile_still_defers_to_git,
         )) {
             return;
@@ -229,7 +229,7 @@ mod git_spawns {
 
     #[test]
     fn location_override_forces_git_authority() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &location_override_forces_git_authority,
         )) {
             return;
@@ -280,7 +280,7 @@ mod invalid_config_path {
 
     #[test]
     fn invalid_runtime_config_names_home_redacted_path() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &invalid_runtime_config_names_home_redacted_path,
         )) {
             return;
@@ -315,7 +315,7 @@ mod invalid_config_path {
 
     #[test]
     fn unreadable_runtime_config_names_home_redacted_path() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &unreadable_runtime_config_names_home_redacted_path,
         )) {
             return;

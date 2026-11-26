@@ -10,8 +10,8 @@ use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, TaskRelation, TaskRelationType, TaskStatus};
 use serde_json::json;
 
-use super::session;
-use crate::application::task::tests::{enter_isolated_child, test_runtime};
+use super::desktop::session;
+use crate::application::task::tests::task::{enter_isolated_child, test_runtime};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use crate::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 

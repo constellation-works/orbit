@@ -8,7 +8,7 @@ use orbit_types::workflow::{
     BASELINE_RED_HOLD_VERDICT_EVENT, BaselineRedFailures, BaselineRedHold,
 };
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::baseline_hold::FAIL_BASELINE_HOLD_HISTORY;
 

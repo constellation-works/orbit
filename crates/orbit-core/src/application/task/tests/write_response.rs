@@ -2,7 +2,7 @@
 
 use orbit_types::task::TaskStatus;
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::write_response::{
     DashboardPageReads, TaskWriteResponsePolicy, task_detail_with_dashboard_extras,
     task_write_response_json,

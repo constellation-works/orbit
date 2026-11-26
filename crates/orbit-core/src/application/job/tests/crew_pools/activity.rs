@@ -78,7 +78,7 @@ fn draw(runtime: &OrbitRuntime, input: &Value, ticket: u64) -> Result<String, Or
 
 #[test]
 fn final_recovery_crew_is_drawn_once_and_frozen_for_the_run() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &final_recovery_crew_is_drawn_once_and_frozen_for_the_run,
     )) {
         return;
@@ -139,7 +139,7 @@ fn final_recovery_crew_is_drawn_once_and_frozen_for_the_run() {
 
 #[test]
 fn final_recovery_crew_draw_honours_the_run_allowlist() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &final_recovery_crew_draw_honours_the_run_allowlist,
     )) {
         return;
@@ -162,7 +162,7 @@ fn final_recovery_crew_draw_honours_the_run_allowlist() {
 
 #[test]
 fn empty_final_recovery_pool_refuses_to_draw() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &empty_final_recovery_pool_refuses_to_draw,
     )) {
         return;

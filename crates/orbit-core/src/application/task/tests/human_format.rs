@@ -2,11 +2,11 @@
 
 use orbit_types::task::TaskStatus;
 
-use super::enter_isolated_child;
+use super::task::enter_isolated_child;
 use crate::application::task::{TaskAddParams, TaskWriteScreen};
 
 fn runtime_with_operator() -> (tempfile::TempDir, crate::OrbitRuntime) {
-    super::assert_isolated_child();
+    super::task::assert_isolated_child();
     let root = tempfile::tempdir().expect("tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo").join(".orbit");

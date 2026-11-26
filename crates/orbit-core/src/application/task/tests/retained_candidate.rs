@@ -6,7 +6,7 @@ use chrono::Utc;
 use orbit_engine::run_worktree_paths;
 use orbit_types::task::TaskStatus;
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::retained_candidate::CANDIDATE_STATUS_LIMIT_OVERRIDE;
 

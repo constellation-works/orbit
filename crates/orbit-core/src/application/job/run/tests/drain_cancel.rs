@@ -22,14 +22,14 @@ use serde_json::{Value, json};
 
 use super::super::actions::CancellationRequest;
 use super::super::state_write::set_run_state_write_hook;
-use super::{
+use super::run::{
     assert_worker_checkpoint_preserved, insert_pending_run, running_run_without_state,
     test_runtime, worker_checkpoint,
 };
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::application::test_support::{admission_receipt, admission_request};
-use crate::application::tests::run_isolated_test;
+use crate::application::tests::application::run_isolated_test;
 use crate::task_params_test_support::task_create_params;
 
 /// State at the owner transport boundary: a received Release removes the

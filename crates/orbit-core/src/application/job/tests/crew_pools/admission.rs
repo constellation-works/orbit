@@ -16,7 +16,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
     use orbit_types::task::{TaskComplexity, TaskStatus};
     use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_limited_pool_member_is_never_drawn_until_its_reading_resets,
     )) {
         return;
@@ -148,7 +148,7 @@ fn a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure() {
 
     use crate::runtime::engine::crew::BundleCrews;
 
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure,
     )) {
         return;
@@ -278,7 +278,7 @@ fn a_running_drains_admission_follows_the_current_crew_pools() {
 
     use orbit_types::task::{TaskComplexity, TaskStatus};
 
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_running_drains_admission_follows_the_current_crew_pools,
     )) {
         return;
