@@ -89,6 +89,19 @@ pub(crate) enum AdmissionScope {
     File,
 }
 
+/// How one admission view checks the snapshot it builds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AdmissionOptions {
+    /// Whether the view requires a default-crew selection from this layer.
+    pub(crate) require_default_crew: bool,
+    /// Whether the view checks the host-wide auto-concurrency memory mark.
+    pub(crate) validate_auto_memory: bool,
+    /// Host-wide memory high-water mark, when the caller supplies one.
+    pub(crate) global_memory_high_percent: Option<u8>,
+    /// Which document the admission sees.
+    pub(crate) scope: AdmissionScope,
+}
+
 impl ConfigSnapshot {
     pub(super) fn finish_admission(
         &mut self,
