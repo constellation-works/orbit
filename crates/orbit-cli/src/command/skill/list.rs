@@ -1,16 +1,18 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
-use orbit_core::skill_catalog::LoadedSkill;
+use orbit_core::Core;
+use orbit_core::app::skill::{Command, LoadedSkill, Outcome, exec};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct SkillListArgs {}
 
-impl Execute for SkillListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let skills = runtime.list_file_skills()?;
+impl ExecuteCore for SkillListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Listed(skills) = exec(core, Command::List)? else {
+            unreachable!("skill list returned an unrelated outcome");
+        };
         let values = skills.iter().map(skill_summary_json).collect::<Vec<_>>();
 
         use crate::output::common::table::{Column, Table};

@@ -25,7 +25,7 @@ use orbit_config::{
     ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     describe_config_key,
 };
-use orbit_core::OrbitRuntime;
+use orbit_core::app::config::ConfigShowRoots;
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::output::config::ConfigShow;
@@ -112,17 +112,17 @@ impl Layout {
 /// The effective (layered) view: layers banner, workspace binding and grouped
 /// sections. `--all` also appends resolved paths.
 pub(super) fn effective_text(
-    runtime: &OrbitRuntime,
+    roots: &ConfigShowRoots,
     values: &[EffectiveConfigValue],
     all: bool,
 ) -> ConfigShow {
     let mut out = ConfigShow::default();
-    let global_path = runtime.global_root().join("config.toml");
-    let workspace_path = runtime.shared_root().join("config.toml");
-    let has_workspace_layer = super::support::runtime_config_roots(runtime).has_workspace_layer();
+    let global_path = roots.global_root.join("config.toml");
+    let workspace_path = roots.shared_root.join("config.toml");
+    let has_workspace_layer = roots.has_workspace_layer;
     let workspace_file_exists = has_workspace_layer && workspace_path.exists();
 
-    let _ = writeln!(out, "orbit config — effective{}", workspace_suffix(runtime));
+    let _ = writeln!(out, "orbit config — effective{}", workspace_suffix(roots));
     let _ = writeln!(out);
     let _ = write!(
         out,
@@ -148,7 +148,7 @@ pub(super) fn effective_text(
             ""
         );
     }
-    if let Some(line) = workspace_binding_line(runtime) {
+    if let Some(line) = workspace_binding_line(roots) {
         let _ = writeln!(out);
         let _ = writeln!(out, "{line}");
     }
@@ -160,7 +160,7 @@ pub(super) fn effective_text(
     // Paths restates the roots already named in the layers banner. `--all`
     // keeps the block; the default view does not.
     if all {
-        write_paths(&mut out, runtime, None);
+        write_paths(&mut out, &roots.path_rows);
     }
     out
 }
@@ -169,7 +169,7 @@ pub(super) fn effective_text(
 /// layering banner, shadowed-value notes, or crews (a scoped snapshot admits
 /// registry keys only).
 pub(super) fn scoped_text(
-    runtime: &OrbitRuntime,
+    roots: &ConfigShowRoots,
     store: &ConfigStore,
     snapshot: &ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
@@ -180,7 +180,7 @@ pub(super) fn scoped_text(
         out,
         "orbit config — {} scope{}",
         store.scope().label(),
-        workspace_suffix(runtime)
+        workspace_suffix(roots)
     );
     let _ = writeln!(out);
     let _ = writeln!(
@@ -189,14 +189,14 @@ pub(super) fn scoped_text(
         "Source",
         display_path(store.path(), store.exists_on_disk())
     );
-    if let Some(line) = workspace_binding_line(runtime) {
+    if let Some(line) = workspace_binding_line(roots) {
         let _ = writeln!(out, "{line}");
     }
 
     let (identity, rows) = scoped_rows(store, settings, snapshot.execution_env_inherit, all);
     write_sections(&mut out, &rows, &[], all, &identity);
     if all {
-        write_paths(&mut out, runtime, Some(store.path()));
+        write_paths(&mut out, &roots.path_rows);
     }
     out
 }
@@ -262,8 +262,8 @@ pub(super) fn scoped_provenance_json(
 
 /// The registered base branch and ship mode, which delivery reads instead of
 /// `workflow.base_branch`. Null for an unregistered checkout.
-pub(super) fn workspace_binding_json(runtime: &OrbitRuntime) -> JsonValue {
-    match runtime.workspace_runtime_binding() {
+pub(super) fn workspace_binding_json(roots: &ConfigShowRoots) -> JsonValue {
+    match &roots.workspace_binding {
         Some(binding) => json!({
             "base_branch": binding.base_branch,
             "ship_mode": binding.ship_mode.as_input_value(),
@@ -714,10 +714,9 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
 
 /// The resolved roots and store locations, replacing the old `derived:` block
 /// and its single-line `persistence` JSON blob. The rows themselves come from
-/// `orbit_core::application::config`, so this view and the dashboard's Paths
-/// grid name the same locations.
-fn write_paths(out: &mut ConfigShow, runtime: &OrbitRuntime, config_path: Option<&Path>) {
-    let rows = orbit_core::application::config::path_rows(runtime, config_path);
+/// `orbit_core::app::config`, so this view and the dashboard's Paths grid name
+/// the same locations.
+fn write_paths(out: &mut ConfigShow, rows: &[(String, String)]) {
     let width = rows
         .iter()
         .map(|(label, _)| label.chars().count())
@@ -853,9 +852,10 @@ fn display_path(path: &Path, exists: bool) -> String {
 
 /// `(workspace: <name>)` for a registered checkout, taken from the repo root
 /// directory name rather than an internal workspace id.
-fn workspace_suffix(runtime: &OrbitRuntime) -> String {
-    runtime
-        .workspace_runtime_binding()
+fn workspace_suffix(roots: &ConfigShowRoots) -> String {
+    roots
+        .workspace_binding
+        .as_ref()
         .and_then(|binding| binding.repo_root.file_name().map(|name| name.to_owned()))
         .map(|name| format!(" (workspace: {})", name.to_string_lossy()))
         .unwrap_or_default()
@@ -863,8 +863,8 @@ fn workspace_suffix(runtime: &OrbitRuntime) -> String {
 
 /// The registry's own delivery values. They are what delivery uses, so a
 /// mismatch against `workflow.base_branch` has to be visible here.
-fn workspace_binding_line(runtime: &OrbitRuntime) -> Option<String> {
-    let binding = runtime.workspace_runtime_binding()?;
+fn workspace_binding_line(roots: &ConfigShowRoots) -> Option<String> {
+    let binding = roots.workspace_binding.as_ref()?;
     let base_branch = binding
         .base_branch
         .clone()

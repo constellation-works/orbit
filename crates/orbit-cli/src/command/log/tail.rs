@@ -16,11 +16,11 @@ use std::time::Duration;
 
 use clap::Args;
 use orbit_cmd::log_format::{self, Filters};
-use orbit_common::Env;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::audit::{Command, Outcome, exec};
+use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::common::sink::OutputMode;
 
 use super::format::{self, LevelFilter};
@@ -59,10 +59,18 @@ pub struct TailArgs {
     pub path: Option<PathBuf>,
 }
 
-impl TailArgs {
-    pub(super) fn execute_with_env(self, _runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        let path = log_format::resolve_log_path(self.path.as_deref(), env)?;
+impl ExecuteCore for TailArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let filters = build_filters(&self)?;
+        let Outcome::LogTail(session) = exec(
+            core,
+            Command::LogTail {
+                path: self.path.clone(),
+            },
+        )?
+        else {
+            unreachable!("log tail returned an unrelated outcome");
+        };
         // A follow tail is unbounded, so its records cannot be collected into a
         // document before the first one is written. It is handed back as a
         // stream the renderer drives instead: that keeps the sink out of the
@@ -71,7 +79,7 @@ impl TailArgs {
         // ignored NO_COLOR and disagreed with every table-rendering command,
         // ADR-0308 §2) without pretending the output is a payload.
         let doc = json!({
-            "path": path.to_string_lossy(),
+            "path": session.path().to_string_lossy(),
             "follow": self.follow,
         });
         Ok(Payload::stream(
@@ -81,13 +89,15 @@ impl TailArgs {
                 // the stream's established JSONL record format.
                 let mut args = self;
                 args.json_lines = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
-                match run_tail(&path, &args, &filters, sink.color_allowed(), writer) {
-                    Ok(()) => Ok(()),
-                    // The reader closing the pipe is how `orbit log tail -f |
-                    // head` ends, not a failure to report (spec §5).
-                    Err(err) if crate::output::common::pipe::is_broken_pipe(&err) => Ok(()),
-                    Err(err) => Err(io_to_orbit(err)),
-                }
+                session.run(|path| {
+                    match run_tail(path, &args, &filters, sink.color_allowed(), writer) {
+                        Ok(()) => Ok(()),
+                        // The reader closing the pipe is how `orbit log tail -f |
+                        // head` ends, not a failure to report (spec §5).
+                        Err(err) if crate::output::common::pipe::is_broken_pipe(&err) => Ok(()),
+                        Err(err) => Err(io_to_orbit(err)),
+                    }
+                })
             }),
         )
         .into())

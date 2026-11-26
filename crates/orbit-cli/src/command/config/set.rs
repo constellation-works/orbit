@@ -3,10 +3,11 @@ use std::path::Path;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
-use orbit_core::OrbitError;
-use orbit_core::OrbitRuntime;
-use orbit_core::application::config::{ConfigScope, ConfigWriteInit, set_key_literal};
-
+use orbit_core::app::config::{
+    Command, ConfigScope, ConfigWriteInit, Outcome, exec,
+    refuse_indirect_uninitialized_caller_orbit,
+};
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
@@ -27,12 +28,7 @@ pub fn preflight_indirect_workspace_write(
     }
     let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, None)?;
-    orbit_core::runtime::refuse_indirect_uninitialized_caller_orbit(
-        env,
-        &cwd,
-        &roots.shared_root,
-        false,
-    )
+    refuse_indirect_uninitialized_caller_orbit(env, &cwd, &roots.shared_root, false)
 }
 
 #[derive(Args)]
@@ -57,7 +53,7 @@ pub struct ConfigSetArgs {
 }
 
 impl ConfigSetArgs {
-    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    pub(super) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         let scope = if self.global {
             ConfigScope::Global
         } else {
@@ -70,9 +66,23 @@ impl ConfigSetArgs {
         } else {
             ConfigWriteInit::RequireExisting
         };
-        let outcome = set_key_literal(runtime, &self.key, &self.value, scope, init)?;
-        let warnings = orbit_cmd::service_environment::crew_env_config_write_warnings(
-            runtime,
+        let Outcome::SetLiteral {
+            outcome,
+            global_root,
+        } = exec(
+            core,
+            Command::SetLiteral {
+                key: self.key.clone(),
+                value: self.value,
+                scope,
+                init,
+            },
+        )?
+        else {
+            unreachable!("config set returned an unrelated outcome");
+        };
+        let warnings = orbit_cmd::service_environment::crew_env_config_write_warnings_for_root(
+            &global_root,
             &self.key,
             &outcome.new_value,
             env,

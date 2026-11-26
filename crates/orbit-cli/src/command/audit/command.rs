@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::export::AuditExportArgs;
 use super::list::AuditListArgs;
@@ -16,9 +16,9 @@ pub struct AuditCommand {
     pub command: AuditSubcommand,
 }
 
-impl Execute for AuditCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl ExecuteCore for AuditCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        self.command.execute(core)
     }
 }
 
@@ -36,14 +36,14 @@ pub enum AuditSubcommand {
     Stats(AuditStatsArgs),
 }
 
-impl Execute for AuditSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AuditSubcommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self {
-            AuditSubcommand::List(args) => args.execute(runtime),
-            AuditSubcommand::Show(args) => args.execute(runtime),
-            AuditSubcommand::Prune(args) => args.execute(runtime),
-            AuditSubcommand::Export(args) => args.execute(runtime),
-            AuditSubcommand::Stats(args) => args.execute(runtime),
+            AuditSubcommand::List(args) => args.execute(core),
+            AuditSubcommand::Show(args) => args.execute(core),
+            AuditSubcommand::Prune(args) => args.execute(core),
+            AuditSubcommand::Export(args) => args.execute(core),
+            AuditSubcommand::Stats(args) => args.execute(core),
         }
     }
 }

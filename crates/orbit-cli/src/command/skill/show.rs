@@ -1,18 +1,20 @@
 use clap::Args;
-use orbit_core::skill_catalog::LoadedSkill;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::skill::{Command, LoadedSkill, Outcome, exec};
+use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct SkillShowArgs {
     pub name: String,
 }
 
-impl Execute for SkillShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let skill = runtime.show_file_skill(&self.name)?;
+impl ExecuteCore for SkillShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Shown(skill) = exec(core, Command::Show(self.name))? else {
+            unreachable!("skill show returned an unrelated outcome");
+        };
         let doc = skill_to_json(&skill);
 
         use std::fmt::Write as _;

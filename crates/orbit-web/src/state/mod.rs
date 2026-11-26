@@ -46,8 +46,6 @@ mod hosts;
 mod registry;
 mod remote_access;
 mod request;
-#[cfg(test)]
-mod tests;
 mod trusted_hosts;
 
 use std::collections::HashSet;
@@ -81,7 +79,7 @@ pub(crate) use remote_access::{
     TailscaleReading,
 };
 pub(crate) use request::{
-    ConfigFileWs, Pinned, PluginPanelWs, RefreshFailure, Ws, WsCore, WsRejection,
+    AuditSummaryWs, ConfigFileWs, Pinned, PluginPanelWs, RefreshFailure, Ws, WsCore, WsRejection,
 };
 pub(crate) use trusted_hosts::TrustedHosts;
 
@@ -146,3 +144,6 @@ struct SnapshotData {
     entries: Vec<WsEntry>,
     default_workspace: Option<String>,
 }
+
+#[cfg(test)]
+mod tests;

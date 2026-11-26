@@ -6,7 +6,7 @@ mod show;
 mod stats;
 mod support;
 
-pub use command::{AuditCommand, AuditSubcommand};
+pub use command::AuditCommand;
 
 /// Whether `audit export --format json` also requests JSON for its
 /// confirmation. A global output format, when supplied, still takes priority.

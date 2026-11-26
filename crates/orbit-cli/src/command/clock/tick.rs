@@ -5,9 +5,10 @@ use std::path::Path;
 
 use clap::Args;
 use orbit_cmd::registry_routines::{run_sweep, run_sweep_at};
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
 use orbit_core::{
-    OrbitError, OrbitRuntime,
+    OrbitError,
     application::routines::{
         AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions,
         SweepOutcome, clock_unit_drift_warning,
@@ -220,7 +221,7 @@ fn run_sweep_for_selected_root(
     }
 
     let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-    let roots = OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)?;
+    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, root_override)?;
     run_sweep_at(&roots.global_root, options, workspace_selector)
 }
 

@@ -1,16 +1,18 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
-use orbit_core::bootstrap::init::LinkResult;
+use orbit_core::Core;
+use orbit_core::app::skill::{Command, LinkResult, Outcome, exec};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct SkillLinkArgs {}
 
-impl Execute for SkillLinkArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = orbit_core::bootstrap::init::link_skills(&runtime.global_root())?;
+impl ExecuteCore for SkillLinkArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Linked(result) = exec(core, Command::Link)? else {
+            unreachable!("skill link returned an unrelated outcome");
+        };
         let text = if result.linked_count == 0 {
             "Skill symlinks are already up to date.".to_string()
         } else {

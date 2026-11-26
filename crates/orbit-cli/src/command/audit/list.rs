@@ -1,10 +1,10 @@
 use clap::Args;
-use orbit_core::application::audit_event::{AuditListingColumns, AuditListingProfile};
-use orbit_core::{AuditEventStatus, OrbitRuntime};
+use orbit_core::app::audit::{AuditListingColumns, AuditListingProfile, Command, Outcome, exec};
+use orbit_core::{AuditEventStatus, Core};
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::Value;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::parse::parse_since;
 
 use super::support::{AuditListFilters, audit_event_table, audit_event_to_json};
@@ -58,8 +58,8 @@ pub struct AuditListArgs {
     pub limit: usize,
 }
 
-impl Execute for AuditListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AuditListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
         // Captured before the filter consumes them: a column the caller
         // filtered on stays on screen even though it now reads uniform.
@@ -68,9 +68,10 @@ impl Execute for AuditListArgs {
             role: self.role.is_some(),
             tool: self.tool.is_some(),
         };
-        let events = runtime
-            .audit_listing_page(
-                AuditListingColumns {
+        let Outcome::Listed(page) = exec(
+            core,
+            Command::List {
+                columns: Box::new(AuditListingColumns {
                     since,
                     tool_name: super::support::audit_tool_filter(self.tool),
                     status: self.status,
@@ -91,13 +92,17 @@ impl Execute for AuditListArgs {
                     mcp_call_id: self.mcp_call,
                     job_run_id: self.run,
                     lease_id: self.lease,
-                },
-                AuditListingProfile::Cli {
+                }),
+                profile: AuditListingProfile::Cli {
                     target_type: self.kind,
                     limit: self.limit,
                 },
-            )?
-            .events;
+            },
+        )?
+        else {
+            unreachable!("audit list returned an unrelated outcome");
+        };
+        let events = page.events;
 
         let values: Vec<Value> = events.iter().map(audit_event_to_json).collect();
         Ok(Payload::list(values, audit_event_table(&events, filtered)).into())

@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::doctor::SkillDoctorArgs;
 use super::link::SkillLinkArgs;
@@ -16,9 +16,9 @@ pub struct SkillCommand {
     pub command: SkillSubcommand,
 }
 
-impl Execute for SkillCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl ExecuteCore for SkillCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        self.command.execute(core)
     }
 }
 
@@ -36,14 +36,14 @@ pub enum SkillSubcommand {
     Unlink(SkillUnlinkArgs),
 }
 
-impl Execute for SkillSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for SkillSubcommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self {
-            SkillSubcommand::List(args) => args.execute(runtime),
-            SkillSubcommand::Show(args) => args.execute(runtime),
-            SkillSubcommand::Doctor(args) => args.execute(runtime),
-            SkillSubcommand::Link(args) => args.execute(runtime),
-            SkillSubcommand::Unlink(args) => args.execute(runtime),
+            SkillSubcommand::List(args) => args.execute(core),
+            SkillSubcommand::Show(args) => args.execute(core),
+            SkillSubcommand::Doctor(args) => args.execute(core),
+            SkillSubcommand::Link(args) => args.execute(core),
+            SkillSubcommand::Unlink(args) => args.execute(core),
         }
     }
 }
