@@ -112,6 +112,7 @@
 mod adopt;
 mod apply;
 mod lookup;
+pub(super) mod source_repair;
 
 pub(in crate::executor::automation) use lookup::candidate_resume;
 
@@ -270,5 +271,3 @@ enum Outcome {
     Held,
     Repair(Value),
 }
-
-pub(super) mod source_repair;

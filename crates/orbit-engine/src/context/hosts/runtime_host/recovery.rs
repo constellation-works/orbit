@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! recovery_methods must precede pub(super) use recovery_methods in lexical scope"
+)]
+
 macro_rules! recovery_methods {
     () => {
         /// Resolve a deny-mode activity's callable tools for one agent launch.

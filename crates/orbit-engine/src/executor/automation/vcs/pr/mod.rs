@@ -23,10 +23,9 @@ mod open;
 mod promote;
 mod recovery;
 mod review_retry;
-mod workflow_failure;
-pub(in crate::executor::automation::vcs) use review_retry::{ReviewCiRetryStep, recover_review_ci};
 mod screenshots;
 pub(in crate::executor::automation::vcs) mod source_identity;
+mod workflow_failure;
 
 // Compatibility shim: the read model is owned by `vcs::pr_answers`. These
 // re-exports keep `pr::answers`, `pr::merge_state`, `pr::diagnostics` and the
@@ -69,3 +68,4 @@ pub(in crate::executor::automation::vcs) use open::{
 };
 pub(in crate::executor::automation) use promote::pr_promote;
 pub(crate) use recovery::{CompletionRecoveryChecks, completion_recovery_checks};
+pub(in crate::executor::automation::vcs) use review_retry::{ReviewCiRetryStep, recover_review_ci};

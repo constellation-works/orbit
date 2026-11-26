@@ -1,4 +1,14 @@
 //! First failures through the real producer, authenticated adapter and owner.
+mod bounded;
+mod cancelled;
+mod dependency_class;
+mod diagnostic;
+mod handoff_step;
+mod hold;
+mod infrastructure;
+mod rate_limit;
+mod unreadable_log;
+
 use super::*;
 use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunPlan, CiRerunRoot};
 
@@ -178,16 +188,6 @@ fn first_dependency_failure_repairs_without_owner_rerun() {
         },
     );
 }
-
-mod bounded;
-mod cancelled;
-mod dependency_class;
-mod diagnostic;
-mod handoff_step;
-mod hold;
-mod infrastructure;
-mod rate_limit;
-mod unreadable_log;
 
 // Each case is refused under both the step-grouped and the raw
 // (timestamp-prefixed) log fallback, in its own fresh row. The 62 independent

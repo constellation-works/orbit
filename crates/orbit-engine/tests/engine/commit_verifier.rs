@@ -3,6 +3,12 @@
 //! refusal of nested repositories that would deliver as gitlinks [ORB-15265],
 //! and an implementer's invalid-finding report rejecting its task [ORB-19635].
 
+#[path = "../support/commit_evidence.rs"]
+mod evidence_fixture;
+
+mod already_landed;
+mod finding_invalid;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,15 +22,10 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-const TASK_ID: &str = "T1";
-const RUN_ID: &str = "jrun-verifier-test";
-
-#[path = "../support/commit_evidence.rs"]
-mod evidence_fixture;
 use evidence_fixture::VerifierHost;
 
-mod already_landed;
-mod finding_invalid;
+const TASK_ID: &str = "T1";
+const RUN_ID: &str = "jrun-verifier-test";
 
 fn fixture_task() -> Task {
     let now = Utc::now();

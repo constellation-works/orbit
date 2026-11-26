@@ -1,4 +1,6 @@
 use super::cli_support::{TestHost, persisted_writer, write_executable};
+use orbit_common::process::shell::quote_posix_arg;
+use orbit_common::test_env::{assert_child_test_passed, run_child_test};
 use orbit_engine::{DispatchError, execute_job_with_resume, load_activity_asset};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
@@ -7,6 +9,10 @@ use orbit_types::workflow::activity_job::{
 };
 use serde_json::json;
 use std::fs;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 use tempfile::tempdir;
 /// [ORB-14091] A task-pilot dispatch configured to retry still stops after
 /// the first attempt when `inspection_revision` is a 7-character id. The
@@ -242,12 +248,6 @@ fn assert_permanent(result: Result<orbit_engine::DispatchOutcome, DispatchError>
     assert!(message.contains(needle), "{message}");
 }
 
-use orbit_common::process::shell::quote_posix_arg;
-use orbit_common::test_env::{assert_child_test_passed, run_child_test};
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
 const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
 const SLOW_COPY_CHILD: &str =
     "admission_audit::inspection::slow_full_ancestry_copy_outlasts_the_local_deadline";

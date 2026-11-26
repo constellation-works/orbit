@@ -33,10 +33,11 @@ use super::required::command::{VALIDATION_TIMEOUT_MS, capture, environment_recor
 use super::scratch_target::{ScratchHostTarget, lease_scratch_host_target};
 use super::worktree::scratch_checkout_path;
 
-/// Name prefix of a host-evidence checkout under the managed worktree root.
-const WORKTREE_DIR: &str = "orbit-host-evidence";
 /// The switch macOS sandbox tests read to fail rather than skip.
 use orbit_common::env_vars::ORBIT_REQUIRE_SANDBOX_EXEC as REQUIRE_SANDBOX_EXEC;
+
+/// Name prefix of a host-evidence checkout under the managed worktree root.
+const WORKTREE_DIR: &str = "orbit-host-evidence";
 
 /// One host run and its judgement.
 #[derive(Debug, Clone)]

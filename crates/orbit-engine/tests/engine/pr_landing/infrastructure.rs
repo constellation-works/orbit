@@ -1,4 +1,9 @@
 //! Missing-required prerequisite recovery through the real-Git PR executor.
+mod bounds;
+mod failed_workflow;
+mod provider_fields;
+mod rate_limit;
+
 use super::*;
 use orbit_types::workflow::{PR_INFRASTRUCTURE_RESERVED_EVENT, pr_infrastructure_reservations};
 
@@ -869,8 +874,3 @@ fn missing_required_prerequisite_holds_unreadable_evidence() {
         },
     );
 }
-
-mod bounds;
-mod failed_workflow;
-mod provider_fields;
-mod rate_limit;

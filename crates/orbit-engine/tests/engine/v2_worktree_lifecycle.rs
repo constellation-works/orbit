@@ -17,6 +17,27 @@
 //! `ORBIT_*` / `GIT_*` variables, and a bounded wait that kills and reaps the
 //! child on timeout or panic.
 
+#[cfg(unix)]
+mod absorbed_candidate;
+#[cfg(unix)]
+mod auto_fix_conflict;
+#[cfg(unix)]
+mod conflict_adoption;
+#[cfg(unix)]
+mod declared_reclaim;
+mod dependency_delivery;
+mod dependency_delivery_dispatch;
+#[cfg(unix)]
+mod dirty_rescue;
+#[cfg(unix)]
+mod generated_regeneration;
+mod local_base_freshness;
+mod preparation;
+#[cfg(unix)]
+mod resolution_intent;
+mod trash;
+mod unlocked_revalidation;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
@@ -50,27 +71,6 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 const BASE: &str = "agent-main";
-
-#[cfg(unix)]
-mod absorbed_candidate;
-#[cfg(unix)]
-mod auto_fix_conflict;
-#[cfg(unix)]
-mod conflict_adoption;
-#[cfg(unix)]
-mod declared_reclaim;
-mod dependency_delivery;
-mod dependency_delivery_dispatch;
-#[cfg(unix)]
-mod dirty_rescue;
-#[cfg(unix)]
-mod generated_regeneration;
-mod local_base_freshness;
-mod preparation;
-#[cfg(unix)]
-mod resolution_intent;
-mod trash;
-mod unlocked_revalidation;
 
 // ---------------------------------------------------------------------------
 // worktree_gc

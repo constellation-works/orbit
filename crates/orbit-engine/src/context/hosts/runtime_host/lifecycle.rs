@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! lifecycle_methods must precede pub(super) use lifecycle_methods in lexical scope"
+)]
+
 macro_rules! lifecycle_methods {
     () => {
         /// Start this run's plugin broker before a sandboxed provider is spawned.

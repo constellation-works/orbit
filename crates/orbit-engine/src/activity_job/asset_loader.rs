@@ -12,12 +12,13 @@ use orbit_types::workflow::activity_job::{
     validate_response_correction_activity, validate_trusted_host_activity,
 };
 
-fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
-    serde_yaml::from_str(yaml)
-}
 use orbit_types::workflow::{
     ToolAllowlistError, activity_tool_policy_deprecation, validate_activity_tool_allowlist,
 };
+
+fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
+    serde_yaml::from_str(yaml)
+}
 
 /// Loaded schemaVersion 2 activity asset plus its envelope metadata.
 #[derive(Debug, Clone)]

@@ -3,6 +3,12 @@
 //! `setup → work → deliver` with a `failure_activity` and a deterministic
 //! `final_recovery_activity` whose output is the decision.
 
+#[path = "host.rs"]
+mod host;
+#[cfg(unix)]
+#[path = "prompt.rs"]
+mod prompt;
+
 use chrono::Utc;
 use orbit_common::{ConflictedFile, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
@@ -18,17 +24,11 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-#[path = "host.rs"]
-mod host;
 use host::{
     ApplyScript, RecoveryHost, Reply, Run, evidence_hold, run, run_with_evidence, run_with_input,
 };
 
 const RUN_ID: &str = "jrun-final-recovery";
-
-#[cfg(unix)]
-#[path = "prompt.rs"]
-mod prompt;
 
 fn deterministic_activity(name: &str) -> ActivityV2 {
     let asset = json!({

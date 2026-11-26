@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! environment_methods must precede pub(super) use environment_methods in lexical scope"
+)]
+
 macro_rules! environment_methods {
     () => {
         /// Admit an implementer's criteria owed after deploy against the task

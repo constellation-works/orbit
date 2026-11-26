@@ -15,6 +15,28 @@
 //! `loop.did_not_converge`). The retry wrapper emits `step.retry` between
 //! attempts and `step.denied` when a denial bypasses retry.
 
+mod audit;
+mod auto_task;
+mod concurrency;
+mod exec_ctx;
+mod execute;
+mod fan_out;
+mod final_recovery;
+mod loop_block;
+pub(crate) mod loop_clock;
+mod parallel;
+mod recovery;
+mod reviewer;
+mod script;
+mod steering_gate;
+mod step;
+mod target;
+mod templating;
+mod validate;
+
+#[cfg(test)]
+mod tests;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -38,28 +60,6 @@ use super::dispatcher::{
     dispatch_v2_target_activity,
 };
 use crate::context::RuntimeHost;
-
-mod audit;
-mod auto_task;
-mod concurrency;
-mod exec_ctx;
-mod execute;
-mod fan_out;
-mod final_recovery;
-mod loop_block;
-pub(crate) mod loop_clock;
-mod parallel;
-mod recovery;
-mod reviewer;
-mod script;
-mod steering_gate;
-mod step;
-mod target;
-mod templating;
-mod validate;
-
-#[cfg(test)]
-mod tests;
 
 use self::audit::*;
 use self::auto_task::*;

@@ -1,3 +1,5 @@
+mod owner;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use orbit_common::OrbitError;
@@ -7,8 +9,6 @@ use serde_json::json;
 
 use super::*;
 use crate::git_fixture;
-
-mod owner;
 
 struct NoDiffHost {
     cli: ScriptHost,

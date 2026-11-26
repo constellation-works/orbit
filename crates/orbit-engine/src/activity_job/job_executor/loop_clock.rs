@@ -1,22 +1,4 @@
 //! Monotonic loop timing, with a thread-scoped deterministic fixture seam.
-use std::time::{Duration, Instant};
-
-pub(super) fn now() -> Instant {
-    #[cfg(feature = "test-support")]
-    if let Some(clock) = fixture::clock() {
-        return (clock.0)();
-    }
-    Instant::now()
-}
-
-pub(super) fn sleep(duration: Duration) {
-    #[cfg(feature = "test-support")]
-    if let Some(clock) = fixture::clock() {
-        (clock.1)(duration);
-        return;
-    }
-    std::thread::sleep(duration);
-}
 
 #[cfg(feature = "test-support")]
 mod fixture {
@@ -51,5 +33,24 @@ mod fixture {
     }
 }
 
+use std::time::{Duration, Instant};
+
 #[cfg(feature = "test-support")]
 pub use fixture::with_loop_clock;
+
+pub(super) fn now() -> Instant {
+    #[cfg(feature = "test-support")]
+    if let Some(clock) = fixture::clock() {
+        return (clock.0)();
+    }
+    Instant::now()
+}
+
+pub(super) fn sleep(duration: Duration) {
+    #[cfg(feature = "test-support")]
+    if let Some(clock) = fixture::clock() {
+        (clock.1)(duration);
+        return;
+    }
+    std::thread::sleep(duration);
+}

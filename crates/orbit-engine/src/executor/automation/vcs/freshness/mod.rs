@@ -3,7 +3,6 @@
 mod checkpoint;
 mod divergence;
 mod preparation;
-pub(crate) use preparation::refreshed_input;
 mod rebase;
 mod rebase_recovery;
 
@@ -14,6 +13,7 @@ pub(super) use divergence::{
     BranchFreshness, branch_freshness_against_ref, commit_sha, ensure_branch_fresh_against_base,
     original_base_sha, remote_branch_sha,
 };
+pub(crate) use preparation::refreshed_input;
 pub(super) use rebase::{discard_rewrite, perform_rebase_onto_base};
 pub(in crate::executor::automation) use rebase::{prepare_pr_handoff, rebase_pr_branch};
 pub(super) use rebase_recovery::{

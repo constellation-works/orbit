@@ -1,47 +1,5 @@
 //! Bounded retries and diagnostics for read-only delivery remote probes.
 
-use std::path::Path;
-use std::time::{Duration, Instant};
-
-use orbit_common::OrbitError;
-
-use super::git::{
-    direct_remote_target, git_failure_error, git_run, timeout_recovery_error,
-    verify_direct_remote_target,
-};
-
-const PROBE_ATTEMPTS: u32 = 3;
-const INITIAL_BACKOFF_MS: u64 = 250;
-
-#[cfg(feature = "test-support")]
-thread_local! {
-    static BACKOFF_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(INITIAL_BACKOFF_MS) };
-}
-
-/// Scale retry waits in fixtures without changing attempt counts or production defaults.
-#[cfg(feature = "test-support")]
-pub fn with_remote_probe_backoff<T>(milliseconds: u64, operation: impl FnOnce() -> T) -> T {
-    struct Restore(u64);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            BACKOFF_MS.with(|slot| slot.set(self.0));
-        }
-    }
-    let _restore = Restore(BACKOFF_MS.with(|slot| slot.replace(milliseconds)));
-    operation()
-}
-
-fn initial_backoff_ms() -> u64 {
-    #[cfg(feature = "test-support")]
-    {
-        BACKOFF_MS.with(std::cell::Cell::get)
-    }
-    #[cfg(not(feature = "test-support"))]
-    {
-        INITIAL_BACKOFF_MS
-    }
-}
-
 // PR polling has a five-second production floor. These fixtures retain
 // requested delay accounting while exercising the next observation immediately;
 // ordinary builds and unscoped tests still perform the original real wait.
@@ -81,8 +39,50 @@ mod fixed_wait_fixture {
     }
 }
 
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use orbit_common::OrbitError;
+
+use super::git::{
+    direct_remote_target, git_failure_error, git_run, timeout_recovery_error,
+    verify_direct_remote_target,
+};
+
 #[cfg(feature = "test-support")]
 pub use fixed_wait_fixture::with_vcs_retry_wait;
+
+const PROBE_ATTEMPTS: u32 = 3;
+const INITIAL_BACKOFF_MS: u64 = 250;
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static BACKOFF_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(INITIAL_BACKOFF_MS) };
+}
+
+/// Scale retry waits in fixtures without changing attempt counts or production defaults.
+#[cfg(feature = "test-support")]
+pub fn with_remote_probe_backoff<T>(milliseconds: u64, operation: impl FnOnce() -> T) -> T {
+    struct Restore(u64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BACKOFF_MS.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(BACKOFF_MS.with(|slot| slot.replace(milliseconds)));
+    operation()
+}
+
+fn initial_backoff_ms() -> u64 {
+    #[cfg(feature = "test-support")]
+    {
+        BACKOFF_MS.with(std::cell::Cell::get)
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        INITIAL_BACKOFF_MS
+    }
+}
 
 pub(crate) fn fixed_wait(duration: Duration) {
     #[cfg(feature = "test-support")]

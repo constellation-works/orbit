@@ -21,6 +21,31 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_cli_agent::/)'`.
 
+#[cfg(unix)]
+mod build_budget;
+#[cfg(unix)]
+#[cfg(unix)]
+#[cfg(unix)]
+mod contract_correction;
+#[cfg(unix)]
+mod declared_blocker;
+#[cfg(unix)]
+mod fleet_notices;
+#[cfg(unix)]
+mod incomplete_continuation;
+#[cfg(unix)]
+mod no_diff;
+#[cfg(unix)]
+mod response_correction;
+#[cfg(unix)]
+mod reviewer_evidence_hold;
+#[cfg(unix)]
+mod stderr_failure;
+#[cfg(unix)]
+mod tag_instructions;
+#[cfg(unix)]
+mod truncated_envelope;
+
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
@@ -46,31 +71,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}"#;
-
-#[cfg(unix)]
-mod build_budget;
-#[cfg(unix)]
-#[cfg(unix)]
-#[cfg(unix)]
-mod contract_correction;
-#[cfg(unix)]
-mod declared_blocker;
-#[cfg(unix)]
-mod fleet_notices;
-#[cfg(unix)]
-mod incomplete_continuation;
-#[cfg(unix)]
-mod no_diff;
-#[cfg(unix)]
-mod response_correction;
-#[cfg(unix)]
-mod reviewer_evidence_hold;
-#[cfg(unix)]
-mod stderr_failure;
-#[cfg(unix)]
-mod tag_instructions;
-#[cfg(unix)]
-mod truncated_envelope;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.

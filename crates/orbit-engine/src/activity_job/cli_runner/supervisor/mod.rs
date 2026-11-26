@@ -46,11 +46,11 @@ mod stall;
 #[cfg(feature = "test-support")]
 mod test_support;
 
-#[cfg(feature = "test-support")]
-pub use test_support::with_cli_supervision_clock;
-
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(feature = "test-support")]
+pub use test_support::with_cli_supervision_clock;
 
 pub(super) use capture::{CapturedOutput, OutputProgress};
 pub(super) use spawn::{
