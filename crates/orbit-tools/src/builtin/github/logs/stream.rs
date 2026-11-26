@@ -4,7 +4,7 @@ use super::super::{LogSelection, StreamedLog, StreamedLogCollector};
 use super::selection::*;
 use orbit_common::OrbitError;
 use orbit_exec::{ExecRequest, NoSandbox, run_process, run_process_streaming_stdout};
-use serde_json::Value;
+use serde::{Deserialize, de::DeserializeOwned};
 /// The collector one read of `shape` feeds its source bytes into.
 fn log_collector(
     bounds: LogReadBounds,
@@ -226,11 +226,11 @@ pub(super) fn run_scoped_log(
 }
 
 /// One lightweight metadata read, or `None` when it cannot be made or parsed.
-fn read_api_json(
+fn read_api_json<T: DeserializeOwned>(
     env: &orbit_common::Env,
     request: ExecRequest,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
-) -> Option<Value> {
+) -> Option<T> {
     let request = guard(&request).ok()?;
     let deadline = crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
     let result = run_process(env, &request, &NoSandbox).ok()?;
@@ -239,6 +239,29 @@ fn read_api_json(
         return None;
     }
     serde_json::from_str(&result.stdout).ok()
+}
+
+// Only completed responses can qualify for caching. Unknown statuses are misses.
+#[derive(Deserialize)]
+enum CompletedStatus {
+    #[serde(rename = "completed")]
+    Completed,
+}
+
+#[derive(Deserialize)]
+struct GitHubCompletedJobMetadata {
+    id: u64,
+    run_id: u64,
+    status: CompletedStatus,
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct GitHubCompletedRunMetadata {
+    id: u64,
+    status: CompletedStatus,
+    run_attempt: u64,
+    url: String,
 }
 
 /// The resolved source of a completed job of this run: the host and repository
@@ -252,17 +275,12 @@ pub(super) fn completed_job_source(
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Option<String> {
     let request = requests.api_request(format!("repos/{}/actions/jobs/{job}", requests.repository));
-    let view = read_api_json(env, request, guard)?;
-    let this_job = view.get("id").and_then(Value::as_u64)?.to_string() == job;
-    let this_run = view
-        .get("run_id")
-        .and_then(Value::as_u64)
-        .is_some_and(|run| run.to_string() == requests.run_id);
-    let completed = view.get("status").and_then(Value::as_str) == Some("completed");
-    if !(this_job && this_run && completed) {
+    let view: GitHubCompletedJobMetadata = read_api_json(env, request, guard)?;
+    let CompletedStatus::Completed = view.status;
+    if view.id.to_string() != job || view.run_id.to_string() != requests.run_id {
         return None;
     }
-    resolved_source(&view, &format!("/actions/jobs/{job}"))
+    resolved_source(&view.url, &format!("/actions/jobs/{job}"))
 }
 
 /// The resolved source and attempt number of this run when GitHub reports it
@@ -276,22 +294,20 @@ fn completed_run_attempt(
         "repos/{}/actions/runs/{}",
         requests.repository, requests.run_id
     ));
-    let view = read_api_json(env, request, guard)?;
-    let this_run = view.get("id").and_then(Value::as_u64)?.to_string() == requests.run_id;
-    let completed = view.get("status").and_then(Value::as_str) == Some("completed");
-    if !(this_run && completed) {
+    let view: GitHubCompletedRunMetadata = read_api_json(env, request, guard)?;
+    let CompletedStatus::Completed = view.status;
+    if view.id.to_string() != requests.run_id {
         return None;
     }
-    let source = resolved_source(&view, &format!("/actions/runs/{}", requests.run_id))?;
-    Some((source, view.get("run_attempt").and_then(Value::as_u64)?))
+    let source = resolved_source(&view.url, &format!("/actions/runs/{}", requests.run_id))?;
+    Some((source, view.run_attempt))
 }
 
 /// The host and repository a status payload names: its API `url` with the
 /// `endpoint` it must end in removed (`https://api.github.com/repos/o/n`).
 /// `None` when the payload carries no such URL, so an entry is never filed
 /// under a source nobody resolved.
-fn resolved_source(view: &Value, endpoint: &str) -> Option<String> {
-    let url = view.get("url").and_then(Value::as_str)?;
+fn resolved_source(url: &str, endpoint: &str) -> Option<String> {
     let source = url.strip_suffix(endpoint)?;
     (source.starts_with("https://") || source.starts_with("http://")).then(|| source.to_string())
 }
