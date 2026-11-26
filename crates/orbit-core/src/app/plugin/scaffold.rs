@@ -9,16 +9,11 @@ use super::Scaffold;
 /// The starter tree, one template per file. Every `__ORBIT_PLUGIN_NS__` is
 /// replaced with the namespace the operator named.
 const NAMESPACE_PLACEHOLDER: &str = "__ORBIT_PLUGIN_NS__";
-
 const MANIFEST_TEMPLATE: &str = include_str!("../../../assets/plugin_templates/plugin.yaml.tmpl");
-
 const BACKEND_TEMPLATE: &str = include_str!("../../../assets/plugin_templates/backend.py.tmpl");
-
 const AUTO_TASK_TEMPLATE: &str =
     include_str!("../../../assets/plugin_templates/auto_task.yaml.tmpl");
-
 const SKILL_TEMPLATE: &str = include_str!("../../../assets/plugin_templates/SKILL.md.tmpl");
-
 const CONFORMANCE_TEMPLATE: &str =
     include_str!("../../../assets/plugin_templates/conformance.yaml.tmpl");
 

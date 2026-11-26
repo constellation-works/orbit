@@ -739,7 +739,7 @@ jobs:
           # Pull requests run the self-tests whose inputs changed against the
           # base; a push runs every self-test.
           CI_SELF_TESTS: ${{ github.event_name == 'pull_request' && 'changed' || 'all' }}
-          CI_TEST_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          CI_TEST_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           TIMEFORMAT='guardrails_seconds=%R'

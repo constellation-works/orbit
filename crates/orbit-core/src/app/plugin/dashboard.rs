@@ -24,38 +24,6 @@ pub struct DashboardToggle {
     pub host: Option<String>,
 }
 
-/// A panel read bound to the loaded plugin and its cache window. The dashboard
-/// executes this read on a cache miss, so a cache hit never invokes the tool.
-pub struct PanelRead {
-    runtime: OrbitRuntime,
-    namespace: String,
-    panel: String,
-    ttl: Duration,
-}
-
-impl PanelRead {
-    pub(super) fn new(core: &Core, namespace: String, panel: String) -> Result<Self, OrbitError> {
-        let runtime = core.runtime();
-        let refresh_ms = runtime.plugin_panel_refresh_ms(&namespace, &panel)?;
-        Ok(Self {
-            runtime: runtime.clone(),
-            namespace,
-            panel,
-            ttl: Duration::from_millis(refresh_ms),
-        })
-    }
-
-    /// How long a cached result for this panel remains fresh.
-    pub fn ttl(&self) -> Duration {
-        self.ttl
-    }
-
-    /// Run the panel source through the existing read-only tool dispatch.
-    pub fn read(self) -> Result<Value, OrbitError> {
-        self.runtime.read_plugin_panel(&self.namespace, &self.panel)
-    }
-}
-
 pub(super) fn exec(core: &Core, toggle: DashboardToggle) -> Result<Outcome, OrbitError> {
     let DashboardToggle {
         namespace,
@@ -112,4 +80,36 @@ pub(super) fn exec(core: &Core, toggle: DashboardToggle) -> Result<Outcome, Orbi
         },
     )
     .map(Outcome::DashboardToggled)
+}
+
+/// A panel read bound to the loaded plugin and its cache window. The dashboard
+/// executes this read on a cache miss, so a cache hit never invokes the tool.
+pub struct PanelRead {
+    runtime: OrbitRuntime,
+    namespace: String,
+    panel: String,
+    ttl: Duration,
+}
+
+impl PanelRead {
+    pub(super) fn new(core: &Core, namespace: String, panel: String) -> Result<Self, OrbitError> {
+        let runtime = core.runtime();
+        let refresh_ms = runtime.plugin_panel_refresh_ms(&namespace, &panel)?;
+        Ok(Self {
+            runtime: runtime.clone(),
+            namespace,
+            panel,
+            ttl: Duration::from_millis(refresh_ms),
+        })
+    }
+
+    /// How long a cached result for this panel remains fresh.
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// Run the panel source through the existing read-only tool dispatch.
+    pub fn read(self) -> Result<Value, OrbitError> {
+        self.runtime.read_plugin_panel(&self.namespace, &self.panel)
+    }
 }

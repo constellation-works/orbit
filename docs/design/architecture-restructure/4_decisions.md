@@ -2,8 +2,8 @@
 title: Architecture Restructure — Decisions
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-26
-last_validated: 2026-11-26
+updated_date: 2026-11-25
+last_validated: 2026-11-25
 status: Accepted
 feature: architecture-restructure
 doc_role: decisions
@@ -190,38 +190,6 @@ The order is: ratchets, environment, store, the surface boundary, the inside of 
 
 - After the surface boundary closes, anything inside `orbit-core` can move without touching a surface.
 - Cost: the runtime, the largest pain, is treated second to last.
-
-## Source style during the restructure
-
-**Recorded:** 2026-11-26 · [ORB-28297]
-
-Orbit adopts STD-12@4. Run `scripts/check-source-style-diff.py` to check local Rust
-changes against the branch point. CI supplies the delivery base, and checks root and
-desktop Rust files in the same guard. The checker comes from `rust-cli-template` at
-`7539c089646fbd1ac872672ee85574f219828534`.
-
-**Deviation from STD-12@4 §R1, §R4, §R5, §R12, §R13, §R16, §R19, §R21, §R22 and §R26.**
-Existing Rust files contain style debt. Enforcing all historical findings at once
-would mix unrelated edits into the restructure. The guard compares each changed
-file with its base version, allowing old findings on the same source line to move
-as surrounding line numbers change. A new file must pass every shared check, apart
-from pre-existing directory names. Generated Rust is exempt as the standard specifies.
-Repairs lower the next PR's baseline. Each affected crate can switch to a full-tree
-check when its existing findings are clear.
-
-**Deviation from STD-12@4 §R20 and §R23.** The first declaration-order migration
-groups modules and imports ahead of other items ([ORB-28842]). The full sequence
-of macros, constants, types with impls, functions and tests, and declaration-order
-struct literals require further workspace cleanup and Clippy configuration in
-[ORB-28969]. Review these rules on changes until those gates land. The shared
-checker already enforces type/impl adjacency and inherent-impl member order
-(§R21 and §R22) on new findings.
-
-**Lint rollout.** The first binding and documentation cohorts landed in [ORB-28305] and
-[ORB-28309]; the import cohort [ORB-28308] was archived. Existing crate-specific coverage of STD-12@4 §R2/§R14,
-§R15 and §R18 is preserved. These rules continue to apply to changed code in crates
-where the corresponding minimum-identifier, glob-import or public-documentation
-lint is not yet enforced. STD-12@4 §R6, §R7, §R24 and §R25 are reviewed.
 
 ## Task References
 
