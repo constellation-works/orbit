@@ -167,11 +167,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./design/standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (8)
+### Designing (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Architecture Restructure](./design/architecture-restructure/1_overview.md) | Approve and land the ratchet check [ORB-28362] and the app table [ORB-28364] | claude |
+| [Claude Code Mod](./design/claude-code-mod/1_scope.md) | Daniel reviews the revised proposal; no task is filed until he approves it | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
@@ -252,6 +253,7 @@ a conservative title/status fallback.
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Implemented | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Bounded delivery and preparation triggers for routines and auto-tasks, with durable work identity and honest coverage. | Draft | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness, score each forecast model version separately, and correct per-metric quantiles from scored residuals | Accepted | claude |
+| [Claude Code Mod](./design/claude-code-mod/1_scope.md) | Scope: replace the Orbit plugin's band, status line, toasts, pane, prompt cards and commit trailer with one behaviour, task and run ids in the transcript drawn as links to the dashboard, with task prefixes read from the host registry, dashboard permalinks that pin the host, and a Codex Desktop trial of links the model writes from a result's url | Draft | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence. | Draft | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
