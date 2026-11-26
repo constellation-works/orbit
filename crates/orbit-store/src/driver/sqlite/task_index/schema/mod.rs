@@ -41,7 +41,7 @@ use self::baseline::apply_registry_baseline;
 use self::decision_snapshots::apply_decision_snapshots;
 use self::index_task_type::apply_index_task_type;
 use crate::contracts::{MigrationCompatibility, StateComponent};
-use crate::driver::sqlite::host::ledger::{LedgeredDatabase, Migration};
+use orbit_common::storage::sqlite::ledger::{LedgeredDatabase, Migration};
 
 /// `user_version` while every applied registry entry is `Additive`.
 const PRE_LEDGER_COMPATIBLE: u32 = 5;
@@ -49,7 +49,7 @@ const PRE_LEDGER_COMPATIBLE: u32 = 5;
 const PRE_LEDGER_REFUSED: u32 = 7;
 
 /// Stable ordered registry of task-registry migrations. Append-only, with
-/// frozen bodies, under the same rules as the store's `ledger::MIGRATIONS`:
+/// frozen bodies, under the same rules as the store's `host::schema::MIGRATIONS`:
 /// never renumber or edit a shipped entry, and give each entry private
 /// shape-defining code. Every prefix is guarded by the task registry schema
 /// golden (`make goldens`).

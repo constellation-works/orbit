@@ -2,7 +2,7 @@
 //! (ORB-12434), and by the feature schema ledgers beside them.
 //!
 //! Both ledgers — the `.orbit/` workspace layout registry and the SQLite
-//! schema ledger ([`crate::maintenance::migration`]) — used to refuse *any* state whose
+//! database schema ledger — used to refuse *any* state whose
 //! recorded version exceeded the running binary's supported version. That
 //! made every version bump a flag day: a stale binary anywhere on a host
 //! failed every command, including write-free ones.
@@ -42,7 +42,7 @@ pub const COMPATIBILITY_RECORD_FORMAT: u32 = 1;
 /// This is a claim about older *readers and writers*, made by the migration's
 /// author. It also decides upgrade admission: an older process may keep
 /// running beside a newer one only across [`Self::Additive`] migrations
-/// (see `orbit_common::fs::generation`).
+/// (see `crate::fs::generation`).
 ///
 /// - [`Self::Additive`] — the migration only adds state that an older binary
 ///   can both read and keep writing through its own code paths: new tables
@@ -66,12 +66,16 @@ pub const COMPATIBILITY_RECORD_FORMAT: u32 = 1;
 /// process write rows the newer binary misreads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationCompatibility {
+    /// Older binaries may keep reading and writing.
     Additive,
+    /// Older binaries may only read.
     ReadCompatible,
+    /// Older binaries must refuse to open the state.
     Breaking,
 }
 
 impl MigrationCompatibility {
+    /// Whether older binaries must refuse to open this state.
     pub fn is_breaking(self) -> bool {
         matches!(self, Self::Breaking)
     }
@@ -85,13 +89,15 @@ impl MigrationCompatibility {
 /// Which versioned state a compatibility decision is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateComponent {
+    /// A workspace's on-disk layout.
     WorkspaceLayout,
+    /// The host store's ledger (`orbit.db`).
     StoreSchema,
     /// The host task registry's ledger (`tasks/index.sqlite`).
     TaskRegistry,
     /// The host-only recovery authority ledger (`authority.db`).
     RecoveryAuthority,
-    /// A feature crate's namespaced schema ledger.
+    /// A feature-owned schema ledger.
     FeatureSchema,
 }
 
@@ -117,7 +123,9 @@ impl fmt::Display for StateComponent {
 /// One breaking migration, as recorded for binaries that lack it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BreakingMigration {
+    /// Schema version of the migration.
     pub version: u32,
+    /// Stable name of the migration.
     pub name: String,
 }
 
@@ -186,9 +194,9 @@ impl CompatibilityRecord {
     }
 
     /// Serialize for storage (single-line JSON).
-    pub fn encode(&self) -> Result<String, orbit_common::OrbitError> {
+    pub fn encode(&self) -> Result<String, crate::OrbitError> {
         serde_json::to_string(self).map_err(|error| {
-            orbit_common::OrbitError::Migration(format!(
+            crate::OrbitError::Migration(format!(
                 "cannot serialize forward-compatibility record: {error}"
             ))
         })
@@ -207,6 +215,7 @@ impl CompatibilityRecord {
 /// migration is [`MigrationCompatibility::Additive`] — for writing too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardCompatibleOpen {
+    /// The versioned state being opened.
     pub component: StateComponent,
     /// Version recorded in the state.
     pub state_version: u32,
@@ -247,9 +256,15 @@ pub enum CompatibilityRefusal {
     NoRecord,
     /// The record describes an older version than the state carries, so the
     /// migrations in between are unclassified.
-    StaleRecord { recorded: u32 },
+    StaleRecord {
+        /// Version the compatibility record describes.
+        recorded: u32,
+    },
     /// A record format this binary does not understand.
-    UnknownRecordFormat { format: u32 },
+    UnknownRecordFormat {
+        /// Record format found in the state.
+        format: u32,
+    },
     /// The record is present but unreadable.
     CorruptRecord(String),
     /// The first breaking migration this binary lacks.

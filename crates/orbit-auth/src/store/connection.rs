@@ -36,8 +36,8 @@ impl LeaseTokenStore {
                 path.display()
             )));
         }
-        let mut connection = opened.connection;
-        schema::migrate_lease_token_store(&mut connection)?;
+        let connection = opened.connection;
+        schema::migrate_lease_token_store(&connection, &path)?;
         Ok(Self { connection })
     }
 }

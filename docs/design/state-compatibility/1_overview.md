@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
+paths: ["crates/orbit-common/src/storage/compatibility.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
 related_features: [state-compatibility, orbit-core]
 related_artifacts: [ORB-10003, ORB-10012, ORB-11994, ORB-12078, ORB-12434]
 ---
@@ -74,12 +74,12 @@ answers in advance, and the older binary reads that answer.
 
 | Concern | File | Task |
 | --- | --- | --- |
-| Compatibility types and the decision | `crates/orbit-store/src/contracts/compat.rs` | Done — [ORB-12434] |
+| Compatibility types and the decision | `crates/orbit-common/src/storage/compatibility.rs` | Done — [ORB-12434] |
 | Layout registry, marker, and `layout.compat` | `crates/orbit-store/src/workflow/layout/registry.rs`, `crates/orbit-store/src/workflow/layout/marker.rs` | Done — [ORB-10012], [ORB-12434] |
-| Shared schema engine and frozen store ledger | `crates/orbit-store/src/driver/sqlite/host/ledger/`, `crates/orbit-store/src/driver/sqlite/host/schema/mod.rs` | Done — [ORB-10003], [ORB-12434], [ORB-15821] |
+| Shared schema engine and frozen store ledger | `crates/orbit-common/src/storage/sqlite/ledger/`, `crates/orbit-store/src/driver/sqlite/host/schema/mod.rs` | Done — [ORB-10003], [ORB-12434], [ORB-15821] |
 | Read-only enforcement on the store handle | `crates/orbit-store/src/driver/sqlite/host/connection.rs` | Done — [ORB-12434] |
 | Operator reporting (`orbit migrate`) | `crates/orbit-cmd/src/migrate.rs`, `crates/orbit-cli/src/command/migrate.rs` | Done — [ORB-10012], [ORB-12434] |
-| Older-writer classification and upgrade admission | `crates/orbit-store/src/contracts/compat.rs`, `crates/orbit-common/src/fs/generation/` | Done — [ORB-13631] |
+| Older-writer classification and upgrade admission | `crates/orbit-common/src/storage/compatibility.rs`, `crates/orbit-common/src/fs/generation/` | Done — [ORB-13631] |
 | Task registry ledger and pre-ledger fence | `crates/orbit-store/src/driver/sqlite/task_index/schema/mod.rs` | Done — [ORB-15822] |
 | Frozen feature ledgers absorbed by store v49 | `crates/orbit-store/src/driver/sqlite/host/schema/feature_ledgers/` | Done — [ORB-15823] |
 | Recovery authority's own ledger | `crates/orbit-store/src/driver/sqlite/authority/schema/mod.rs` | Done — [ORB-15824] |

@@ -51,8 +51,8 @@ Design intent: [docs/design/state-compatibility/](../../docs/design/state-compat
 
 - `boundary`: Coordinates task mutations that span canonical files, the registry index and host reservations, including journal recovery and bulk maintenance writes. The document, history, artifact and reservation repositories share the workspace’s commit boundary.
 - `compose`: Composition constructors that assemble driver, repository, and workflow store backends; imports `contracts`, `driver`, `repository`, `workflow`, and `orbit-common`.
-- `contracts`: Consumer-facing record shapes, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only (no persistence drivers).
-- `driver`: Private single-technology persistence drivers (`driver/file` and `driver/sqlite`, never importing each other); imports `contracts`, `fs`, `json_schema`, `orbit-common`, and `orbit-types`.
+- `contracts`: Consumer-facing persistence traits, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only (no persistence drivers).
+- `driver`: Private single-technology persistence drivers (`driver/file` and `driver/sqlite`, never importing each other); imports `contracts`, `fs`, `json_schema`, `orbit-common`, and `orbit-types`. The host store, task registry, and recovery authority own separate ordered registries run by `orbit-common`'s SQLite ledger.
 - `file_store`: Facade exposing `FileStore::read` (`FileSnapshot`) and `FileStore::write` (`FileTx`) over one family of file-backed records and handing out their concrete repositories; imports `driver`, `repository`, and `orbit-common`.
 - `fs`: Narrow filesystem mechanics (locks, path safety, atomic writes, YAML) shared by drivers and workflows; imports `orbit-common` and `orbit-types` only.
 - `json_schema`: JSON Schema draft validation and compilation helper for stored skill/tool schemas; imports `jsonschema`, `orbit-common`, and `serde_json` only.

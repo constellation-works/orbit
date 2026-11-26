@@ -10,7 +10,7 @@ use orbit_common::OrbitError;
 use rusqlite::Connection;
 
 use crate::contracts::{ForwardCompatibleOpen, MigrationCompatibility, StateComponent};
-use crate::driver::sqlite::host::ledger::{
+use orbit_common::storage::sqlite::ledger::{
     LedgeredDatabase, Migration, current_schema_version, evaluate_newer_database,
     run_database_migrations,
 };

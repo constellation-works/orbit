@@ -12,11 +12,12 @@ use orbit_types::workflow::{JobRunState, PipelineState};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde_json::json;
 
-use super::super::super::ledger::{self, Migration};
+use super::super::super::ledger::run_store_migrations;
 use super::super::MIGRATIONS;
 use super::super::feature_ledgers::FEATURE_REGISTRIES;
 use super::super::feature_schema_meta::{FeatureMigration, apply_feature_registry};
 use crate::Store;
+use orbit_common::storage::sqlite::ledger::Migration;
 
 /// The store registry up to, not including, v49.
 fn before_absorption() -> &'static [Migration] {
@@ -104,17 +105,21 @@ fn schema(conn: &Connection) -> Vec<(String, String, Option<String>)> {
 #[test]
 fn absorption_writes_what_each_feature_open_wrote() {
     let opened = Connection::open_in_memory().expect("feature-open fixture");
-    ledger::run_migrations(&opened, before_absorption()).expect("migrate to v48");
+    run_store_migrations(&opened, before_absorption(), None).expect("migrate to v48");
     for (feature, migrations) in FEATURE_REGISTRIES {
         open_feature(&opened, feature, migrations).expect("open feature");
     }
 
     let absorbed = Connection::open_in_memory().expect("absorbed fixture");
-    ledger::run_migrations(&absorbed, before_absorption()).expect("migrate to v48");
+    run_store_migrations(&absorbed, before_absorption(), None).expect("migrate to v48");
     assert!(
-        ledger::run_migrations(&absorbed, &MIGRATIONS[..before_absorption().len() + 1])
-            .expect("apply v49")
-            .is_none()
+        run_store_migrations(
+            &absorbed,
+            &MIGRATIONS[..before_absorption().len() + 1],
+            None
+        )
+        .expect("apply v49")
+        .is_none()
     );
 
     let (rows, records) = feature_footprint(&absorbed);
@@ -141,11 +146,11 @@ fn a_binary_without_absorption_keeps_writing_and_decides_features_from_their_rec
     let conn = Connection::open_in_memory().expect("fixture");
     // This guarantee belongs to additive v49; a later read-compatible or
     // breaking store migration must still fence a v48 writer.
-    ledger::run_migrations(&conn, &MIGRATIONS[..before_absorption().len() + 1])
+    run_store_migrations(&conn, &MIGRATIONS[..before_absorption().len() + 1], None)
         .expect("migrate to v49");
     let rows = feature_rows(&conn);
 
-    let open = ledger::run_migrations(&conn, before_absorption())
+    let open = run_store_migrations(&conn, before_absorption(), None)
         .expect("a v48 binary opens the v49 store")
         .expect("the store is newer than that binary");
     assert!(open.writable, "{open}");
@@ -238,7 +243,7 @@ fn pilot_state(generation: u64, members: MemberState) -> AutomationState {
 /// at v48 and automation at v3, holding `state`. `seed` adds other rows.
 fn automation_v3_store(path: &Path, state: &AutomationState, seed: impl FnOnce(&Connection)) {
     let conn = Connection::open(path).expect("open fixture database");
-    ledger::run_migrations(&conn, before_absorption()).expect("migrate to v48");
+    run_store_migrations(&conn, before_absorption(), None).expect("migrate to v48");
     open_feature(&conn, "automation", &registry("automation")[..3]).expect("automation v3");
     conn.execute(
         "INSERT INTO automation_consumers VALUES (?1,?2,?3)",

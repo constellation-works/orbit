@@ -14,6 +14,7 @@ mod hardening;
 mod header;
 mod wal_lease;
 
+pub mod ledger;
 pub mod pragma;
 
 pub use connection::{

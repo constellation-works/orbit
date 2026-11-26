@@ -1,7 +1,8 @@
-use super::super::super::super::ledger::{self, Migration};
+use super::super::super::super::ledger::run_store_migrations;
 use super::super::super::*;
 use crate::contracts::MigrationCompatibility;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::ledger::Migration;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
@@ -46,7 +47,7 @@ fn failed_migration_rolls_back_schema_and_ledger() {
         },
     ];
 
-    let err = ledger::run_migrations(&conn, &registry).expect_err("v2 must fail");
+    let err = run_store_migrations(&conn, &registry, None).expect_err("v2 must fail");
     assert!(matches!(err, OrbitError::Migration(_)), "got {err:?}");
     let message = err.to_string();
     assert!(message.contains("v2 (fails-midway)"), "got {message}");
@@ -73,7 +74,7 @@ fn failed_migration_rolls_back_schema_and_ledger() {
             apply: migration_v1_marker_v2,
         },
     ];
-    ledger::run_migrations(&conn, &fixed).expect("resume after fix");
+    run_store_migrations(&conn, &fixed, None).expect("resume after fix");
     assert_eq!(current_schema_version(&conn).expect("current version"), 2);
 }
 
