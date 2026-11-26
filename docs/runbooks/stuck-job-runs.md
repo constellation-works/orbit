@@ -553,7 +553,10 @@ The v2 executor checkpoints every completed top-level step into
 forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)),
 a `held` run whose completion could not read the forge
 (`delivery_forge_observation_unavailable`), and a `held` run the host manager
-stopped (`operator_stopped`). Any other state errors with `resume requires an interrupted, failed, or timed-out run`.
+stopped (`operator_stopped`). A `held` run an implementer's blocker stopped is
+refused too, with its salvage steps ([a task blocked by an implementer's
+blocker](#a-task-blocked-by-an-implementers-blocker)). Any other state errors
+with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh
 orbit job resume <run_id>
@@ -654,8 +657,10 @@ lineage wrote through its failure handoff (`pr_failure_handoff`,
 `pr_conflict_blocked`, `validation_environment_blocked`,
 `review_gate_escalation`) is readmitted the same way, including back to
 `review` when the checkpoint rules above hold. An implementer-declared
-blocker (`task_blocked_by_agent`) is not in that list: resume leaves the
-task blocked, and an operator moves it back once the blocker is gone.
+blocker (`task_blocked_by_agent`) is not in that list: resume refuses it and
+leaves the task blocked. Its candidate stays uncommitted in the run's worktree,
+so save it before requeueing; see [a task blocked by an implementer's
+blocker](#a-task-blocked-by-an-implementers-blocker).
 Missing stage evidence,
 an unrelated or superseding attempt, a manual block, and withdrawn or terminal
 states cannot gain review through this repair. A merged PR alone is not review
@@ -1780,6 +1785,30 @@ to another host; it cannot fetch a host-local candidate and would implement
 afresh. Do not run `orbit job resume <held_run_id>`: resume refuses held runs
 of this kind.
 See [CONFIG.md](../CONFIG.md#owner-sign-off-holds-the-run-owner_signoff_required).
+
+## A task blocked by an implementer's blocker
+
+An implementer that cannot proceed declares a blocker, and its run ends `held`
+under `task_blocked_by_agent` with the blocker kind. Nothing was committed or
+pushed, and no PR was opened. The task is `blocked`, and its system comment
+names the run, failed step, worktree, branch and base head. The candidate is
+uncommitted in that worktree, and no other copy exists.
+
+`orbit job resume <held_run_id>` refuses this run by design, and no later run
+reuses its uncommitted files. Once the blocker is resolved, keep the candidate
+before anything else:
+
+1. Leave the worktree in place.
+2. From your checkout, save the changes:
+   `git -C <worktree> add -A && git -C <worktree> diff --cached --binary HEAD > .orbit/tmp/<task-id>-salvage.patch`.
+3. Attach the patch with `orbit task artifact put <task-id> .orbit/tmp/<task-id>-salvage.patch`,
+   and name it in a task comment, which the next run's prompt carries.
+4. Once the run has stopped, return the task to backlog with `orbit task requeue <task-id>
+   --reason '<why it can continue>'`. Requeue is refused while the run still runs. The next run
+   starts fresh from the base.
+
+The refusal from `orbit job resume` repeats these steps with the run's own
+worktree and branch. See [CONFIG.md](../CONFIG.md#agent-declared-blockers-stop-the-run).
 
 ## A task waiting on a provider usage limit
 

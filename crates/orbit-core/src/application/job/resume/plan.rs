@@ -7,6 +7,7 @@ use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
 use orbit_types::workflow::{
     DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState, is_operator_stopped,
+    is_task_blocked_by_agent, task_blocked_by_agent_kind,
 };
 use serde_json::Value;
 
@@ -282,6 +283,9 @@ impl OrbitRuntime {
                 JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
             )
         {
+            if let Some(refusal) = self.agent_blocker_resume_refusal(&source)? {
+                return Err(OrbitError::JobValidation(refusal));
+            }
             return Err(OrbitError::JobValidation(format!(
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
                  one held because the host manager stopped its worker, or one held because the \
@@ -449,6 +453,65 @@ impl OrbitRuntime {
         }
 
         Ok((ancestors, lineage))
+    }
+
+    /// [ORB-29000] The refusal for a run an implementer's blocker held. Resume
+    /// stays fail-closed; the message only says what the operator keeps. The
+    /// candidate is uncommitted in the run's worktree and no later run reuses
+    /// it, so the way forward is to save it, attach it and requeue the task.
+    /// `None` for every other refused run.
+    fn agent_blocker_resume_refusal(&self, source: &JobRun) -> Result<Option<String>, OrbitError> {
+        let Some(step) = source.steps.last() else {
+            return Ok(None);
+        };
+        if source.state != JobRunState::Held
+            || !is_task_blocked_by_agent(step.error_code.as_deref(), step.error_message.as_deref())
+        {
+            return Ok(None);
+        }
+        let state = self.read_run_state(&source.run_id)?;
+        let handoff = state
+            .as_ref()
+            .and_then(|state| state.failure_activity_checkpoint.as_ref())
+            .map(|checkpoint| &checkpoint.output);
+        let handoff_text = |key: &str| {
+            handoff
+                .and_then(|output| output.get(key))
+                .and_then(Value::as_str)
+        };
+        let kind = task_blocked_by_agent_kind(step.error_message.as_deref().unwrap_or_default())
+            .unwrap_or("unspecified");
+        let task = handoff_text("task_id").unwrap_or("<task-id>");
+        let worktree = state
+            .as_ref()
+            .and_then(|state| state.pipeline.get("worktree"))
+            .and_then(|worktree| worktree.get("workspace_path"))
+            .and_then(Value::as_str);
+        let location = match worktree {
+            Some(path) => format!("in worktree {path}"),
+            None => format!(
+                "in the run's worktree (`orbit run show {} --json` names it)",
+                source.run_id
+            ),
+        };
+        let branch = handoff_text("branch")
+            .map(|branch| format!(" on branch {branch}"))
+            .unwrap_or_default();
+        let head = handoff_text("head_sha")
+            .map(|head| format!(" at {head}"))
+            .unwrap_or_default();
+        let path = worktree.unwrap_or("<worktree>");
+        let patch = format!(".orbit/tmp/{task}-salvage.patch");
+        Ok(Some(format!(
+            "job run '{}' is held by an agent's blocker (kind {kind}), which resume does not \
+             continue. Its candidate is uncommitted {location}{branch}{head}, and no later run reuses \
+             it. To keep it: leave that worktree in place, save its changes with `git -C {path} add -A \
+             && git -C {path} diff --cached --binary HEAD > <your checkout>/{patch}`, attach the patch \
+             with `orbit task artifact put {task} {patch}` and name it in a task comment, then return \
+             the task to backlog with `orbit task requeue {task} --reason '<why it can continue>'` once \
+             the run has stopped (requeue is refused while it runs); the next run starts fresh.",
+            source.run_id
+        )))
     }
 
     /// Refuse a resume whose targeted task is bound outside this lineage.
