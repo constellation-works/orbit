@@ -96,12 +96,15 @@
 //! read-only, and it therefore stays outside the boundary.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use orbit_common::OrbitError;
 use orbit_types::task::{TaskEnvelopeV2, TaskEventRowV2};
 use serde::{Deserialize, Serialize};
 
 use crate::Store;
 use crate::boundary::v2_bundle::TaskBundleStoreV2;
+use crate::contracts::{ClaimInspection, ClaimInvocation, OwnerWaveAdmission, OwnerWaveCandidate};
 use crate::repository::task_index::TaskRegistryStore;
 
 /// Lock target for one task-store partition. The advisory lock is its
@@ -145,6 +148,53 @@ pub struct TaskCommitBoundary {
     partition_dir: PathBuf,
     /// Deadlines and holder diagnostics for the host and partition locks.
     lock_options: orbit_common::fs::io::FileLockOptions,
+}
+
+/// A workspace's task coordination, including legacy composition without a
+/// commit boundary.
+#[derive(Clone, Default)]
+pub struct TaskCoordination {
+    boundary: Option<Arc<TaskCommitBoundary>>,
+}
+
+impl TaskCoordination {
+    pub(crate) fn new(boundary: Arc<TaskCommitBoundary>) -> Self {
+        Self {
+            boundary: Some(boundary),
+        }
+    }
+
+    /// Admit the owner's drain wave in order. A legacy composition without
+    /// coordination admits every candidate and publishes no footprint.
+    pub fn admit_owner_wave(
+        &self,
+        candidates: &[OwnerWaveCandidate],
+        owner_machine_id: Option<&str>,
+    ) -> Result<Vec<OwnerWaveAdmission>, OrbitError> {
+        match &self.boundary {
+            Some(boundary) => boundary.admit_owner_wave(candidates, owner_machine_id),
+            None => Ok(candidates
+                .iter()
+                .map(|candidate| OwnerWaveAdmission::admitted(&candidate.task_id))
+                .collect()),
+        }
+    }
+
+    /// Settle an interrupted commit, then read execution claims.
+    pub fn resolve_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+        require_claim_boundary(self.boundary.as_deref())?.resolve_execution_claims()
+    }
+
+    /// Refuse a worker invocation whose claim lost its authority.
+    pub fn verify_worker_claim(&self, invocation: &ClaimInvocation) -> Result<(), OrbitError> {
+        require_claim_boundary(self.boundary.as_deref())?.verify_worker_claim(invocation)
+    }
+}
+
+pub(in crate::boundary) fn require_claim_boundary(
+    boundary: Option<&TaskCommitBoundary>,
+) -> Result<&TaskCommitBoundary, OrbitError> {
+    boundary.ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
 }
 
 mod admission;

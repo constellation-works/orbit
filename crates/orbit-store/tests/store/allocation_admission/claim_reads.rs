@@ -174,7 +174,8 @@ fn inspection_joins_only_matching_states_and_preserves_legacy_defaults() {
             .unwrap(),
         owner
             .backends
-            .commit_boundary
+            .task
+            .coordination
             .resolve_execution_claims()
             .unwrap(),
     ] {

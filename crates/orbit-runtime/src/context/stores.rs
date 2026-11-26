@@ -3,13 +3,14 @@ use crate::stored::job_runs::JobRuns;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
-use orbit_store::TaskV2Store;
+use orbit_store::compose::WorkspaceTaskBackends;
 use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
 use orbit_store::{
     TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
     TaskReservationRepository,
 };
+use orbit_store::{TaskCoordination, TaskV2Store};
 use orbit_tools::ToolRegistry;
 use std::sync::Arc;
 
@@ -24,6 +25,7 @@ pub(crate) struct OrbitHostStore {
 #[derive(Clone)]
 pub struct OrbitStores {
     pub(crate) task: Arc<TaskV2Store>,
+    task_coordination: TaskCoordination,
     pub(crate) task_document: TaskDocumentRepository,
     pub(crate) task_history: TaskHistoryRepository,
     pub(crate) task_artifact: TaskArtifactRepository,
@@ -38,10 +40,7 @@ pub struct OrbitStores {
 impl OrbitStores {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        task: Arc<TaskV2Store>,
-        task_document: TaskDocumentRepository,
-        task_history: TaskHistoryRepository,
-        task_artifact: TaskArtifactRepository,
+        tasks: WorkspaceTaskBackends,
         lexical_index: LexicalIndex,
         task_reservation: TaskReservationRepository,
         job_run: Arc<JobRuns>,
@@ -50,10 +49,11 @@ impl OrbitStores {
         host: OrbitHostStore,
     ) -> Self {
         Self {
-            task,
-            task_document,
-            task_history,
-            task_artifact,
+            task: tasks.task,
+            task_coordination: tasks.coordination,
+            task_document: tasks.document,
+            task_history: tasks.history,
+            task_artifact: tasks.artifact,
             lexical_index,
             task_reservation,
             job_run,
@@ -65,6 +65,11 @@ impl OrbitStores {
 
     pub fn tasks(&self) -> &TaskV2Store {
         self.task.as_ref()
+    }
+
+    /// This workspace's task coordination through the shared commit boundary.
+    pub fn task_coordination(&self) -> &TaskCoordination {
+        &self.task_coordination
     }
 
     pub fn task_documents(&self) -> &TaskDocumentRepository {

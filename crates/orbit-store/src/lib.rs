@@ -65,7 +65,7 @@ pub mod recovery_authority {
 use chrono::{DateTime, Utc};
 
 pub use boundary::TaskV2Store;
-pub use boundary::{TaskCommitBoundary, admission_refusal};
+pub use boundary::{TaskCommitBoundary, TaskCoordination, admission_refusal};
 pub use contracts::incident::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
     FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,

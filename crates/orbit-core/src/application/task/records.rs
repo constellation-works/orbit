@@ -431,7 +431,9 @@ impl crate::OrbitRuntime {
         &self,
         context: &orbit_store::contracts::ClaimInvocation,
     ) -> Result<(), OrbitError> {
-        self.stores().tasks().verify_worker_claim(context)
+        self.stores()
+            .task_coordination()
+            .verify_worker_claim(context)
     }
 
     /// A claimed worker's mid-run steering records, behind the same fence
@@ -467,7 +469,7 @@ impl crate::OrbitRuntime {
     pub fn resolve_execution_claims(
         &self,
     ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
-        self.stores().tasks().resolve_execution_claims()
+        self.stores().task_coordination().resolve_execution_claims()
     }
 
     /// Repairing counterpart of [`Self::inspect_live_execution_claims`] for

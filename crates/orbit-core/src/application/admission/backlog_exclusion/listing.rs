@@ -448,7 +448,7 @@ fn list_backlog_tasks_impl(
         } else {
             runtime
                 .stores()
-                .tasks()
+                .task_coordination()
                 .admit_owner_wave(
                     &candidates,
                     runtime

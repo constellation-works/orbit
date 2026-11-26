@@ -377,8 +377,6 @@ impl OrbitRuntime {
         let expected_phase = expected_phase.trim();
         self.ensure_coordination_task_write_permitted()?;
         let claim = self
-            .stores()
-            .tasks()
             .resolve_execution_claims()?
             .into_iter()
             .find(|claim| claim.claim.claim_id == claim_id)
@@ -483,7 +481,7 @@ impl OrbitRuntime {
         handoff_id: &str,
     ) -> Result<(ClaimInspection, AcceptedHandoff), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        for claim in self.stores().tasks().resolve_execution_claims()? {
+        for claim in self.resolve_execution_claims()? {
             let Some(accepted) = self
                 .stores()
                 .tasks()
