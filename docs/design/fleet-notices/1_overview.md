@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: "Fleet notices: short-lived, scoped, authored coordination notes (warn, incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data"
 tags: [fleet-notices, federated-mcp, operator-attention]
-paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/repository/notice.rs", "crates/orbit-core/src/adapter/tool_host/notice_tools.rs", "crates/orbit-cli/src/command/notice.rs", "crates/orbit-store/src/driver/sqlite/host/schema/notices.rs", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-mcp/src/federated/**", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-core/src/application/routines/sweep/tick.rs"]
+paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/repository/notice.rs", "crates/orbit-core/src/adapter/tool_host/notice_tools.rs", "crates/orbit-cli/src/command/notice/**", "crates/orbit-store/src/driver/sqlite/host/schema/notices.rs", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-mcp/src/federated/**", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-core/src/application/routines/sweep/tick.rs"]
 related_features: [operator-attention, federated-mcp, mid-run-steering, distributed-drain, path-leases, human-decision-channel]
 related_artifacts: [ORB-21207, ORB-21208, ORB-21164, ORB-21211, ORB-21214, ORB-21215]
 ---
@@ -100,7 +100,7 @@ Notices view and the `notice_open` attention kind ([2_design.md §8](./2_design.
 | Operation noun and tool specs | [governance/notice.rs](../../../crates/orbit-common/src/governance/notice.rs) | [ORB-21211] |
 | Post, close, list, show and poster authority | [application/notice/](../../../crates/orbit-core/src/application/notice/mod.rs) | [ORB-21211] |
 | Tool adapter | [notice_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/notice_tools.rs) | [ORB-21211] |
-| `orbit notice` CLI | [notice.rs](../../../crates/orbit-cli/src/command/notice.rs) | [ORB-21211] |
+| `orbit notice` CLI | [notice/](../../../crates/orbit-cli/src/command/notice/) | [ORB-21211] |
 | Notice tool classes (`control_plane`) | [capability.rs](../../../crates/orbit-mcp/src/federated/capability.rs) | [ORB-21214] |
 | Workspace-less per-owner aggregation | [notice_aggregate.rs](../../../crates/orbit-mcp/src/federated/notice_aggregate.rs) | [ORB-21214] |
 | Follower CLI owner routing | [host_route.rs](../../../crates/orbit-cli/src/command/host_route.rs) | [ORB-21214] |
