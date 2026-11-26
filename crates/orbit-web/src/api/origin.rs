@@ -189,8 +189,11 @@ impl<'a> Gate<'a> {
         if !stream {
             return response;
         }
-        let guard = self.access.open_stream(device);
-        crate::lease::listener::retain_response_allowance(response, guard)
+        if let Some(guard) = self.access.open_stream(device, login) {
+            crate::lease::listener::retain_response_allowance(response, guard)
+        } else {
+            response
+        }
     }
 }
 

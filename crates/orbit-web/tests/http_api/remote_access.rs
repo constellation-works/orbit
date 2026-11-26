@@ -1,9 +1,17 @@
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
 
+use orbit_common::process::ancestry::process_start_key;
+use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, isolated};
+use super::support::{Fixture, Server, isolated};
 
 /// A `tailscale` stub: `serve status --json` prints `serve.json` beside it,
 /// `whois --json <ip>` names the device `phone`.
@@ -175,6 +183,534 @@ fn remote_access_reports_policy_serve_check_and_only_trusted_host_traffic() {
             );
             assert_eq!(body["restart_required"], true, "{body}");
             assert_eq!(body["configured_policy_error"], Value::Null);
+        },
+    );
+}
+
+struct SshStubCleanup {
+    log: std::path::PathBuf,
+}
+
+impl Drop for SshStubCleanup {
+    fn drop(&mut self) {
+        let Ok(text) = fs::read_to_string(&self.log) else {
+            return;
+        };
+        for line in text.lines() {
+            let Ok(call) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let (Some(pid), Some(starttime)) = (call["pid"].as_u64(), call["starttime"].as_u64())
+            else {
+                continue;
+            };
+            let Ok(pid) = u32::try_from(pid) else {
+                continue;
+            };
+            if process_start_key(pid).is_some_and(|key| key.starttime == starttime) {
+                // SAFETY: `process_start_key` confirmed the PID still belongs to the stub.
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+fn install_ssh_stub(bin: &Path, remote_port: u16) -> SshStubCleanup {
+    let script = bin.join("ssh");
+    fs::write(&script, include_str!("stub_ssh.py")).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = bin.join("calls.jsonl");
+    let config = json!({
+        "log": log,
+        "release": bin.join("release"),
+        "hosts": {"hostb-ssh": {"attach": remote_port, "spawn": null}},
+    });
+    fs::write(bin.join("ssh.json"), config.to_string()).unwrap();
+    SshStubCleanup { log }
+}
+
+struct PendingUpstream {
+    release: mpsc::Sender<()>,
+    stream_rx: mpsc::Receiver<TcpStream>,
+}
+
+struct FakeRemote {
+    port: u16,
+    pending_rx: mpsc::Receiver<PendingUpstream>,
+    immediate_rx: mpsc::Receiver<TcpStream>,
+    hold_releases: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
+}
+
+impl FakeRemote {
+    fn start(machine_id: &str) -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pending_tx, pending_rx) = mpsc::channel();
+        let (immediate_tx, immediate_rx) = mpsc::channel();
+        let hold_releases = Arc::new(Mutex::new(Vec::new()));
+        let releases = Arc::clone(&hold_releases);
+        let identity = json!({"hosts": [{
+            "local": true,
+            "machine_id": machine_id,
+            "binary_version": "9.9.9",
+            "protocol_fingerprint": "fixture",
+        }]})
+        .to_string();
+        thread::spawn(move || {
+            for incoming in listener.incoming() {
+                let Ok(stream) = incoming else { break };
+                let pending_tx = pending_tx.clone();
+                let immediate_tx = immediate_tx.clone();
+                let releases = Arc::clone(&releases);
+                let identity = identity.clone();
+                thread::spawn(move || {
+                    handle_remote_connection(stream, &identity, pending_tx, immediate_tx, releases);
+                });
+            }
+        });
+        Self {
+            port,
+            pending_rx,
+            immediate_rx,
+            hold_releases,
+        }
+    }
+}
+
+impl Drop for FakeRemote {
+    fn drop(&mut self) {
+        for tx in self.hold_releases.lock().unwrap().drain(..) {
+            let _ = tx.send(());
+        }
+    }
+}
+
+fn handle_remote_connection(
+    mut stream: TcpStream,
+    identity: &str,
+    pending_tx: mpsc::Sender<PendingUpstream>,
+    immediate_tx: mpsc::Sender<TcpStream>,
+    hold_releases: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
+) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let Ok(read) = stream.read(&mut chunk) else {
+            return;
+        };
+        if read == 0 {
+            return;
+        }
+        buf.extend_from_slice(&chunk[..read]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16 * 1024 {
+            break;
+        }
+    }
+    let _ = stream.set_read_timeout(None);
+    let head = String::from_utf8_lossy(&buf);
+    let path = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default();
+    if path == "/healthz" {
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+    } else if path == "/api/hosts?probe=false" {
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{identity}",
+            identity.len()
+        );
+    } else if path.starts_with("/api/events/stream?mode=pending") {
+        let (release_tx, release_rx) = mpsc::channel();
+        hold_releases.lock().unwrap().push(release_tx.clone());
+        let (stream_tx, stream_rx) = mpsc::channel();
+        if pending_tx
+            .send(PendingUpstream {
+                release: release_tx,
+                stream_rx,
+            })
+            .is_err()
+        {
+            return;
+        }
+        if release_rx.recv().is_err() {
+            return;
+        }
+        if write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\ndata: {{\"kind\":\"ready\"}}\n\n"
+        )
+        .is_err()
+            || stream.flush().is_err()
+        {
+            return;
+        }
+        let _ = stream_tx.send(stream);
+    } else if path.starts_with("/api/events/stream") {
+        if write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\ndata: {{\"kind\":\"ready\"}}\n\n"
+        )
+        .is_err()
+            || stream.flush().is_err()
+        {
+            return;
+        }
+        let _ = immediate_tx.send(stream);
+    } else {
+        let _ = write!(
+            stream,
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+    }
+}
+
+fn configure_trusted_remote_host(fixture: &Fixture, bin: &Path) {
+    let config = fixture.global.join("config.toml");
+    let base = fs::read_to_string(&config).unwrap();
+    fs::write(
+        &config,
+        format!(
+            "{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\n\
+             trusted_logins = [\"alice@example.com\"]\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        fixture.global.join("hosts.toml"),
+        "schema_version = 1\n\n[[hosts]]\nname = \"hostb\"\nmachine_id = \"hm_hostb_remote\"\nssh = \"hostb-ssh\"\ntask_prefix = \"HB\"\n",
+    )
+    .unwrap();
+    serve_json(bin, "dash.tailnet.ts.net", "http://127.0.0.1:0");
+}
+
+fn send_trusted(server: &Server, path: &str, login: &str, ip: &str) -> Response {
+    server
+        .request("GET", path)
+        .header("host", "dash.tailnet.ts.net")
+        .header("tailscale-user-login", login)
+        .header("x-forwarded-for", ip)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .unwrap()
+}
+
+fn read_sse_ready(response: Response) -> BufReader<Response> {
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    let mut reader = BufReader::new(response);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        assert!(
+            reader.read_line(&mut line).unwrap() > 0,
+            "SSE stream ended before initial event"
+        );
+        if line.starts_with("data: ") {
+            return reader;
+        }
+    }
+}
+
+fn close_and_drain(mut reader: BufReader<Response>, upstream: TcpStream) {
+    let _ = upstream.shutdown(Shutdown::Both);
+    drop(upstream);
+    let mut rest = String::new();
+    while reader.read_line(&mut rest).is_ok_and(|n| n > 0) {}
+}
+
+#[test]
+fn remote_access_caps_devices_and_refusal_keys_at_capacity() {
+    isolated(
+        "remote_access::remote_access_caps_devices_and_refusal_keys_at_capacity",
+        || {
+            let fixture = Fixture::new();
+            let bin = tailscale_stub(&fixture);
+            let remote = FakeRemote::start("hm_hostb_remote");
+            let _ssh = install_ssh_stub(&bin, remote.port);
+            configure_trusted_remote_host(&fixture, &bin);
+            let server = fixture.server_with_path(false, &bin);
+            serve_json(&bin, "dash.tailnet.ts.net", &server.origin);
+
+            // Open 64 live forwarded SSE streams from 64 distinct devices.
+            let mut open_streams = Vec::new();
+            for i in 1..=64 {
+                let ip = format!("100.64.2.{i}");
+                let response = send_trusted(
+                    &server,
+                    "/api/on/hostb/events/stream?mode=immediate",
+                    "alice@example.com",
+                    &ip,
+                );
+                let reader = read_sse_ready(response);
+                let upstream = remote
+                    .immediate_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+                open_streams.push((ip, reader, upstream));
+            }
+
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["connections"]["devices"].as_array().unwrap().len(), 64);
+            assert_eq!(body["connections"]["open_streams"], 64);
+
+            // A 65th ordinary request and a 65th SSE stream cannot grow the table beyond 64.
+            assert!(
+                send_trusted(
+                    &server,
+                    "/api/tasks?workspace=ws_http_fixture",
+                    "alice@example.com",
+                    "100.64.2.65",
+                )
+                .status()
+                .is_success()
+            );
+            let overflow_sse = read_sse_ready(send_trusted(
+                &server,
+                "/api/on/hostb/events/stream?mode=immediate",
+                "alice@example.com",
+                "100.64.2.65",
+            ));
+            let overflow_upstream = remote
+                .immediate_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            let devices = body["connections"]["devices"].as_array().unwrap();
+            assert_eq!(devices.len(), 64, "device table must remain capped at 64");
+            assert_eq!(body["connections"]["open_streams"], 64);
+            assert!(
+                !devices.iter().any(|d| d["ip"] == "100.64.2.65"),
+                "unretained 65th device must not be inserted while all 64 slots hold streams"
+            );
+
+            // Close one pinned device's stream, then let 100.64.2.65 open a newly accounted stream.
+            let (_, first_reader, first_upstream) = open_streams.remove(0);
+            close_and_drain(first_reader, first_upstream);
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["connections"]["open_streams"], 63);
+
+            let accounted_65_reader = read_sse_ready(send_trusted(
+                &server,
+                "/api/on/hostb/events/stream?mode=immediate",
+                "alice@example.com",
+                "100.64.2.65",
+            ));
+            let accounted_65_upstream = remote
+                .immediate_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            open_streams.push((
+                "100.64.2.65".to_string(),
+                accounted_65_reader,
+                accounted_65_upstream,
+            ));
+
+            // Closing the earlier unaccounted 65th stream must not decrement the new accounted one.
+            close_and_drain(overflow_sse, overflow_upstream);
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["connections"]["open_streams"], 64);
+            let dev_65 = body["connections"]["devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["ip"] == "100.64.2.65")
+                .expect("100.64.2.65 should now be retained");
+            assert_eq!(dev_65["open_streams"], 1);
+
+            // Refusal key capacity: 64 unlisted logins fill the table, then overflow and other reasons
+            // must not grow the refusal items list beyond 64.
+            for i in 0..64 {
+                let login = format!("mallory-{i:02}@example.com");
+                assert_eq!(
+                    send_trusted(
+                        &server,
+                        "/api/tasks?workspace=ws_http_fixture",
+                        &login,
+                        "100.64.3.1",
+                    )
+                    .status()
+                    .as_u16(),
+                    403
+                );
+            }
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["refusals"]["items"].as_array().unwrap().len(), 64);
+            assert_eq!(body["refusals"]["total"], 64);
+
+            for i in 64..66 {
+                let login = format!("mallory-{i:02}@example.com");
+                assert_eq!(
+                    send_trusted(
+                        &server,
+                        "/api/tasks?workspace=ws_http_fixture",
+                        &login,
+                        "100.64.3.1",
+                    )
+                    .status()
+                    .as_u16(),
+                    403
+                );
+            }
+            assert_eq!(
+                server
+                    .request("GET", "/api/tasks?workspace=ws_http_fixture")
+                    .header("host", "dash.tailnet.ts.net")
+                    .header("tailscale-user-login", "alice@example.com")
+                    .header("origin", "https://evil.example")
+                    .send()
+                    .unwrap()
+                    .status()
+                    .as_u16(),
+                403
+            );
+            assert_eq!(
+                server
+                    .request("GET", "/api/tasks?workspace=ws_http_fixture")
+                    .header("host", "dash.tailnet.ts.net")
+                    .header("tailscale-user-login", "alice@example.com")
+                    .header("sec-fetch-site", "cross-site")
+                    .send()
+                    .unwrap()
+                    .status()
+                    .as_u16(),
+                403
+            );
+
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            let items = body["refusals"]["items"].as_array().unwrap();
+            assert!(
+                items.len() <= 64,
+                "refusal keys must remain capped at 64, got {}: {items:?}",
+                items.len()
+            );
+            assert_eq!(body["refusals"]["total"], 68);
+            assert!(
+                items
+                    .iter()
+                    .any(|item| item["reason"] == "unlisted_login" && item["login"].is_null()),
+                "overflow unlisted_login bucket should be present: {items:?}"
+            );
+            assert!(
+                items.iter().any(|item| item["reason"] == "origin_mismatch"),
+                "origin_mismatch bucket should be present: {items:?}"
+            );
+            assert!(
+                items.iter().any(|item| item["reason"] == "sec_fetch_site"),
+                "sec_fetch_site bucket should be present: {items:?}"
+            );
+
+            for (_, reader, upstream) in open_streams {
+                close_and_drain(reader, upstream);
+            }
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["connections"]["open_streams"], 0);
+        },
+    );
+}
+
+#[test]
+fn remote_access_evicted_pending_stream_cannot_decrement_later_stream() {
+    isolated(
+        "remote_access::remote_access_evicted_pending_stream_cannot_decrement_later_stream",
+        || {
+            let fixture = Fixture::new();
+            let bin = tailscale_stub(&fixture);
+            let remote = FakeRemote::start("hm_hostb_remote");
+            let _ssh = install_ssh_stub(&bin, remote.port);
+            configure_trusted_remote_host(&fixture, &bin);
+            let server = fixture.server_with_path(false, &bin);
+            serve_json(&bin, "dash.tailnet.ts.net", &server.origin);
+
+            // Start a forwarded SSE request that pauses before returning response headers.
+            let origin = server.origin.clone();
+            let pending_handle = thread::spawn(move || {
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(20))
+                    .build()
+                    .unwrap();
+                client
+                    .get(format!("{origin}/api/on/hostb/events/stream?mode=pending"))
+                    .header("host", "dash.tailnet.ts.net")
+                    .header("tailscale-user-login", "alice@example.com")
+                    .header("x-forwarded-for", "100.64.0.99")
+                    .send()
+                    .unwrap()
+            });
+
+            // Once the fake remote receives the request, Gate::admit has recorded 100.64.0.99
+            // and is suspended awaiting the handler response.
+            let pending = remote
+                .pending_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("pending stream reached remote");
+
+            // Fill all 64 device slots with ordinary requests, evicting 100.64.0.99 while pending.
+            for i in 1..=64 {
+                let ip = format!("100.64.1.{i}");
+                assert!(
+                    send_trusted(
+                        &server,
+                        "/api/tasks?workspace=ws_http_fixture",
+                        "alice@example.com",
+                        &ip,
+                    )
+                    .status()
+                    .is_success()
+                );
+            }
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            let devices = body["connections"]["devices"].as_array().unwrap();
+            assert_eq!(devices.len(), 64);
+            assert!(
+                !devices.iter().any(|d| d["ip"] == "100.64.0.99"),
+                "pending device should have been evicted by 64 ordinary requests"
+            );
+
+            // Release the pending request so it returns text/event-stream and stays open.
+            pending.release.send(()).unwrap();
+            let pending_reader = read_sse_ready(pending_handle.join().unwrap());
+            let pending_upstream = pending
+                .stream_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+
+            // Open a second SSE stream from the same IP while the first is still open.
+            let second_reader = read_sse_ready(send_trusted(
+                &server,
+                "/api/on/hostb/events/stream?mode=immediate",
+                "alice@example.com",
+                "100.64.0.99",
+            ));
+            let second_upstream = remote
+                .immediate_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+
+            // Close the first stream; the second stream must remain counted as 1.
+            close_and_drain(pending_reader, pending_upstream);
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["connections"]["open_streams"], 1);
+            let dev = body["connections"]["devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["ip"] == "100.64.0.99")
+                .expect("100.64.0.99 should remain present for its second stream");
+            assert_eq!(dev["open_streams"], 1);
+
+            // Closing the second stream releases its own count cleanly to 0.
+            close_and_drain(second_reader, second_upstream);
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(body["connections"]["open_streams"], 0);
         },
     );
 }
