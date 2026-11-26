@@ -536,7 +536,7 @@ service side regardless.
   otherwise) and must resolve to one local owner workspace the grant covers on this host. One it
   does not cover is refused with a `resident_scope_refused` message. That message reaches the
   agent as `plugin_broker_refused`, because every `PolicyDenied` maps to that code
-  (`crates/orbit-runtime/src/plugin/broker/protocol.rs`).
+  (`crates/orbit-runtime/src/host/plugin/broker/protocol.rs`).
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
   bound to the run's task and job run. An exec backend is confined by the §5 intersection.

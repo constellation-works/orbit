@@ -6,14 +6,12 @@ use orbit_common::fs::selector::canonical_selector_in_workspace;
 
 mod block_on_run_failure;
 pub mod locks;
-pub mod pr_forge;
-pub mod pr_forge_refresh;
-mod pr_forge_rerun;
 pub mod provider_hold;
 mod reservation_cleanup;
 mod reservation_history;
-#[cfg(test)]
-mod tests;
+
+pub use crate::host::forge as pr_forge;
+pub use crate::host::forge::refresh as pr_forge_refresh;
 
 pub use block_on_run_failure::InfraBlockedTask;
 pub use block_on_run_failure::resumed_task_run_id;

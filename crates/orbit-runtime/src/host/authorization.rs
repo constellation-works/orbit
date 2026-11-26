@@ -7,9 +7,9 @@ use orbit_common::governance::authorization::{
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 
+use super::exec::tool_exec::CapabilityEnforcement;
 use crate::RuntimeKernel;
 use crate::base::policy::{DECISION_DIGEST_OPERATION_ID, DECISION_SUBMIT_OPERATION_ID};
-use crate::tool_exec::CapabilityEnforcement;
 
 impl RuntimeKernel {
     /// Authorize a governed tool call.

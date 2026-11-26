@@ -115,7 +115,7 @@ fs_profile: Some(fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE).to_string())
 
 This is the implicit-`unrestricted` rule from §2 in code form. Every v2 dispatcher path that constructs a `ToolContext` reaches this line, so omitting `fsProfile:` means "unrestricted within policy," not "no policy."
 
-Legacy pipeline contexts are different. `crates/orbit-runtime/src/tool_exec.rs` fills a missing profile from `ORBIT_ACTIVITY_FS_PROFILE`; if the variable is unset, `ctx.fs_profile` stays `None`. That used to bypass the retired in-process helper; the live CLI sandbox still needs an explicit profile (see §9).
+Legacy pipeline contexts are different. `crates/orbit-runtime/src/host/exec/tool_exec.rs` fills a missing profile from `ORBIT_ACTIVITY_FS_PROFILE`; if the variable is unset, `ctx.fs_profile` stays `None`. That used to bypass the retired in-process helper; the live CLI sandbox still needs an explicit profile (see §9).
 
 ---
 

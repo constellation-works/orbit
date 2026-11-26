@@ -40,7 +40,7 @@ Crew memory is off by default, and the gate is structural, not just a setting:
 
 ## 2. Memory Key
 
-The key is the **model** a scorecard row reports. A scorecard row is (crew, model) ([agent scorecards §2](../agent-scorecards/2_design.md#2-ranking-unit)). Crews of one model, such as `opus` and `opus@medium`, which `resolve_crew` and `same_crew_family` in `crates/orbit-types/src/identity/agent_pair.rs` treat as one family, share a key. The run's recorded `crew_model` (`record_run_crew_from_input`, `crates/orbit-runtime/src/engine/crew/run_input.rs`) is the source. A run with no recorded model gets no memory, never a guessed one. That is the same rule that makes the scorecards show `model unknown`.
+The key is the **model** a scorecard row reports. A scorecard row is (crew, model) ([agent scorecards §2](../agent-scorecards/2_design.md#2-ranking-unit)). Crews of one model, such as `opus` and `opus@medium`, which `resolve_crew` and `same_crew_family` in `crates/orbit-types/src/identity/agent_pair.rs` treat as one family, share a key. The run's recorded `crew_model` (`record_run_crew_from_input`, `crates/orbit-runtime/src/run/engine/crew/run_input.rs`) is the source. A run with no recorded model gets no memory, never a guessed one. That is the same rule that makes the scorecards show `model unknown`.
 
 Why model rather than crew: [Memory is keyed by model, not crew](./4_decisions.md#memory-is-keyed-by-model-not-crew).
 

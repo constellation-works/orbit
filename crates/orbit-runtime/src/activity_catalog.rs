@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use orbit_engine::activity_job::{CatalogDirectory, CatalogDirectoryList};
 
 use super::RuntimeKernel;
-use crate::assets::DEFAULT_ACTIVITY_FILES;
+use crate::host::exec::assets::DEFAULT_ACTIVITY_FILES;
 
 impl RuntimeKernel {
     /// Build the activity catalog for `target: activity:<name>` resolution

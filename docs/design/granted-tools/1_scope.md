@@ -29,7 +29,7 @@ Bearing: tasks already carry `required_tools`
 whose requirements never override a deny [ORB-15162]
 ([`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs));
 field-level operator authorization already exists in
-[`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs); and claimed
+[`tool_exec.rs`](../../../crates/orbit-runtime/src/host/exec/tool_exec.rs); and claimed
 (follower) implementers already refuse coordination requirements in
 [`serve/admission.rs`](../../../crates/orbit-core/src/application/distributed/serve/admission.rs).
 
@@ -79,8 +79,8 @@ denied ones.
 | `agent_implement` denies the ten tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
 | A requirement that the deny list covers fails implementer admission; non-implementers drop it with a note [ORB-15162] | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) (`admit_required_tools`, `resolve_activity_tool_denials`), [`activity_tool_requirements.rs`](../../../crates/orbit-core/src/application/job/activity_tool_requirements.rs) (`drops_disallowed_requirements`) |
 | Requirements must be exact canonical names of registered, agent-facing, enabled tools; wildcards are refused | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) |
-| Field-level operator authorization: `orbit.auto_task` action `update` carrying `expected_enabled`, and `orbit.auto_task` action `mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`operation.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operation.rs) (`orbit.routine.control`, Operator-only) |
-| Every governed tool call passes one capability chokepoint; a session's capabilities, not its asserted mode, decide | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs), [`authorization.rs`](../../../crates/orbit-runtime/src/host/authorization.rs) (`authorize_tool_operation`) |
+| Field-level operator authorization: `orbit.auto_task` action `update` carrying `expected_enabled`, and `orbit.auto_task` action `mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/host/exec/tool_exec.rs) (`authorize_registered_tool`), [`operation.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operation.rs) (`orbit.routine.control`, Operator-only) |
+| Every governed tool call passes one capability chokepoint; a session's capabilities, not its asserted mode, decide | [`tool_exec.rs`](../../../crates/orbit-runtime/src/host/exec/tool_exec.rs), [`authorization.rs`](../../../crates/orbit-runtime/src/host/authorization.rs) (`authorize_tool_operation`) |
 | A claimed implementer is held when a requirement is in `CLAIMED_MODE_DENIED_TOOLS` or is a coordination tool outside the closed claimed-owner bridge | [`serve/admission.rs`](../../../crates/orbit-core/src/application/distributed/serve/admission.rs) (`claimed_required_tool_hold`), [`invocation.rs`](../../../crates/orbit-types/src/tool/invocation.rs) (`CLAIMED_MODE_DENIED_TOOLS`, `CLAIMED_OWNER_TOOLS`) |
 | An activity's system of record is its durable artifact; agent-loop output is advisory and the returned object is not persisted as the decision record | [`4_decisions.md`](../activity-job/4_decisions.md) (activity-job: "provider output is not the system of record") |
 
@@ -93,7 +93,7 @@ operator authority, following the field-level authorization pattern of
 - Setting, adding to, or removing from `granted_tools` on
   `orbit.task.add` / `orbit.task.update` is a governed operation in its own
   right. Follow the pattern in
-  [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs): when the
+  [`tool_exec.rs`](../../../crates/orbit-runtime/src/host/exec/tool_exec.rs): when the
   input carries a `granted_tools` change, `authorize_registered_tool`
   additionally requires the dedicated governed operation
   `orbit.task.grant_tools`, `allowed: &[Operator]` in

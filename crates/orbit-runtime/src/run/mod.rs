@@ -1,7 +1,13 @@
 //! [`Run`]: [`Host`] plus the run this process carries — the owner transport
 //! it coordinates through and where automation executes.
 
+pub mod engine;
 mod identity;
+pub mod recovery_decision;
+pub mod run_input;
+mod tool_exec;
+pub mod upgrade_handover;
+pub(crate) mod worker_coordination;
 
 use std::sync::Arc;
 

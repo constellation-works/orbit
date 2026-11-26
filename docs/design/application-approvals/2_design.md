@@ -75,7 +75,7 @@ Other crates are named explicitly.
    (`crates/orbit-store/src/repository/audit/event/insert.rs:224`).
 
 Admission runs before the capability chokepoint in `authorize_registered_tool`
-(`crates/orbit-runtime/src/tool_exec.rs:175`), in `run_tool_with_context_and_capability`
+(`crates/orbit-runtime/src/host/exec/tool_exec.rs:175`), in `run_tool_with_context_and_capability`
 (`crates/orbit-core/src/adapter/tool_execution.rs:122-135`) and on every plugin callback
 (`crates/orbit-core/src/adapter/command/dispatch/execute/runtime.rs:513-520`).
 App-bound completion callbacks are sent to the host, because the witness is hidden from
@@ -314,7 +314,7 @@ application write never forces a transition.
 
 **Always refused**, whatever the consent says: every operation or input that carries an
 Operator floor in the governed-operation catalogue, including the input-dependent floors
-in `authorize_registered_tool` (`crates/orbit-runtime/src/tool_exec.rs:163-227`).
+in `authorize_registered_tool` (`crates/orbit-runtime/src/host/exec/tool_exec.rs:163-227`).
 Consent-time validation derives this from the catalogue, not from a list
 (`application_operator_floored`): a built-in whose governed row admits `Operator`, or an
 input field listed in `INPUT_DEPENDENT_OPERATION_FLOORS` whose operation does. Today that

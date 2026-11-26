@@ -2349,17 +2349,26 @@ for module in mcp plugin; do
   fi
 done
 
-# [ORB-28388] orbit-runtime layers: `base` names none of `stored`, `host` or
-# `run` (or their crate-root re-exports); `stored` names only `base` among the
-# four layers and never `host` or `run`. Missing layer directories fail closed.
+# [ORB-28388, ORB-28389] orbit-runtime layers: `base` names none of `stored`,
+# `host` or `run` (or their crate-root re-exports); `stored` names only `base`
+# among the four layers; `host` names only `base` and `stored` and never `run`.
+# Missing layer directories fail closed.
 runtime_src="$repo_root/crates/orbit-runtime/src"
+runtime_run_names='run|Run|engine|recovery_decision|run_input|upgrade_handover|worker_coordination|pipeline_poll_wait_override|with_owner_read_retry_wait|with_pipeline_poll_wait|check_worker_host_input|check_worker_search_scope|is_coordination_tool'
+runtime_host_names='host|Host|assets|command_exec|git_sandbox|scripts|tool_exec|task_pr_forge|plugin|host_resource|host_signal|AdmissionCrewSettings|with_host_load_sampling_wait'
+runtime_stored_names='stored|Stored|JobRuns|audit|workspace|recovery_authority|context'
 if ! super_chains_into "$runtime_src" base \
-  'stored|host|run|Stored|Host|Run|JobRuns|audit|workspace|recovery_authority|context' crate-root; then
+  "${runtime_stored_names}|${runtime_host_names}|${runtime_run_names}" crate-root; then
   echo "orbit-runtime base must not name stored, host or run"
   fail=1
 fi
-if ! super_chains_into "$runtime_src" stored 'host|run|Host|Run' crate-root; then
+if ! super_chains_into "$runtime_src" stored \
+  "${runtime_host_names}|${runtime_run_names}" crate-root; then
   echo "orbit-runtime stored must not name host or run"
+  fail=1
+fi
+if ! super_chains_into "$runtime_src" host "$runtime_run_names" crate-root; then
+  echo "orbit-runtime host must not name run"
   fail=1
 fi
 

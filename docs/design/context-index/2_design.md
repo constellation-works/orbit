@@ -491,7 +491,7 @@ Replay's arms are crews. This evaluation holds the crew fixed and varies the sel
 | **Dispatched** | What the pilot had set when the task was first dispatched | Today's normal case |
 | **Oracle** | The files of the reference diff that exist at the base | The most any predictor could give |
 
-Measured per run, from records that exist: tool calls before the first edit and the result bytes of those calls ([first_edit.rs](../../../crates/orbit-runtime/src/engine/first_edit.rs)), implement tokens and derived cost, implement wall time, the held-out test outcome, diff size, and how many changed files fell outside the starting selectors. Orbit records no time-to-first-edit and no tokens-to-first-edit; the two first-edit counts are the proxies for "exploration", and total implement tokens and time bound it from above.
+Measured per run, from records that exist: tool calls before the first edit and the result bytes of those calls ([first_edit.rs](../../../crates/orbit-runtime/src/run/engine/first_edit.rs)), implement tokens and derived cost, implement wall time, the held-out test outcome, diff size, and how many changed files fell outside the starting selectors. Orbit records no time-to-first-edit and no tokens-to-first-edit; the two first-edit counts are the proxies for "exploration", and total implement tokens and time bound it from above.
 
 Order and size:
 

@@ -27,14 +27,14 @@
 //!
 //! The `base::path::resolve` sub-module implements root discovery. The `builder`
 //! sub-module wires together stores, policy, tools, plugins, and event bus into a
-//! complete [`RuntimeKernel`], whose `orbit_runtime` module separates construction
-//! and host probes while `base` and `stored` hold the two lower layers.
-//! The `engine`, `stored::audit`, `mutation`, and `tool_exec` sub-modules provide
-//! the high-level operations exposed to command handlers; `plugin` and
-//! `stored::workspace` own host plugins and the workspace catalog and claim;
-//! `host_signal` probes host lifecycle signals, such as a scheduled reboot, that
-//! hold new admissions; `task::pr_forge` is the forge a task's terminal decision
-//! closes its Orbit-authored PRs through.
+//! complete [`RuntimeKernel`], while the four layers hold the runtime's
+//! mechanisms: `base` (configuration, paths, actor, binding, event log,
+//! authorization policy data, managed-run env parsing), `stored` (stores,
+//! persistence, audit, workspace catalog and claims, recovery authority), `host`
+//! (PR forge, host signals, resource probes and forecasts, admission policy,
+//! plugins, command/tool/script/Git-sandbox execution, embedded assets) and
+//! `run` (worker coordination, engine helpers, step-recovery decisions, run
+//! inputs, upgrade handover).
 
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Legacy runtime command surfaces still need a focused documentation pass.
@@ -57,47 +57,45 @@ pub mod application_authority {
 }
 mod application_consent;
 mod application_port;
-pub mod assets;
 pub mod base;
 pub mod builder;
-pub mod command_exec;
 pub mod cost;
-pub mod engine;
 pub mod friction;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod git_sandbox;
 pub mod host;
-pub mod host_resource;
-pub mod host_signal;
 pub mod mutation;
 mod orbit_runtime;
-pub mod plugin;
-pub mod recovery_decision;
 pub mod run;
-pub mod run_input;
-pub mod scripts;
 pub mod stored;
 pub mod task;
-// Preserve the public forge path without exposing task runtime internals.
-pub use task::pr_forge as task_pr_forge;
 pub use task::{InfraBlockedTask, StaleTaskReservation};
-pub mod tool_exec;
-pub mod upgrade_handover;
-mod worker_coordination;
+
 #[cfg(feature = "test-support")]
-pub(crate) use worker_coordination::host_load_sampling_wait_override;
+pub use host::resource::with_host_load_sampling_wait;
 #[cfg(feature = "test-support")]
-pub use worker_coordination::pipeline_poll_wait_override;
+pub use run::worker_coordination::pipeline_poll_wait_override;
 #[cfg(feature = "test-support")]
-pub use worker_coordination::{
-    with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
-};
+pub use run::worker_coordination::{with_owner_read_retry_wait, with_pipeline_poll_wait};
 
 // Compatibility module re-exports so callers outside this crate keep their
 // public paths until the wrapper is deleted.
 pub use base::event as event_bus;
 pub use base::path::paths;
 pub use base::policy as authorization;
+pub use host::exec::assets;
+pub use host::exec::command_exec;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use host::exec::git_sandbox;
+pub use host::exec::scripts;
+pub use host::exec::tool_exec;
+// Preserve the public forge path without exposing task runtime internals.
+pub use host::forge as task_pr_forge;
+pub use host::plugin;
+pub use host::resource as host_resource;
+pub use host::signal as host_signal;
+pub use run::engine;
+pub use run::recovery_decision;
+pub use run::run_input;
+pub use run::upgrade_handover;
 pub use stored::audit;
 pub use stored::recovery_authority;
 pub use stored::workspace;
@@ -118,19 +116,20 @@ pub use application_port::ApplicationPort;
 pub use base::Base;
 pub use base::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 pub use base::config::{CONFIG_TOML_FILE, existing_config_file_path};
+pub use base::managed_env::managed_workspace_selector_from_env;
 pub use base::role::Role;
 pub use host::Host;
 pub use orbit_runtime::{
     AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
 };
 pub use run::Run;
+pub use run::worker_coordination::{
+    check_worker_host_input, check_worker_search_scope, is_coordination_tool,
+};
 pub use stored::Stored;
 pub use stored::job_runs::JobRuns;
 
 pub use base::path::resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
-pub use worker_coordination::{
-    check_worker_host_input, check_worker_search_scope, is_coordination_tool,
-};
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use base::path::resolve::{
@@ -151,4 +150,3 @@ pub use builder::UNBOUND_DATA_DIR_PARTITION_ID;
 /// Guard this process's `gh` reads with the host's GitHub quota record. Only
 /// the `orbit` binary calls it, so test and library processes stay unguarded.
 pub use orbit_tools::github_quota::enable_host_guard as enable_github_quota_guard;
-pub use run_input::managed_workspace_selector_from_env;

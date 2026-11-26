@@ -5,7 +5,8 @@ use super::admission::{
     evaluate_constrained,
 };
 use super::validation::OperationRole;
-use crate::{RuntimeKernel, tool_exec::CapabilityEnforcement};
+use crate::RuntimeKernel;
+use crate::host::exec::tool_exec::CapabilityEnforcement;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;

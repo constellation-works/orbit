@@ -90,7 +90,7 @@ pub fn is_resident_drain_status_call(tool: &str, input: &serde_json::Value) -> b
 pub fn route_resident_delivery_recovery_to_broker(env: &orbit_common::Env, tool: &str) -> bool {
     tool == TASK_RESUME_DELIVERY_OPERATION_ID
         && env.orbit_plugin_broker().is_some()
-        && crate::run_input::managed_run_context_run_id_from_env(env).is_some()
+        && crate::base::managed_env::managed_run_context_run_id_from_env(env).is_some()
 }
 
 /// Identity facts retained after operator admission.

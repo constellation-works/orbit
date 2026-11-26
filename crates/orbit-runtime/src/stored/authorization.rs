@@ -34,7 +34,7 @@ use crate::base::policy::{OperatorAuthorizer, TASK_REQUEUE_OPERATION_ID};
 impl RuntimeKernel {
     /// Routing hint for the nested client. Only the broker authenticates the run.
     pub fn env_names_resident_cycle(&self, env: &orbit_common::Env) -> bool {
-        crate::run_input::managed_run_context_run_id_from_env(env)
+        crate::base::managed_env::managed_run_context_run_id_from_env(env)
             .is_some_and(|run_id| self.is_resident_cycle_run(&run_id))
     }
 

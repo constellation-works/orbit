@@ -123,7 +123,7 @@ stops only new admissions: running work continues.
 
 - **Start.** A reading at or above 20% is `critical` at once, but it holds admission only
   once readings have stayed at or above 20% across the 10-second sustain window
-  (`RESOURCE_SUSTAIN_WINDOW` in `crates/orbit-runtime/src/host_resource/mod.rs`). The window
+  (`RESOURCE_SUSTAIN_WINDOW` in `crates/orbit-runtime/src/host/resource/mod.rs`). The window
   opens at the first such reading, and the hold starts at the first reading at least 10
   seconds later, timed by each sample's observation time. A reading below 20% before then
   restarts the window.
