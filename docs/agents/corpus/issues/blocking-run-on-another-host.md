@@ -47,4 +47,4 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-30T20:43:43.469861666Z | ORB-20156 | jrun-20261030-2040-t2 | blocking run lives on a host the recovering operator cannot inspect; source ORB-20156 history:blocked_triage@2026-10-30T20:43:43.469861666Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T20:43:43.469861666Z | ORB-20156 | jrun-20261030-2040-t2 | blocking run lives on a host the recovering operator cannot inspect; source ORB-20156 history:blocked_task_triaged@2026-10-30T20:43:43.469861666Z | blocked_task_triaged disposition=human_only recorded in ORB-22246 resume pass |

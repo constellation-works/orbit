@@ -39,4 +39,4 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-31T03:32:12.612576429Z | ORB-20306 | not recorded in triage comment | implementer returns attribution_unconfirmed; source ORB-20306 history:blocked_triage@2026-10-31T03:32:12.612576429Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-31T03:32:12.612576429Z | ORB-20306 | not recorded in triage comment | implementer returns attribution_unconfirmed; source ORB-20306 history:blocked_task_triaged@2026-10-31T03:32:12.612576429Z | blocked_task_triaged disposition=human_only recorded in ORB-22246 resume pass |

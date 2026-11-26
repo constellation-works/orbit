@@ -41,5 +41,5 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-30T18:37:07.817426735Z | ORB-20216 | not recorded in triage comment | criterion needs operator-reserved merge/push/requeue; source ORB-20216 history:pilot_triage@2026-10-30T18:37:07.817426735Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
-| 2026-10-31T01:04:43.199746512Z | ORB-20336 | not recorded in triage comment | criterion needs operator-reserved merge/push/requeue; source ORB-20336 history:pilot_triage@2026-10-31T01:04:43.199746512Z | pilot_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T18:37:07.817426735Z | ORB-20216 | not recorded in triage comment | criterion needs operator-reserved merge/push/requeue; source ORB-20216 history:pilot_warning_triaged@2026-10-30T18:37:07.817426735Z | pilot_warning_triaged disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-31T01:04:43.199746512Z | ORB-20336 | not recorded in triage comment | criterion needs operator-reserved merge/push/requeue; source ORB-20336 history:pilot_warning_triaged@2026-10-31T01:04:43.199746512Z | pilot_warning_triaged disposition=human_only recorded in ORB-22246 resume pass |

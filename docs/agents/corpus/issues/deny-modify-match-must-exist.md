@@ -9,7 +9,7 @@ links: [ORB-13964, ORB-13984, ORB-20339, ORB-20443]
 
 ## Signature
 
-`policy denied: linux-bwrap cannot enforce absent denyModify '<path>'` or `invalid input: denyModify match '<path>' must exist and resolve canonically: No such file or directory`.
+``policy denied: linux-bwrap cannot enforce absent denyModify `<path>` `` or ``invalid input: denyModify match `<path>` must exist and resolve canonically: No such file or directory``.
 
 ## Mechanism
 
@@ -21,7 +21,7 @@ ORB-20443 fixed the recorded dangling-link case for managed Bubblewrap invocatio
 
 ## Fix task
 
-ORB-20443 was already landed at the ORB-22246 scan. Its execution summary names the same ORB-20339 run and error and confirms the dangling-link fix. It does not resolve a genuinely absent non-link match or another path-resolution error. An open-task search for this symptom returned no matching task.
+ORB-20443 was already landed at the ORB-22246 scan. Its execution summary confirms the dangling-link fix for F2026-10-712 and does not name the ORB-20339 run or error. It does not resolve a genuinely absent non-link match or another path-resolution error. An open-task search for this symptom returned no matching task.
 
 ## Occurrences
 
@@ -41,4 +41,4 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-31T02:15:35.480519373Z | ORB-20339 | jrun-20261031-0153-c19 | sandbox policy refuses a deny-modify path that does not exist; source ORB-20339 history:blocked_triage@2026-10-31T02:15:35.480519373Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-31T02:15:35.480519373Z | ORB-20339 | jrun-20261031-0153-c19 | sandbox policy refuses a deny-modify path that does not exist; source ORB-20339 history:blocked_task_triaged@2026-10-31T02:15:35.480519373Z | blocked_task_triaged disposition=human_only recorded in ORB-22246 resume pass |
