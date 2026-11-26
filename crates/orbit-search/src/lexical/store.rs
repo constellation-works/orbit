@@ -55,7 +55,6 @@ impl LexicalStore {
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(err)?;
-        migration::check_search_read_compatibility(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),

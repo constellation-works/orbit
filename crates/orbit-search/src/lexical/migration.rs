@@ -21,8 +21,6 @@ const MIGRATIONS: &[ledger::Migration] = &[ledger::Migration {
     apply: apply_lexical_index_baseline,
 }];
 
-const SUPPORTED_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
-
 const CHUNKS_DDL: &str = r#"
     CREATE TABLE IF NOT EXISTS chunks (
         id INTEGER PRIMARY KEY,
@@ -125,14 +123,6 @@ pub(super) fn migrate_search_index(
         tracing::info!("removed obsolete search vectors and reclaimed database space");
     }
     Ok(false)
-}
-
-pub(super) fn check_search_read_compatibility(conn: &Connection) -> Result<(), OrbitError> {
-    let version = ledger::current_schema_version(conn)?;
-    if version > SUPPORTED_VERSION {
-        ledger::evaluate_newer_database(conn, &DATABASE, version, SUPPORTED_VERSION)?;
-    }
-    Ok(())
 }
 
 fn apply_lexical_index_baseline(conn: &Connection) -> Result<(), OrbitError> {
