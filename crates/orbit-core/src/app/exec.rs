@@ -93,6 +93,8 @@ pub(crate) struct Operation {
     job_run_id: Option<String>,
     native_operator_refusal: Option<&'static str>,
     audit_role: Option<&'static str>,
+    /// Whether a command-line caller is held to the command's governance row.
+    command_row: bool,
 }
 
 impl Operation {
@@ -106,6 +108,7 @@ impl Operation {
             native_operator_refusal: None,
             audit_role: None,
             job_run_id: None,
+            command_row: true,
             command: noun.cli_name,
             subcommand: spec.cli_path.join("-"),
             tool_name: Some(spec.tool_name),
@@ -125,6 +128,7 @@ impl Operation {
             native_operator_refusal: None,
             audit_role: None,
             job_run_id: None,
+            command_row: true,
             subcommand: subcommand.into(),
             tool_name: None,
             target_type: None,
@@ -157,6 +161,13 @@ impl Operation {
     /// Preserve the command's explicit audit attribution.
     pub(crate) fn audit_role(mut self, role: &'static str) -> Self {
         self.audit_role = Some(role);
+        self
+    }
+
+    /// Hold no caller to the command's governance row: the invocation is the
+    /// non-destructive form of a command whose destruction is flag-gated.
+    pub(crate) fn without_command_row(mut self) -> Self {
+        self.command_row = false;
         self
     }
 
@@ -238,7 +249,7 @@ fn record_mutation(
 /// An operation with no row passes. A refusal is recorded by the decision.
 fn authorize(core: &Core, operation: &Operation) -> Result<(), Error> {
     let runtime = core.runtime();
-    if core.entry() == Entry::CommandLine {
+    if core.entry() == Entry::CommandLine && operation.command_row {
         runtime.authorize_command_operation(operation.command, &operation.subcommand)?;
     }
     if let Some(refusal) = operation.native_operator_refusal {

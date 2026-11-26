@@ -511,9 +511,13 @@ fn execute_admitted(
             agent.as_deref(),
             model.as_deref(),
         ),
-        OrbitBuiltinAction::WorkspaceClaim(verb) => {
-            super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
-        }
+        OrbitBuiltinAction::WorkspaceClaim(verb) => super::workspace_claim_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            agent,
+            model,
+        ),
     }?;
     super::artifact_redaction::finish_tool_response(
         runtime,

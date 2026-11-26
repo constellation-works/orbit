@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use crate::entry::resolved::Resolved;
 
-use super::super::{CommandOut, CommandOutput, Commands, Execute};
+use super::super::{CommandOut, CommandOutput, Commands, Execute, ExecuteCore};
 use super::args::Invocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,7 +453,7 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
             command: WorkspaceSubcommand::Rebind(args),
         }) => args
             .execute_workspace_rebind_without_runtime(context.workspace_selector, context.resolved),
-        Commands::Workspace(command) => command.execute(context.runtime()?),
+        Commands::Workspace(command) => ExecuteCore::execute(command, context.core()?),
         _ => dispatch_mismatch("Workspace"),
     }
 }

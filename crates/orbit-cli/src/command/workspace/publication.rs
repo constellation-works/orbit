@@ -1,12 +1,12 @@
 use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
-use orbit_registry::{load_machine_identity, workspace_registry};
+use orbit_core::Core;
+use orbit_core::app::workspace::{Command, Outcome, exec};
 use orbit_types::workspace::{
     DEFAULT_PUBLICATION_BRANCH, WorkspacePublicationBinding, redact_git_remote,
 };
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload, require_confirmation};
+use crate::command::{CommandOut, ExecuteCore, Payload, require_confirmation};
 
 #[derive(Args)]
 #[command(about = "Manage the owner-local task-publication repository binding")]
@@ -27,13 +27,13 @@ pub enum WorkspacePublicationSubcommand {
     Remove(WorkspacePublicationRemoveArgs),
 }
 
-impl Execute for WorkspacePublicationCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for WorkspacePublicationCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self.command {
-            WorkspacePublicationSubcommand::Bind(args) => args.execute_bind(runtime, false),
-            WorkspacePublicationSubcommand::Show(args) => args.execute(runtime),
-            WorkspacePublicationSubcommand::Rebind(args) => args.execute_bind(runtime, true),
-            WorkspacePublicationSubcommand::Remove(args) => args.execute(runtime),
+            WorkspacePublicationSubcommand::Bind(args) => args.execute_bind(core, false),
+            WorkspacePublicationSubcommand::Show(args) => args.execute(core),
+            WorkspacePublicationSubcommand::Rebind(args) => args.execute_bind(core, true),
+            WorkspacePublicationSubcommand::Remove(args) => args.execute(core),
         }
     }
 }
@@ -52,41 +52,19 @@ pub struct WorkspacePublicationBindArgs {
 }
 
 impl WorkspacePublicationBindArgs {
-    fn execute_bind(self, runtime: &OrbitRuntime, rebind: bool) -> CommandOut {
-        let workspace_id = selected_workspace_id(runtime)?;
-        let task_workspace_id = selected_task_workspace_id(runtime)?;
-        let global_root = runtime.global_root();
-        let machine_id = load_machine_identity(&global_root)?.id;
-        let registry_path = workspace_registry::registry_path_for(&global_root);
-        let binding = workspace_registry::with_registry_lock(&registry_path, || {
-            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            let binding = if rebind {
-                workspace_registry::rebind_publication_by_id(
-                    &mut registry,
-                    &workspace_id,
-                    &self.remote,
-                    &self.branch,
-                    &self.publication_id,
-                    Some(&machine_id),
-                )?
-            } else {
-                workspace_registry::bind_publication_by_id(
-                    &mut registry,
-                    &workspace_id,
-                    &self.remote,
-                    &self.branch,
-                    &self.publication_id,
-                    Some(&machine_id),
-                )?
-            };
-            runtime.record_task_publication_source(
-                &task_workspace_id,
-                &binding.source_repository_fingerprint,
-            )?;
-            workspace_registry::save_registry_to(&registry, &registry_path)?;
-
-            Ok(binding)
-        })?;
+    fn execute_bind(self, core: &Core, rebind: bool) -> CommandOut {
+        let Outcome::PublicationBound { binding, .. } = exec(
+            core,
+            Command::PublicationBind {
+                remote: self.remote,
+                publication_id: self.publication_id,
+                branch: self.branch,
+                rebind,
+            },
+        )?
+        else {
+            unreachable!("workspace publication bind returned an unrelated outcome");
+        };
 
         let action = if rebind { "rebound" } else { "bound" };
         Ok(Payload::detail(
@@ -106,16 +84,21 @@ impl WorkspacePublicationBindArgs {
 #[derive(Args)]
 pub struct WorkspacePublicationShowArgs {}
 
-impl Execute for WorkspacePublicationShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let workspace_id = selected_workspace_id(runtime)?;
-        let registry = workspace_registry::load_registry_from(
-            &workspace_registry::registry_path_for(&runtime.global_root()),
-        )?;
-        match workspace_registry::find_publication_binding_by_id(&registry, &workspace_id) {
-            Some(binding) => {
-                Ok(Payload::detail(binding_json(binding, "shown"), format_binding(binding)).into())
-            }
+impl ExecuteCore for WorkspacePublicationShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Publication {
+            workspace_id,
+            binding,
+        } = exec(core, Command::PublicationShow)?
+        else {
+            unreachable!("workspace publication show returned an unrelated outcome");
+        };
+        match binding {
+            Some(binding) => Ok(Payload::detail(
+                binding_json(&binding, "shown"),
+                format_binding(&binding),
+            )
+            .into()),
             None => Ok(Payload::detail(
                 json!({
                     "workspace_id": workspace_id,
@@ -136,26 +119,15 @@ pub struct WorkspacePublicationRemoveArgs {
     pub confirm: bool,
 }
 
-impl Execute for WorkspacePublicationRemoveArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for WorkspacePublicationRemoveArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         require_confirmation(
             self.confirm,
             "removing a task-publication binding and its local last-success record",
         )?;
-        let workspace_id = selected_workspace_id(runtime)?;
-        let global_root = runtime.global_root();
-        let machine_id = load_machine_identity(&global_root)?.id;
-        let registry_path = workspace_registry::registry_path_for(&global_root);
-        let removed = workspace_registry::with_registry_lock(&registry_path, || {
-            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            let removed = workspace_registry::unbind_publication_by_id(
-                &mut registry,
-                &workspace_id,
-                Some(&machine_id),
-            )?;
-            workspace_registry::save_registry_to(&registry, &registry_path)?;
-            Ok(removed)
-        })?;
+        let Outcome::PublicationRemoved(removed) = exec(core, Command::PublicationRemove)? else {
+            unreachable!("workspace publication remove returned an unrelated outcome");
+        };
         Ok(Payload::detail(
             json!({
                 "workspace_id": removed.workspace_id,
@@ -170,20 +142,6 @@ impl Execute for WorkspacePublicationRemoveArgs {
         )
         .into())
     }
-}
-
-fn selected_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::OrbitError> {
-    runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone())
-        .map_or_else(|| runtime.workspace_id(), Ok)
-}
-
-fn selected_task_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::OrbitError> {
-    runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.task_partition_id.clone())
-        .map_or_else(|| runtime.workspace_id(), Ok)
 }
 
 fn binding_json(binding: &WorkspacePublicationBinding, action: &str) -> Value {

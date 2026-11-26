@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitRuntime;
-use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys, TaskListFilter};
+use orbit_core::Core;
+use orbit_core::app::workspace::{CandidateSection, Command, Outcome, TaskRows, exec};
+use orbit_core::application::task::{TaskCandidateKeys, TaskListFilter};
 use serde_json::{Value, json};
 
 use super::super::pagination::TaskPageQuery;
@@ -14,7 +15,7 @@ use super::super::{bad_request, blocking, server_error};
 use super::fan_out::fan_out;
 use super::list::{abbreviate_home, entry_is_owned};
 use crate::projections::{TaskListProjection, cached_riskiness_model};
-use crate::state::{DashboardState, Pinned, WsEntry};
+use crate::state::{DashboardState, Pinned, Ws, WsCore, WsEntry};
 
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
 ///
@@ -179,7 +180,14 @@ fn all_task_sections_json(
     }))
 }
 
-type WorkspaceSelection = Result<(Arc<OrbitRuntime>, TaskCandidateKeys), String>;
+type WorkspaceSelection = Result<(Arc<Source>, TaskCandidateKeys), String>;
+
+/// One workspace an aggregate page reads: its app entry, and the runtime its
+/// row projections still read.
+struct Source {
+    core: Arc<Core>,
+    ws: Ws,
+}
 
 /// Visit each workspace once, then transpose the results into section order.
 /// Within each section the workspace order and its individual errors remain
@@ -203,32 +211,39 @@ fn select_workspace_task_pages(
             tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
             "failed to open workspace".to_string()
         })?;
-        let filters: Vec<_> = queries
+        let source = Arc::new(Source {
+            core: WsCore::over(&runtime).0,
+            ws: Ws(runtime),
+        });
+        let sections = queries
             .iter()
-            .map(|query| workspace_task_filter(query, index, resume_index))
-            .collect();
-        let pages = if batch_indexed {
-            let indexed_pages = runtime.observe_task_candidate_key_pages(&filters).map_err(|error| {
-                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
-                error.to_string()
-            })?;
-            indexed_pages.unwrap_or_else(|| {
-                filters
-                    .into_iter()
-                    .map(|(filter, limit)| workspace_observed_task_keys(&runtime, &filter, limit))
-                    .collect()
+            .map(|query| {
+                let (filter, limit) = workspace_task_filter(query, index, resume_index);
+                CandidateSection {
+                    filter,
+                    limit,
+                    pilot_warnings: !batch_indexed && query.pilot_warnings(),
+                }
             })
-        } else {
-            queries
-                .iter()
-                .zip(filters)
-                .map(|(query, (filter, limit))| workspace_task_keys(&runtime, query, filter, limit))
-                .collect()
+            .collect();
+        let pages = match exec(
+            &source.core,
+            Command::TaskCandidates {
+                sections,
+                batch: batch_indexed,
+            },
+        ) {
+            Ok(Outcome::TaskCandidates(pages)) => pages,
+            Ok(_) => unreachable!("fleet task selection returned an unrelated outcome"),
+            Err(error) => {
+                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                return Err(error.to_string());
+            }
         };
         Ok(pages
             .into_iter()
             .map(|page| {
-                page.map(|page| (Arc::clone(&runtime), page))
+                page.map(|page| (Arc::clone(&source), page))
                     .map_err(|error| {
                         tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
                         error.to_string()
@@ -285,7 +300,7 @@ fn all_tasks_json(
     let mut unavailable = Vec::new();
     let mut unavailable_ids = HashSet::new();
     for (index, (entry, selection)) in entries.iter().zip(selections).enumerate() {
-        let (runtime, page) = match selection {
+        let (source, page) = match selection {
             Ok(selection) => selection,
             Err(error) => {
                 record_unavailable(&mut unavailable, &mut unavailable_ids, entry, &error);
@@ -304,7 +319,7 @@ fn all_tasks_json(
                 .then_with(|| a.id.cmp(&b.id))
         });
         for task in items {
-            candidates.push((task, runtime.clone(), *entry));
+            candidates.push((task, Arc::clone(&source), *entry));
         }
     }
     candidates.truncate(query.limit());
@@ -329,69 +344,87 @@ fn all_tasks_json(
     } else {
         None
     };
-    let mut rows = Vec::with_capacity(candidates.len());
-    for (task, runtime, entry) in candidates {
-        // Same contract as the per-workspace scan above: one unreadable row
-        // is logged and skipped rather than failing the whole fleet list.
-        match runtime.get_listed_task_row(&task.id) {
-            Ok(Some(row)) => rows.push((row, runtime, entry)),
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(
-                    workspace = %entry.id,
-                    task = %task.id,
-                    %error,
-                    "fleet task list skipped an unreadable task row"
-                );
-                // The dropped row would look like a new review task when it
-                // returns, unless this read says the workspace was incomplete.
-                record_unavailable(
-                    &mut unavailable,
-                    &mut unavailable_ids,
-                    entry,
-                    &error.to_string(),
-                );
+    // One read per workspace, in page order: its candidates' rows and one
+    // batched delivery-run read for those that read.
+    let mut groups: Vec<(Arc<Source>, &WsEntry, Vec<String>)> = Vec::new();
+    for (task, source, entry) in candidates {
+        match groups.last_mut() {
+            Some((_, last, ids)) if last.id == entry.id => ids.push(task.id),
+            _ => groups.push((source, entry, vec![task.id])),
+        }
+    }
+    let mut rows = Vec::new();
+    // In page order, so the first failed delivery-run read is the one
+    // reported.
+    let mut attention_by_workspace = Vec::new();
+    let mut run_branches_by_workspace: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for (source, entry, ids) in groups {
+        let Outcome::TaskRows(read) = exec(&source.core, Command::TaskRows(ids.clone()))? else {
+            unreachable!("fleet task rows returned an unrelated outcome");
+        };
+        let TaskRows {
+            rows: read_rows,
+            delivery_attention,
+            run_branches,
+        } = *read;
+        let mut read_any = false;
+        for (id, row) in ids.iter().zip(read_rows) {
+            // Same contract as the per-workspace scan above: one unreadable
+            // row is logged and skipped rather than failing the whole fleet
+            // list.
+            match row {
+                Ok(Some(row)) => {
+                    read_any = true;
+                    rows.push((row, Arc::clone(&source), entry));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        workspace = %entry.id,
+                        task = %id,
+                        %error,
+                        "fleet task list skipped an unreadable task row"
+                    );
+                    // The dropped row would look like a new review task when
+                    // it returns, unless this read says the workspace was
+                    // incomplete.
+                    record_unavailable(
+                        &mut unavailable,
+                        &mut unavailable_ids,
+                        entry,
+                        &error.to_string(),
+                    );
+                }
             }
+        }
+        if read_any {
+            attention_by_workspace.push((entry.id.clone(), delivery_attention));
+            run_branches_by_workspace.insert(entry.id.clone(), run_branches);
         }
     }
     // All runtimes in a dashboard share one coordination registry. Read its
     // global dependency projection once, after hydrating the page.
-    let statuses = rows
-        .first()
-        .map(|(_, runtime, _)| {
-            runtime.dependency_status_index(rows.iter().map(|(row, _, _)| &row.task))
-        })
-        .transpose()?
-        .unwrap_or_default();
-    // Each workspace's runtime carries its own crew registry; build each one
-    // once for the page rather than once per row.
-    // One batched delivery-run read per workspace for the page's rows.
-    let mut attention_by_workspace: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
-    let mut run_branches_by_workspace: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for (row, runtime, entry) in &rows {
-        let _ = row;
-        if !attention_by_workspace.contains_key(&entry.id) {
-            let workspace_rows = rows
-                .iter()
-                .filter(|(_, _, other)| other.id == entry.id)
-                .map(|(row, _, _)| row);
-            let map = runtime.delivery_attention_map(workspace_rows)?;
-            attention_by_workspace.insert(entry.id.clone(), map);
-            run_branches_by_workspace.insert(
-                entry.id.clone(),
-                runtime.local_run_branches(
-                    rows.iter()
-                        .filter(|(_, _, other)| other.id == entry.id)
-                        .map(|(row, _, _)| row),
-                ),
-            );
+    let statuses = match rows.first() {
+        Some((_, source, _)) => {
+            let tasks = rows.iter().map(|(row, _, _)| row.task.clone()).collect();
+            match exec(&source.core, Command::DependencyStatuses(tasks))? {
+                Outcome::DependencyStatuses(statuses) => statuses,
+                _ => unreachable!("dependency statuses returned an unrelated outcome"),
+            }
         }
-    }
+        None => BTreeMap::new(),
+    };
+    let attention_by_workspace = attention_by_workspace
+        .into_iter()
+        .map(|(id, attention)| attention.map(|attention| (id, attention)))
+        .collect::<Result<BTreeMap<String, BTreeMap<String, Value>>, _>>()?;
     let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
     let mut values = Vec::with_capacity(rows.len());
-    for (row, runtime, entry) in rows {
+    for (row, source, entry) in rows {
+        // The row projections still read the workspace's runtime.
+        let runtime = &source.ws.0;
         let projection = projections.entry(entry.id.as_str()).or_insert_with(|| {
-            TaskListProjection::new(&runtime)
+            TaskListProjection::new(runtime)
                 .with_delivery_attention(
                     attention_by_workspace
                         .get(&entry.id)
@@ -408,10 +441,10 @@ fn all_tasks_json(
                     // On the blocking pool: wait for this workspace's model
                     // as the per-workspace list does.
                     tokio::runtime::Handle::current()
-                        .block_on(cached_riskiness_model(state, &runtime)),
+                        .block_on(cached_riskiness_model(state, runtime)),
                 )
         });
-        let mut value = projection.row_to_json(&runtime, &row, &statuses)?;
+        let mut value = projection.row_to_json(runtime, &row, &statuses)?;
         if let Value::Object(map) = &mut value {
             map.insert("workspace_id".to_string(), json!(entry.id));
             map.insert("workspace_name".to_string(), json!(entry.name));
@@ -448,67 +481,4 @@ fn record_unavailable(
             "error": error,
         }));
     }
-}
-
-/// One workspace's candidates for the merge, as ids and creation times. A
-/// filter the task index fully answers is selected there without reading a
-/// single envelope, so only the merged page's bundles are ever opened; the
-/// rest (title search, type, parent, external refs) select over envelopes.
-///
-/// The aggregate is observational — like `/api/job-runs/all`, a dashboard
-/// poll costs reads only — so selection observes settled envelopes without
-/// entering the task-commit boundary: it never queues behind a drain's
-/// exclusive commit sections and never triggers recovery or index repair.
-/// The `pilot_warnings` selection has no observational form and keeps the
-/// coordinated read.
-fn workspace_task_keys(
-    runtime: &OrbitRuntime,
-    query: &TaskPageQuery,
-    filter: TaskListFilter,
-    limit: usize,
-) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
-    if query.pilot_warnings() {
-        let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-            filter,
-            pilot_warnings: true,
-            limit,
-            ..Default::default()
-        })?;
-        return Ok(TaskCandidateKeys {
-            items: page
-                .items
-                .into_iter()
-                .map(|row| TaskCandidateKey {
-                    id: row.task.id,
-                    created_at: row.task.created_at,
-                })
-                .collect(),
-            total: page.total,
-            total_without_cursor: page.total_without_cursor,
-        });
-    }
-    if let Some(keys) = runtime.observe_task_candidate_keys(&filter, limit)? {
-        return Ok(keys);
-    }
-    workspace_observed_task_keys(runtime, &filter, limit)
-}
-
-fn workspace_observed_task_keys(
-    runtime: &OrbitRuntime,
-    filter: &TaskListFilter,
-    limit: usize,
-) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
-    let page = runtime.observe_task_candidates(filter, limit)?;
-    Ok(TaskCandidateKeys {
-        items: page
-            .items
-            .into_iter()
-            .map(|task| TaskCandidateKey {
-                id: task.id,
-                created_at: task.created_at,
-            })
-            .collect(),
-        total: page.total,
-        total_without_cursor: page.total_without_cursor,
-    })
 }
