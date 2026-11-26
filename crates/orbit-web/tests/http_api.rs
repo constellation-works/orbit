@@ -121,6 +121,8 @@ mod scripts;
 mod support;
 #[path = "http_api/task_auto_fix.rs"]
 mod task_auto_fix;
+#[path = "http_api/task_candidate_discard.rs"]
+mod task_candidate_discard;
 #[path = "http_api/task_contracts.rs"]
 mod task_contracts;
 #[path = "http_api/task_create.rs"]

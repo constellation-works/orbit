@@ -27,6 +27,7 @@ use std::sync::Arc;
 ///   `refactor`/`chore`).
 /// - `q` (alias `search`) — case-insensitive task ID/title substring.
 /// - `detail` — optionally include the full projection for a task on this page.
+/// - `detail_candidate=true` — with `detail`, include discard availability.
 /// - `detail_runs=true` — with `detail`, include its bounded Runs tab page.
 /// - `limit` — positive integer, defaulting to [`orbit_core::DEFAULT_TASK_LIST_LIMIT`].
 /// - `cursor` — opaque continuation returned as `next_cursor`; it is rejected
@@ -246,6 +247,7 @@ fn task_page_json(
                 &statuses,
                 detail_riskiness.as_deref(),
                 &page_reads,
+                query.detail_candidate,
             )
         }) {
             Ok(detail) => result["detail"] = detail,
@@ -311,7 +313,8 @@ pub(in crate::api) async fn get_task(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    if workspace_is_all(query.as_deref()) {
+    let include_candidate = has_query_value(query.as_deref(), "detail_candidate", "true");
+    if has_query_value(query.as_deref(), "workspace", "all") {
         let lookup_state = state.clone();
         let lookup_id = id.clone();
         let owner = match blocking("task owner lookup", move || {
@@ -329,7 +332,14 @@ pub(in crate::api) async fn get_task(
             runtime,
             row,
         } = owner;
-        return task_detail_response(&state, runtime, row, Some((id, name, root))).await;
+        return task_detail_response(
+            &state,
+            runtime,
+            row,
+            Some((id, name, root)),
+            include_candidate,
+        )
+        .await;
     }
     let Ws(runtime) = match ws {
         Ok(ws) => ws,
@@ -340,7 +350,7 @@ pub(in crate::api) async fn get_task(
         Ok(row) => row,
         Err(response) => return *response,
     };
-    task_detail_response(&state, runtime, row, None).await
+    task_detail_response(&state, runtime, row, None, include_candidate).await
 }
 
 /// The workspace that owns a task, with the row read from it.
@@ -352,11 +362,10 @@ struct TaskOwner {
     row: orbit_core::application::task::TaskRow,
 }
 
-/// Whether the raw query selects the aggregate (`workspace=all`) scope.
-fn workspace_is_all(query: Option<&str>) -> bool {
+fn has_query_value(query: Option<&str>, name: &str, expected: &str) -> bool {
     query.is_some_and(|query| {
         url::form_urlencoded::parse(query.as_bytes())
-            .any(|(key, value)| key == "workspace" && value == "all")
+            .any(|(key, value)| key == name && value == expected)
     })
 }
 
@@ -427,6 +436,7 @@ async fn task_detail_response(
     runtime: Arc<OrbitRuntime>,
     row: orbit_core::application::task::TaskRow,
     stamp: Option<(String, String, String)>,
+    include_candidate: bool,
 ) -> Response {
     let riskiness = cached_riskiness_model(state, &runtime).await;
     match blocking("task detail", move || {
@@ -437,6 +447,7 @@ async fn task_detail_response(
             &statuses,
             riskiness.as_deref(),
             &DashboardPageReads::default(),
+            include_candidate,
         )?;
         if let (Some((id, name, root)), Value::Object(map)) = (stamp, &mut value) {
             map.insert("workspace_id".to_string(), json!(id));

@@ -1,7 +1,7 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters.
 
 import { ALL_WORKSPACES_TOKEN, captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskDetailPath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isOpenTask, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
@@ -381,7 +381,7 @@ async function pinOpenTask(taskId, context, tasks = []) {
     const owner = (Array.isArray(tasks) ? tasks : []).find(task => task && task.id === taskId && (!workspace || task.workspace_id === workspace));
     const ownerTask = { id: taskId, workspace_id: workspace || owner?.workspace_id };
     const readScope = !ownerTask.workspace_id && isAggregateView() ? { id: taskId, workspace_id: ALL_WORKSPACES_TOKEN } : ownerTask;
-    const task = await fetchJson(taskWorkspacePath(readScope, `/api/tasks/${encodeURIComponent(taskId)}`));
+    const task = await fetchJson(taskDetailPath(readScope));
     if (superseded()) return;
     if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
     if (ownerTask.workspace_id && task.workspace_id && task.workspace_id !== ownerTask.workspace_id) throw new Error(`${taskId} not found`);
@@ -419,7 +419,7 @@ export function refreshPinnedTask(context) {
     || !taskState.pinnedExternalTask || taskState.pinnedExternalTask.id !== taskId;
   const promise = (async () => {
     try {
-      const task = await fetchJson(taskMutationPath(previous));
+      const task = await fetchJson(taskDetailPath(previous));
       if (superseded()) return;
       // Check only before applying the response: our own update also replaces
       // the pinned record, but must still reach the repaint below.

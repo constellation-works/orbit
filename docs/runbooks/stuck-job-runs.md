@@ -909,7 +909,16 @@ to `backlog` and closes the task's undelivered Orbit-authored pull requests. It
 is the equivalent route to a requeue's discard, without a recorded requeue
 decision. A blocked task's requeue carries the same discard (the dashboard's
 requeue, or `orbit task requeue <task-id> --discard-candidate`), so an
-operator without the CLI update route has one too. Answering a block-triage
+operator without the CLI update route has one too. In the dashboard, a task
+with a published or retained candidate also offers **Discard candidate** in
+other open statuses. The dashboard requests `detail_candidate=true` for the open
+task. Its detail then reports `published_candidate` when the evidence can be read.
+Confirm the consequences and enter a reason. The action
+records the dashboard actor and reason, discards the candidate, closes its
+undelivered Orbit-authored pull requests, and returns the task to `backlog`.
+A held run has already stopped; a live run or unsettled claim is refused and
+left untouched. A forge closure failure is reported after the requeue and can
+require manual cleanup. Answering a block-triage
 decision option whose rewrite changes the description or acceptance criteria
 of a task that holds a published or kept candidate discards that candidate with
 the answer: it applies the rewrite, records the discard in the task history,

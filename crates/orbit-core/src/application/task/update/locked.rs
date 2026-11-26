@@ -101,6 +101,7 @@ impl OrbitRuntime {
                 &updated,
                 status_note.as_deref(),
                 discarded,
+                false,
             );
         }
         // A status change can append history after this lock (resolves, pull

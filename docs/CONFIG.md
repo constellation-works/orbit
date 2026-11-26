@@ -3134,7 +3134,7 @@ An operator's or agent's move from active work back to `backlog` or `someday` (`
 - all of them when a final recovery requeued the task, since the next run resumes that published candidate;
 - the PR of the candidate the owner kept from the task's last claim, or all of them when that candidate cannot be read.
 
-The blocked and final-recovery exceptions hold however often the task moves between `backlog` and `someday` afterwards. `--discard-candidate` with the move drops every exception except a live run or claim. Moving from `someday` to `backlog`, or out of `done`, `rejected` or `archived` (including `--force`), closes nothing. Automation's own requeues and holds close nothing. Merged PRs are never touched.
+The blocked and final-recovery exceptions hold however often the task moves between `backlog` and `someday` afterwards. `--discard-candidate` with the move drops every exception except a live run or claim. The dashboard's **Discard candidate** action also closes undelivered PRs when the task is already in `backlog` or another open status, and refuses while a run or claim is live. Moving from `someday` to `backlog`, or out of `done`, `rejected` or `archived` (including `--force`), closes nothing unless an open task is discarded through the dashboard. Automation's own requeues and holds close nothing. Merged PRs are never touched.
 
 A terminal or requeue closure records each successfully closed PR as a `pull_request_closed` task-history entry, including its closing comment. When the done note names a landing PR, the comment says `superseded by #N`. A task with no recorded PR makes no forge call. A forge error is logged as a warning and never fails the transition.
 

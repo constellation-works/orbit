@@ -38,7 +38,7 @@ pub(super) fn operator_discard_hint(id: &str, status: TaskStatus) -> String {
 }
 
 impl OrbitRuntime {
-    /// Return blocked `task` to the backlog with `requeue`'s records, in one
+    /// Return `task` to the backlog with `requeue`'s records, in one
     /// compare-and-set write. Called under the task write lock. The run the
     /// decision names is the task's current one.
     pub(crate) fn write_candidate_requeue(
@@ -91,7 +91,7 @@ impl OrbitRuntime {
                     .chain(requeue.preserved.clone())
                     .chain(requeue.history.clone())
                     .collect(),
-                expected_status: Some(vec![TaskStatus::Blocked]),
+                expected_status: Some(vec![task.status]),
                 ..Default::default()
             },
         )
@@ -171,7 +171,18 @@ impl OrbitRuntime {
         discard: bool,
         actor: Option<&str>,
     ) -> Result<Value, OrbitError> {
-        self.requeue_blocked_task_by(id, reason, discard, actor, "operator requeue")
+        self.requeue_blocked_task_by(id, reason, discard, actor, "operator requeue", false)
+    }
+
+    /// Discard a stopped task's candidate and return it to the backlog, recording
+    /// the dashboard operator's reason. Executing runs and unsettled claims refuse.
+    pub fn discard_task_candidate_as(
+        &self,
+        id: &str,
+        reason: &str,
+        actor: &str,
+    ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_by(id, reason, true, Some(actor), "operator requeue", true)
     }
 
     /// A resident cycle's requeue. `agent_actor` is the trusted agent identity
@@ -185,7 +196,14 @@ impl OrbitRuntime {
         discard: bool,
         agent_actor: &str,
     ) -> Result<Value, OrbitError> {
-        self.requeue_blocked_task_by(id, reason, discard, Some(agent_actor), "resident requeue")
+        self.requeue_blocked_task_by(
+            id,
+            reason,
+            discard,
+            Some(agent_actor),
+            "resident requeue",
+            false,
+        )
     }
 
     fn requeue_blocked_task_by(
@@ -195,6 +213,7 @@ impl OrbitRuntime {
         discard: bool,
         actor: Option<&str>,
         comment_label: &str,
+        allow_discard_any_status: bool,
     ) -> Result<Value, OrbitError> {
         let reason = redact_all(reason.trim());
         if reason.is_empty() {
@@ -208,7 +227,15 @@ impl OrbitRuntime {
             None => self.actor().resolve_write_label(None, None)?,
         };
         let task = self.get_task(id)?;
-        self.ensure_requeueable(&task)?;
+        self.ensure_requeueable(&task, allow_discard_any_status)?;
+        if allow_discard_any_status
+            && task.status != TaskStatus::Blocked
+            && !self.task_has_discardable_candidate(&task)?
+        {
+            return Err(OrbitError::InvalidInput(
+                "the task has no candidate to discard".into(),
+            ));
+        }
         let receipt = self.handoff_receipt(&task)?;
         let resume = if discard {
             None
@@ -253,9 +280,10 @@ impl OrbitRuntime {
                 held.head_sha, held.branch
             )
         });
+        let previous_status = task.status;
         let task = self.with_task_write_locked(id, || {
             let current = self.get_task(id)?;
-            self.ensure_requeueable(&current)?;
+            self.ensure_requeueable(&current, allow_discard_any_status)?;
             if current.updated_at != task.updated_at || current.job_run_id != task.job_run_id {
                 return Err(OrbitError::InvalidInput(format!(
                     "{id} changed while its requeue was being authenticated; nothing was \
@@ -358,10 +386,11 @@ impl OrbitRuntime {
             if !orbit_types::workflow::PR_CLOSE_ON_TERMINAL {
                 "disabled"
             } else if self.close_task_prs_after_requeue(
-                TaskStatus::Blocked,
+                previous_status,
                 &task,
                 Some(&reason),
                 true,
+                allow_discard_any_status,
             ) {
                 "settled"
             } else {
@@ -492,10 +521,17 @@ impl OrbitRuntime {
         }))
     }
 
-    /// Refuse a requeue of `task` unless it is blocked and its run has
+    /// Refuse a requeue unless its status is eligible and its run has
     /// conclusively stopped.
-    fn ensure_requeueable(&self, task: &Task) -> Result<(), OrbitError> {
-        if task.status != TaskStatus::Blocked {
+    fn ensure_requeueable(
+        &self,
+        task: &Task,
+        allow_discard_any_status: bool,
+    ) -> Result<(), OrbitError> {
+        if task.status != TaskStatus::Blocked
+            && (!allow_discard_any_status
+                || matches!(task.status, TaskStatus::Done | TaskStatus::Archived))
+        {
             return Err(OrbitError::InvalidInput(
                 if task.status == TaskStatus::Review {
                     format!(
@@ -511,6 +547,16 @@ impl OrbitRuntime {
                     )
                 },
             ));
+        }
+        if allow_discard_any_status
+            && let Some((run_id, state)) =
+                super::super::lifecycle::live_local_run_owning(self, &task.id)?
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "{} cannot be requeued yet: run `{run_id}` is {state}. Nothing was changed; \
+                 requeue it once the run has stopped.",
+                task.id
+            )));
         }
         if let Some(reason) = self.unsettled_run(task)? {
             return Err(OrbitError::InvalidInput(format!(

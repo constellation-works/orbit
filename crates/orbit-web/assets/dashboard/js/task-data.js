@@ -4,7 +4,7 @@
 
 import { fetchJson, isAggregateView } from './common.js';
 import { drainReadinessEntry, drainReadinessFailure } from './drain-waits.js';
-import { rerender, taskList, taskState, taskMutationPath, taskWorkspacePath, taskDispatchIdentity } from './task-shared.js';
+import { rerender, taskList, taskState, taskDetailPath, taskWorkspacePath, taskDispatchIdentity } from './task-shared.js';
 
 // DANI-10391: a list row is a summary (`projection: "summary"`). It carries what
 // the collapsed row renders and filters on, plus counts, but the bodies, the
@@ -121,7 +121,7 @@ export function loadTaskDetail(task, context) {
     taskDetailLoads.set(taskDispatchIdentity(task), load);
     return load.promise;
   }
-  load.promise = fetchJson(taskMutationPath(task)).then(
+  load.promise = fetchJson(taskDetailPath(task)).then(
     (full) => {
       load.pending = false;
       if (taskDetailLoads.get(taskDispatchIdentity(task)) === load) {
