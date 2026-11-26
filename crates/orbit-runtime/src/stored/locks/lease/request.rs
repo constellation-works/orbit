@@ -30,6 +30,13 @@ use crate::base::config::lease_policy::{
 
 const REQUEST_TOOL: &str = "orbit.lease.request";
 
+struct LeaseRequester<'a> {
+    principal: String,
+    principal_class: LeasePrincipalClass,
+    actor: String,
+    token: Option<&'a LeaseTokenGrant>,
+}
+
 /// Request a lease on `selectors` for `principal`.
 ///
 /// Advisory is granted and names the holders it overlaps. Hard drops
@@ -89,13 +96,6 @@ pub fn prepare_request_with_token<'a>(
             token: Some(grant),
         },
     )
-}
-
-struct LeaseRequester<'a> {
-    principal: String,
-    principal_class: LeasePrincipalClass,
-    actor: String,
-    token: Option<&'a LeaseTokenGrant>,
 }
 
 fn request_as<'a>(

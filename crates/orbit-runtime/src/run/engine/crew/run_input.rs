@@ -16,6 +16,11 @@ use std::path::Path;
 /// assesses tasks, not the crew a task is assigned to.
 pub const TASK_PILOT_JOB: &str = "task_pilot_pipeline";
 
+/// Run-input key under which a pulled claimed leaf carries the owner's
+/// snapshot of its task. Written when the follower creates the leaf
+/// (`orbit-store` `LocalPullMutation::CreateLeaf`) from the claim receipt.
+const CLAIMED_TASK_INPUT_KEY: &str = "claimed_task";
+
 impl RuntimeKernel {
     /// Whether the job at `yaml_path` can dispatch an agent. A definition that
     /// does not load or resolve counts as agent-bearing: the run's own load
@@ -102,6 +107,27 @@ impl RuntimeKernel {
     }
 }
 
+/// The owner's view of a claimed task, as far as crew resolution needs it.
+#[derive(Debug, Deserialize)]
+pub struct ClaimedTaskSnapshot {
+    pub id: String,
+    #[serde(default)]
+    crew: Option<String>,
+    /// How `crew` was assigned on the owner [ORB-17773]; absent on a leaf
+    /// created before it was carried, which reads as not automatic.
+    #[serde(default)]
+    pub crew_source: Option<CrewSource>,
+    #[serde(default)]
+    pub complexity: Option<TaskComplexity>,
+}
+
+impl ClaimedTaskSnapshot {
+    /// The owner's crew for the task, when it names one.
+    pub fn crew(&self) -> Option<&str> {
+        self.crew.as_deref().and_then(non_empty)
+    }
+}
+
 /// Collect `task_id` / `task.id` / `task_ids` entries. Generic `id` is left to
 /// `RuntimeKernel::task_id_from_run_input` so a non-task `id` cannot pollute
 /// mixed-crew detection.
@@ -127,32 +153,6 @@ pub fn task_ids_for_crew_resolution(input: &Value) -> Vec<String> {
         }
     }
     ids
-}
-
-/// Run-input key under which a pulled claimed leaf carries the owner's
-/// snapshot of its task. Written when the follower creates the leaf
-/// (`orbit-store` `LocalPullMutation::CreateLeaf`) from the claim receipt.
-const CLAIMED_TASK_INPUT_KEY: &str = "claimed_task";
-
-/// The owner's view of a claimed task, as far as crew resolution needs it.
-#[derive(Debug, Deserialize)]
-pub struct ClaimedTaskSnapshot {
-    pub id: String,
-    #[serde(default)]
-    crew: Option<String>,
-    /// How `crew` was assigned on the owner [ORB-17773]; absent on a leaf
-    /// created before it was carried, which reads as not automatic.
-    #[serde(default)]
-    pub crew_source: Option<CrewSource>,
-    #[serde(default)]
-    pub complexity: Option<TaskComplexity>,
-}
-
-impl ClaimedTaskSnapshot {
-    /// The owner's crew for the task, when it names one.
-    pub fn crew(&self) -> Option<&str> {
-        self.crew.as_deref().and_then(non_empty)
-    }
 }
 
 /// Read the claimed-task snapshot off a run input. Absent or `null` means the
