@@ -1,7 +1,6 @@
 # Machine checks — STD-04 Testing and verification
 
-The gate that enforces each rule in [STD-04](STD-04.md), or `review-only`. Ship a change
-with the gate its rule names, or say it is review-only.
+The gate that enforces each rule in [STD-04](STD-04.md), or `review-only`. Ship a change with the gate its rule names, or say it is review-only.
 
 Each gate below is real and can be adopted. "Orbit:" says whether Orbit enforces it today.
 

@@ -1,13 +1,8 @@
 # Machine checks — STD-01 CLI surface
 
-The gate that enforces each rule in [STD-01](STD-01.md), or `review-only`. Ship a change
-with the gate its rule names, or say it is review-only.
+The gate that enforces each rule in [STD-01](STD-01.md), or `review-only`. Ship a change with the gate its rule names, or say it is review-only.
 
-The **Gate** column names what an adopting repo wires up. The **Orbit instance** column
-names where Orbit already has that gate. A rule marked `review-only` has no mechanical
-gate that is worth its false-positive rate, so reviewers check it against the rule text.
-For a new Rust CLI, `assert_cmd` for exit codes and streams, plus `insta` or `trycmd` for
-goldens, covers most of this table.
+The **Gate** column names what an adopting repo wires up. The **Orbit instance** column names where Orbit already has that gate. A rule marked `review-only` has no mechanical gate that is worth its false-positive rate, so reviewers check it against the rule text. For a new Rust CLI, `assert_cmd` for exit codes and streams, plus `insta` or `trycmd` for goldens, covers most of this table.
 
 | Rule | Gate | Orbit instance |
 |---|---|---|

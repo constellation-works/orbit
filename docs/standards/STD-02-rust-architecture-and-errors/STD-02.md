@@ -3,377 +3,125 @@ id: STD-02-rust-architecture-and-errors
 title: Rust architecture and errors — layering, visibility, typed errors, failure semantics, idiom and naming, logging, and test layout for constellation Rust projects
 summary: Normative structure and failure rules for any constellation Rust repo (workspace or single-crate CLI) — dependency direction, crate splits, visibility, one definition per rule, typed thiserror errors translated at the boundary, errors that name verified causes, exhaustive matches, load-time config validation, unknown-never-reads-as-success, fail-closed vs fail-open, batch isolation, preconditions before side effects, no boolean mode parameters, Rust API naming, borrow-general signatures, reasoned and expiring lint suppressions, lossless persisted shapes, tracing, dead code, test layout — plus the copyable lint, dependency-direction and cargo-deny gates. Read before creating or restructuring a Rust project or designing how it fails.
 tags: [standard, rust, architecture, errors, failure-semantics, idioms, naming, testing, lints]
-version: 8
-created: 2026-09-26
-updated: 2026-11-25
+version: 10
+created_date: 2026-09-26
+updated_date: 2026-11-26
 last_validated: 2026-09-26
 related: [STD-01-cli-surface, STD-03-concurrency-and-process-safety, STD-04-testing-and-verification, STD-05-security-boundaries]
 ---
 
 # Rust architecture and errors
 
-How a constellation Rust project is layered, what it exposes, how it fails, and where its
-tests live. Orbit (`codebases/orbit`) is the worked example; the rules are written for a
-repo that is not Orbit, including a small one. Several rules (R24–R34, and parts of R10 and
-R16) are language-neutral principles about failure, and R39–R47 are language-neutral
-principles about structure; they are stated portably, with the Rust specifics as notes.
+How a constellation Rust project is layered, what it exposes, how it fails, and where its tests live. Orbit (`codebases/orbit`) is the worked example; the rules are written for a repo that is not Orbit, including a small one. Several rules (R24–R34, and parts of R10 and R16) are language-neutral principles about failure, and R39–R47 are language-neutral principles about structure; they are stated portably, with the Rust specifics as notes.
 
 Neighbouring standards own the rest, and their rules are not repeated here:
-- Concurrency, async, locking, channels, durable writes and subprocesses: STD-03
-  (`STD-03-concurrency-and-process-safety`).
-- The CLI's user-facing surface (flags, output streams, exit codes, how an error is
-  presented, never silently dropping caller input): STD-01 (`STD-01-cli-surface`).
-- Test strategy and verification beyond the layout rules R19–R21: STD-04
-  (`STD-04-testing-and-verification`).
+- Concurrency, async, locking, channels, durable writes and subprocesses: STD-03 (`STD-03-concurrency-and-process-safety`).
+- The CLI's user-facing surface (flags, output streams, exit codes, how an error is presented, never silently dropping caller input): STD-01 (`STD-01-cli-surface`).
+- Test strategy and verification beyond the layout rules R19–R21: STD-04 (`STD-04-testing-and-verification`).
 - Trust boundaries, authority and secrets: STD-05 (`STD-05-security-boundaries`).
 
-This standard is a directory. This file holds the binding text: the rules, where they
-apply, and how to deviate. Beside it, [`why.md`](why.md) gives the reason for each rule,
-[`checks.md`](checks.md) the gate that enforces it, [`exemplars.md`](exemplars.md) worked
-examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each version.
+This standard is a directory. This file holds the binding text: the rules, where they apply, and how to deviate. Beside it, [`why.md`](why.md) gives the reason for each rule, [`checks.md`](checks.md) the gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each version.
 
 ## Rules
 
-**Scaling.** Every rule applies to a multi-crate workspace and to a single-crate CLI. Where a
-rule says *layer* or *unit*, read **crate** in a workspace and **top-level module** (for
-example `src/domain/`, `src/app/`, `src/cli/`) in a single crate. A single crate expresses
-dependency direction as module-import rules instead of `Cargo.toml` edges; the rules are the
-same.
+**Scaling.** Every rule applies to a multi-crate workspace and to a single-crate CLI. Where a rule says *layer* or *unit*, read **crate** in a workspace and **top-level module** (for example `src/domain/`, `src/app/`, `src/cli/`) in a single crate. A single crate expresses dependency direction as module-import rules instead of `Cargo.toml` edges; the rules are the same.
 
 ### Layering and structure
 
-- **R1.** *Declared layer order.* Code in a lower layer MUST NOT import from a higher one,
-  against an ordered layer model written in the project's architecture doc. The default model
-  is foundation (contract types, shared mechanisms) → domain (records and pure rules) →
-  application (the operations the product offers, R2) → composition → surfaces. Persistence
-  sits below the application layer and imports record types only (R40). A project MAY merge
-  layers it does not need or name more of them (Orbit names eight); it MUST NOT reorder
-  these.
-- **R2.** *Domain, application, composition and surfaces are separate.* Domain units own
-  their data and logic. Every operation the product offers has exactly one entry point in an
-  application unit, which sequences domain logic, persistence and ports for that operation
-  (R41). Exactly one composition unit joins configuration, storage construction and adapters,
-  and it only constructs. Surfaces (CLI parsing, HTTP/MCP handlers, hooks, rendering) MUST
-  only parse input, call one operation, directly or through composition, and render the
-  result. A surface handler that calls two or more domain or persistence functions in
-  sequence is holding an operation, which belongs in the application unit. A small project
-  MAY keep application and composition in one unit; the line between that unit and its
-  surfaces stays.
-- **R3.** *Resolved inputs flow down.* Domain and runtime code MUST receive resolved
-  configuration and filesystem roots as values from composition, never load config or
-  discover the cwd or `$HOME` itself.
-- **R4.** *Mechanisms never depend on features.* Kernel units that expose reusable
-  mechanisms (process, filesystem, codec, sandbox, observability helpers) MUST NOT depend on
-  any domain, composition or surface unit.
-- **R5.** *Contract types are I/O-free.* The foundation unit holding shared contract types
-  (serde DTOs, IDs, pure constructors, narrow errors) MUST perform no I/O — no `std::fs`,
-  `std::net`, `std::process`, database or HTTP — and depend on no crate that does.
+- **R1.** *Declared layer order.* Code in a lower layer MUST NOT import from a higher one, against an ordered layer model written in the project's architecture doc. The default model is foundation (contract types, shared mechanisms) → domain (records and pure rules) → application (the operations the product offers, R2) → composition → surfaces. Persistence sits below the application layer and imports record types only (R40). A project MAY merge layers it does not need or name more of them (Orbit names eight); it MUST NOT reorder these.
+- **R2.** *Domain, application, composition and surfaces are separate.* Domain units own their data and logic. Every operation the product offers has exactly one entry point in an application unit, which sequences domain logic, persistence and ports for that operation (R41). Exactly one composition unit joins configuration, storage construction and adapters, and it only constructs. Surfaces (CLI parsing, HTTP/MCP handlers, hooks, rendering) MUST only parse input, call one operation, directly or through composition, and render the result. A surface handler that calls two or more domain or persistence functions in sequence is holding an operation, which belongs in the application unit. A small project MAY keep application and composition in one unit; the line between that unit and its surfaces stays.
+- **R3.** *Resolved inputs flow down.* Domain and runtime code MUST receive resolved configuration and filesystem roots as values from composition, never load config or discover the cwd or `$HOME` itself.
+- **R4.** *Mechanisms never depend on features.* Kernel units that expose reusable mechanisms (process, filesystem, codec, sandbox, observability helpers) MUST NOT depend on any domain, composition or surface unit.
+- **R5.** *Contract types are I/O-free.* The foundation unit holding shared contract types (serde DTOs, IDs, pure constructors, narrow errors) MUST perform no I/O — no `std::fs`, `std::net`, `std::process`, database or HTTP — and depend on no crate that does.
 - **R6.** *Direction is machine-checked.* Dependency direction MUST be enforced by a CI check, and a new edge changes that check and the architecture doc in the same change. The check MUST also reject an import cycle between units and enforce the order declared inside a layer (R39). A boundary is enforced by the strongest mechanism the project has: a crate edge where one exists, else item visibility (`pub(crate)`, `pub(super)`), else a `clippy.toml` `disallowed-types` or `disallowed-methods` entry, and a source grep only for what none of those can state (`crate::` imports, module-to-module rules). Each `clippy.toml` entry names what to call instead; an allowed module carries a module-level `#![expect(clippy::disallowed_types, reason = "…")]` or `#![expect(clippy::disallowed_methods, reason = "…")]` (R35), and a project on the shared kit crates bans those paths with no exemption. Grep rules that Clippy covers are removed from the direction script. A boundary that only a grep or `clippy.toml` enforces and that takes more than a few rules to state is a candidate for a crate edge (R7).
 - **R7.** *Crates follow build boundaries, not taxonomy.* A new crate MUST be justified by a build or dependency need — compile-graph isolation, an independently consumed artifact, or a dependency edge that must be enforceable — not by conceptual category. A new CLI SHOULD start as two crates, because the library/surface edge is exactly such an enforceable edge: a library crate that holds the operations (R45), the composition unit (R2) and every adapter, and that depends on no argument parser, terminal or log-subscriber crate; and a CLI crate that holds argument declarations, the mapping from arguments to one operation, rendering and `main`, and depends on exactly one internal crate. Composition, adapters for external systems, process spawning and every read of the environment MUST NOT live in the CLI crate. A project that persists state through a database or another storage driver SHOULD make persistence a third crate from the day it takes that dependency, so that `Cargo.toml` confines the driver to it and R40's rule that persistence imports no operation is a crate edge. Any other project starts as one crate. Split further only when another such need appears.
-- **R24.** *One definition per rule, enforced at the chokepoint.* Every validation,
-  authorization and classification rule MUST have exactly one implementation, enforced in
-  the shared path that every entry point crosses — CLI, HTTP or MCP handler, dashboard,
-  scheduler, and any adapter added later. In practice that is the composition or domain
-  operation that R2 routes surfaces through. A surface MUST NOT re-implement, pre-empt or
-  bypass the rule, and two code paths that need the same rule call one function rather than
-  spelling it twice.
-- **R25.** *Obligations live in deterministic code.* Where a system hands work to an agent,
-  a script or a person following instructions, an obligation the system later relies on (a
-  record written, a field set, a check run) SHOULD be performed or verified by deterministic
-  code, not left to prompt text, a README step or convention. Instructions may ask for it;
-  code produces or checks it before anything depends on it.
-- **R39.** *No cycles; order inside a layer.* The import graph between units MUST be acyclic
-  at every level: between crates, between the top-level modules of a crate, and between the
-  modules of one layer. A layer with more than about ten units MUST declare an order inside
-  itself in the architecture doc (for a domain layer, for example, base values → records →
-  rules), and R1 applies to that order. An item that two units both need moves to the lower
-  of them or to a unit below both; neither imports the other to reach it.
-- **R40.** *Persistence stores; it does not decide.* The persistence unit owns how records
-  reach durable storage: reads, writes, transactions, locking, schema and format upgrades. It
-  MUST NOT hold a validation, authorization or classification rule (R24), and it MUST import
-  record and contract types only, never an application unit, a port or a feature's rules. Its
-  API is named for the records it stores (`entries().get`, `sessions().put`), not for the
-  operations that use them (`settle_pass`, `approve_and_archive`). A check that must be
-  atomic with its write is a domain function that the calling operation runs inside a
-  transaction handle the persistence unit provides: the persistence unit supplies the
-  transaction, the caller supplies the rule. A constraint the storage engine itself enforces
-  (a unique key, a foreign key, a revision compare-and-swap) is mechanism, not a rule, and
-  stays.
-- **R41.** *An operation loads, decides, effects and commits.* A decision (validating,
-  selecting, ranking, classifying, planning) SHOULD be a pure function from values to values,
-  with no I/O and no read of the clock or the environment. An operation (R2) SHOULD follow
-  one shape: load the state it needs into values; decide with pure functions; perform
-  external effects (a model call, a network request, a subprocess) through ports (R42);
-  commit its writes in one transaction that re-checks the state it loaded. Code that performs
-  I/O makes no domain decision, and a decision function is testable with no filesystem,
-  database or network. An operation that cannot follow the shape says why in its doc comment.
-  Locking and durable writes are STD-03.
-- **R42.** *Ports belong to the caller.* A trait that stands for an external system (a model
-  or network service, another process, the clock) MUST be defined in the layer that calls it,
-  speak in that layer's own values, and be implemented in composition or an adapter unit; the
-  unit that defines a port never imports its implementation. Each feature keeps the request
-  and response shapes of its calls beside its own rules, and one file MUST NOT collect the
-  shapes of unrelated features. A trait is introduced for an external effect or when a second
-  implementation exists; the project's own storage is a concrete type until there is a second
-  backend.
+- **R24.** *One definition per rule, enforced at the chokepoint.* Every validation, authorization and classification rule MUST have exactly one implementation, enforced in the shared path that every entry point crosses — CLI, HTTP or MCP handler, dashboard, scheduler, and any adapter added later. In practice that is the composition or domain operation that R2 routes surfaces through. A surface MUST NOT re-implement, pre-empt or bypass the rule, and two code paths that need the same rule call one function rather than spelling it twice.
+- **R25.** *Obligations live in deterministic code.* Where a system hands work to an agent, a script or a person following instructions, an obligation the system later relies on (a record written, a field set, a check run) SHOULD be performed or verified by deterministic code, not left to prompt text, a README step or convention. Instructions may ask for it; code produces or checks it before anything depends on it.
+- **R39.** *No cycles; order inside a layer.* The import graph between units MUST be acyclic at every level: between crates, between the top-level modules of a crate, and between the modules of one layer. A layer with more than about ten units MUST declare an order inside itself in the architecture doc (for a domain layer, for example, base values → records → rules), and R1 applies to that order. An item that two units both need moves to the lower of them or to a unit below both; neither imports the other to reach it.
+- **R40.** *Persistence stores; it does not decide.* The persistence unit owns how records reach durable storage: reads, writes, transactions, locking, schema and format upgrades. It MUST NOT hold a validation, authorization or classification rule (R24), and it MUST import record and contract types only, never an application unit, a port or a feature's rules. Its API is named for the records it stores (`entries().get`, `sessions().put`), not for the operations that use them (`settle_pass`, `approve_and_archive`). A check that must be atomic with its write is a domain function that the calling operation runs inside a transaction handle the persistence unit provides: the persistence unit supplies the transaction, the caller supplies the rule. A constraint the storage engine itself enforces (a unique key, a foreign key, a revision compare-and-swap) is mechanism, not a rule, and stays.
+- **R41.** *An operation loads, decides, effects and commits.* A decision (validating, selecting, ranking, classifying, planning) SHOULD be a pure function from values to values, with no I/O and no read of the clock or the environment. An operation (R2) SHOULD follow one shape: load the state it needs into values; decide with pure functions; perform external effects (a model call, a network request, a subprocess) through ports (R42); commit its writes in one transaction that re-checks the state it loaded. Code that performs I/O makes no domain decision, and a decision function is testable with no filesystem, database or network. An operation that cannot follow the shape says why in its doc comment. Locking and durable writes are STD-03.
+- **R42.** *Ports belong to the caller.* A trait that stands for an external system (a model or network service, another process, the clock) MUST be defined in the layer that calls it, speak in that layer's own values, and be implemented in composition or an adapter unit; the unit that defines a port never imports its implementation. Each feature keeps the request and response shapes of its calls beside its own rules, and one file MUST NOT collect the shapes of unrelated features. A trait is introduced for an external effect or when a second implementation exists; the project's own storage is a concrete type until there is a second backend.
 - **R43.** *A unit says what it owns, and new code goes to the lowest unit that can own it.* The architecture doc MUST map every unit (each crate, and each top-level module of a crate) with one sentence stating what it owns and the units it may import; the unit's doc comment states the same sentence. The map MUST be machine-checked: a gate fails when a crate or a top-level module is missing from the doc, when a path the doc names does not exist, or when a unit has no doc comment. New code goes in the lowest unit whose sentence covers it and that needs no new upward import to hold it. When no unit's sentence covers it, the same change adds the unit and its row; code is not parked in the nearest file that compiles. Outside the foundation layer a unit MUST NOT be named for no responsibility (`common`, `utils`, `helpers`, `misc`, `shared`), and no unit collects the shapes of unrelated features in one `types` or `models` file. The foundation's contract-types unit (R5) is the one shared home, and it holds only what two or more units use. R37 says the same of type names.
-- **R44.** *Legacy and upgrade code is quarantined.* Readers of superseded formats, schema
-  and format migrations, and one-time importers MUST live in one unit named for that purpose
-  (`legacy`, `migrate`), which the live path calls only when it opens or upgrades stored
-  state. The live path reads and writes the current shape only and imports nothing else from
-  that unit. A superseded reader is deleted when no supported version can still produce its
-  input (R17).
+- **R44.** *Legacy and upgrade code is quarantined.* Readers of superseded formats, schema and format migrations, and one-time importers MUST live in one unit named for that purpose (`legacy`, `migrate`), which the live path calls only when it opens or upgrades stored state. The live path reads and writes the current shape only and imports nothing else from that unit. A superseded reader is deleted when no supported version can still produce its input (R17).
 - **R45.** *The application layer is sliced by subject.* Each subject a user can name (a command noun, a resource) MUST be one application unit that holds that subject's operations (R2), its rules and its input and outcome types, with one public entry point that every surface calls. A surface command maps to exactly one such unit. A project MUST NOT sort the same subjects a second time by kind, into a rules layer or crate that collects every subject's rules, or into one folder of use-case files across subjects: a change to one subject touches one application unit and one persistence repository. A domain unit exists only for a subsystem that several subjects use and that has an identity of its own (an engine, a store, a search index). Application units call each other only through their entry points, in an order declared under R39, and R18's directory clause binds here: the layer's files are grouped in one folder per subject. Persistence stays one repository per record (R40), because subjects and records do not line up, and the record shapes it stores MAY live in a module of the persistence unit that imports nothing else from it. What every application unit runs against (the context handed to an operation, id resolution, error mapping) is one named unit beside them and holds nothing else (R43).
 - **R46.** *A tool starts no model and no agent.* A project other than the orchestrator MUST NOT invoke a model or an agent provider itself, in process or by spawning a provider's CLI. Work that needs one runs as an orchestrator job (Orbit: a job with an agent activity) that reads and writes through the project's own commands; the project supplies the deterministic steps on either side, preparing the input and checking and storing the result (R25). Provider adapters, their credentials and the supervision of agent processes belong to the orchestrator alone. An existing in-process call is removed once an orchestrator job can replace it, and until then lives in one unit that only its callers import.
 - **R47.** *A subject stays whole.* Code for one subject MUST NOT be split across units only so that one of them stays free of I/O. A library unit MAY own the file access its subject needs, confined to one module of that unit, and MAY import the persistence unit: finding, reading and parsing one kind of input live together. R41's pure decision functions remain the default inside a unit; this rule limits how far a purity or layering rule may scatter one subject across units. Such a unit never imports the application layer (R1), reads no environment and discovers no root (R3), and a function of it that writes takes the caller's transaction instead of opening its own (R40).
+- **R48.** *CLI output is one file per top-level command.* In a CLI crate's output layer (`src/output/`), each top-level command has exactly one file named for it directly under `output/` (for example `output/mail.rs`), holding that command's payloads and its rendering for all of its verbs; there is no file per verb. Code two or more commands share lives under `output/common/`, in files named for what they hold (`common/error.rs`, `common/json.rs`), never for a kind of thing. `output/mod.rs` holds the module's wiring only. Every file directly under `output/` other than `mod.rs` is named for a top-level command.
+- **R49.** *A command noun is one file, or a directory past three verbs.* In a CLI crate's `src/command/`, a noun with three verbs or fewer is one file, `command/<noun>.rs`. A noun with four or more verbs (four or more variants in its clap subcommand enum) is a directory `command/<noun>/`: each verb has its own file `command/<noun>/<verb>.rs` holding that verb's argument struct, its help and examples text, and its mapping to the application unit it calls (STD-02 R45); `command/<noun>/mod.rs` holds only noun-level things: the verb list, the noun-level help and examples, the arguments its verbs share, and the dispatch to each verb. Code shared by the verbs of one noun is a named sibling file in its directory, not `mod.rs`. Code shared by two or more nouns lives under `command/common/`. A noun becomes a directory in a move-only change made before the change that adds its fourth verb; a noun of three verbs or fewer may already be a directory.
 
 ### Visibility and dependencies
 
-- **R8.** *Private by default.* Items MUST default to private or `pub(crate)`; `pub` is
-  reserved for the deliberate cross-crate or public API, and the crate root re-exports only
-  what a consumer actually needs.
-- **R9.** *Workspace-declared dependencies.* In a workspace, every third-party dependency
-  used by more than one member MUST be declared once in `[workspace.dependencies]` and
-  referenced as `dep.workspace = true` (package `version`, `edition`, `rust-version` and
-  `license` inherited the same way); a single crate pins `rust-version` in `[package]`.
+- **R8.** *Private by default.* Items MUST default to private or `pub(crate)`; `pub` is reserved for the deliberate cross-crate or public API, and the crate root re-exports only what a consumer actually needs.
+- **R9.** *Workspace-declared dependencies.* In a workspace, every third-party dependency used by more than one member MUST be declared once in `[workspace.dependencies]` and referenced as `dep.workspace = true` (package `version`, `edition`, `rust-version` and `license` inherited the same way); a single crate pins `rust-version` in `[package]`.
 
 ### Idiom and naming
 
-These rules bind new and changed code. An existing signature or name is brought into line
-when the change touches it for another reason, not in a sweep of its own.
+These rules bind new and changed code. An existing signature or name is brought into line when the change touches it for another reason, not in a sweep of its own.
 
-- **R36.** *No boolean mode parameters.* A function or method callable outside its own
-  module MUST NOT take a `bool` that selects between behaviours (`render(true)`,
-  `sync(path, false)`). It takes a two-variant enum named for the choice
-  (`Verbosity::Summary | Verbosity::Full`), or the operation becomes two functions. A `bool`
-  that is plain data — a setter's value, a field of an options struct, a value carried into
-  a persisted or wire shape — is not a mode and is allowed. A private helper whose callers
-  sit beside it MAY take a mode `bool`.
-- **R37.** *Rust API naming.* Names SHOULD follow the Rust API Guidelines naming rules.
-  Getters drop `get_` (`fn name(&self)`, `fn name_mut(&mut self)`). Conversion prefixes
-  match the real cost and ownership: `as_` is a free borrow-to-borrow view, `to_` is costly
-  or borrow-to-owned, and `into_` consumes `self`. Constructors are `new` and `with_*`; a
-  fallible one is `try_new`, `TryFrom` or `FromStr`. A type that has `len()` has
-  `is_empty()`. A type is named for what it is, not with a `Manager`, `Service`, `Helper`
-  or `Util` suffix, and an abbreviation an outside reader would not know is spelled out.
-- **R38.** *Signatures borrow the most general type and own only what they keep.* A
-  parameter that is only read SHOULD take the most general borrowed form (`&str`, `&[T]`,
-  `&Path`, `&T`, `Option<&T>`), never `&String`, `&Vec<T>`, `&PathBuf`, `&Box<T>` or
-  `&Option<T>`. A function that stores or consumes an argument takes it by value rather
-  than borrowing it and cloning inside. `Rc`, `Arc`, `RefCell` and `Mutex` stay out of
-  signatures shared across modules unless shared ownership is the contract. A `clone()`
-  whose only purpose is to end a borrow is replaced by restructuring (a narrower borrow,
-  `mem::take`, `Option::take`, splitting a struct so disjoint fields borrow separately); a
-  deliberate clone of non-trivial data on a hot path says so in a comment. Conversions
-  implement `From`, `TryFrom` or `FromStr`, never `Into` directly or an inherent
-  `from_str`. `Deref` is implemented only by smart pointers and owning collections, never
-  to imitate inheritance. Absence is `Option`, never a sentinel such as `""`, `-1` or `0`
-  (R29).
+- **R36.** *No boolean mode parameters.* A function or method callable outside its own module MUST NOT take a `bool` that selects between behaviours (`render(true)`, `sync(path, false)`). It takes a two-variant enum named for the choice (`Verbosity::Summary | Verbosity::Full`), or the operation becomes two functions. A `bool` that is plain data — a setter's value, a field of an options struct, a value carried into a persisted or wire shape — is not a mode and is allowed. A private helper whose callers sit beside it MAY take a mode `bool`.
+- **R37.** *Rust API naming.* Names SHOULD follow the Rust API Guidelines naming rules. Getters drop `get_` (`fn name(&self)`, `fn name_mut(&mut self)`). Conversion prefixes match the real cost and ownership: `as_` is a free borrow-to-borrow view, `to_` is costly or borrow-to-owned, and `into_` consumes `self`. Constructors are `new` and `with_*`; a fallible one is `try_new`, `TryFrom` or `FromStr`. A type that has `len()` has `is_empty()`. A type is named for what it is, not with a `Manager`, `Service`, `Helper` or `Util` suffix, and an abbreviation an outside reader would not know is spelled out.
+- **R38.** *Signatures borrow the most general type and own only what they keep.* A parameter that is only read SHOULD take the most general borrowed form (`&str`, `&[T]`, `&Path`, `&T`, `Option<&T>`), never `&String`, `&Vec<T>`, `&PathBuf`, `&Box<T>` or `&Option<T>`. A function that stores or consumes an argument takes it by value rather than borrowing it and cloning inside. `Rc`, `Arc`, `RefCell` and `Mutex` stay out of signatures shared across modules unless shared ownership is the contract. A `clone()` whose only purpose is to end a borrow is replaced by restructuring (a narrower borrow, `mem::take`, `Option::take`, splitting a struct so disjoint fields borrow separately); a deliberate clone of non-trivial data on a hot path says so in a comment. Conversions implement `From`, `TryFrom` or `FromStr`, never `Into` directly or an inherent `from_str`. `Deref` is implemented only by smart pointers and owning collections, never to imitate inheritance. Absence is `Option`, never a sentinel such as `""`, `-1` or `0` (R29).
+- **R51.** *Parameter count.* A function MUST NOT take more than seven parameters, the receiver counted. Parameters that travel together become a struct named for what they are (a request, options, a context), written as a struct literal. No `#[allow]` or `#[expect]` of `clippy::too_many_arguments`. New and changed functions MUST meet this rule. A repository with existing offenders runs the gate as a count that may only fall and records that count as a deviation.
+- **R52.** *No variants by suffix.* A function SHOULD NOT be copied under a longer name to pass one more value: `run`, `run_at`, `run_with_providers` and `run_at_with_providers` are one function that takes a context struct holding the clock and the providers, and the production entry point builds the default context. The `with_*` constructors and builder methods of R37 are not this.
 
 ### Errors and domain types
 
-- **R10.** *Typed errors per unit; classify from structure.* Each crate (single crate: each
-  layer module whose callers branch on its failures) MUST define its own
-  `thiserror`-derived error enum with variants callers can match; library code never
-  returns `String`, `Box<dyn Error>` or `anyhow::Error`. Any code that classifies a failure,
-  its own or a child process's, MUST decide from structured data — an error variant, an exit
-  status, a supervisor's verdict, an `io::ErrorKind` or errno value — and MUST NOT match
-  substrings of a message, stderr, a URL or an errno's text.
-- **R11.** *One surface error type.* The project MUST have one uniform error type at its
-  surface boundary (Orbit: `OrbitError`), kept small by boxing large variant payloads. When
-  that type is part of a public API it MUST be `#[non_exhaustive]`. In a two-crate CLI
-  (R7) the surface error type is crate-private in the CLI crate, so `#[non_exhaustive]` has
-  nothing to protect there; the domain library's public error enum (R10) carries it instead.
-- **R12.** *Translate at the boundary, once.* A typed error that crosses into the surface
-  error type MUST be converted by one translator and applied as `?` or
-  `.map_err(translator)?`; call sites never map variants ad hoc, and code inside a unit
-  propagates the typed error unchanged. When the owning unit can depend on the surface
-  type (Orbit: `OrbitError` lives in the foundation crate `orbit-common`), the translator is
-  defined next to the error in its owning unit. When the surface type lives in a crate that
-  depends on the owning unit, as a CLI crate over a domain library does, the owning unit
-  cannot name it; there the one translator is a single `#[from]` variant or `From` impl on
-  the surface type, in the surface crate.
-- **R13.** *No panics on fallible paths.* Production code MUST propagate failures with `?`
-  instead of `unwrap()`, `expect()`, `panic!`, `todo!` or `unreachable!`; tests are exempt,
-  and a genuine invariant `expect` carries
-  `#[expect(clippy::expect_used, reason = "<the invariant>")]` on the narrowest item (R35).
-- **R14.** *Newtypes with validating constructors.* A primitive that carries a protocol
-  contract (IDs, refs, versions, hashes, selectors) that crosses a function boundary SHOULD
-  be a newtype with a private inner value and a fallible constructor (`new`/`FromStr`/
-  `TryFrom`, plus `#[serde(try_from = …)]` when deserialized), not a bare `String` checked
-  by an `is_valid_x(&str)` helper.
-- **R26.** *Errors state verified causes, resolved inputs and a runnable remedy.* An error
-  MUST assert only causes the code actually checked, and each failure mode MUST get its own
-  error (variant and message), never a shared string that fits several. The message MUST
-  carry the resolved inputs that decided the outcome: the path, scope, config layer or
-  effective `PATH`. Any remedy it suggests MUST be safe and runnable from the surface where
-  the error appears. How a surface presents the error is STD-01 §R19–R21.
-- **R27.** *Exhaustive matches on domain enums.* Code that branches on a domain enum the
-  project owns (a status, outcome, kind or class) MUST name every variant, with no wildcard
-  or default arm, so that adding a variant fails the build at every decision it affects.
-  *Rust:* no `_ =>` or catch-all binding arm on an in-workspace enum; write a predicate as
-  an exhaustive `match` rather than `matches!` whenever a new variant's answer is not
-  obviously "no". A foreign `#[non_exhaustive]` enum still needs its wildcard.
-  *Elsewhere:* TypeScript's `never` check, Python's `typing.assert_never`.
-- **R28.** *Configuration is validated at load.* Configuration and other operator-authored
-  input MUST be validated when it is loaded: references resolved, numeric values checked
-  against their bounds, and narrowing conversions checked (`try_from`, never `as`). A bad
-  value is refused at load, naming the key, not discovered or silently wrapped at use time.
-  Load and use go through the same validation function (R24).
+- **R10.** *Typed errors per unit; classify from structure.* Each crate (single crate: each layer module whose callers branch on its failures) MUST define its own `thiserror`-derived error enum with variants callers can match; library code never returns `String`, `Box<dyn Error>` or `anyhow::Error`. Any code that classifies a failure, its own or a child process's, MUST decide from structured data — an error variant, an exit status, a supervisor's verdict, an `io::ErrorKind` or errno value — and MUST NOT match substrings of a message, stderr, a URL or an errno's text.
+- **R11.** *One surface error type.* The project MUST have one uniform error type at its surface boundary (Orbit: `OrbitError`), kept small by boxing large variant payloads. When that type is part of a public API it MUST be `#[non_exhaustive]`. In a two-crate CLI (R7) the surface error type is crate-private in the CLI crate, so `#[non_exhaustive]` has nothing to protect there; the domain library's public error enum (R10) carries it instead.
+- **R12.** *Translate at the boundary, once.* A typed error that crosses into the surface error type MUST be converted by one translator and applied as `?` or `.map_err(translator)?`; call sites never map variants ad hoc, and code inside a unit propagates the typed error unchanged. When the owning unit can depend on the surface type (Orbit: `OrbitError` lives in the foundation crate `orbit-common`), the translator is defined next to the error in its owning unit. When the surface type lives in a crate that depends on the owning unit, as a CLI crate over a domain library does, the owning unit cannot name it; there the one translator is a single `#[from]` variant or `From` impl on the surface type, in the surface crate.
+- **R13.** *No panics on fallible paths.* Production code MUST propagate failures with `?` instead of `unwrap()`, `expect()`, `panic!`, `todo!` or `unreachable!`; tests are exempt, and a genuine invariant `expect` carries `#[expect(clippy::expect_used, reason = "<the invariant>")]` on the narrowest item (R35).
+- **R14.** *Newtypes with validating constructors.* A primitive that carries a protocol contract (IDs, refs, versions, hashes, selectors) that crosses a function boundary SHOULD be a newtype with a private inner value and a fallible constructor (`new`/`FromStr`/ `TryFrom`, plus `#[serde(try_from = …)]` when deserialized), not a bare `String` checked by an `is_valid_x(&str)` helper.
+- **R26.** *Errors state verified causes, resolved inputs and a runnable remedy.* An error MUST assert only causes the code actually checked, and each failure mode MUST get its own error (variant and message), never a shared string that fits several. The message MUST carry the resolved inputs that decided the outcome: the path, scope, config layer or effective `PATH`. Any remedy it suggests MUST be safe and runnable from the surface where the error appears. How a surface presents the error is STD-01 §R19–R21.
+- **R27.** *Exhaustive matches on domain enums.* Code that branches on a domain enum the project owns (a status, outcome, kind or class) MUST name every variant, with no wildcard or default arm, so that adding a variant fails the build at every decision it affects. *Rust:* no `_ =>` or catch-all binding arm on an in-workspace enum; write a predicate as an exhaustive `match` rather than `matches!` whenever a new variant's answer is not obviously "no". A foreign `#[non_exhaustive]` enum still needs its wildcard. *Elsewhere:* TypeScript's `never` check, Python's `typing.assert_never`.
+- **R28.** *Configuration is validated at load.* Configuration and other operator-authored input MUST be validated when it is loaded: references resolved, numeric values checked against their bounds, and narrowing conversions checked (`try_from`, never `as`). A bad value is refused at load, naming the key, not discovered or silently wrapped at use time. Load and use go through the same validation function (R24).
 
 ### Failure semantics
 
-- **R29.** *Unknown is never zero, empty, success or healthy.* When a value or a check
-  cannot be obtained, the result MUST say so explicitly — `None`/`null` with a reason,
-  `unavailable`, `outcome_unknown` — and MUST NOT read as 0, an empty list, "healthy",
-  success or exit 0. "Could not run" and "ran and failed" are distinct outcomes. A health or
-  readiness check MUST probe the real effective state (the timer is actually scheduled, the
-  helper actually executes, the disk is actually writable), never only a configuration
-  flag or a manager command's exit status.
-- **R30.** *Distinct failure classes get distinct terminal states.* A wait, a dead end, an
-  infrastructure failure and a verdict are different outcomes and MUST NOT share a terminal
-  state, status or error variant. A caller can always tell "could not start" from "ran and
-  was rejected", and "not yet" from "never".
-- **R31.** *Fail closed on integrity, fail open on side channels, and say which.* When code
-  cannot verify an authorization, sandbox, integrity or ownership fact, it MUST refuse. When
-  a best-effort side channel fails (telemetry, metrics, cache refresh, cosmetic asset
-  reconciliation), that failure MUST NOT fail the primary operation, and it is still
-  recorded (R32). Each check MUST declare its class, in its type or a comment at the
-  decision, so a reviewer can tell a deliberate fail-open from a missing error path. The
-  security boundaries themselves are STD-05.
-- **R32.** *One bad item is isolated, reported and counted.* In a batch, scan, listing or
-  aggregate, a failing item MUST be isolated and reported with its identity and cause while
-  the remaining items proceed. It MUST NOT abort the whole operation, and it MUST NOT be
-  folded into a success summary or total: a run over N items with k failures reports k
-  failures. An operation declared all-or-nothing instead refuses as a whole before its first
-  side effect (R34).
-- **R33.** *Recovery paths accept the states they exist to fix.* Resume, repair, recovery
-  and cleanup paths MUST accept the partial, stale or half-applied states they were written
-  for, and complete or undo them. They MUST NOT apply the forward path's strict
-  preconditions and refuse. A state the path cannot identify with certainty is still
-  refused, never guessed (STD-03 §R9).
-- **R34.** *Preconditions before the first side effect.* An operation MUST validate every
-  input and prerequisite — ids, flags, executables, capabilities, registered actions —
-  before its first durable side effect, so a rejected request leaves nothing behind. A
-  dry-run or preflight MUST run the same checks, in the same order, through the same code
-  as the real run.
+- **R29.** *Unknown is never zero, empty, success or healthy.* When a value or a check cannot be obtained, the result MUST say so explicitly — `None`/`null` with a reason, `unavailable`, `outcome_unknown` — and MUST NOT read as 0, an empty list, "healthy", success or exit 0. "Could not run" and "ran and failed" are distinct outcomes. A health or readiness check MUST probe the real effective state (the timer is actually scheduled, the helper actually executes, the disk is actually writable), never only a configuration flag or a manager command's exit status.
+- **R30.** *Distinct failure classes get distinct terminal states.* A wait, a dead end, an infrastructure failure and a verdict are different outcomes and MUST NOT share a terminal state, status or error variant. A caller can always tell "could not start" from "ran and was rejected", and "not yet" from "never".
+- **R31.** *Fail closed on integrity, fail open on side channels, and say which.* When code cannot verify an authorization, sandbox, integrity or ownership fact, it MUST refuse. When a best-effort side channel fails (telemetry, metrics, cache refresh, cosmetic asset reconciliation), that failure MUST NOT fail the primary operation, and it is still recorded (R32). Each check MUST declare its class, in its type or a comment at the decision, so a reviewer can tell a deliberate fail-open from a missing error path. The security boundaries themselves are STD-05.
+- **R32.** *One bad item is isolated, reported and counted.* In a batch, scan, listing or aggregate, a failing item MUST be isolated and reported with its identity and cause while the remaining items proceed. It MUST NOT abort the whole operation, and it MUST NOT be folded into a success summary or total: a run over N items with k failures reports k failures. An operation declared all-or-nothing instead refuses as a whole before its first side effect (R34).
+- **R33.** *Recovery paths accept the states they exist to fix.* Resume, repair, recovery and cleanup paths MUST accept the partial, stale or half-applied states they were written for, and complete or undo them. They MUST NOT apply the forward path's strict preconditions and refuse. A state the path cannot identify with certainty is still refused, never guessed (STD-03 §R9).
+- **R34.** *Preconditions before the first side effect.* An operation MUST validate every input and prerequisite — ids, flags, executables, capabilities, registered actions — before its first durable side effect, so a rejected request leaves nothing behind. A dry-run or preflight MUST run the same checks, in the same order, through the same code as the real run.
 
 ### Logging, contracts, and size
 
-- **R15.** *`tracing`, not print.* Diagnostics MUST go through `tracing`. Only the CLI's
-  single output layer, which owns stdout/stderr as the command's result channel (STD-01),
-  may write to the standard streams: `print!`, `eprint!` and `dbg!` are denied everywhere,
-  and outside that layer no code names `io::stdout()` or `io::stderr()` either. The one
-  place that installs the log subscriber may hand it `io::stderr`; any other exception (an
-  async-signal-safe write in a signal handler, say) is listed in the stream guard with its
-  reason.
-- **R16.** *Persisted and wire shapes are contracts.* A serde shape that is written to disk,
-  a database, or another process MUST change only compatibly — new fields defaulted, a
-  separate `*Document` wire type when the domain shape diverges, and a removed field or key
-  warned about and ignored (or migrated) rather than silently rejected. Round trips MUST be
-  lossless: a value that was written reads back as the same value, and neither a writer nor
-  a deserializer fabricates a value it does not know. A missing timestamp stays absent
-  (`Option`, never `#[serde(default = "Utc::now")]`), and an ambiguous record keeps its
-  ambiguity instead of a guessed default.
-- **R17.** *Fewest moving parts.* Dead code MUST be deleted together with its docs, tests,
-  config keys and design notes; compatibility shims are kept only for an external contract
-  or a persisted format (R16), and a retired path is guarded so it does not grow back.
-- **R18.** *Size is a heuristic.* A source file past about 800 lines SHOULD be checked for
-  multiple responsibilities and split along them (not into `part1`/`part2`); closely related
-  functionality MAY stay in one file when a split would only scatter it. The same check
-  applies to a type with more than about 25 public methods or with `impl` blocks spread over
-  several files, and to a directory with more than about 12 sibling modules and no grouping:
-  each is checked for several responsibilities sharing one name.
+- **R15.** *`tracing`, not print.* Diagnostics MUST go through `tracing`. Only the CLI's single output layer, which owns stdout/stderr as the command's result channel (STD-01), may write to the standard streams: `print!`, `eprint!` and `dbg!` are denied everywhere, and outside that layer no code names `io::stdout()` or `io::stderr()` either. The one place that installs the log subscriber may hand it `io::stderr`; any other exception (an async-signal-safe write in a signal handler, say) is listed in the stream guard with its reason.
+- **R16.** *Persisted and wire shapes are contracts.* A serde shape that is written to disk, a database, or another process MUST change only compatibly — new fields defaulted, a separate `*Document` wire type when the domain shape diverges, and a removed field or key warned about and ignored (or migrated) rather than silently rejected. Round trips MUST be lossless: a value that was written reads back as the same value, and neither a writer nor a deserializer fabricates a value it does not know. A missing timestamp stays absent (`Option`, never `#[serde(default = "Utc::now")]`), and an ambiguous record keeps its ambiguity instead of a guessed default.
+- **R17.** *Fewest moving parts.* Dead code MUST be deleted together with its docs, tests, config keys and design notes; compatibility shims are kept only for an external contract or a persisted format (R16), and a retired path is guarded so it does not grow back.
+- **R18.** *Size is a heuristic.* A source file past about 800 lines SHOULD be checked for multiple responsibilities and split along them (not into `part1`/`part2`); closely related functionality MAY stay in one file when a split would only scatter it. The same check applies to a type with more than about 25 public methods or with `impl` blocks spread over several files, and to a directory with more than about 12 sibling modules and no grouping: each is checked for several responsibilities sharing one name.
+- **R50.** *Function length is a heuristic.* A function past about 60 lines of code (comment lines and blank lines not counted) SHOULD be checked for several phases and split along them into named functions, with the state the phases share moved out of mutable locals into a struct the phases take. A function that needs comment headings to mark its phases is the sign. A function that is one long `match` or table MAY stay whole, and a function is never cut into `part_one` and `part_two` to meet the number. No gate fails a build: a reviewer may read the count from `clippy::too_many_lines` at `too-many-lines-threshold = 60`, run by hand.
 
 ### Tests
 
-- **R19.** *Unit tests in a sibling `tests/` directory.* Unit tests for the files of a
-  module MUST live in `<module>/tests/<source_file>.rs` (top-level files: `src/tests/`),
-  declared once by the parent's `#[cfg(test)] mod tests;`, so they reach only
-  `pub`/`pub(crate)`/`pub(super)` items; visibility is never widened solely for a test.
-- **R20.** *Crate-root `tests/` is integration only.* The crate-root `tests/` directory MUST
-  hold only tests that drive the crate's public API or built binary end to end.
-- **R21.** *Tests exercise behaviour.* A test MUST assert what the code guarantees by running
-  it; it never text-matches source, assets or UI copy (`include_str!` + `contains()`), and
-  never pins operational policy owned by config or prompts (model, schedule, wording) unless
-  its assertion message cites the incident it guards.
+- **R19.** *Unit tests in a sibling `tests/` directory.* Unit tests for the files of a module MUST live in `<module>/tests/<source_file>.rs` (top-level files: `src/tests/`), declared once by the parent's `#[cfg(test)] mod tests;`, so they reach only `pub`/`pub(crate)`/`pub(super)` items; visibility is never widened solely for a test.
+- **R20.** *Crate-root `tests/` is integration only.* The crate-root `tests/` directory MUST hold only tests that drive the crate's public API or built binary end to end.
+- **R21.** *Tests exercise behaviour.* A test MUST assert what the code guarantees by running it; it never text-matches source, assets or UI copy (`include_str!` + `contains()`), and never pins operational policy owned by config or prompts (model, schedule, wording) unless its assertion message cites the incident it guards.
 
 ### Gates
 
-- **R22.** *Shared lint baseline.* Every crate MUST opt into the lint table in
-  [Machine checks](checks.md), enforced by CI running `cargo clippy --all-targets --
-  -D warnings` so every `warn` lint fails the build.
-- **R23.** *Supply-chain gate.* CI MUST run `cargo deny check` against a checked-in
-  `deny.toml` that denies yanked crates, open advisories and unknown sources and allow-lists
-  licenses, with every exception carrying a reason and a re-review date.
-- **R35.** *Lint suppressions state a reason and expire.* A suppression MUST be
-  `#[expect(<lint>, reason = "…")]` on the narrowest item that needs it, so the reason is
-  reviewable and the compiler reports the suppression once the lint stops firing. `#[allow]`
-  is reserved for generated code, macro output and a lint that fires on only some targets
-  or `cfg`s (where an `expect` would go unfulfilled on the others), and it still carries
-  `reason = "…"`. Test-only relaxations of R13 go in `clippy.toml`
-  (`allow-unwrap-in-tests`, `allow-expect-in-tests`) or a reasoned
-  `cfg_attr(test, allow(…, reason = "…"))`. Source never contains `#![deny(warnings)]`;
-  warnings fail the build only in CI (R22). A suppression without a reason is fixed when
-  its item changes. Needs `rust-version` 1.81 or later.
+- **R22.** *Shared lint baseline.* Every crate MUST opt into the lint table in [Machine checks](checks.md), enforced by CI running `cargo clippy --all-targets -- -D warnings` so every `warn` lint fails the build.
+- **R23.** *Supply-chain gate.* CI MUST run `cargo deny check` against a checked-in `deny.toml` that denies yanked crates, open advisories and unknown sources and allow-lists licenses, with every exception carrying a reason and a re-review date.
+- **R35.** *Lint suppressions state a reason and expire.* A suppression MUST be `#[expect(<lint>, reason = "…")]` on the narrowest item that needs it, so the reason is reviewable and the compiler reports the suppression once the lint stops firing. `#[allow]` is reserved for generated code, macro output and a lint that fires on only some targets or `cfg`s (where an `expect` would go unfulfilled on the others), and it still carries `reason = "…"`. Test-only relaxations of R13 go in `clippy.toml` (`allow-unwrap-in-tests`, `allow-expect-in-tests`) or a reasoned `cfg_attr(test, allow(…, reason = "…"))`. Source never contains `#![deny(warnings)]`; warnings fail the build only in CI (R22). A suppression without a reason is fixed when its item changes. Needs `rust-version` 1.81 or later.
 
 ## Applies to
 
-- `rust`: every rule, in every constellation Rust project, whether a multi-crate workspace
-  or a single-crate CLI; all gates in [Machine checks](checks.md).
-- `universal`: R24–R26, R29–R34, R36 and R39–R47, the classification clause of R10 and the
-  lossless clause of R16 are language-neutral and bind any project; R27 and R28 wherever the
-  language offers exhaustiveness checking and checked conversions.
-- `cli`: R7's two-crate default, R11 and R12's downstream-surface form, and R15's stream
-  guard.
+- `rust`: every rule, in every constellation Rust project, whether a multi-crate workspace or a single-crate CLI; all gates in [Machine checks](checks.md).
+- `universal`: R24–R26, R29–R34, R36 and R39–R47, the classification clause of R10 and the lossless clause of R16 are language-neutral and bind any project; R27 and R28 wherever the language offers exhaustiveness checking and checked conversions.
+- `cli`: R7's two-crate default, R11 and R12's downstream-surface form, and R15's stream guard.
 - `service`: R29 (health checks), R31 and R32 bind hardest on long-running services.
-- `stateful`: R16, R33 and R34 for anything that persists state across runs; R40, R44 and
-  R7's persistence crate for anything that persists it through a storage driver.
+- `stateful`: R16, R33 and R34 for anything that persists state across runs; R40, R44 and R7's persistence crate for anything that persists it through a storage driver.
 
-**Adopting v5.** R39–R44 and the v5 forms of R1, R2, R6, R7 and R18 bind a new project and
-any restructuring of an existing one. A repo that adopted an earlier version records where
-it stands against them as a deviation (below) until it restructures; it is not required to
-restructure in order to re-pin.
+**Adopting v5.** R39–R44 and the v5 forms of R1, R2, R6, R7 and R18 bind a new project and any restructuring of an existing one. A repo that adopted an earlier version records where it stands against them as a deviation (below) until it restructures; it is not required to restructure in order to re-pin.
 
-**Adopting v6.** R45–R47 and the v6 form of R7 bind the same way: a new project, and any
-restructuring of an existing one.
+**Adopting v6.** R45–R47 and the v6 form of R7 bind the same way: a new project, and any restructuring of an existing one.
 
-**Adopting v7.** R43's gate binds a new project from its first commit. An existing project
-adds the gate in the change that re-pins it to v7 or later and completes its map there; until
-then the missing gate is a deviation (below).
+**Adopting v7.** R43's gate binds a new project from its first commit. An existing project adds the gate in the change that re-pins it to v7 or later and completes its map there; until then the missing gate is a deviation (below).
 
-Out of scope, and optional for adopters: Orbit's per-crate stability tiers
-(`[package.metadata.orbit] stability`, `codebases/orbit/scripts/check-stability.sh`) and its
-product-identity marker (`codebases/orbit/ARCHITECTURE.md#product-identity`) are
-Orbit-specific mechanisms. A repo with external crate consumers can adopt a stability
-marker; nothing here requires it. Concurrency, async, locking, bounded channels and
-subprocess safety are STD-03.
+Out of scope, and optional for adopters: Orbit's per-crate stability tiers (`[package.metadata.orbit] stability`, `codebases/orbit/scripts/check-stability.sh`) and its product-identity marker (`codebases/orbit/ARCHITECTURE.md#product-identity`) are Orbit-specific mechanisms. A repo with external crate consumers can adopt a stability marker; nothing here requires it. Concurrency, async, locking, bounded channels and subprocess safety are STD-03.
 
 ## Deviations
 
-An adopting repo that departs from a rule records a decision in its own design docs, citing
-`STD-02@<version> §Rn` (for example `STD-02@2 §R27`) and the reason. It never edits its
-vendored copy of this standard.
+An adopting repo that departs from a rule records a decision in its own design docs, citing `STD-02@<version> §Rn` (for example `STD-02@2 §R27`) and the reason. It never edits its vendored copy of this standard.
 
-Known deviations in the exemplar itself, so adopters do not copy them: Orbit has no
-production private-inner validated newtype (R14) and validates identities with
-`validate_*(&str)` helpers; several Orbit crates declare `tempfile = "3"` directly although
-it is in `[workspace.dependencies]` (R9); `missing_docs` is allowed at most crate roots
-(R22); Orbit's `satisfies_dependency` is a `matches!` predicate rather than an exhaustive
-match (R27); Orbit gates none of the [adoptable lints](checks.md#adoptable-additions-beyond-orbits-baseline);
-and Orbit has no stream grep guard (R15): besides its logging subscriber, `orbit-exec`
-writes stderr from a signal handler and a debug tee, and `orbit-common` probes stderr for a
-terminal. As of v4 (measured 2026-10-28 at `7af1c6e74`), Orbit has 459 `#[allow]`
-attributes, none with a reason, and no `#[expect]` (R35); about 58 `pub`/`pub(crate)`
-functions take a `bool` parameter, not yet sorted into modes and data (R36); and 20 public
-`get_` getters (R37). All are grandfathered until touched. As of v5 (read 2026-11-24 at
-`79250ad48e`, from `ARCHITECTURE.md` only), Orbit's crate graph has an application tier
-(`orbit-core`) apart from composition (`orbit-cmd`) and a store crate that depends on the
-foundation alone, which is what R1, R2, R7 and R40 ask at crate level. Orbit has two
-foundation crates named `orbit-common` and `orbit-types`, which R43 permits only in the
-foundation. Orbit has not been measured inside its crates against R39, or at all against
-R41–R44. The repo these rules were drawn from is scribe (`codebases/scribe` at `1e1954d`),
-which was first restructured under ORB-27707 into four crates sorted by kind, the layout R45
-now rules out, and is being restructured again under ORB-27921 to its
-`docs/design/scribe/specs/architecture.md`; until that lands it breaks R7 and R45, keeps
-five in-process model calls against R46, and meets R41–R43 only in part.
+Known deviations in the exemplar itself, so adopters do not copy them: Orbit has no production private-inner validated newtype (R14) and validates identities with `validate_*(&str)` helpers; several Orbit crates declare `tempfile = "3"` directly although it is in `[workspace.dependencies]` (R9); `missing_docs` is allowed at most crate roots (R22); Orbit's `satisfies_dependency` is a `matches!` predicate rather than an exhaustive match (R27); Orbit gates none of the [adoptable lints](checks.md#adoptable-additions-beyond-orbits-baseline); and Orbit has no stream grep guard (R15): besides its logging subscriber, `orbit-exec` writes stderr from a signal handler and a debug tee, and `orbit-common` probes stderr for a terminal. As of v4 (measured 2026-10-28 at `7af1c6e74`), Orbit has 459 `#[allow]` attributes, none with a reason, and no `#[expect]` (R35); about 58 `pub`/`pub(crate)` functions take a `bool` parameter, not yet sorted into modes and data (R36); and 20 public `get_` getters (R37). All are grandfathered until touched. As of v5 (read 2026-11-24 at `79250ad48e`, from `ARCHITECTURE.md` only), Orbit's crate graph has an application tier (`orbit-core`) apart from composition (`orbit-cmd`) and a store crate that depends on the foundation alone, which is what R1, R2, R7 and R40 ask at crate level. Orbit has two foundation crates named `orbit-common` and `orbit-types`, which R43 permits only in the foundation. Orbit has not been measured inside its crates against R39, or at all against R41–R44. The repo these rules were drawn from is scribe (`codebases/scribe` at `1e1954d`), which was first restructured under ORB-27707 into four crates sorted by kind, the layout R45 now rules out, and is being restructured again under ORB-27921 to its `docs/design/scribe/specs/architecture.md`; until that lands it breaks R7 and R45, keeps five in-process model calls against R46, and meets R41–R43 only in part.

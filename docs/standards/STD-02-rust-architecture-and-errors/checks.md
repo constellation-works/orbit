@@ -1,7 +1,6 @@
 # Machine checks — STD-02 Rust architecture and errors
 
-The gate that enforces each rule in [STD-02](STD-02.md), or `review-only`. Ship a change
-with the gate its rule names, or say it is review-only.
+The gate that enforces each rule in [STD-02](STD-02.md), or `review-only`. Ship a change with the gate its rule names, or say it is review-only.
 
 | Rule | Gate |
 |---|---|
@@ -18,11 +17,13 @@ with the gate its rule names, or say it is review-only.
 | R40 | Dependency-direction check: the persistence unit imports no application unit, port or feature-rule unit (a crate edge once persistence is its own crate, R7). The naming of its API is review-only. |
 | R41 | review-only |
 | R42 | Dependency-direction check: the unit that defines a port does not import its implementation. Where the shapes live is review-only. |
-| R43 | Architecture-map check in the structure gate: fails when a workspace crate is absent from the architecture doc, when a top-level module (`src/<name>.rs` or `src/<name>/`, `tests` excluded) is absent from its crate's section, when a path the doc writes in code formatting does not exist, or when a crate root or top-level module lacks a first-line `//!` doc. The crate list is read from `cargo metadata`. Whether a unit's sentence matches its `//!` sentence, where new code is placed, and the naming clauses are review-only. |
+| R43 | Architecture-map check in the structure gate, a copyable script ([below](#architecture-map-check-r43)): fails when a workspace crate is absent from the architecture doc, when a top-level module (`src/<name>.rs` or `src/<name>/`, `tests` excluded) is absent from its crate's section, when a path the doc writes in code formatting does not exist, or when a crate root or top-level module lacks a first-line `//!` doc. The crate list is read from `cargo metadata`. Whether a unit's sentence matches its `//!` sentence, where new code is placed, and the naming clauses are review-only. |
 | R44 | Dependency-direction check: only the open and upgrade entry points import the legacy unit. Otherwise review-only. |
 | R45 | review-only; the unit map R43 requires lists one application unit per subject, and the dependency-direction check (R6) holds their order |
 | R46 | review-only; a project MAY add provider program and SDK crate names to its dependency-direction check |
 | R47 | review-only |
+| R48 | review-only |
+| R49 | review-only |
 | R8 | review-only (optionally `unreachable_pub = "warn"`, not in Orbit's baseline) |
 | R9 | review-only (Orbit does not gate it; see *Deviations* in [`STD-02.md`](STD-02.md#deviations)) |
 | R10 | review-only; an optional grep for `.contains(` on `stderr`, error `to_string()` or message values in classification code is a useful review aid |
@@ -33,6 +34,8 @@ with the gate its rule names, or say it is review-only.
 | R36 | Adoptable lint `clippy::fn_params_excessive_bools` with `max-fn-params-bools = 1` catches two or more `bool`s on one function; a single mode `bool` is review-only (at `0` the lint also fires on setters and other data `bool`s) |
 | R37 | Default-on `clippy::wrong_self_convention`, `clippy::len_without_is_empty` and `clippy::should_implement_trait` (+ `-D warnings`) catch part of it; the rest is review-only |
 | R38 | Default-on `clippy::ptr_arg` and `clippy::from_over_into`; adoptable `clippy::clone_on_ref_ptr`, `clippy::rc_buffer`, `clippy::needless_pass_by_value`; clones that only end a borrow are review-only |
+| R51 | `clippy::too_many_arguments` at warn, with `too-many-arguments-threshold = 7` in `clippy.toml` |
+| R52 | review-only |
 | R26 | review-only; a unit test per error constructor can assert that the resolved inputs appear in the message |
 | R27 | Adoptable lints `clippy::wildcard_enum_match_arm` and `clippy::match_wildcard_for_single_variants` (see [Adoptable additions](#adoptable-additions-beyond-orbits-baseline)); not in Orbit's baseline |
 | R28 | A load-time test per bounded key (an out-of-range value is refused at load, naming the key); adoptable lints `clippy::cast_possible_truncation`, `clippy::cast_sign_loss`, `clippy::cast_possible_wrap` for the `as` ban; not in Orbit's baseline |
@@ -46,6 +49,7 @@ with the gate its rule names, or say it is review-only.
 | R16 | Round-trip tests on persisted fixtures (old document deserializes; removed key warns; write → read → write is byte-stable); grep ban on `serde(default = "…now")` |
 | R17 | Retired-path guard in the dependency-direction check; otherwise review-only |
 | R18 | review-only |
+| R50 | review-only |
 | R19 | Orphan-module check (every `src/**/tests/*.rs` declared in its `tests/mod.rs`) |
 | R20 | review-only |
 | R21 | review-only |
@@ -55,8 +59,7 @@ with the gate its rule names, or say it is review-only.
 
 ## Lint baseline (R13, R15, R22)
 
-This is Orbit's complete `[workspace.lints]` table, copied from `codebases/orbit/Cargo.toml`
-(lines 44–55) as of 2026-09-26 — not a subset. In a workspace root `Cargo.toml`:
+This is Orbit's complete `[workspace.lints]` table, copied from `codebases/orbit/Cargo.toml` (lines 44–55) as of 2026-09-26 — not a subset. In a workspace root `Cargo.toml`:
 
 ```toml
 # Workspace-wide lint config. Each crate opts in via `[lints] workspace = true`.
@@ -80,12 +83,9 @@ and in every member's `Cargo.toml`:
 workspace = true
 ```
 
-For a single-crate project, put the same keys in the package `Cargo.toml` as
-`[lints.clippy]` and `[lints.rust]`. `await_holding_lock` is STD-03 territory; it is kept
-here because it is part of the same table.
+For a single-crate project, put the same keys in the package `Cargo.toml` as `[lints.clippy]` and `[lints.rust]`. `await_holding_lock` is STD-03 territory; it is kept here because it is part of the same table.
 
-Crate-root attributes that complete the baseline (from `crates/orbit-common/src/lib.rs` and
-`crates/orbit-cli/src/main.rs`):
+Crate-root attributes that complete the baseline (from `crates/orbit-common/src/lib.rs` and `crates/orbit-cli/src/main.rs`):
 
 ```rust
 // Library crates / non-output modules: printing is an error, not a warning.
@@ -94,21 +94,9 @@ Crate-root attributes that complete the baseline (from `crates/orbit-common/src/
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 ```
 
-In a new binary, deny the print lints crate-wide too and have the one output module write
-through locked handles (`writeln!(io::stdout().lock(), …)`) that return `io::Result`. A
-closed pipe then arrives as an `io::ErrorKind::BrokenPipe` value the output layer maps to a
-silent exit 0 (STD-01 §R13), so the binary needs neither a scoped print allow nor a
-broken-pipe panic hook. Because clippy's print lints do not see those `writeln!` calls, pair
-them with the stream grep guard below. Orbit instead allows printing crate-wide in
-`main.rs` and allows `missing_docs` at 15 of 17 crate roots, so in practice `missing_docs`
-is enforced only in `orbit-config` and `orbit-web`. A new repo keeps `missing_docs` on from
-the start. Crate-root integration tests (`tests/*.rs`) need their own
-`#![allow(clippy::expect_used, clippy::unwrap_used)]`.
+In a new binary, deny the print lints crate-wide too and have the one output module write through locked handles (`writeln!(io::stdout().lock(), …)`) that return `io::Result`. A closed pipe then arrives as an `io::ErrorKind::BrokenPipe` value the output layer maps to a silent exit 0 (STD-01 §R13), so the binary needs neither a scoped print allow nor a broken-pipe panic hook. Because clippy's print lints do not see those `writeln!` calls, pair them with the stream grep guard below. Orbit instead allows printing crate-wide in `main.rs` and allows `missing_docs` at 15 of 17 crate roots, so in practice `missing_docs` is enforced only in `orbit-config` and `orbit-web`. A new repo keeps `missing_docs` on from the start. Crate-root integration tests (`tests/*.rs`) need their own `#![allow(clippy::expect_used, clippy::unwrap_used)]`.
 
-These attributes are Orbit's as written. Since v4, R35 wants a reason on each: write
-`#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used, reason = "…"))]`, or
-drop the attributes and set `allow-unwrap-in-tests = true` and `allow-expect-in-tests = true`
-in `clippy.toml`.
+These attributes are Orbit's as written. Since v4, R35 wants a reason on each: write `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used, reason = "…"))]`, or drop the attributes and set `allow-unwrap-in-tests = true` and `allow-expect-in-tests = true` in `clippy.toml`.
 
 CI and the pre-handoff gate run:
 
@@ -119,10 +107,7 @@ cargo clippy --workspace --all-targets -- -D warnings   # single crate: drop --w
 
 ## Adoptable additions (beyond Orbit's baseline)
 
-These lints are **not** in Orbit's table and are not part of R22's required baseline. They
-mechanize R27 and R28 for a repo that wants the gate; each name was checked with
-`cargo clippy --explain <lint>` on clippy 0.1.96. Add them to the same
-`[workspace.lints.clippy]` table (single crate: `[lints.clippy]`):
+These lints are **not** in Orbit's table and are not part of R22's required baseline. They mechanize R27 and R28 for a repo that wants the gate; each name was checked with `cargo clippy --explain <lint>` on clippy 0.1.96. Add them to the same `[workspace.lints.clippy]` table (single crate: `[lints.clippy]`):
 
 ```toml
 # STD-02 §R27 — no wildcard arm on an enum match (restriction group; also fires on
@@ -160,8 +145,7 @@ if grep -rnE --include='*.rs' 'deny\(warnings\)' crates; then  # single crate: s
 fi
 ```
 
-These were checked with `cargo clippy` 0.1.98 on 2026-10-28 (`max-fn-params-bools = 0`
-fired on a `set_on(&mut self, on: bool)` setter, hence `1`).
+These were checked with `cargo clippy` 0.1.98 on 2026-10-28 (`max-fn-params-bools = 0` fired on a `set_on(&mut self, on: bool)` setter, hence `1`).
 
 And a grep ban for R16's "no fabricated timestamps", suitable for the same CI job:
 
@@ -173,39 +157,25 @@ fi
 
 ## Review checklist (rules no lint can check)
 
-Use this when reviewing a Rust diff against STD-02, after the gates above are green. Check
-only the changed lines and what they break.
+Use this when reviewing a Rust diff against STD-02, after the gates above are green. Check only the changed lines and what they break.
 
-- **Failure paths.** A new error path names verified causes and resolved inputs (R26); a
-  `map_err(|_| …)` that drops the source, or a `String` error in library code (R10); a
-  panic reachable from input (R13); unknown read as 0, empty or success (R29); one bad item
-  aborting a batch (R32); a side effect before validation (R34).
-- **Types and shapes.** A wildcard arm on a domain enum (R27); a bare `String` id that
-  crosses a function boundary (R14); a persisted shape changed incompatibly or a fabricated
-  default (R16); a `pub` that only a test needed (R8, R19).
-- **Signatures and names.** A mode `bool` on a shared function (R36); `get_`, a mismatched
-  `as_`/`to_`/`into_`, or a `Manager`/`Util` name (R37); `&String`/`&Vec<T>`, a clone that
-  only ends a borrow, `Rc`/`RefCell` in a shared signature, or a sentinel for absence
-  (R38).
+- **Failure paths.** A new error path names verified causes and resolved inputs (R26); a `map_err(|_| …)` that drops the source, or a `String` error in library code (R10); a panic reachable from input (R13); unknown read as 0, empty or success (R29); one bad item aborting a batch (R32); a side effect before validation (R34).
+- **Types and shapes.** A wildcard arm on a domain enum (R27); a bare `String` id that crosses a function boundary (R14); a persisted shape changed incompatibly or a fabricated default (R16); a `pub` that only a test needed (R8, R19).
+- **Signatures and names.** A mode `bool` on a shared function (R36); `get_`, a mismatched `as_`/`to_`/`into_`, or a `Manager`/`Util` name (R37); `&String`/`&Vec<T>`, a clone that only ends a borrow, `Rc`/`RefCell` in a shared signature, or a sentinel for absence (R38).
 - **Suppressions.** A new `#[allow]`, or an `#[expect]` without a reason (R35).
 - **Structure.** A new edge against the layer order (R1–R6); logic in a surface (R2, R24).
 
-Report each finding as `STD-02 §Rn — <what is wrong> — <path>:<line>` with the smallest
-code change that fixes it, grouped by severity:
+Report each finding as `STD-02 §Rn — <what is wrong> — <path>:<line>` with the smallest code change that fixes it, grouped by severity:
 
-- **Must fix:** a bug, a reachable panic, a broken persisted or public contract, or a MUST
-  rule broken by new code.
-- **Should fix:** a SHOULD rule or a MUST rule's cost that is real but not yet a bug (a
-  worse error message, a harder test).
+- **Must fix:** a bug, a reachable panic, a broken persisted or public contract, or a MUST rule broken by new code.
+- **Should fix:** a SHOULD rule or a MUST rule's cost that is real but not yet a bug (a worse error message, a harder test).
 - **Consider:** naming and polish, and anything that looks deliberate; say the trade-off.
 
-Group repeats into one finding with every location. Keep the list proportionate, and name
-what the change already does well so the author knows what to keep.
+Group repeats into one finding with every location. Keep the list proportionate, and name what the change already does well so the author knows what to keep.
 
 ## Stream grep guard (R15)
 
-Only the output module may name the standard streams. A minimal guard, assuming that module
-is `crates/<tool>/src/output/` (single crate: `src/output/`):
+Only the output module may name the standard streams. A minimal guard, assuming that module is `crates/<tool>/src/output/` (single crate: `src/output/`):
 
 ```sh
 #!/usr/bin/env bash
@@ -219,24 +189,33 @@ hits=$(grep -rnE --include='*.rs' --exclude-dir=tests "$PATTERN" crates \
 if [[ -n "$hits" ]]; then echo "$hits" >&2; echo "std streams belong to $OUTPUT_DIR only" >&2; exit 1; fi
 ```
 
-The constellation Rust CLI template (`constellation-works/rust-cli-template`, checked out
-at `codebases/rust-cli-template`) ships the full version as `scripts/check-terminal-guard.sh`. List any justified
-exception (R15) as an extra `grep -v` with a comment giving its reason.
+The constellation Rust CLI template (`constellation-works/rust-cli-template`, checked out at `codebases/rust-cli-template`) ships the full version as `scripts/check-terminal-guard.sh`. List any justified exception (R15) as an extra `grep -v` with a comment giving its reason.
+
+## Architecture-map check (R43)
+
+The gate is one script, run in the structure gate beside the dependency-direction check. Copy `scripts/check-architecture-map.sh` from the constellation Rust CLI template (`constellation-works/rust-cli-template`, checked out at `codebases/rust-cli-template`; landed in constellation-works/rust-cli-template#37, `7a018d7`). It names no crate and reads the crate list from `cargo metadata`, so the copy needs no edit and a new crate or module fails the gate until the doc names it. It needs `cargo` and `python3`.
+
+It fails, naming the file and the unit, when:
+
+| Failure | What the script reads |
+|---|---|
+| A workspace crate has no section | A `##` heading in `ARCHITECTURE.md` whose first code span is the crate's name |
+| A top-level module is not in its crate's section | `src/<name>.rs` or `src/<name>/` (`tests`, `bin` and the crate roots excluded) must appear as a top-level entry of the section's file tree, or as a code span `<name>.rs` or `<name>/` |
+| A documented path does not exist | Every code span that looks like a path (it has a `/` or a file extension) and every entry of a crate section's fenced file tree. A span resolves from the repository root, from the section's crate, or as a path suffix inside it |
+| A unit has no doc comment | Each crate root (lib or bin target) and each top-level module file (`<name>.rs`, else `<name>/mod.rs`) begins with a `//!` line |
+
+Write the architecture doc for it:
+
+- A path in code formatting is read as a claim that the path exists. Write a path that does not exist (a module the project chose not to have, a planned file) in plain prose, not in backticks. Placeholders (`<..>`, `$`, `*`, `…`) are skipped.
+- A crate section's fenced block is its file tree under `src/`; indentation gives the nesting.
+
+Exit status: 0 when the map matches, 1 with one line per problem, 2 when `cargo` or `python3` is missing or `cargo metadata` fails. A repository with no `crates/*/Cargo.toml` passes with nothing checked, so a single-crate project (*Scaling* in [STD-02](STD-02.md)) adapts the crate discovery before it relies on the gate. The template's tests for the script (`crates/tmpl-cli/tests/script.rs`) cover the four failures.
 
 ## Dependency-direction check (R1–R7, R17)
 
-**Workspace, from `cargo metadata`.** Port the shape of
-`codebases/orbit/scripts/check-dependency-direction.sh`: an explicit allowlist of internal
-dependencies per crate, read from `cargo metadata --no-deps`, that fails on (a) a workspace
-crate with no policy entry, (b) any internal edge not on that crate's list, and (c) a
-dev-only edge used as a normal dependency. Keep the layer table in the architecture doc and
-the allowlist in the same change (R6). Orbit additionally pins a few crates with a
-manifest-parsing test (`crates/orbit-mcp/tests/dep_boundary.rs`); the script alone is
-sufficient. This variant needs cargo and a JSON parser.
+**Workspace, from `cargo metadata`.** Port the shape of `codebases/orbit/scripts/check-dependency-direction.sh`: an explicit allowlist of internal dependencies per crate, read from `cargo metadata --no-deps`, that fails on (a) a workspace crate with no policy entry, (b) any internal edge not on that crate's list, and (c) a dev-only edge used as a normal dependency. Keep the layer table in the architecture doc and the allowlist in the same change (R6). Orbit additionally pins a few crates with a manifest-parsing test (`crates/orbit-mcp/tests/dep_boundary.rs`); the script alone is sufficient. This variant needs cargo and a JSON parser.
 
-**Workspace, from the manifests alone.** For a small workspace, or a fast CI lane that runs
-before anything compiles, read the non-dev dependency tables straight out of each
-`crates/*/Cargo.toml` with `awk`. It needs no build, no network and no `jq`:
+**Workspace, from the manifests alone.** For a small workspace, or a fast CI lane that runs before anything compiles, read the non-dev dependency tables straight out of each `crates/*/Cargo.toml` with `awk`. It needs no build, no network and no `jq`:
 
 ```sh
 #!/usr/bin/env bash
@@ -270,14 +249,9 @@ done
 exit "$fail"
 ```
 
-It does not see dependencies declared in dotted-key form (`dependencies.foo = …`) or
-inside an inline table on one line; keep manifests in the conventional one-table-per-section
-shape, or use the `cargo metadata` variant. Module bans (the single-crate block below) can
-follow in the same script, as the Rust CLI template's
-`scripts/check-dependency-direction.sh` does.
+It does not see dependencies declared in dotted-key form (`dependencies.foo = …`) or inside an inline table on one line; keep manifests in the conventional one-table-per-section shape, or use the `cargo metadata` variant. Module bans (the single-crate block below) can follow in the same script, as the Rust CLI template's `scripts/check-dependency-direction.sh` does.
 
-**Single crate.** Layers are modules, so the check is a set of `rg` bans over
-`src/`, excluding test code. A minimal version for `domain` / `app` / `cli` layers:
+**Single crate.** Layers are modules, so the check is a set of `rg` bans over `src/`, excluding test code. A minimal version for `domain` / `app` / `cli` layers:
 
 ```sh
 #!/usr/bin/env bash
@@ -296,21 +270,13 @@ for retired in src/legacy; do [[ -e "$retired" ]] && { echo "retired path exists
 exit "$fail"
 ```
 
-Wire it into the same CI job as clippy. Orbit's `orbit-core` and `orbit-store` blocks in its
-script (lines 183–234) are the multi-module version of exactly this.
+Wire it into the same CI job as clippy. Orbit's `orbit-core` and `orbit-store` blocks in its script (lines 183–234) are the multi-module version of exactly this.
 
 ## Clippy disallowed paths (R3, R5, R6)
 
-Clippy resolves a disallowed path however the code spells it. A grep misses `use std::env;`
-followed by `env::var(..)`, and this list catches it. So the file, process and environment
-boundaries are `clippy.toml` entries, and the dependency-direction script keeps only the crate
-and module rules and `std::net`. The order is the R6 ladder: a crate edge where one exists, else
-item visibility, else an entry here, and a grep only for what none of those can state.
+Clippy resolves a disallowed path however the code spells it. A grep misses `use std::env;` followed by `env::var(..)`, and this list catches it. So the file, process and environment boundaries are `clippy.toml` entries, and the dependency-direction script keeps only the crate and module rules and `std::net`. The order is the R6 ladder: a crate edge where one exists, else item visibility, else an entry here, and a grep only for what none of those can state.
 
-Copy this baseline to the repository's `clippy.toml`. Replace the unit names in each reason with
-the project's own; Orbit's `clippy.toml` names `orbit_common::fs::io` and
-`orbit_common::process::run_bounded` for the same shapes. The gate is
-`cargo clippy --all-targets -- -D warnings`.
+Copy this baseline to the repository's `clippy.toml`. Replace the unit names in each reason with the project's own; Orbit's `clippy.toml` names `orbit_common::fs::io` and `orbit_common::process::run_bounded` for the same shapes. The gate is `cargo clippy --all-targets -- -D warnings`.
 
 ```toml
 # clippy.toml — STD-02 §R3, §R5, §R6: the file, process and environment boundary, resolved by Clippy.
@@ -355,27 +321,19 @@ disallowed-methods = [
 ]
 ```
 
-A module that is allowed one of these carries a module-level expectation with its reason, on the
-module that is the adapter for that boundary (R35). The compiler warns once the lint stops firing,
-and `-D warnings` fails the gate, so the exemption cannot outlive its use:
+A module that is allowed one of these carries a module-level expectation with its reason, on the module that is the adapter for that boundary (R35). The compiler warns once the lint stops firing, and `-D warnings` fails the gate, so the exemption cannot outlive its use:
 
 ```rust
 #![expect(clippy::disallowed_methods, reason = "this module is the file adapter; every other module goes through it")]
 ```
 
-Use `clippy::disallowed_types` for the type entries. A project on the `cw-kit` crates (`cw-fs`,
-`cw-app`, `cw-supervise`) bans these paths with no exemption, because the kit is the only code
-that names them.
+Use `clippy::disallowed_types` for the type entries. A project on the `cw-kit` crates (`cw-fs`, `cw-app`, `cw-supervise`) bans these paths with no exemption, because the kit is the only code that names them.
 
-Existing partial lists: `codebases/orbit/clippy.toml`, `codebases/nebula/clippy.toml` and
-`codebases/orbit-graph/clippy.toml` each keep some of these paths beside their own rules.
+Existing partial lists: `codebases/orbit/clippy.toml`, `codebases/nebula/clippy.toml` and `codebases/orbit-graph/clippy.toml` each keep some of these paths beside their own rules.
 
 ## cargo-deny (R23)
 
-Install a pinned `cargo-deny`, check in `deny.toml`, and run `cargo deny check` in CI. The
-policy sections below are copied from `codebases/orbit/deny.toml` (subset: Orbit's
-`ignore` entry and license comments are omitted — start with an empty `ignore` and add the
-licenses your tree actually needs):
+Install a pinned `cargo-deny`, check in `deny.toml`, and run `cargo deny check` in CI. The policy sections below are copied from `codebases/orbit/deny.toml` (subset: Orbit's `ignore` entry and license comments are omitted — start with an empty `ignore` and add the licenses your tree actually needs):
 
 ```toml
 [advisories]
@@ -397,5 +355,4 @@ unknown-registry = "deny"
 unknown-git = "deny"
 ```
 
-A sandboxed or offline runner needs a writable advisory DB; Orbit's
-`scripts/cargo-deny.sh` shows the wrapper (`--disable-fetch`, custom `db-path`).
+A sandboxed or offline runner needs a writable advisory DB; Orbit's `scripts/cargo-deny.sh` shows the wrapper (`--disable-fetch`, custom `db-path`).

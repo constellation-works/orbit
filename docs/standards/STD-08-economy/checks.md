@@ -1,7 +1,6 @@
 # Machine checks — STD-08 Economy
 
-The gate that enforces each rule in [STD-08](STD-08.md), or `review-only`. Ship a change
-with the gate its rule names, or say it is review-only.
+The gate that enforces each rule in [STD-08](STD-08.md), or `review-only`. Ship a change with the gate its rule names, or say it is review-only.
 
 | Rule | Gate |
 |---|---|

@@ -113,59 +113,9 @@ paragraph_check() {
         END { flush() }' "$1"
 }
 
-# STD-10 applies only to adopters. Inspect each instruction name without following
-# directory symlinks; provider symlinks must resolve to the local source.
-if [ -d STD-10-agent-instruction-files ]; then
-  # Walk the files git knows (tracked, or untracked and not ignored) when git is present: other
-  # worktrees, node_modules and target trees can hold instruction copies that are not this repository's.
-  findings=$(cd ../.. && {
-    repository_files
-  } | while IFS= read -r file; do
-    not_excluded "$file" || continue
-    case "${file##*/}" in (AGENTS.md | CLAUDE.md | GEMINI.md) ;; (*) continue ;; esac
-    [ -f "$file" ] || [ -L "$file" ] || continue
-    dir=${file%/*}; name=${file##*/}; source=$dir/AGENTS.md
-    if [ "$name" != AGENTS.md ]; then
-      if [ ! -f "$source" ] || [ -L "$source" ]; then
-        printf '%s: STD-10 §R1: source files 0, required 1\n' "$file"
-      elif [ -L "$file" ]; then
-        if [ ! "$file" -ef "$source" ]; then
-          printf '%s: STD-10 §R1: links to source 0, required 1\n' "$file"
-        fi
-      elif [ "$(head -n 1 "$file" | tr -d "\r")" != '@AGENTS.md' ]; then
-        printf '%s: STD-10 §R1: imports 0, required 1\n' "$file"
-      fi
-    elif [ -L "$file" ]; then
-      printf '%s: STD-10 §R1: regular source files 0, required 1\n' "$file"
-    fi
-    # Inspect source and real import files, but never count a symlink twice.
-    if [ ! -L "$file" ] && [ -f "$file" ]; then
-      paragraph_check "$file" 10 R8
-    fi
-    if [ "$name" = AGENTS.md ] && [ -f "$file" ] && [ ! -L "$file" ]; then
-      bytes=$(wc -c < "$file")
-      for provider in "$dir/CLAUDE.md" "$dir/GEMINI.md"; do
-        if [ -f "$provider" ] && [ ! -L "$provider" ] &&
-           [ "$(head -n 1 "$provider" | tr -d "\r")" = '@AGENTS.md' ]; then
-          # Each provider loads only its own import; check each stack separately.
-          total=$((bytes + $(wc -c < "$provider")))
-          limit=4000; [ "$dir" = . ] && limit=8000
-          [ "$total" -le "$limit" ] || printf '%s + %s: STD-10 §R10: %d bytes, limit %d\n' "$file" "$provider" "$total" "$limit"
-        fi
-      done
-      limit=4000; [ "$dir" = . ] && limit=8000
-      [ "$bytes" -le "$limit" ] || printf '%s: STD-10 §R10: %d bytes, limit %d\n' "$file" "$bytes" "$limit"
-    fi
-  done)
-  if [ -n "$findings" ]; then
-    printf '%s\n' "$findings" >&2
-    instruction_status=1
-  fi
-fi
-
-# check_links FILE SKILL_ROOT — a markdown link resolves against FILE's directory only; a backticked
+# check_links FILE CONTEXT_ROOT — a markdown link resolves against FILE's directory only; a backticked
 # token is checked as a repository path only when its first segment exists as a directory beside
-# FILE, at the repository root, or at SKILL_ROOT (the directory holding SKILL.md).
+# FILE, at the repository root, or at CONTEXT_ROOT (the directory holding the context file).
 check_links() {
   awk '
     { line=$0; t=line; sub(/^[ \t]*/, "", t)
@@ -194,8 +144,60 @@ check_links() {
   done
 }
 
-# STD-11 uses the same git-known walk and exclusions as STD-10.
-if [ -d STD-11-agent-skills ]; then
+# A standard's slug can change; the id is stable, so locate any adopted STD-11 directory by id.
+std11_dir=""
+for candidate in STD-11-*/; do
+  [ -d "$candidate" ] || continue
+  std11_dir=${candidate%/}
+  break
+done
+if [ -n "$std11_dir" ]; then
+  # Check instruction files against STD-11 R20, R11, R25 and R17.
+  findings=$(cd ../.. && repository_files | while IFS= read -r file; do
+    not_excluded "$file" || continue
+    case "${file##*/}" in (AGENTS.md | CLAUDE.md | GEMINI.md) ;; (*) continue ;; esac
+    [ -f "$file" ] || [ -L "$file" ] || continue
+    dir=${file%/*}; name=${file##*/}; source=$dir/AGENTS.md
+    if [ "$name" != AGENTS.md ]; then
+      if [ ! -f "$source" ] || [ -L "$source" ]; then
+        printf '%s: STD-11 §R20: source files 0, required 1\n' "$file"
+      elif [ -L "$file" ]; then
+        if [ ! "$file" -ef "$source" ]; then
+          printf '%s: STD-11 §R20: links to source 0, required 1\n' "$file"
+        fi
+      elif [ "$(head -n 1 "$file" | tr -d "\r")" != '@AGENTS.md' ]; then
+        printf '%s: STD-11 §R20: imports 0, required 1\n' "$file"
+      fi
+    elif [ -L "$file" ]; then
+      printf '%s: STD-11 §R20: regular source files 0, required 1\n' "$file"
+    fi
+    if [ ! -L "$file" ] && [ -f "$file" ]; then
+      paragraph_check "$file" 11 R11
+    fi
+    check_links "$file" .
+    if [ "$name" = AGENTS.md ] && [ -f "$file" ] && [ ! -L "$file" ]; then
+      bytes=$(wc -c < "$file")
+      for provider in "$dir/CLAUDE.md" "$dir/GEMINI.md"; do
+        if [ -f "$provider" ] && [ ! -L "$provider" ] &&
+           [ "$(head -n 1 "$provider" | tr -d "\r")" = '@AGENTS.md' ]; then
+          # Each provider loads only its own import; check each stack separately.
+          total=$((bytes + $(wc -c < "$provider")))
+          limit=4000; [ "$dir" = . ] && limit=8000
+          [ "$total" -le "$limit" ] || printf '%s + %s: STD-11 §R25: %d bytes, limit %d\n' "$file" "$provider" "$total" "$limit"
+        fi
+      done
+      limit=4000; [ "$dir" = . ] && limit=8000
+      [ "$bytes" -le "$limit" ] || printf '%s: STD-11 §R25: %d bytes, limit %d\n' "$file" "$bytes" "$limit"
+    fi
+  done)
+  if [ -n "$findings" ]; then
+    printf '%s\n' "$findings" >&2
+    instruction_status=1
+  fi
+fi
+
+# STD-11 uses the same git-known walk and exclusions for skill checks.
+if [ -n "$std11_dir" ]; then
   findings=$(cd ../.. && repository_files | while IFS= read -r skill; do
     case "$skill" in (*/SKILL.md) ;; (*) continue ;; esac
     [ -f "$skill" ] && not_excluded "$skill" || continue

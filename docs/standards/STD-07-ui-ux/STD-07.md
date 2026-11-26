@@ -4,167 +4,74 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Eight principles and the normative rules that serve them, for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 tags: [standard, ui, ux, design]
 version: 20
-created: 2026-11-09
-updated: 2026-11-25
+created_date: 2026-11-09
+updated_date: 2026-11-25
 last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
 
 # UI and UX
 
-These rules cover how an operator-facing screen is laid out, worded and kept calm. They
-are distilled from the corrections the owner made repeatedly between September and November
-2026, across the Orbit dashboard and website, orbit-office and constellation-site. Each rule
-names a correction that came back at least once after it was first fixed. The aim is that a
-reviewer can catch it before the owner sees it.
+These rules cover how an operator-facing screen is laid out, worded and kept calm. They are distilled from the corrections the owner made repeatedly between September and November 2026, across the Orbit dashboard and website, orbit-office and constellation-site. Each rule names a correction that came back at least once after it was first fixed. The aim is that a reviewer can catch it before the owner sees it.
 
-The house reference is a tool that says one thing per region and nothing it doesn't need
-to: "simple purpose, simple design" (ORB-21727). When a rule and a design token disagree,
-the project's design tokens give the values, and these rules give the relationships those
-values must keep.
+The house reference is a tool that says one thing per region and nothing it doesn't need to: "simple purpose, simple design" (ORB-21727). When a rule and a design token disagree, the project's design tokens give the values, and these rules give the relationships those values must keep.
 
-This standard is a directory. This file holds the binding text. Beside it,
-[`why.md`](why.md) gives the corrections behind each rule, [`checks.md`](checks.md) the
-gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and
-[`CHANGELOG.md`](CHANGELOG.md) what changed in each version.
+This standard is a directory. This file holds the binding text. Beside it, [`why.md`](why.md) gives the corrections behind each rule, [`checks.md`](checks.md) the gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each version.
 
 ## Principles
 
-Every rule below serves one of these principles. When no rule covers a case, judge it by
-them and cite the principle (`STD-07 §P3`) the way a rule is cited. A rule is the specific
-decision: where a principle seems to disagree with one, follow the rule and file a
-`standards` friction.
+Every rule below serves one of these principles. When no rule covers a case, judge it by them and cite the principle (`STD-07 §P3`) the way a rule is cited. A rule is the specific decision: where a principle seems to disagree with one, follow the rule and file a `standards` friction.
 
-- **P1. One thing, once, in few words.** Every element earns its place by being acted on.
-  Each fact appears once, under the shortest clear label. Explanation waits behind an info
-  icon, and a drill-down adds only what its parent lacks. (R13–R16, R29, R32, R41)
-- **P2. Nothing moves unless the operator moved it.** A screen is calm because it is stable,
-  not because it is sparse. Loading, a status change, a message or a resize never shifts a
-  neighbour, swaps the page the operator is on, or changes how a familiar control looks.
-  (R5, R21, R37, R39, R43)
-- **P3. Even edges are correctness, not polish.** An odd gap, a ragged edge or an orphan is
-  a defect. Siblings share spacing, side-by-side panels share edges, rows share one grid, and
-  one kind of element has one look. When items do not fit evenly, remove the weakest instead
-  of squeezing one in. (R1–R3, R6, R27, R28, R30, R31, R40)
-- **P4. Every value is derived, never guessed.** A size, width, colour or gap comes from the
-  content, from the project's spacing and type scales, or from its theme. A number chosen to
-  make one view look right is a defect that has not surfaced yet. (R8, R11, R30, R35, R42)
-- **P5. Use the room there is.** Width is for use: a second column when the window is wide, a
-  row of controls that runs on before it wraps, prose as wide as the table beside it. When it
-  is narrow, drop the least important thing; never wrap a header, scroll sideways or leave
-  half the page blank. Dense is fine while it stays even (P3) and stable (P2). (R4, R23, R28,
-  R38, R39, R42)
-- **P6. The answer first, the evidence one step away, both honest.** A view leads with what
-  the operator came for, a summary sits with its detail, and the detail opens on demand. A
-  chart is a claim: it agrees with its data and with any ranking beside it. (R14, R17–R19,
-  R29, R34–R36)
-- **P7. State lives on the thing.** Running, stuck, repairing and idle show on the item as a
-  dot, pill or tint, readable at a glance. Idle is still visible, empty says why, and a
-  finished action tidies up after itself. (R10, R20, R22)
-- **P8. Corrections become structure.** A new view starts from an approved mock, each owner
-  correction becomes a rule, and a rule becomes a machine check wherever a machine can see
-  the defect. (R25, R26)
+- **P1. One thing, once, in few words.** Every element earns its place by being acted on. Each fact appears once, under the shortest clear label. Explanation waits behind an info icon, and a drill-down adds only what its parent lacks. (R13–R16, R29, R32, R41)
+- **P2. Nothing moves unless the operator moved it.** A screen is calm because it is stable, not because it is sparse. Loading, a status change, a message or a resize never shifts a neighbour, swaps the page the operator is on, or changes how a familiar control looks. (R5, R21, R37, R39, R43)
+- **P3. Even edges are correctness, not polish.** An odd gap, a ragged edge or an orphan is a defect. Siblings share spacing, side-by-side panels share edges, rows share one grid, and one kind of element has one look. When items do not fit evenly, remove the weakest instead of squeezing one in. (R1–R3, R6, R27, R28, R30, R31, R40)
+- **P4. Every value is derived, never guessed.** A size, width, colour or gap comes from the content, from the project's spacing and type scales, or from its theme. A number chosen to make one view look right is a defect that has not surfaced yet. (R8, R11, R30, R35, R42)
+- **P5. Use the room there is.** Width is for use: a second column when the window is wide, a row of controls that runs on before it wraps, prose as wide as the table beside it. When it is narrow, drop the least important thing; never wrap a header, scroll sideways or leave half the page blank. Dense is fine while it stays even (P3) and stable (P2). (R4, R23, R28, R38, R39, R42)
+- **P6. The answer first, the evidence one step away, both honest.** A view leads with what the operator came for, a summary sits with its detail, and the detail opens on demand. A chart is a claim: it agrees with its data and with any ranking beside it. (R14, R17–R19, R29, R34–R36)
+- **P7. State lives on the thing.** Running, stuck, repairing and idle show on the item as a dot, pill or tint, readable at a glance. Idle is still visible, empty says why, and a finished action tidies up after itself. (R10, R20, R22)
+- **P8. Corrections become structure.** A new view starts from an approved mock, each owner correction becomes a rule, and a rule becomes a machine check wherever a machine can see the defect. (R25, R26)
 
 ## Rules
 
 ### Layout and alignment
 
-- **R1.** Sibling elements of the same kind MUST share padding and gaps: rows, cards,
-  buttons, headings and the space after them. No element carries padding beyond what its
-  content needs, and removing or adding one sibling MUST NOT leave an odd gap. A container's
-  padding is symmetric: top equals bottom, and left equals right.
-- **R2.** Panels placed side by side MUST share their top and bottom edges and inner insets.
-  A stated split (such as 50:50, or "the same width as" a named panel) is exact. No panel
-  leaves a ragged end or an empty gutter beside its neighbour.
-- **R3.** Rows in a repeated list or grid MUST share one column grid, so that chips, cells,
-  badges and actions line up across rows and across groups.
-- **R4.** Content MUST stay inside its container: text wraps instead of overflowing, no
-  element draws over another, and the page never scrolls sideways at any supported width
-  down to 375px.
-- **R5.** The layout MUST NOT shift when content appears, changes or disappears. That covers
-  text that loads in, a status that changes, and a transient message. Neighbouring regions
-  never move or reflow, and creating or editing an item opens in a modal or popover, not by
-  pushing the page down.
+- **R1.** Sibling elements of the same kind MUST share padding and gaps: rows, cards, buttons, headings and the space after them. No element carries padding beyond what its content needs, and removing or adding one sibling MUST NOT leave an odd gap. A container's padding is symmetric: top equals bottom, and left equals right.
+- **R2.** Panels placed side by side MUST share their top and bottom edges and inner insets. A stated split (such as 50:50, or "the same width as" a named panel) is exact. No panel leaves a ragged end or an empty gutter beside its neighbour.
+- **R3.** Rows in a repeated list or grid MUST share one column grid, so that chips, cells, badges and actions line up across rows and across groups.
+- **R4.** Content MUST stay inside its container: text wraps instead of overflowing, no element draws over another, and the page never scrolls sideways at any supported width down to 375px.
+- **R5.** The layout MUST NOT shift when content appears, changes or disappears. That covers text that loads in, a status that changes, and a transient message. Neighbouring regions never move or reflow, and creating or editing an item opens in a modal or popover, not by pushing the page down.
 - **R6.** Peer controls MUST be the same kind of input and MUST match in rendered height, and selects MUST be no taller than the buttons beside them. Peer buttons MUST share equal rendered height—especially when adjacent, in the same row, or sharing the same underlying function, with stricter uniformity the closer they sit. Peer widths SHOULD aim for uniformity too, though to a lesser scrutiny and subject to content (R42). A button MUST NOT wrap onto extra lines to break peer height; when room runs out, keep readable type and shorten the label by content (R39) instead of shrinking type or leaving mismatched heights.
-- **R7.** Close, Back and panel-level toggles MUST sit at the top right of their panel,
-  beside the related header actions.
-- **R27.** A row of tiles, cards or stats MUST NOT leave an orphan: a lone item wrapped onto
-  a row of its own at any supported width. Choose a count that fills every row, use a grid
-  whose columns divide the count evenly at each breakpoint, or drop the weakest item. It is
-  better to remove one than to leave one out on its own.
-- **R28.** Blocks stacked in one column MUST share that column's width. A notice, a
-  paragraph or a header block narrower than the table or chart below it MUST NOT leave an
-  empty right-hand column. Widen it to the column, put a related block beside it (such as the
-  legend or a summary), or, for helper prose, move it behind an info icon (R13).
+- **R7.** Close, Back and panel-level toggles MUST sit at the top right of their panel, beside the related header actions.
+- **R27.** A row of tiles, cards or stats MUST NOT leave an orphan: a lone item wrapped onto a row of its own at any supported width. Choose a count that fills every row, use a grid whose columns divide the count evenly at each breakpoint, or drop the weakest item. It is better to remove one than to leave one out on its own.
+- **R28.** Blocks stacked in one column MUST share that column's width. A notice, a paragraph or a header block narrower than the table or chart below it MUST NOT leave an empty right-hand column. Widen it to the column, put a related block beside it (such as the legend or a summary), or, for helper prose, move it behind an info icon (R13).
 
-- **R30.** One kind of element MUST look the same wherever it appears. This covers a
-  progress or stage strip, a pill, a table, a stat tile and a panel header: each shares
-  height, weight, label size, margins and current-step treatment across views. Build it as
-  one shared component, never restyle it per view. Its labels never wrap. A label longer than
-  its slot is truncated with an ellipsis and shows the full text on hover and focus. A
-  duration goes beside the label or in that hover text.
+- **R30.** One kind of element MUST look the same wherever it appears. This covers a progress or stage strip, a pill, a table, a stat tile and a panel header: each shares height, weight, label size, margins and current-step treatment across views. Build it as one shared component, never restyle it per view. Its labels never wrap. A label longer than its slot is truncated with an ellipsis and shows the full text on hover and focus. A duration goes beside the label or in that hover text.
 
-- **R31.** A container MUST NOT sit inside another container unless the inner one marks a
-  real distinction: a different kind of content, a selectable item, or a state. A
-  disclosure's body, a section's prose or a lone block gets no second border or background
-  inside its card.
+- **R31.** A container MUST NOT sit inside another container unless the inner one marks a real distinction: a different kind of content, a selectable item, or a state. A disclosure's body, a section's prose or a lone block gets no second border or background inside its card.
 
-- **R33.** Secondary metadata about an item MUST go on its own line under the item's
-  primary label, aligned with that label, in a muted style. Aliases, crews, IDs and counts
-  do not run inline after the label. A badge that qualifies the label itself (such as
-  "single tier") stays beside it. An item with no metadata has no empty second line.
-- **R40.** Items in an inline list (ids, links, tags) MUST be separated the same way
-  everywhere: the separator sits directly after the preceding item, or after that item's
-  trailing icon, with no space before it, and a clearly visible gap follows it before the
-  next item. The gap does not depend on a space in a different font from the items. A
-  small icon beside an item (an info ⓘ, a status dot) sits close to it, no wider apart than
-  the standard icon gap. An enlarged tap or hover target may overlap the space around it
-  but MUST NOT add visible space.
+- **R33.** Secondary metadata about an item MUST go on its own line under the item's primary label, aligned with that label, in a muted style. Aliases, crews, IDs and counts do not run inline after the label. A badge that qualifies the label itself (such as "single tier") stays beside it. An item with no metadata has no empty second line.
+- **R40.** Items in an inline list (ids, links, tags) MUST be separated the same way everywhere: the separator sits directly after the preceding item, or after that item's trailing icon, with no space before it, and a clearly visible gap follows it before the next item. The gap does not depend on a space in a different font from the items. A small icon beside an item (an info ⓘ, a status dot) sits close to it, no wider apart than the standard icon gap. An enlarged tap or hover target may overlap the space around it but MUST NOT add visible space.
 - **R47.** A container's height MUST come from its content. A card, comment or panel in a stacked list ends where its content ends, with the same inner padding as its siblings (R1). The last item MUST NOT stretch to fill the height left over in its parent. A region whose job is to fill its parent (a scroll area, an editor, a plot) is exempt.
 - **R48.** Everything shown under a selected tab MUST belong to that tab. A panel that stays the same whichever tab is chosen MUST NOT sit under the tab strip: it moves above the strip as page-level content, or into the one tab it serves. Choosing a tab changes only the content below the strip.
 
 ### Typography
 
-- **R8.** A view MUST use one type scale: elements of the same kind share size, weight and
-  family. Weight shows hierarchy only, and figures and labels are not bolded for emphasis.
-  Monospace is used only for IDs, metrics, timestamps, code and logs; prose, hints and
-  messages are sans-serif.
+- **R8.** A view MUST use one type scale: elements of the same kind share size, weight and family. Weight shows hierarchy only, and figures and labels are not bolded for emphasis. Monospace is used only for IDs, metrics, timestamps, code and logs; prose, hints and messages are sans-serif.
 - **R9.** A label MUST sit on the same row as its value, not on a row of its own above an indented value. In label/value lists, a label MUST NOT wrap one word per line, and a value MUST NOT draw over its label. Each label MUST be vertically centred against its value, including a value that spans several lines.
-- **R35.** Text inside a chart MUST use the page's type scale. Labels, ticks and axis titles
-  render at the same sizes as the equivalent text around the chart at every width. A chart
-  never scales its text with its own width (for example an SVG with a fixed `viewBox`
-  stretched to fill its panel). The plot reflows instead.
+- **R35.** Text inside a chart MUST use the page's type scale. Labels, ticks and axis titles render at the same sizes as the equivalent text around the chart at every width. A chart never scales its text with its own width (for example an SVG with a fixed `viewBox` stretched to fill its panel). The plot reflows instead.
 
 ### Colour and theme
 
-- **R10.** Adjacent sections and idle elements MUST be told apart by a visible boundary or a
-  background step. An idle or empty control is never invisible against its background.
-  Text meets 4.5:1 contrast, except disabled text.
-- **R11.** A colour MUST mean one thing everywhere. A status has one colour on every surface,
-  text colours match across pages, and colours come from shared tokens, never chosen per
-  view.
-- **R12.** Each product MUST declare its default theme (light or dark) in its design docs and
-  apply it consistently across its views. A default that is applied MUST NOT be stored as if
-  the user had chosen it.
-- **R45.** A text colour MUST follow the text's role, not its length or its view. The
-  product's strongest text colour is for what the operator looks for: titles, labels that
-  name a thing, and scanned values (ids, counts, states). Prose (a description, a comment
-  body, a reason, a message: anything read as sentences) MUST use the step below it, which
-  still meets R10's contrast. A title and the prose under it are never the same colour.
-  Inside prose, ids, code and links keep their own colour, so they stand out from the
-  sentence. Secondary metadata (timestamps, authors, counts beside a title) and hints use
-  the steps below prose. Each product names its steps as theme tokens (R11).
+- **R10.** Adjacent sections and idle elements MUST be told apart by a visible boundary or a background step. An idle or empty control is never invisible against its background. Text meets 4.5:1 contrast, except disabled text.
+- **R11.** A colour MUST mean one thing everywhere. A status has one colour on every surface, text colours match across pages, and colours come from shared tokens, never chosen per view.
+- **R12.** Each product MUST declare its default theme (light or dark) in its design docs and apply it consistently across its views. A default that is applied MUST NOT be stored as if the user had chosen it.
+- **R45.** A text colour MUST follow the text's role, not its length or its view. The product's strongest text colour is for what the operator looks for: titles, labels that name a thing, and scanned values (ids, counts, states). Prose (a description, a comment body, a reason, a message: anything read as sentences) MUST use the step below it, which still meets R10's contrast. A title and the prose under it are never the same colour. Inside prose, ids, code and links keep their own colour, so they stand out from the sentence. Secondary metadata (timestamps, authors, counts beside a title) and hints use the steps below prose. Each product names its steps as theme tokens (R11).
 
 ### Words
 
-- **R13.** Screens MUST use minimal words. There are no taglines, summary sentences or helper
-  paragraphs in the working view. Explanation that is needed goes behind an info icon that
-  works on hover, keyboard focus and tap.
-- **R14.** A status line MUST fit on one line. Longer text, such as a reason, description or
-  acceptance criteria, is collapsed by default behind a "show full" control. The exception
-  is an error the operator must act on: it is never truncated.
-- **R15.** A label MUST be short and MUST NOT repeat context the screen already shows. For
-  example, it says "View run", not "View run on host-1" next to the host's name.
+- **R13.** Screens MUST use minimal words. There are no taglines, summary sentences or helper paragraphs in the working view. Explanation that is needed goes behind an info icon that works on hover, keyboard focus and tap.
+- **R14.** A status line MUST fit on one line. Longer text, such as a reason, description or acceptance criteria, is collapsed by default behind a "show full" control. The exception is an error the operator must act on: it is never truncated.
+- **R15.** A label MUST be short and MUST NOT repeat context the screen already shows. For example, it says "View run", not "View run on host-1" next to the host's name.
 - **R16.** A screen MUST show each piece of information once, and only what the operator acts on. Duplicate controls, nav entries for panels already on screen, redundant pages, noise badges and filler values ("no estimate", "+0/-0") are removed. Disabled features are hidden, not shown greyed out in nav. A detail view, dialog or drill-down MUST NOT repeat what the view that opened it already shows; it adds only what that view lacks.
 - **R32.** A hover tooltip MUST add something the screen does not already show: the full text of a truncated or shortened label, a definition, or detail deliberately moved off the screen. It never restates a visible label or a state that a colour, icon or position already shows (for example "Implement · done" on a green step). The full text stays in the accessible name either way. A tooltip's bubble fits its text up to a maximum width, with no empty area beside a short text. Buttons carry no general help tooltip, except the narrow full-name reveal for an ambiguously shortened label under R41.
 - **R41.** A button MUST NOT show a hover or focus help bubble or a native tooltip explaining what it does or why it is disabled. Its label says what it does, and the effect of pressing it, when the label does not show it, goes in the button's accessible description, for example "Run a cycle now that writes a checkpoint" on "Wake for status". A consequence the operator must see before acting (irreversible, affects other hosts) is shown in the confirmation the button opens, or behind an info icon beside it (R13), and a disabled button's reason is given the same way. Narrow full-name exception: only when a button's visible label is shortened for a constrained layout (R6, R39, R42) and that shrinkage introduces ambiguity (for example "Euro" for "Euro area" or "Rest" for "Rest of world"), the button MUST reveal its full name (and no instructional help) on hover and keyboard focus, support touch, and keep the full name in its accessible name (R32).
@@ -172,83 +79,39 @@ decision: where a principle seems to disagree with one, follow the rule and file
 
 ### Data display
 
-- **R17.** A view MUST put the answer first and collapse the detail. A table longer than
-  about seven rows collapses or offers "show all", while a short list is never paginated.
-  The cap is for a list that shares its region with other content. A list that is the whole
-  content of its own tab or panel shows in full. A
-  page that keeps growing is split into tabs. Small sets are not split into tabs: a handful
-  of items in two states (such as open and recently closed) stay in one list, with the
-  active group first and the rest under a heading or a collapsed disclosure. That way an
-  empty tab never hides the items that exist.
-- **R18.** Where a shape or trend matters, a view SHOULD show a chart, bar or sparkline
-  instead of raw numbers or JSON. Markdown is always rendered, never shown raw.
-- **R19.** A chart MUST agree with the data it summarises. It agrees with any ranking shown
-  beside it, puts every axis in the same "better" direction (or groups axes by direction),
-  and uses a cumulative or rolling view for spiky counts.
-- **R29.** A summary figure MUST sit with the detail it summarises, in that panel's header
-  or as its first line. It never gets a full-width panel of its own. A panel holding a single
-  number and its caption is folded into its neighbour.
-- **R34.** A chart MUST label each mark with its name only. Its figures (score, cost, count)
-  go in a tooltip on hover and keyboard focus, and in the chart's accessible description.
-  Labels never overlap each other, a mark or a reference line. A label with no room gets a
-  leader line or is shown in the tooltip only.
-- **R36.** Rows that share a rank, band or group MUST be ordered by the figure the view
-  ranks on, so that the column reads in order. Another key (such as cost, then name) only
-  breaks exact ties. Ordering inside a group by a value the view does not rank on reads as
-  a mistake.
+- **R17.** A view MUST put the answer first and collapse the detail. A table longer than about seven rows collapses or offers "show all", while a short list is never paginated. The cap is for a list that shares its region with other content. A list that is the whole content of its own tab or panel shows in full. A page that keeps growing is split into tabs. Small sets are not split into tabs: a handful of items in two states (such as open and recently closed) stay in one list, with the active group first and the rest under a heading or a collapsed disclosure. That way an empty tab never hides the items that exist.
+- **R18.** Where a shape or trend matters, a view SHOULD show a chart, bar or sparkline instead of raw numbers or JSON. Markdown is always rendered, never shown raw.
+- **R19.** A chart MUST agree with the data it summarises. It agrees with any ranking shown beside it, puts every axis in the same "better" direction (or groups axes by direction), and uses a cumulative or rolling view for spiky counts.
+- **R29.** A summary figure MUST sit with the detail it summarises, in that panel's header or as its first line. It never gets a full-width panel of its own. A panel holding a single number and its caption is folded into its neighbour.
+- **R34.** A chart MUST label each mark with its name only. Its figures (score, cost, count) go in a tooltip on hover and keyboard focus, and in the chart's accessible description. Labels never overlap each other, a mark or a reference line. A label with no room gets a leader line or is shown in the tooltip only.
+- **R36.** Rows that share a rank, band or group MUST be ordered by the figure the view ranks on, so that the column reads in order. Another key (such as cost, then name) only breaks exact ties. Ordering inside a group by a value the view does not rank on reads as a mistake.
 
 ### State and feedback
 
-- **R20.** Live state MUST be shown on the item itself as a small pill, dot or tint, not as a
-  new column or a sentence. Running, draining, repairing and warnings are visible at a glance.
-- **R21.** Transient feedback MUST expire on its own and be dismissible. There is no flashing
-  loading text, and no background toast the operator can't act on.
-- **R22.** An empty state MUST say why it is empty. A completed action resets its UI: an item
-  collapses when its status changes, and a search can be cleared. A refused action offers
-  its recovery path.
+- **R20.** Live state MUST be shown on the item itself as a small pill, dot or tint, not as a new column or a sentence. Running, draining, repairing and warnings are visible at a glance.
+- **R21.** Transient feedback MUST expire on its own and be dismissible. There is no flashing loading text, and no background toast the operator can't act on.
+- **R22.** An empty state MUST say why it is empty. A completed action resets its UI: an item collapses when its status changes, and a search can be cleared. A refused action offers its recovery path.
 
 ### Responsiveness and interaction
 
-- **R23.** A view MUST use the width it has. Wide screens get a second column, and tables
-  don't scroll sideways when the window is wide enough. Narrow widths drop secondary content
-  and any nav that is redundant at that width.
-- **R24.** Primary actions MUST stay reachable. A panel's action buttons stick to its bottom
-  edge, and a detail panel stays in view while the list beside it scrolls.
-- **R37.** Changing how a control behaves MUST NOT change how it looks. A native control
-  (such as a `<select>`) is not replaced by a custom widget with different chrome, and its
-  options gain no new colours or decoration, unless the owner approved the new look as a
-  mock (R25).
-- **R38.** A row of controls MUST use the width available to it before it wraps. Chips,
-  filters and buttons do not break onto a second row while there is unused space beside
-  them: where the row would wrap inside its own column, it extends into that space instead.
-  Where the row fits its column it stays there, and takes no row of its own above the
-  neighbouring column.
+- **R23.** A view MUST use the width it has. Wide screens get a second column, and tables don't scroll sideways when the window is wide enough. Narrow widths drop secondary content and any nav that is redundant at that width.
+- **R24.** Primary actions MUST stay reachable. A panel's action buttons stick to its bottom edge, and a detail panel stays in view while the list beside it scrolls.
+- **R37.** Changing how a control behaves MUST NOT change how it looks. A native control (such as a `<select>`) is not replaced by a custom widget with different chrome, and its options gain no new colours or decoration, unless the owner approved the new look as a mock (R25).
+- **R38.** A row of controls MUST use the width available to it before it wraps. Chips, filters and buttons do not break onto a second row while there is unused space beside them: where the row would wrap inside its own column, it extends into that space instead. Where the row fits its column it stays there, and takes no row of its own above the neighbouring column.
 - **R39.** A panel's header row, a row of summary figures and a strip of tabs MUST stay on one line at every supported width. Wherever the row fits at full size, its members keep their full size and content. Only where it would not fit do members shrink: a shorter label, a smaller figure, a pill reduced to its dot. If it still does not fit, members are removed, least important first, and a removed value stays in the row's tooltip and accessible name. Shrinking starts at the width where the full-size row stops fitting, measured from its content or derived from its real full-size width, never at a fixed breakpoint that also catches widths where it fits. The row never wraps and never scrolls sideways. A row of controls (chips, filters, buttons) follows R38 for wrapping, and when a constrained row shortens button or control labels to keep one line and uniform peer height (R6), it MUST preserve full labels wherever they fit, shorten labels by content before reducing readable type, and—where shortening introduces ambiguity—reveal the full name under R41.
 - **R42.** A control's width MUST come from its content, not a fixed size. A select is as wide as its longest option plus its arrow, and a button or chip as wide as its label, aiming for comparable widths across peer buttons subject to content without sacrificing equal rendered height (R6). It never grows past the space its row leaves once the other members have their full size. Where the row does not fit, it preserves readable type and shortens labels by content (for example "Euro area" to "Euro" and "Rest of world" to "Rest") before reducing font size, and never clips the part of a value that tells options apart (such as the host in "workspace · host"). Where shortening a button label introduces ambiguity, reveal the full name on hover, keyboard focus and touch and preserve the full accessible name (R41). A select's width follows its whole option set, not the selected option, so changing the selection moves nothing (R5). A field meant to fill its row, such as a search box, is exempt.
-- **R43.** When regions shown side by side collapse into one column, the page's primary
-  region (the one its nav entry names, such as the task list on Tasks) MUST stay shown. A
-  secondary region (a dock, side panel or detail pane) replaces it only when the operator
-  navigated to that region at the collapsed width, through its nav entry or a link to it.
-  Choosing a tab or item inside a secondary region while both are visible is not such a
-  navigation. The secondary region keeps its selection for when it is reached, and widening
-  again shows both regions.
+- **R43.** When regions shown side by side collapse into one column, the page's primary region (the one its nav entry names, such as the task list on Tasks) MUST stay shown. A secondary region (a dock, side panel or detail pane) replaces it only when the operator navigated to that region at the collapsed width, through its nav entry or a link to it. Choosing a tab or item inside a secondary region while both are visible is not such a navigation. The secondary region keeps its selection for when it is reached, and widening again shows both regions.
 - **R44.** Every dialog, panel, drawer, popover or floating bar that Esc closes and that has a close button MUST label that button "esc", not ×, "Close" or "Back to list". The label is lowercase. The button's accessible name still says what it closes, for example "Close task details (Esc)". Placement follows R7.
 
 ### Process
 
-- **R25.** A new view or a redesign MUST start from a mock the owner approves before it is
-  built.
-- **R26.** Every UI correction the owner makes MUST be recorded as a UI fix task that quotes
-  it. When it reveals a gap in this standard, a `standards` friction MUST also be filed (see
-  the README's canon-gap convention). Where a machine check can catch the defect, the fix
-  adds or extends that check with the fix.
+- **R25.** A new view or a redesign MUST start from a mock the owner approves before it is built.
+- **R26.** Every UI correction the owner makes MUST be recorded as a UI fix task that quotes it. When it reveals a gap in this standard, a `standards` friction MUST also be filed (see the README's canon-gap convention). Where a machine check can catch the defect, the fix adds or extends that check with the fix.
 
 ## Applies to
 
-`ui`: any project that renders a screen for people (web dashboard, site, desktop or TUI
-panel). Terminal command output stays under STD-01.
+`ui`: any project that renders a screen for people (web dashboard, site, desktop or TUI panel). Terminal command output stays under STD-01.
 
 ## Deviations
 
-An adopting repo that departs from a rule records a decision in its own design docs, citing
-`STD-07@<version> §Rn` and the reason. It never edits its vendored copy of this standard.
+An adopting repo that departs from a rule records a decision in its own design docs, citing `STD-07@<version> §Rn` and the reason. It never edits its vendored copy of this standard.
