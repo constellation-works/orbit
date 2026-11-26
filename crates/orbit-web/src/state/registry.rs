@@ -84,10 +84,6 @@ impl CheckoutFingerprint {
     }
 }
 
-pub(super) fn checkout_fingerprints(entries: &[WsEntry]) -> Vec<CheckoutFingerprint> {
-    entries.iter().map(CheckoutFingerprint::read).collect()
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct UnavailableCheckout {
     workspace: String,
@@ -200,6 +196,10 @@ impl RegistrySource {
             failure.warn();
         }
     }
+}
+
+pub(super) fn checkout_fingerprints(entries: &[WsEntry]) -> Vec<CheckoutFingerprint> {
+    entries.iter().map(CheckoutFingerprint::read).collect()
 }
 
 /// Best-effort default for `cwd` when serving globally: the `Active` registered

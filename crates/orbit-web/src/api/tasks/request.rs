@@ -120,53 +120,6 @@ pub(in crate::api) struct CreateTaskBody {
     pub(super) unsupported: Map<String, Value>,
 }
 
-fn default_priority() -> TaskPriority {
-    TaskPriority::Medium
-}
-
-/// Reject a task body carrying keys the endpoint would otherwise discard.
-///
-/// ORB-10648: both task bodies derived a plain `Deserialize`, so any undeclared
-/// key (`priority` on update, an `agent` typo, a field only the native
-/// `orbit.task.update` tool declares) was silently dropped and the handler
-/// still answered `200` with the task JSON. A caller that reports per-field
-/// application — bridge's `orbit_task_update` write confirmation — then
-/// affirmatively reports a field as applied that was never persisted, and a
-/// false "applied" is worse than an error because nothing prompts a read-back.
-///
-/// The contract is all-or-nothing: an unsupported key fails the whole request,
-/// so no write lands partially. The keys are captured through
-/// `#[serde(flatten)]` rather than `#[serde(deny_unknown_fields)]` for the same
-/// reason [`CreateTaskBody::workspace`] is a declared trap field (ORB-00042):
-/// the diagnostic stays Orbit's own, naming every offending key and pointing at
-/// the surface that does accept it, instead of serde's opaque message.
-pub(super) fn reject_unsupported_task_body_fields(
-    agent: Option<&String>,
-    unsupported: &Map<String, Value>,
-    endpoint: &str,
-) -> Option<Response> {
-    if agent.is_some() {
-        return Some(bad_request(format!(
-            "{endpoint} no longer accepts `agent`; use `model` with the agent \
-             family (codex, claude, gemini, grok, or muse) for attribution"
-        )));
-    }
-    if unsupported.is_empty() {
-        return None;
-    }
-    let mut names = unsupported.keys().cloned().collect::<Vec<_>>();
-    names.sort();
-    let names = names
-        .iter()
-        .map(|name| format!("`{name}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(bad_request(format!(
-        "unsupported body field(s) {names}: {endpoint} does not apply them, so the \
-         request is rejected rather than reporting a write that would not land"
-    )))
-}
-
 /// Partial-update body for `PATCH /tasks/:id`. Each field is `Option<...>`;
 /// fields absent from the JSON body remain unchanged.
 ///
@@ -252,14 +205,6 @@ pub(in crate::api) struct UpdateTaskBody {
     pub(super) unsupported: Map<String, Value>,
 }
 
-fn deserialize_nullable_string_patch_field<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
-}
 /// Body for `POST /tasks/:id/archive`: `force` is the dashboard's
 /// `--force` equivalent for a run-owned task.
 #[derive(Deserialize, Default)]
@@ -298,4 +243,60 @@ pub(in crate::api) struct PostDeployBody {
     pub(super) evidence: Option<String>,
     #[serde(default)]
     pub(super) reason: Option<String>,
+}
+
+fn default_priority() -> TaskPriority {
+    TaskPriority::Medium
+}
+
+/// Reject a task body carrying keys the endpoint would otherwise discard.
+///
+/// ORB-10648: both task bodies derived a plain `Deserialize`, so any undeclared
+/// key (`priority` on update, an `agent` typo, a field only the native
+/// `orbit.task.update` tool declares) was silently dropped and the handler
+/// still answered `200` with the task JSON. A caller that reports per-field
+/// application — bridge's `orbit_task_update` write confirmation — then
+/// affirmatively reports a field as applied that was never persisted, and a
+/// false "applied" is worse than an error because nothing prompts a read-back.
+///
+/// The contract is all-or-nothing: an unsupported key fails the whole request,
+/// so no write lands partially. The keys are captured through
+/// `#[serde(flatten)]` rather than `#[serde(deny_unknown_fields)]` for the same
+/// reason [`CreateTaskBody::workspace`] is a declared trap field (ORB-00042):
+/// the diagnostic stays Orbit's own, naming every offending key and pointing at
+/// the surface that does accept it, instead of serde's opaque message.
+pub(super) fn reject_unsupported_task_body_fields(
+    agent: Option<&String>,
+    unsupported: &Map<String, Value>,
+    endpoint: &str,
+) -> Option<Response> {
+    if agent.is_some() {
+        return Some(bad_request(format!(
+            "{endpoint} no longer accepts `agent`; use `model` with the agent \
+             family (codex, claude, gemini, grok, or muse) for attribution"
+        )));
+    }
+    if unsupported.is_empty() {
+        return None;
+    }
+    let mut names = unsupported.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    let names = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(bad_request(format!(
+        "unsupported body field(s) {names}: {endpoint} does not apply them, so the \
+         request is rejected rather than reporting a write that would not land"
+    )))
+}
+
+fn deserialize_nullable_string_patch_field<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }

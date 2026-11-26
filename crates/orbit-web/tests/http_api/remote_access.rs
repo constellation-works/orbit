@@ -14,6 +14,114 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, Server, isolated};
 
+struct SshStubCleanup {
+    log: std::path::PathBuf,
+}
+
+struct PendingUpstream {
+    release: mpsc::Sender<()>,
+    stream_rx: mpsc::Receiver<TcpStream>,
+}
+
+/// Releases the `serve status` probes a [`gated_tailscale_stub`] holds. Dropping
+/// it releases any probe a failed test left blocked, so no stub outlives it.
+struct Gate(std::path::PathBuf);
+
+impl Drop for SshStubCleanup {
+    fn drop(&mut self) {
+        let Ok(text) = fs::read_to_string(&self.log) else {
+            return;
+        };
+        for line in text.lines() {
+            let Ok(call) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let (Some(pid), Some(starttime)) = (call["pid"].as_u64(), call["starttime"].as_u64())
+            else {
+                continue;
+            };
+            let Ok(pid) = u32::try_from(pid) else {
+                continue;
+            };
+            if process_start_key(pid).is_some_and(|key| key.starttime == starttime) {
+                // SAFETY: `process_start_key` confirmed the PID still belongs to the stub.
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+struct FakeRemote {
+    port: u16,
+    pending_rx: mpsc::Receiver<PendingUpstream>,
+    immediate_rx: mpsc::Receiver<TcpStream>,
+    hold_releases: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
+}
+
+impl Gate {
+    /// Lets every probe waiting at the gate finish. Fails when none is waiting,
+    /// since a non-blocking open for writing needs a reader.
+    fn release(&self) -> std::io::Result<()> {
+        let mut gate = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&self.0)?;
+        gate.write_all(&[b'\n'; 16])
+    }
+}
+
+impl FakeRemote {
+    fn start(machine_id: &str) -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (pending_tx, pending_rx) = mpsc::channel();
+        let (immediate_tx, immediate_rx) = mpsc::channel();
+        let hold_releases = Arc::new(Mutex::new(Vec::new()));
+        let releases = Arc::clone(&hold_releases);
+        let identity = json!({"hosts": [{
+            "local": true,
+            "machine_id": machine_id,
+            "binary_version": "9.9.9",
+            "protocol_fingerprint": "fixture",
+        }]})
+        .to_string();
+        thread::spawn(move || {
+            for incoming in listener.incoming() {
+                let Ok(stream) = incoming else { break };
+                let pending_tx = pending_tx.clone();
+                let immediate_tx = immediate_tx.clone();
+                let releases = Arc::clone(&releases);
+                let identity = identity.clone();
+                thread::spawn(move || {
+                    handle_remote_connection(stream, &identity, pending_tx, immediate_tx, releases);
+                });
+            }
+        });
+        Self {
+            port,
+            pending_rx,
+            immediate_rx,
+            hold_releases,
+        }
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
+impl Drop for FakeRemote {
+    fn drop(&mut self) {
+        for tx in self.hold_releases.lock().unwrap().drain(..) {
+            let _ = tx.send(());
+        }
+    }
+}
+
 /// A `tailscale` stub: `serve status --json` prints `serve.json` beside it,
 /// `whois --json <ip>` names the device `phone`.
 fn tailscale_stub(fixture: &Fixture) -> std::path::PathBuf {
@@ -242,36 +350,6 @@ fn remote_access_serve_target_must_match_the_listener_family() {
     );
 }
 
-struct SshStubCleanup {
-    log: std::path::PathBuf,
-}
-
-impl Drop for SshStubCleanup {
-    fn drop(&mut self) {
-        let Ok(text) = fs::read_to_string(&self.log) else {
-            return;
-        };
-        for line in text.lines() {
-            let Ok(call) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            let (Some(pid), Some(starttime)) = (call["pid"].as_u64(), call["starttime"].as_u64())
-            else {
-                continue;
-            };
-            let Ok(pid) = u32::try_from(pid) else {
-                continue;
-            };
-            if process_start_key(pid).is_some_and(|key| key.starttime == starttime) {
-                // SAFETY: `process_start_key` confirmed the PID still belongs to the stub.
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                }
-            }
-        }
-    }
-}
-
 fn install_ssh_stub(bin: &Path, remote_port: u16) -> SshStubCleanup {
     let script = bin.join("ssh");
     fs::write(&script, include_str!("stub_ssh.py")).unwrap();
@@ -284,62 +362,6 @@ fn install_ssh_stub(bin: &Path, remote_port: u16) -> SshStubCleanup {
     });
     fs::write(bin.join("ssh.json"), config.to_string()).unwrap();
     SshStubCleanup { log }
-}
-
-struct PendingUpstream {
-    release: mpsc::Sender<()>,
-    stream_rx: mpsc::Receiver<TcpStream>,
-}
-
-struct FakeRemote {
-    port: u16,
-    pending_rx: mpsc::Receiver<PendingUpstream>,
-    immediate_rx: mpsc::Receiver<TcpStream>,
-    hold_releases: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
-}
-
-impl FakeRemote {
-    fn start(machine_id: &str) -> Self {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (pending_tx, pending_rx) = mpsc::channel();
-        let (immediate_tx, immediate_rx) = mpsc::channel();
-        let hold_releases = Arc::new(Mutex::new(Vec::new()));
-        let releases = Arc::clone(&hold_releases);
-        let identity = json!({"hosts": [{
-            "local": true,
-            "machine_id": machine_id,
-            "binary_version": "9.9.9",
-            "protocol_fingerprint": "fixture",
-        }]})
-        .to_string();
-        thread::spawn(move || {
-            for incoming in listener.incoming() {
-                let Ok(stream) = incoming else { break };
-                let pending_tx = pending_tx.clone();
-                let immediate_tx = immediate_tx.clone();
-                let releases = Arc::clone(&releases);
-                let identity = identity.clone();
-                thread::spawn(move || {
-                    handle_remote_connection(stream, &identity, pending_tx, immediate_tx, releases);
-                });
-            }
-        });
-        Self {
-            port,
-            pending_rx,
-            immediate_rx,
-            hold_releases,
-        }
-    }
-}
-
-impl Drop for FakeRemote {
-    fn drop(&mut self) {
-        for tx in self.hold_releases.lock().unwrap().drain(..) {
-            let _ = tx.send(());
-        }
-    }
 }
 
 fn handle_remote_connection(
@@ -707,28 +729,6 @@ esac
     let made = unsafe { libc::mkfifo(c_gate.as_ptr(), 0o600) };
     assert_eq!(made, 0, "mkfifo: {}", std::io::Error::last_os_error());
     (bin, Gate(gate))
-}
-
-/// Releases the `serve status` probes a [`gated_tailscale_stub`] holds. Dropping
-/// it releases any probe a failed test left blocked, so no stub outlives it.
-struct Gate(std::path::PathBuf);
-
-impl Gate {
-    /// Lets every probe waiting at the gate finish. Fails when none is waiting,
-    /// since a non-blocking open for writing needs a reader.
-    fn release(&self) -> std::io::Result<()> {
-        let mut gate = fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(&self.0)?;
-        gate.write_all(&[b'\n'; 16])
-    }
-}
-
-impl Drop for Gate {
-    fn drop(&mut self) {
-        let _ = self.release();
-    }
 }
 
 fn tailscale_calls(bin: &Path) -> Vec<String> {

@@ -22,6 +22,105 @@ use super::super::support::{Fixture, Server, json_ok};
 
 use super::WS;
 
+/// Failure evidence used by the blocked-cause HTTP scenario.
+pub(super) const WORK_FAILURES: &[&str] = &[
+    "assertion failed in sandbox_profile_regression",
+    "error[E0425]: cannot find value in module sandbox",
+    "assertion failed in bwrap_launch_regression",
+    "compiler error in bubblewrap::profile",
+    "assertion failed in seatbelt_policy_test",
+    "assertion failed in authentication_regression",
+    "compiler error in oauth::authenticate",
+    "assertion failed in unauthorized_request",
+    "assertion failed in unauthorized",
+    "compiler error in authentication_error",
+    "assertion failed in enospc_recovery",
+    "compiler error in provider_limit_regression",
+    "assertion failed in invalid_token_parser",
+    "compiler error in authentication_failed_regression",
+];
+
+/// Failure evidence used by the blocked-cause HTTP scenario.
+pub(super) const INFRA_FAILURES: &[(&str, &str, &str)] = &[
+    (
+        "sandbox",
+        "execution_failed",
+        "bwrap: No permissions to create new namespace",
+    ),
+    (
+        "sandbox",
+        "execution_failed",
+        "cli subprocess exited with code 71 sandbox-exec could not apply Orbit's macOS sandbox profile (`sandbox_apply: Operation not permitted`), so the CLI never started",
+    ),
+    (
+        "sandbox",
+        "execution_failed",
+        "sandbox-exec cannot apply a profile",
+    ),
+    (
+        "sandbox",
+        "execution_failed",
+        "Orbit linux-bwrap policy denied the attempted write: read-only mount",
+    ),
+    (
+        "sandbox",
+        "provider_unavailable",
+        "Orbit's macOS sandbox hid the stored credential and the login is not necessarily expired",
+    ),
+    ("auth", "provider_unavailable", "OAuth token expired"),
+    (
+        "auth",
+        "provider_unavailable",
+        "No authentication information found",
+    ),
+    (
+        "auth",
+        "provider_unavailable",
+        "Authentication required. Please run agent login first",
+    ),
+    ("auth", "execution_failed", "HTTP 401 Unauthorized"),
+    (
+        "auth",
+        "provider_unavailable",
+        "codex provider authentication failure (HTTP 403): credentials rejected",
+    ),
+    ("auth", "provider_unavailable", "invalid API key"),
+    (
+        "auth",
+        "execution_failed",
+        "[provider_unavailable] provider=codex Unauthorized",
+    ),
+    ("auth", "provider_unavailable", "authentication_error"),
+    (
+        "disk",
+        "execution_failed",
+        "write failed: No space left on device (ENOSPC)",
+    ),
+    ("disk", "execution_failed", "disk quota exceeded"),
+    ("disk", "execution_failed", "disk full"),
+    (
+        "provider_limit",
+        "provider_limit",
+        "account usage exhausted",
+    ),
+    ("provider_limit", "provider_capacity", "no capacity"),
+    (
+        "provider_limit",
+        "execution_failed",
+        "[provider_limit] provider=codex usage exhausted",
+    ),
+    (
+        "provider_unavailable",
+        "provider_unavailable",
+        "CLI unusable",
+    ),
+    (
+        "provider_unavailable",
+        "provider_refusal",
+        "content refused",
+    ),
+];
+
 pub(in super::super) struct TaskEventFixture<'a> {
     pub(in super::super) task_id: &'a str,
     pub(in super::super) at: DateTime<Utc>,
@@ -747,102 +846,3 @@ pub(super) fn without_open_wait_durations(mut section: Value) -> Value {
     }
     section
 }
-
-/// Failure evidence used by the blocked-cause HTTP scenario.
-pub(super) const WORK_FAILURES: &[&str] = &[
-    "assertion failed in sandbox_profile_regression",
-    "error[E0425]: cannot find value in module sandbox",
-    "assertion failed in bwrap_launch_regression",
-    "compiler error in bubblewrap::profile",
-    "assertion failed in seatbelt_policy_test",
-    "assertion failed in authentication_regression",
-    "compiler error in oauth::authenticate",
-    "assertion failed in unauthorized_request",
-    "assertion failed in unauthorized",
-    "compiler error in authentication_error",
-    "assertion failed in enospc_recovery",
-    "compiler error in provider_limit_regression",
-    "assertion failed in invalid_token_parser",
-    "compiler error in authentication_failed_regression",
-];
-
-/// Failure evidence used by the blocked-cause HTTP scenario.
-pub(super) const INFRA_FAILURES: &[(&str, &str, &str)] = &[
-    (
-        "sandbox",
-        "execution_failed",
-        "bwrap: No permissions to create new namespace",
-    ),
-    (
-        "sandbox",
-        "execution_failed",
-        "cli subprocess exited with code 71 sandbox-exec could not apply Orbit's macOS sandbox profile (`sandbox_apply: Operation not permitted`), so the CLI never started",
-    ),
-    (
-        "sandbox",
-        "execution_failed",
-        "sandbox-exec cannot apply a profile",
-    ),
-    (
-        "sandbox",
-        "execution_failed",
-        "Orbit linux-bwrap policy denied the attempted write: read-only mount",
-    ),
-    (
-        "sandbox",
-        "provider_unavailable",
-        "Orbit's macOS sandbox hid the stored credential and the login is not necessarily expired",
-    ),
-    ("auth", "provider_unavailable", "OAuth token expired"),
-    (
-        "auth",
-        "provider_unavailable",
-        "No authentication information found",
-    ),
-    (
-        "auth",
-        "provider_unavailable",
-        "Authentication required. Please run agent login first",
-    ),
-    ("auth", "execution_failed", "HTTP 401 Unauthorized"),
-    (
-        "auth",
-        "provider_unavailable",
-        "codex provider authentication failure (HTTP 403): credentials rejected",
-    ),
-    ("auth", "provider_unavailable", "invalid API key"),
-    (
-        "auth",
-        "execution_failed",
-        "[provider_unavailable] provider=codex Unauthorized",
-    ),
-    ("auth", "provider_unavailable", "authentication_error"),
-    (
-        "disk",
-        "execution_failed",
-        "write failed: No space left on device (ENOSPC)",
-    ),
-    ("disk", "execution_failed", "disk quota exceeded"),
-    ("disk", "execution_failed", "disk full"),
-    (
-        "provider_limit",
-        "provider_limit",
-        "account usage exhausted",
-    ),
-    ("provider_limit", "provider_capacity", "no capacity"),
-    (
-        "provider_limit",
-        "execution_failed",
-        "[provider_limit] provider=codex usage exhausted",
-    ),
-    (
-        "provider_unavailable",
-        "provider_unavailable",
-        "CLI unusable",
-    ),
-    (
-        "provider_unavailable",
-        "provider_refusal",
-        "content refused",
-    ),
-];

@@ -24,72 +24,6 @@ use crate::state::{DashboardState, Ws};
 /// Newest v2 envelope events of the month the audit scan reads.
 const FRICTION_SCAN_EVENTS: usize = 50_000;
 
-fn diagnostics_friction_from_v2_audit(
-    runtime: &OrbitRuntime,
-    month: &str,
-    limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    validate_year_month(month)?;
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let (since, until) = month_bounds_utc(month)?;
-    let payloads = v2_audit_payloads(runtime, Some(since), Some(until), FRICTION_SCAN_EVENTS)?;
-    // Only the envelope links are decoded for every scanned event, borrowed
-    // from its payload; a full JSON tree per event was most of the compute.
-    // Payloads that are not JSON objects are skipped, as before; the derive
-    // would otherwise read a JSON array positionally.
-    let events: Vec<(&str, ScanLinks<'_>)> = payloads
-        .iter()
-        .filter(|payload| payload.trim_start().starts_with('{'))
-        .filter_map(|payload| Some((payload.as_str(), serde_json::from_str(payload).ok()?)))
-        .collect();
-    let blob_store = audit_blob_store(runtime);
-    let by_id: HashMap<&str, &ScanLinks<'_>> = events
-        .iter()
-        .filter_map(|(_, links)| links.event_id.as_deref().map(|id| (id, links)))
-        .collect();
-    // `events` is oldest-first; walk newest-first and stop at `limit` so only
-    // the rows returned pay for their stderr blob read.
-    let mut rows = Vec::new();
-    for (payload, links) in events.iter().rev() {
-        if !is_friction_candidate(links, payload, month) {
-            continue;
-        }
-        let Ok(event) = serde_json::from_str::<Value>(payload) else {
-            continue;
-        };
-        if let Some(row) = diagnostics_friction_row(&blob_store, &by_id, links, &event, month) {
-            rows.push(row);
-            if rows.len() == limit {
-                break;
-            }
-        }
-    }
-    Ok(rows)
-}
-
-/// Whether [`diagnostics_friction_row`] can return a row for this event,
-/// read from its links and, for the outcome kinds, the few outcome fields.
-fn is_friction_candidate(links: &ScanLinks<'_>, payload: &str, month: &str) -> bool {
-    if !links.ts.as_deref().is_some_and(|ts| ts.starts_with(month)) {
-        return false;
-    }
-    match links.body_kind.as_deref().unwrap_or("") {
-        "cli_invocation_finished" => serde_json::from_str::<OutcomeFields<'_>>(payload)
-            .is_ok_and(|fields| fields.exit_code != Some(0) || fields.timed_out == Some(true)),
-        "step_finished" => serde_json::from_str::<OutcomeFields<'_>>(payload).is_ok_and(|fields| {
-            !matches!(
-                fields.outcome.as_deref().unwrap_or("success"),
-                "success" | "skipped"
-            )
-        }),
-        "step_denied" | "tool_denied" | "fs_call_denied" => true,
-        _ => false,
-    }
-}
-
 /// The envelope fields the friction scan reads from every event, each as
 /// a `Value::as_str` read of the payload would see it.
 #[derive(Deserialize)]
@@ -106,6 +40,16 @@ struct ScanLinks<'a> {
     ts: Option<Cow<'a, str>>,
 }
 
+struct LenientVisitor<'de>(PhantomData<&'de ()>);
+
+/// The envelope links a step attribution walk reads, from the friction
+/// scan's or the Errors feed's compact view of an event.
+pub(super) trait EnvelopeLinks {
+    fn step_id(&self) -> Option<&str>;
+    fn parent_event_id(&self) -> Option<&str>;
+    fn body_kind(&self) -> Option<&str>;
+}
+
 /// The outcome fields deciding whether a finished invocation or step is
 /// friction, each as the matching `Value` accessor would read it.
 #[derive(Deserialize)]
@@ -117,24 +61,6 @@ struct OutcomeFields<'a> {
     #[serde(borrow, default, deserialize_with = "lenient_str")]
     outcome: Option<Cow<'a, str>>,
 }
-
-/// A string field borrowed from the payload where it has no escapes, or
-/// `None` for any other JSON type, without building a tree for it.
-fn lenient_str<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Cow<'de, str>>, D::Error> {
-    deserializer.deserialize_any(LenientVisitor(PhantomData))
-}
-
-fn lenient_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
-    Ok(Value::deserialize(deserializer)?.as_i64())
-}
-
-fn lenient_bool<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<bool>, D::Error> {
-    Ok(Value::deserialize(deserializer)?.as_bool())
-}
-
-struct LenientVisitor<'de>(PhantomData<&'de ()>);
 
 impl<'de> Visitor<'de> for LenientVisitor<'de> {
     type Value = Option<Cow<'de, str>>;
@@ -202,6 +128,88 @@ impl EnvelopeLinks for ScanLinks<'_> {
     fn body_kind(&self) -> Option<&str> {
         self.body_kind.as_deref()
     }
+}
+
+fn diagnostics_friction_from_v2_audit(
+    runtime: &OrbitRuntime,
+    month: &str,
+    limit: usize,
+) -> Result<Vec<Value>, orbit_core::OrbitError> {
+    validate_year_month(month)?;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let (since, until) = month_bounds_utc(month)?;
+    let payloads = v2_audit_payloads(runtime, Some(since), Some(until), FRICTION_SCAN_EVENTS)?;
+    // Only the envelope links are decoded for every scanned event, borrowed
+    // from its payload; a full JSON tree per event was most of the compute.
+    // Payloads that are not JSON objects are skipped, as before; the derive
+    // would otherwise read a JSON array positionally.
+    let events: Vec<(&str, ScanLinks<'_>)> = payloads
+        .iter()
+        .filter(|payload| payload.trim_start().starts_with('{'))
+        .filter_map(|payload| Some((payload.as_str(), serde_json::from_str(payload).ok()?)))
+        .collect();
+    let blob_store = audit_blob_store(runtime);
+    let by_id: HashMap<&str, &ScanLinks<'_>> = events
+        .iter()
+        .filter_map(|(_, links)| links.event_id.as_deref().map(|id| (id, links)))
+        .collect();
+    // `events` is oldest-first; walk newest-first and stop at `limit` so only
+    // the rows returned pay for their stderr blob read.
+    let mut rows = Vec::new();
+    for (payload, links) in events.iter().rev() {
+        if !is_friction_candidate(links, payload, month) {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if let Some(row) = diagnostics_friction_row(&blob_store, &by_id, links, &event, month) {
+            rows.push(row);
+            if rows.len() == limit {
+                break;
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// Whether [`diagnostics_friction_row`] can return a row for this event,
+/// read from its links and, for the outcome kinds, the few outcome fields.
+fn is_friction_candidate(links: &ScanLinks<'_>, payload: &str, month: &str) -> bool {
+    if !links.ts.as_deref().is_some_and(|ts| ts.starts_with(month)) {
+        return false;
+    }
+    match links.body_kind.as_deref().unwrap_or("") {
+        "cli_invocation_finished" => serde_json::from_str::<OutcomeFields<'_>>(payload)
+            .is_ok_and(|fields| fields.exit_code != Some(0) || fields.timed_out == Some(true)),
+        "step_finished" => serde_json::from_str::<OutcomeFields<'_>>(payload).is_ok_and(|fields| {
+            !matches!(
+                fields.outcome.as_deref().unwrap_or("success"),
+                "success" | "skipped"
+            )
+        }),
+        "step_denied" | "tool_denied" | "fs_call_denied" => true,
+        _ => false,
+    }
+}
+
+/// A string field borrowed from the payload where it has no escapes, or
+/// `None` for any other JSON type, without building a tree for it.
+fn lenient_str<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Cow<'de, str>>, D::Error> {
+    deserializer.deserialize_any(LenientVisitor(PhantomData))
+}
+
+fn lenient_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_i64())
+}
+
+fn lenient_bool<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<bool>, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_bool())
 }
 
 /// The friction row for `event`, attributing its step through `links`, the
@@ -324,14 +332,6 @@ pub(super) fn enclosing_step_id_for_event<'a, E: EnvelopeLinks>(
         parent_id = parent.parent_event_id();
     }
     None
-}
-
-/// The envelope links a step attribution walk reads, from the friction
-/// scan's or the Errors feed's compact view of an event.
-pub(super) trait EnvelopeLinks {
-    fn step_id(&self) -> Option<&str>;
-    fn parent_event_id(&self) -> Option<&str>;
-    fn body_kind(&self) -> Option<&str>;
 }
 
 fn read_blob_excerpt_best_effort(blob_store: &BlobStore, blob_ref: &str) -> Excerpt {

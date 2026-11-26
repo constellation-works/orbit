@@ -16,13 +16,6 @@ use serde_json::{Value, json};
 
 use super::support::*;
 
-/// Every scenario runs isolated with a fresh fixture; `name` is the exact
-/// libtest path the child re-executes by. Scenario bodies are plain
-/// functions so their statements stay at low indentation.
-fn scenario(name: &'static str, body: fn(&Fixture)) {
-    isolated(name, || body(&Fixture::new()));
-}
-
 /// Declare one isolated scenario: `name` is both the test and, prefixed
 /// with `runs::`, the exact libtest path the child re-executes by.
 macro_rules! scenario_test {
@@ -32,6 +25,13 @@ macro_rules! scenario_test {
             scenario(concat!("runs::", stringify!($name)), $body);
         }
     };
+}
+
+/// Every scenario runs isolated with a fresh fixture; `name` is the exact
+/// libtest path the child re-executes by. Scenario bodies are plain
+/// functions so their statements stay at low indentation.
+fn scenario(name: &'static str, body: fn(&Fixture)) {
+    isolated(name, || body(&Fixture::new()));
 }
 
 scenario_test!(

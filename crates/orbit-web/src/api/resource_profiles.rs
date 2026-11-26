@@ -29,6 +29,25 @@ pub(super) struct ResourceProfilesQuery {
     last: Option<String>,
 }
 
+/// The answer, in the order its keys are written.
+#[derive(Serialize)]
+struct ResourceProfilesBody<'a> {
+    workspace_id: &'a str,
+    built_at: DateTime<Utc>,
+    host: Option<HostCapacity>,
+    admit_cpu_percent: u8,
+    admit_memory_percent: u8,
+    profile_window: u32,
+    /// The requested selection, including the legacy `all` alias; its
+    /// effective bound is `delivery_limit`.
+    last: Option<String>,
+    delivery_limit: usize,
+    max_last: usize,
+    min_profile_deliveries: u32,
+    horizon_cap_minutes: u32,
+    profiles: &'a RawValue,
+}
+
 /// Each profile is the object `orbit run profiles --json` emits. Profiles are
 /// per host (each host keeps its own store), so this serving host's set is the
 /// only one in the answer; another host's comes through its forward.
@@ -86,23 +105,4 @@ pub(super) async fn resource_profiles(
         Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         Err(response) => *response,
     }
-}
-
-/// The answer, in the order its keys are written.
-#[derive(Serialize)]
-struct ResourceProfilesBody<'a> {
-    workspace_id: &'a str,
-    built_at: DateTime<Utc>,
-    host: Option<HostCapacity>,
-    admit_cpu_percent: u8,
-    admit_memory_percent: u8,
-    profile_window: u32,
-    /// The requested selection, including the legacy `all` alias; its
-    /// effective bound is `delivery_limit`.
-    last: Option<String>,
-    delivery_limit: usize,
-    max_last: usize,
-    min_profile_deliveries: u32,
-    horizon_cap_minutes: u32,
-    profiles: &'a RawValue,
 }

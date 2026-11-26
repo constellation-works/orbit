@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
+/// The dashboard API's per-message cap for list projections.
+const LIST_MESSAGE_MAX_BYTES: usize = 2048;
+
 // Seed the production audit budget in one transaction, rather than paying for
 // 50,000 runtime writes or adding a test-only setting to the HTTP server.
 fn fill_stderr_audit_budget(fixture: &Fixture, count: usize, ts: DateTime<Utc>) {
@@ -381,9 +384,6 @@ fn step_errors_without_failure_detail_report_its_absence() {
         },
     );
 }
-
-/// The dashboard API's per-message cap for list projections.
-const LIST_MESSAGE_MAX_BYTES: usize = 2048;
 
 #[test]
 fn long_step_errors_are_bounded_in_errors_and_friction_and_the_run_keeps_them() {

@@ -109,6 +109,26 @@ pub struct ConnectArgs {
     pub no_operator: bool,
 }
 
+/// Whether an idle read ends the attempt or keeps waiting until the deadline.
+///
+/// Readiness polling uses [`ProbeIdle::Yield`]: a silent peer must return so
+/// the next poll can run. A one-shot body read uses
+/// [`ProbeIdle::UntilDeadline`]: gaps shorter than the total budget still
+/// succeed, and a trickle cannot extend that budget.
+#[derive(Clone, Copy)]
+pub(crate) enum ProbeIdle {
+    /// Return when one read waits out [`PROBE_IO_TIMEOUT`] with no bytes.
+    Yield,
+    /// Keep reading through idle gaps until the caller's deadline.
+    UntilDeadline,
+}
+
+/// Status and body of one bounded HTTP/1.0 GET.
+pub(crate) struct ProbedHttp {
+    pub(crate) status: u16,
+    pub(crate) body: String,
+}
+
 /// Establish the tunnel — attaching to an already-running remote dashboard
 /// when one answers, spawning one otherwise — wait for readiness, open the
 /// browser, and block until Ctrl-C / SIGTERM — then tear down only what this
@@ -253,26 +273,6 @@ fn parse_controls_authorized(body: &str) -> Option<bool> {
 /// to decide whether an attached remote already has operator capability.
 fn routines_controls_authorized(local_port: u16) -> Option<bool> {
     parse_controls_authorized(&http_get_ok_body(local_port, "/api/routines")?)
-}
-
-/// Whether an idle read ends the attempt or keeps waiting until the deadline.
-///
-/// Readiness polling uses [`ProbeIdle::Yield`]: a silent peer must return so
-/// the next poll can run. A one-shot body read uses
-/// [`ProbeIdle::UntilDeadline`]: gaps shorter than the total budget still
-/// succeed, and a trickle cannot extend that budget.
-#[derive(Clone, Copy)]
-pub(crate) enum ProbeIdle {
-    /// Return when one read waits out [`PROBE_IO_TIMEOUT`] with no bytes.
-    Yield,
-    /// Keep reading through idle gaps until the caller's deadline.
-    UntilDeadline,
-}
-
-/// Status and body of one bounded HTTP/1.0 GET.
-pub(crate) struct ProbedHttp {
-    pub(crate) status: u16,
-    pub(crate) body: String,
 }
 
 /// `GET path` over the forwarded local port. Returns the response body only

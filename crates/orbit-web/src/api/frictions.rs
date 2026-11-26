@@ -101,13 +101,6 @@ impl FrictionCall {
     }
 }
 
-async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<Response>> {
-    blocking("friction tool", move || {
-        friction::exec(&core, call.into_command()).map(Outcome::into_value)
-    })
-    .await
-}
-
 #[derive(Deserialize, Default)]
 pub(super) struct FrictionsQuery {
     #[serde(default)]
@@ -163,6 +156,13 @@ pub(super) struct FrictionPatchBody {
     /// report.
     #[serde(flatten)]
     extra: Map<String, Value>,
+}
+
+async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<Response>> {
+    blocking("friction tool", move || {
+        friction::exec(&core, call.into_command()).map(Outcome::into_value)
+    })
+    .await
 }
 
 pub(super) async fn list_frictions(

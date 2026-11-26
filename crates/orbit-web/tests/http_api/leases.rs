@@ -4,6 +4,54 @@ use serde_json::{Value, json};
 use super::support::{Fixture, error_code, isolated, json_ok, leases_enabled};
 use orbit_core::runtime::stored::locks::lease::install_test_lease_policy;
 
+macro_rules! probe_lease_verb {
+    ($verb:ident) => {
+        fn $verb(
+            &self,
+            caller: &orbit_web::LeaseCaller,
+            input: Value,
+        ) -> orbit_web::LeaseBackendResult {
+            Ok(json!({
+                "verb": stringify!($verb),
+                "principal": caller.principal,
+                "workspace": caller.workspace,
+                "input": input,
+            }))
+        }
+    };
+}
+
+// A transport probe, not a second runtime adapter: checks the exported API a
+// listener can use without depending on dashboard state or localhost headers.
+struct ProbeBackend;
+
+impl orbit_web::LeaseBackend for ProbeBackend {
+    probe_lease_verb!(request);
+    probe_lease_verb!(renew);
+    probe_lease_verb!(expand);
+    probe_lease_verb!(release);
+    probe_lease_verb!(show);
+    probe_lease_verb!(check);
+    probe_lease_verb!(notices);
+
+    fn list(&self, caller: &orbit_web::LeaseCaller) -> orbit_web::LeaseBackendResult {
+        Ok(json!({"verb": "list", "principal": caller.principal, "workspace": caller.workspace}))
+    }
+
+    fn notice_stream(
+        &self,
+        caller: &orbit_web::LeaseCaller,
+        input: Value,
+    ) -> Result<orbit_web::LeaseNoticePages, Box<axum::response::Response>> {
+        let (pages, receiver) = tokio::sync::mpsc::channel(1);
+        let notice = json!({"seq": 7, "workspace": caller.workspace, "input": input});
+        pages
+            .try_send(Ok(json!({"notices": [notice], "cursor": 7})))
+            .unwrap();
+        Ok(receiver)
+    }
+}
+
 #[test]
 fn notice_poll_and_sse_resume_share_durable_sequence() {
     isolated(
@@ -275,54 +323,6 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             check_standalone_routes();
         },
     );
-}
-
-// A transport probe, not a second runtime adapter: checks the exported API a
-// listener can use without depending on dashboard state or localhost headers.
-struct ProbeBackend;
-
-macro_rules! probe_lease_verb {
-    ($verb:ident) => {
-        fn $verb(
-            &self,
-            caller: &orbit_web::LeaseCaller,
-            input: Value,
-        ) -> orbit_web::LeaseBackendResult {
-            Ok(json!({
-                "verb": stringify!($verb),
-                "principal": caller.principal,
-                "workspace": caller.workspace,
-                "input": input,
-            }))
-        }
-    };
-}
-
-impl orbit_web::LeaseBackend for ProbeBackend {
-    probe_lease_verb!(request);
-    probe_lease_verb!(renew);
-    probe_lease_verb!(expand);
-    probe_lease_verb!(release);
-    probe_lease_verb!(show);
-    probe_lease_verb!(check);
-    probe_lease_verb!(notices);
-
-    fn list(&self, caller: &orbit_web::LeaseCaller) -> orbit_web::LeaseBackendResult {
-        Ok(json!({"verb": "list", "principal": caller.principal, "workspace": caller.workspace}))
-    }
-
-    fn notice_stream(
-        &self,
-        caller: &orbit_web::LeaseCaller,
-        input: Value,
-    ) -> Result<orbit_web::LeaseNoticePages, Box<axum::response::Response>> {
-        let (pages, receiver) = tokio::sync::mpsc::channel(1);
-        let notice = json!({"seq": 7, "workspace": caller.workspace, "input": input});
-        pages
-            .try_send(Ok(json!({"notices": [notice], "cursor": 7})))
-            .unwrap();
-        Ok(receiver)
-    }
 }
 
 fn check_standalone_routes() {

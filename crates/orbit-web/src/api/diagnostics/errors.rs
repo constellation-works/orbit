@@ -26,6 +26,68 @@ use crate::log_format::{
 use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 use crate::state::{DashboardState, Ws};
 
+/// Most stderr blobs one `/api/diagnostics/errors` computation reads from
+/// disk. Each `cli_invocation_finished` event costs one blob read, so a long
+/// history of invocations with no structured error lines would otherwise read
+/// thousands of files per poll. Newest invocations are read first, so the cap
+/// only ever drops the oldest, and the feed reports the oldest invocation read
+/// as the start of its stderr coverage.
+pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
+
+/// Newest v2 envelope events the Errors feed scans for agent stderr.
+const STDERR_SCAN_EVENTS: usize = 50_000;
+
+/// Store rows read per page of that scan.
+const STDERR_SCAN_PAGE: usize = 5_000;
+
+type ErrorRowsWithCoverage = (Vec<Value>, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ParsedErrorLine {
+    pub ts: String,
+    pub target: String,
+    pub message: String,
+}
+
+/// The fields the Errors feed reads from one v2 envelope event. A full JSON
+/// tree per event made the 50,000-event scan the largest allocation of a
+/// dashboard poll; these fields take a small fraction of that.
+#[derive(Deserialize)]
+struct StderrScanEvent {
+    #[serde(default, deserialize_with = "string_field")]
+    event_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    parent_event_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    body_kind: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    run_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    ts: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    stderr_blob_ref: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    task_id: Option<String>,
+    #[serde(default, deserialize_with = "string_field")]
+    provider: Option<String>,
+}
+
+impl EnvelopeLinks for StderrScanEvent {
+    fn step_id(&self) -> Option<&str> {
+        self.step_id.as_deref()
+    }
+
+    fn parent_event_id(&self) -> Option<&str> {
+        self.parent_event_id.as_deref()
+    }
+
+    fn body_kind(&self) -> Option<&str> {
+        self.body_kind.as_deref()
+    }
+}
+
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
     blob_store
         .read(blob_ref)
@@ -92,8 +154,6 @@ fn diagnostics_errors(
         "coverage_since": coverage_since.map(|since| since.to_rfc3339()),
     }))
 }
-
-type ErrorRowsWithCoverage = (Vec<Value>, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
 fn diagnostics_error_rows(
     runtime: &OrbitRuntime,
@@ -302,14 +362,6 @@ fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
     })
 }
 
-/// Most stderr blobs one `/api/diagnostics/errors` computation reads from
-/// disk. Each `cli_invocation_finished` event costs one blob read, so a long
-/// history of invocations with no structured error lines would otherwise read
-/// thousands of files per poll. Newest invocations are read first, so the cap
-/// only ever drops the oldest, and the feed reports the oldest invocation read
-/// as the start of its stderr coverage.
-pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
-
 /// Agent-stderr rows newest first, with the timestamp of the oldest invocation
 /// read when the blob cap stopped the scan before the window start, combined
 /// with the raw audit-event scan's coverage boundary.
@@ -413,13 +465,6 @@ fn agent_stderr_error_rows(
     Ok((rows, coverage_since))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ParsedErrorLine {
-    pub ts: String,
-    pub target: String,
-    pub message: String,
-}
-
 fn parse_structured_error_lines(stderr: &str, fallback_ts: &str) -> Vec<ParsedErrorLine> {
     stderr
         .lines()
@@ -473,51 +518,6 @@ fn step_index_by_id(events: &[StderrScanEvent]) -> HashMap<(&str, &str), u32> {
         });
     }
     result
-}
-
-/// Newest v2 envelope events the Errors feed scans for agent stderr.
-const STDERR_SCAN_EVENTS: usize = 50_000;
-
-/// Store rows read per page of that scan.
-const STDERR_SCAN_PAGE: usize = 5_000;
-
-/// The fields the Errors feed reads from one v2 envelope event. A full JSON
-/// tree per event made the 50,000-event scan the largest allocation of a
-/// dashboard poll; these fields take a small fraction of that.
-#[derive(Deserialize)]
-struct StderrScanEvent {
-    #[serde(default, deserialize_with = "string_field")]
-    event_id: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    parent_event_id: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    body_kind: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    step_id: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    run_id: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    ts: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    stderr_blob_ref: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    task_id: Option<String>,
-    #[serde(default, deserialize_with = "string_field")]
-    provider: Option<String>,
-}
-
-impl EnvelopeLinks for StderrScanEvent {
-    fn step_id(&self) -> Option<&str> {
-        self.step_id.as_deref()
-    }
-
-    fn parent_event_id(&self) -> Option<&str> {
-        self.parent_event_id.as_deref()
-    }
-
-    fn body_kind(&self) -> Option<&str> {
-        self.body_kind.as_deref()
-    }
 }
 
 /// A string payload field, or `None` for any other JSON type, matching the

@@ -20,6 +20,80 @@ use crate::lease_intake::{
 };
 use crate::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
 
+struct FrameLimitFixture {
+    runtime: Arc<OrbitRuntime>,
+    socket_path: std::path::PathBuf,
+    _socket: LeaseIntakeSocket,
+    _tokio: tokio::runtime::Runtime,
+    _tmp: tempfile::TempDir,
+}
+
+impl FrameLimitFixture {
+    fn start() -> Self {
+        Self::start_with(IntakeLimits::default())
+    }
+
+    fn start_with(limits: IntakeLimits) -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("global")).expect("global root");
+        seed_registered_workspace(tmp.path(), "ws_frame_limit");
+        Self::serve(tmp, limits, "intake.sock")
+    }
+
+    /// Stop serving and serve the same owner store again from a new runtime
+    /// and socket, as after an Orbit Web or listener restart.
+    fn restart(self, limits: IntakeLimits) -> Self {
+        let Self {
+            runtime,
+            _socket,
+            _tokio,
+            _tmp,
+            ..
+        } = self;
+        drop(_socket);
+        _tokio.shutdown_background();
+        drop(runtime);
+        Self::serve(_tmp, limits, "intake-restarted.sock")
+    }
+
+    fn serve(tmp: tempfile::TempDir, limits: IntakeLimits, socket_name: &str) -> Self {
+        let global_root = tmp.path().join("global");
+        let repo = tmp.path().join("ws_frame_limit");
+        let runtime = Arc::new(
+            OrbitRuntime::from_roots(&global_root, &repo.join(".orbit")).expect("runtime"),
+        );
+        let socket_path = tmp.path().join(socket_name);
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let own_uid = unsafe { libc::geteuid() };
+        let mut socket =
+            LeaseIntakeSocket::for_test_listener(listener, socket_path.clone(), own_uid);
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let accept = {
+            let _entered = tokio.enter();
+            socket
+                .serve(DashboardState::single(Arc::clone(&runtime)), limits)
+                .expect("serve")
+        };
+        tokio.spawn(accept);
+        Self {
+            runtime,
+            socket_path,
+            _socket: socket,
+            _tokio: tokio,
+            _tmp: tmp,
+        }
+    }
+
+    fn connect(&self) -> LeaseIntakeClient {
+        LeaseIntakeClient::connect(&self.socket_path, Duration::from_secs(10)).expect("connect")
+    }
+}
+
 fn call(
     client: &mut LeaseIntakeClient,
     principal: &str,
@@ -115,80 +189,6 @@ fn refusal(response: LeaseIntakeResponse) -> LeaseIntakeError {
     match response {
         LeaseIntakeResponse::Error(error) => error,
         LeaseIntakeResponse::Ok { result } => panic!("intake allowed: {result}"),
-    }
-}
-
-struct FrameLimitFixture {
-    runtime: Arc<OrbitRuntime>,
-    socket_path: std::path::PathBuf,
-    _socket: LeaseIntakeSocket,
-    _tokio: tokio::runtime::Runtime,
-    _tmp: tempfile::TempDir,
-}
-
-impl FrameLimitFixture {
-    fn start() -> Self {
-        Self::start_with(IntakeLimits::default())
-    }
-
-    fn start_with(limits: IntakeLimits) -> Self {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(tmp.path().join("global")).expect("global root");
-        seed_registered_workspace(tmp.path(), "ws_frame_limit");
-        Self::serve(tmp, limits, "intake.sock")
-    }
-
-    /// Stop serving and serve the same owner store again from a new runtime
-    /// and socket, as after an Orbit Web or listener restart.
-    fn restart(self, limits: IntakeLimits) -> Self {
-        let Self {
-            runtime,
-            _socket,
-            _tokio,
-            _tmp,
-            ..
-        } = self;
-        drop(_socket);
-        _tokio.shutdown_background();
-        drop(runtime);
-        Self::serve(_tmp, limits, "intake-restarted.sock")
-    }
-
-    fn serve(tmp: tempfile::TempDir, limits: IntakeLimits, socket_name: &str) -> Self {
-        let global_root = tmp.path().join("global");
-        let repo = tmp.path().join("ws_frame_limit");
-        let runtime = Arc::new(
-            OrbitRuntime::from_roots(&global_root, &repo.join(".orbit")).expect("runtime"),
-        );
-        let socket_path = tmp.path().join(socket_name);
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
-        // SAFETY: geteuid has no preconditions and cannot fail.
-        let own_uid = unsafe { libc::geteuid() };
-        let mut socket =
-            LeaseIntakeSocket::for_test_listener(listener, socket_path.clone(), own_uid);
-        let tokio = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        let accept = {
-            let _entered = tokio.enter();
-            socket
-                .serve(DashboardState::single(Arc::clone(&runtime)), limits)
-                .expect("serve")
-        };
-        tokio.spawn(accept);
-        Self {
-            runtime,
-            socket_path,
-            _socket: socket,
-            _tokio: tokio,
-            _tmp: tmp,
-        }
-    }
-
-    fn connect(&self) -> LeaseIntakeClient {
-        LeaseIntakeClient::connect(&self.socket_path, Duration::from_secs(10)).expect("connect")
     }
 }
 

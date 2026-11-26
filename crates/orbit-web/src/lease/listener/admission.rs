@@ -20,6 +20,8 @@ use super::router::{bearer_secret, listener_refusal, route_verb, unauthorized};
 use super::{LeaseListenerLimits, limits};
 use crate::api::leases::{LeaseCaller, LeaseCallerToken};
 
+pub(super) const REQUEST_WINDOW: Duration = Duration::from_secs(60);
+
 pub(super) struct ListenerGate {
     pub(super) client_address: LeaseClientAddressPolicy,
     pub(super) store: Arc<Mutex<LeaseTokenStore>>,
@@ -144,7 +146,14 @@ struct LimitedClient {
     key: LimitKey,
 }
 
-pub(super) const REQUEST_WINDOW: Duration = Duration::from_secs(60);
+/// Marks a response that Orbit produced and audited itself.
+#[derive(Clone, Copy)]
+pub(super) struct AuditedByOrbit;
+
+/// The audit reason for a refusal the backend produced without reaching
+/// Orbit.
+#[derive(Clone, Copy)]
+pub(super) struct ListenerRefusalReason(pub(super) &'static str);
 
 /// Resolve once, then bound every request before authentication, including
 /// health, unknown routes, malformed forwarding chains and method errors.
@@ -220,15 +229,6 @@ pub(super) async fn listener_address_gate(
     }
     limits::retain_response_allowance(response, permit)
 }
-
-/// Marks a response that Orbit produced and audited itself.
-#[derive(Clone, Copy)]
-pub(super) struct AuditedByOrbit;
-
-/// The audit reason for a refusal the backend produced without reaching
-/// Orbit.
-#[derive(Clone, Copy)]
-pub(super) struct ListenerRefusalReason(pub(super) &'static str);
 
 /// Authenticate and apply address-independent read/write and concurrency budgets.
 pub(super) async fn lease_listener_gate(

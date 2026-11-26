@@ -52,50 +52,6 @@ impl PeerUser {
     }
 }
 
-fn operator_uid() -> libc::uid_t {
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    unsafe { libc::geteuid() }
-}
-
-/// `(uid, primary gid)` of `name`, or `None` when there is no such user.
-fn lookup_user(name: &str) -> Result<Option<(libc::uid_t, libc::gid_t)>, OrbitError> {
-    let c_name = std::ffi::CString::new(name).map_err(|_| {
-        OrbitError::InvalidInput(
-            "the lease intake peer user must not contain a NUL byte".to_string(),
-        )
-    })?;
-    let mut buf = vec![0 as libc::c_char; 1024];
-    loop {
-        // SAFETY: getpwnam_r writes only into the caller-owned `pwd` and
-        // `buf`; the fields read below are copied out before either is
-        // dropped, and only after a success with a non-null `result`.
-        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-        let mut result: *mut libc::passwd = std::ptr::null_mut();
-        // SAFETY: c_name is NUL-terminated (CString); pwd, buf and result are live out-params,
-        // and buf.len() is the buffer length passed to getpwnam_r.
-        let rc = unsafe {
-            libc::getpwnam_r(
-                c_name.as_ptr(),
-                &mut pwd,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut result,
-            )
-        };
-        if rc == 0 {
-            return Ok((!result.is_null()).then_some((pwd.pw_uid, pwd.pw_gid)));
-        }
-        if rc == libc::ERANGE && buf.len() < (1 << 20) {
-            buf.resize(buf.len() * 2, 0);
-            continue;
-        }
-        return Err(OrbitError::Io(format!(
-            "look up the lease intake peer user `{name}`: {}",
-            io::Error::from_raw_os_error(rc)
-        )));
-    }
-}
-
 /// The bound intake socket, removed when dropped.
 pub(crate) struct LeaseIntakeSocket {
     /// Taken by [`LeaseIntakeSocket::serve`].
@@ -182,6 +138,50 @@ impl Drop for LeaseIntakeSocket {
         {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+}
+
+fn operator_uid() -> libc::uid_t {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// `(uid, primary gid)` of `name`, or `None` when there is no such user.
+fn lookup_user(name: &str) -> Result<Option<(libc::uid_t, libc::gid_t)>, OrbitError> {
+    let c_name = std::ffi::CString::new(name).map_err(|_| {
+        OrbitError::InvalidInput(
+            "the lease intake peer user must not contain a NUL byte".to_string(),
+        )
+    })?;
+    let mut buf = vec![0 as libc::c_char; 1024];
+    loop {
+        // SAFETY: getpwnam_r writes only into the caller-owned `pwd` and
+        // `buf`; the fields read below are copied out before either is
+        // dropped, and only after a success with a non-null `result`.
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: c_name is NUL-terminated (CString); pwd, buf and result are live out-params,
+        // and buf.len() is the buffer length passed to getpwnam_r.
+        let rc = unsafe {
+            libc::getpwnam_r(
+                c_name.as_ptr(),
+                &mut pwd,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut result,
+            )
+        };
+        if rc == 0 {
+            return Ok((!result.is_null()).then_some((pwd.pw_uid, pwd.pw_gid)));
+        }
+        if rc == libc::ERANGE && buf.len() < (1 << 20) {
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        return Err(OrbitError::Io(format!(
+            "look up the lease intake peer user `{name}`: {}",
+            io::Error::from_raw_os_error(rc)
+        )));
     }
 }
 

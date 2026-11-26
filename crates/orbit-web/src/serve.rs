@@ -30,6 +30,26 @@ use crate::{api, assets, health, heap, state};
 pub(crate) use crate::connect::{DEFAULT_DASHBOARD_PORT, open_browser};
 pub(crate) use crate::shutdown::shutdown_signal;
 
+/// Upper bound on graceful connection drain once shutdown begins (a shutdown
+/// signal or a lifecycle boundary such as an Orbit upgrade) — well under
+/// `orbit-web.service`'s `TimeoutStopUSec=90s` (see the 2026-09-05 restart
+/// incident, ORB-11246: `stop-sigterm` timed out and systemd fell back to
+/// SIGKILL). As soon as shutdown begins, `run_server` also tells long-lived
+/// streaming handlers (`api::request_shutdown`, e.g. `/api/log/stream`) to close
+/// cooperatively, so in practice the drain below finishes almost immediately;
+/// this timeout is a deterministic backstop for a connection that doesn't
+/// cooperate, so the process still exits on its own instead of relying on
+/// systemd's SIGKILL.
+const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
+
+/// The former `lease.intake.peer_user` default (unset), fixed when the key
+/// was removed [ORB-22808]: the OS user Orbit Web's lease intake socket
+/// accepts. With none, Orbit Web serves no intake socket.
+const LEASE_INTAKE_PEER_USER: Option<&str> = None;
+
+/// How often the dashboard checks for a replacement or a pending switch.
+const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Arguments for `orbit web serve` (and the library entry point).
 #[derive(Args, Clone)]
 #[command(about = "Run the Orbit dashboard")]
@@ -181,18 +201,6 @@ pub(crate) fn build_state(
     );
     state::DashboardState::from_registry(global_root, source, env.clone())
 }
-
-/// Upper bound on graceful connection drain once shutdown begins (a shutdown
-/// signal or a lifecycle boundary such as an Orbit upgrade) — well under
-/// `orbit-web.service`'s `TimeoutStopUSec=90s` (see the 2026-09-05 restart
-/// incident, ORB-11246: `stop-sigterm` timed out and systemd fell back to
-/// SIGKILL). As soon as shutdown begins, `run_server` also tells long-lived
-/// streaming handlers (`api::request_shutdown`, e.g. `/api/log/stream`) to close
-/// cooperatively, so in practice the drain below finishes almost immediately;
-/// this timeout is a deterministic backstop for a connection that doesn't
-/// cooperate, so the process still exits on its own instead of relying on
-/// systemd's SIGKILL.
-const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
 /// `/healthz` with the same Host/Origin and nosniff layers as `/api`, under
 /// `state`'s trusted-host policy.
@@ -397,11 +405,6 @@ fn run_server(args: &ServeArgs, state: state::DashboardState, env: &Env) -> Resu
     Ok(())
 }
 
-/// The former `lease.intake.peer_user` default (unset), fixed when the key
-/// was removed [ORB-22808]: the OS user Orbit Web's lease intake socket
-/// accepts. With none, Orbit Web serves no intake socket.
-const LEASE_INTAKE_PEER_USER: Option<&str> = None;
-
 /// Bind the lease intake socket when there is an intake peer user; `None`
 /// when there is none.
 #[cfg(unix)]
@@ -434,9 +437,6 @@ fn bind_lease_intake(_global_root: &Path) -> Result<Option<()>, OrbitError> {
 pub(crate) fn teardown_runtime(runtime: tokio::runtime::Runtime) {
     runtime.shutdown_background();
 }
-
-/// How often the dashboard checks for a replacement or a pending switch.
-const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Resolve when this dashboard should stop serving: with the installed
 /// executable to hand over to when a newer one replaced it, or `None` to

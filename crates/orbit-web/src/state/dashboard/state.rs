@@ -248,12 +248,12 @@ impl DashboardState {
         Self {
             inner: Arc::new(StateInner {
                 env,
-                hosts,
-                host_tunnels,
                 global_root,
                 host_resources: Mutex::new(None),
                 host_disk_paths,
                 snapshot: Mutex::new(Arc::new(initial)),
+                hosts,
+                host_tunnels,
                 runtimes: Mutex::new(runtimes),
                 source,
                 refresh_lock: Mutex::new(()),

@@ -10,6 +10,9 @@ use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok, walk_audit_pages};
 
+/// The feed's per-message cap, as documented on the dashboard API.
+const LIST_MESSAGE_MAX_BYTES: usize = 2048;
+
 #[test]
 fn failed_runs_tile_matches_filtered_terminal_runs() {
     isolated(
@@ -383,9 +386,6 @@ fn incidents_carry_the_cause_one_failure_shares_across_surfaces() {
         },
     );
 }
-
-/// The feed's per-message cap, as documented on the dashboard API.
-const LIST_MESSAGE_MAX_BYTES: usize = 2048;
 
 /// A failure message of a few hundred KB, as a failed validation records,
 /// with a bare token straddling the cap: cutting before redacting would leave
