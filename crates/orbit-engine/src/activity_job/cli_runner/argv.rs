@@ -83,9 +83,9 @@ pub(super) fn try_audit_argv_for_dispatch(
                 process_env,
                 &sb.fs_profile,
                 &LinuxBwrapCommand {
-                    program: program,
-                    args: args,
-                    cwd: cwd,
+                    program,
+                    args,
+                    cwd,
                     managed_worktree: sb.managed_worktree,
                 },
                 Vec::new(),

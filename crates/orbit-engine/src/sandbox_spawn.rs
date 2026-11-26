@@ -327,9 +327,9 @@ fn spawn_linux_bwrap(
         process_env,
         &sandbox.fs_profile,
         &LinuxBwrapCommand {
-            program: program,
-            args: args,
-            cwd: cwd,
+            program,
+            args,
+            cwd,
             managed_worktree: sandbox.managed_worktree,
         },
         authority,
