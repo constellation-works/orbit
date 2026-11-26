@@ -14,6 +14,30 @@ use serde_json::{Value, json};
 /// Exact phrase when a cancelled run has no recorded reason.
 const NO_REASON_RECORDED: &str = "no reason recorded";
 
+impl<'a> Command<'a, Option<RunFailureCause>> {
+    /// Read the deepest recorded cause, falling back to the run's own evidence.
+    pub fn failure_cause(run: &'a JobRun) -> Self {
+        Self::new(Operation::command("run", "failure-root"), move |core| {
+            let rt = core.runtime();
+            let state = read_state(rt, &run.run_id);
+            let chain = failure_root(rt, run, state.as_ref()).filter(|cause| {
+                [cause.step.as_deref(), cause.message.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|text| !text.trim().is_empty())
+            });
+            Ok(chain.or_else(|| {
+                rt.run_failure_cause(
+                    run,
+                    RunFailureContextProfile::DeepestObserved,
+                    &mut log_failure_warning,
+                )
+                .ok()
+            }))
+        })
+    }
+}
+
 /// Attach `failure_root` and `cancellation` to the detail run object.
 ///
 /// `failure_root` is the deepest failed, timed-out, cancelled, or interrupted
@@ -179,28 +203,4 @@ fn owned(value: Option<&str>) -> Option<String> {
 
 fn reason_text(reason: Option<&str>) -> String {
     owned(reason).unwrap_or_else(|| NO_REASON_RECORDED.to_string())
-}
-
-impl<'a> Command<'a, Option<RunFailureCause>> {
-    /// Read the deepest recorded cause, falling back to the run's own evidence.
-    pub fn failure_cause(run: &'a JobRun) -> Self {
-        Self::new(Operation::command("run", "failure-root"), move |core| {
-            let rt = core.runtime();
-            let state = read_state(rt, &run.run_id);
-            let chain = failure_root(rt, run, state.as_ref()).filter(|cause| {
-                [cause.step.as_deref(), cause.message.as_deref()]
-                    .into_iter()
-                    .flatten()
-                    .any(|text| !text.trim().is_empty())
-            });
-            Ok(chain.or_else(|| {
-                rt.run_failure_cause(
-                    run,
-                    RunFailureContextProfile::DeepestObserved,
-                    &mut log_failure_warning,
-                )
-                .ok()
-            }))
-        })
-    }
 }

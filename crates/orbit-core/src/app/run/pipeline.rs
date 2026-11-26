@@ -13,6 +13,39 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
+impl<'a> Command<'a, Value> {
+    pub(crate) fn pipeline_invoke(
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+        reservation_owner: Option<ReservationOwnerContext>,
+        trigger: JobRunTrigger,
+    ) -> Self {
+        Self::new(Operation::command("pipeline", "invoke"), move |core| {
+            invoke(
+                core.runtime(),
+                input,
+                agent,
+                model,
+                reservation_owner,
+                trigger,
+            )
+        })
+    }
+}
+
+impl<'a> Command<'a, Value> {
+    pub(crate) fn pipeline_wait(
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Self {
+        Self::new(Operation::command("pipeline", "wait"), move |core| {
+            wait(core.runtime(), input, agent, model)
+        })
+    }
+}
+
 fn invoke(
     runtime: &OrbitRuntime,
     input: Value,
@@ -103,37 +136,4 @@ fn wait(
         actor.as_deref(),
     )?)
     .map_err(serialize_error("serialize pipeline wait"))
-}
-
-impl<'a> Command<'a, Value> {
-    pub(crate) fn pipeline_invoke(
-        input: Value,
-        agent: Option<String>,
-        model: Option<String>,
-        reservation_owner: Option<ReservationOwnerContext>,
-        trigger: JobRunTrigger,
-    ) -> Self {
-        Self::new(Operation::command("pipeline", "invoke"), move |core| {
-            invoke(
-                core.runtime(),
-                input,
-                agent,
-                model,
-                reservation_owner,
-                trigger,
-            )
-        })
-    }
-}
-
-impl<'a> Command<'a, Value> {
-    pub(crate) fn pipeline_wait(
-        input: Value,
-        agent: Option<String>,
-        model: Option<String>,
-    ) -> Self {
-        Self::new(Operation::command("pipeline", "wait"), move |core| {
-            wait(core.runtime(), input, agent, model)
-        })
-    }
 }
