@@ -7,7 +7,8 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
     use std::process::{Command, Stdio};
 
     use super::{
-        LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority, inherit_mount_sources,
+        LinuxBwrapCommand, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
+        inherit_mount_sources,
     };
 
     const ISOLATED_CHILD: &str = "ORBIT_DESCRIPTOR_EXEC_ERROR_CHILD";
@@ -58,10 +59,12 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
     let plan = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &profile(modify),
-        "/bin/true",
-        &[],
-        Some(&root),
-        false,
+        &LinuxBwrapCommand {
+            program: "/bin/true",
+            args: &[],
+            cwd: Some(&root),
+            managed_worktree: false,
+        },
         authority,
         None,
     )
@@ -98,7 +101,9 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
 fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
     use std::os::unix::fs::symlink;
 
-    use super::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
+    use super::{
+        LinuxBwrapCommand, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
+    };
 
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("root");
@@ -117,10 +122,12 @@ fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
     let error = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &resolved,
-        "/bin/true",
-        &[],
-        Some(&root),
-        false,
+        &LinuxBwrapCommand {
+            program: "/bin/true",
+            args: &[],
+            cwd: Some(&root),
+            managed_worktree: false,
+        },
         vec![LinuxBwrapMountAuthority {
             destination: target,
             source: std::sync::Arc::new(source),
@@ -138,7 +145,9 @@ fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
 fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
     use std::os::unix::fs::symlink;
 
-    use super::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
+    use super::{
+        LinuxBwrapCommand, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
+    };
 
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("root");
@@ -154,10 +163,12 @@ fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
     let error = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &resolved,
-        "/bin/true",
-        &[],
-        Some(&root),
-        false,
+        &LinuxBwrapCommand {
+            program: "/bin/true",
+            args: &[],
+            cwd: Some(&root),
+            managed_worktree: false,
+        },
         vec![LinuxBwrapMountAuthority {
             destination: target,
             source: std::sync::Arc::new(source),

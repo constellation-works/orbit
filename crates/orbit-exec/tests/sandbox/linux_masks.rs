@@ -2,7 +2,8 @@
 use super::linux_sandbox::profile;
 use orbit_common::OrbitError;
 use orbit_exec::{
-    LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask, compile_linux_bwrap_argv_with_authority,
+    LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapCommand, LinuxBwrapMask,
+    compile_linux_bwrap_argv_with_authority,
 };
 use std::{fs, path::PathBuf};
 
@@ -60,10 +61,12 @@ fn mask_refuses_a_tree_the_plan_aliases_elsewhere() {
     let error = compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &resolved,
-        "/bin/true",
-        &[],
-        Some(&fixture.workspace),
-        true,
+        &LinuxBwrapCommand {
+            program: "/bin/true",
+            args: &[],
+            cwd: Some(&fixture.workspace),
+            managed_worktree: true,
+        },
         Vec::new(),
         Some(&mask),
     )

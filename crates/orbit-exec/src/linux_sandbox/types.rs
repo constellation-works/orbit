@@ -90,6 +90,20 @@ pub struct LinuxBwrapMask {
     pub files: Vec<PathBuf>,
 }
 
+/// The program a Bubblewrap plan wraps, with its arguments, working directory
+/// and whether it runs in a managed worktree.
+#[derive(Debug, Clone, Copy)]
+pub struct LinuxBwrapCommand<'a> {
+    /// The program the sandbox executes.
+    pub program: &'a str,
+    /// Arguments passed to `program`.
+    pub args: &'a [String],
+    /// Working directory inside the sandbox, when the caller pins one.
+    pub cwd: Option<&'a Path>,
+    /// Whether `cwd` is a managed worktree, which carries a post-run guard.
+    pub managed_worktree: bool,
+}
+
 /// A host object already validated and opened by the runtime owner. Sharing
 /// the handle avoids a parent-side `dup`: closing such a duplicate can release
 /// unrelated POSIX locks held by SQLite in the same process.

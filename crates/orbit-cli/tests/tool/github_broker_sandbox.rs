@@ -163,13 +163,15 @@ fn sandbox_fixture() {
     let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &profile,
-        "/usr/bin/python3",
-        &[
-            provider.display().to_string(),
-            env!("CARGO_BIN_EXE_orbit").to_string(),
-        ],
-        Some(&work),
-        false,
+        &orbit_exec::LinuxBwrapCommand {
+            program: "/usr/bin/python3",
+            args: &[
+                provider.display().to_string(),
+                env!("CARGO_BIN_EXE_orbit").to_string(),
+            ],
+            cwd: Some(&work),
+            managed_worktree: false,
+        },
         Vec::new(),
         Some(&mask),
     )

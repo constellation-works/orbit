@@ -94,7 +94,7 @@ pub use linux_landlock::{
 pub use linux_sandbox::probe_bwrap_fresh_for_user;
 pub use linux_sandbox::{
     BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, HOST_BWRAP_PATH,
-    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
+    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapCommand, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval,
     LinuxBwrapSpawnRequest, UnsatisfiedWriteGrant, WriteAnchorKind, bwrap_deferral_notice,
     bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,

@@ -12,7 +12,7 @@ use orbit_common::process::OwnedChild;
 #[cfg(any(test, feature = "test-support"))]
 use orbit_exec::bwrap_program_for_audit;
 use orbit_exec::{
-    BwrapProbeOutcome, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
+    BwrapProbeOutcome, LinuxBwrapCommand, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
     LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest,
     UnsatisfiedWriteGrant, append_macos_file_mask, append_macos_subpath_mask,
     compile_linux_bwrap_argv_with_authority, compile_macos_sandbox_profile,
@@ -326,10 +326,12 @@ fn spawn_linux_bwrap(
     let plan = compile_linux_bwrap_argv_with_authority(
         process_env,
         &sandbox.fs_profile,
-        program,
-        args,
-        cwd,
-        sandbox.managed_worktree,
+        &LinuxBwrapCommand {
+            program,
+            args,
+            cwd,
+            managed_worktree: sandbox.managed_worktree,
+        },
         authority,
         mask.as_ref(),
     )

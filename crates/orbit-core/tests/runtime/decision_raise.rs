@@ -209,14 +209,16 @@ fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
     let mut plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
         &orbit_common::Env::capture(),
         &resolved.fs_profile,
-        binary.to_str().unwrap(),
-        &[
-            "--exact".into(),
-            "decision_raise::managed_scenarios".into(),
-            "--nocapture".into(),
-        ],
-        Some(&worktree),
-        true,
+        &orbit_exec::LinuxBwrapCommand {
+            program: binary.to_str().unwrap(),
+            args: &[
+                "--exact".into(),
+                "decision_raise::managed_scenarios".into(),
+                "--nocapture".into(),
+            ],
+            cwd: Some(&worktree),
+            managed_worktree: true,
+        },
         authority,
         None,
     )

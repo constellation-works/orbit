@@ -5,7 +5,7 @@
     "orbit-config": 0,
     "orbit-core": 26,
     "orbit-engine": 36,
-    "orbit-exec": 2,
+    "orbit-exec": 0,
     "orbit-runtime": 6,
     "orbit-search": 0,
     "orbit-store": 12,
