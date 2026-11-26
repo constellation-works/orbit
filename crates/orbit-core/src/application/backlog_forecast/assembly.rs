@@ -18,6 +18,19 @@ use super::usage::ForecastRun;
 use super::{dependencies, model, outcomes, resource_fit, rework, usage};
 use crate::application::admission::backlog_exclusion;
 
+/// Days the arrival rate is measured over.
+pub(super) const ARRIVAL_DAYS: i64 = 7;
+/// Tags whose filings count as sweep output rather than hand filings.
+const SWEEP_TAGS: [&str; 7] = [
+    "ci-failure-sweep",
+    "qa-sweep",
+    "code-review",
+    "security-review",
+    "delivery-code-review",
+    "friction-curation",
+    "baseline-red-repair",
+];
+
 pub(super) struct ForecastSimulationInputs {
     pub(super) items: Vec<Item>,
     pub(super) resolved: Vec<Resolved>,
@@ -36,18 +49,7 @@ pub(super) struct ForecastSimulationInputs {
     pub(super) admission: crate::application::admission::forecast::ForecastAdmission,
     pub(super) review_evidence_gaps: BTreeMap<String, ReviewEvidenceGap>,
 }
-/// Days the arrival rate is measured over.
-pub(super) const ARRIVAL_DAYS: i64 = 7;
-/// Tags whose filings count as sweep output rather than hand filings.
-const SWEEP_TAGS: [&str; 7] = [
-    "ci-failure-sweep",
-    "qa-sweep",
-    "code-review",
-    "security-review",
-    "delivery-code-review",
-    "friction-curation",
-    "baseline-red-repair",
-];
+
 /// Complexity tier → the crews its pool draws (weight above zero).
 fn complexity_pools(runtime: &OrbitRuntime) -> BTreeMap<String, BTreeSet<String>> {
     let pools = match runtime.workspace_complexity_crew_pools() {
@@ -220,12 +222,12 @@ pub(super) fn assemble_forecast_simulation(
         probabilities: Vec::new(),
         prior_basis: Vec::new(),
         risks: Vec::new(),
-        known_origins: BTreeMap::new(),
         gaps: Vec::new(),
         pool_gaps: Vec::new(),
         pool_fixes: Vec::new(),
         in_origin_review: 0,
         excluded_links: BTreeMap::new(),
+        known_origins: BTreeMap::new(),
     };
     for task in &queued {
         let risk = risk_model.estimate(task);

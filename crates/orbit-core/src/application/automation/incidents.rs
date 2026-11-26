@@ -19,6 +19,217 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) type IncidentMembers = BTreeMap<String, Vec<String>>;
 
+struct Diagnosis {
+    workspace: String,
+    episode: String,
+    cause: Option<String>,
+    failure: bool,
+    recovery_settled: bool,
+    coupled: bool,
+    cancelled: bool,
+    evidence: Value,
+}
+
+impl Diagnosis {
+    fn facts(&self) -> IncidentFacts {
+        IncidentFacts {
+            workspace: self.workspace.clone(),
+            episode: Some(self.episode.clone()),
+            cause: self.cause.clone(),
+            failure: self.failure,
+            recovery_settled: self.recovery_settled,
+            current_failure_coupling: self.coupled,
+            cancellation: self.cancelled,
+        }
+    }
+}
+
+/// Bounded reuse of incident inventory work for one `Host` evaluation.
+///
+/// Lifetime: one `members::evaluate` call. `Host::observe` may populate the
+/// session; `Host::admission` reuses that snapshot only after a freshness
+/// check against current blocked-task identities, related-run owner/state,
+/// retry children, child-dispatch tokens, and live liveness probes. Liveness
+/// is never cached by run ID across a changed owner/state observation. A
+/// failed freshness check rebuilds. Candidate fingerprint `observe` stays a
+/// fresh read so `material_changed` does not depend on the session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct IncidentSession {
+    cached: Option<IncidentMembers>,
+    freshness: Option<FreshnessSnapshot>,
+    building: FreshnessSnapshot,
+    recording: bool,
+}
+
+impl IncidentSession {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn inventory(
+        &mut self,
+        runtime: &OrbitRuntime,
+    ) -> Result<IncidentMembers, AutomationError> {
+        if let Some(cached) = self.cached.clone()
+            && self.fresh(runtime)?
+        {
+            return Ok(cached);
+        }
+
+        let built = self.rebuild(runtime)?;
+        self.cached = Some(built.clone());
+        Ok(built)
+    }
+
+    fn rebuild(&mut self, runtime: &OrbitRuntime) -> Result<IncidentMembers, AutomationError> {
+        self.recording = true;
+        self.building = FreshnessSnapshot::default();
+
+        let listed = blocked_candidates(runtime)?;
+        self.building.tasks = listed.items.iter().map(envelope_identity).collect();
+
+        let mut members: IncidentMembers = BTreeMap::new();
+        let mut unsettled = BTreeSet::new();
+
+        for candidate in &listed.items {
+            let task = runtime.get_task(&candidate.id)?;
+            if let Ok(diagnosis) = diagnose(runtime, &task, self) {
+                let facts = diagnosis.facts();
+                if let Ok(key) = incident_key(&facts) {
+                    members.entry(key).or_default().push(task.id);
+                } else if let Ok(key) = incident_key(&IncidentFacts {
+                    recovery_settled: true,
+                    ..facts
+                }) {
+                    // An unsettled member is keyed as if settled, so its whole
+                    // incident is withheld below.
+                    unsettled.insert(key);
+                }
+            }
+        }
+
+        // An incident with any still-unsettled member is not yet diagnosable at all.
+        members.retain(|key, _| !unsettled.contains(key));
+
+        for ids in members.values_mut() {
+            ids.sort();
+        }
+
+        self.recording = false;
+        self.freshness = Some(std::mem::take(&mut self.building));
+        Ok(members)
+    }
+
+    fn fresh(&mut self, runtime: &OrbitRuntime) -> Result<bool, AutomationError> {
+        let Some(snapshot) = self.freshness.clone() else {
+            return Ok(false);
+        };
+
+        let listed = blocked_candidates(runtime)?;
+        let tasks: Vec<_> = listed.items.iter().map(envelope_identity).collect();
+        if tasks != snapshot.tasks {
+            return Ok(false);
+        }
+
+        for (run_id, expected) in &snapshot.runs {
+            let Some(run) = runtime.get_job_run_backend(run_id)? else {
+                return Ok(false);
+            };
+            let liveness = run_owner_liveness(&run);
+            if run.state != expected.state
+                || run.pid != expected.pid
+                || run.pid_start_time != expected.pid_start_time
+                || liveness != expected.liveness
+            {
+                return Ok(false);
+            }
+
+            let state = runtime.read_run_state(run_id)?;
+            if child_dispatch_token(state.as_ref()) != expected.child_dispatches {
+                return Ok(false);
+            }
+        }
+
+        for (run_id, expected) in &snapshot.retries {
+            let children = self.retries(runtime, run_id)?;
+            let mut child_ids: Vec<String> =
+                children.iter().map(|child| child.run_id.clone()).collect();
+            child_ids.sort();
+            if &child_ids != expected {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn retries(
+        &mut self,
+        runtime: &OrbitRuntime,
+        run_id: &str,
+    ) -> Result<Vec<JobRun>, AutomationError> {
+        let children = runtime.stores().jobs().job_run_retries(run_id, 51)?;
+        if self.recording {
+            let mut ids: Vec<String> = children.iter().map(|child| child.run_id.clone()).collect();
+            ids.sort();
+            self.building.retries.insert(run_id.to_string(), ids);
+        }
+        Ok(children)
+    }
+
+    fn note_run(
+        &mut self,
+        run: &JobRun,
+        liveness: RunOwnerLiveness,
+        state: &Option<PipelineState>,
+    ) {
+        if !self.recording {
+            return;
+        }
+        self.building
+            .runs
+            .entry(run.run_id.clone())
+            .and_modify(|identity| {
+                identity.state = run.state;
+                identity.pid = run.pid;
+                identity.pid_start_time = run.pid_start_time.clone();
+                identity.liveness = liveness;
+                identity.child_dispatches = child_dispatch_token(state.as_ref());
+            })
+            .or_insert(RunIdentity {
+                state: run.state,
+                pid: run.pid,
+                pid_start_time: run.pid_start_time.clone(),
+                liveness,
+                child_dispatches: child_dispatch_token(state.as_ref()),
+            });
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FreshnessSnapshot {
+    tasks: Vec<TaskIdentity>,
+    runs: BTreeMap<String, RunIdentity>,
+    retries: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TaskIdentity {
+    id: String,
+    status: TaskStatus,
+    job_run_id: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RunIdentity {
+    state: JobRunState,
+    pid: Option<u32>,
+    pid_start_time: Option<String>,
+    liveness: RunOwnerLiveness,
+    child_dispatches: Vec<(String, String, bool, Option<String>, bool)>,
+}
+
 pub(crate) fn failure_coupled(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -77,31 +288,6 @@ pub(crate) fn observe(
     let mut session = IncidentSession::new();
     let diagnosis = diagnose(runtime, task, &mut session)?;
     Ok((incident_key(&diagnosis.facts())?, diagnosis.evidence))
-}
-
-struct Diagnosis {
-    workspace: String,
-    episode: String,
-    cause: Option<String>,
-    failure: bool,
-    recovery_settled: bool,
-    coupled: bool,
-    cancelled: bool,
-    evidence: Value,
-}
-
-impl Diagnosis {
-    fn facts(&self) -> IncidentFacts {
-        IncidentFacts {
-            workspace: self.workspace.clone(),
-            episode: Some(self.episode.clone()),
-            cause: self.cause.clone(),
-            failure: self.failure,
-            recovery_settled: self.recovery_settled,
-            current_failure_coupling: self.coupled,
-            cancellation: self.cancelled,
-        }
-    }
 }
 
 fn diagnose(
@@ -250,192 +436,6 @@ fn diagnose(
         evidence: json!({"episode":episode,"cause_run_id":run.run_id,"coupled_run_id":run_id,
         "task_revision":task.updated_at, "task_id":task.id}),
     })
-}
-
-/// Bounded reuse of incident inventory work for one `Host` evaluation.
-///
-/// Lifetime: one `members::evaluate` call. `Host::observe` may populate the
-/// session; `Host::admission` reuses that snapshot only after a freshness
-/// check against current blocked-task identities, related-run owner/state,
-/// retry children, child-dispatch tokens, and live liveness probes. Liveness
-/// is never cached by run ID across a changed owner/state observation. A
-/// failed freshness check rebuilds. Candidate fingerprint `observe` stays a
-/// fresh read so `material_changed` does not depend on the session.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct IncidentSession {
-    cached: Option<IncidentMembers>,
-    freshness: Option<FreshnessSnapshot>,
-    building: FreshnessSnapshot,
-    recording: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-struct FreshnessSnapshot {
-    tasks: Vec<TaskIdentity>,
-    runs: BTreeMap<String, RunIdentity>,
-    retries: BTreeMap<String, Vec<String>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TaskIdentity {
-    id: String,
-    status: TaskStatus,
-    job_run_id: Option<String>,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RunIdentity {
-    state: JobRunState,
-    pid: Option<u32>,
-    pid_start_time: Option<String>,
-    liveness: RunOwnerLiveness,
-    child_dispatches: Vec<(String, String, bool, Option<String>, bool)>,
-}
-
-impl IncidentSession {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    pub(crate) fn inventory(
-        &mut self,
-        runtime: &OrbitRuntime,
-    ) -> Result<IncidentMembers, AutomationError> {
-        if let Some(cached) = self.cached.clone()
-            && self.fresh(runtime)?
-        {
-            return Ok(cached);
-        }
-
-        let built = self.rebuild(runtime)?;
-        self.cached = Some(built.clone());
-        Ok(built)
-    }
-
-    fn rebuild(&mut self, runtime: &OrbitRuntime) -> Result<IncidentMembers, AutomationError> {
-        self.recording = true;
-        self.building = FreshnessSnapshot::default();
-
-        let listed = blocked_candidates(runtime)?;
-        self.building.tasks = listed.items.iter().map(envelope_identity).collect();
-
-        let mut members: IncidentMembers = BTreeMap::new();
-        let mut unsettled = BTreeSet::new();
-
-        for candidate in &listed.items {
-            let task = runtime.get_task(&candidate.id)?;
-            if let Ok(diagnosis) = diagnose(runtime, &task, self) {
-                let facts = diagnosis.facts();
-                if let Ok(key) = incident_key(&facts) {
-                    members.entry(key).or_default().push(task.id);
-                } else if let Ok(key) = incident_key(&IncidentFacts {
-                    recovery_settled: true,
-                    ..facts
-                }) {
-                    // An unsettled member is keyed as if settled, so its whole
-                    // incident is withheld below.
-                    unsettled.insert(key);
-                }
-            }
-        }
-
-        // An incident with any still-unsettled member is not yet diagnosable at all.
-        members.retain(|key, _| !unsettled.contains(key));
-
-        for ids in members.values_mut() {
-            ids.sort();
-        }
-
-        self.recording = false;
-        self.freshness = Some(std::mem::take(&mut self.building));
-        Ok(members)
-    }
-
-    fn fresh(&mut self, runtime: &OrbitRuntime) -> Result<bool, AutomationError> {
-        let Some(snapshot) = self.freshness.clone() else {
-            return Ok(false);
-        };
-
-        let listed = blocked_candidates(runtime)?;
-        let tasks: Vec<_> = listed.items.iter().map(envelope_identity).collect();
-        if tasks != snapshot.tasks {
-            return Ok(false);
-        }
-
-        for (run_id, expected) in &snapshot.runs {
-            let Some(run) = runtime.get_job_run_backend(run_id)? else {
-                return Ok(false);
-            };
-            let liveness = run_owner_liveness(&run);
-            if run.state != expected.state
-                || run.pid != expected.pid
-                || run.pid_start_time != expected.pid_start_time
-                || liveness != expected.liveness
-            {
-                return Ok(false);
-            }
-
-            let state = runtime.read_run_state(run_id)?;
-            if child_dispatch_token(state.as_ref()) != expected.child_dispatches {
-                return Ok(false);
-            }
-        }
-
-        for (run_id, expected) in &snapshot.retries {
-            let children = self.retries(runtime, run_id)?;
-            let mut child_ids: Vec<String> =
-                children.iter().map(|child| child.run_id.clone()).collect();
-            child_ids.sort();
-            if &child_ids != expected {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
-    }
-
-    fn retries(
-        &mut self,
-        runtime: &OrbitRuntime,
-        run_id: &str,
-    ) -> Result<Vec<JobRun>, AutomationError> {
-        let children = runtime.stores().jobs().job_run_retries(run_id, 51)?;
-        if self.recording {
-            let mut ids: Vec<String> = children.iter().map(|child| child.run_id.clone()).collect();
-            ids.sort();
-            self.building.retries.insert(run_id.to_string(), ids);
-        }
-        Ok(children)
-    }
-
-    fn note_run(
-        &mut self,
-        run: &JobRun,
-        liveness: RunOwnerLiveness,
-        state: &Option<PipelineState>,
-    ) {
-        if !self.recording {
-            return;
-        }
-        self.building
-            .runs
-            .entry(run.run_id.clone())
-            .and_modify(|identity| {
-                identity.state = run.state;
-                identity.pid = run.pid;
-                identity.pid_start_time = run.pid_start_time.clone();
-                identity.liveness = liveness;
-                identity.child_dispatches = child_dispatch_token(state.as_ref());
-            })
-            .or_insert(RunIdentity {
-                state: run.state,
-                pid: run.pid,
-                pid_start_time: run.pid_start_time.clone(),
-                liveness,
-                child_dispatches: child_dispatch_token(state.as_ref()),
-            });
-    }
 }
 
 fn envelope_identity(task: &TaskEnvelopeV2) -> TaskIdentity {

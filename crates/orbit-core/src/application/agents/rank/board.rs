@@ -102,45 +102,6 @@ impl ModelRow {
     }
 }
 
-/// Pool the scorecard's crew-and-model rows by model. A task two crews of
-/// one model both worked counts once per crew, as on the scorecard.
-pub(super) fn pool(ledger: Vec<LedgerRow>) -> Vec<ModelRow> {
-    let mut models: BTreeMap<String, ModelRow> = BTreeMap::new();
-    for row in ledger {
-        let model = models.entry(row.model.clone()).or_insert_with(|| ModelRow {
-            model: row.model.clone(),
-            crews: BTreeMap::new(),
-            records: Vec::new(),
-            costs: Vec::new(),
-            landed: 0.0,
-            lines: 0,
-            sized_tasks: 0,
-        });
-        for task in row.tasks {
-            // Credit each crew only with the tasks it actually worked: a
-            // pooled row's tasks belong to different crews' subsets.
-            if task.crews.is_empty() {
-                *model.crews.entry(CREW_UNKNOWN.to_string()).or_default() += 1;
-            }
-            for crew in &task.crews {
-                *model.crews.entry(crew.clone()).or_default() += 1;
-            }
-            model.landed += task.actual.get("weighted_landed").copied().unwrap_or(0.0);
-            if let Some(lines) = task.lines {
-                model.lines = model.lines.saturating_add(lines);
-                model.sized_tasks += 1;
-            }
-            model.costs.push((task.tier, task.cost));
-            model.records.push(Record {
-                tier: task.tier,
-                start: task.start,
-                observed: observe(&task),
-            });
-        }
-    }
-    models.into_values().collect()
-}
-
 /// One model's place on the board.
 pub(super) struct Placed {
     pub(super) z: Option<f64>,
@@ -181,6 +142,58 @@ pub(super) struct Board {
     pub(super) qualified: bool,
     /// `P(a > b)` for eligible `a != b`, keyed by row index.
     pub(super) paired: BTreeMap<(usize, usize), f64>,
+}
+
+/// One tier's score and cost for the value chart. The score is
+/// `100 + 10 × z` from that tier's observations only. Board shrinkage is
+/// not applied: shrinkage is defined for the whole board, and a per-tier
+/// board would be a different statistic.
+pub(super) struct TierPoint {
+    pub(super) tier: &'static str,
+    pub(super) tasks: usize,
+    pub(super) score: Option<f64>,
+    pub(super) cost_per_task: Option<f64>,
+    pub(super) cost_coverage: f64,
+    pub(super) cost_unknown: bool,
+}
+
+/// Pool the scorecard's crew-and-model rows by model. A task two crews of
+/// one model both worked counts once per crew, as on the scorecard.
+pub(super) fn pool(ledger: Vec<LedgerRow>) -> Vec<ModelRow> {
+    let mut models: BTreeMap<String, ModelRow> = BTreeMap::new();
+    for row in ledger {
+        let model = models.entry(row.model.clone()).or_insert_with(|| ModelRow {
+            model: row.model.clone(),
+            crews: BTreeMap::new(),
+            records: Vec::new(),
+            costs: Vec::new(),
+            landed: 0.0,
+            lines: 0,
+            sized_tasks: 0,
+        });
+        for task in row.tasks {
+            // Credit each crew only with the tasks it actually worked: a
+            // pooled row's tasks belong to different crews' subsets.
+            if task.crews.is_empty() {
+                *model.crews.entry(CREW_UNKNOWN.to_string()).or_default() += 1;
+            }
+            for crew in &task.crews {
+                *model.crews.entry(crew.clone()).or_default() += 1;
+            }
+            model.landed += task.actual.get("weighted_landed").copied().unwrap_or(0.0);
+            if let Some(lines) = task.lines {
+                model.lines = model.lines.saturating_add(lines);
+                model.sized_tasks += 1;
+            }
+            model.costs.push((task.tier, task.cost));
+            model.records.push(Record {
+                tier: task.tier,
+                start: task.start,
+                observed: observe(&task),
+            });
+        }
+    }
+    models.into_values().collect()
 }
 
 /// Units-weighted mean `z` of every eligible row but `skip`; `None` when
@@ -474,19 +487,6 @@ fn costs(rows: &[ModelRow]) -> Vec<Cost> {
             }
         })
         .collect()
-}
-
-/// One tier's score and cost for the value chart. The score is
-/// `100 + 10 × z` from that tier's observations only. Board shrinkage is
-/// not applied: shrinkage is defined for the whole board, and a per-tier
-/// board would be a different statistic.
-pub(super) struct TierPoint {
-    pub(super) tier: &'static str,
-    pub(super) tasks: usize,
-    pub(super) score: Option<f64>,
-    pub(super) cost_per_task: Option<f64>,
-    pub(super) cost_coverage: f64,
-    pub(super) cost_unknown: bool,
 }
 
 pub(super) fn tier_points(row: &ModelRow, scales: &[Option<f64>; MEASURE_COUNT]) -> Vec<TierPoint> {

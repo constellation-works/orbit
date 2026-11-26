@@ -74,13 +74,16 @@ impl OrbitRuntime {
                         })
                     })
                     .transpose()?;
+                let comment = string("comment")?;
+                let plan = string("plan")?;
+                let execution_summary = string("execution_summary")?;
                 let task = self.update_task_as_application(
                     &id,
                     TaskUpdateParams {
+                        plan,
+                        execution_summary,
+                        comment,
                         status,
-                        comment: string("comment")?,
-                        plan: string("plan")?,
-                        execution_summary: string("execution_summary")?,
                         ..Default::default()
                     },
                     actor,

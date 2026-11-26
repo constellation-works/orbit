@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 
 pub(in crate::application) use crate::application::task::{Anchor, BlockCause};
 
+/// Infrastructure causes, in the order the dashboard lists them.
+pub(in crate::application::codebase) const INFRA_CAUSES: &[&str] = &[
+    "auth",
+    "sandbox",
+    "disk",
+    "provider_limit",
+    "provider_unavailable",
+    "forge_unavailable",
+    "baseline_red",
+    "environment",
+    "owner_route",
+    "transient",
+    "interrupted",
+];
+
+/// Who made a manual block, in the order the dashboard lists them.
+pub(in crate::application::codebase) const ACTOR_KINDS: &[&str] =
+    &["operator", "agent", "system", "unknown"];
+
 /// [`BlockCause`] as stored: its infrastructure cause or actor kind by name,
 /// which must name one this binary lists to be read back.
 #[derive(Serialize, Deserialize)]
@@ -59,22 +78,3 @@ pub(in crate::application::codebase) struct Block {
     pub(in crate::application::codebase) event: String,
     pub(in crate::application::codebase) cause: BlockCause,
 }
-
-/// Infrastructure causes, in the order the dashboard lists them.
-pub(in crate::application::codebase) const INFRA_CAUSES: &[&str] = &[
-    "auth",
-    "sandbox",
-    "disk",
-    "provider_limit",
-    "provider_unavailable",
-    "forge_unavailable",
-    "baseline_red",
-    "environment",
-    "owner_route",
-    "transient",
-    "interrupted",
-];
-
-/// Who made a manual block, in the order the dashboard lists them.
-pub(in crate::application::codebase) const ACTOR_KINDS: &[&str] =
-    &["operator", "agent", "system", "unknown"];

@@ -18,6 +18,36 @@ use super::rows::{
     file_sections, fnv1a_hash, not_inherited_keys, section_catalog, workspace_binding_json,
 };
 
+/// Recent `file_view` resolutions. A dashboard alternates between its two
+/// file scopes, so a few slots keep both warm; the cap bounds a process
+/// serving many workspaces to the resolutions it actually revisits.
+static FILE_VIEW_RESOLUTIONS: Mutex<Vec<(FileViewResolutionKey, Arc<FileViewResolution>)>> =
+    Mutex::new(Vec::new());
+
+/// What one `file_view` resolution is a function of: the scope, both layer
+/// files as stamped before the resolution read them, the scoped file's exact
+/// bytes as opened, and the environment its defaults were admitted against.
+/// The stamps are sampled first, as registry fingerprints are elsewhere, so
+/// a rewrite during resolution stamps differently on the next view and
+/// re-resolves instead of serving the entry beside newer bytes.
+#[derive(PartialEq)]
+struct FileViewResolutionKey {
+    scope: &'static str,
+    global_path: PathBuf,
+    workspace_path: PathBuf,
+    global_stamp: Option<(SystemTime, u64)>,
+    workspace_stamp: Option<(SystemTime, u64)>,
+    scoped_text_hash: u64,
+    environment_hash: u64,
+    plugin_schema_generation: u64,
+}
+
+/// The two resolutions one `file_view` needs, cached together.
+struct FileViewResolution {
+    snapshot: ConfigSnapshot,
+    layered_values: Option<Vec<EffectiveConfigValue>>,
+}
+
 /// Parse the `scope` a caller selects for a file view or a write.
 pub fn parse_config_scope(raw: &str) -> Option<ConfigScope> {
     match raw.trim() {
@@ -236,36 +266,6 @@ pub(super) fn effective_value(runtime: &OrbitRuntime, key: &str) -> Result<JsonV
     .value_for(key)
     .unwrap_or(JsonValue::Null))
 }
-
-/// What one `file_view` resolution is a function of: the scope, both layer
-/// files as stamped before the resolution read them, the scoped file's exact
-/// bytes as opened, and the environment its defaults were admitted against.
-/// The stamps are sampled first, as registry fingerprints are elsewhere, so
-/// a rewrite during resolution stamps differently on the next view and
-/// re-resolves instead of serving the entry beside newer bytes.
-#[derive(PartialEq)]
-struct FileViewResolutionKey {
-    scope: &'static str,
-    global_path: PathBuf,
-    workspace_path: PathBuf,
-    global_stamp: Option<(SystemTime, u64)>,
-    workspace_stamp: Option<(SystemTime, u64)>,
-    scoped_text_hash: u64,
-    environment_hash: u64,
-    plugin_schema_generation: u64,
-}
-
-/// The two resolutions one `file_view` needs, cached together.
-struct FileViewResolution {
-    snapshot: ConfigSnapshot,
-    layered_values: Option<Vec<EffectiveConfigValue>>,
-}
-
-/// Recent `file_view` resolutions. A dashboard alternates between its two
-/// file scopes, so a few slots keep both warm; the cap bounds a process
-/// serving many workspaces to the resolutions it actually revisits.
-static FILE_VIEW_RESOLUTIONS: Mutex<Vec<(FileViewResolutionKey, Arc<FileViewResolution>)>> =
-    Mutex::new(Vec::new());
 
 fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
     let metadata = std::fs::metadata(path).ok()?;

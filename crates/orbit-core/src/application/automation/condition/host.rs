@@ -298,21 +298,6 @@ impl Host<'_> {
     }
 }
 
-fn condition_entry(note: String) -> TaskHistoryEntry {
-    TaskHistoryEntry {
-        at: Utc::now(),
-        by: SYSTEM_ACTOR_LABEL.to_string(),
-        event: CONDITION_FIRED_EVENT.to_string(),
-        note: Some(note),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: None,
-        surface: None,
-        caller: None,
-    }
-}
-
 impl ConditionHost for Host<'_> {
     fn observe(
         &self,
@@ -397,6 +382,21 @@ impl ConditionHost for Host<'_> {
         };
         self.mark_subject(fire, &id);
         Ok(id)
+    }
+}
+
+fn condition_entry(note: String) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at: Utc::now(),
+        by: SYSTEM_ACTOR_LABEL.to_string(),
+        event: CONDITION_FIRED_EVENT.to_string(),
+        note: Some(note),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: None,
+        surface: None,
+        caller: None,
     }
 }
 

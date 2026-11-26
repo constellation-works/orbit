@@ -21,6 +21,17 @@ use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAuto
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+/// The task history event of an auto-fix started outside the run.
+const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
+
+/// The head and blocker an out-of-run auto-fix start names.
+#[derive(Deserialize)]
+struct OutOfRunStart {
+    pr_number: String,
+    head_sha: String,
+    blocker: PrAutoFixBlocker,
+}
+
 pub(super) fn values<'a>(tasks: impl Iterator<Item = &'a TaskOutcome>, metric: &str) -> Vec<f64> {
     tasks
         .filter_map(|task| match task.values.get(metric) {
@@ -392,17 +403,6 @@ fn ratio_difference(
         },
         by_complexity,
     }
-}
-
-/// The task history event of an auto-fix started outside the run.
-const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
-
-/// The head and blocker an out-of-run auto-fix start names.
-#[derive(Deserialize)]
-struct OutOfRunStart {
-    pr_number: String,
-    head_sha: String,
-    blocker: PrAutoFixBlocker,
 }
 
 /// When the task last moved to done.

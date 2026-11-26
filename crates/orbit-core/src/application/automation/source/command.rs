@@ -31,6 +31,9 @@ const OUTPUT_LIMIT_POLL: Duration = Duration::from_millis(10);
 /// Only the kept paths are held in memory, so this bounds disk, not evidence.
 pub(in crate::application::automation) const LISTING_LIMIT: u64 = 256 * 1_048_576;
 
+/// Bytes of a child's stderr kept for a deferral reason.
+const FAILURE_TEXT_LIMIT: u64 = 4096;
+
 impl<'a> Source<'a> {
     /// `env` is the environment the runtime was composed with; a source never
     /// reads the ambient process environment itself.
@@ -480,9 +483,6 @@ impl<'a> Source<'a> {
         self.command_with("git", args, &[], input, budget)
     }
 }
-
-/// Bytes of a child's stderr kept for a deferral reason.
-const FAILURE_TEXT_LIMIT: u64 = 4096;
 
 /// The request the host's GitHub quota guard reads for a `gh` command: the
 /// child inherits this process's environment plus `env`, in `root`. `None`

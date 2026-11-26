@@ -15,6 +15,10 @@ use super::inputs::pilot_steps;
 use super::wire::PilotRunStateView;
 use crate::OrbitRuntime;
 
+/// The most invocation records one run's identity read accepts; at the
+/// limit the read may be truncated, which cannot establish an identity.
+const PILOT_INVOCATION_LIMIT: usize = 1000;
+
 /// The pilot run behind an assessment: its id, the crew and model its
 /// activity recorded (either `None` when it recorded none) and how long it ran.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -187,72 +191,6 @@ pub(in crate::application) struct PilotRuns {
     /// Whether [`Self::prefetch_attribution_inputs`] already ran for this
     /// load.
     prefetched: std::cell::Cell<bool>,
-}
-
-/// The most invocation records one run's identity read accepts; at the
-/// limit the read may be truncated, which cannot establish an identity.
-const PILOT_INVOCATION_LIMIT: usize = 1000;
-
-/// Every listed run's invocation records from one accounting read of the
-/// workspace, grouped by run, instead of one detailed read per run: the
-/// accounting facts carry the activity, task links, model and token
-/// components identity reads, oldest first. `None` when the batch read
-/// fails, so attribution falls back to the per-run detailed read.
-fn batch_invocations_by_run(
-    runtime: &OrbitRuntime,
-    by_run_id: &HashMap<String, usize>,
-) -> Option<HashMap<String, Vec<PilotInvocation>>> {
-    let workspace_id = runtime.stores().jobs().workspace_id().to_string();
-    let facts = runtime
-        .stores()
-        .host_store()
-        .read()
-        .and_then(|snapshot| {
-            snapshot
-                .invocation()
-                .list_accounting_facts(&InvocationAccountingQuery {
-                    workspace_id: Some(workspace_id),
-                    since: None,
-                    // The detailed read is unbounded; a day of slack covers a
-                    // clock that recorded an invocation slightly ahead.
-                    until: Utc::now() + chrono::Duration::days(1),
-                })
-        })
-        .ok()?;
-    let mut by_run: HashMap<String, Vec<PilotInvocation>> = HashMap::new();
-    for fact in facts {
-        if by_run_id.contains_key(&fact.job_run_id) {
-            by_run
-                .entry(fact.job_run_id.clone())
-                .or_default()
-                .push(PilotInvocation::from(fact));
-        }
-    }
-    Some(by_run)
-}
-
-/// One run's invocation records, newest first. A truncated or failed read
-/// cannot establish an identity and reads as none.
-fn load_run_invocations(runtime: &OrbitRuntime, run_id: &str) -> Vec<PilotInvocation> {
-    match runtime.workspace_invocation_records(InvocationQuery {
-        job_run_id: Some(run_id.to_string()),
-        limit: PILOT_INVOCATION_LIMIT,
-        // Pilot identity reads activity, task links, model and token totals only.
-        skip_tool_calls: true,
-        ..Default::default()
-    }) {
-        Ok(records) if records.len() < PILOT_INVOCATION_LIMIT => {
-            records.into_iter().map(PilotInvocation::from).collect()
-        }
-        Ok(_) => {
-            tracing::warn!(%run_id, "pilot identity: invocation read truncated");
-            Vec::new()
-        }
-        Err(error) => {
-            tracing::warn!(%run_id, %error, "pilot identity: invocations unreadable");
-            Vec::new()
-        }
-    }
 }
 
 impl PilotRuns {
@@ -512,5 +450,67 @@ impl PilotRuns {
         });
         let run = found.next()?;
         found.next().is_none().then_some(run)
+    }
+}
+
+/// Every listed run's invocation records from one accounting read of the
+/// workspace, grouped by run, instead of one detailed read per run: the
+/// accounting facts carry the activity, task links, model and token
+/// components identity reads, oldest first. `None` when the batch read
+/// fails, so attribution falls back to the per-run detailed read.
+fn batch_invocations_by_run(
+    runtime: &OrbitRuntime,
+    by_run_id: &HashMap<String, usize>,
+) -> Option<HashMap<String, Vec<PilotInvocation>>> {
+    let workspace_id = runtime.stores().jobs().workspace_id().to_string();
+    let facts = runtime
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .invocation()
+                .list_accounting_facts(&InvocationAccountingQuery {
+                    workspace_id: Some(workspace_id),
+                    since: None,
+                    // The detailed read is unbounded; a day of slack covers a
+                    // clock that recorded an invocation slightly ahead.
+                    until: Utc::now() + chrono::Duration::days(1),
+                })
+        })
+        .ok()?;
+    let mut by_run: HashMap<String, Vec<PilotInvocation>> = HashMap::new();
+    for fact in facts {
+        if by_run_id.contains_key(&fact.job_run_id) {
+            by_run
+                .entry(fact.job_run_id.clone())
+                .or_default()
+                .push(PilotInvocation::from(fact));
+        }
+    }
+    Some(by_run)
+}
+
+/// One run's invocation records, newest first. A truncated or failed read
+/// cannot establish an identity and reads as none.
+fn load_run_invocations(runtime: &OrbitRuntime, run_id: &str) -> Vec<PilotInvocation> {
+    match runtime.workspace_invocation_records(InvocationQuery {
+        job_run_id: Some(run_id.to_string()),
+        limit: PILOT_INVOCATION_LIMIT,
+        // Pilot identity reads activity, task links, model and token totals only.
+        skip_tool_calls: true,
+        ..Default::default()
+    }) {
+        Ok(records) if records.len() < PILOT_INVOCATION_LIMIT => {
+            records.into_iter().map(PilotInvocation::from).collect()
+        }
+        Ok(_) => {
+            tracing::warn!(%run_id, "pilot identity: invocation read truncated");
+            Vec::new()
+        }
+        Err(error) => {
+            tracing::warn!(%run_id, %error, "pilot identity: invocations unreadable");
+            Vec::new()
+        }
     }
 }

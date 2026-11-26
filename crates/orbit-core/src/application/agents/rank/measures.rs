@@ -10,23 +10,6 @@ use crate::application::agents::score::REVIEW_MIN_SUPPORT;
 /// How many measures the ranking has; per-measure arrays use it.
 pub(super) const MEASURE_COUNT: usize = 6;
 
-/// One ranked measure.
-pub(super) struct Measure {
-    pub(super) key: &'static str,
-    pub(super) label: &'static str,
-    pub(super) pillar: &'static str,
-    /// Weight points out of 100.
-    pub(super) weight: f64,
-    pub(super) units: &'static str,
-    /// `+1` when more is better, `-1` for a problem measure, so a positive
-    /// residual is always better than expected.
-    pub(super) sign: f64,
-    /// `Some(reason)` while the measure's events are not recorded: it
-    /// reports as unmeasured and leaves every weight denominator.
-    pub(super) unrecorded: Option<&'static str>,
-    pub(super) definition: &'static str,
-}
-
 pub(super) const ESCAPED_REGRESSIONS: &str = "escaped_regressions";
 pub(super) const REVIEW_OUTCOME: &str = "review_outcome";
 pub(super) const CREW_REWORK: &str = "crew_rework";
@@ -104,10 +87,42 @@ pub(super) const COUNTING_ORDER: [&str; 4] = [
     "crew-caused rework",
 ];
 
+/// One ranked measure.
+pub(super) struct Measure {
+    pub(super) key: &'static str,
+    pub(super) label: &'static str,
+    pub(super) pillar: &'static str,
+    /// Weight points out of 100.
+    pub(super) weight: f64,
+    pub(super) units: &'static str,
+    /// `+1` when more is better, `-1` for a problem measure, so a positive
+    /// residual is always better than expected.
+    pub(super) sign: f64,
+    /// `Some(reason)` while the measure's events are not recorded: it
+    /// reports as unmeasured and leaves every weight denominator.
+    pub(super) unrecorded: Option<&'static str>,
+    pub(super) definition: &'static str,
+}
+
 /// One task's actual and expected count for each measure; `None` where the
 /// task adds no unit (an unrecorded measure, or review outcome on a task no
 /// review settled).
 pub(super) type Observations = [Option<(f64, f64)>; MEASURE_COUNT];
+
+/// A measure's totals over a set of tasks.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Totals {
+    pub(super) actual: f64,
+    pub(super) expected: f64,
+    pub(super) units: usize,
+}
+
+impl Totals {
+    /// `sign × (actual − expected) ÷ units`; `None` without units.
+    pub(super) fn residual(self, measure: &Measure) -> Option<f64> {
+        (self.units > 0).then(|| measure.sign * (self.actual - self.expected) / self.units as f64)
+    }
+}
 
 pub(super) fn observe(task: &LedgerTask) -> Observations {
     let term = |key: &str| {
@@ -145,21 +160,6 @@ pub(super) fn review_supported(totals: &[Totals; MEASURE_COUNT]) -> bool {
         .iter()
         .zip(totals)
         .all(|(measure, total)| measure.key != REVIEW_OUTCOME || total.units >= REVIEW_MIN_SUPPORT)
-}
-
-/// A measure's totals over a set of tasks.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Totals {
-    pub(super) actual: f64,
-    pub(super) expected: f64,
-    pub(super) units: usize,
-}
-
-impl Totals {
-    /// `sign × (actual − expected) ÷ units`; `None` without units.
-    pub(super) fn residual(self, measure: &Measure) -> Option<f64> {
-        (self.units > 0).then(|| measure.sign * (self.actual - self.expected) / self.units as f64)
-    }
 }
 
 pub(super) fn totals<'a>(

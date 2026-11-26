@@ -46,6 +46,12 @@ pub(crate) struct Source<'a> {
     fetch_origin: bool,
 }
 
+impl Source<'_> {
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+
 /// Keep persisted repository identities consistent across source readers.
 /// Only repositories without a remote need to resolve the common directory.
 fn repository_identity(
@@ -76,10 +82,4 @@ fn budget_now() -> Instant {
         return now;
     }
     Instant::now()
-}
-
-impl Source<'_> {
-    fn elapsed(&self) -> Duration {
-        self.started.elapsed()
-    }
 }

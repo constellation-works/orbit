@@ -16,6 +16,9 @@ pub(super) use implementers::{
     LedgerRow, LedgerTask, crew_label_run_identities, implementer_ledger,
 };
 
+/// The tiers [`implementer_size_curves`] can narrow to.
+pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;
+
 /// Builds a role's rows for the window, requested minimum support and
 /// execution scope. Only implementers read the scope: the other roles score
 /// review, authorship and assessment, not how a task was executed.
@@ -70,9 +73,6 @@ pub(super) fn implementer_size_curves(
 ) -> serde_json::Map<String, serde_json::Value> {
     implementers::size_curves(facts, window, complexity, execution)
 }
-
-/// The tiers [`implementer_size_curves`] can narrow to.
-pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;
 
 pub(super) fn spec(role: AgentRole) -> &'static RoleSpec {
     match role {

@@ -43,21 +43,6 @@ const RELEASE_CHUNK: usize = 500;
 
 const HEX_DIGITS: &str = "0123456789abcdef";
 
-/// Attempt ids are lowercase SHA-256 digests; nothing else is provably an
-/// attempt pin.
-fn is_attempt_id(id: &str) -> bool {
-    id.len() == 64
-        && id
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-fn unproven(detail: impl std::fmt::Display) -> AutomationError {
-    AutomationError::Deferred(DeferredReason::AutomationPinOwnerUnproven(format!(
-        "{detail}"
-    )))
-}
-
 /// Who may create, release and reclaim the pins of one namespace: the
 /// identities whose stores hold every consumer and run that can name them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +116,115 @@ enum Record {
     Missing,
     Matches,
     Conflicting(String),
+}
+
+/// What `orbit doctor --fix-automation-pins` did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AttemptPinCleanup {
+    /// The pin namespace this Orbit root and workspace own.
+    pub namespace: String,
+    /// Why nothing in the namespace was reclaimed: its owner record is
+    /// missing or names another owner.
+    pub refused: Option<String>,
+    /// Owned pins nothing names; each was deleted.
+    pub released: Vec<String>,
+    /// Owned pins of attempts a consumer still has in flight or will retry.
+    pub retained_active: usize,
+    /// Owned pins of attempts a pending or running pipeline run still carries.
+    pub retained_live_run: usize,
+    /// Owned pins kept because ownership was refused.
+    pub retained_unproven: usize,
+    /// Owned pins that moved or could not be deleted; left in place.
+    pub kept: Vec<String>,
+    /// Legacy shared `refs/orbit/automation/<attempt id>` pins. No owner is
+    /// recorded for them, and another root or an earlier client may still
+    /// need one, so all are retained.
+    pub retained_legacy: usize,
+    /// Pin namespaces recorded for another Orbit root, workspace, machine or
+    /// Git directory; never listed or touched.
+    pub foreign_owners: usize,
+    /// Refs that are not attempt pins in this namespace or at the legacy top
+    /// level; nothing proves whose they are, so they are left untouched.
+    pub unrecognized: Vec<String>,
+}
+
+/// Attempt ids this owner still names, by why they are needed.
+#[derive(Default)]
+struct Inventory {
+    active: BTreeSet<String>,
+    live_runs: BTreeSet<String>,
+}
+
+impl Inventory {
+    /// Every consumer this owner's evaluations write, read in bounded pages to
+    /// exhaustion, and every pending or running pilot run of its workspace.
+    fn read(runtime: &OrbitRuntime, owner: &Owner) -> Result<Self, OrbitError> {
+        let mut inventory = Self::default();
+        let store = runtime.sqlite_store()?;
+        let prefix = owner.consumers();
+        let _: ControlFlow<std::convert::Infallible> =
+            consumer_states::for_each_workspace_consumer_state(
+                &prefix,
+                |after, limit| {
+                    store.read().and_then(|snapshot| {
+                        snapshot.automation().states_page(&prefix, after, limit)
+                    })
+                },
+                |state| &state.consumer,
+                |state| {
+                    inventory.add(&state);
+                    Ok(ControlFlow::Continue(()))
+                },
+            )?;
+
+        for job in [
+            "task_pilot_pipeline",
+            "task_triage_pipeline",
+            crate::application::contracts::FINDING_VERIFICATION_JOB,
+            crate::application::contracts::ESCALATION_TRIAGE_JOB,
+        ] {
+            for run in runtime
+                .stores()
+                .jobs()
+                .list_pending_or_running_job_runs(job)?
+            {
+                if let Some(id) = run
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("state_automation"))
+                    .and_then(|claim| claim.get("id"))
+                    .and_then(Value::as_str)
+                {
+                    inventory.live_runs.insert(id.to_string());
+                }
+            }
+        }
+        Ok(inventory)
+    }
+
+    fn add(&mut self, state: &AutomationState) {
+        let Some(members) = &state.members else {
+            return;
+        };
+        if let Some(active) = &members.active {
+            self.active.insert(active.id.clone());
+        }
+    }
+}
+
+/// Attempt ids are lowercase SHA-256 digests; nothing else is provably an
+/// attempt pin.
+fn is_attempt_id(id: &str) -> bool {
+    id.len() == 64
+        && id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn unproven(detail: impl std::fmt::Display) -> AutomationError {
+    AutomationError::Deferred(DeferredReason::AutomationPinOwnerUnproven(format!(
+        "{detail}"
+    )))
 }
 
 fn record(source: &Source, owner: &Owner) -> Result<Record, AutomationError> {
@@ -299,36 +393,6 @@ pub fn pin_attempt_source(
         .map_err(automation_error_to_orbit)
 }
 
-/// What `orbit doctor --fix-automation-pins` did.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct AttemptPinCleanup {
-    /// The pin namespace this Orbit root and workspace own.
-    pub namespace: String,
-    /// Why nothing in the namespace was reclaimed: its owner record is
-    /// missing or names another owner.
-    pub refused: Option<String>,
-    /// Owned pins nothing names; each was deleted.
-    pub released: Vec<String>,
-    /// Owned pins of attempts a consumer still has in flight or will retry.
-    pub retained_active: usize,
-    /// Owned pins of attempts a pending or running pipeline run still carries.
-    pub retained_live_run: usize,
-    /// Owned pins kept because ownership was refused.
-    pub retained_unproven: usize,
-    /// Owned pins that moved or could not be deleted; left in place.
-    pub kept: Vec<String>,
-    /// Legacy shared `refs/orbit/automation/<attempt id>` pins. No owner is
-    /// recorded for them, and another root or an earlier client may still
-    /// need one, so all are retained.
-    pub retained_legacy: usize,
-    /// Pin namespaces recorded for another Orbit root, workspace, machine or
-    /// Git directory; never listed or touched.
-    pub foreign_owners: usize,
-    /// Refs that are not attempt pins in this namespace or at the legacy top
-    /// level; nothing proves whose they are, so they are left untouched.
-    pub unrecognized: Vec<String>,
-}
-
 /// Reclaim every owned attempt pin that no in-flight attempt and no live run
 /// of this owner still names, and report what every other pin namespace holds
 /// without touching it. A pin that only an accepted assessment names is
@@ -483,68 +547,4 @@ fn top_level_refs(
         );
     }
     Ok(refs)
-}
-
-/// Attempt ids this owner still names, by why they are needed.
-#[derive(Default)]
-struct Inventory {
-    active: BTreeSet<String>,
-    live_runs: BTreeSet<String>,
-}
-
-impl Inventory {
-    /// Every consumer this owner's evaluations write, read in bounded pages to
-    /// exhaustion, and every pending or running pilot run of its workspace.
-    fn read(runtime: &OrbitRuntime, owner: &Owner) -> Result<Self, OrbitError> {
-        let mut inventory = Self::default();
-        let store = runtime.sqlite_store()?;
-        let prefix = owner.consumers();
-        let _: ControlFlow<std::convert::Infallible> =
-            consumer_states::for_each_workspace_consumer_state(
-                &prefix,
-                |after, limit| {
-                    store.read().and_then(|snapshot| {
-                        snapshot.automation().states_page(&prefix, after, limit)
-                    })
-                },
-                |state| &state.consumer,
-                |state| {
-                    inventory.add(&state);
-                    Ok(ControlFlow::Continue(()))
-                },
-            )?;
-
-        for job in [
-            "task_pilot_pipeline",
-            "task_triage_pipeline",
-            crate::application::contracts::FINDING_VERIFICATION_JOB,
-            crate::application::contracts::ESCALATION_TRIAGE_JOB,
-        ] {
-            for run in runtime
-                .stores()
-                .jobs()
-                .list_pending_or_running_job_runs(job)?
-            {
-                if let Some(id) = run
-                    .input
-                    .as_ref()
-                    .and_then(|input| input.get("state_automation"))
-                    .and_then(|claim| claim.get("id"))
-                    .and_then(Value::as_str)
-                {
-                    inventory.live_runs.insert(id.to_string());
-                }
-            }
-        }
-        Ok(inventory)
-    }
-
-    fn add(&mut self, state: &AutomationState) {
-        let Some(members) = &state.members else {
-            return;
-        };
-        if let Some(active) = &members.active {
-            self.active.insert(active.id.clone());
-        }
-    }
 }

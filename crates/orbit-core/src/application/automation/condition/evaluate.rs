@@ -14,31 +14,6 @@ use super::facts;
 use super::host::{self, Target};
 use crate::OrbitRuntime;
 
-/// The clock cadence a hold's continuity limit is measured against.
-fn cadence_seconds(runtime: &OrbitRuntime) -> u64 {
-    crate::application::contracts::load_clock_settings(&runtime.global_root())
-        .map(|settings| settings.cadence_seconds)
-        .unwrap_or(60)
-}
-
-/// Why this checkout may not fire a workspace or task condition: a replica,
-/// a workspace owned by another host, or an unresolved owner (§4).
-pub(crate) fn condition_refusal(runtime: &OrbitRuntime) -> Option<&'static str> {
-    if runtime.role().is_replica() {
-        return Some("replica_checkout");
-    }
-    super::super::ownership::resolve(runtime, None).refusal()
-}
-
-/// The consumer key of a condition definition.
-pub(crate) fn condition_consumer(
-    runtime: &OrbitRuntime,
-    carrier: ConditionCarrier,
-    name: &str,
-) -> Result<String, OrbitError> {
-    consumer_key(runtime, carrier.kind(), name)
-}
-
 /// A definition carrying a condition, with what it fires.
 pub(crate) struct ConditionDefinition<'a> {
     pub(crate) carrier: ConditionCarrier,
@@ -95,6 +70,31 @@ impl<'a> ConditionDefinition<'a> {
             ))
         })
     }
+}
+
+/// The clock cadence a hold's continuity limit is measured against.
+fn cadence_seconds(runtime: &OrbitRuntime) -> u64 {
+    crate::application::contracts::load_clock_settings(&runtime.global_root())
+        .map(|settings| settings.cadence_seconds)
+        .unwrap_or(60)
+}
+
+/// Why this checkout may not fire a workspace or task condition: a replica,
+/// a workspace owned by another host, or an unresolved owner (§4).
+pub(crate) fn condition_refusal(runtime: &OrbitRuntime) -> Option<&'static str> {
+    if runtime.role().is_replica() {
+        return Some("replica_checkout");
+    }
+    super::super::ownership::resolve(runtime, None).refusal()
+}
+
+/// The consumer key of a condition definition.
+pub(crate) fn condition_consumer(
+    runtime: &OrbitRuntime,
+    carrier: ConditionCarrier,
+    name: &str,
+) -> Result<String, OrbitError> {
+    consumer_key(runtime, carrier.kind(), name)
 }
 
 /// One firing pass for a condition definition on this host.

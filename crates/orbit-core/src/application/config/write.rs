@@ -108,6 +108,47 @@ pub struct ConfigWriteOutcome {
     pub rows: Vec<JsonValue>,
 }
 
+/// Why a guarded config removal refused to clear a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigUnsetRefusal {
+    /// Stable machine-readable refusal code.
+    pub code: &'static str,
+    /// Human-readable reason explaining why the value was preserved.
+    pub message: String,
+}
+
+/// Result of a guarded config key removal that requires preserving the
+/// effective value.
+#[derive(Debug, Clone)]
+pub enum GuardedConfigUnset {
+    /// The key was cleared without changing the effective value.
+    Unset(ConfigWriteOutcome),
+    /// The key was preserved because removal would change or cannot predict
+    /// the effective value.
+    Refused(ConfigUnsetRefusal),
+}
+
+enum ConditionalEdit<T, R> {
+    Save(T),
+    Abort(R),
+}
+
+enum ConditionalWrite<T, R> {
+    Saved(Box<ConfigStore>, T),
+    Aborted(R),
+}
+
+/// Whether a workspace transaction also holds the global file's write lock.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FallbackLock {
+    /// Lock only the target file.
+    Skip,
+    /// For a workspace target, hold the global write lock around the whole
+    /// transaction, so every global writer either saved before `edit` read
+    /// the global fallback or waits until the workspace file is saved.
+    Hold,
+}
+
 /// Write one key into `scope`'s file, admitting it exactly as `orbit config
 /// set` would.
 pub fn set_key(
@@ -149,26 +190,6 @@ pub fn set_key_literal(
         Ok(old_value)
     })?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
-}
-
-/// Why a guarded config removal refused to clear a key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigUnsetRefusal {
-    /// Stable machine-readable refusal code.
-    pub code: &'static str,
-    /// Human-readable reason explaining why the value was preserved.
-    pub message: String,
-}
-
-/// Result of a guarded config key removal that requires preserving the
-/// effective value.
-#[derive(Debug, Clone)]
-pub enum GuardedConfigUnset {
-    /// The key was cleared without changing the effective value.
-    Unset(ConfigWriteOutcome),
-    /// The key was preserved because removal would change or cannot predict
-    /// the effective value.
-    Refused(ConfigUnsetRefusal),
 }
 
 /// Clear one key from `scope`'s file so the layer below takes over again.
@@ -428,16 +449,6 @@ fn validate_store(
     }
 }
 
-enum ConditionalEdit<T, R> {
-    Save(T),
-    Abort(R),
-}
-
-enum ConditionalWrite<T, R> {
-    Saved(Box<ConfigStore>, T),
-    Aborted(R),
-}
-
 /// One write of `scope`'s file as a transaction: under the file's write lock,
 /// open it, let `edit` mutate and validate the staged document, then save
 /// exactly what was validated. A concurrent writer of the same file waits for
@@ -454,17 +465,6 @@ fn write_store<T>(
         ConditionalWrite::Saved(store, value) => Ok((*store, value)),
         ConditionalWrite::Aborted(never) => match never {},
     }
-}
-
-/// Whether a workspace transaction also holds the global file's write lock.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FallbackLock {
-    /// Lock only the target file.
-    Skip,
-    /// For a workspace target, hold the global write lock around the whole
-    /// transaction, so every global writer either saved before `edit` read
-    /// the global fallback or waits until the workspace file is saved.
-    Hold,
 }
 
 /// Locked config transaction whose `edit` may refuse before saving, leaving

@@ -308,6 +308,16 @@ impl SharedBaseRepairWait {
     }
 }
 
+/// The holder's head failure carrying `signature`, read from its typed
+/// auto-fix records.
+struct SharedFailure {
+    proof: SharedFailureProof,
+    failed_head: String,
+    base_branch: Option<String>,
+    checks: Vec<String>,
+    base_commits: Vec<String>,
+}
+
 fn short(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
 }
@@ -512,16 +522,6 @@ fn recovery_widened_overlaps(
         a.widened_selector == b.widened_selector && a.requested_selector == b.requested_selector
     });
     selectors
-}
-
-/// The holder's head failure carrying `signature`, read from its typed
-/// auto-fix records.
-struct SharedFailure {
-    proof: SharedFailureProof,
-    failed_head: String,
-    base_branch: Option<String>,
-    checks: Vec<String>,
-    base_commits: Vec<String>,
 }
 
 /// The failure of the head still under landing that carries `signature`.

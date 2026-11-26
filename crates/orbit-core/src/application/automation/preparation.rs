@@ -21,6 +21,66 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+/// Repository instructions captured from one immutable source revision.
+///
+/// The serialized form deliberately remains the fingerprint input used before
+/// this cache existed, so sharing it changes work performed, not evidence.
+#[derive(Clone)]
+pub(crate) struct InstructionSnapshot(String);
+
+/// Per-path selector object cache. A pinned revision is immutable, so the
+/// object a path names there never changes; sharing it across the tasks and
+/// fingerprints of one apply removes one tree lookup per shared selector
+/// without changing evidence. Only successes are cached; failures recompute.
+/// Bounded to the most recent 512 entries to avoid unbounded growth in a
+/// long-lived process.
+type SelectorObjectCache = std::collections::HashMap<(String, String), Option<String>>;
+
+/// The enabled state-triggered task pilots this host evaluates, read once per
+/// admission pass [ORB-15191]. Each entry is a pilot's eligibility and how
+/// long a task it would prepare waits for it: the trigger's admission window
+/// plus its run deadline, from the task's last change.
+pub(crate) struct FootprintPilots(Vec<(PreparationEligibility, chrono::Duration)>);
+
+impl FootprintPilots {
+    /// The routines this workspace declares that would prepare a task here:
+    /// enabled, `preparation_eligible`, and owned by this machine. A routine
+    /// that does not parse prepares nothing.
+    pub(crate) fn load(runtime: &OrbitRuntime) -> Self {
+        let identity = runtime.automation_machine_identity();
+        let pilots = declared_routine_names(&runtime.shared_root())
+            .into_values()
+            .filter_map(|path| {
+                let definition = parse_routine_yaml(&std::fs::read_to_string(path).ok()?).ok()?;
+                let trigger = definition.trigger.state.as_ref()?;
+                (definition.enabled
+                    && trigger.kind == StateTriggerKind::PreparationEligible
+                    && identity == Some(trigger.owner_machine.as_str()))
+                .then(|| {
+                    let wait = trigger
+                        .max_wait_minutes
+                        .saturating_add(trigger.deadline_minutes);
+                    (
+                        trigger.eligibility.clone(),
+                        chrono::Duration::minutes(i64::from(wait)),
+                    )
+                })
+            })
+            .collect();
+        Self(pilots)
+    }
+
+    /// Until when `task` waits for a pilot to prepare it, or `None` when no
+    /// pilot here would.
+    pub(crate) fn prepares_until(&self, task: &Task) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.0
+            .iter()
+            .filter(|(eligibility, _)| routine_pilot_exclusion(task, eligibility).is_none())
+            .map(|(_, wait)| task.updated_at + *wait)
+            .max()
+    }
+}
+
 /// Scheduled preparation must leave approved manual-only work free to start.
 /// This filter sits outside freshness so it does not invalidate pilot evidence.
 pub(super) fn routine_pilot_exclusion(
@@ -43,13 +103,6 @@ pub(super) fn routine_pilot_exclusion(
         .then(|| format!("excluded_tag: {NO_DRAIN_TAG}"))
 }
 
-/// Repository instructions captured from one immutable source revision.
-///
-/// The serialized form deliberately remains the fingerprint input used before
-/// this cache existed, so sharing it changes work performed, not evidence.
-#[derive(Clone)]
-pub(crate) struct InstructionSnapshot(String);
-
 /// Last-revision instruction cache. A pinned revision is immutable, so the
 /// same revision string names the same tree in any checkout that contains it;
 /// sharing the snapshot across the tasks of one apply (and across sequential
@@ -60,14 +113,6 @@ fn instructions_cache() -> &'static std::sync::Mutex<Option<(String, Instruction
         std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
-
-/// Per-path selector object cache. A pinned revision is immutable, so the
-/// object a path names there never changes; sharing it across the tasks and
-/// fingerprints of one apply removes one tree lookup per shared selector
-/// without changing evidence. Only successes are cached; failures recompute.
-/// Bounded to the most recent 512 entries to avoid unbounded growth in a
-/// long-lived process.
-type SelectorObjectCache = std::collections::HashMap<(String, String), Option<String>>;
 
 fn selector_cache() -> &'static std::sync::Mutex<SelectorObjectCache> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<SelectorObjectCache>> =
@@ -766,51 +811,6 @@ fn for_each_active_preparation(
         }
     }
     Ok(())
-}
-
-/// The enabled state-triggered task pilots this host evaluates, read once per
-/// admission pass [ORB-15191]. Each entry is a pilot's eligibility and how
-/// long a task it would prepare waits for it: the trigger's admission window
-/// plus its run deadline, from the task's last change.
-pub(crate) struct FootprintPilots(Vec<(PreparationEligibility, chrono::Duration)>);
-
-impl FootprintPilots {
-    /// The routines this workspace declares that would prepare a task here:
-    /// enabled, `preparation_eligible`, and owned by this machine. A routine
-    /// that does not parse prepares nothing.
-    pub(crate) fn load(runtime: &OrbitRuntime) -> Self {
-        let identity = runtime.automation_machine_identity();
-        let pilots = declared_routine_names(&runtime.shared_root())
-            .into_values()
-            .filter_map(|path| {
-                let definition = parse_routine_yaml(&std::fs::read_to_string(path).ok()?).ok()?;
-                let trigger = definition.trigger.state.as_ref()?;
-                (definition.enabled
-                    && trigger.kind == StateTriggerKind::PreparationEligible
-                    && identity == Some(trigger.owner_machine.as_str()))
-                .then(|| {
-                    let wait = trigger
-                        .max_wait_minutes
-                        .saturating_add(trigger.deadline_minutes);
-                    (
-                        trigger.eligibility.clone(),
-                        chrono::Duration::minutes(i64::from(wait)),
-                    )
-                })
-            })
-            .collect();
-        Self(pilots)
-    }
-
-    /// Until when `task` waits for a pilot to prepare it, or `None` when no
-    /// pilot here would.
-    pub(crate) fn prepares_until(&self, task: &Task) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.0
-            .iter()
-            .filter(|(eligibility, _)| routine_pilot_exclusion(task, eligibility).is_none())
-            .map(|(_, wait)| task.updated_at + *wait)
-            .max()
-    }
 }
 
 fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String>> {

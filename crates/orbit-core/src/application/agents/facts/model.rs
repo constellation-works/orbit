@@ -121,16 +121,6 @@ pub(in crate::application::agents) struct Runner {
     pub(in crate::application::agents) reported_effort: Option<Option<String>>,
 }
 
-/// Deserialize a present reported effort, `null` included, as `Some`; an
-/// absent one stays `None` through `#[serde(default)]`. The same three-state
-/// contract as the claim settlement's reported effort.
-fn reported_effort_three_state<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
-}
-
 /// One implementation attempt: a run span from task history, and the job
 /// run that worked it when one is found.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,17 +358,6 @@ impl TaskFacts {
     }
 }
 
-/// The review job attempt that filed `task`: the attempt of the task it was
-/// spawned from whose span contains the filing. `None` for a task no review
-/// job filed, or whose filer is outside the scan or has no attempt then.
-pub(in crate::application::agents) fn filing_attempt<'a>(
-    by_id: &HashMap<&str, &'a TaskFacts>,
-    task: &TaskFacts,
-) -> Option<(&'a TaskFacts, usize)> {
-    let filer = by_id.get(task.filed.as_ref()?.filer.as_deref()?)?;
-    Some((filer, filer.attempt_at(task.created_at)?))
-}
-
 /// One scan of a workspace: every role and the attribution strip slice it.
 #[derive(Debug)]
 pub struct AgentFacts {
@@ -422,4 +401,25 @@ pub(in crate::application::agents) struct RunRecord {
     pub(super) started_at: DateTime<Utc>,
     pub(super) finished_at: Option<DateTime<Utc>>,
     pub(super) runner: Runner,
+}
+
+/// Deserialize a present reported effort, `null` included, as `Some`; an
+/// absent one stays `None` through `#[serde(default)]`. The same three-state
+/// contract as the claim settlement's reported effort.
+fn reported_effort_three_state<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+/// The review job attempt that filed `task`: the attempt of the task it was
+/// spawned from whose span contains the filing. `None` for a task no review
+/// job filed, or whose filer is outside the scan or has no attempt then.
+pub(in crate::application::agents) fn filing_attempt<'a>(
+    by_id: &HashMap<&str, &'a TaskFacts>,
+    task: &TaskFacts,
+) -> Option<(&'a TaskFacts, usize)> {
+    let filer = by_id.get(task.filed.as_ref()?.filer.as_deref()?)?;
+    Some((filer, filer.attempt_at(task.created_at)?))
 }

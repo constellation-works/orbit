@@ -9,41 +9,6 @@ use orbit_types::task::{TaskComment, TaskStatus};
 use orbit_types::workflow::{ResidentComment, ResidentCostEvent};
 use serde_json::{Value, json};
 
-fn invalid(message: impl Into<String>) -> OrbitError {
-    OrbitError::InvalidInput(message.into())
-}
-
-fn reopen_if_due(record: &mut EvolutionRecord, now: DateTime<Utc>) {
-    if record.state != EvolutionState::Declined {
-        return;
-    }
-    let totals = record.evolution_totals(Some(now - Duration::days(i64::from(record.window_days))));
-    let cost = totals.minutes.saturating_add(totals.slot_minutes);
-    // A zero-cost decline must gain real cost, not immediately satisfy 0 >= 0.
-    let doubled = cost > 0 && u128::from(cost) >= u128::from(record.cost_at_decline) * 2;
-    if record.declined_until.is_some_and(|until| now >= until) || doubled {
-        record.state = EvolutionState::Open;
-        record.proposal_task = None;
-        record.declined_until = None;
-    }
-}
-fn decline(record: &mut EvolutionRecord, now: DateTime<Utc>, days: u32) {
-    let totals = record.evolution_totals(Some(now - Duration::days(i64::from(record.window_days))));
-    record.cost_at_decline = totals.minutes.saturating_add(totals.slot_minutes);
-    record.declined_until = Some(now + Duration::days(i64::from(days)));
-    record.state = EvolutionState::Declined;
-}
-fn view(mut record: EvolutionRecord, since: Option<DateTime<Utc>>) -> Result<Value, OrbitError> {
-    reopen_if_due(&mut record, Utc::now());
-    let totals = record.evolution_totals(since);
-    let mut value = serde_json::to_value(record).map_err(|error| invalid(error.to_string()))?;
-    let fields = serde_json::to_value(totals).map_err(|error| invalid(error.to_string()))?;
-    if let (Some(value), Some(fields)) = (value.as_object_mut(), fields.as_object()) {
-        value.extend(fields.clone());
-    }
-    Ok(value)
-}
-
 impl TaskEvolutionPort for OrbitRuntime {
     fn project_task_checkpoint_costs(&self, comments: &[TaskComment]) -> Result<(), OrbitError> {
         self.ingest_checkpoint_costs(comments)
@@ -309,4 +274,39 @@ impl OrbitRuntime {
             Ok(())
         })
     }
+}
+
+fn invalid(message: impl Into<String>) -> OrbitError {
+    OrbitError::InvalidInput(message.into())
+}
+
+fn reopen_if_due(record: &mut EvolutionRecord, now: DateTime<Utc>) {
+    if record.state != EvolutionState::Declined {
+        return;
+    }
+    let totals = record.evolution_totals(Some(now - Duration::days(i64::from(record.window_days))));
+    let cost = totals.minutes.saturating_add(totals.slot_minutes);
+    // A zero-cost decline must gain real cost, not immediately satisfy 0 >= 0.
+    let doubled = cost > 0 && u128::from(cost) >= u128::from(record.cost_at_decline) * 2;
+    if record.declined_until.is_some_and(|until| now >= until) || doubled {
+        record.state = EvolutionState::Open;
+        record.proposal_task = None;
+        record.declined_until = None;
+    }
+}
+fn decline(record: &mut EvolutionRecord, now: DateTime<Utc>, days: u32) {
+    let totals = record.evolution_totals(Some(now - Duration::days(i64::from(record.window_days))));
+    record.cost_at_decline = totals.minutes.saturating_add(totals.slot_minutes);
+    record.declined_until = Some(now + Duration::days(i64::from(days)));
+    record.state = EvolutionState::Declined;
+}
+fn view(mut record: EvolutionRecord, since: Option<DateTime<Utc>>) -> Result<Value, OrbitError> {
+    reopen_if_due(&mut record, Utc::now());
+    let totals = record.evolution_totals(since);
+    let mut value = serde_json::to_value(record).map_err(|error| invalid(error.to_string()))?;
+    let fields = serde_json::to_value(totals).map_err(|error| invalid(error.to_string()))?;
+    if let (Some(value), Some(fields)) = (value.as_object_mut(), fields.as_object()) {
+        value.extend(fields.clone());
+    }
+    Ok(value)
 }

@@ -57,13 +57,13 @@ use orbit_types::identity::{CREW_EFFORT_SEPARATOR, ReasoningEffort};
 use super::facts::{AgentInvocationFacts, AgentLaunchFacts};
 use super::{AgentFacts, MODEL_UNKNOWN};
 
+/// The effort value of historical work with no recorded dispatch identity.
+pub(super) const EFFORT_UNKNOWN: &str = "unknown";
+
 /// A recorded reasoning effort in the shared encoding: `None` is the
 /// provider default, `Some("unknown")` is historical work with no recorded
 /// effort, and any other `Some` is the rendered effort's wire name.
 pub(super) type RecordedEffort = Option<String>;
-
-/// The effort value of historical work with no recorded dispatch identity.
-pub(super) const EFFORT_UNKNOWN: &str = "unknown";
 
 /// Which role's invocations a unit's main invocation is drawn from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,48 +90,9 @@ impl MainActivity {
     }
 }
 
-/// One invocation's recorded effort, in the shared encoding.
-pub(super) fn effort_of_invocation(fact: &InvocationAccountingFact) -> RecordedEffort {
-    match &fact.execution {
-        Some(execution) => execution.reasoning_effort.map(|effort| effort.to_string()),
-        None => Some(EFFORT_UNKNOWN.to_string()),
-    }
-}
-
-/// The human label of a recorded effort: the wire name, `provider default`
-/// for a null effort, and `effort unknown` for historical work.
-pub(super) fn effort_label(effort: &RecordedEffort) -> String {
-    match effort {
-        None => "provider default".to_string(),
-        Some(effort) if effort == EFFORT_UNKNOWN => "effort unknown".to_string(),
-        Some(effort) => effort.clone(),
-    }
-}
-
-/// A row's display label: `model @ effort`.
-pub(super) fn row_label(model: &str, effort: &RecordedEffort) -> String {
-    format!("{model} @ {}", effort_label(effort))
-}
-
-/// Parse a detail selection's effort name into the shared encoding. Accepts
-/// the wire names plus `provider_default` / `provider default` and
-/// `unknown` / `effort unknown`.
-pub(super) fn parse_recorded_effort(value: &str) -> RecordedEffort {
-    match value.trim() {
-        "provider_default" | "provider default" => None,
-        "effort_unknown" | "effort unknown" => Some(EFFORT_UNKNOWN.to_string()),
-        other => Some(other.to_string()),
-    }
-}
-
 /// The shared scorecard row key: model (`model unknown` when none was
 /// recorded) and recorded effort.
 pub(super) type ModelEffortKey = (String, RecordedEffort);
-
-/// The key of a unit whose model may be unrecorded.
-pub(super) fn model_effort_key(model: Option<&str>, effort: RecordedEffort) -> ModelEffortKey {
-    (model.unwrap_or(MODEL_UNKNOWN).to_string(), effort)
-}
 
 /// One unit of work whose main invocation's effort is wanted. `model`
 /// and `activity_id` bind the match to the unit's own round: an
@@ -189,6 +150,116 @@ impl EffortSource {
             EffortSource::Unrecorded => "unrecorded",
         }
     }
+}
+
+impl crate::OrbitRuntime {
+    /// The reasoning effort a claimed leaf `run` ran at, as its follower
+    /// reports it on the claim settlement: the effort of the run's main
+    /// implementing invocation (else its latest matching launch record) in
+    /// this host's own records, exactly as this host's scorecards would count
+    /// it. `Some(None)` is the provider default, and `None` an effort this
+    /// host does not know (no matching record, or an unreadable store), which
+    /// the follower then omits. Attribution only; never derived from crew
+    /// configuration or the leaf's crew label.
+    pub(crate) fn leaf_reported_effort(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<RecordedEffort> {
+        self.leaf_reported_identity(run).map(|(effort, _)| effort)
+    }
+
+    /// [`Self::leaf_reported_effort`] with the model of the same record (the
+    /// main implementing invocation, else the launch record), when that
+    /// record names one [ORB-24150]. Never derived from a crew name or
+    /// configuration.
+    pub(crate) fn leaf_reported_identity(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<(RecordedEffort, Option<String>)> {
+        let store = self.sqlite_store().ok()?;
+        let workspace_id = self.stores().jobs().workspace_id().to_string();
+        let since = Some(run.created_at);
+        let until = chrono::Utc::now();
+        let snapshot = store.read().ok()?;
+        let invocation_repo = snapshot.invocation();
+        let invocations = invocation_repo
+            .list_accounting_facts(&orbit_store::contract::InvocationAccountingQuery {
+                workspace_id: Some(workspace_id.clone()),
+                since,
+                until,
+            })
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, run_id = %run.run_id, "leaf effort: invocations unreadable");
+                Vec::new()
+            });
+        let launches = invocation_repo
+            .list_agent_executions(&orbit_store::contract::AgentExecutionQuery {
+                workspace_id: Some(workspace_id),
+                since,
+                until,
+            })
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, run_id = %run.run_id, "leaf effort: launch records unreadable");
+                Vec::new()
+            });
+        let run_id = run.run_id.to_string();
+        let (effort, model, _) = recorded_main_identity(
+            &invocations.into(),
+            &launches.into(),
+            MainInvocationUnit {
+                run_id: Some(&run_id),
+                activity: MainActivity::Implement,
+                task_id: None,
+                model: run.crew_model.as_deref(),
+                activity_id: None,
+                after: None,
+                until: None,
+                reported: None,
+                crew: None,
+            },
+        );
+        let model = model.filter(|model| !model.trim().is_empty());
+        (effort.as_deref() != Some(EFFORT_UNKNOWN)).then_some((effort, model))
+    }
+}
+
+/// One invocation's recorded effort, in the shared encoding.
+pub(super) fn effort_of_invocation(fact: &InvocationAccountingFact) -> RecordedEffort {
+    match &fact.execution {
+        Some(execution) => execution.reasoning_effort.map(|effort| effort.to_string()),
+        None => Some(EFFORT_UNKNOWN.to_string()),
+    }
+}
+
+/// The human label of a recorded effort: the wire name, `provider default`
+/// for a null effort, and `effort unknown` for historical work.
+pub(super) fn effort_label(effort: &RecordedEffort) -> String {
+    match effort {
+        None => "provider default".to_string(),
+        Some(effort) if effort == EFFORT_UNKNOWN => "effort unknown".to_string(),
+        Some(effort) => effort.clone(),
+    }
+}
+
+/// A row's display label: `model @ effort`.
+pub(super) fn row_label(model: &str, effort: &RecordedEffort) -> String {
+    format!("{model} @ {}", effort_label(effort))
+}
+
+/// Parse a detail selection's effort name into the shared encoding. Accepts
+/// the wire names plus `provider_default` / `provider default` and
+/// `unknown` / `effort unknown`.
+pub(super) fn parse_recorded_effort(value: &str) -> RecordedEffort {
+    match value.trim() {
+        "provider_default" | "provider default" => None,
+        "effort_unknown" | "effort unknown" => Some(EFFORT_UNKNOWN.to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// The key of a unit whose model may be unrecorded.
+pub(super) fn model_effort_key(model: Option<&str>, effort: RecordedEffort) -> ModelEffortKey {
+    (model.unwrap_or(MODEL_UNKNOWN).to_string(), effort)
 }
 
 /// The effort a crew label states: `Some` for a `<crew>@<effort>` reference
@@ -351,75 +422,4 @@ fn recorded_main_identity(
                 EffortSource::LaunchRecord,
             )
         })
-}
-
-impl crate::OrbitRuntime {
-    /// The reasoning effort a claimed leaf `run` ran at, as its follower
-    /// reports it on the claim settlement: the effort of the run's main
-    /// implementing invocation (else its latest matching launch record) in
-    /// this host's own records, exactly as this host's scorecards would count
-    /// it. `Some(None)` is the provider default, and `None` an effort this
-    /// host does not know (no matching record, or an unreadable store), which
-    /// the follower then omits. Attribution only; never derived from crew
-    /// configuration or the leaf's crew label.
-    pub(crate) fn leaf_reported_effort(
-        &self,
-        run: &orbit_types::workflow::JobRun,
-    ) -> Option<RecordedEffort> {
-        self.leaf_reported_identity(run).map(|(effort, _)| effort)
-    }
-
-    /// [`Self::leaf_reported_effort`] with the model of the same record (the
-    /// main implementing invocation, else the launch record), when that
-    /// record names one [ORB-24150]. Never derived from a crew name or
-    /// configuration.
-    pub(crate) fn leaf_reported_identity(
-        &self,
-        run: &orbit_types::workflow::JobRun,
-    ) -> Option<(RecordedEffort, Option<String>)> {
-        let store = self.sqlite_store().ok()?;
-        let workspace_id = self.stores().jobs().workspace_id().to_string();
-        let since = Some(run.created_at);
-        let until = chrono::Utc::now();
-        let snapshot = store.read().ok()?;
-        let invocation_repo = snapshot.invocation();
-        let invocations = invocation_repo
-            .list_accounting_facts(&orbit_store::contract::InvocationAccountingQuery {
-                workspace_id: Some(workspace_id.clone()),
-                since,
-                until,
-            })
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, run_id = %run.run_id, "leaf effort: invocations unreadable");
-                Vec::new()
-            });
-        let launches = invocation_repo
-            .list_agent_executions(&orbit_store::contract::AgentExecutionQuery {
-                workspace_id: Some(workspace_id),
-                since,
-                until,
-            })
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, run_id = %run.run_id, "leaf effort: launch records unreadable");
-                Vec::new()
-            });
-        let run_id = run.run_id.to_string();
-        let (effort, model, _) = recorded_main_identity(
-            &invocations.into(),
-            &launches.into(),
-            MainInvocationUnit {
-                run_id: Some(&run_id),
-                activity: MainActivity::Implement,
-                task_id: None,
-                model: run.crew_model.as_deref(),
-                activity_id: None,
-                after: None,
-                until: None,
-                reported: None,
-                crew: None,
-            },
-        );
-        let model = model.filter(|model| !model.trim().is_empty());
-        (effort.as_deref() != Some(EFFORT_UNKNOWN)).then_some((effort, model))
-    }
 }

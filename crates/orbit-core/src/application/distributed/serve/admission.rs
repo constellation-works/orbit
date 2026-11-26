@@ -21,55 +21,6 @@ use crate::application::host_labels;
 use crate::application::task::{PilotAdmissionHold, standing_baseline_hold_from_history};
 use crate::runtime::run_input::recorded_task_ids;
 
-/// The pull hold for a task assigned to a human crew: operator work no
-/// follower or owner pull claims, matching the local `human_crew` exclusion.
-/// The pull hold for a task tagged `no-drain`: no follower claims it.
-fn no_drain_pull_hold(task: &Task) -> Option<String> {
-    task.tags.iter().any(|tag| tag == NO_DRAIN_TAG).then(|| {
-        format!("{NO_DRAIN_TAG}: tagged `{NO_DRAIN_TAG}`; no automatic drain or follower admits it")
-    })
-}
-
-fn human_crew_pull_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
-    let human = runtime.human_crew(task.crew.as_deref())?;
-    Some(format!(
-        "human_crew: assigned to human crew `{}`; operator work no drain claims",
-        human.name
-    ))
-}
-
-/// A grant pins execution to the owner, intersected with its required labels.
-/// Ungranted tasks keep the claimed implementer's existing restrictions.
-fn claimed_tool_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
-    if let Some(grant) = host_labels::granted_tools_owner_hold(task) {
-        return Some(runtime.task_host_labels_wait(task).unwrap_or(grant));
-    }
-    claimed_required_tool_hold(task)
-}
-
-/// A remote claimed implementer's restrictions, using the same deny set as
-/// the engine and the same closed bridge as dispatch. Reachability is
-/// [`is_claimed_leaf_reachable_tool`], derived from the claimed-owner list
-/// the leaf-side refusal uses: workspace search and listing cross that
-/// bridge, while every other owner workspace tool — coordination or not,
-/// such as the codebase analytics a leaf's sandboxed owner route refuses
-/// as `owner_route_unavailable` — cannot reach a remote leaf, so the task
-/// stays in the backlog for the owner.
-fn claimed_required_tool_hold(task: &Task) -> Option<String> {
-    task.required_tools.iter().find_map(|tool| {
-        let restriction = if CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()) {
-            "denied in claimed mode; the implementer returns task state through its output"
-        } else if is_claimed_leaf_reachable_tool(tool) {
-            return None;
-        } else if crate::runtime::is_coordination_tool(tool) && !is_claimed_owner_tool(tool) {
-            "owner coordination outside the closed claimed-owner bridge"
-        } else {
-            "owner-only outside the closed claimed-owner bridge"
-        };
-        Some(format!("required tool `{tool}` is {restriction}"))
-    })
-}
-
 impl OrbitRuntime {
     /// Explicit owner maintenance used by `doctor admission-receipts --compact`.
     /// Retains full receipts for unsettled claims and permanent tombstones for
@@ -450,4 +401,53 @@ impl OrbitRuntime {
         }
         Ok(carried)
     }
+}
+
+/// The pull hold for a task assigned to a human crew: operator work no
+/// follower or owner pull claims, matching the local `human_crew` exclusion.
+/// The pull hold for a task tagged `no-drain`: no follower claims it.
+fn no_drain_pull_hold(task: &Task) -> Option<String> {
+    task.tags.iter().any(|tag| tag == NO_DRAIN_TAG).then(|| {
+        format!("{NO_DRAIN_TAG}: tagged `{NO_DRAIN_TAG}`; no automatic drain or follower admits it")
+    })
+}
+
+fn human_crew_pull_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
+    let human = runtime.human_crew(task.crew.as_deref())?;
+    Some(format!(
+        "human_crew: assigned to human crew `{}`; operator work no drain claims",
+        human.name
+    ))
+}
+
+/// A grant pins execution to the owner, intersected with its required labels.
+/// Ungranted tasks keep the claimed implementer's existing restrictions.
+fn claimed_tool_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
+    if let Some(grant) = host_labels::granted_tools_owner_hold(task) {
+        return Some(runtime.task_host_labels_wait(task).unwrap_or(grant));
+    }
+    claimed_required_tool_hold(task)
+}
+
+/// A remote claimed implementer's restrictions, using the same deny set as
+/// the engine and the same closed bridge as dispatch. Reachability is
+/// [`is_claimed_leaf_reachable_tool`], derived from the claimed-owner list
+/// the leaf-side refusal uses: workspace search and listing cross that
+/// bridge, while every other owner workspace tool — coordination or not,
+/// such as the codebase analytics a leaf's sandboxed owner route refuses
+/// as `owner_route_unavailable` — cannot reach a remote leaf, so the task
+/// stays in the backlog for the owner.
+fn claimed_required_tool_hold(task: &Task) -> Option<String> {
+    task.required_tools.iter().find_map(|tool| {
+        let restriction = if CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()) {
+            "denied in claimed mode; the implementer returns task state through its output"
+        } else if is_claimed_leaf_reachable_tool(tool) {
+            return None;
+        } else if crate::runtime::is_coordination_tool(tool) && !is_claimed_owner_tool(tool) {
+            "owner coordination outside the closed claimed-owner bridge"
+        } else {
+            "owner-only outside the closed claimed-owner bridge"
+        };
+        Some(format!("required tool `{tool}` is {restriction}"))
+    })
 }

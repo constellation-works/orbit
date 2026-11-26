@@ -13,6 +13,9 @@ use super::review_modes::ReviewHistory;
 use super::usage::ForecastRun;
 use super::{outcomes, usage};
 
+/// How far before the oldest task or forecast the invocation read starts.
+const SPEND_READ_SLACK: Duration = Duration::days(1);
+
 pub(super) struct ForecastCohorts {
     pub(super) runs: HashMap<String, Vec<ForecastRun>>,
     pub(super) reviews: ReviewHistory,
@@ -22,8 +25,6 @@ pub(super) struct ForecastCohorts {
     pub(super) waits: Vec<AwayWait>,
     pub(super) live_episodes: u64,
 }
-/// How far before the oldest task or forecast the invocation read starts.
-const SPEND_READ_SLACK: Duration = Duration::days(1);
 
 pub(super) fn prepare_forecast_cohorts(
     runtime: &OrbitRuntime,

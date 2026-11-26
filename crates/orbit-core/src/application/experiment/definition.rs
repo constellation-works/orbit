@@ -11,69 +11,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Whether an arm does better with a lower or a higher value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Better {
-    Lower,
-    Higher,
-}
-
-/// How a metric is summarised: a mean of per-task values, a rate of
-/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
-    Mean,
-    Rate,
-    /// Arm total numerator divided by arm total reviewable lines.
-    Ratio,
-}
-
-/// One experiment metric: the single declaration every name list, predicate
-/// and readout row is derived from.
-pub(crate) struct MetricSpec {
-    pub(crate) name: &'static str,
-    pub(crate) kind: Kind,
-    pub(crate) better: Better,
-    pub(crate) unit: &'static str,
-    /// Confined to an implementation step; exploratory, so it cannot be a
-    /// primary.
-    pub(crate) step_local: bool,
-    /// Read from a task's review gate settlements.
-    pub(crate) review_derived: bool,
-    /// For a per-line ratio, the whole-task metric its arm total divides by
-    /// reviewable lines.
-    pub(crate) line_numerator: Option<&'static str>,
-}
-
-const fn spec(name: &'static str, kind: Kind, better: Better, unit: &'static str) -> MetricSpec {
-    MetricSpec {
-        name,
-        kind,
-        better,
-        unit,
-        step_local: false,
-        review_derived: false,
-        line_numerator: None,
-    }
-}
-
-impl MetricSpec {
-    const fn step_local(mut self) -> Self {
-        self.step_local = true;
-        self
-    }
-
-    const fn review_derived(mut self) -> Self {
-        self.review_derived = true;
-        self
-    }
-
-    const fn per_line(mut self, numerator: &'static str) -> Self {
-        self.line_numerator = Some(numerator);
-        self
-    }
-}
-
 /// Every metric an experiment may name, in the order the readout and the
 /// refusal texts list them.
 pub(crate) const METRIC_SPECS: &[MetricSpec] = &[
@@ -126,63 +63,59 @@ pub(crate) const METRIC_SPECS: &[MetricSpec] = &[
     .per_line("lead_time"),
 ];
 
-/// The metric registered under `name`.
-pub(crate) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
-    METRIC_SPECS.iter().find(|spec| spec.name == name)
-}
-
-/// Metric names an experiment may read its verdict or guardrails on, in
-/// table order.
-pub fn experiment_metric_names() -> impl Iterator<Item = &'static str> {
-    METRIC_SPECS.iter().map(|spec| spec.name)
-}
-
-/// Metrics confined to an implementation step, in table order; these are
-/// exploratory.
-pub fn step_local_metric_names() -> impl Iterator<Item = &'static str> {
-    METRIC_SPECS
-        .iter()
-        .filter(|spec| spec.step_local)
-        .map(|spec| spec.name)
-}
-
-/// Whether a registered metric measures only part of a task.
-pub fn experiment_metric_is_step_local(metric: &str) -> bool {
-    metric_spec(metric).is_some_and(|spec| spec.step_local)
-}
-
-/// Whether a registered metric is derived from review gate settlements.
-pub fn experiment_metric_is_review_derived(metric: &str) -> bool {
-    metric_spec(metric).is_some_and(|spec| spec.review_derived)
-}
-
-/// Whether a registered metric is a ratio over reviewable lines.
-fn experiment_metric_is_per_line(metric: &str) -> bool {
-    metric_spec(metric).is_some_and(|spec| spec.line_numerator.is_some())
-}
-
-/// A per-line primary needs a `lines_changed` guardrail so an arm cannot
-/// win by shrinking the denominator. The operator chooses the threshold.
-pub(crate) fn require_lines_changed_guardrail(
-    primary: Option<&str>,
-    guardrails_json: &str,
-) -> Result<(), OrbitError> {
-    let Some(primary) = primary.filter(|metric| experiment_metric_is_per_line(metric)) else {
-        return Ok(());
-    };
-    let present = serde_json::from_str::<BTreeMap<String, String>>(guardrails_json)
-        .ok()
-        .is_some_and(|guardrails| guardrails.contains_key("lines_changed"));
-    if present {
-        return Ok(());
-    }
-    Err(OrbitError::InvalidInput(format!(
-        "primary metric `{primary}` is per line and requires a lines_changed guardrail, for example {{\"lines_changed\": \"+0\"}}"
-    )))
-}
-
 /// Complexities a population filter may name.
 pub const EXPERIMENT_COMPLEXITIES: &[&str] = &["low", "medium", "hard", "xhard"];
+
+/// Whether an arm does better with a lower or a higher value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Better {
+    Lower,
+    Higher,
+}
+
+/// How a metric is summarised: a mean of per-task values, a rate of
+/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Mean,
+    Rate,
+    /// Arm total numerator divided by arm total reviewable lines.
+    Ratio,
+}
+
+/// One experiment metric: the single declaration every name list, predicate
+/// and readout row is derived from.
+pub(crate) struct MetricSpec {
+    pub(crate) name: &'static str,
+    pub(crate) kind: Kind,
+    pub(crate) better: Better,
+    pub(crate) unit: &'static str,
+    /// Confined to an implementation step; exploratory, so it cannot be a
+    /// primary.
+    pub(crate) step_local: bool,
+    /// Read from a task's review gate settlements.
+    pub(crate) review_derived: bool,
+    /// For a per-line ratio, the whole-task metric its arm total divides by
+    /// reviewable lines.
+    pub(crate) line_numerator: Option<&'static str>,
+}
+
+impl MetricSpec {
+    const fn step_local(mut self) -> Self {
+        self.step_local = true;
+        self
+    }
+
+    const fn review_derived(mut self) -> Self {
+        self.review_derived = true;
+        self
+    }
+
+    const fn per_line(mut self, numerator: &'static str) -> Self {
+        self.line_numerator = Some(numerator);
+        self
+    }
+}
 
 /// The activity role an overlay entry applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -191,10 +124,6 @@ pub enum OverlayRole {
     Implement,
     Review,
     Recovery,
-}
-
-fn implement_only() -> Vec<OverlayRole> {
-    vec![OverlayRole::Implement]
 }
 
 /// One role's instruction overlay: a repository file, or `false` to
@@ -232,10 +161,6 @@ pub struct CrewWeight {
     pub crew: String,
     #[serde(default = "one")]
     pub weight: u32,
-}
-
-fn one() -> u32 {
-    1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,6 +347,120 @@ impl ExperimentOverlay {
     }
 }
 
+/// One arm as submitted on create or update.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArmInput {
+    name: String,
+    #[serde(default)]
+    control: bool,
+    #[serde(default = "one")]
+    weight: u32,
+    #[serde(default)]
+    overlay: Option<Value>,
+}
+
+/// One validated arm, ready to store.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ArmDefinition {
+    pub(crate) name: String,
+    pub(crate) control: bool,
+    pub(crate) weight: u32,
+    pub(crate) overlay_json: String,
+    pub(crate) overlay_digest: String,
+}
+
+/// Which tasks an experiment enrolls. Empty lists place no restriction.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PopulationFilter {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub complexity: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_type: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags_include: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags_exclude: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub origin: Vec<String>,
+}
+
+const fn spec(name: &'static str, kind: Kind, better: Better, unit: &'static str) -> MetricSpec {
+    MetricSpec {
+        name,
+        kind,
+        better,
+        unit,
+        step_local: false,
+        review_derived: false,
+        line_numerator: None,
+    }
+}
+
+/// The metric registered under `name`.
+pub(crate) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
+    METRIC_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// Metric names an experiment may read its verdict or guardrails on, in
+/// table order.
+pub fn experiment_metric_names() -> impl Iterator<Item = &'static str> {
+    METRIC_SPECS.iter().map(|spec| spec.name)
+}
+
+/// Metrics confined to an implementation step, in table order; these are
+/// exploratory.
+pub fn step_local_metric_names() -> impl Iterator<Item = &'static str> {
+    METRIC_SPECS
+        .iter()
+        .filter(|spec| spec.step_local)
+        .map(|spec| spec.name)
+}
+
+/// Whether a registered metric measures only part of a task.
+pub fn experiment_metric_is_step_local(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.step_local)
+}
+
+/// Whether a registered metric is derived from review gate settlements.
+pub fn experiment_metric_is_review_derived(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.review_derived)
+}
+
+/// Whether a registered metric is a ratio over reviewable lines.
+fn experiment_metric_is_per_line(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.line_numerator.is_some())
+}
+
+/// A per-line primary needs a `lines_changed` guardrail so an arm cannot
+/// win by shrinking the denominator. The operator chooses the threshold.
+pub(crate) fn require_lines_changed_guardrail(
+    primary: Option<&str>,
+    guardrails_json: &str,
+) -> Result<(), OrbitError> {
+    let Some(primary) = primary.filter(|metric| experiment_metric_is_per_line(metric)) else {
+        return Ok(());
+    };
+    let present = serde_json::from_str::<BTreeMap<String, String>>(guardrails_json)
+        .ok()
+        .is_some_and(|guardrails| guardrails.contains_key("lines_changed"));
+    if present {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "primary metric `{primary}` is per line and requires a lines_changed guardrail, for example {{\"lines_changed\": \"+0\"}}"
+    )))
+}
+
+fn implement_only() -> Vec<OverlayRole> {
+    vec![OverlayRole::Implement]
+}
+
+fn one() -> u32 {
+    1
+}
+
 /// `sha256:<hex>` of a stored overlay's canonical JSON.
 pub(crate) fn overlay_digest(canonical_json: &str) -> String {
     let hex: String = Sha256::digest(canonical_json.as_bytes())
@@ -480,29 +519,6 @@ fn repository_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// One arm as submitted on create or update.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArmInput {
-    name: String,
-    #[serde(default)]
-    control: bool,
-    #[serde(default = "one")]
-    weight: u32,
-    #[serde(default)]
-    overlay: Option<Value>,
-}
-
-/// One validated arm, ready to store.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ArmDefinition {
-    pub(crate) name: String,
-    pub(crate) control: bool,
-    pub(crate) weight: u32,
-    pub(crate) overlay_json: String,
-    pub(crate) overlay_digest: String,
-}
-
 /// Parse and validate the submitted arm list. A draft may be incomplete
 /// (fewer than two arms, no control yet); start checks completeness.
 pub(crate) fn parse_arms(value: Value) -> Result<Vec<ArmDefinition>, OrbitError> {
@@ -537,12 +553,13 @@ pub(crate) fn parse_arms(value: Value) -> Result<Vec<ArmDefinition>, OrbitError>
                 .unwrap_or_else(|| Value::Object(Default::default())),
         )?;
         let overlay_json = overlay.canonical_json()?;
+        let overlay_digest = overlay_digest(&overlay_json);
         arms.push(ArmDefinition {
-            overlay_digest: overlay_digest(&overlay_json),
-            overlay_json,
             name,
             control: input.control,
             weight: input.weight,
+            overlay_json,
+            overlay_digest,
         });
     }
     if controls > 1 {
@@ -551,22 +568,6 @@ pub(crate) fn parse_arms(value: Value) -> Result<Vec<ArmDefinition>, OrbitError>
         ));
     }
     Ok(arms)
-}
-
-/// Which tasks an experiment enrolls. Empty lists place no restriction.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PopulationFilter {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub complexity: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub task_type: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags_include: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags_exclude: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub origin: Vec<String>,
 }
 
 /// Parse, normalize and validate a population filter into its stored JSON.

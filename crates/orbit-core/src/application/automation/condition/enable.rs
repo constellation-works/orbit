@@ -38,6 +38,14 @@ pub struct ConditionEnablePreview {
     pub unavailable: Vec<String>,
 }
 
+/// The result of clearing a stall.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConditionStallCleared {
+    pub consumer: String,
+    pub cleared: orbit_types::workflow::automation::ConditionStall,
+    pub audit: ConditionAudit,
+}
+
 /// Preview an enable, an epoch change or `fire_existing` without writing.
 pub(crate) fn enable_preview(
     runtime: &OrbitRuntime,
@@ -99,10 +107,30 @@ pub(crate) fn enable_preview(
     unavailable.sort();
     unavailable.dedup();
     let fire_existing = definition.condition.on_enable == ConditionOnEnable::FireExisting;
-    let refused = matches.len() > definition.condition.max_matches as usize;
+    let matched = matches.len();
+    let refused = matched > definition.condition.max_matches as usize;
+    let name = definition.name.to_string();
+    let refusal = refused.then(|| {
+        format!(
+            "too_many_matches: {} subjects match now and max_matches is {}; nothing was \
+             enabled",
+            matched, definition.condition.max_matches
+        )
+    });
+    let would_fire = if fire_existing && !refused {
+        matches.iter().take(20).cloned().collect()
+    } else {
+        Vec::new()
+    };
+    let would_baseline = if fire_existing || refused {
+        Vec::new()
+    } else {
+        matches.iter().take(20).cloned().collect()
+    };
+
     Ok(ConditionEnablePreview {
         kind: definition.carrier.kind(),
-        name: definition.name.to_string(),
+        name,
         scope: definition.condition.scope.as_str(),
         on_enable: if fire_existing {
             "fire_existing"
@@ -110,28 +138,13 @@ pub(crate) fn enable_preview(
             "baseline"
         },
         max_matches: definition.condition.max_matches,
-        matched: matches.len(),
+        matches: matches.into_iter().take(20).collect(),
+        matched,
         unknown: unknown.len(),
         refused,
-        refusal: refused.then(|| {
-            format!(
-                "too_many_matches: {} subjects match now and max_matches is {}; nothing was \
-                 enabled",
-                matches.len(),
-                definition.condition.max_matches
-            )
-        }),
-        would_fire: if fire_existing && !refused {
-            matches.iter().take(20).cloned().collect()
-        } else {
-            Vec::new()
-        },
-        would_baseline: if fire_existing || refused {
-            Vec::new()
-        } else {
-            matches.iter().take(20).cloned().collect()
-        },
-        matches: matches.into_iter().take(20).collect(),
+        refusal,
+        would_fire,
+        would_baseline,
         unavailable,
     })
 }
@@ -181,12 +194,4 @@ pub(crate) fn forget_condition_state(
     if let Err(error) = result {
         tracing::warn!(%name, %error, "condition state not forgotten");
     }
-}
-
-/// The result of clearing a stall.
-#[derive(Debug, Clone, Serialize)]
-pub struct ConditionStallCleared {
-    pub consumer: String,
-    pub cleared: orbit_types::workflow::automation::ConditionStall,
-    pub audit: ConditionAudit,
 }

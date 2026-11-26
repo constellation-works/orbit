@@ -111,6 +111,18 @@ pub(super) struct Delivery {
     pub(super) usd: Option<f64>,
 }
 
+impl CellRow for Delivery {
+    fn complexity(&self) -> &str {
+        &self.complexity
+    }
+    fn crew(&self) -> Option<&str> {
+        self.crew.as_deref()
+    }
+    fn review_mode(&self) -> ReviewMode {
+        self.review_mode
+    }
+}
+
 /// What an in-progress task's current attempt has already used, subtracted
 /// from its draw.
 #[derive(Clone, Copy, Default)]
@@ -176,18 +188,6 @@ pub(super) trait CellRow {
     fn complexity(&self) -> &str;
     fn crew(&self) -> Option<&str>;
     fn review_mode(&self) -> ReviewMode;
-}
-
-impl CellRow for Delivery {
-    fn complexity(&self) -> &str {
-        &self.complexity
-    }
-    fn crew(&self) -> Option<&str> {
-        self.crew.as_deref()
-    }
-    fn review_mode(&self) -> ReviewMode {
-        self.review_mode
-    }
 }
 
 /// Which history a task's draws come from.
@@ -280,12 +280,130 @@ impl Resolved {
     }
 }
 
+impl Resolved {
+    /// The share of its outcome pool's attempts that did not deliver;
+    /// `None` without episodes.
+    pub(super) fn setback_probability(&self, episodes: &[Episode]) -> Option<f64> {
+        (!self.episodes.is_empty()).then(|| {
+            let setbacks = self
+                .episodes
+                .iter()
+                .filter(|index| episodes[**index].outcome != EpisodeOutcome::Delivered)
+                .count();
+            round_share(setbacks as f64 / self.episodes.len() as f64)
+        })
+    }
+
+    /// Whether its outcome pool holds an attempt that left the queue.
+    pub(super) fn can_block(&self, episodes: &[Episode]) -> bool {
+        self.episodes
+            .iter()
+            .any(|index| episodes[*index].outcome == EpisodeOutcome::Blocked)
+    }
+}
+
 /// A resolved pool: its basis and indices into its rows.
 struct Pool {
     basis: Basis,
     cell_samples: usize,
     review_mode_fallback: bool,
     samples: Vec<usize>,
+}
+
+/// One task's draw for one simulated drain, or a sum of draws. A missing
+/// value (no history, or no priced or costed delivery to draw from) makes
+/// every sum it joins missing, so a total never silently undercounts.
+#[derive(Clone, Copy)]
+pub(super) struct Draw {
+    pub(super) hours: Option<f64>,
+    pub(super) tokens: Option<f64>,
+    pub(super) usd: Option<f64>,
+}
+
+impl Draw {
+    pub(super) const ZERO: Self = Self {
+        hours: Some(0.0),
+        tokens: Some(0.0),
+        usd: Some(0.0),
+    };
+    pub(super) const MISSING: Self = Self {
+        hours: None,
+        tokens: None,
+        usd: None,
+    };
+
+    pub(super) fn add(&mut self, other: &Draw) {
+        let sum = |total: Option<f64>, one: Option<f64>| total.zip(one).map(|(a, b)| a + b);
+        self.hours = sum(self.hours, other.hours);
+        self.tokens = sum(self.tokens, other.tokens);
+        self.usd = sum(self.usd, other.usd);
+    }
+
+    /// This draw less what was already used, floored at zero.
+    fn less(self, spent: Spent) -> Self {
+        let less = |value: Option<f64>, used: f64| value.map(|value| (value - used).max(0.0));
+        Self {
+            hours: less(self.hours, spent.hours),
+            tokens: less(self.tokens, spent.tokens),
+            usd: less(self.usd, spent.usd),
+        }
+    }
+}
+
+/// One attempt in a task's simulated drain.
+#[derive(Clone, Copy)]
+pub(super) struct Step {
+    /// The slot hours it holds.
+    pub(super) hours: f64,
+    /// What it uses, charged when it starts.
+    pub(super) spend: Draw,
+    pub(super) outcome: EpisodeOutcome,
+    /// What follows an attempt that did not deliver.
+    pub(super) then: Follow,
+}
+
+/// A task's attempts for one iteration: the wait before its first (a
+/// blocked task's return), then attempts until one delivers or no return
+/// follows.
+#[derive(Clone)]
+pub(super) struct Script {
+    pub(super) initial: Follow,
+    pub(super) steps: Vec<Step>,
+    /// It was still retrying after [`MAX_ATTEMPTS`].
+    pub(super) limited: bool,
+}
+
+impl Script {
+    /// Hours until it finishes, ignoring contention; `None` if it never does.
+    pub(super) fn finish_hours(&self) -> Option<f64> {
+        let mut total = match self.initial {
+            Follow::Requeue(wait) => wait,
+            Follow::Resolve(wait) => return Some(wait),
+            Follow::Absorb(_) | Follow::Censored | Follow::Never => return None,
+        };
+        for step in &self.steps {
+            total += step.hours;
+            if step.outcome == EpisodeOutcome::Delivered {
+                return Some(total);
+            }
+            match step.then {
+                Follow::Requeue(wait) => total += wait,
+                Follow::Resolve(wait) => return Some(total + wait),
+                Follow::Absorb(_) | Follow::Censored | Follow::Never => return None,
+            }
+        }
+        None
+    }
+}
+
+impl Default for Script {
+    fn default() -> Self {
+        Self {
+            initial: Follow::Requeue(0.0),
+            steps: Vec::new(),
+            limited: false,
+        }
+    }
 }
 
 /// Eligible pools along the fallback chain, narrowest first: complexity ×
@@ -430,126 +548,8 @@ pub(super) fn resolve_forecast_item(
     }
 }
 
-impl Resolved {
-    /// The share of its outcome pool's attempts that did not deliver;
-    /// `None` without episodes.
-    pub(super) fn setback_probability(&self, episodes: &[Episode]) -> Option<f64> {
-        (!self.episodes.is_empty()).then(|| {
-            let setbacks = self
-                .episodes
-                .iter()
-                .filter(|index| episodes[**index].outcome != EpisodeOutcome::Delivered)
-                .count();
-            round_share(setbacks as f64 / self.episodes.len() as f64)
-        })
-    }
-
-    /// Whether its outcome pool holds an attempt that left the queue.
-    pub(super) fn can_block(&self, episodes: &[Episode]) -> bool {
-        self.episodes
-            .iter()
-            .any(|index| episodes[*index].outcome == EpisodeOutcome::Blocked)
-    }
-}
-
 fn round_share(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
-}
-
-/// One task's draw for one simulated drain, or a sum of draws. A missing
-/// value (no history, or no priced or costed delivery to draw from) makes
-/// every sum it joins missing, so a total never silently undercounts.
-#[derive(Clone, Copy)]
-pub(super) struct Draw {
-    pub(super) hours: Option<f64>,
-    pub(super) tokens: Option<f64>,
-    pub(super) usd: Option<f64>,
-}
-
-impl Draw {
-    pub(super) const ZERO: Self = Self {
-        hours: Some(0.0),
-        tokens: Some(0.0),
-        usd: Some(0.0),
-    };
-    pub(super) const MISSING: Self = Self {
-        hours: None,
-        tokens: None,
-        usd: None,
-    };
-
-    pub(super) fn add(&mut self, other: &Draw) {
-        let sum = |total: Option<f64>, one: Option<f64>| total.zip(one).map(|(a, b)| a + b);
-        self.hours = sum(self.hours, other.hours);
-        self.tokens = sum(self.tokens, other.tokens);
-        self.usd = sum(self.usd, other.usd);
-    }
-
-    /// This draw less what was already used, floored at zero.
-    fn less(self, spent: Spent) -> Self {
-        let less = |value: Option<f64>, used: f64| value.map(|value| (value - used).max(0.0));
-        Self {
-            hours: less(self.hours, spent.hours),
-            tokens: less(self.tokens, spent.tokens),
-            usd: less(self.usd, spent.usd),
-        }
-    }
-}
-
-/// One attempt in a task's simulated drain.
-#[derive(Clone, Copy)]
-pub(super) struct Step {
-    /// The slot hours it holds.
-    pub(super) hours: f64,
-    /// What it uses, charged when it starts.
-    pub(super) spend: Draw,
-    pub(super) outcome: EpisodeOutcome,
-    /// What follows an attempt that did not deliver.
-    pub(super) then: Follow,
-}
-
-/// A task's attempts for one iteration: the wait before its first (a
-/// blocked task's return), then attempts until one delivers or no return
-/// follows.
-#[derive(Clone)]
-pub(super) struct Script {
-    pub(super) initial: Follow,
-    pub(super) steps: Vec<Step>,
-    /// It was still retrying after [`MAX_ATTEMPTS`].
-    pub(super) limited: bool,
-}
-
-impl Default for Script {
-    fn default() -> Self {
-        Self {
-            initial: Follow::Requeue(0.0),
-            steps: Vec::new(),
-            limited: false,
-        }
-    }
-}
-
-impl Script {
-    /// Hours until it finishes, ignoring contention; `None` if it never does.
-    pub(super) fn finish_hours(&self) -> Option<f64> {
-        let mut total = match self.initial {
-            Follow::Requeue(wait) => wait,
-            Follow::Resolve(wait) => return Some(wait),
-            Follow::Absorb(_) | Follow::Censored | Follow::Never => return None,
-        };
-        for step in &self.steps {
-            total += step.hours;
-            if step.outcome == EpisodeOutcome::Delivered {
-                return Some(total);
-            }
-            match step.then {
-                Follow::Requeue(wait) => total += wait,
-                Follow::Resolve(wait) => return Some(total + wait),
-                Follow::Absorb(_) | Follow::Censored | Follow::Never => return None,
-            }
-        }
-        None
-    }
 }
 
 /// Draw `item`'s attempts into `script`: each attempt samples an episode of

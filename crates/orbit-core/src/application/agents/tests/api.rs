@@ -21,6 +21,19 @@ use crate::application::codebase::{PilotAssessment, PilotEvidence, PilotRun};
 // (crew, tier, implemented tasks, landed tasks, reviewed tasks, first accepts).
 type Cohort<'a> = (&'a str, Option<TaskComplexity>, usize, usize, usize, usize);
 
+/// A labelled unit's run id and, when it completed an invocation, whether
+/// that invocation recorded a dispatch identity and at which effort.
+type LabelledRun = Option<(&'static str, Option<(bool, Option<ReasoningEffort>)>)>;
+
+/// One implementer unit for the crew-label fixtures: task id, crew label,
+/// its run ([`LabelledRun`]) and the effort a follower reported for it.
+type LabelledUnit = (
+    &'static str,
+    &'static str,
+    LabelledRun,
+    Option<Option<String>>,
+);
+
 fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
     // Fixed timestamps age out of the served rolling window; use its clock.
     let now = Utc::now();
@@ -44,16 +57,16 @@ fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
             let reviews =
                 (index < reviewed).then(|| review_of(&id, None, plus_minutes(start, 1), verdict));
             tasks.push(TaskFacts {
-                complexity,
                 status: if landed_here {
                     TaskStatus::Done
                 } else {
                     TaskStatus::Review
                 },
+                complexity,
                 landed: landed_here,
-                landed_at: landed_here.then_some(now),
                 attempts: vec![attempt],
                 final_attempt: Some(0),
+                landed_at: landed_here.then_some(now),
                 reviews: reviews.into_iter().collect(),
                 ..minimal_task(&id, start)
             });
@@ -147,8 +160,8 @@ fn scan_facts(
         tasks_scanned: tasks.len(),
         tasks,
         charges,
-        credits,
         run_costs: BTreeMap::new(),
+        credits,
         regressions: Vec::new(),
         landed_lines: BTreeMap::new(),
         performance_types: Vec::new(),
@@ -283,9 +296,9 @@ fn in_review(id: &str, at: DateTime<Utc>, attempts: Vec<Attempt>) -> TaskFacts {
     TaskFacts {
         status: TaskStatus::Review,
         landed: false,
-        landed_at: None,
         attempts,
         final_attempt: Some(0),
+        landed_at: None,
         ..minimal_task(id, at)
     }
 }
@@ -1215,19 +1228,6 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
     );
 }
 
-/// A labelled unit's run id and, when it completed an invocation, whether
-/// that invocation recorded a dispatch identity and at which effort.
-type LabelledRun = Option<(&'static str, Option<(bool, Option<ReasoningEffort>)>)>;
-
-/// One implementer unit for the crew-label fixtures: task id, crew label,
-/// its run ([`LabelledRun`]) and the effort a follower reported for it.
-type LabelledUnit = (
-    &'static str,
-    &'static str,
-    LabelledRun,
-    Option<Option<String>>,
-);
-
 fn labelled_facts(units: Vec<LabelledUnit>) -> AgentFacts {
     let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
@@ -1249,9 +1249,9 @@ fn labelled_facts(units: Vec<LabelledUnit>) -> AgentFacts {
         }
         tasks.push(TaskFacts {
             complexity: Some(TaskComplexity::Low),
-            landed_at: Some(now),
             attempts: vec![attempt],
             final_attempt: Some(0),
+            landed_at: Some(now),
             ..minimal_task(task_id, start)
         });
     }

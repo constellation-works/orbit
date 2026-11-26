@@ -28,32 +28,6 @@ pub(crate) const CPU_LIGHT_BUDGET_FULL: &str = "cpu_light_budget_full";
 /// while only CPU pressure throttles.
 pub(crate) const CPU_LIGHT_LEAVES: u8 = 2;
 
-/// A leaf that adds almost no CPU: an auto-task tagged `no-diff-expected`
-/// whose brief does no build work [ORB-15766].
-///
-/// Both tags are required. `no-diff-expected` alone is an operator's claim
-/// about the diff, not about the work; automated provenance alone says
-/// nothing about cost. Auto-tasks that build or run the product
-/// ([`auto_task_builds_by_design`]) are excluded: they must not be admitted
-/// from the CPU-light budget while the host is under CPU pressure.
-pub(crate) fn is_cpu_light(task: &Task) -> bool {
-    let has_no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
-    if !has_no_diff {
-        return false;
-    }
-    let has_auto_task = task
-        .tags
-        .iter()
-        .any(|tag| tag.starts_with(AUTO_TASK_TAG_PREFIX));
-    if !has_auto_task {
-        return false;
-    }
-    let is_build_heavy = task.tags.iter().any(|tag| {
-        auto_task_builds_by_design(tag.strip_prefix(AUTO_TASK_TAG_PREFIX).unwrap_or(tag))
-    });
-    !is_build_heavy
-}
-
 /// Reserved light slots, and how many live leaves already hold one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LightBudget {
@@ -154,4 +128,30 @@ impl ResourceGate {
             Self::Closed => false,
         }
     }
+}
+
+/// A leaf that adds almost no CPU: an auto-task tagged `no-diff-expected`
+/// whose brief does no build work [ORB-15766].
+///
+/// Both tags are required. `no-diff-expected` alone is an operator's claim
+/// about the diff, not about the work; automated provenance alone says
+/// nothing about cost. Auto-tasks that build or run the product
+/// ([`auto_task_builds_by_design`]) are excluded: they must not be admitted
+/// from the CPU-light budget while the host is under CPU pressure.
+pub(crate) fn is_cpu_light(task: &Task) -> bool {
+    let has_no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+    if !has_no_diff {
+        return false;
+    }
+    let has_auto_task = task
+        .tags
+        .iter()
+        .any(|tag| tag.starts_with(AUTO_TASK_TAG_PREFIX));
+    if !has_auto_task {
+        return false;
+    }
+    let is_build_heavy = task.tags.iter().any(|tag| {
+        auto_task_builds_by_design(tag.strip_prefix(AUTO_TASK_TAG_PREFIX).unwrap_or(tag))
+    });
+    !is_build_heavy
 }

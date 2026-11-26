@@ -20,6 +20,9 @@ use crate::application::distributed::ensure_distributed_mutation_available;
 
 use super::refusal;
 
+/// The longest model or crew name a late report may carry.
+const MODEL_NAME_LIMIT: usize = 200;
+
 /// The owner's answer to an accepted late effort report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LateEffortReportResult {
@@ -31,9 +34,6 @@ pub struct LateEffortReportResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_outcome: Option<&'static str>,
 }
-
-/// The longest model or crew name a late report may carry.
-const MODEL_NAME_LIMIT: usize = 200;
 
 impl OrbitRuntime {
     /// Record `effort` (`None` for the provider default) as the effort the

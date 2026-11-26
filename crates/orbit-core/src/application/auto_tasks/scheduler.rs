@@ -488,13 +488,13 @@ pub(crate) fn template_params(
             .unwrap_or(orbit_types::task::TaskComplexity::Unassessed),
         task_type: Some(template.task_type),
         status: Some(status),
+        system_created: true,
         // A template without a crew mints an unassigned task, which draws
         // from the complexity pool for its complexity; so does one still
         // naming the retired `system` crew [ORB-15663].
         crew: runtime
             .crew_unless_retired(template.crew.as_deref())
             .map(str::to_string),
-        system_created: true,
         ..TaskAddParams::default()
     })
 }

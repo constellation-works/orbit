@@ -91,24 +91,6 @@ pub(crate) struct LeafRunOccupancy {
     pub(crate) unknown_reason: Option<&'static str>,
 }
 
-/// The gate's parked-lock record, resolved against current holders.
-pub(crate) struct LockWait {
-    pub(crate) gate_run_id: String,
-    pub(crate) selectors: Vec<String>,
-    /// Selectors that map to a task currently holding a lock.
-    pub(crate) blockers: Vec<LockWaitBlocker>,
-    /// Selectors no current holder explains. The gate recorded a conflict, so
-    /// the wait is real; the holder has since moved on, or holds through a
-    /// reservation rather than a task status. Reported rather than dropped so
-    /// the missing evidence is visible instead of looking like no conflict.
-    pub(crate) unresolved_selectors: Vec<String>,
-}
-
-pub(crate) struct LockWaitBlocker {
-    pub(crate) selector: String,
-    pub(crate) holder_task_ids: Vec<String>,
-}
-
 impl LeafRunOccupancy {
     fn to_json(&self) -> Value {
         let mut entry = json!({
@@ -143,6 +125,30 @@ impl LeafRunOccupancy {
         }
         entry
     }
+}
+
+/// The gate's parked-lock record, resolved against current holders.
+pub(crate) struct LockWait {
+    pub(crate) gate_run_id: String,
+    pub(crate) selectors: Vec<String>,
+    /// Selectors that map to a task currently holding a lock.
+    pub(crate) blockers: Vec<LockWaitBlocker>,
+    /// Selectors no current holder explains. The gate recorded a conflict, so
+    /// the wait is real; the holder has since moved on, or holds through a
+    /// reservation rather than a task status. Reported rather than dropped so
+    /// the missing evidence is visible instead of looking like no conflict.
+    pub(crate) unresolved_selectors: Vec<String>,
+}
+
+pub(crate) struct LockWaitBlocker {
+    pub(crate) selector: String,
+    pub(crate) holder_task_ids: Vec<String>,
+}
+
+struct ResolvedPhase {
+    phase: LeafRunPhase,
+    lock_wait: Option<LockWait>,
+    unknown_reason: Option<&'static str>,
 }
 
 /// Project the occupied slots into the readiness payload's `occupancy` block.
@@ -239,12 +245,6 @@ fn read_dispatch_lineage(
     }
 
     Ok(lineage)
-}
-
-struct ResolvedPhase {
-    phase: LeafRunPhase,
-    lock_wait: Option<LockWait>,
-    unknown_reason: Option<&'static str>,
 }
 
 fn resolve_phase(

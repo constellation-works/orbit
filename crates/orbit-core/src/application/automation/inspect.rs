@@ -27,43 +27,6 @@ pub struct UnresolvableBranch {
     pub error: String,
 }
 
-/// Every enabled delivery auto-task owned here whose branch git cannot
-/// resolve, in definition order. A definition with persisted state is checked
-/// too: a branch deleted after baseline stops it just as surely. One whose
-/// seeding plugin is off here never ticks, so it is not reported.
-pub fn unresolvable_delivery_branches(
-    runtime: &OrbitRuntime,
-) -> Result<Vec<UnresolvableBranch>, OrbitError> {
-    let source = Source::new(
-        &runtime.paths().repo_root,
-        runtime.execution_env_policy().process_env(),
-    );
-    let mut unresolvable = Vec::new();
-    for definition in runtime.listed_auto_task_definitions()? {
-        let AutoTaskSchedule::Deliveries {
-            deliveries_landed: declared,
-            ..
-        } = &definition.schedule
-        else {
-            continue;
-        };
-        if !runtime.auto_task_enabled(&definition)
-            || !ownership::resolve(runtime, declared.owner_machine.as_deref()).owned_here
-        {
-            continue;
-        }
-        if let Some(error) = branch_unavailable(&source, &declared.branch) {
-            unresolvable.push(UnresolvableBranch {
-                definition: definition.name.clone(),
-                branch: declared.branch.clone(),
-                error,
-            });
-        }
-    }
-
-    Ok(unresolvable)
-}
-
 /// An enabled delivery definition whose resolved owner is not this host.
 ///
 /// Admission is impossible here whatever `enabled` says, so a surface that
@@ -137,6 +100,74 @@ impl UnadmittableDefinition {
     }
 }
 
+/// A delivery auto-task whose claimed or admitted action stopped without evidence its
+/// settlement would accept — usually a task closed with missing or malformed
+/// coverage. The next evaluation settles it; one still reported means none is
+/// running here, and the consumer admits nothing until it does or an operator
+/// recovers or resets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WedgedConsumer {
+    pub definition: String,
+    /// The stopped action: the task the consumer is still waiting on.
+    pub action_id: String,
+    /// The task's terminal status, or `deleted` when the recorded task is gone.
+    pub terminal_status: String,
+    /// The last validation reason recorded against its evidence, if any.
+    pub reason: Option<String>,
+}
+
+/// One delivery consumer as inspection sees it, already resolved against the
+/// same ownership and epoch the evaluator uses.
+struct Inspection<'a> {
+    kind: &'a str,
+    name: &'a str,
+    epoch: &'a str,
+    trigger: &'a DeliveryTrigger,
+    ownership: DeliveryOwnership,
+    enabled: bool,
+    admission_deferred: bool,
+    /// The evaluator adopts a compatible edit of this kind on its own.
+    adopts_settings: bool,
+    definition: Option<&'a AutoTaskDefinition>,
+}
+
+/// Every enabled delivery auto-task owned here whose branch git cannot
+/// resolve, in definition order. A definition with persisted state is checked
+/// too: a branch deleted after baseline stops it just as surely. One whose
+/// seeding plugin is off here never ticks, so it is not reported.
+pub fn unresolvable_delivery_branches(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<UnresolvableBranch>, OrbitError> {
+    let source = Source::new(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
+    let mut unresolvable = Vec::new();
+    for definition in runtime.listed_auto_task_definitions()? {
+        let AutoTaskSchedule::Deliveries {
+            deliveries_landed: declared,
+            ..
+        } = &definition.schedule
+        else {
+            continue;
+        };
+        if !runtime.auto_task_enabled(&definition)
+            || !ownership::resolve(runtime, declared.owner_machine.as_deref()).owned_here
+        {
+            continue;
+        }
+        if let Some(error) = branch_unavailable(&source, &declared.branch) {
+            unresolvable.push(UnresolvableBranch {
+                definition: definition.name.clone(),
+                branch: declared.branch.clone(),
+                error,
+            });
+        }
+    }
+
+    Ok(unresolvable)
+}
+
 /// Ownership refusal for one delivery auto-task, or `None` when this host owns
 /// it, it is disabled, or it is not a delivery definition at all.
 ///
@@ -180,22 +211,6 @@ pub fn unadmittable_delivery_definitions(
         .iter()
         .filter_map(|definition| delivery_ownership_refusal(runtime, definition))
         .collect())
-}
-
-/// A delivery auto-task whose claimed or admitted action stopped without evidence its
-/// settlement would accept — usually a task closed with missing or malformed
-/// coverage. The next evaluation settles it; one still reported means none is
-/// running here, and the consumer admits nothing until it does or an operator
-/// recovers or resets it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WedgedConsumer {
-    pub definition: String,
-    /// The stopped action: the task the consumer is still waiting on.
-    pub action_id: String,
-    /// The task's terminal status, or `deleted` when the recorded task is gone.
-    pub terminal_status: String,
-    /// The last validation reason recorded against its evidence, if any.
-    pub reason: Option<String>,
 }
 
 /// Every delivery auto-task here holding a stopped claimed or admitted action, in
@@ -357,21 +372,6 @@ fn inspect_routine_status(
         now,
         Some(cache),
     )
-}
-
-/// One delivery consumer as inspection sees it, already resolved against the
-/// same ownership and epoch the evaluator uses.
-struct Inspection<'a> {
-    kind: &'a str,
-    name: &'a str,
-    epoch: &'a str,
-    trigger: &'a DeliveryTrigger,
-    ownership: DeliveryOwnership,
-    enabled: bool,
-    admission_deferred: bool,
-    /// The evaluator adopts a compatible edit of this kind on its own.
-    adopts_settings: bool,
-    definition: Option<&'a AutoTaskDefinition>,
 }
 
 fn inspect(

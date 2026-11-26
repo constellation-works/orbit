@@ -73,21 +73,24 @@ impl ExperimentView {
             .zip(experiment.max_days)
             .and_then(|(event, days)| experiment_horizon_at(event.at, days))
             .map(|at| at.to_rfc3339());
+        let population = stored_json("population", &experiment.population_json)?;
+        let guardrails = stored_json("guardrails", &experiment.guardrails_json)?;
+        let arms = arms.into_iter().map(arm_view).collect::<Result<_, _>>()?;
+        let events = events
+            .into_iter()
+            .map(event_view)
+            .collect::<Result<_, _>>()?;
+
         Ok(Self {
-            population: stored_json("population", &experiment.population_json)?,
-            guardrails: stored_json("guardrails", &experiment.guardrails_json)?,
-            arms: arms.into_iter().map(arm_view).collect::<Result<_, _>>()?,
-            events: events
-                .into_iter()
-                .map(event_view)
-                .collect::<Result<_, _>>()?,
             id: experiment.id,
             name: experiment.name,
             status: experiment.status,
             mode: experiment.mode,
             segment: experiment.segment,
             hypothesis: experiment.hypothesis,
+            population,
             primary_metric: experiment.primary_metric,
+            guardrails,
             min_sample: experiment.min_sample_per_arm,
             max_days: experiment.max_days,
             horizon_at,
@@ -98,24 +101,27 @@ impl ExperimentView {
             created_at: experiment.created_at.to_rfc3339(),
             updated_at: experiment.updated_at.to_rfc3339(),
             revision: experiment.revision,
+            arms,
+            events,
         })
     }
 }
 
 fn arm_view(arm: ExperimentArmRow) -> Result<ExperimentArmView, OrbitError> {
+    let overlay = stored_json("overlay", &arm.overlay_json)?;
     Ok(ExperimentArmView {
-        overlay: stored_json("overlay", &arm.overlay_json)?,
         name: arm.name,
         control: arm.control,
         weight: arm.weight,
+        overlay,
         overlay_digest: arm.overlay_digest,
         retired_segment: arm.retired_segment,
     })
 }
 
 fn event_view(event: ExperimentEventRow) -> Result<ExperimentEventView, OrbitError> {
+    let detail = stored_json("event detail", &event.detail_json)?;
     Ok(ExperimentEventView {
-        detail: stored_json("event detail", &event.detail_json)?,
         seq: event.seq,
         kind: event.kind,
         from_status: event.from_status,
@@ -124,6 +130,7 @@ fn event_view(event: ExperimentEventRow) -> Result<ExperimentEventView, OrbitErr
         actor: event.actor,
         at: event.at.to_rfc3339(),
         reason: event.reason,
+        detail,
     })
 }
 

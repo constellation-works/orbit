@@ -243,14 +243,16 @@ impl LeafRunEvidenceView {
             };
         };
         let state = |recorded: bool| if recorded { "recorded" } else { "unrecorded" };
+        let build_state = state(evidence.report.build.is_some());
+        let root_cause_state = state(evidence.report.root_cause.is_some());
         Self {
             provenance: Some(evidence.provenance.as_str()),
             recorded_at: Some(evidence.recorded_at),
             job_id: Some(evidence.report.job_id),
-            build_state: state(evidence.report.build.is_some()),
             build: evidence.report.build,
-            root_cause_state: state(evidence.report.root_cause.is_some()),
+            build_state,
             root_cause: evidence.report.root_cause,
+            root_cause_state,
         }
     }
 }

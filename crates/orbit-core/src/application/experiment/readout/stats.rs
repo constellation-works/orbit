@@ -15,6 +15,19 @@ const SEED: u64 = 0x0e57_a11e_2026_1026;
 /// A 95% interval, low then high.
 pub(super) type Interval = [f64; 2];
 
+/// One task's numerator and its reviewable-line denominator.
+#[derive(Clone, Copy)]
+pub(super) struct WeightedPair {
+    pub(super) numerator: f64,
+    pub(super) lines: u64,
+}
+
+/// One stratum's control and treatment values.
+pub(super) struct Cell<'a> {
+    pub(super) control: &'a [f64],
+    pub(super) treatment: &'a [f64],
+}
+
 /// The stream for one label: FNV-1a over the label, mixed into the fixed seed.
 fn seeded_stream(label: &str) -> SplitMix64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -61,13 +74,6 @@ pub(super) fn bootstrap(
         })
         .collect();
     percentile_interval(draws)
-}
-
-/// One task's numerator and its reviewable-line denominator.
-#[derive(Clone, Copy)]
-pub(super) struct WeightedPair {
-    pub(super) numerator: f64,
-    pub(super) lines: u64,
 }
 
 /// Sum of numerators divided by sum of lines. `None` when the lines sum to
@@ -120,12 +126,6 @@ pub(super) fn paired_ratio_difference(
         })
         .collect();
     Some((estimate, percentile_interval(draws)))
-}
-
-/// One stratum's control and treatment values.
-pub(super) struct Cell<'a> {
-    pub(super) control: &'a [f64],
-    pub(super) treatment: &'a [f64],
 }
 
 /// The treatment-minus-control difference in means, post-stratified: each

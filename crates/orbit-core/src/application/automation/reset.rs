@@ -15,18 +15,18 @@ pub(crate) mod probe_hook {
         static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
     }
 
-    /// Interleave a consumer transition after reset inspects action liveness.
-    /// Scoped to this thread and restored on return or unwind.
-    pub fn with_reset_probe_hook<T>(hook: impl Fn() + 'static, operation: impl FnOnce() -> T) -> T {
-        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
-        operation()
-    }
-
     struct Restore(Option<Hook>);
     impl Drop for Restore {
         fn drop(&mut self) {
             HOOK.with(|slot| slot.replace(self.0.take()));
         }
+    }
+
+    /// Interleave a consumer transition after reset inspects action liveness.
+    /// Scoped to this thread and restored on return or unwind.
+    pub fn with_reset_probe_hook<T>(hook: impl Fn() + 'static, operation: impl FnOnce() -> T) -> T {
+        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
+        operation()
     }
 
     pub(super) fn after_probe() {
@@ -47,6 +47,17 @@ use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 use serde::Serialize;
 
 use super::{ownership, source::Source};
+
+/// What deleting a delivery definition did to its consumer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ConsumerTeardown {
+    pub consumer: String,
+    /// The consumer had recorded state, and an audited reset destroyed it.
+    pub reset: bool,
+    /// Every pinned `refs/orbit/automation/*` ref the consumer held; all of
+    /// them are deleted.
+    pub released_refs: Vec<String>,
+}
 
 /// Preview or apply a reset for one delivery auto-task.
 ///
@@ -144,17 +155,6 @@ pub fn reset_auto_task(
     }
 
     Ok(applied)
-}
-
-/// What deleting a delivery definition did to its consumer.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct ConsumerTeardown {
-    pub consumer: String,
-    /// The consumer had recorded state, and an audited reset destroyed it.
-    pub reset: bool,
-    /// Every pinned `refs/orbit/automation/*` ref the consumer held; all of
-    /// them are deleted.
-    pub released_refs: Vec<String>,
 }
 
 /// Why deleting `definition` must not tear its delivery consumer down yet.

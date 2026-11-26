@@ -42,6 +42,62 @@ struct StoredWaitGrant {
     expires_at: DateTime<Utc>,
 }
 
+/// A redeemed grant: what one shell may read.
+pub(crate) struct AttentionWaitScope(StoredWaitGrant);
+
+impl AttentionWaitScope {
+    /// Redeem `token`, or refuse it as `capability_denied`. A missing,
+    /// unknown or expired token is never read as clean.
+    pub(crate) fn redeem(global_root: &Path, token: &str) -> Result<Self, OrbitError> {
+        redeem_wait_grant(global_root, token, Utc::now()).map(Self)
+    }
+
+    /// Refuse an input that reaches past the grant: the whole host, other
+    /// hosts, grant minting, or a workspace the grant does not name.
+    pub(crate) fn check_input(&self, input: &Value) -> Result<(), OrbitError> {
+        for field in ["all", "host", "wait_grant", "candidate_read"] {
+            if input.get(field).is_some_and(|value| !value.is_null()) {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "attention wait reads only the workspaces its grant names; `{field}` is not allowed"
+                )));
+            }
+        }
+        let selectors =
+            orbit_common::governance::attention::filter::attention_strings(input, "workspace");
+        if let Some(outside) = selectors.iter().find(|selector| {
+            !self.0.workspace_ids.contains(selector) && !self.0.workspace_names.contains(selector)
+        }) {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "workspace `{outside}` is outside this attention wait grant"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuse a response whose echoed scope is not wholly inside the grant,
+    /// whichever way the selector resolved.
+    pub(crate) fn check_response(&self, response: &Value) -> Result<(), OrbitError> {
+        let read = response["filters"]["workspace"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let outside = read.is_empty()
+            || read.iter().any(|workspace| {
+                !workspace["id"]
+                    .as_str()
+                    .is_some_and(|id| self.0.workspace_ids.iter().any(|granted| granted == id))
+            });
+        if outside {
+            return Err(OrbitError::CapabilityDenied(
+                "this attention wait grant does not cover the workspace read; pass --workspace \
+                 for one the minting session read"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn grant_dir(global_root: &Path) -> PathBuf {
     global_root.join(GRANT_DIR)
 }
@@ -181,60 +237,4 @@ fn redeem_wait_grant(
         return Err(refusal("the grant has expired"));
     }
     Ok(grant)
-}
-
-/// A redeemed grant: what one shell may read.
-pub(crate) struct AttentionWaitScope(StoredWaitGrant);
-
-impl AttentionWaitScope {
-    /// Redeem `token`, or refuse it as `capability_denied`. A missing,
-    /// unknown or expired token is never read as clean.
-    pub(crate) fn redeem(global_root: &Path, token: &str) -> Result<Self, OrbitError> {
-        redeem_wait_grant(global_root, token, Utc::now()).map(Self)
-    }
-
-    /// Refuse an input that reaches past the grant: the whole host, other
-    /// hosts, grant minting, or a workspace the grant does not name.
-    pub(crate) fn check_input(&self, input: &Value) -> Result<(), OrbitError> {
-        for field in ["all", "host", "wait_grant", "candidate_read"] {
-            if input.get(field).is_some_and(|value| !value.is_null()) {
-                return Err(OrbitError::CapabilityDenied(format!(
-                    "attention wait reads only the workspaces its grant names; `{field}` is not allowed"
-                )));
-            }
-        }
-        let selectors =
-            orbit_common::governance::attention::filter::attention_strings(input, "workspace");
-        if let Some(outside) = selectors.iter().find(|selector| {
-            !self.0.workspace_ids.contains(selector) && !self.0.workspace_names.contains(selector)
-        }) {
-            return Err(OrbitError::CapabilityDenied(format!(
-                "workspace `{outside}` is outside this attention wait grant"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Refuse a response whose echoed scope is not wholly inside the grant,
-    /// whichever way the selector resolved.
-    pub(crate) fn check_response(&self, response: &Value) -> Result<(), OrbitError> {
-        let read = response["filters"]["workspace"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let outside = read.is_empty()
-            || read.iter().any(|workspace| {
-                !workspace["id"]
-                    .as_str()
-                    .is_some_and(|id| self.0.workspace_ids.iter().any(|granted| granted == id))
-            });
-        if outside {
-            return Err(OrbitError::CapabilityDenied(
-                "this attention wait grant does not cover the workspace read; pass --workspace \
-                 for one the minting session read"
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
 }

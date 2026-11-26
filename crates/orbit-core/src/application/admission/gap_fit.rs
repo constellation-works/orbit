@@ -167,25 +167,6 @@ impl HeadWait<'_> {
     }
 }
 
-/// The profile lookup that prices `task` in `workspace_id`: its work class
-/// from its tags now, its complexity, `no-diff-expected` for a template's
-/// base class, and the model of its assigned crew in `profiles`' crews. A
-/// task without a crew runs the default crew or a later draw, so its crew
-/// model is unknown and the key's union prices it.
-pub(crate) fn task_lookup(workspace_id: &str, task: &Task, profiles: &ProfileSet) -> ProfileLookup {
-    ProfileLookup::new(
-        workspace_id,
-        work_class(&task.tags),
-        task.complexity.map(|complexity| complexity.to_string()),
-        task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
-    )
-    .with_crew_model(
-        profiles
-            .crew_model(task.crew.as_deref())
-            .map(str::to_string),
-    )
-}
-
 /// One pass's gap fit against one forecast.
 pub(crate) struct GapFit<'a> {
     mode: GapFitMode,
@@ -375,6 +356,25 @@ impl<'a> GapFit<'a> {
         };
         (record, self.reservations)
     }
+}
+
+/// The profile lookup that prices `task` in `workspace_id`: its work class
+/// from its tags now, its complexity, `no-diff-expected` for a template's
+/// base class, and the model of its assigned crew in `profiles`' crews. A
+/// task without a crew runs the default crew or a later draw, so its crew
+/// model is unknown and the key's union prices it.
+pub(crate) fn task_lookup(workspace_id: &str, task: &Task, profiles: &ProfileSet) -> ProfileLookup {
+    ProfileLookup::new(
+        workspace_id,
+        work_class(&task.tags),
+        task.complexity.map(|complexity| complexity.to_string()),
+        task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
+    )
+    .with_crew_model(
+        profiles
+            .crew_model(task.crew.as_deref())
+            .map(str::to_string),
+    )
 }
 
 /// `minutes` up to [`SERIES_MINUTES`] as `percent` of the host, one point per

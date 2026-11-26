@@ -39,6 +39,15 @@ use crate::runtime::stored::locks::{
 /// earliest in dispatch order reserve; the rest wait on their locks as before.
 pub(super) const MAX_SURFACE_RESERVATIONS: usize = 2;
 
+/// The borrowed lock-resolution inputs a surface-reservation pass reads:
+/// where the workspace lives, which paths count as unlocked, and how
+/// overlaps block.
+pub(super) struct SurfaceLockContext<'a> {
+    pub(super) workspace_root: &'a Path,
+    pub(super) unlocked: &'a UnlockedContextPaths,
+    pub(super) lock_modes: &'a FootprintLockModes,
+}
+
 /// Whether a task blocked only by held locks may reserve its surface: critical
 /// and high priority only, so ordinary work never holds the queue for itself.
 pub(super) fn reserves_surface(task: &Task) -> bool {
@@ -51,15 +60,6 @@ pub(super) fn reserving_detail() -> String {
     "Reserves its surface while it waits on these locks: overlapping backlog work ranked \
      behind it is withheld until it is admitted or leaves backlog."
         .to_string()
-}
-
-/// The borrowed lock-resolution inputs a surface-reservation pass reads:
-/// where the workspace lives, which paths count as unlocked, and how
-/// overlaps block.
-pub(super) struct SurfaceLockContext<'a> {
-    pub(super) workspace_root: &'a Path,
-    pub(super) unlocked: &'a UnlockedContextPaths,
-    pub(super) lock_modes: &'a FootprintLockModes,
 }
 
 /// Withhold every task in `backlog` that a reservation covers, recording it in
@@ -119,17 +119,20 @@ pub(super) fn withhold_reserved_surfaces<'a>(
                 .collect::<Vec<_>>();
             reserved_for.sort_unstable();
             reserved_for.dedup();
+            let id = task.id.clone();
+            let detail = Some(format!(
+                "Reserved for {}, ranked ahead of this task and waiting only on context \
+                 locks. This task is admitted once the reserving task is admitted or leaves \
+                 backlog.",
+                reserved_for.join(", ")
+            ));
+
             excluded.push(BacklogTaskExclusion {
-                id: task.id.clone(),
+                id,
                 reason: BacklogTaskExclusionReason::SurfaceReserved,
-                detail: Some(format!(
-                    "Reserved for {}, ranked ahead of this task and waiting only on context \
-                     locks. This task is admitted once the reserving task is admitted or leaves \
-                     backlog.",
-                    reserved_for.join(", ")
-                )),
                 conflicts,
                 crew: None,
+                detail,
             });
         },
     )

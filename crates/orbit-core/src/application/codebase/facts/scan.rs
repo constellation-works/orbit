@@ -262,7 +262,6 @@ pub(in crate::application::codebase) fn scan(
             delivery_at,
             pilot,
             no_diff,
-            regressions: Vec::new(),
             id,
             title: task.title,
             crew: task.crew.or(task.implemented_by),
@@ -277,6 +276,7 @@ pub(in crate::application::codebase) fn scan(
             had_run,
             widenings: history.widenings,
             blocks: history.blocks,
+            regressions: Vec::new(),
             left_backlog: history.left_backlog,
         });
     }

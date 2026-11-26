@@ -24,6 +24,18 @@ pub(super) struct Record {
     pub(super) observed: Observations,
 }
 
+/// One measure's calibrated scale and how it was reached.
+#[derive(Clone, Default)]
+pub(super) struct Calibrated {
+    /// The deviation over the whole calibration window.
+    pub(super) raw: Option<f64>,
+    /// The 10th percentile of the weekly estimates.
+    pub(super) floor: Option<f64>,
+    pub(super) weekly: Vec<f64>,
+    /// `max(raw, floor)`; `None` when the measure never varied.
+    pub(super) scale: Option<f64>,
+}
+
 /// Records grouped by tier, the strata every resample draws within.
 pub(super) fn by_tier<'a>(
     records: impl IntoIterator<Item = &'a Record>,
@@ -107,18 +119,6 @@ fn deviation(values: &[f64]) -> Option<f64> {
         .sum::<f64>()
         / (values.len() - 1) as f64;
     Some(variance.sqrt())
-}
-
-/// One measure's calibrated scale and how it was reached.
-#[derive(Clone, Default)]
-pub(super) struct Calibrated {
-    /// The deviation over the whole calibration window.
-    pub(super) raw: Option<f64>,
-    /// The 10th percentile of the weekly estimates.
-    pub(super) floor: Option<f64>,
-    pub(super) weekly: Vec<f64>,
-    /// `max(raw, floor)`; `None` when the measure never varied.
-    pub(super) scale: Option<f64>,
 }
 
 /// Calibrate every measure's noise scale from `records` (the whole fleet's

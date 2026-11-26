@@ -16,6 +16,10 @@ use super::{
 };
 use crate::OrbitRuntime;
 
+/// The verb and audit action every revision write records.
+const WRITE_VERB: &str = "write";
+const WRITE_EVENT: &str = "revision_written";
+
 /// What a dreaming run's write is held to beyond the five rules: the task
 /// it writes for, recorded on the revision's event, and the evidence pack
 /// its citations must come from.
@@ -23,10 +27,6 @@ pub(super) struct DreamingWrite<'a> {
     pub(super) task_id: &'a str,
     pub(super) evidence_pack: &'a BTreeSet<String>,
 }
-
-/// The verb and audit action every revision write records.
-const WRITE_VERB: &str = "write";
-const WRITE_EVENT: &str = "revision_written";
 
 impl OrbitRuntime {
     /// An operator-named key. A configured crew's name is refused with the

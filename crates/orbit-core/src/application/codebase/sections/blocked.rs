@@ -2,6 +2,9 @@ use super::*;
 
 use super::rollup::*;
 
+/// Unclassified events the Blocked section names, most frequent first.
+const UNCLASSIFIED_EVENT_LIMIT: usize = 5;
+
 #[derive(Default)]
 pub(in crate::application::codebase) struct BlockedRow<'a> {
     pub(in crate::application::codebase) tally: Tally,
@@ -140,9 +143,6 @@ pub(in crate::application::codebase) fn rank_blocked(
         |row| row.tally.numerator > 0 || !row.unclassified.is_empty(),
     )
 }
-
-/// Unclassified events the Blocked section names, most frequent first.
-const UNCLASSIFIED_EVENT_LIMIT: usize = 5;
 
 pub(in crate::application::codebase) fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
     let BlockedRows {

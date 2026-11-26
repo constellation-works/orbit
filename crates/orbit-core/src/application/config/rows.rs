@@ -46,6 +46,18 @@ pub(super) const CREW_POOL_KEYS: &[&str] = &[
     "workflow.purpose_crews.sweep_tasks",
 ];
 
+/// What every row of one file view is read against.
+pub(super) struct FileRowContext<'a> {
+    pub(super) store: &'a ConfigStore,
+    /// The layer this file is in the layered config: the workspace view of a
+    /// checkout without its own root is the global file.
+    pub(super) layer: ConfigValueSourceKind,
+    /// The layered values, or `None` when the layers do not load.
+    pub(super) layered: Option<&'a [EffectiveConfigValue]>,
+    /// The built-in value of every registry key; see [`built_in_values`].
+    pub(super) built_in: Arc<HashMap<&'static str, JsonValue>>,
+}
+
 /// FNV-1a over `bytes`, for cache keys within this process only.
 pub(super) fn fnv1a_hash(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -274,18 +286,6 @@ pub(super) fn effective_row(entry: &EffectiveConfigValue) -> JsonValue {
         ),
     );
     JsonValue::Object(row)
-}
-
-/// What every row of one file view is read against.
-pub(super) struct FileRowContext<'a> {
-    pub(super) store: &'a ConfigStore,
-    /// The layer this file is in the layered config: the workspace view of a
-    /// checkout without its own root is the global file.
-    pub(super) layer: ConfigValueSourceKind,
-    /// The layered values, or `None` when the layers do not load.
-    pub(super) layered: Option<&'a [EffectiveConfigValue]>,
-    /// The built-in value of every registry key; see [`built_in_values`].
-    pub(super) built_in: Arc<HashMap<&'static str, JsonValue>>,
 }
 
 fn file_row(

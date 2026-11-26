@@ -63,28 +63,6 @@ const OWNER_GATES_INPUT_KEY: &str = "owner_validation_gates";
 
 const PASS_FAILURE_THRESHOLD: u32 = 3;
 
-/// Operator inputs for one follower drain.
-#[derive(Debug, Clone, Default)]
-pub struct WorkspacePullRequest<'a> {
-    /// Host-qualified owner selector, copied from federated discovery.
-    pub selector: &'a str,
-    /// The admission window. `None` or zero is one admission pass.
-    pub for_seconds: Option<u64>,
-    pub max_active_leaf_runs: Option<u32>,
-    /// Crews this window may run claimed work as (`--allow-crew`). Empty
-    /// means every crew the window can run.
-    pub allowed_crews: &'a [String],
-    pub actor: Option<&'a str>,
-}
-
-/// One start option that cannot sit beside `--pull`: its CLI argument id, its
-/// usage as the CLI's parser prints it, and whether a start supplied it.
-struct PullStartConflict {
-    arg_id: &'static str,
-    usage: &'static str,
-    supplied: fn(&PullStartOptionsSupplied) -> bool,
-}
-
 /// Every option a pull drain refuses beside `--pull`, in refusal order. A
 /// local drain's settings have no meaning on a claim the owner decides.
 const PULL_START_CONFLICTS: [PullStartConflict; 10] = [
@@ -159,6 +137,28 @@ pub const PULL_START_HOST_REQUIRES_ARG_ID: &str = "pull";
 /// `--pull` as the CLI's parser prints it, for a surface repeating its words.
 const PULL_ARG_USAGE: &str = "--pull <SELECTOR>";
 
+/// Operator inputs for one follower drain.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspacePullRequest<'a> {
+    /// Host-qualified owner selector, copied from federated discovery.
+    pub selector: &'a str,
+    /// The admission window. `None` or zero is one admission pass.
+    pub for_seconds: Option<u64>,
+    pub max_active_leaf_runs: Option<u32>,
+    /// Crews this window may run claimed work as (`--allow-crew`). Empty
+    /// means every crew the window can run.
+    pub allowed_crews: &'a [String],
+    pub actor: Option<&'a str>,
+}
+
+/// One start option that cannot sit beside `--pull`: its CLI argument id, its
+/// usage as the CLI's parser prints it, and whether a start supplied it.
+struct PullStartConflict {
+    arg_id: &'static str,
+    usage: &'static str,
+    supplied: fn(&PullStartOptionsSupplied) -> bool,
+}
+
 /// Which options a start supplied. Presence is what counts: a supplied empty
 /// crew pool or claim token is supplied, and a flag left at its default is not.
 #[derive(Debug, Clone, Copy, Default)]
@@ -199,12 +199,6 @@ impl PullStartOptionsSupplied {
         }
         pull_start_review_refusal(self.review).map(ToOwned::to_owned)
     }
-}
-
-/// Why a pull drain refuses a review request, when one was made. The CLI asks
-/// this after its owner preflight, once its parser has refused the conflicts.
-pub fn pull_start_review_refusal(review_requested: bool) -> Option<&'static str> {
-    review_requested.then(crate::application::review::pull_review_request_refusal)
 }
 
 impl crate::OrbitRuntime {
@@ -581,6 +575,12 @@ impl crate::OrbitRuntime {
             gates,
         ))
     }
+}
+
+/// Why a pull drain refuses a review request, when one was made. The CLI asks
+/// this after its owner preflight, once its parser has refused the conflicts.
+pub fn pull_start_review_refusal(review_requested: bool) -> Option<&'static str> {
+    review_requested.then(crate::application::review::pull_review_request_refusal)
 }
 
 fn pull_on_owner_refusal() -> OrbitError {

@@ -23,18 +23,6 @@ use crate::application::review::crew::pre_landing_review_crew_unset;
 /// configuration still names it.
 pub const OWNER_COMPLETION_POLICY: &str = "workspace-config:workflow.distributed_completion";
 
-/// Refuse a mutating distributed entry point while the feature is closed.
-pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), OrbitError> {
-    if DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED {
-        return Ok(());
-    }
-    Err(OrbitError::CapabilityRefused(format!(
-        "distributed entry point '{entry_point}' is unavailable: the distributed drain's \
-         mutating entry points are closed in this build, so the owner serves only the read-only \
-         preflight and receipt lookup"
-    )))
-}
-
 /// What the caller declares about itself, so the probe can answer the question
 /// a follower actually has: *would my pull be admitted right now?*
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -366,6 +354,18 @@ impl crate::OrbitRuntime {
         }
         Ok(refusal)
     }
+}
+
+/// Refuse a mutating distributed entry point while the feature is closed.
+pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), OrbitError> {
+    if DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED {
+        return Ok(());
+    }
+    Err(OrbitError::CapabilityRefused(format!(
+        "distributed entry point '{entry_point}' is unavailable: the distributed drain's \
+         mutating entry points are closed in this build, so the owner serves only the read-only \
+         preflight and receipt lookup"
+    )))
 }
 
 /// The binary version both endpoints compare. One definition so the probe

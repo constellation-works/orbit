@@ -121,14 +121,6 @@ const CLI_MCP_SOURCES: &[&str] = &[
     "crates/orbit-common/src/governance/",
 ];
 
-/// Where a generated or mirrored output comes from.
-enum Source {
-    /// The same relative path under another prefix.
-    Mirror(&'static str),
-    /// Any file under these prefixes.
-    Within(&'static [&'static str]),
-}
-
 /// Generated or mirrored outputs, by path prefix (a trailing `/`) or exact
 /// path. A landed output counts as covered when a selector covers its source.
 const DERIVED: &[(&str, Source)] = &[
@@ -151,39 +143,20 @@ const DERIVED: &[(&str, Source)] = &[
     ("docs/INDEX.md", Source::Within(&["docs/"])),
 ];
 
+/// Where a generated or mirrored output comes from.
+enum Source {
+    /// The same relative path under another prefix.
+    Mirror(&'static str),
+    /// Any file under these prefixes.
+    Within(&'static [&'static str]),
+}
+
 /// One declared selector that can cover files.
 struct Declared<'a> {
     raw: &'a str,
     anchor: Anchor,
     /// Set for a selector whose path holds a wildcard.
     glob: Option<RelativePathGlob>,
-}
-
-/// The path selectors among `raw`, one per anchor. Module and command
-/// selectors name no files and are left out.
-fn declared(raw: &[String]) -> Vec<Declared<'_>> {
-    let mut seen = BTreeSet::new();
-    raw.iter()
-        .filter_map(|raw| {
-            let anchor = Anchor::parse(raw)?;
-            if !seen.insert(anchor.clone()) {
-                return None;
-            }
-            let glob = anchor
-                .path
-                .contains(['*', '?'])
-                .then(|| {
-                    let pattern = if anchor.dir {
-                        format!("{}/**", anchor.path)
-                    } else {
-                        anchor.path.clone()
-                    };
-                    RelativePathGlob::new(&pattern).ok()
-                })
-                .flatten();
-            Some(Declared { raw, anchor, glob })
-        })
-        .collect()
 }
 
 impl Declared<'_> {
@@ -273,46 +246,6 @@ impl Score {
     }
 }
 
-fn ratio(numerator: usize, denominator: usize) -> f64 {
-    if denominator == 0 {
-        0.0
-    } else {
-        numerator as f64 / denominator as f64
-    }
-}
-
-/// Grade `selectors` against a landed diff: the score, the landed files no
-/// selector covered, and each path selector with whether it covered one.
-fn grade<'a>(
-    selectors: &'a [String],
-    landed: &BTreeSet<String>,
-) -> (Score, Vec<String>, Vec<(Declared<'a>, bool)>) {
-    let mut declared: Vec<(Declared<'a>, bool)> = declared(selectors)
-        .into_iter()
-        .map(|selector| (selector, false))
-        .collect();
-    let mut missed = Vec::new();
-    for path in landed {
-        let mut covered = false;
-        for (selector, useful) in &mut declared {
-            if selector.covers_landed(path) {
-                *useful = true;
-                covered = true;
-            }
-        }
-        if !covered {
-            missed.push(path.clone());
-        }
-    }
-    let score = Score {
-        covered: landed.len() - missed.len(),
-        landed: landed.len(),
-        useful: declared.iter().filter(|(_, useful)| *useful).count(),
-        declared: declared.len(),
-    };
-    (score, missed, declared)
-}
-
 /// One assessed task, graded once per scan.
 #[derive(Debug, Clone)]
 pub(in crate::application::agents) struct Graded {
@@ -377,6 +310,75 @@ impl Graded {
     }
 }
 
+type Key = ModelEffortKey;
+
+/// The path selectors among `raw`, one per anchor. Module and command
+/// selectors name no files and are left out.
+fn declared(raw: &[String]) -> Vec<Declared<'_>> {
+    let mut seen = BTreeSet::new();
+    raw.iter()
+        .filter_map(|raw| {
+            let anchor = Anchor::parse(raw)?;
+            if !seen.insert(anchor.clone()) {
+                return None;
+            }
+            let glob = anchor
+                .path
+                .contains(['*', '?'])
+                .then(|| {
+                    let pattern = if anchor.dir {
+                        format!("{}/**", anchor.path)
+                    } else {
+                        anchor.path.clone()
+                    };
+                    RelativePathGlob::new(&pattern).ok()
+                })
+                .flatten();
+            Some(Declared { raw, anchor, glob })
+        })
+        .collect()
+}
+
+fn ratio(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
+}
+
+/// Grade `selectors` against a landed diff: the score, the landed files no
+/// selector covered, and each path selector with whether it covered one.
+fn grade<'a>(
+    selectors: &'a [String],
+    landed: &BTreeSet<String>,
+) -> (Score, Vec<String>, Vec<(Declared<'a>, bool)>) {
+    let mut declared: Vec<(Declared<'a>, bool)> = declared(selectors)
+        .into_iter()
+        .map(|selector| (selector, false))
+        .collect();
+    let mut missed = Vec::new();
+    for path in landed {
+        let mut covered = false;
+        for (selector, useful) in &mut declared {
+            if selector.covers_landed(path) {
+                *useful = true;
+                covered = true;
+            }
+        }
+        if !covered {
+            missed.push(path.clone());
+        }
+    }
+    let score = Score {
+        covered: landed.len() - missed.len(),
+        landed: landed.len(),
+        useful: declared.iter().filter(|(_, useful)| *useful).count(),
+        declared: declared.len(),
+    };
+    (score, missed, declared)
+}
+
 /// Grade every assessment the scan found and decide which of its contests
 /// and held waits count against its pilot.
 pub(in crate::application::agents) fn grade_all(evidence: PilotEvidence) -> Vec<Graded> {
@@ -436,8 +438,6 @@ pub(in crate::application::agents) fn grade_all(evidence: PilotEvidence) -> Vec<
         })
         .collect()
 }
-
-type Key = ModelEffortKey;
 
 /// The tier a task was assessed at, as an index into [`TIERS`].
 fn tier_index(complexity: Option<TaskComplexity>) -> Option<usize> {
@@ -739,12 +739,14 @@ fn row_input<'a>(
         }
     }
     RowInput {
-        escaped_regressions_fallback: None,
         crew: crews
             .first()
             .cloned()
             .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
         crews,
+        model: row.0,
+        effort: row.1,
+        units,
         effort_sources: assessed
             .iter()
             .fold(BTreeMap::new(), |mut sources, (graded, _)| {
@@ -753,18 +755,9 @@ fn row_input<'a>(
                     .or_default() += 1;
                 sources
             }),
-        model: row.0,
-        effort: row.1,
-        units,
         runs_without_model,
         provisional: None,
         tallies,
-        expected: None,
-        reviewed_units: None,
-        unjudged: false,
-        denominators,
-        sample_units,
-        exposure_units,
         stats: [
             stat(
                 "recall_percent",
@@ -822,6 +815,13 @@ fn row_input<'a>(
         .into_iter()
         .chain(warning_stats)
         .collect(),
+        escaped_regressions_fallback: None,
+        expected: None,
+        denominators,
+        sample_units,
+        exposure_units,
+        reviewed_units: None,
+        unjudged: false,
     }
 }
 

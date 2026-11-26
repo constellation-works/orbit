@@ -6,36 +6,6 @@ use super::super::condition::ConditionSubjectView;
 use super::MAX_LISTED;
 use super::report::{ExplainMatch, ExplainMiss, ExplainSubject};
 
-pub(super) fn subject_tree(
-    evaluator: &ConditionEvaluator,
-    checked: &CheckedCondition,
-    task: Option<&TaskFacts>,
-    key: &str,
-    title: Option<String>,
-    in_prefilter: bool,
-) -> ExplainSubject {
-    let truth = evaluator.truth(&checked.when, task);
-    ExplainSubject {
-        key: key.to_string(),
-        title,
-        in_prefilter,
-        value: truth.label(),
-        reason: unknown_reason(&truth),
-        when: evaluator.clause_tree(&checked.when, task),
-        rearm: checked
-            .rearm
-            .as_ref()
-            .map(|rearm| evaluator.clause_tree(rearm, task)),
-    }
-}
-
-fn unknown_reason(truth: &Truth) -> Option<String> {
-    match truth {
-        Truth::Unknown(reason) => Some(reason.clone()),
-        _ => None,
-    }
-}
-
 pub(super) struct SubjectState<'a> {
     pub(super) state: Option<&'a ConditionState>,
     pub(super) hold: Duration,
@@ -117,5 +87,35 @@ impl Report {
                 reason: unknown_reason(&clause.value),
             });
         }
+    }
+}
+
+pub(super) fn subject_tree(
+    evaluator: &ConditionEvaluator,
+    checked: &CheckedCondition,
+    task: Option<&TaskFacts>,
+    key: &str,
+    title: Option<String>,
+    in_prefilter: bool,
+) -> ExplainSubject {
+    let truth = evaluator.truth(&checked.when, task);
+    ExplainSubject {
+        key: key.to_string(),
+        title,
+        in_prefilter,
+        value: truth.label(),
+        reason: unknown_reason(&truth),
+        when: evaluator.clause_tree(&checked.when, task),
+        rearm: checked
+            .rearm
+            .as_ref()
+            .map(|rearm| evaluator.clause_tree(rearm, task)),
+    }
+}
+
+fn unknown_reason(truth: &Truth) -> Option<String> {
+    match truth {
+        Truth::Unknown(reason) => Some(reason.clone()),
+        _ => None,
     }
 }

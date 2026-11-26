@@ -43,15 +43,6 @@ use crate::runtime::stored::locks::{
     active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
 
-/// The ship mode an unattended drain delivers in.
-///
-/// [`crate::runtime::RuntimeKernel::automatic_delivery_ship_mode`]: the workspace binding's
-/// mode, local when the workspace is unregistered. Readiness and doctor call
-/// the same method.
-pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
-    runtime.automatic_delivery_ship_mode()
-}
-
 /// Observation keeps the live launcher's recorded missing-source names;
 /// without a live run, readiness judges the observing environment.
 pub(super) enum BacklogReadMode<'a> {
@@ -66,6 +57,15 @@ pub(super) enum BacklogReadMode<'a> {
         /// The registry-global status index this read's caller already holds.
         shared_status: Option<&'a BTreeMap<String, TaskStatus>>,
     },
+}
+
+/// The ship mode an unattended drain delivers in.
+///
+/// [`crate::runtime::RuntimeKernel::automatic_delivery_ship_mode`]: the workspace binding's
+/// mode, local when the workspace is unregistered. Readiness and doctor call
+/// the same method.
+pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
+    runtime.automatic_delivery_ship_mode()
 }
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship

@@ -9,6 +9,25 @@ use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusio
 
 use super::entries::RefusedPullSettlement;
 
+/// How long a drain requests no claim after a claimed leaf was released for
+/// the owner's busy store. Long enough for the owner's lock holder to finish,
+/// short against a drain's window.
+const OWNER_BUSY_BACKOFF_MINUTES: i64 = 5;
+
+/// How many separate busy-owner episodes in one window a drain backs off
+/// before it suppresses its host for the rest of the window. Releases that
+/// end within [`OWNER_BUSY_BACKOFF_MINUTES`] of the previous one belong to the
+/// same episode — leaves already running when the owner's store locked, which
+/// one backoff covers — so only an owner that stays busy across backoffs
+/// reaches the bound.
+pub(crate) const OWNER_BUSY_EPISODE_LIMIT: u32 = 3;
+
+/// [ORB-15791] How long a crew's first capacity failure in a window backs it
+/// off; each further one in the same window doubles it, up to
+/// [`CAPACITY_BACKOFF_CAP_MINUTES`], well below a drain's window.
+const CAPACITY_BACKOFF_MINUTES: i64 = 10;
+const CAPACITY_BACKOFF_CAP_MINUTES: i64 = 60;
+
 impl PullCrewWindow {
     /// What the drain declares to the owner on each request.
     #[must_use]
@@ -131,19 +150,6 @@ impl PullCrewWindow {
     }
 }
 
-/// How long a drain requests no claim after a claimed leaf was released for
-/// the owner's busy store. Long enough for the owner's lock holder to finish,
-/// short against a drain's window.
-const OWNER_BUSY_BACKOFF_MINUTES: i64 = 5;
-
-/// How many separate busy-owner episodes in one window a drain backs off
-/// before it suppresses its host for the rest of the window. Releases that
-/// end within [`OWNER_BUSY_BACKOFF_MINUTES`] of the previous one belong to the
-/// same episode — leaves already running when the owner's store locked, which
-/// one backoff covers — so only an owner that stays busy across backoffs
-/// reaches the bound.
-pub(crate) const OWNER_BUSY_EPISODE_LIMIT: u32 = 3;
-
 /// Whether a drain's busy-owner releases hold it briefly or suppress its
 /// host for the rest of the window.
 pub(super) enum OwnerBusyVerdict {
@@ -193,12 +199,6 @@ impl OwnerBusyReleases {
         }))
     }
 }
-
-/// [ORB-15791] How long a crew's first capacity failure in a window backs it
-/// off; each further one in the same window doubles it, up to
-/// [`CAPACITY_BACKOFF_CAP_MINUTES`], well below a drain's window.
-const CAPACITY_BACKOFF_MINUTES: i64 = 10;
-const CAPACITY_BACKOFF_CAP_MINUTES: i64 = 60;
 
 /// The capacity failures one crew's claimed leaves met in a pull drain's
 /// window.

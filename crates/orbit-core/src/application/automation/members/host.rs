@@ -20,62 +20,6 @@ use std::collections::BTreeMap;
 
 use super::Host;
 
-pub(crate) fn evaluate(
-    runtime: &OrbitRuntime,
-    definition: &RoutineDefinition,
-    dry_run: bool,
-    now: DateTime<Utc>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    evaluate_with_cache(runtime, definition, dry_run, now, None)
-}
-
-pub(crate) fn evaluate_with_cache(
-    runtime: &OrbitRuntime,
-    definition: &RoutineDefinition,
-    dry_run: bool,
-    now: DateTime<Utc>,
-    cache: Option<&super::super::source_cache::SourceCache>,
-) -> Result<AutomationDiagnostic, OrbitError> {
-    let trigger = definition
-        .trigger
-        .state
-        .as_ref()
-        .ok_or_else(|| OrbitError::InvalidInput("not a state routine".into()))?;
-
-    let consumer = consumer_key(runtime, "routine", &definition.name)?;
-
-    // Timing edits apply to pending work; the active attempt retains its budget.
-    let epoch = definition_epoch(&(
-        &trigger.kind,
-        &trigger.owner_machine,
-        &trigger.branch,
-        &definition.target,
-    ))
-    .map_err(automation_error_to_orbit)?;
-
-    let owned = Some(trigger.owner_machine.as_str()) == runtime.automation_machine_identity();
-
-    let mut effective = trigger.clone();
-    effective.retries = effective.retries.min(definition.policy.retries.max);
-
-    let mut host = Host::new(runtime, &definition.name, &effective, dry_run);
-    host.inspection_cache = cache;
-    host.guard = definition.trigger.when.clone();
-    members::evaluate(
-        &runtime.sqlite_store()?,
-        &host,
-        MemberEvaluation {
-            consumer: &consumer,
-            epoch: &epoch,
-            trigger: &effective,
-            enabled: definition.enabled && owned,
-            dry_run,
-            now,
-        },
-    )
-    .map_err(automation_error_to_orbit)
-}
-
 impl<'a> Host<'a> {
     pub(crate) fn new(
         runtime: &'a OrbitRuntime,
@@ -155,4 +99,60 @@ impl<'a> Host<'a> {
             &self.policy,
         )
     }
+}
+
+pub(crate) fn evaluate(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    evaluate_with_cache(runtime, definition, dry_run, now, None)
+}
+
+pub(crate) fn evaluate_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    cache: Option<&super::super::source_cache::SourceCache>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    let trigger = definition
+        .trigger
+        .state
+        .as_ref()
+        .ok_or_else(|| OrbitError::InvalidInput("not a state routine".into()))?;
+
+    let consumer = consumer_key(runtime, "routine", &definition.name)?;
+
+    // Timing edits apply to pending work; the active attempt retains its budget.
+    let epoch = definition_epoch(&(
+        &trigger.kind,
+        &trigger.owner_machine,
+        &trigger.branch,
+        &definition.target,
+    ))
+    .map_err(automation_error_to_orbit)?;
+
+    let owned = Some(trigger.owner_machine.as_str()) == runtime.automation_machine_identity();
+
+    let mut effective = trigger.clone();
+    effective.retries = effective.retries.min(definition.policy.retries.max);
+
+    let mut host = Host::new(runtime, &definition.name, &effective, dry_run);
+    host.inspection_cache = cache;
+    host.guard = definition.trigger.when.clone();
+    members::evaluate(
+        &runtime.sqlite_store()?,
+        &host,
+        MemberEvaluation {
+            consumer: &consumer,
+            epoch: &epoch,
+            trigger: &effective,
+            enabled: definition.enabled && owned,
+            dry_run,
+            now,
+        },
+    )
+    .map_err(automation_error_to_orbit)
 }

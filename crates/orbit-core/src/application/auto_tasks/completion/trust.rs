@@ -28,6 +28,15 @@ pub(super) struct TrustedIdentity {
     pub(super) execution_machine: Option<String>,
 }
 
+/// The candidate manifest, the refs it was admitted with, each listed
+/// artifact's content, and the owner's authority facts about those artifacts.
+pub(super) type AdmittedEvidence = (
+    AutoTaskEvidenceCandidate,
+    Vec<AutoTaskEvidenceRef>,
+    Map<String, Value>,
+    Map<String, Value>,
+);
+
 pub(super) fn trusted_identity(
     runtime: &OrbitRuntime,
     step: &StepContext,
@@ -135,15 +144,6 @@ fn trusted_run(runtime: &OrbitRuntime, task: &Task) -> Result<(String, Option<St
     }
     Ok((run_id, None))
 }
-
-/// The candidate manifest, the refs it was admitted with, each listed
-/// artifact's content, and the owner's authority facts about those artifacts.
-pub(super) type AdmittedEvidence = (
-    AutoTaskEvidenceCandidate,
-    Vec<AutoTaskEvidenceRef>,
-    Map<String, Value>,
-    Map<String, Value>,
-);
 
 /// The writer class the owner stamped on an artifact, as an adapter reads it.
 fn artifact_writer_name(writer: ArtifactWriter) -> &'static str {

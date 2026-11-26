@@ -184,6 +184,14 @@ impl WindowBounds {
     }
 }
 
+/// Why [`parse_span`] refused a duration.
+pub(super) enum SpanError {
+    /// Not an amount followed by a known unit.
+    Malformed,
+    /// Well formed, but too large for a duration.
+    OutOfRange,
+}
+
 fn until_rejected(raw: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "until must be an RFC 3339 instant or a duration ago such as 30d; got '{raw}'"
@@ -210,14 +218,6 @@ pub(super) fn parse_until(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>
         SpanError::OutOfRange => out_of_range(),
     })?;
     now.checked_sub_signed(span).ok_or_else(out_of_range)
-}
-
-/// Why [`parse_span`] refused a duration.
-pub(super) enum SpanError {
-    /// Not an amount followed by a known unit.
-    Malformed,
-    /// Well formed, but too large for a duration.
-    OutOfRange,
 }
 
 /// A non-negative duration such as `14d`: `m`/`min`/`minute`, `h`/`hour`,

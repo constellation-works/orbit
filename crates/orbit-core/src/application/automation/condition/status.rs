@@ -200,6 +200,226 @@ pub struct ConditionStatus {
     pub subjects: Vec<ConditionSubjectView>,
 }
 
+/// The compact projection list surfaces carry: ownership, counts, the
+/// stall, the last pass, and the last fire and skip with its reason.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConditionListing {
+    pub ownership: &'static str,
+    pub tracked: bool,
+    pub armed: usize,
+    pub holding: usize,
+    pub waiting: usize,
+    pub fired: usize,
+    pub pending_intents: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stall: Option<ConditionStall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_pass: Option<ConditionPass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_fire: Option<ConditionFireView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_skip: Option<ConditionSkip>,
+}
+
+impl From<ConditionStatus> for ConditionListing {
+    fn from(status: ConditionStatus) -> Self {
+        Self {
+            ownership: status.ownership,
+            tracked: status.tracked,
+            armed: status.armed,
+            holding: status.holding,
+            waiting: status.waiting,
+            fired: status.fired,
+            pending_intents: status.pending_intents,
+            stall: status.stall,
+            last_pass: status.last_pass,
+            last_fire: status.last_fire,
+            last_skip: status.last_skip,
+        }
+    }
+}
+
+impl OrbitRuntime {
+    /// The list projection of a routine's condition, `None` for any other
+    /// trigger.
+    pub(crate) fn routine_condition_listing(
+        &self,
+        definition: &RoutineDefinition,
+    ) -> Result<Option<ConditionListing>, OrbitError> {
+        ConditionDefinition::of_routine(definition)
+            .map(|condition| condition_status(self, &condition, Utc::now()).map(Into::into))
+            .transpose()
+    }
+
+    /// The list projection of an auto-task's condition, `None` for any
+    /// other schedule.
+    pub(crate) fn auto_task_condition_listing(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<ConditionListing>, OrbitError> {
+        ConditionDefinition::of_auto_task(definition)
+            .map(|condition| condition_status(self, &condition, Utc::now()).map(Into::into))
+            .transpose()
+    }
+}
+
+/// Every fire this workspace's condition consumers record, by ID.
+type FireIndex = HashMap<String, (String, ConditionFire)>;
+
+/// A routine or auto-task by name that carries a condition.
+pub(crate) struct FoundCondition {
+    pub(crate) carrier: ConditionCarrier,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) enabled: bool,
+    pub(crate) definition: FoundDefinition,
+}
+
+impl FoundCondition {
+    pub(crate) fn condition_definition(&self) -> Result<ConditionDefinition<'_>, OrbitError> {
+        match &self.definition {
+            FoundDefinition::Routine(definition) => ConditionDefinition::of_routine(definition),
+            FoundDefinition::AutoTask(definition) => ConditionDefinition::of_auto_task(definition),
+        }
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "{} '{}' has no condition",
+                self.carrier.kind(),
+                self.name
+            ))
+        })
+    }
+}
+
+pub(crate) enum FoundDefinition {
+    Routine(Box<RoutineDefinition>),
+    AutoTask(Box<AutoTaskDefinition>),
+}
+
+/// A routine or auto-task by that name, with or without a condition.
+struct LoadedCarrier {
+    carrier: ConditionCarrier,
+    name: String,
+    path: String,
+    enabled: bool,
+    definition: FoundDefinition,
+    has_condition: bool,
+}
+
+impl OrbitRuntime {
+    /// Find the named definition among this checkout's routines and
+    /// auto-tasks and require that it carries a condition. `selector` is a
+    /// name, or `routine:<name>` / `auto-task:<name>`.
+    pub(crate) fn condition_definition_for(
+        &self,
+        selector: &str,
+    ) -> Result<FoundCondition, OrbitError> {
+        let selector = selector.trim();
+        let (kinds, name) = match selector.split_once(':') {
+            Some(("routine", name)) => (&[ConditionCarrier::Routine][..], name),
+            Some(("auto-task", name)) => (&[ConditionCarrier::AutoTask][..], name),
+            _ => (
+                &[ConditionCarrier::Routine, ConditionCarrier::AutoTask][..],
+                selector,
+            ),
+        };
+        if name.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "definition must name a routine or auto-task".into(),
+            ));
+        }
+        let mut found = Vec::new();
+        for carrier in kinds {
+            if let Some(definition) = self.load_condition_carrier(*carrier, name)? {
+                found.push(definition);
+            }
+        }
+        match found.len() {
+            0 => Err(OrbitError::InvalidInput(format!(
+                "no {} named '{name}' in this workspace",
+                match kinds {
+                    [only] => only.kind(),
+                    _ => "routine or auto-task",
+                }
+            ))),
+            1 => {
+                let carrier = found.remove(0);
+                if !carrier.has_condition {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{} '{}' has no condition; this covers {} triggers only",
+                        carrier.carrier.kind(),
+                        carrier.name,
+                        carrier.carrier.clause()
+                    )));
+                }
+                Ok(FoundCondition {
+                    carrier: carrier.carrier,
+                    name: carrier.name,
+                    path: carrier.path,
+                    enabled: carrier.enabled,
+                    definition: carrier.definition,
+                })
+            }
+            _ => Err(OrbitError::InvalidInput(format!(
+                "both a routine and an auto-task are named '{name}'; pass routine:{name} or \
+                 auto-task:{name}"
+            ))),
+        }
+    }
+
+    fn load_condition_carrier(
+        &self,
+        carrier: ConditionCarrier,
+        name: &str,
+    ) -> Result<Option<LoadedCarrier>, OrbitError> {
+        match carrier {
+            ConditionCarrier::Routine => {
+                let Some((path, loaded)) =
+                    orbit_automation::routines::loader::find_routine_definition(
+                        &self.shared_root(),
+                        name,
+                    )
+                else {
+                    return Ok(None);
+                };
+                let definition = loaded.map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "routine '{name}' does not load ({}): {error}",
+                        path.display()
+                    ))
+                })?;
+                let has_condition = definition.trigger.condition.is_some();
+                Ok(Some(LoadedCarrier {
+                    carrier,
+                    name: definition.name.clone(),
+                    path: path.display().to_string(),
+                    enabled: definition.enabled,
+                    definition: FoundDefinition::Routine(Box::new(definition)),
+                    has_condition,
+                }))
+            }
+            ConditionCarrier::AutoTask => {
+                let Some(path) = self.auto_task_discovery_path(name)? else {
+                    return Ok(None);
+                };
+                let definition = self.validated_auto_task_definition(name)?.ok_or_else(|| {
+                    OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
+                })?;
+                let has_condition =
+                    matches!(definition.schedule, AutoTaskSchedule::Condition { .. });
+                Ok(Some(LoadedCarrier {
+                    carrier,
+                    name: definition.name.clone(),
+                    path: path.display().to_string(),
+                    enabled: definition.enabled,
+                    definition: FoundDefinition::AutoTask(Box::new(definition)),
+                    has_condition,
+                }))
+            }
+        }
+    }
+}
+
 /// The status of one condition definition, read-only.
 pub(crate) fn condition_status(
     runtime: &OrbitRuntime,
@@ -297,69 +517,6 @@ pub(crate) fn condition_status(
     })
 }
 
-/// The compact projection list surfaces carry: ownership, counts, the
-/// stall, the last pass, and the last fire and skip with its reason.
-#[derive(Debug, Clone, Serialize)]
-pub struct ConditionListing {
-    pub ownership: &'static str,
-    pub tracked: bool,
-    pub armed: usize,
-    pub holding: usize,
-    pub waiting: usize,
-    pub fired: usize,
-    pub pending_intents: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stall: Option<ConditionStall>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_pass: Option<ConditionPass>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_fire: Option<ConditionFireView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_skip: Option<ConditionSkip>,
-}
-
-impl From<ConditionStatus> for ConditionListing {
-    fn from(status: ConditionStatus) -> Self {
-        Self {
-            ownership: status.ownership,
-            tracked: status.tracked,
-            armed: status.armed,
-            holding: status.holding,
-            waiting: status.waiting,
-            fired: status.fired,
-            pending_intents: status.pending_intents,
-            stall: status.stall,
-            last_pass: status.last_pass,
-            last_fire: status.last_fire,
-            last_skip: status.last_skip,
-        }
-    }
-}
-
-impl OrbitRuntime {
-    /// The list projection of a routine's condition, `None` for any other
-    /// trigger.
-    pub(crate) fn routine_condition_listing(
-        &self,
-        definition: &RoutineDefinition,
-    ) -> Result<Option<ConditionListing>, OrbitError> {
-        ConditionDefinition::of_routine(definition)
-            .map(|condition| condition_status(self, &condition, Utc::now()).map(Into::into))
-            .transpose()
-    }
-
-    /// The list projection of an auto-task's condition, `None` for any
-    /// other schedule.
-    pub(crate) fn auto_task_condition_listing(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<Option<ConditionListing>, OrbitError> {
-        ConditionDefinition::of_auto_task(definition)
-            .map(|condition| condition_status(self, &condition, Utc::now()).map(Into::into))
-            .transpose()
-    }
-}
-
 /// Count subjects by arm and whether they are serving a `for_minutes` hold.
 /// A true subject without a hold is an edge a stall or cap is keeping back,
 /// not a hold.
@@ -392,15 +549,15 @@ fn self_view(
         self_facts(state, now),
     );
     ConditionSelfView {
+        last_fired: facts.last_fired,
+        last_minted: facts.last_minted,
+        last_minted_task: facts.last_minted_task,
         completion_contract: definition
             .target
             .auto_task()
             .is_some_and(|definition| definition.completion.is_some()),
         last_succeeded_at: facts.last_succeeded_at,
         last_succeeded_unavailable: facts.last_succeeded_unreadable,
-        last_fired: facts.last_fired,
-        last_minted: facts.last_minted,
-        last_minted_task: facts.last_minted_task,
         fires_24h: facts.fires_24h,
     }
 }
@@ -429,9 +586,6 @@ fn named_history_view(
         })
         .collect()
 }
-
-/// Every fire this workspace's condition consumers record, by ID.
-type FireIndex = HashMap<String, (String, ConditionFire)>;
 
 fn fire_index(runtime: &OrbitRuntime) -> Result<FireIndex, OrbitError> {
     let Some(machine) = runtime.automation_machine_identity() else {
@@ -503,158 +657,4 @@ fn chain_from(index: &FireIndex, fire: &ConditionFire) -> Vec<ConditionChainLink
         }
     }
     chain
-}
-
-/// A routine or auto-task by name that carries a condition.
-pub(crate) struct FoundCondition {
-    pub(crate) carrier: ConditionCarrier,
-    pub(crate) name: String,
-    pub(crate) path: String,
-    pub(crate) enabled: bool,
-    pub(crate) definition: FoundDefinition,
-}
-
-pub(crate) enum FoundDefinition {
-    Routine(Box<RoutineDefinition>),
-    AutoTask(Box<AutoTaskDefinition>),
-}
-
-impl FoundCondition {
-    pub(crate) fn condition_definition(&self) -> Result<ConditionDefinition<'_>, OrbitError> {
-        match &self.definition {
-            FoundDefinition::Routine(definition) => ConditionDefinition::of_routine(definition),
-            FoundDefinition::AutoTask(definition) => ConditionDefinition::of_auto_task(definition),
-        }
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "{} '{}' has no condition",
-                self.carrier.kind(),
-                self.name
-            ))
-        })
-    }
-}
-
-/// A routine or auto-task by that name, with or without a condition.
-struct LoadedCarrier {
-    carrier: ConditionCarrier,
-    name: String,
-    path: String,
-    enabled: bool,
-    definition: FoundDefinition,
-    has_condition: bool,
-}
-
-impl OrbitRuntime {
-    /// Find the named definition among this checkout's routines and
-    /// auto-tasks and require that it carries a condition. `selector` is a
-    /// name, or `routine:<name>` / `auto-task:<name>`.
-    pub(crate) fn condition_definition_for(
-        &self,
-        selector: &str,
-    ) -> Result<FoundCondition, OrbitError> {
-        let selector = selector.trim();
-        let (kinds, name) = match selector.split_once(':') {
-            Some(("routine", name)) => (&[ConditionCarrier::Routine][..], name),
-            Some(("auto-task", name)) => (&[ConditionCarrier::AutoTask][..], name),
-            _ => (
-                &[ConditionCarrier::Routine, ConditionCarrier::AutoTask][..],
-                selector,
-            ),
-        };
-        if name.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "definition must name a routine or auto-task".into(),
-            ));
-        }
-        let mut found = Vec::new();
-        for carrier in kinds {
-            if let Some(definition) = self.load_condition_carrier(*carrier, name)? {
-                found.push(definition);
-            }
-        }
-        match found.len() {
-            0 => Err(OrbitError::InvalidInput(format!(
-                "no {} named '{name}' in this workspace",
-                match kinds {
-                    [only] => only.kind(),
-                    _ => "routine or auto-task",
-                }
-            ))),
-            1 => {
-                let carrier = found.remove(0);
-                if !carrier.has_condition {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "{} '{}' has no condition; this covers {} triggers only",
-                        carrier.carrier.kind(),
-                        carrier.name,
-                        carrier.carrier.clause()
-                    )));
-                }
-                Ok(FoundCondition {
-                    carrier: carrier.carrier,
-                    name: carrier.name,
-                    path: carrier.path,
-                    enabled: carrier.enabled,
-                    definition: carrier.definition,
-                })
-            }
-            _ => Err(OrbitError::InvalidInput(format!(
-                "both a routine and an auto-task are named '{name}'; pass routine:{name} or \
-                 auto-task:{name}"
-            ))),
-        }
-    }
-
-    fn load_condition_carrier(
-        &self,
-        carrier: ConditionCarrier,
-        name: &str,
-    ) -> Result<Option<LoadedCarrier>, OrbitError> {
-        match carrier {
-            ConditionCarrier::Routine => {
-                let Some((path, loaded)) =
-                    orbit_automation::routines::loader::find_routine_definition(
-                        &self.shared_root(),
-                        name,
-                    )
-                else {
-                    return Ok(None);
-                };
-                let definition = loaded.map_err(|error| {
-                    OrbitError::InvalidInput(format!(
-                        "routine '{name}' does not load ({}): {error}",
-                        path.display()
-                    ))
-                })?;
-                Ok(Some(LoadedCarrier {
-                    carrier,
-                    name: definition.name.clone(),
-                    path: path.display().to_string(),
-                    enabled: definition.enabled,
-                    has_condition: definition.trigger.condition.is_some(),
-                    definition: FoundDefinition::Routine(Box::new(definition)),
-                }))
-            }
-            ConditionCarrier::AutoTask => {
-                let Some(path) = self.auto_task_discovery_path(name)? else {
-                    return Ok(None);
-                };
-                let definition = self.validated_auto_task_definition(name)?.ok_or_else(|| {
-                    OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
-                })?;
-                Ok(Some(LoadedCarrier {
-                    carrier,
-                    name: definition.name.clone(),
-                    path: path.display().to_string(),
-                    enabled: definition.enabled,
-                    has_condition: matches!(
-                        definition.schedule,
-                        AutoTaskSchedule::Condition { .. }
-                    ),
-                    definition: FoundDefinition::AutoTask(Box::new(definition)),
-                }))
-            }
-        }
-    }
 }

@@ -23,6 +23,9 @@ use crate::application::automation::condition::{evaluate_guard, facts};
 use super::completion::contract_admission_hold;
 use super::job_step::{bound_task, parse_frozen_job, resolve_target};
 
+/// The observation cadence while a frozen step waits.
+const RECHECK_SECONDS: i64 = 60;
+
 /// One step of a frozen execution, as its checkpoint records it.
 pub(super) struct StepContext {
     pub(super) state: PipelineState,
@@ -190,6 +193,21 @@ struct LocatedStep<'a> {
     top_index: usize,
     enclosing_parallel: Option<&'a str>,
     dynamic: bool,
+}
+
+/// What a step's `reuse_when` makes of its definition's latest accepted
+/// result.
+pub(super) enum ReuseVerdict {
+    /// No `reuse_when`, no accepted result, or the predicate is false: the
+    /// step binds or mints as usual.
+    NoMatch,
+    /// The predicate holds for this receipt. The caller still revalidates it
+    /// against this execution before the step may settle on it.
+    Matched(Box<AutoTaskCompletionReceipt>),
+    /// The history is unreadable or the predicate is unknown, so whether a
+    /// reusable result exists cannot be decided: the step holds instead of
+    /// minting.
+    Held(String),
 }
 
 fn locate_step<'a>(steps: &'a [JobV2Step], id: &str) -> Option<LocatedStep<'a>> {
@@ -445,21 +463,6 @@ fn wait_facts(
     })
 }
 
-/// What a step's `reuse_when` makes of its definition's latest accepted
-/// result.
-pub(super) enum ReuseVerdict {
-    /// No `reuse_when`, no accepted result, or the predicate is false: the
-    /// step binds or mints as usual.
-    NoMatch,
-    /// The predicate holds for this receipt. The caller still revalidates it
-    /// against this execution before the step may settle on it.
-    Matched(Box<AutoTaskCompletionReceipt>),
-    /// The history is unreadable or the predicate is unknown, so whether a
-    /// reusable result exists cannot be decided: the step holds instead of
-    /// minting.
-    Held(String),
-}
-
 /// Judge `reuse_when` against the definition's latest accepted result. A
 /// definition with none is missing, never unreadable, and an unreadable
 /// history never reads as missing.
@@ -503,6 +506,3 @@ pub(super) fn reuse_verdict(
         },
     )
 }
-
-/// The observation cadence while a frozen step waits.
-const RECHECK_SECONDS: i64 = 60;

@@ -13,42 +13,6 @@ use crate::application::distributed::ensure_distributed_mutation_available;
 
 use super::refusal;
 
-fn fail_mutation_id(claim_id: &str) -> String {
-    format!("pull-fail:{claim_id}")
-}
-
-pub(super) fn release_mutation_id(claim_id: &str) -> String {
-    format!("pull-release:{claim_id}")
-}
-
-fn handoff_mutation_id(claim_id: &str) -> String {
-    format!("pull-handoff:{claim_id}")
-}
-
-/// The crew the settlement itself reports: its evidence's own crew first,
-/// then the typed failure's or the unusable provider's, mirroring the
-/// settlement record's priority after what the follower reported beside it
-/// [ORB-19602]. A handoff carries no evidence, so this is `None` for one.
-fn settlement_reported_crew(settlement: &ClaimMutation) -> Option<String> {
-    let named = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
-    match settlement {
-        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence) => named(&evidence.crew)
-            .or_else(|| {
-                evidence
-                    .failure
-                    .as_ref()
-                    .and_then(|failure| named(&failure.crew))
-            })
-            .or_else(|| {
-                evidence
-                    .provider_unavailable
-                    .as_ref()
-                    .and_then(|unavailable| named(&unavailable.crew))
-            }),
-        _ => None,
-    }
-}
-
 impl OrbitRuntime {
     /// Settle a claim with the follower's durable settlement: a typed handoff
     /// or a failure. Anything else is a lifecycle operation the executor does
@@ -227,5 +191,41 @@ impl OrbitRuntime {
             );
         })
         .ok()
+    }
+}
+
+fn fail_mutation_id(claim_id: &str) -> String {
+    format!("pull-fail:{claim_id}")
+}
+
+pub(super) fn release_mutation_id(claim_id: &str) -> String {
+    format!("pull-release:{claim_id}")
+}
+
+fn handoff_mutation_id(claim_id: &str) -> String {
+    format!("pull-handoff:{claim_id}")
+}
+
+/// The crew the settlement itself reports: its evidence's own crew first,
+/// then the typed failure's or the unusable provider's, mirroring the
+/// settlement record's priority after what the follower reported beside it
+/// [ORB-19602]. A handoff carries no evidence, so this is `None` for one.
+fn settlement_reported_crew(settlement: &ClaimMutation) -> Option<String> {
+    let named = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
+    match settlement {
+        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence) => named(&evidence.crew)
+            .or_else(|| {
+                evidence
+                    .failure
+                    .as_ref()
+                    .and_then(|failure| named(&failure.crew))
+            })
+            .or_else(|| {
+                evidence
+                    .provider_unavailable
+                    .as_ref()
+                    .and_then(|unavailable| named(&unavailable.crew))
+            }),
+        _ => None,
     }
 }

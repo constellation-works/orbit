@@ -27,6 +27,11 @@ pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS as COMPUTE
 /// serializing and scoring what follows the simulation need the margin.
 pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
 
+/// Nodes the arrival stream first draws, growing by [`ARRIVAL_BATCH_GROWTH`]
+/// each time a drain outruns them.
+const FIRST_ARRIVAL_BATCH: usize = 64;
+const ARRIVAL_BATCH_GROWTH: usize = 4;
+
 /// Resolved generation and compute bounds for one forecast simulation.
 #[derive(Clone, Copy)]
 pub(super) struct SimulationBounds {
@@ -34,26 +39,6 @@ pub(super) struct SimulationBounds {
     pub(super) compute_budget: Duration,
     pub(super) deadline: Instant,
 }
-
-/// The wall-time budget of a scenario with arrivals: [`ARRIVALS_COMPUTE_BUDGET`]
-/// unless a test fixture substituted another through [`COMPUTE_BUDGET_ENV`].
-pub(super) fn arrivals_compute_budget(env: &Env) -> Duration {
-    #[cfg(not(feature = "test-support"))]
-    let _ = env;
-    #[cfg(feature = "test-support")]
-    if let Some(millis) = env
-        .orbit_test_forecast_compute_budget_ms()
-        .and_then(OsStr::to_str)
-        .and_then(|value| value.parse().ok())
-    {
-        return Duration::from_millis(millis);
-    }
-    ARRIVALS_COMPUTE_BUDGET
-}
-/// Nodes the arrival stream first draws, growing by [`ARRIVAL_BATCH_GROWTH`]
-/// each time a drain outruns them.
-const FIRST_ARRIVAL_BATCH: usize = 64;
-const ARRIVAL_BATCH_GROWTH: usize = 4;
 
 /// The bound that ended a scenario with arrivals before all its iterations.
 #[derive(Clone, Copy)]
@@ -71,10 +56,6 @@ impl SimulationCut {
             Self::ComputeBudget => "compute_budget",
         }
     }
-}
-
-fn probability(count: u64, of: u64) -> Option<f64> {
-    (of > 0).then(|| (count as f64 / of as f64 * 1000.0).round() / 1000.0)
 }
 
 /// The simulated totals and schedules for one scenario.
@@ -488,6 +469,26 @@ impl Outcome {
 pub(super) struct Forecast {
     pub(super) backlog: Value,
     pub(super) if_approved: Option<Value>,
+}
+
+/// The wall-time budget of a scenario with arrivals: [`ARRIVALS_COMPUTE_BUDGET`]
+/// unless a test fixture substituted another through [`COMPUTE_BUDGET_ENV`].
+pub(super) fn arrivals_compute_budget(env: &Env) -> Duration {
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
+    #[cfg(feature = "test-support")]
+    if let Some(millis) = env
+        .orbit_test_forecast_compute_budget_ms()
+        .and_then(OsStr::to_str)
+        .and_then(|value| value.parse().ok())
+    {
+        return Duration::from_millis(millis);
+    }
+    ARRIVALS_COMPUTE_BUDGET
+}
+
+fn probability(count: u64, of: u64) -> Option<f64> {
+    (of > 0).then(|| (count as f64 / of as f64 * 1000.0).round() / 1000.0)
 }
 
 /// Simulate [`ITERATIONS`] drains of `items` on `slots`, each admitted as

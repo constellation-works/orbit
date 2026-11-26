@@ -204,6 +204,66 @@ impl<'a> Row<'a> {
     }
 }
 
+/// Each row's passed and total review gate settlements on one tier.
+type TierCounts<'k> = BTreeMap<&'k ModelEffortKey, (usize, usize)>;
+
+/// Every row's review gate verdicts by tier, to compare a row's accept rate
+/// with the other reviewers' on the same tiers.
+struct PeerRates<'k> {
+    tiers: BTreeMap<&'static str, TierCounts<'k>>,
+}
+
+impl<'k> PeerRates<'k> {
+    fn new(rows: &'k BTreeMap<ModelEffortKey, Row<'_>>) -> Self {
+        let mut tiers: BTreeMap<&'static str, TierCounts<'k>> = BTreeMap::new();
+        for (key, row) in rows {
+            for (tier, passed) in &row.verdicts {
+                let entry = tiers.entry(tier).or_default().entry(key).or_default();
+                entry.0 += usize::from(*passed);
+                entry.1 += 1;
+            }
+        }
+        Self { tiers }
+    }
+
+    fn compare(
+        &self,
+        key: &ModelEffortKey,
+        verdicts: &[(&'static str, bool)],
+    ) -> Option<PeerComparison> {
+        let (mut compared, mut passed, mut expected) = (0.0, 0.0, 0.0);
+        for (tier, accepted) in verdicts {
+            let (peer_passed, peer_total) = self
+                .tiers
+                .get(tier)
+                .into_iter()
+                .flatten()
+                .filter(|(other, _)| **other != key)
+                .fold((0, 0), |(p, t), (_, (passed, total))| {
+                    (p + passed, t + total)
+                });
+            if peer_total == 0 {
+                continue;
+            }
+            compared += 1.0;
+            passed += f64::from(u8::from(*accepted));
+            expected += peer_passed as f64 / peer_total as f64;
+        }
+        (compared > 0.0).then(|| PeerComparison {
+            expected: expected / compared,
+            observed: passed / compared,
+        })
+    }
+}
+
+/// A row's accept rate against its peers': the rate the other reviewers
+/// would have had on the row's own tier mix, over the reviews whose tier any
+/// peer reviewed.
+struct PeerComparison {
+    expected: f64,
+    observed: f64,
+}
+
 /// One row per reviewer crew and model with a review settled, or a review
 /// job attempt started, in the window.
 fn rows(
@@ -512,26 +572,26 @@ fn rows(
             let crews: Vec<String> = row.crews.iter().cloned().collect();
             let sample_units = sample_units(row.unit_ids.iter().cloned(), TERMS, &row.tallies);
             RowInput {
-                escaped_regressions_fallback: None,
-                denominators: BTreeMap::new(),
                 crew: crews
                     .first()
                     .cloned()
                     .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
                 crews,
-                effort_sources: row.effort_sources,
                 model: key.0,
                 effort: key.1,
                 units: row.units,
+                effort_sources: row.effort_sources,
                 runs_without_model: row.without_model,
                 provisional: Some(row.provisional),
                 tallies: row.tallies,
+                stats,
+                escaped_regressions_fallback: None,
+                expected: None,
+                denominators: BTreeMap::new(),
                 sample_units,
                 exposure_units: Vec::new(),
-                expected: None,
                 reviewed_units: None,
                 unjudged: !row.judged,
-                stats,
             }
         })
         .collect()
@@ -577,66 +637,6 @@ fn severity_or_low(severity: Option<DefectSeverity>) -> f64 {
 
 fn tier(complexity: Option<TaskComplexity>) -> &'static str {
     complexity.map_or("unassessed", TaskComplexity::as_str)
-}
-
-/// Each row's passed and total review gate settlements on one tier.
-type TierCounts<'k> = BTreeMap<&'k ModelEffortKey, (usize, usize)>;
-
-/// Every row's review gate verdicts by tier, to compare a row's accept rate
-/// with the other reviewers' on the same tiers.
-struct PeerRates<'k> {
-    tiers: BTreeMap<&'static str, TierCounts<'k>>,
-}
-
-/// A row's accept rate against its peers': the rate the other reviewers
-/// would have had on the row's own tier mix, over the reviews whose tier any
-/// peer reviewed.
-struct PeerComparison {
-    expected: f64,
-    observed: f64,
-}
-
-impl<'k> PeerRates<'k> {
-    fn new(rows: &'k BTreeMap<ModelEffortKey, Row<'_>>) -> Self {
-        let mut tiers: BTreeMap<&'static str, TierCounts<'k>> = BTreeMap::new();
-        for (key, row) in rows {
-            for (tier, passed) in &row.verdicts {
-                let entry = tiers.entry(tier).or_default().entry(key).or_default();
-                entry.0 += usize::from(*passed);
-                entry.1 += 1;
-            }
-        }
-        Self { tiers }
-    }
-
-    fn compare(
-        &self,
-        key: &ModelEffortKey,
-        verdicts: &[(&'static str, bool)],
-    ) -> Option<PeerComparison> {
-        let (mut compared, mut passed, mut expected) = (0.0, 0.0, 0.0);
-        for (tier, accepted) in verdicts {
-            let (peer_passed, peer_total) = self
-                .tiers
-                .get(tier)
-                .into_iter()
-                .flatten()
-                .filter(|(other, _)| **other != key)
-                .fold((0, 0), |(p, t), (_, (passed, total))| {
-                    (p + passed, t + total)
-                });
-            if peer_total == 0 {
-                continue;
-            }
-            compared += 1.0;
-            passed += f64::from(u8::from(*accepted));
-            expected += peer_passed as f64 / peer_total as f64;
-        }
-        (compared > 0.0).then(|| PeerComparison {
-            expected: expected / compared,
-            observed: passed / compared,
-        })
-    }
 }
 
 /// The row's shown-not-scored context: its review counts, accept rate

@@ -29,6 +29,24 @@ pub(crate) struct FactInputs {
     pub(crate) self_facts: SelfFacts,
 }
 
+/// The facts plus every task the workspace lists.
+pub(crate) struct GatheredFacts {
+    pub(crate) facts: ConditionFacts,
+    /// Board values that could not be read, with why.
+    pub(crate) unavailable: Vec<String>,
+    /// Every task the workspace lists, by ID.
+    pub(crate) tasks: BTreeMap<String, Task>,
+}
+
+/// What a task's history says: its position (the observation revision), its
+/// creation origin, and when it last moved into its current status.
+#[derive(Debug, Clone)]
+pub(crate) struct HistoryFacts {
+    pub(crate) revision: usize,
+    pub(crate) origin: Option<ConditionOrigin>,
+    pub(crate) status_since: DateTime<Utc>,
+}
+
 /// `self` with the definition's accepted-result history added. Only an
 /// auto-task that declares a completion contract has such a history; any other
 /// definition keeps `self` as its fire records give it. Missing history leaves
@@ -114,24 +132,6 @@ pub(crate) fn unavailable_history_notes(
             .as_ref()
             .map(|why| format!("auto_tasks['{name}'].last_succeeded_at: {why}"))
     })
-}
-
-/// The facts plus every task the workspace lists.
-pub(crate) struct GatheredFacts {
-    pub(crate) facts: ConditionFacts,
-    /// Board values that could not be read, with why.
-    pub(crate) unavailable: Vec<String>,
-    /// Every task the workspace lists, by ID.
-    pub(crate) tasks: BTreeMap<String, Task>,
-}
-
-/// What a task's history says: its position (the observation revision), its
-/// creation origin, and when it last moved into its current status.
-#[derive(Debug, Clone)]
-pub(crate) struct HistoryFacts {
-    pub(crate) revision: usize,
-    pub(crate) origin: Option<ConditionOrigin>,
-    pub(crate) status_since: DateTime<Utc>,
 }
 
 pub(crate) fn gather(

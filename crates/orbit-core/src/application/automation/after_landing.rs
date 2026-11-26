@@ -33,6 +33,13 @@ use orbit_types::workflow::automation::recovery::{CrewOsHold, ModelRefusedCrew, 
 /// The auto-task definition after-landing review runs through.
 pub(crate) const AFTER_LANDING_CONSUMER: &str = "delivery-code-review";
 
+/// Scheduling states that need an operator before the consumer admits again.
+const BLOCKING_STATES: &[&str] = &[
+    orbit_automation::delivery::DEFINITION_CHANGED,
+    "needs_attention",
+    "retry_deadline_expired",
+];
+
 impl OrbitRuntime {
     /// Whether `definition` is enabled here: its own `enabled` flag. Every
     /// delivery evaluation, inspection and listing reads this rather than
@@ -40,16 +47,6 @@ impl OrbitRuntime {
     pub fn auto_task_enabled(&self, definition: &AutoTaskDefinition) -> bool {
         definition.enabled
     }
-}
-
-/// The crews a review task minted for `definition` is drawn from instead of
-/// the template's crew: `workflow.purpose_crews.review`, when this is the
-/// after-landing consumer and the crew is set. Empty otherwise.
-fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
-    if definition.name != AFTER_LANDING_CONSUMER {
-        return Vec::new();
-    }
-    runtime.operation_policy().review_crew.value.clone()
 }
 
 /// The positive-weight `workflow.purpose_crews.review` members a review task
@@ -62,6 +59,203 @@ struct ReviewPool {
     eligible: Vec<ReviewCrewPoolMember>,
     os_excluded: Vec<OsExcludedCrew>,
     model_refused: Vec<ModelRefusedCrew>,
+}
+
+/// What turned after-landing review on or left it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterLandingSource {
+    /// The auto-task's own `enabled` flag.
+    AutoTask,
+    /// No `delivery-code-review` definition loads here.
+    Missing,
+}
+
+impl AfterLandingSource {
+    /// The operator-facing provenance label.
+    pub fn label(self) -> String {
+        match self {
+            AfterLandingSource::AutoTask => format!("auto-task {AFTER_LANDING_CONSUMER}"),
+            AfterLandingSource::Missing => format!("auto-task {AFTER_LANDING_CONSUMER} missing"),
+        }
+    }
+}
+
+/// Whether the `after-landing` consumer can review landed work on this host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AfterLandingHealth {
+    /// The consumer definition's name.
+    pub consumer: String,
+    /// The definition loads and is not parked by an inactive plugin.
+    pub present: bool,
+    /// The consumer is enabled here.
+    pub enabled: bool,
+    /// This host is the consumer's resolved owner.
+    pub owned_here: bool,
+    /// The machine the consumer's ownership resolves to, if any.
+    pub owner_machine: Option<String>,
+    /// The branch the consumer watches.
+    pub branch: Option<String>,
+    /// Why that branch does not resolve, when it does not.
+    pub branch_error: Option<String>,
+    /// The admitted action the consumer is wedged on, if any.
+    pub wedged_action: Option<String>,
+    /// The recorded stall that suspends the consumer, if any.
+    pub stall: Option<String>,
+    /// The consumer's scheduling state as `orbit auto-task show` reports it.
+    pub state: Option<String>,
+    /// The crew its review tasks are minted with, when it is one crew.
+    pub crew: Option<String>,
+    /// The `workflow.purpose_crews.review` pool each batch's review task draws its
+    /// crew from, when it names more than one [ORB-15195].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crew_pool: Vec<String>,
+    /// Why that crew, or every crew of the pool, cannot be resolved on this
+    /// host, when it cannot.
+    pub crew_error: Option<String>,
+    /// When the consumer's open batch was frozen and minted.
+    pub last_batch_minted_at: Option<DateTime<Utc>>,
+    /// When the consumer last accepted coverage evidence for a batch.
+    pub last_batch_covered_at: Option<DateTime<Utc>>,
+    /// When the next batch is due, as one phrase: in flight, due now, due by
+    /// a time, or waiting for landed deliveries.
+    pub next_batch_due: Option<String>,
+    /// The instant the oldest pending delivery makes a batch due, when the
+    /// threshold is not reached first.
+    pub next_batch_due_at: Option<DateTime<Utc>>,
+    /// The commit the consumer has observed, when it has a cursor and origin
+    /// is configured. Absent for a repository with no remote, so this report
+    /// stays the shape it had before remote observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_commit: Option<String>,
+    /// `refs/remotes/origin/<branch>`, when that ref exists. Doctor reads it
+    /// and does not fetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_head: Option<String>,
+    /// First-parent commits the observed cursor has not reached. `Some(0)`
+    /// means the cursor matches the remote-tracking head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits_behind_remote: Option<u64>,
+    /// The observed commit is not an ancestor of the remote-tracking head.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remote_diverged: bool,
+    /// Origin is configured and `refs/remotes/origin/<branch>` is missing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remote_unfetched: bool,
+    /// Every reason the consumer cannot review landed work; empty when healthy.
+    pub problems: Vec<String>,
+}
+
+impl AfterLandingHealth {
+    /// Nothing stops the consumer from reviewing landed work.
+    pub fn healthy(&self) -> bool {
+        self.problems.is_empty()
+    }
+
+    /// The single operator-facing health line.
+    pub fn line(&self) -> String {
+        if !self.present {
+            return format!(
+                "unhealthy: consumer `{}` {}",
+                self.consumer,
+                self.problems.join("; ")
+            );
+        }
+        let owner = match (&self.owner_machine, self.owned_here) {
+            (Some(owner), true) => format!("owned here (`{owner}`)"),
+            (Some(owner), false) => format!("owned by `{owner}`"),
+            (None, _) => "no owner".to_string(),
+        };
+        let branch = self.branch_phrase();
+        let progress = match (&self.wedged_action, &self.stall) {
+            (Some(_), _) => "wedged on a closed batch task".to_string(),
+            (None, Some(stall)) => format!("stalled ({stall})"),
+            (None, None) => "not wedged or stalled".to_string(),
+        };
+        let minted = self
+            .last_batch_minted_at
+            .map(|at| format!("last batch minted at {}", at.to_rfc3339()))
+            .unwrap_or_else(|| "no batch minted yet".to_string());
+        let covered = self
+            .last_batch_covered_at
+            .map(|at| format!("last batch covered at {}", at.to_rfc3339()))
+            .unwrap_or_else(|| "no batch covered yet".to_string());
+        let facts = [
+            format!(
+                "consumer `{}` {}",
+                self.consumer,
+                if self.enabled { "enabled" } else { "disabled" }
+            ),
+            owner,
+            progress,
+            branch,
+            if self.crew_pool.is_empty() {
+                format!("crew `{}`", self.crew.as_deref().unwrap_or("-"))
+            } else {
+                format!("crews [{}] drawn per batch", self.crew_pool.join(", "))
+            },
+            format!("state {}", self.state.as_deref().unwrap_or("-")),
+            minted,
+            covered,
+            format!(
+                "next batch {}",
+                self.next_batch_due.as_deref().unwrap_or("unknown")
+            ),
+        ]
+        .join(", ");
+
+        if self.healthy() {
+            format!("healthy: {facts}")
+        } else {
+            format!("unhealthy: {}; {facts}", self.problems.join("; "))
+        }
+    }
+
+    fn branch_phrase(&self) -> String {
+        let base = match (&self.branch, &self.branch_error) {
+            (Some(branch), None) => format!("branch `{branch}` resolves"),
+            (Some(branch), Some(_)) => format!("branch `{branch}` does not resolve"),
+            (None, _) => "no branch".to_string(),
+        };
+        match self.remote_clause() {
+            Some(clause) => format!("{base}; {clause}"),
+            None => base,
+        }
+    }
+
+    /// How the observed cursor relates to the remote-tracking head. Absent
+    /// when the repository has no origin, so the branch wording stays put.
+    fn remote_clause(&self) -> Option<String> {
+        let branch = self.branch.as_deref()?;
+        if self.remote_unfetched {
+            return Some(format!("origin/{branch} has no remote-tracking ref"));
+        }
+        let remote = self.remote_head.as_deref()?;
+        if self.remote_diverged {
+            return Some(format!(
+                "is not an ancestor of origin/{branch} ({remote}) (history_diverged)"
+            ));
+        }
+        match self.commits_behind_remote {
+            Some(0) => Some(format!("matches origin/{branch} ({remote})")),
+            Some(behind) => Some(format!(
+                "trails origin/{branch} ({remote}) by {behind} commits"
+            )),
+            None => Some(format!(
+                "origin/{branch} is at {remote}; the consumer has not observed a commit yet"
+            )),
+        }
+    }
+}
+
+/// The crews a review task minted for `definition` is drawn from instead of
+/// the template's crew: `workflow.purpose_crews.review`, when this is the
+/// after-landing consumer and the crew is set. Empty otherwise.
+fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
+    if definition.name != AFTER_LANDING_CONSUMER {
+        return Vec::new();
+    }
+    runtime.operation_policy().review_crew.value.clone()
 }
 
 fn eligible_review_pool(
@@ -196,26 +390,6 @@ fn delivery_implementers(runtime: &OrbitRuntime, deliveries: &[Delivery]) -> BTr
         .collect()
 }
 
-/// What turned after-landing review on or left it off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AfterLandingSource {
-    /// The auto-task's own `enabled` flag.
-    AutoTask,
-    /// No `delivery-code-review` definition loads here.
-    Missing,
-}
-
-impl AfterLandingSource {
-    /// The operator-facing provenance label.
-    pub fn label(self) -> String {
-        match self {
-            AfterLandingSource::AutoTask => format!("auto-task {AFTER_LANDING_CONSUMER}"),
-            AfterLandingSource::Missing => format!("auto-task {AFTER_LANDING_CONSUMER} missing"),
-        }
-    }
-}
-
 /// Whether after-landing review is on here, and why.
 pub(crate) fn after_landing_switch(
     runtime: &OrbitRuntime,
@@ -235,183 +409,9 @@ fn after_landing_definition(
         .find(|definition| definition.name == AFTER_LANDING_CONSUMER))
 }
 
-/// Whether the `after-landing` consumer can review landed work on this host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AfterLandingHealth {
-    /// The consumer definition's name.
-    pub consumer: String,
-    /// The definition loads and is not parked by an inactive plugin.
-    pub present: bool,
-    /// The consumer is enabled here.
-    pub enabled: bool,
-    /// This host is the consumer's resolved owner.
-    pub owned_here: bool,
-    /// The machine the consumer's ownership resolves to, if any.
-    pub owner_machine: Option<String>,
-    /// The branch the consumer watches.
-    pub branch: Option<String>,
-    /// Why that branch does not resolve, when it does not.
-    pub branch_error: Option<String>,
-    /// The admitted action the consumer is wedged on, if any.
-    pub wedged_action: Option<String>,
-    /// The recorded stall that suspends the consumer, if any.
-    pub stall: Option<String>,
-    /// The consumer's scheduling state as `orbit auto-task show` reports it.
-    pub state: Option<String>,
-    /// The crew its review tasks are minted with, when it is one crew.
-    pub crew: Option<String>,
-    /// The `workflow.purpose_crews.review` pool each batch's review task draws its
-    /// crew from, when it names more than one [ORB-15195].
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub crew_pool: Vec<String>,
-    /// Why that crew, or every crew of the pool, cannot be resolved on this
-    /// host, when it cannot.
-    pub crew_error: Option<String>,
-    /// When the consumer's open batch was frozen and minted.
-    pub last_batch_minted_at: Option<DateTime<Utc>>,
-    /// When the consumer last accepted coverage evidence for a batch.
-    pub last_batch_covered_at: Option<DateTime<Utc>>,
-    /// When the next batch is due, as one phrase: in flight, due now, due by
-    /// a time, or waiting for landed deliveries.
-    pub next_batch_due: Option<String>,
-    /// The instant the oldest pending delivery makes a batch due, when the
-    /// threshold is not reached first.
-    pub next_batch_due_at: Option<DateTime<Utc>>,
-    /// The commit the consumer has observed, when it has a cursor and origin
-    /// is configured. Absent for a repository with no remote, so this report
-    /// stays the shape it had before remote observation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observed_commit: Option<String>,
-    /// `refs/remotes/origin/<branch>`, when that ref exists. Doctor reads it
-    /// and does not fetch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_head: Option<String>,
-    /// First-parent commits the observed cursor has not reached. `Some(0)`
-    /// means the cursor matches the remote-tracking head.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commits_behind_remote: Option<u64>,
-    /// The observed commit is not an ancestor of the remote-tracking head.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub remote_diverged: bool,
-    /// Origin is configured and `refs/remotes/origin/<branch>` is missing.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub remote_unfetched: bool,
-    /// Every reason the consumer cannot review landed work; empty when healthy.
-    pub problems: Vec<String>,
-}
-
 fn is_false(value: &bool) -> bool {
     !*value
 }
-
-impl AfterLandingHealth {
-    /// Nothing stops the consumer from reviewing landed work.
-    pub fn healthy(&self) -> bool {
-        self.problems.is_empty()
-    }
-
-    /// The single operator-facing health line.
-    pub fn line(&self) -> String {
-        if !self.present {
-            return format!(
-                "unhealthy: consumer `{}` {}",
-                self.consumer,
-                self.problems.join("; ")
-            );
-        }
-        let owner = match (&self.owner_machine, self.owned_here) {
-            (Some(owner), true) => format!("owned here (`{owner}`)"),
-            (Some(owner), false) => format!("owned by `{owner}`"),
-            (None, _) => "no owner".to_string(),
-        };
-        let branch = self.branch_phrase();
-        let progress = match (&self.wedged_action, &self.stall) {
-            (Some(_), _) => "wedged on a closed batch task".to_string(),
-            (None, Some(stall)) => format!("stalled ({stall})"),
-            (None, None) => "not wedged or stalled".to_string(),
-        };
-        let minted = self
-            .last_batch_minted_at
-            .map(|at| format!("last batch minted at {}", at.to_rfc3339()))
-            .unwrap_or_else(|| "no batch minted yet".to_string());
-        let covered = self
-            .last_batch_covered_at
-            .map(|at| format!("last batch covered at {}", at.to_rfc3339()))
-            .unwrap_or_else(|| "no batch covered yet".to_string());
-        let facts = [
-            format!(
-                "consumer `{}` {}",
-                self.consumer,
-                if self.enabled { "enabled" } else { "disabled" }
-            ),
-            owner,
-            progress,
-            branch,
-            if self.crew_pool.is_empty() {
-                format!("crew `{}`", self.crew.as_deref().unwrap_or("-"))
-            } else {
-                format!("crews [{}] drawn per batch", self.crew_pool.join(", "))
-            },
-            format!("state {}", self.state.as_deref().unwrap_or("-")),
-            minted,
-            covered,
-            format!(
-                "next batch {}",
-                self.next_batch_due.as_deref().unwrap_or("unknown")
-            ),
-        ]
-        .join(", ");
-
-        if self.healthy() {
-            format!("healthy: {facts}")
-        } else {
-            format!("unhealthy: {}; {facts}", self.problems.join("; "))
-        }
-    }
-
-    fn branch_phrase(&self) -> String {
-        let base = match (&self.branch, &self.branch_error) {
-            (Some(branch), None) => format!("branch `{branch}` resolves"),
-            (Some(branch), Some(_)) => format!("branch `{branch}` does not resolve"),
-            (None, _) => "no branch".to_string(),
-        };
-        match self.remote_clause() {
-            Some(clause) => format!("{base}; {clause}"),
-            None => base,
-        }
-    }
-
-    /// How the observed cursor relates to the remote-tracking head. Absent
-    /// when the repository has no origin, so the branch wording stays put.
-    fn remote_clause(&self) -> Option<String> {
-        let branch = self.branch.as_deref()?;
-        if self.remote_unfetched {
-            return Some(format!("origin/{branch} has no remote-tracking ref"));
-        }
-        let remote = self.remote_head.as_deref()?;
-        if self.remote_diverged {
-            return Some(format!(
-                "is not an ancestor of origin/{branch} ({remote}) (history_diverged)"
-            ));
-        }
-        match self.commits_behind_remote {
-            Some(0) => Some(format!("matches origin/{branch} ({remote})")),
-            Some(behind) => Some(format!(
-                "trails origin/{branch} ({remote}) by {behind} commits"
-            )),
-            None => Some(format!(
-                "origin/{branch} is at {remote}; the consumer has not observed a commit yet"
-            )),
-        }
-    }
-}
-
-/// Scheduling states that need an operator before the consumer admits again.
-const BLOCKING_STATES: &[&str] = &[
-    orbit_automation::delivery::DEFINITION_CHANGED,
-    "needs_attention",
-    "retry_deadline_expired",
-];
 
 /// The after-landing consumer's health on this host, or `None` when
 /// after-landing review is off.

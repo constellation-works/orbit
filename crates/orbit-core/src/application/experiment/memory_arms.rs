@@ -11,23 +11,6 @@ use orbit_store::contract::ExperimentRecord;
 use super::definition::ExperimentOverlay;
 use crate::OrbitRuntime;
 
-/// The names of `record`'s arms whose overlay delivers crew memory.
-pub(crate) fn memory_arm_names(record: &ExperimentRecord) -> Result<BTreeSet<String>, OrbitError> {
-    let mut arms = BTreeSet::new();
-    for arm in &record.arms {
-        let overlay = ExperimentOverlay::parse(
-            &arm.name,
-            serde_json::from_str(&arm.overlay_json).map_err(|error| {
-                OrbitError::Store(format!("invalid experiment overlay: {error}"))
-            })?,
-        )?;
-        if overlay.memory.is_some() {
-            arms.insert(arm.name.clone());
-        }
-    }
-    Ok(arms)
-}
-
 impl OrbitRuntime {
     /// The ids of this workspace's running experiments, shadow or live,
     /// with at least one memory arm. Dreaming mints only while one exists.
@@ -87,4 +70,21 @@ impl OrbitRuntime {
         }
         Ok(false)
     }
+}
+
+/// The names of `record`'s arms whose overlay delivers crew memory.
+pub(crate) fn memory_arm_names(record: &ExperimentRecord) -> Result<BTreeSet<String>, OrbitError> {
+    let mut arms = BTreeSet::new();
+    for arm in &record.arms {
+        let overlay = ExperimentOverlay::parse(
+            &arm.name,
+            serde_json::from_str(&arm.overlay_json).map_err(|error| {
+                OrbitError::Store(format!("invalid experiment overlay: {error}"))
+            })?,
+        )?;
+        if overlay.memory.is_some() {
+            arms.insert(arm.name.clone());
+        }
+    }
+    Ok(arms)
 }
