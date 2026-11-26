@@ -4,6 +4,11 @@
 //! output they hold; code two or more commands share lives under `common/`.
 //! This file holds the module's wiring only (STD-02 R48).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the CLI output layer owns the standard streams"
+)]
+
 pub mod attention;
 pub mod common;
 pub mod config;

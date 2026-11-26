@@ -50,6 +50,10 @@ impl CaptureSink {
 
     /// Also echo the stream to this process's stderr with sensitive
     /// environment values redacted, when `enabled`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process supervisor echoes redacted child output directly to stderr"
+    )]
     pub fn with_redacting_echo(mut self, enabled: bool) -> Self {
         self.echo = enabled.then(|| RedactingEcho::new(std::io::stderr()));
         self

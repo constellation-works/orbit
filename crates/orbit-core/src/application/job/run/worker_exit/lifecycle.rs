@@ -44,6 +44,10 @@ pub(crate) struct WorkerLifetime {
 }
 
 impl WorkerLifetime {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "worker lifetime receipts must reach the retained stderr log"
+    )]
     pub(crate) fn enter(run_id: &str) -> Self {
         #[cfg(unix)]
         // SAFETY: getppid only reads this process's parent ID.
@@ -67,6 +71,10 @@ impl WorkerLifetime {
         Self { record }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "worker lifetime receipts must reach the retained stderr log"
+    )]
     pub(crate) fn record_return(mut self, error: Option<&OrbitError>) {
         self.record.returned_at = Some(Utc::now());
         self.record.error = error.map(|error| bounded_provenance(&error.to_string()));
@@ -75,6 +83,10 @@ impl WorkerLifetime {
 }
 
 impl Drop for WorkerLifetime {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "unwind receipts must reach the retained stderr log"
+    )]
     fn drop(&mut self) {
         if self.record.returned_at.is_none() && std::thread::panicking() {
             self.record.returned_at = Some(Utc::now());

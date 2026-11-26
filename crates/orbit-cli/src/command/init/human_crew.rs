@@ -3,7 +3,7 @@
 //! operator answers or passes `--human-name`. `orbit-config` owns the write;
 //! the terminal side lives here.
 
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 
 use orbit_common::Env;
@@ -86,7 +86,7 @@ pub(super) fn ensure_human_crew_for_init(
                 Some(name) => format!("Human crew name for your own work [{name}]: "),
                 None => "Human crew name for your own work: ".to_string(),
             };
-            let stderr = io::stderr();
+            let stderr = crate::output::common::sink::stderr();
             let mut output = stderr.lock();
             return collect_human_crew_name(
                 &prompt,

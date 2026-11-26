@@ -488,3 +488,8 @@ fn query_terminal_width() -> Option<u16> {
 fn query_terminal_width() -> Option<u16> {
     None
 }
+
+/// Return stderr for prompts and child-process progress kept off stdout.
+pub(crate) fn stderr() -> std::io::Stderr {
+    std::io::stderr()
+}

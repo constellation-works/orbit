@@ -36,6 +36,10 @@ pub(super) async fn write_stdio_invalid_request() -> bool {
 /// base64 is carried as both an image block and `structuredContent`, so a
 /// second writer can insert bytes inside the record. One `write_all` keeps
 /// the lock until the record is finished.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the MCP transport holds stdout across a complete protocol frame"
+)]
 fn write_complete_stdout_frame(frame: &[u8]) -> std::io::Result<()> {
     let mut stdout = std::io::stdout().lock();
     std::io::Write::write_all(&mut stdout, frame)?;

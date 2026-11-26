@@ -438,7 +438,7 @@ fn prompt_machine_name() -> Result<String, OrbitError> {
         Some(name) => format!("Machine name [{name}]: "),
         None => "Machine name: ".to_string(),
     };
-    let stderr = io::stderr();
+    let stderr = crate::output::common::sink::stderr();
     let mut output = stderr.lock();
     collect_machine_name(&prompt, default, &mut output, |prompt, output| {
         prompt_stdin::read_trimmed_line(prompt, output).map_err(prompt_io_to_orbit)
@@ -487,7 +487,7 @@ where
 const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
 
 fn prompt_task_prefix() -> Result<String, OrbitError> {
-    let stderr = io::stderr();
+    let stderr = crate::output::common::sink::stderr();
     let mut output = stderr.lock();
     collect_task_prefix(&mut output, |prompt, output| {
         prompt_stdin::read_trimmed_line(prompt, output).map_err(prompt_io_to_orbit)

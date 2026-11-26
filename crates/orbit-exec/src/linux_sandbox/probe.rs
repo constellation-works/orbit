@@ -75,6 +75,10 @@ pub fn bwrap_deferral_notice(test: &str, detail: &str) -> String {
 /// Write [`bwrap_deferral_notice`] straight to this process's stderr, past
 /// the test harness's output capture, so a passing test's deferral shows in
 /// any run's output, with or without `--nocapture`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "deferral evidence must bypass test output capture"
+)]
 pub fn report_bwrap_deferral(test: &str, detail: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr(), "{}", bwrap_deferral_notice(test, detail));

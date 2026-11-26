@@ -194,6 +194,10 @@ fn pending_forward_action(previous: &PreviousHandlers, pending: i32) -> Option<(
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the supervisor must report termination before the default signal ends the process"
+)]
 fn announce_default_termination(signal: i32) {
     // SIG_DFL terminates this process, so the wait-result stderr annotation
     // never reaches the CLI. Write the same text to the process stderr first.

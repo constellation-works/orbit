@@ -77,9 +77,9 @@ pub(super) fn require_tool(env: &Env, program: &str) -> Result<PathBuf, OrbitErr
 /// Run a step that legitimately takes minutes (npm, the browser download),
 /// streaming its progress to stderr so stdout stays the command's record.
 pub(super) fn run_streaming(command: &mut Command, what: &str) -> Result<(), OrbitError> {
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
-        reason = "an npm install or browser download streams progress to the operator's terminal and legitimately runs for minutes; no fixed deadline fits, and the operator can interrupt it"
+        reason = "an npm install or browser download streams progress to the operator's terminal and legitimately runs for minutes; no fixed deadline fits, and stdout is redirected to stderr to protect machine output"
     )]
     let status = command
         .stdin(Stdio::null())
@@ -98,9 +98,9 @@ pub(super) fn run_streaming(command: &mut Command, what: &str) -> Result<(), Orb
 /// Run a step that may ask for the operator's password (`sudo`).
 #[cfg(target_os = "linux")]
 pub(super) fn run_interactive(command: &mut Command, what: &str) -> Result<(), OrbitError> {
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
-        reason = "interactive sudo authentication followed by a package install: it waits on a human at the terminal, so no deadline applies"
+        reason = "interactive sudo authentication followed by a package install: it waits on a human and redirects stdout to stderr to protect machine output"
     )]
     let status = command
         .stdout(Stdio::from(std::io::stderr()))

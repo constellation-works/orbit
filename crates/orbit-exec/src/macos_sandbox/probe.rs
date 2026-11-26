@@ -30,6 +30,10 @@ impl SandboxExecApplyProbe {
     ///
     /// Panics for missing binaries, unexpected failures, or a refusal when
     /// `ORBIT_REQUIRE_SANDBOX_EXEC=1`. A skipped run is never host evidence.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "deferral evidence must bypass test output capture"
+    )]
     pub fn test_guard(&self, env: &orbit_common::Env, test: &str) -> bool {
         let required = env.orbit_require_sandbox_exec() == Some(std::ffi::OsStr::new("1"));
         match self.guard_with_writer(test, required, &mut std::io::stderr()) {
