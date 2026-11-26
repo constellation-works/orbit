@@ -120,7 +120,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `workspace` | `app::workspace` | above task |
 | `workspace_auto` | `unit::workspace_auto` | 8 |
 
-New apps with no `application/` entry: `friction` (built, `app/friction/`), `host`, `update`, and `remote_command`, which takes `app/run/command.rs` out of the run app ([design §3](../design/architecture-restructure/2_design.md#the-remote-command-gets-its-own-app)). They have no row, since there is no entry.
+New apps with no `application/` entry: `friction` (built, `app/friction/`), `host`, `update`, `remote_command`, which takes `app/run/command.rs` out of the run app ([design §3](../design/architecture-restructure/2_design.md#the-remote-command-gets-its-own-app)), and `lease`, which takes `app/run/lease.rs` out of it ([design §3](../design/architecture-restructure/2_design.md#leases-get-their-own-app-and-lock-contention-goes-to-the-task-app)). They have no row, since there is no entry.
 
 A module beside `application/`: `metrics` dissolves into `app::run` (order 2) in two steps, ORB-28962 then ORB-28963 ([design §3](../design/architecture-restructure/2_design.md#metrics-dissolves-into-the-run-app)). It has no row, since it is not an `application/` entry.
 
