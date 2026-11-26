@@ -6,9 +6,13 @@
 //! specification is refused with an explicit discard-and-rerun exit. Nothing
 //! is requeued while the run that published is still live, and a human's
 //! word on a transient block stands over the automatic requeue.
-use super::failed_publication::{escalated_handoff_fixture, escalated_handoff_fixture_with};
+use super::failed_publication::{
+    configure_before_pr_review, escalated_handoff_fixture, escalated_handoff_fixture_with,
+    failed_sync_handoff_fixture,
+};
 use super::published_owner::{checkpoint, next, save_run};
 use super::*;
+use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use orbit_core::application::routines::{
     RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
@@ -1149,6 +1153,217 @@ fn requeue_resumes_a_validate_failure_handoff_whose_failed_step_has_no_recorded_
     assert_next_run_resumes_the_published_candidate(&f);
 }
 
+fn task_run_count(f: &Fixture) -> u64 {
+    f.runtime
+        .count_job_runs_observed(JobRunListParams {
+            task_id: Some(f.task.clone()),
+            ..Default::default()
+        })
+        .unwrap()
+}
+
+fn requeue_recovers_the_owner_commit_after_sync_fails_with_output() {
+    use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT};
+
+    let (f, owner_commit) = failed_sync_handoff_fixture();
+    assert_eq!(f.state.step_states[&3], JobRunState::Failed);
+    assert!(f.state.pipeline["sync_base"]["error"].is_string());
+    assert_eq!(f.state.pipeline["commit"]["commit_sha"], owner_commit);
+
+    let runs = task_run_count(&f);
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog");
+    assert_eq!(answer["source_run_id"], f.source.run_id);
+    assert_eq!(answer["resumes"]["head_sha"], f.head);
+    assert_eq!(answer["resumes"]["pull_request"], "17");
+    refused(&f, false, "duplicate requeue");
+    reblock(&f);
+    assert_eq!(requeue(&f, false).unwrap()["resumes"], answer["resumes"]);
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_eq!(task_run_count(&f), runs, "requeue only records admission");
+
+    let current_base = git(&f.repo, &["rev-parse", "main"]);
+    assert_ne!(current_base, f.state.pipeline["prepare_branch"]["base_sha"]);
+    let (run, setup) = next(&f);
+    assert_eq!(task_run_count(&f), runs + 1);
+    assert_eq!(setup["base_sha"], current_base);
+    configure_before_pr_review(&f, &run.run_id);
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({"job_run_id":run.run_id,"task_ids":[f.task],
+        "workspace_path":checkout,"base_sha":setup["base_sha"]}),
+    );
+    assert_eq!(resumed["outcome"], "resumed_carried");
+    assert_eq!(resumed["implement"], false);
+    assert_eq!(resumed["reused_branch"], f.branch);
+    assert_eq!(resumed["reused_head_sha"], f.head);
+    assert_eq!(resumed["prior_pull_request"], "17");
+    checkpoint(
+        &f,
+        &run.run_id,
+        step_index(&f, "resume_candidate"),
+        "resume_candidate",
+        resumed,
+    );
+
+    let commit = f.action(
+        "git_commit",
+        json!({"job_run_id":run.run_id,"scope":"all","workspace_path":checkout,
+        "base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}),
+    );
+    assert_eq!(commit["base_sha"], current_base);
+    let delivery_head = commit["commit_sha"].clone();
+    let original_base = f.state.pipeline["worktree"]["base_sha"].as_str().unwrap();
+    assert_eq!(
+        git(&checkout, &["diff", &current_base, "HEAD"]),
+        git(&f.repo, &["diff", original_base, &f.head]),
+        "the successor carries the exact preserved patch onto the current base"
+    );
+    checkpoint(&f, &run.run_id, 1, "commit", commit);
+    let prepared = f.action(
+        "pr_prepare",
+        json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,
+        "authenticate_preparation":true,"base":"main","base_sync":"remote"}),
+    );
+    assert_eq!(prepared["base_sha"], current_base);
+    assert_eq!(prepared["head_sha"], delivery_head);
+    assert_eq!(prepared["remote_sha"], f.head);
+    checkpoint(&f, &run.run_id, 2, "prepare_branch", prepared.clone());
+    let mut input = prepared.clone();
+    input["preparation"] = prepared;
+    input["step_id"] = json!("sync_base");
+    input["job_run_id"] = json!(run.run_id);
+    input["completed_task_ids"] = json!([f.task]);
+    input["workspace_path"] = json!(checkout);
+    let sync = f.action("git_rebase", input);
+    assert_eq!(sync["decision"], "skipped_current");
+    assert_eq!(sync["base_sha"], current_base);
+    assert_eq!(sync["head_sha_before"], delivery_head);
+    assert_eq!(sync["remote_sha_before"], f.head);
+    checkpoint(&f, &run.run_id, 3, "sync_base", sync.clone());
+
+    let mut gate = json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],
+        "workspace_path":checkout,"base_sha":sync["base_sha"],"base_ref":sync["base_ref"]});
+    let validated = f.action("candidate_validate", gate.clone());
+    assert_eq!(validated["decision"], "passed");
+    assert_eq!(validated["tested_head"], sync["head_sha"]);
+    assert_eq!(validated["base_sha"], current_base);
+    checkpoint(
+        &f,
+        &run.run_id,
+        step_index(&f, "validate"),
+        "validate",
+        validated,
+    );
+    gate["base"] = json!("main");
+    gate["base_sync"] = json!("remote");
+    gate["mode"] = json!("pr");
+    let review = f.action("review_gate_admit", gate.clone());
+    assert_eq!(review["applies"], true);
+    assert_eq!(review["head_sha"], sync["head_sha"]);
+    assert_eq!(review["base_sha"], current_base);
+    let report = json!({"schema_version":REVIEW_CONTRACT_VERSION,"attempt_id":review["attempt_id"],
+        "verdict":"accept","summary":"Checked the preserved patch on the current base","findings":[],
+        "validation":[{"id":"V1","command":"true","outcome":"passed","role":"required"}],
+        "escalation":null});
+    let path = f.repo.join(".orbit/tmp/recovered-review.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, report.to_string()).unwrap();
+    f.runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({"id":f.task,"model":"codex","path":REVIEW_REPORT_ARTIFACT,"source_path":path}),
+        )
+        .unwrap();
+    gate["admission"] = review;
+    let settled = f.action("review_gate_settle", gate);
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["reviewed_head_sha"], delivery_head);
+
+    f.assert_original();
+}
+
+fn failed_sync_handoff_still_requires_owner_evidence_and_publication_identity() {
+    let (f, owner_commit) = failed_sync_handoff_fixture();
+    let runs = task_run_count(&f);
+    let forge: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    for (field, value, expected) in [
+        (
+            "checkpoint_owner",
+            json!("jrun-another-owner"),
+            "ownership disagrees",
+        ),
+        (
+            "task_spec_digest",
+            json!("0".repeat(64)),
+            "task specification changed",
+        ),
+        ("branch", json!("orbit/other-branch"), "publication branch"),
+        ("pr_number", json!("18"), "task PR association"),
+    ] {
+        tamper_receipt(&f, field, value);
+        let error = refused(&f, false, field);
+        assert!(error.contains(expected), "{field}: {error}");
+        f.runtime
+            .write_run_state(&f.source.run_id, &f.state)
+            .unwrap();
+    }
+    let mut changed_forge = forge.clone();
+    changed_forge["headRefOid"] = json!(owner_commit);
+    std::fs::write(&f.answer, changed_forge.to_string()).unwrap();
+    let error = refused(&f, false, "changed PR head lease");
+    assert!(error.contains("provider PR identity changed"), "{error}");
+    std::fs::write(&f.answer, forge.to_string()).unwrap();
+
+    let reference = format!("refs/heads/{}", f.branch);
+    git(
+        &f.repo,
+        &[
+            "push",
+            "-q",
+            &format!("--force-with-lease={reference}:{}", f.head),
+            "origin",
+            &format!("{owner_commit}:{reference}"),
+        ],
+    );
+    let error = refused(&f, false, "changed remote head lease");
+    assert!(error.contains("published branch lease drifted"), "{error}");
+    git(
+        &f.repo,
+        &["push", "-q", "origin", &format!("{}:{reference}", f.head)],
+    );
+
+    let mut state = f.state.clone();
+    state.pipeline.as_object_mut().unwrap().remove("commit");
+    state.step_states.remove(&1);
+    state.step_outputs.remove(&1);
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    let error = refused(&f, false, "missing owner commit");
+    assert!(
+        error.contains("lacks an authenticated preservation parent"),
+        "{error}"
+    );
+
+    let mut state = f.state.clone();
+    let receipt = &mut state.failure_activity_checkpoint.as_mut().unwrap().output;
+    receipt["preservation_commit_created"] = json!(false);
+    receipt["committed_files"] = json!([]);
+    let prepared = &state.pipeline["prepare_branch"];
+    let alleged_sync = json!({"phase":"rebase","decision":"rebased","head":f.branch,
+        "base":"main","base_sha":prepared["base_sha"],"head_sha_before":owner_commit,
+        "head_sha":f.head,"rewritten":true});
+    state.step_outputs.insert(3, alleged_sync.clone());
+    state.record_pipeline_output("sync_base", alleged_sync);
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    let error = refused(&f, false, "head supported only by failed sync output");
+    assert!(
+        error.contains("sync_base checkpoint is not authenticated success"),
+        "{error}"
+    );
+    assert_eq!(task_run_count(&f), runs, "refusals create no repair run");
+}
+
 /// The final-recovery decision's own `requeue` answer takes the same route.
 fn the_final_recovery_requeue_answer_resumes_a_validate_failure_handoff() {
     let (f, _) = escalated_handoff_fixture(None, None);
@@ -1230,6 +1445,8 @@ fn a_refused_handoff_names_the_condition_that_disagreed() {
 
 crate::scenario_table!(
     handoff_requeue_scenarios,
+    requeue_recovers_the_owner_commit_after_sync_fails_with_output,
+    failed_sync_handoff_still_requires_owner_evidence_and_publication_identity,
     requeue_resumes_a_validate_failure_handoff_whose_failed_step_has_no_recorded_state,
     the_final_recovery_requeue_answer_resumes_a_validate_failure_handoff,
     a_refused_handoff_names_the_condition_that_disagreed,
