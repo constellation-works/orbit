@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use orbit_common::fs::generation::CompatibilityIdentity;
 
 use crate::driver::sqlite::host::schema;
-use crate::driver::sqlite::task_registry;
+use crate::driver::sqlite::task_index;
 
 /// What upgrade admission compares against the live participants: the store
 /// schema, task registry and workspace layout ledgers, and every feature
@@ -20,7 +20,7 @@ pub fn compiled_compatibility() -> CompatibilityIdentity {
     }
     CompatibilityIdentity {
         store_schema: schema::schema_compatibility(),
-        task_registry: task_registry::registry_compatibility(),
+        task_registry: task_index::registry_compatibility(),
         workspace_layout: crate::workflow::layout::layout_compatibility(),
         features,
         feature_floors,

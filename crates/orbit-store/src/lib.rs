@@ -36,7 +36,7 @@ pub mod maintenance {
             read_workspace_config, read_workspace_config_optional, workspace_config_path,
             write_workspace_config,
         };
-        pub use crate::driver::sqlite::task_registry::*;
+        pub use crate::repository::task_index::*;
     }
 }
 
@@ -88,8 +88,8 @@ pub use contracts::{
     SessionLogAppendParams, SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams,
     TaskCompletionByComplexity, TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics,
     TaskLockConflict, TaskLockHolder, TaskReservationReleaseReason, TaskReservationReserveParams,
-    TaskStoreBackend, TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter,
-    V2AuditEventInsertParams, V2AuditEventRow,
+    TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams,
+    V2AuditEventRow,
 };
 pub use driver::file::executor_def_store::ExecutorDefDir;
 pub use driver::file::policy_def_store::PolicyDefDirs;
@@ -130,6 +130,7 @@ pub use repository::review::ReviewRepository;
 pub use repository::script_grant::ScriptGrantRepository;
 pub use repository::session_log::SessionLogRepository;
 pub use repository::skill::SkillRepository;
+pub use repository::task::TaskV2Store;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
 pub use repository::tool::ToolRepository;
 pub use store::{Snapshot, Tx};

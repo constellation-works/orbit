@@ -25,10 +25,8 @@ use super::super::boundary::section_probe::{SECTIONS, SectionCost};
 use crate::Store;
 use crate::compose::workspace_coordinated_backends;
 use crate::contracts::*;
-use crate::driver::sqlite::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
-};
 use crate::repository::task::v2::TaskV2Store;
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 const PARTITION: &str = "orbit-test-123456";
 const MACHINE: &str = "machine-a";
@@ -421,7 +419,7 @@ fn a_listing_during_a_commit_apply_waits_for_the_writer_and_does_not_rebuild_the
             ..FileLockOptions::default()
         })),
     );
-    reader_tasks.list_tasks().expect("the index serves");
+    reader_tasks.list_tasks_bare().expect("the index serves");
 
     let (applying_tx, applying) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
@@ -443,7 +441,7 @@ fn a_listing_during_a_commit_apply_waits_for_the_writer_and_does_not_rebuild_the
     let reader = std::thread::spawn(move || {
         let bundle_lock = format!("/.{task_id}.bundle.lock");
         let (tasks, events) = lock_events_observed(
-            || reader_tasks.list_tasks(),
+            || reader_tasks.list_tasks_bare(),
             move |event| {
                 let message = event.get("message").map(String::as_str);
                 if message == Some(WAITING_FOR_WRITER)
@@ -514,7 +512,7 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
         Arc::clone(&other),
     ));
     let history_before = reader_tasks
-        .get_task_row(&task_id, false)
+        .get_task_row_bare(&task_id, false)
         .expect("read")
         .expect("task")
         .history
@@ -541,7 +539,7 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
         .with_admission(|| Ok(()))
         .expect("an admission passes a held apply");
     let envelopes = reader_tasks
-        .task_envelopes_for_ids(&[task_id.clone()].into())
+        .task_envelopes_for_ids_bare(&[task_id.clone()].into())
         .expect("envelope read");
     assert_eq!(
         envelopes[0].job_run_id.as_deref(),
@@ -556,7 +554,7 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
         let bundle_lock = format!("/.{task_id}.bundle.lock");
         std::thread::spawn(move || {
             let (task, _) = lock_events_observed(
-                || reader_tasks.get_task_row(&task_id, false),
+                || reader_tasks.get_task_row_bare(&task_id, false),
                 move |event| {
                     if event.get("message").map(String::as_str) == Some(WAITING_FOR_LOCK)
                         && event

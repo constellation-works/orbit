@@ -3,15 +3,18 @@ use crate::contracts::TaskListFilter;
 use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
-    pub(crate) fn automation_task_for_key(&self, key: &str) -> Result<Option<Task>, OrbitError> {
+    pub(crate) fn automation_task_for_key_bare(
+        &self,
+        key: &str,
+    ) -> Result<Option<Task>, OrbitError> {
         self.ensure_recovered()?;
         match self.registry.task_action_id(&self.workspace_id, key)? {
-            Some(id) => self.get_task(&id),
+            Some(id) => self.get_task_bare(&id),
             None => Ok(None),
         }
     }
 
-    pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
+    pub fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         self.create_task_with_key(params, None)
             .map(|(task, _)| task)
     }
@@ -23,19 +26,19 @@ impl TaskV2Store {
         self.in_boundary(|| self.create_task_locked(params, key, None))
     }
 
-    pub(crate) fn lookup_desktop_creation(
+    pub fn lookup_desktop_creation(
         &self,
         key: &str,
         digest: &str,
     ) -> Result<Option<Task>, OrbitError> {
         self.in_boundary(
             || match self.registry.task_action(&self.workspace_id, key, digest)? {
-                Some(id) => self.get_task(&id),
+                Some(id) => self.get_task_bare(&id),
                 None => Ok(None),
             },
         )
     }
-    pub(crate) fn lookup_committed_creation_id(
+    pub fn lookup_committed_creation_id(
         &self,
         key: &str,
         digest: &str,
@@ -48,7 +51,7 @@ impl TaskV2Store {
         )
     }
 
-    pub(crate) fn create_desktop_task(
+    pub fn create_desktop_task(
         &self,
         params: TaskCreateParams,
         key: &str,
@@ -257,12 +260,12 @@ impl TaskV2Store {
     }
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
-    pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+    pub(crate) fn list_tasks_bare(&self) -> Result<Vec<Task>, OrbitError> {
         self.ensure_recovered()?;
         self.tasks_for_index_filter(TaskIndexFilter::default())
     }
 
-    pub(crate) fn list_tasks_filtered(
+    pub(crate) fn list_tasks_filtered_bare(
         &self,
         status: Option<TaskStatus>,
         priority: Option<TaskPriority>,
@@ -297,11 +300,11 @@ impl TaskV2Store {
         Ok(tasks)
     }
 
-    pub(crate) fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+    pub(crate) fn list_tasks_by_tags_bare(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         self.ensure_recovered()?;
         let required_tags = normalize_task_tags(tags.to_vec());
         if required_tags.is_empty() {
-            return self.list_tasks();
+            return self.list_tasks_bare();
         }
         // The index answers the tag filter itself; a bundle scan returns
         // every task, so the predicate is re-applied either way.
@@ -317,7 +320,7 @@ impl TaskV2Store {
         Ok(tasks)
     }
 
-    pub(crate) fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
+    pub(crate) fn get_task_bare(&self, id: &str) -> Result<Option<Task>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
         match self.bundle_store.read_bundle(id) {
@@ -340,7 +343,10 @@ impl TaskV2Store {
     /// settled from here: recovering another workspace's interrupted commit
     /// would be a write to a workspace this caller does not own, so an
     /// unreadable owner bundle fails closed as an error instead.
-    pub(crate) fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+    pub(crate) fn registered_task_bare(
+        &self,
+        id: &str,
+    ) -> Result<RegisteredTaskResolution, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         let Some(binding) = self.registry.find_task_binding(id)? else {
             let known = match orbit_types::task::task_id_prefix(id) {
@@ -354,7 +360,7 @@ impl TaskV2Store {
             });
         };
         if binding.partition_id == self.workspace_id {
-            return match self.get_task(id)? {
+            return match self.get_task_bare(id)? {
                 Some(task) => Ok(RegisteredTaskResolution::Resolved(Box::new(task))),
                 None => {
                     self.ensure_registered_bundle_absent(
@@ -376,7 +382,7 @@ impl TaskV2Store {
     /// Read `id`'s status history through its registered owner, with the
     /// authority and fail-closed reads of [`Self::registered_task`]. `None`
     /// when no local workspace holds the task.
-    pub(crate) fn registered_task_history(
+    pub(crate) fn registered_task_history_bare(
         &self,
         id: &str,
     ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
@@ -394,7 +400,10 @@ impl TaskV2Store {
 
     /// The partition the registry binds `id` to, when a workspace on this
     /// machine owns it.
-    pub(crate) fn registered_task_workspace(&self, id: &str) -> Result<Option<String>, OrbitError> {
+    pub(crate) fn registered_task_workspace_bare(
+        &self,
+        id: &str,
+    ) -> Result<Option<String>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         Ok(self
             .registry
@@ -461,17 +470,17 @@ impl TaskV2Store {
         Ok(())
     }
 
-    pub(crate) fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
-        self.search_tasks_filtered(query, &[])
+    pub(crate) fn search_tasks_bare(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
+        self.search_tasks_filtered_bare(query, &[])
     }
 
-    pub(crate) fn search_tasks_filtered(
+    pub(crate) fn search_tasks_filtered_bare(
         &self,
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
         let mut matches = Vec::new();
-        self.search_tasks_visit(query, tags, None, &|_| true, &mut |task| {
+        self.search_tasks_visit_bare(query, tags, None, &|_| true, &mut |task| {
             matches.push(task);
             true
         })?;
@@ -498,7 +507,7 @@ impl TaskV2Store {
     /// the caller does not admit, that lies past the point where `visit`
     /// stopped, or whose search documents hold no match, no longer fails the
     /// search.
-    pub(crate) fn search_tasks_visit(
+    pub(crate) fn search_tasks_visit_bare(
         &self,
         query: &str,
         tags: &[String],
@@ -510,7 +519,7 @@ impl TaskV2Store {
         // Candidate materialization is lightweight; artifact content search
         // below may still open matching text blobs on demand.
         let lowered = query.to_lowercase();
-        let candidates = self.task_candidates(
+        let candidates = self.task_candidates_bare(
             &TaskListFilter {
                 tags: tags.to_vec(),
                 statuses: statuses.map(<[TaskStatus]>::to_vec),
@@ -538,7 +547,7 @@ impl TaskV2Store {
         Ok(())
     }
 
-    pub(crate) fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
+    pub fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.in_boundary(|| {
             if let Some(boundary) = &self.coordination {

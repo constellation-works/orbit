@@ -1,6 +1,6 @@
 //! Export of a workspace's task bundles to a portable tar.zst archive.
 
-use crate::driver::sqlite::task_registry::TaskRegistryStore;
+use crate::repository::task_index::TaskRegistryStore;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::{TASK_ARTIFACT_SCHEMA_VERSION, validate_orb_task_id};

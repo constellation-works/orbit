@@ -59,7 +59,7 @@ long dashboard reads, it once made one PR completion wait 62.5 s, including a 30
 timeout. A changed journal is still written through ordinary sections.
 
 A pass that makes many task reads (a search, the config view's review section) enters one shared
-section around all of them with `TaskStoreBackend::in_read_section`. Its nested reads re-enter
+section around all of them with `TaskV2Store::in_read_section`. Its nested reads re-enter
 that section, so the pass queues, takes the locks and writes its holder record once instead of
 once per read. Inside it, a pass must not wait on another thread's task reads or request an
 admission: either would wait behind the shared lock the pass itself holds.

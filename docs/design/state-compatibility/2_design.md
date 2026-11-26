@@ -178,7 +178,7 @@ cannot prove data compatibility.
 ## 7 The task registry ledger
 
 `tasks/index.sqlite` is a separate SQLite file, so it has a registry of its own
-(`driver/sqlite/task_registry/ledger.rs`), run by the store's ledger engine.
+(`driver/sqlite/task_index/schema/mod.rs`), run by the store's ledger engine.
 The engine takes a `LedgeredDatabase` naming the state component (`task
 registry`), and writes the same `schema_meta` ledger rows and
 `migration.compat` record into that file. Its entries follow the rules of §1

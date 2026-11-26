@@ -209,7 +209,7 @@ fn store_warnings<T>(op: impl FnOnce() -> T) -> (T, u64) {
 
 fn active_ids(store: &TaskV2Store) -> Vec<String> {
     store
-        .list_tasks_filtered(Some(TaskStatus::InProgress), None, None, None, None, None)
+        .list_tasks_filtered_bare(Some(TaskStatus::InProgress), None, None, None, None, None)
         .expect("filtered listing")
         .into_iter()
         .map(|task| task.id)
@@ -236,7 +236,7 @@ fn repeated_reads_while_degraded_attempt_one_rebuild_and_stay_correct() {
         let (tagged, reads) = bundle_reads(|| {
             fixture
                 .store
-                .list_tasks_by_tags(&["v2".to_string()])
+                .list_tasks_by_tags_bare(&["v2".to_string()])
                 .expect("tag listing")
         });
         assert_eq!(tagged.len() as u64, registered);
@@ -245,7 +245,7 @@ fn repeated_reads_while_degraded_attempt_one_rebuild_and_stay_correct() {
         let reopened = fixture.reopened_store();
         let (page, reads) = bundle_reads(|| {
             reopened
-                .query_task_rows(
+                .query_task_rows_bare(
                     &TaskListFilter {
                         statuses: Some(vec![TaskStatus::Done]),
                         ..Default::default()
@@ -363,14 +363,14 @@ fn degraded_reads_still_fail_on_task_field_corruption() {
     assert!(
         fixture
             .store
-            .list_tasks_filtered(Some(TaskStatus::InProgress), None, None, None, None, None)
+            .list_tasks_filtered_bare(Some(TaskStatus::InProgress), None, None, None, None, None)
             .is_err(),
         "a suppressed repair must not hide a corrupt bundle"
     );
     assert!(
         fixture
             .store
-            .task_candidates(&TaskListFilter::default(), 50)
+            .task_candidates_bare(&TaskListFilter::default(), 50)
             .is_err()
     );
 
@@ -392,7 +392,7 @@ fn removing_the_edge_through_a_supported_update_repairs_on_the_next_read() {
     // index row is rewritten, so recovery has to come from the gate.
     let (_, healthy) = fixture
         .store
-        .list_tasks()
+        .list_tasks_bare()
         .expect("list")
         .into_iter()
         .map(|task| task.id)

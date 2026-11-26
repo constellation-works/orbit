@@ -101,8 +101,8 @@ use orbit_types::task::{TaskEnvelopeV2, TaskEventRowV2};
 use serde::{Deserialize, Serialize};
 
 use crate::Store;
-use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
+use crate::repository::task_index::TaskRegistryStore;
 
 /// Lock target for one task-store partition. The advisory lock is its
 /// dot-prefixed sibling, so this name is never itself created or removed.

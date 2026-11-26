@@ -10,15 +10,12 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ORB_TASK_ID_MAX, format_task_id, is_valid_task_id_prefix, parse_task_number, task_id_prefix,
 };
-use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
+use rusqlite::{Connection, params, params_from_iter};
 use std::collections::BTreeSet;
 
-/// `allocator_state` row present while the issued-id high-water mark is
-/// unknown: the registry was recreated over existing task partitions.
-/// Surviving bundles cannot prove which ids deleted tasks or crashed
-/// reservations consumed, so allocation stays refused until an explicit
-/// [`TaskRegistryStore::seed_allocator_start`] removes the row.
-pub(super) const HIGH_WATER_UNKNOWN_AUTHORITY: &str = "high_water_unknown";
+// Allocation stays refused while this row exists; only an explicit
+// [`TaskRegistryStore::seed_allocator_start`] removes it.
+use crate::driver::sqlite::task_index::HIGH_WATER_UNKNOWN_AUTHORITY;
 
 fn high_water_unknown(conn: &Connection) -> Result<bool, OrbitError> {
     conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM allocator_state WHERE authority = ?1)")
@@ -168,44 +165,40 @@ impl TaskRegistryStore {
             return Ok(Vec::new());
         }
         let count = i64::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))?;
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
+        let (next, task_prefix) = self.db.write(|tx| {
+            if workspace_by_id(tx, &partition_id)?.is_none() {
+                return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
+            }
+            if high_water_unknown(tx)? {
+                return Err(OrbitError::Store(
+                    "task id allocation refused: the task registry was recreated over existing task \
+                     partitions, so the highest task id already issued is unknown. Reindex every \
+                     workspace, then set the next id above every id ever issued with `orbit \
+                     workspace init --force --task-id-start <N>` (see the task-migration recovery \
+                     guide)"
+                        .into(),
+                ));
+            }
 
-        if workspace_by_id(&tx, &partition_id)?.is_none() {
-            return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
-        }
-        if high_water_unknown(&tx)? {
-            return Err(OrbitError::Store(
-                "task id allocation refused: the task registry was recreated over existing task \
-                 partitions, so the highest task id already issued is unknown. Reindex every \
-                 workspace, then set the next id above every id ever issued with `orbit \
-                 workspace init --force --task-id-start <N>` (see the task-migration recovery \
-                 guide)"
-                    .into(),
-            ));
-        }
-
-        let (next, task_prefix): (i64, String) = tx
-            .query_row(
-                "SELECT next_number, task_prefix FROM allocator_state WHERE authority = 'local'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+            let (next, task_prefix): (i64, String) = tx
+                .query_row(
+                    "SELECT next_number, task_prefix FROM allocator_state WHERE authority = 'local'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(sqlite_store_error)?;
+            // `next + count - 1` is the last id this reservation hands out, so a run
+            // that would cross the ceiling is refused whole rather than part-served.
+            if next.saturating_add(count - 1) > i64::from(ORB_TASK_ID_MAX) {
+                return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
+            }
+            tx.execute(
+                "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
+                params![next.saturating_add(count), now_string()],
             )
             .map_err(sqlite_store_error)?;
-        // `next + count - 1` is the last id this reservation hands out, so a run
-        // that would cross the ceiling is refused whole rather than part-served.
-        if next.saturating_add(count - 1) > i64::from(ORB_TASK_ID_MAX) {
-            return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
-        }
-        tx.execute(
-            "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
-            params![next.saturating_add(count), now_string()],
-        )
-        .map_err(sqlite_store_error)?;
-        tx.commit().map_err(sqlite_store_error)?;
+            Ok((next, task_prefix))
+        })?;
 
         (next..next.saturating_add(count))
             .map(|number| {
@@ -243,38 +236,34 @@ impl TaskRegistryStore {
             }
         }
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let (current, next): (String, i64) = tx
-            .query_row(
-                "SELECT task_prefix, next_number FROM allocator_state WHERE authority = 'local'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+        self.db.write(|tx| {
+            let (current, next): (String, i64) = tx
+                .query_row(
+                    "SELECT task_prefix, next_number FROM allocator_state WHERE authority = 'local'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(sqlite_store_error)?;
+            if current == task_prefix {
+                            return Ok(());
+            }
+            let task_count: i64 = tx
+                .query_row("SELECT COUNT(*) FROM task_bundle_bindings", [], |row| {
+                    row.get(0)
+                })
+                .map_err(sqlite_store_error)?;
+            if current != "ORB" || next != 0 || task_count != 0 {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task prefix is immutable after allocation begins (registry uses '{current}', host identity requests '{task_prefix}')"
+                )));
+            }
+            tx.execute(
+                "UPDATE allocator_state SET task_prefix = ?1, updated_at = ?2 WHERE authority = 'local'",
+                params![task_prefix, now_string()],
             )
             .map_err(sqlite_store_error)?;
-        if current == task_prefix {
-            tx.commit().map_err(sqlite_store_error)?;
-            return Ok(());
-        }
-        let task_count: i64 = tx
-            .query_row("SELECT COUNT(*) FROM task_bundle_bindings", [], |row| {
-                row.get(0)
-            })
-            .map_err(sqlite_store_error)?;
-        if current != "ORB" || next != 0 || task_count != 0 {
-            return Err(OrbitError::InvalidInput(format!(
-                "task prefix is immutable after allocation begins (registry uses '{current}', host identity requests '{task_prefix}')"
-            )));
-        }
-        tx.execute(
-            "UPDATE allocator_state SET task_prefix = ?1, updated_at = ?2 WHERE authority = 'local'",
-            params![task_prefix, now_string()],
-        )
-        .map_err(sqlite_store_error)?;
-        tx.commit().map_err(sqlite_store_error)
+            Ok(())
+        })
     }
 
     /// The prefix this host mints under. Task authority follows the prefix, so
@@ -374,31 +363,27 @@ impl TaskRegistryStore {
     /// also the operator's assertion of the issued-id high-water mark, so it
     /// lifts the refusal of a registry recreated over existing partitions.
     pub fn seed_allocator_start(&self, start: u32) -> Result<AllocatorSeedOutcome, OrbitError> {
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+        self.db.write(|tx| {
+            let previous = read_allocator_next_number(tx)?;
+            if start < previous {
+                return Err(OrbitError::InvalidInput(format!(
+                    "tasks.id_start {start} would lower the allocator below its current position {previous}; the counter only moves forward"
+                )));
+            }
+            let changed = start != previous;
+            if changed {
+                set_allocator_next_number(tx, start)?;
+            }
+            tx.execute(
+                "DELETE FROM allocator_state WHERE authority = ?1",
+                [HIGH_WATER_UNKNOWN_AUTHORITY],
+            )
             .map_err(sqlite_store_error)?;
-        let previous = read_allocator_next_number(&tx)?;
-        if start < previous {
-            return Err(OrbitError::InvalidInput(format!(
-                "tasks.id_start {start} would lower the allocator below its current position {previous}; the counter only moves forward"
-            )));
-        }
-        let changed = start != previous;
-        if changed {
-            set_allocator_next_number(&tx, start)?;
-        }
-        tx.execute(
-            "DELETE FROM allocator_state WHERE authority = ?1",
-            [HIGH_WATER_UNKNOWN_AUTHORITY],
-        )
-        .map_err(sqlite_store_error)?;
-        tx.commit().map_err(sqlite_store_error)?;
-        Ok(AllocatorSeedOutcome {
-            previous,
-            next: start,
-            changed,
+            Ok(AllocatorSeedOutcome {
+                previous,
+                next: start,
+                changed,
+        })
         })
     }
 
@@ -421,42 +406,36 @@ impl TaskRegistryStore {
             }
         }
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let previous = read_allocator_next_number(&tx)?;
-        if target > previous {
-            set_allocator_next_number(&tx, target)?;
-        }
-        tx.commit().map_err(sqlite_store_error)
+        self.db.write(|tx| {
+            let previous = read_allocator_next_number(tx)?;
+            if target > previous {
+                set_allocator_next_number(tx, target)?;
+            }
+            Ok(())
+        })
     }
 
     /// Advance past a local on-disk task ID. SQLite's integer counter can hold
     /// `u32::MAX + 1`, which marks exhaustion after the final valid ID.
     pub(crate) fn bump_allocator_past_task_number(&self, number: u32) -> Result<(), OrbitError> {
         let target = i64::from(number) + 1;
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let previous: i64 = tx
-            .query_row(
-                "SELECT next_number FROM allocator_state WHERE authority = 'local'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_store_error)?;
-        if target > previous {
-            tx.execute(
-                "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
-                params![target, now_string()],
-            )
-            .map_err(sqlite_store_error)?;
-        }
-        tx.commit().map_err(sqlite_store_error)
+        self.db.write(|tx| {
+            let previous: i64 = tx
+                .query_row(
+                    "SELECT next_number FROM allocator_state WHERE authority = 'local'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_store_error)?;
+            if target > previous {
+                tx.execute(
+                    "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
+                    params![target, now_string()],
+                )
+                .map_err(sqlite_store_error)?;
+            }
+            Ok(())
+        })
     }
 
     /// Restore an allocator value after a larger workflow failed after its
@@ -468,25 +447,22 @@ impl TaskRegistryStore {
         expected_current: u32,
         previous: u32,
     ) -> Result<(), OrbitError> {
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let current = read_allocator_next_number(&tx)?;
-        if current != expected_current {
-            return Err(OrbitError::Store(format!(
-                "cannot roll back failed publication restore allocator: expected {expected_current}, found {current}"
-            )));
-        }
-        if previous > current {
-            return Err(OrbitError::Store(format!(
-                "invalid publication restore allocator rollback from {current} to {previous}"
-            )));
-        }
-        if previous != current {
-            set_allocator_next_number(&tx, previous)?;
-        }
-        tx.commit().map_err(sqlite_store_error)
+        self.db.write(|tx| {
+            let current = read_allocator_next_number(tx)?;
+            if current != expected_current {
+                return Err(OrbitError::Store(format!(
+                    "cannot roll back failed publication restore allocator: expected {expected_current}, found {current}"
+                )));
+            }
+            if previous > current {
+                return Err(OrbitError::Store(format!(
+                    "invalid publication restore allocator rollback from {current} to {previous}"
+                )));
+            }
+            if previous != current {
+                set_allocator_next_number(tx, previous)?;
+            }
+            Ok(())
+        })
     }
 }

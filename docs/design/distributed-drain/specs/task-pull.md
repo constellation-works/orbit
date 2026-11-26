@@ -673,7 +673,7 @@ Artifact origin is supplied separately from artifact bytes and actor attribution
 location must accompany a trusted run binding; changing a legacy/unqualified link does not
 infer a location from a matching local run ID.
 
-The internal API is `TaskStoreBackend::mutate_execution_claim` with non-deserializable
+The internal API is `TaskV2Store::mutate_execution_claim` with non-deserializable
 `ClaimInvocation` and typed `ClaimMutation`. Missing context fails closed. Mutation receipts are
 scoped to immutable claim and mutation ID, compare the complete input, and replay their original
 outcome without changing a newer attempt. `inspect_execution_claims` reports provenance, phase,

@@ -15,7 +15,6 @@ use orbit_types::task::{
     TaskEnvelopeV2, TaskStatus, TaskType, complexity_bucket, complexity_bucket_ord,
     normalize_task_tags,
 };
-use rusqlite::TransactionBehavior;
 use std::collections::{BTreeMap, BTreeSet};
 
 impl TaskRegistryStore {
@@ -49,45 +48,42 @@ impl TaskRegistryStore {
             envelope.validate()?;
         }
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-
-        for envelope in envelopes {
-            let binding = task_bundle_by_id(&tx, &envelope.id)?
-                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, envelope.id.clone()))?;
-            if binding.partition_id != partition_id {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{}' is registered to workspace '{}', not '{}'",
-                    envelope.id, binding.partition_id, partition_id
-                )));
-            }
-        }
-
-        validate_replacement_relations(&tx, &partition_id, envelopes)?;
-
-        for envelope in envelopes {
-            tx.execute(
-                "DELETE FROM task_bundle_tags WHERE task_id = ?1",
-                [&envelope.id],
-            )
-            .map_err(sqlite_store_error)?;
-            tx.execute(
-                "DELETE FROM task_bundle_relations WHERE source_task_id = ?1",
-                [&envelope.id],
-            )
-            .map_err(sqlite_store_error)?;
-        }
-
-        {
-            let mut writer = TaskIndexWriter::prepare(&tx)?;
+        self.db.write(|tx| {
             for envelope in envelopes {
-                writer.write(&partition_id, envelope)?;
+                let binding = task_bundle_by_id(tx, &envelope.id)?.ok_or_else(|| {
+                    OrbitError::not_found(NotFoundKind::Task, envelope.id.clone())
+                })?;
+                if binding.partition_id != partition_id {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "task '{}' is registered to workspace '{}', not '{}'",
+                        envelope.id, binding.partition_id, partition_id
+                    )));
+                }
             }
-        }
-        tx.commit().map_err(sqlite_store_error)
+
+            validate_replacement_relations(tx, &partition_id, envelopes)?;
+
+            for envelope in envelopes {
+                tx.execute(
+                    "DELETE FROM task_bundle_tags WHERE task_id = ?1",
+                    [&envelope.id],
+                )
+                .map_err(sqlite_store_error)?;
+                tx.execute(
+                    "DELETE FROM task_bundle_relations WHERE source_task_id = ?1",
+                    [&envelope.id],
+                )
+                .map_err(sqlite_store_error)?;
+            }
+
+            {
+                let mut writer = TaskIndexWriter::prepare(tx)?;
+                for envelope in envelopes {
+                    writer.write(&partition_id, envelope)?;
+                }
+            }
+            Ok(())
+        })
     }
 
     pub fn replace_workspace_task_indexes(
@@ -100,49 +96,45 @@ impl TaskRegistryStore {
             envelope.validate()?;
         }
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+        self.db.write(|tx| {
+            let registered = task_ids_for_workspace(tx, &partition_id)?;
+            let requested = envelopes
+                .iter()
+                .map(|envelope| envelope.id.clone())
+                .collect::<BTreeSet<_>>();
+            if registered != requested {
+                return Err(OrbitError::Store(format!(
+                    "task index rebuild for workspace '{}' expected registered ids {:?}, got {:?}",
+                    partition_id, registered, requested
+                )));
+            }
+
+            validate_replacement_relations(tx, &partition_id, envelopes)?;
+
+            tx.execute(
+                "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
+                [&partition_id],
+            )
+            .map_err(sqlite_store_error)?;
+            tx.execute(
+                "DELETE FROM task_bundle_relations WHERE workspace_id = ?1",
+                [&partition_id],
+            )
+            .map_err(sqlite_store_error)?;
+            tx.execute(
+                "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
+                [&partition_id],
+            )
             .map_err(sqlite_store_error)?;
 
-        let registered = task_ids_for_workspace(&tx, &partition_id)?;
-        let requested = envelopes
-            .iter()
-            .map(|envelope| envelope.id.clone())
-            .collect::<BTreeSet<_>>();
-        if registered != requested {
-            return Err(OrbitError::Store(format!(
-                "task index rebuild for workspace '{}' expected registered ids {:?}, got {:?}",
-                partition_id, registered, requested
-            )));
-        }
-
-        validate_replacement_relations(&tx, &partition_id, envelopes)?;
-
-        tx.execute(
-            "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
-            [&partition_id],
-        )
-        .map_err(sqlite_store_error)?;
-        tx.execute(
-            "DELETE FROM task_bundle_relations WHERE workspace_id = ?1",
-            [&partition_id],
-        )
-        .map_err(sqlite_store_error)?;
-        tx.execute(
-            "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
-            [&partition_id],
-        )
-        .map_err(sqlite_store_error)?;
-
-        {
-            let mut writer = TaskIndexWriter::prepare(&tx)?;
-            for envelope in envelopes {
-                writer.write(&partition_id, envelope)?;
+            {
+                let mut writer = TaskIndexWriter::prepare(tx)?;
+                for envelope in envelopes {
+                    writer.write(&partition_id, envelope)?;
+                }
             }
-        }
-        tx.commit().map_err(sqlite_store_error)
+            Ok(())
+        })
     }
 
     pub fn indexed_task_versions_for_workspace(

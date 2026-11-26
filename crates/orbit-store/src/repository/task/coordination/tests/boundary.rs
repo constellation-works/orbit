@@ -15,9 +15,7 @@ use tempfile::TempDir;
 
 use super::super::TaskCommitBoundary;
 use crate::Store;
-use crate::driver::sqlite::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
-};
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 const FIRST: &str = "orbit-first-111111";
 const SECOND: &str = "orbit-second-222222";

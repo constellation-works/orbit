@@ -108,9 +108,9 @@ fn store_schema_prefix_goldens() {
 fn task_registry_schema_prefix_goldens() {
     check_schema_prefix_goldens(
         "driver::sqlite::host::schema::tests::ledger::registry::task_registry_schema_prefix_goldens",
-        &crate::driver::sqlite::task_registry::ledger::REGISTRY_DATABASE,
-        crate::driver::sqlite::task_registry::ledger::MIGRATIONS,
-        "src/driver/sqlite/task_registry/tests/registry_schema.golden",
+        &crate::driver::sqlite::task_index::schema::REGISTRY_DATABASE,
+        crate::driver::sqlite::task_index::schema::MIGRATIONS,
+        "src/driver/sqlite/task_index/schema/tests/registry_schema.golden",
     );
 }
 

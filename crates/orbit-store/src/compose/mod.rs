@@ -6,19 +6,19 @@ use std::sync::Arc;
 use crate::Store;
 use crate::contracts::{
     TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend, TaskStoreBackend,
+    TaskReservationStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
 use crate::driver::file::session_log_store::SessionLogDir;
-use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::file_store::FileStore;
 use crate::repository::sqlite_backends::SqliteTaskReservationStoreBackend;
 use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
+use crate::repository::task_index::TaskRegistryStore;
 use crate::workflow::friction::import_workspace_frictions;
 
 pub struct WorkspaceTaskBackends {
-    pub task: Arc<dyn TaskStoreBackend>,
+    pub task: Arc<TaskV2Store>,
     pub document: Arc<dyn TaskDocumentStoreBackend>,
     pub history: Arc<dyn TaskHistoryStoreBackend>,
     pub artifact: Arc<dyn TaskArtifactStoreBackend>,

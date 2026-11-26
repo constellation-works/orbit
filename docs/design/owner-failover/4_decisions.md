@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: Proposed standing rules for owner failover — epoch-fenced authority moves, operator-triggered takeover, cursor mirroring, per-epoch ID ranges, kind-based reconciliation, and execution state that never crosses an epoch.
 tags: [owner-failover, distributed-drain, task-publication, failover, multi-host]
-paths: ["crates/orbit-store/src/driver/sqlite/task_registry/**", "crates/orbit-store/src/workflow/task/**"]
+paths: ["crates/orbit-store/src/driver/sqlite/task_index/**", "crates/orbit-store/src/repository/task_index/**", "crates/orbit-store/src/workflow/task/**"]
 related_features: [distributed-drain, task-publication, state-compatibility]
 related_artifacts: [ORB-20620]
 ---

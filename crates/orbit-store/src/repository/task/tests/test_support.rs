@@ -10,9 +10,7 @@ use orbit_types::task::{
 use tempfile::TempDir;
 
 use super::super::v2_bundle::*;
-use crate::driver::sqlite::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
-};
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();

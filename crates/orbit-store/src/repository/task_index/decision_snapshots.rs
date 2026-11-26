@@ -19,7 +19,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<BTreeMap<String, TaskDecisionSnapshot>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        if self.pre_ledger {
+        if self.db.pre_ledger() {
             return Ok(BTreeMap::new());
         }
         let conn = self.read()?;
@@ -53,7 +53,7 @@ impl TaskRegistryStore {
         request_id: &str,
     ) -> Result<Option<String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        if self.pre_ledger {
+        if self.db.pre_ledger() {
             return Ok(None);
         }
         self.read()?.query_row(
@@ -79,7 +79,7 @@ impl TaskRegistryStore {
         if self.is_read_only()? {
             return Ok(false);
         }
-        self.with_registry_cache_write(|conn| {
+        self.db.cache_write(|conn| {
             let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
                 Ok(tx) => tx,
                 Err(error) if error.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) => return Ok(false),

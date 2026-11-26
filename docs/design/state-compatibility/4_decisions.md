@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, why read-compatible store opens are enforced read-only by SQLite itself, when a compatibility path may be deleted, and why every SQLite schema change goes through one frozen, versioned ledger per database.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-store/src/workflow/layout/marker.rs", "crates/orbit-store/src/driver/sqlite/task_registry/schema.rs"]
+paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-store/src/workflow/layout/marker.rs", "crates/orbit-store/src/driver/sqlite/task_index/schema/open.rs"]
 related_features: [state-compatibility]
 related_artifacts: [ORB-12434, ORB-15732, ORB-15729]
 ---
@@ -167,7 +167,7 @@ applies this rule.
 ## One versioned ledger per SQLite database, with frozen migration bodies
 
 **Recorded:** 2026-10-12 · [ORB-15729]
-**Code anchors:** `crates/orbit-store/src/driver/sqlite/host/schema/mod.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/host/schema/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/host/schema/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_registry/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/host/schema/feature_schema_meta.rs::FeatureMigration`
+**Code anchors:** `crates/orbit-store/src/driver/sqlite/host/schema/mod.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/host/schema/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/host/schema/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_index/schema/mod.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_index/schema/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/host/schema/feature_schema_meta.rs::FeatureMigration`
 
 ### Context
 

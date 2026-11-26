@@ -24,9 +24,9 @@ use crate::driver::file::task_bundle::{
     PENDING_WRITE_FILE_NAME, TaskBundleV2, bundle_lock_target, read_bundle_at,
     recover_pending_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
-use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::fs::path_safety::read_contained_artifact_blob;
 use crate::fs::yaml::write_yaml_atomic_with;
+use crate::repository::task_index::TaskRegistryStore;
 
 /// Version of the publication envelope and tree contract.
 pub const TASK_PUBLICATION_FORMAT_VERSION: u32 = 1;

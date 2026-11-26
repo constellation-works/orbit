@@ -60,7 +60,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use orbit_types::task::TaskEnvelopeV2;
 
 use crate::contracts::{EnvelopeStampRecord, TaskBundleBinding};
-use crate::driver::sqlite::task_registry::TaskIndexProofRow;
+use crate::repository::task_index::TaskIndexProofRow;
 
 /// Filesystem evidence that an envelope file is the one a cached parse came
 /// from. See the module docs for the guarantees this does and does not carry.

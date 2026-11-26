@@ -28,7 +28,7 @@ fn envelope_only_page_reads_no_bundles_and_matches_hydrated_envelope_fields() {
     // under test.
     let (full, full_reads) = bundle_reads(|| {
         store
-            .query_task_rows(
+            .query_task_rows_bare(
                 &TaskListFilter::default(),
                 50,
                 None,
@@ -50,7 +50,7 @@ fn envelope_only_page_reads_no_bundles_and_matches_hydrated_envelope_fields() {
 
     let (compact, compact_reads) = bundle_reads(|| {
         store
-            .query_task_rows(
+            .query_task_rows_bare(
                 &TaskListFilter::default(),
                 50,
                 None,
@@ -116,7 +116,7 @@ fn small_status_lookup_returns_only_its_targets_across_workspaces() {
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let index = store
-        .task_status_index_for(&store.workspace_id, &targets)
+        .task_status_index_for_bare(&store.workspace_id, &targets)
         .expect("workspace status lookup");
     assert_eq!(index.len(), 2, "bounded lookup returned {index:?}");
     assert_eq!(index.get(&ids[0]), Some(&TaskStatus::Backlog));
@@ -127,7 +127,7 @@ fn small_status_lookup_returns_only_its_targets_across_workspaces() {
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let index = store
-        .task_status_index_for(&store.workspace_id, &targets)
+        .task_status_index_for_bare(&store.workspace_id, &targets)
         .expect("cross-workspace status lookup");
     assert_eq!(index, [(foreign, TaskStatus::Done)].into_iter().collect());
 
@@ -141,7 +141,7 @@ fn small_status_lookup_returns_only_its_targets_across_workspaces() {
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let index = store
-        .task_status_index_for(&store.workspace_id, &targets)
+        .task_status_index_for_bare(&store.workspace_id, &targets)
         .expect("missing-target status lookup");
     assert!(!index.contains_key(&missing_own));
     assert!(!index.contains_key("ZZZ-999999"));

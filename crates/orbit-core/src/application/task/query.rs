@@ -711,7 +711,7 @@ impl OrbitRuntime {
     /// Run `op` as one read section of this workspace's task store: the task
     /// reads it makes on this thread share one acquisition of the commit
     /// boundary instead of each taking it
-    /// ([`orbit_store::TaskStoreBackend::in_read_section`]). For a read-only
+    /// ([`orbit_store::TaskV2Store::in_read_section`]). For a read-only
     /// surface whose reads are many and short; `op` must not admit work or
     /// wait on another thread's task reads. A worker reads through its owner
     /// and a replica checkout reads no local tasks, so both run `op` directly.
@@ -797,13 +797,13 @@ impl OrbitRuntime {
 }
 
 type TaskLockFn = fn(
-    &dyn orbit_store::TaskStoreBackend,
+    &orbit_store::TaskV2Store,
     &str,
     &mut dyn FnMut() -> Result<(), OrbitError>,
 ) -> Result<(), OrbitError>;
 
 fn run_under_task_write_lock(
-    tasks: &dyn orbit_store::TaskStoreBackend,
+    tasks: &orbit_store::TaskV2Store,
     id: &str,
     op: &mut dyn FnMut() -> Result<(), OrbitError>,
 ) -> Result<(), OrbitError> {
@@ -811,7 +811,7 @@ fn run_under_task_write_lock(
 }
 
 fn run_under_task_comment_write_lock(
-    tasks: &dyn orbit_store::TaskStoreBackend,
+    tasks: &orbit_store::TaskV2Store,
     id: &str,
     op: &mut dyn FnMut() -> Result<(), OrbitError>,
 ) -> Result<(), OrbitError> {

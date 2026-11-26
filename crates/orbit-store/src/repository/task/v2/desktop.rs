@@ -46,7 +46,7 @@ pub(crate) fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> S
 }
 
 impl TaskV2Store {
-    pub(crate) fn read_desktop_task(
+    pub fn read_desktop_task(
         &self,
         id: &str,
     ) -> Result<crate::contracts::DesktopTaskRead, OrbitError> {
@@ -94,11 +94,11 @@ impl TaskV2Store {
         })
     }
 
-    pub(crate) fn desktop_task_revision(&self, id: &str) -> Result<String, OrbitError> {
+    pub fn desktop_task_revision(&self, id: &str) -> Result<String, OrbitError> {
         self.ensure_recovered()?;
         revision(&self.read_existing_bundle(id)?)
     }
-    pub(crate) fn apply_desktop_task_mutation(
+    pub fn apply_desktop_task_mutation(
         &self,
         id: &str,
         p: &DesktopTaskMutationParams,

@@ -61,7 +61,7 @@ fn a_reader_never_observes_a_transition_between_its_event_and_its_envelope() {
 
         event_appended.wait();
         let task = store
-            .get_task(&id)
+            .get_task_bare(&id)
             .expect("a half-published transition must not read as corruption")
             .expect("task exists");
         assert!(
@@ -75,7 +75,7 @@ fn a_reader_never_observes_a_transition_between_its_event_and_its_envelope() {
         );
 
         let listed = store
-            .list_tasks()
+            .list_tasks_bare()
             .expect("a half-published transition must not fail the listing");
         assert_eq!(listed.len(), 2, "no task may drop out of a listing");
     });

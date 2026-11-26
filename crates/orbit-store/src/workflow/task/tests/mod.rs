@@ -7,10 +7,10 @@ use orbit_types::task::{
 };
 
 use crate::driver::file::task_bundle::TaskBundleV2;
-use crate::driver::sqlite::task_registry::{
+use crate::repository::task::v2_bundle::TaskBundleStoreV2;
+use crate::repository::task_index::{
     TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
 };
-use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 pub(super) mod archive;
 mod git;

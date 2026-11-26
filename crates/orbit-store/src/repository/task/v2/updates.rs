@@ -45,7 +45,7 @@ fn tags_changed_event(
 }
 
 impl TaskV2Store {
-    pub(crate) fn apply_atomic_task_mutation(
+    pub fn apply_atomic_task_mutation(
         &self,
         id: &str,
         fields: &AtomicTaskMutationParams,

@@ -31,10 +31,8 @@ use super::super::selection::after_selection;
 use crate::Store;
 use crate::compose::workspace_coordinated_backends;
 use crate::contracts::*;
-use crate::driver::sqlite::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
-};
 use crate::repository::task::v2::TaskV2Store;
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 const PARTITION: &str = "orbit-test-123456";
 const OTHER_PARTITION: &str = "other-test-654321";
@@ -206,7 +204,7 @@ impl Owner {
     }
 
     fn status(&self, id: &str) -> TaskStatus {
-        self.tasks.get_task(id).unwrap().unwrap().status
+        self.tasks.get_task_bare(id).unwrap().unwrap().status
     }
 }
 

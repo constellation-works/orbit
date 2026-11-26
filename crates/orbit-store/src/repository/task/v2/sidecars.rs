@@ -10,13 +10,13 @@ const PARALLEL_HISTORY_READ_MIN_TASKS: usize = 64;
 const MAX_HISTORY_READ_THREADS: usize = 4;
 
 impl TaskV2Store {
-    pub(crate) fn task_decision_snapshots(
+    pub fn task_decision_snapshots(
         &self,
     ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
         self.registry.task_decision_snapshots(&self.workspace_id)
     }
 
-    pub(crate) fn record_task_decision_snapshots(
+    pub fn record_task_decision_snapshots(
         &self,
         records: &[crate::contracts::TaskDecisionSnapshot],
     ) -> Result<bool, OrbitError> {
@@ -24,10 +24,7 @@ impl TaskV2Store {
             .record_task_decision_snapshots(&self.workspace_id, records)
     }
 
-    pub(crate) fn decision_request_task_id(
-        &self,
-        request_id: &str,
-    ) -> Result<Option<String>, OrbitError> {
+    pub fn decision_request_task_id(&self, request_id: &str) -> Result<Option<String>, OrbitError> {
         self.registry
             .decision_request_task_id(&self.workspace_id, request_id)
     }

@@ -6,7 +6,7 @@ use crate::driver::file::task_bundle::{
     TaskBundleV2, bundle_lock_target, read_bundle_at, replace_bundle_at, write_bundle_at,
     write_bundle_with_artifacts_at,
 };
-use crate::driver::sqlite::task_registry::{
+use crate::repository::task_index::{
     RegisterWorkspaceParams, TaskBundleBinding, TaskRegistryStore, parse_orb_task_number,
 };
 use orbit_common::OrbitError;

@@ -11,11 +11,9 @@
 //! stamps.
 
 use std::collections::HashMap;
-use std::sync::TryLockError;
 
-use orbit_common::fs::io::sqlite_synchronous;
-use orbit_common::storage::sqlite::{pragma, sqlite_error, sqlite_store_error};
-use orbit_common::{OrbitError, StorageLayer};
+use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 
 use super::partition_id::validate_partition_id;
@@ -42,7 +40,7 @@ impl TaskRegistryStore {
     ) -> Result<HashMap<String, EnvelopeStampRecord>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
-        if self.pre_ledger && !has_envelope_stamps(&conn)? {
+        if self.db.pre_ledger() && !has_envelope_stamps(&conn)? {
             return Ok(HashMap::new());
         }
         let mut stmt = conn
@@ -88,28 +86,8 @@ impl TaskRegistryStore {
         if records.is_empty() {
             return Ok(true);
         }
-        self.with_registry_cache_write(|conn| write_envelope_stamps(conn, &partition_id, records))
-    }
-
-    /// No-wait, non-durable writes for derived registry caches. Restore the
-    /// writer's settings before releasing its mutex, including on failure.
-    pub(super) fn with_registry_cache_write(
-        &self,
-        write: impl FnOnce(&mut Connection) -> Result<bool, OrbitError>,
-    ) -> Result<bool, OrbitError> {
-        let mut conn = match self.conn.try_lock() {
-            Ok(conn) => conn,
-            Err(TryLockError::WouldBlock) => return Ok(false),
-            Err(TryLockError::Poisoned(e)) => {
-                return Err(OrbitError::Store(format!("mutex poisoned: {e}")));
-            }
-        };
-        let settings = CacheWriteSettings::apply(&conn)?;
-        let recorded = write(&mut conn);
-        let restored = settings.restore(&conn);
-        let recorded = recorded?;
-        restored?;
-        Ok(recorded)
+        self.db
+            .cache_write(|conn| write_envelope_stamps(conn, &partition_id, records))
     }
 }
 
@@ -153,49 +131,4 @@ fn write_envelope_stamps(
     }
     tx.commit().map_err(sqlite_store_error)?;
     Ok(true)
-}
-
-/// The writer connection's busy timeout and sync level while it records
-/// stamps: no wait for the write lock, and in WAL mode no fsync at commit.
-/// Both are per-connection, so [`Self::restore`] puts them back before the
-/// writer mutex is released: the busy timeout as it was, and the durable
-/// level [`TaskRegistryStore::open`] gives the writer.
-struct CacheWriteSettings {
-    busy_timeout_ms: i64,
-}
-
-impl CacheWriteSettings {
-    fn apply(conn: &Connection) -> Result<Self, OrbitError> {
-        let settings = Self {
-            busy_timeout_ms: pragma::get::<i64>(conn, "busy_timeout").map_err(|e| {
-                sqlite_error(StorageLayer::Store, &e, format!("read busy_timeout: {e}"))
-            })?,
-        };
-        let applied = pragma::set(conn, "busy_timeout", &0)
-            .and_then(|()| pragma::set(conn, "synchronous", &sqlite_synchronous("NORMAL")))
-            .map_err(|e| {
-                sqlite_error(
-                    StorageLayer::Store,
-                    &e,
-                    format!("relax envelope stamp write: {e}"),
-                )
-            });
-        if let Err(error) = applied {
-            let _ = settings.restore(conn);
-            return Err(error);
-        }
-        Ok(settings)
-    }
-
-    fn restore(&self, conn: &Connection) -> Result<(), OrbitError> {
-        pragma::set(conn, "synchronous", &sqlite_synchronous("FULL"))
-            .and_then(|()| pragma::set(conn, "busy_timeout", &self.busy_timeout_ms))
-            .map_err(|e| {
-                sqlite_error(
-                    StorageLayer::Store,
-                    &e,
-                    format!("restore registry writer settings: {e}"),
-                )
-            })
-    }
 }

@@ -35,9 +35,9 @@ use crate::contracts::{
     TaskHistoryUpdateParams,
 };
 use crate::driver::file::sort::sort_by_created_desc_id_asc;
-use crate::driver::sqlite::task_registry::{TaskIndexFilter, TaskRegistryStore};
 use crate::repository::task::coordination::TaskCommitBoundary;
 use crate::repository::task::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDocumentV2};
+use crate::repository::task_index::{TaskIndexFilter, TaskRegistryStore};
 
 mod acceptance;
 mod artifact_paths;
@@ -101,7 +101,7 @@ pub(super) fn stamp_pending_events(
     }
 }
 
-pub(crate) struct TaskV2Store {
+pub struct TaskV2Store {
     registry: TaskRegistryStore,
     bundle_store: TaskBundleStoreV2,
     workspace_id: String,

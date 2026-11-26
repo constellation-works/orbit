@@ -12,7 +12,6 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::claim_section::Owner;
-use crate::contracts::TaskStoreBackend;
 
 const REPORT: &str = "advisory file lock held past its threshold";
 
@@ -154,7 +153,7 @@ fn slow_release_reports_do_not_hold_task_boundaries() {
         return;
     }
     let owner = Owner::open(1);
-    let expected = TaskStoreBackend::list_tasks(owner.tasks.as_ref()).expect("tasks");
+    let expected = owner.tasks.list_tasks().expect("tasks");
     let (locks, _) = stalled_report(&owner, None, || {
         let partition = owner.boundary.partition_dir.join(".task-commit.lock");
         let host = partition
@@ -171,15 +170,16 @@ fn slow_release_reports_do_not_hold_task_boundaries() {
                 .is_some(),
         ];
         if locks == [true, true] {
-            let task = TaskStoreBackend::get_task(owner.tasks.as_ref(), &expected[0].id)
+            let task = owner
+                .tasks
+                .get_task(&expected[0].id)
                 .expect("task")
                 .expect("present");
             assert_eq!(
                 serde_json::to_value(task).unwrap(),
                 serde_json::to_value(&expected[0]).unwrap()
             );
-            let search =
-                TaskStoreBackend::search_tasks(owner.tasks.as_ref(), "Task").expect("search");
+            let search = owner.tasks.search_tasks("Task").expect("search");
             assert_eq!(search.len(), 1);
             assert_eq!(search[0].id, expected[0].id);
         }
@@ -206,7 +206,7 @@ fn task_read_report_latency_probe() {
         return;
     }
     let owner = Owner::open(8);
-    let expected = TaskStoreBackend::list_tasks(owner.tasks.as_ref()).expect("tasks");
+    let expected = owner.tasks.list_tasks().expect("tasks");
     for method in ["task show", "search"] {
         for sample in 0..10 {
             let started = Instant::now();
@@ -214,17 +214,17 @@ fn task_read_report_latency_probe() {
                 stalled_report(&owner, Some(Duration::from_millis(2200)), || {
                     let started = Instant::now();
                     if method == "task show" {
-                        let task =
-                            TaskStoreBackend::get_task(owner.tasks.as_ref(), &expected[0].id)
-                                .expect("read")
-                                .expect("task");
+                        let task = owner
+                            .tasks
+                            .get_task(&expected[0].id)
+                            .expect("read")
+                            .expect("task");
                         assert_eq!(
                             serde_json::to_value(task).unwrap(),
                             serde_json::to_value(&expected[0]).unwrap()
                         );
                     } else {
-                        let tasks = TaskStoreBackend::search_tasks(owner.tasks.as_ref(), "Task")
-                            .expect("search");
+                        let tasks = owner.tasks.search_tasks("Task").expect("search");
                         let ids = tasks
                             .iter()
                             .map(|task| &task.id)

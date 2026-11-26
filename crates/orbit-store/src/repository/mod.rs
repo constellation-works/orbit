@@ -36,4 +36,5 @@ pub(crate) mod session_log;
 pub(crate) mod skill;
 pub(crate) mod sqlite_backends;
 pub(crate) mod task;
+pub(crate) mod task_index;
 pub(crate) mod tool;

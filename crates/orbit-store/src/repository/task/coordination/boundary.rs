@@ -6,8 +6,8 @@ use super::{
     COORDINATION_LOCK_FILE, COORDINATION_LOCK_LABEL, REQUIRED_MARKER_FILE, TaskCommitBoundary,
 };
 use crate::Store;
-use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
+use crate::repository::task_index::TaskRegistryStore;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
     FileLockOptions, atomic_write_text, create_private_dir_all, hold_step,

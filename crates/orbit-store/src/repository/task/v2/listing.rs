@@ -9,7 +9,7 @@ use crate::contracts::{
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
 impl TaskV2Store {
-    pub(crate) fn task_candidates(
+    pub(crate) fn task_candidates_bare(
         &self,
         filter: &TaskListFilter,
         limit: usize,
@@ -35,7 +35,7 @@ impl TaskV2Store {
     /// or after `updated_since`, projected directly from the validated index
     /// snapshot without hydrating every envelope on disk. Falls back to the
     /// strict bundle scan when the index is missing or stale.
-    pub(crate) fn task_lifecycle_stamps_matching(
+    pub(crate) fn task_lifecycle_stamps_matching_bare(
         &self,
         statuses: &[TaskStatus],
         updated_since: chrono::DateTime<Utc>,
@@ -96,10 +96,10 @@ impl TaskV2Store {
     /// Informational read: never enter coordination, settle pending writes,
     /// repair the index or persist freshness proofs. Index rows that disagree
     /// with an envelope no writer holds are read from their bundles and merged
-    /// with the rest of the index ([`Self::indexed_candidates_with_stale`]);
+    /// with the rest of the index (`Self::indexed_candidates_with_stale`);
     /// an incomplete index falls back to the same strict bundle scan, without
     /// publishing a repair.
-    pub(crate) fn observe_task_candidates(
+    pub fn observe_task_candidates(
         &self,
         filter: &TaskListFilter,
         limit: usize,
@@ -225,7 +225,7 @@ impl TaskV2Store {
     /// index alone: ids and creation times, with no envelope read. `None` when
     /// the filter needs envelope predicates or the index cannot serve, and the
     /// caller selects through [`Self::task_candidates`] instead.
-    pub(crate) fn task_candidate_keys(
+    pub(crate) fn task_candidate_keys_bare(
         &self,
         filter: &TaskListFilter,
         limit: usize,
@@ -236,7 +236,7 @@ impl TaskV2Store {
     /// [`Self::task_candidate_keys`] under the observational terms of
     /// [`Self::observe_task_candidates`]: freshness is validated without
     /// persisting proofs and recovery is never entered.
-    pub(crate) fn observe_task_candidate_keys(
+    pub fn observe_task_candidate_keys(
         &self,
         filter: &TaskListFilter,
         limit: usize,
@@ -244,7 +244,7 @@ impl TaskV2Store {
         self.candidate_keys(filter, limit, true)
     }
 
-    pub(crate) fn observe_task_candidate_key_pages(
+    pub fn observe_task_candidate_key_pages(
         &self,
         pages: &[(TaskListFilter, usize)],
     ) -> Result<Option<Vec<Result<TaskCandidateKeys, OrbitError>>>, OrbitError> {
@@ -342,7 +342,7 @@ impl TaskV2Store {
         })
     }
 
-    pub(crate) fn query_task_rows(
+    pub(crate) fn query_task_rows_bare(
         &self,
         filter: &TaskListFilter,
         limit: usize,
@@ -356,7 +356,7 @@ impl TaskV2Store {
             filter.clone()
         };
         let candidates =
-            self.task_candidates(&selection_filter, Self::selection_limit(limit, residual))?;
+            self.task_candidates_bare(&selection_filter, Self::selection_limit(limit, residual))?;
         self.page_from_candidates(&filter, limit, residual, hydration, candidates)
     }
 
@@ -368,7 +368,7 @@ impl TaskV2Store {
     /// page to the strict bundle scan as before. When the index cannot serve
     /// (missing, incomplete or stale), every page takes the unbatched route,
     /// whose first read scans and repairs the index for the rest.
-    pub(crate) fn query_task_row_pages(
+    pub(crate) fn query_task_row_pages_bare(
         &self,
         pages: &[(TaskListFilter, usize)],
         residual: TaskResidualFilter<'_>,
@@ -381,7 +381,9 @@ impl TaskV2Store {
         let Some(unsettled) = self.validate_index()? else {
             return pages
                 .iter()
-                .map(|(filter, limit)| self.query_task_rows(filter, *limit, residual, hydration))
+                .map(|(filter, limit)| {
+                    self.query_task_rows_bare(filter, *limit, residual, hydration)
+                })
                 .collect();
         };
         pages
@@ -591,20 +593,25 @@ impl TaskV2Store {
             &mut status_by_id,
             dependencies,
             |id| {
-                Ok(self.registered_task_history(id).unwrap_or_else(|error| {
-                    orbit_common::tracing::warn!(
-                        task_id = id,
-                        %error,
-                        "archived dependency history unreadable; keeping it a dead end"
-                    );
-                    None
-                }))
+                Ok(self
+                    .registered_task_history_bare(id)
+                    .unwrap_or_else(|error| {
+                        orbit_common::tracing::warn!(
+                            task_id = id,
+                            %error,
+                            "archived dependency history unreadable; keeping it a dead end"
+                        );
+                        None
+                    }))
             },
         );
         Ok(status_by_id)
     }
 
-    pub(crate) fn get_task_row_uncached(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
+    pub(crate) fn get_task_row_uncached_bare(
+        &self,
+        id: &str,
+    ) -> Result<Option<TaskRow>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
         let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
@@ -613,7 +620,7 @@ impl TaskV2Store {
         self.row_from_bundle(bundle).map(Some)
     }
 
-    pub(crate) fn get_task_row(
+    pub(crate) fn get_task_row_bare(
         &self,
         id: &str,
         list_read: bool,
@@ -665,7 +672,7 @@ impl TaskV2Store {
     /// cost follows the ids asked for rather than the workspace. The envelope
     /// file is read directly, not through the envelope cache, which is only
     /// proven current inside a freshness scan.
-    pub(crate) fn task_envelopes_for_ids(
+    pub(crate) fn task_envelopes_for_ids_bare(
         &self,
         ids: &BTreeSet<String>,
     ) -> Result<Vec<TaskEnvelopeV2>, OrbitError> {

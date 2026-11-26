@@ -1,4 +1,8 @@
-//! The task registry's own migration ledger, run by the store ledger engine.
+//! The task registry's own migration ledger, run by the store ledger engine:
+//! [`MIGRATIONS`] is the one ordered step list, and each step's frozen body
+//! is a sibling module (`baseline` v1, `index_task_type` v2,
+//! `decision_snapshots` v3). `open` adopts, migrates and admits a registry
+//! when it opens.
 //!
 //! `tasks/index.sqlite` is a separate file from the store database, so it
 //! carries its own `schema_meta` ledger rows and `migration.compat` record,
@@ -23,21 +27,26 @@
 //!
 //! Ledger-aware binaries ignore `user_version` once a registry has a ledger.
 
+mod baseline;
+mod decision_snapshots;
+mod index_task_type;
+pub(super) mod open;
+
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{pragma, sqlite_error};
 use orbit_common::{StorageLayer, fs::generation::LedgerCompatibility};
 use rusqlite::Connection;
 
-use super::baseline::apply_registry_baseline;
-use super::decision_snapshots_schema::apply_decision_snapshots;
-use super::index_task_type::apply_index_task_type;
+use self::baseline::apply_registry_baseline;
+use self::decision_snapshots::apply_decision_snapshots;
+use self::index_task_type::apply_index_task_type;
 use crate::contracts::{MigrationCompatibility, StateComponent};
 use crate::driver::sqlite::host::ledger::{LedgeredDatabase, Migration};
 
 /// `user_version` while every applied registry entry is `Additive`.
-pub(super) const PRE_LEDGER_COMPATIBLE: u32 = 5;
+const PRE_LEDGER_COMPATIBLE: u32 = 5;
 /// `user_version` once any applied registry entry is not `Additive`.
-pub(super) const PRE_LEDGER_REFUSED: u32 = 7;
+const PRE_LEDGER_REFUSED: u32 = 7;
 
 /// Stable ordered registry of task-registry migrations. Append-only, with
 /// frozen bodies, under the same rules as the store's `ledger::MIGRATIONS`:
@@ -71,7 +80,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
 ];
 
 /// Newest registry ledger version this binary produces.
-pub(super) const SUPPORTED_REGISTRY_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
+const SUPPORTED_REGISTRY_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 /// The task registry as the ledger engine runs it.
 pub(crate) const REGISTRY_DATABASE: LedgeredDatabase = LedgeredDatabase {

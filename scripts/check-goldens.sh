@@ -16,7 +16,7 @@ set -euo pipefail
 #     platform, Bubblewrap/Landlock on Linux)
 #   - crates/orbit-core/tests/sandbox_profile_goldens/ (resolved Linux sandbox)
 #   - store-ledger and task-registry-ledger sqlite_schema prefixes under
-#     orbit-store host/schema/tests/ and task_registry/tests/
+#     orbit-store host/schema/tests/ and task_index/schema/tests/
 #
 # Regeneration env vars (also printed by the failing tests):
 #   ORBIT_UPDATE_STORE_SCHEMA_GOLDENS=1

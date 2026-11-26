@@ -80,7 +80,7 @@ machine a disjoint id range).
 | Archive pack/unpack (tar.zst) | [crates/orbit-store/src/workflow/task/archive.rs](../../../crates/orbit-store/src/workflow/task/archive.rs) | [ORB-00034] |
 | Export / validated import + renumber | [crates/orbit-store/src/workflow/task/export.rs](../../../crates/orbit-store/src/workflow/task/export.rs), [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-00034], [ORB-20828] |
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
-| Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs) | [ORB-00034], [ORB-10721] |
+| Allocator seed/bump + prefix primitives | [crates/orbit-store/src/repository/task_index/allocator.rs](../../../crates/orbit-store/src/repository/task_index/allocator.rs) | [ORB-00034], [ORB-10721] |
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
 | Request-time runtime facades | [crates/orbit-core/src/application/task_bundle/migration.rs](../../../crates/orbit-core/src/application/task_bundle/migration.rs) | [ORB-24534] moved export/import/reindex into application |
 | Open-time allocator seeding | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] introduced seeding; [ORB-24534] kept only open-time code here |
