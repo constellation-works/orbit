@@ -2,7 +2,7 @@
 title: Architecture Restructure — Design
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-25
+updated_date: 2026-11-26
 last_validated: 2026-11-25
 status: Accepted
 feature: architecture-restructure
@@ -17,7 +17,7 @@ related_artifacts: [ORB-28318, ORB-28362, ORB-28364, ORB-27886, ORB-17906, ORB-1
 
 # Architecture Restructure — Design
 
-This doc describes the approved target, not current code: every section says what exists today and what it becomes. Nothing here is implemented. The decisions are in [4_decisions.md](4_decisions.md) and the alternatives in [3_vision.md](3_vision.md); the measurements behind the motivation are in [1_overview.md](1_overview.md). Counts are from `agent-main` at `b81eca83`.
+This doc describes the approved target: every section says what existed when it was written and what it becomes, and the sections whose work has landed carry a **Status** line (§2, §4, §7, §8, §10, §11). The environment, store and runtime-layer phases are built; the surface boundary is partly built; the inside of `orbit-core` and the engine host are not started. A "Today" paragraph is the design-time state, not the current one. The decisions are in [4_decisions.md](4_decisions.md) and the alternatives in [3_vision.md](3_vision.md); the measurements behind the motivation are in [1_overview.md](1_overview.md). Counts are from `agent-main` at `b81eca83`, before the work began.
 
 ## 1. The target in one picture
 
@@ -87,6 +87,8 @@ render(outcome)                                           // render
 - `orbit-core` stops exporting `OrbitRuntime`, `orbit_runtime::*` (`runtime/mod.rs:13`) and the `orbit_store` items (`lib.rs:218–279`). The surfaces have no Cargo edge to `orbit-runtime`, `orbit-store` or `orbit-engine`, so after that a surface that names the runtime does not compile. That is a crate edge, the strongest gate there is (STD-02 §R6), and it replaces `scripts/check-cli-imports.sh` and the missing guard for `orbit-web`.
 - A read model the dashboard needs (`query_task_rows`, `delivery_attention_map`, `list_job_runs`) is a read command of the app that owns the data, and its `Outcome` is the model.
 - The tool path keeps its JSON entry. Its handler match, which the operation registry already has for migrated nouns, calls `app::<noun>::exec`. A surface with typed input calls `exec` directly. Both end in the same function.
+
+**Status.** `Core` (`crates/orbit-core/src/composition/core.rs`) and the chokepoint `app/exec.rs` exist, and the `friction`, `task`, `run` and `plugin` apps are the entry for their surfaces [ORB-28396] to [ORB-28399]. Workspace commands are in progress [ORB-28400]; the other families, the generic tool and MCP entries, the CLI entry and the dashboard are filed and not built [ORB-28401] to [ORB-28407], [ORB-28415]. `orbit-core` still exports `OrbitRuntime`, so a surface can still name it [ORB-28417].
 
 ## 3. Apps: one unit per subject
 
@@ -200,6 +202,8 @@ Where today's 32 modules go. This mapping is by module name; the task that does 
 - **Direction inside the crate.** `base` names none of the others, `stored` names only `base`, `host` only those two, and `run` any of them. `scripts/check-dependency-direction.sh` gets the four as one more declared chain. A crate for each layer would make the same rule a crate edge, which is the stronger gate (STD-02 §R6). It is not proposed: Daniel's direction keeps the runtime in one crate, and the script already holds the same kind of chain inside `orbit-core`.
 - **How it gets there.** `RuntimeKernel` stays while the work is in flight, as a struct that holds the four layers, so the 1,075 places that take `&OrbitRuntime` keep compiling. First the fields are carved into the four structs and the files moved, with no caller changed. Then the role checks are folded into `Role` and the task access. Then, as each subject becomes an app (§3), its flows take the lowest layer they need. When nothing takes the whole kernel, it and the wrapper are deleted, and layers start being built on demand.
 
+**Status.** The four layer structs exist [ORB-28387], laid out as `base/`, `stored/`, `host/` and `run/` under `orbit-runtime/src` [ORB-28388], [ORB-28389]. The role is resolved once in `Base` [ORB-28390] and a worker's task reads are chosen when `Stored` is built [ORB-28391]. Not yet done: the coordination writes and remaining worker-role checks [ORB-28392], [ORB-28393], the nine top-level modules still outside the layers (sorting them is in review [ORB-28394]), and emptying `ApplicationPort` [ORB-28395]. The wrapper, `from_kernel_ref` and on-demand layers wait for [ORB-28455].
+
 ## 5. Calls between apps
 
 **Today.** Eleven modules of `application/` have a declared order, enforced by `scripts/check-dependency-direction.sh`. A lower module that needs behaviour from a higher one owns a trait, and the higher module implements it on `OrbitRuntime`. There are 31 such traits (`TaskJobPort`, `JobDrainPort`, `AutomationReviewPort`, …). Because the implementor is the runtime every function already holds, the guard also has to derive the higher module's method names and forbid them by name.
@@ -269,11 +273,13 @@ orbit-store/src/
 - **The other three databases** stay where they are and take the same shape: `semantic.db` in `orbit-search`, `lease-tokens.db` in `orbit-auth`, and `authority.db`, whose SQL moves from `orbit-runtime` into `orbit-store` as a third SQLite driver. The migration ledger moves down to `orbit-common`'s SQLite helpers so `orbit-search` and `orbit-auth` can use it without depending on `orbit-store`. After that there is one migration mechanism, and `rusqlite` is a dependency of `orbit-store`, `orbit-search`, `orbit-auth` and `orbit-common` only: `orbit-core` and `orbit-runtime` drop it, and Cargo enforces that.
 - **Names.** Modules become singular (`contracts/` → `contract/`, `notice_store.rs` → `repository/notice.rs`). Existing tables keep their names (decision 7).
 
+**Status.** Built. `orbit-store` has `contract/`, one repository per record under `repository/`, `driver/sqlite/{host,task_index,authority}/` each with its schema, `boundary/`, `migrate/` and the `Store::read` and `Store::write` facade [ORB-28372] to [ORB-28380], [ORB-28381], [ORB-28384]. The backend traits are deleted and the store is closed [ORB-28386]. One migration ledger serves the SQLite files [ORB-28385], and the store is opened in composition only (Clippy disallows `Store::open` elsewhere). The task commit boundary is one module [ORB-28382] and the ownership of the task-index coordination methods was decided [ORB-28518]. Follow-ups: the writer-lock ratchet was restored after the schema split [ORB-28488], and the routine scheduler's store open goes through composition [ORB-28670]. Not yet true: `orbit-core` and three surface crates still list `rusqlite`, which the end state drops.
+
 ## 8. Environment
 
 **At design time.** `crates/orbit-common/src/env_vars.rs` declared 136 names with meaning, default and matching flag. A golden test generated the reference in `docs/CONFIG.md` for STD-01 §R25. Across 12 crates, 232 `env::var` calls and 15 `env::vars` calls read directly from the process. Of the single-variable reads, 144 used a declared constant and the others used a local constant or computed name.
 
-**Implemented for the runtime, engine, tools and store.** Resolved configuration carries the startup snapshot into the runtime's base layer. Root discovery, engine launcher and Git policy, tool dispatch, and the publication Git runner receive the snapshot or values resolved from it. The architecture ratchet held the remaining direct process-environment calls while conversion was in flight; the Clippy gate below now enforces the production boundary.
+**Implemented** [ORB-28365] to [ORB-28371]. Resolved configuration carries the startup snapshot into the runtime's base layer. Root discovery, engine launcher and Git policy, tool dispatch, and the publication Git runner receive the snapshot or values resolved from it. The architecture ratchet held the remaining direct process-environment calls while conversion was in flight; the Clippy gate below now enforces the production boundary [ORB-28371]. Follow-ups: calls that fetch the whole environment instead of receiving a value are ratcheted [ORB-28646], and the CLI entry resolves the root, worker invocation and actor once [ORB-28647].
 
 **Proposed.**
 
@@ -311,20 +317,24 @@ Each rule gets the strongest mechanism available (STD-02 §R6).
 
 **Ratchets while the work is in flight.** The end-state gates cannot be switched on until their count is zero, and Orbit lands many unrelated changes a day. So the first task adds one CI check with a checked-in baseline, the pattern `scripts/dashboard-css-literals-baseline.json` already uses: a count may fall, and the baseline is lowered in the same change; it may not rise. The counts: files with an `impl OrbitRuntime` block; files in each surface crate that name `OrbitRuntime`; `RuntimeHost` methods; `ApplicationPort` methods; `*Backend` traits; `Store::open` calls outside composition; writer locks outside `Store::write`; calls of the global environment accessors; `.process_env()` method calls; places that read the worker invocation or the coordination owner; top-level modules of `orbit-runtime` outside the four layers.
 
+**Status of the gates.** The ratchet check and its baseline are in place (`scripts/check-architecture-ratchet.py`, `scripts/architecture-ratchet-baseline.json`) [ORB-28362], and the Clippy ban on environment reads is a gate [ORB-28371]. The other gates in the table wait for their phase.
+
 ## 11. Order of work
 
-Each task lands on its own, leaves every check green and changes no behaviour. The work is filed as 95 tasks in eight phases, each tagged `architecture-restructure` and `architecture-restructure:phase-N`. The decided order (ratchets, environment, store, the surface boundary, the inside of core, the engine host) is the order in which the gates close. The tasks' dependencies say what must finish first. Two tasks with no dependency between them can still declare the same file (see the one-writer rule below).
+Each task lands on its own, leaves every check green and changes no behaviour. The work was filed as 95 tasks in eight phases, each tagged `architecture-restructure` and `architecture-restructure:phase-N`; follow-ups filed while building are listed under the table. Phases 0, 1 and 2 are done, phase 3 is nearly done, phase 4 is in progress and phases 5 to 7 are not started. The decided order (ratchets, environment, store, the surface boundary, the inside of core, the engine host) is the order in which the gates close. The tasks' dependencies say what must finish first. Two tasks with no dependency between them can still declare the same file (see the one-writer rule below).
 
-| Phase | What | Tasks | Waits for |
-|---|---|---|---|
-| 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing |
-| 1 | Environment | ORB-28365 to ORB-28371 | ORB-28365 to ORB-28370 wait for the ratchet check (ORB-28362); ORB-28367 to ORB-28370 also wait for ORB-28365 and ORB-28366; ORB-28371 waits for ORB-28367 to ORB-28370 |
-| 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except ORB-28373 (no dependencies) and ORB-28384 (waits for ORB-28373 only) |
-| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 |
-| 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check, the app table and ORB-28365 (ORB-28416 waits for it) |
-| 5 | Inside core | ORB-28418 to ORB-28454 | phases 2, 3 and 4 complete |
-| 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except ORB-28408 (no dependencies) |
-| 7 | Finish | ORB-28455 to ORB-28457 | phases 5 and 6 |
+| Phase | What | Tasks | Waits for | State |
+|---|---|---|---|---|
+| 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing | done |
+| 1 | Environment | ORB-28365 to ORB-28371 | ORB-28365 to ORB-28370 wait for the ratchet check (ORB-28362); ORB-28367 to ORB-28370 also wait for ORB-28365 and ORB-28366; ORB-28371 waits for ORB-28367 to ORB-28370 | done |
+| 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except ORB-28373 (no dependencies) and ORB-28384 (waits for ORB-28373 only) | done |
+| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 | ORB-28387 to ORB-28391 done; ORB-28394 in review; ORB-28392, ORB-28393 and ORB-28395 backlog |
+| 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check, the app table and ORB-28365 (ORB-28416 waits for it) | ORB-28396 to ORB-28399 done; ORB-28400 in progress; the rest backlog |
+| 5 | Inside core | ORB-28418 to ORB-28454 | phases 2, 3 and 4 complete | proposed |
+| 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except ORB-28408 (no dependencies) | proposed |
+| 7 | Finish | ORB-28455 to ORB-28457 | phases 5 and 6 | proposed |
+
+Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet after the schema split; [ORB-28518] decided who owns the task-index coordination methods; [ORB-28542] routed task coordination through the task commit boundary; [ORB-28646] ratcheted calls that fetch the whole environment; [ORB-28647] resolves the root, worker invocation and actor once in the CLI entry (done); [ORB-28670] routed the routine scheduler's store open through composition; [ORB-28616] will route claim handoff and consent commands via `exec` (phase 4, backlog); [ORB-28962] will expose run metrics through `app::run` and [ORB-28963] will move core metrics into it (phase 5, proposed).
 
 0. **Ratchets.** The ratchet check and its baseline land [ORB-28362]. `docs/architecture/orbit-core.md` gets the table of which module becomes which app or subsystem unit, and the declared order [ORB-28364].
 1. **Environment.** `Env::capture`, the local constants folded into `env_vars.rs`, readers converted by crate tier, then the Clippy ban.
@@ -367,15 +377,46 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 ## Task References
 
 - [ORB-28318] — carried this proposal to Daniel's approval.
-- [ORB-28362] — adds the ratchet check; the first of the 95 filed tasks (`orbit task list --tag architecture-restructure`).
-- [ORB-28364] — writes the app and unit table.
-- [ORB-28387] — carves the kernel into the four layers.
-- [ORB-28396] — adds `Core`, `exec` and the first app.
-- [ORB-28417] — closes `orbit-core`'s exports.
-- [ORB-28450] — ends pass A: dissolves `contracts` and deletes `application/`.
-- [ORB-28451] — starts pass B: narrows flows to `&Base`.
-- [ORB-28454] — ends pass B: narrows the remaining flows to `&Run`.
-- [ORB-28455] — deletes the wrapper and builds layers on demand.
+- [ORB-28362] — added the ratchet check and its baseline; the first of the filed tasks (`orbit task list --tag architecture-restructure`).
+- [ORB-28364] — wrote the app and unit table.
+- [ORB-28365] — added the one environment capture in `main`.
+- [ORB-28371] — banned environment reads outside the capture with Clippy; the last of the environment tasks.
+- [ORB-28372] — added `Store::read` and `Store::write`, the first store task.
+- [ORB-28380] — converted the job run record, the last of the record conversions.
+- [ORB-28381] — gave the task index its own SQLite driver.
+- [ORB-28382] — named the task commit boundary as one module.
+- [ORB-28384] — moved `authority.db` under `orbit-store`.
+- [ORB-28385] — shared one migration ledger across the SQLite files.
+- [ORB-28386] — deleted the store's backend traits and closed it.
+- [ORB-28387] — carved the kernel into the four layer structs.
+- [ORB-28388] — laid out the base and stored layers of `orbit-runtime`.
+- [ORB-28389] — laid out its host and run layers.
+- [ORB-28390] — resolved the process role once in `Base`.
+- [ORB-28391] — chose a worker's task reads when `Stored` is built.
+- [ORB-28392] — will choose coordination writes from the role.
+- [ORB-28393] — will fold the remaining worker-role checks.
+- [ORB-28394] — is sorting the runtime modules named for a subject.
+- [ORB-28395] — will empty the kernel's `ApplicationPort`.
+- [ORB-28396] — added `Core`, `exec` and the friction app.
+- [ORB-28399] — routed plugin commands through `app::plugin`, the last of the four apps built.
+- [ORB-28400] — is routing workspace commands through `app::workspace`.
+- [ORB-28401] — will route config, skill and audit commands through `exec`.
+- [ORB-28407] — will remove authorization and audit from the CLI entry.
+- [ORB-28415] — will give the dashboard a `Core` instead of the runtime.
+- [ORB-28417] — will close `orbit-core`'s exports to `app`, `Core` and `Error`.
+- [ORB-28450] — will end pass A by dissolving `contracts` and deleting `application/`.
+- [ORB-28451] — will start pass B by narrowing flows to `&Base`.
+- [ORB-28454] — will end pass B by narrowing the remaining flows to `&Run`.
+- [ORB-28455] — will delete the wrapper and build layers on demand.
+- [ORB-28488] — restored the writer-lock ratchet after the schema split.
+- [ORB-28518] — decided who owns the task-index coordination methods.
+- [ORB-28542] — routed task coordination through the task commit boundary.
+- [ORB-28616] — will route claim handoff and consent commands via `exec`.
+- [ORB-28646] — ratcheted calls that fetch the whole environment instead of receiving a value.
+- [ORB-28647] — resolved the root, worker invocation and actor once in the CLI entry.
+- [ORB-28670] — routed the routine scheduler's store open through composition.
+- [ORB-28962] — will expose run metrics through `app::run`.
+- [ORB-28963] — will move core metrics into the run app.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.

@@ -153,11 +153,12 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (9)
+### Building (10)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
+| [Architecture Restructure](./design/architecture-restructure/1_overview.md) | Finish routing surface commands through exec: ORB-28400, then ORB-28401 to ORB-28407 | claude |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
@@ -167,11 +168,10 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./design/standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (9)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Architecture Restructure](./design/architecture-restructure/1_overview.md) | Approve and land the ratchet check [ORB-28362] and the app table [ORB-28364] | claude |
 | [Claude Code Mod](./design/claude-code-mod/1_scope.md) | ORB-28914 (address key) and ORB-28915 (permalinks) wait for approval to build | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
