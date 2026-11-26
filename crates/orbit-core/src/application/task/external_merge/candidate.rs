@@ -19,14 +19,15 @@ use crate::application::task::TaskJobPort;
 use crate::application::task::pr_closure::unsettled_claim_reason;
 use crate::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest};
 
-use super::model::SETTLEABLE_STATUSES;
+use super::model::{BacklogDelivery, SETTLEABLE_STATUSES};
+use super::persistence::OwnerPublicationRevision;
 
 /// A task that may settle, with the PRs that may have delivered it.
 pub(super) struct Candidate {
     pub(super) task: Task,
     /// Accepted handoff and released claim PRs, each with its landing branch.
     follower_prs: BTreeMap<u64, String>,
-    requeued_handoff: Option<u64>,
+    pub(super) backlog_delivery: Option<BacklogDelivery>,
     /// The task's handed-off claim whose landing stopped or whose completion
     /// authority was revoked. Only its candidate PR settles it with the claim.
     pub(super) revoked: Option<RevokedHandoff>,
@@ -70,7 +71,10 @@ impl Candidate {
         if let Some(revoked) = &self.revoked {
             return vec![revoked.pull_request];
         }
-        if let Some(number) = self.requeued_handoff {
+        if let Some(
+            BacklogDelivery::FailureHandoff(number) | BacklogDelivery::OwnerPublication(number),
+        ) = self.backlog_delivery
+        {
             return vec![number];
         }
         let mut numbers = self
@@ -91,6 +95,7 @@ impl Candidate {
 /// The merged pull request that delivered a candidate.
 pub(super) struct DeliveryLanding {
     pub(super) merged: MergedPullRequest,
+    pub(super) owner_revision: Option<OwnerPublicationRevision>,
     /// The stopped publication's head, when the pull request merged at a
     /// verified base refresh of it rather than at that head.
     pub(super) refreshed_from: Option<String>,
@@ -100,6 +105,7 @@ impl DeliveryLanding {
     fn exact(merged: MergedPullRequest) -> Self {
         Self {
             merged,
+            owner_revision: None,
             refreshed_from: None,
         }
     }
@@ -221,7 +227,7 @@ impl OrbitRuntime {
         };
         let candidate = Candidate {
             follower_prs,
-            requeued_handoff: None,
+            backlog_delivery: None,
             task,
             revoked: handoff,
         };
@@ -320,33 +326,12 @@ impl OrbitRuntime {
     ) -> Result<Candidate, String> {
         if !SETTLEABLE_STATUSES.contains(&task.status) {
             return Err(format!(
-                "it is '{}'; only a blocked, in-progress, review or preserved failure-handoff backlog task settles",
+                "it is '{}'; only a blocked, in-progress, review or backlog task with a preserved delivery settles",
                 task.status
             ));
         }
-        let requeued_handoff = if task.status == TaskStatus::Backlog {
-            let receipt = self.handoff_receipt(&task).map_err(|e| e.to_string())?;
-            match receipt {
-                Some(receipt) => {
-                    let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
-                    if super::super::requeue::current_run_requeue_stands(&task, &history)
-                        && self
-                            .task_spec_for_settlement(&task)
-                            .map_err(|error| error.to_string())?
-                            .spec_digest_matches(&receipt.task_spec_digest)
-                    {
-                        Some(
-                            receipt
-                                .pull_request
-                                .parse::<u64>()
-                                .map_err(|e| e.to_string())?,
-                        )
-                    } else {
-                        return Err("backlog task has no preserved failure-handoff requeue".into());
-                    }
-                }
-                _ => return Err("backlog task has no preserved failure-handoff requeue".into()),
-            }
+        let backlog_delivery = if task.status == TaskStatus::Backlog {
+            Some(self.backlog_delivery(&task).map_err(|e| e.to_string())?)
         } else {
             None
         };
@@ -360,6 +345,11 @@ impl OrbitRuntime {
             );
         }
         let claims = self.settlement_claims(claims_cache);
+        if matches!(backlog_delivery, Some(BacklogDelivery::OwnerPublication(_)))
+            && let Some(claim) = Self::unsettled_task_claim_with_claims(&task, claims)?
+        {
+            return Err(unsettled_claim_reason(&claim));
+        }
         let revoked = self.revoked_handoff_with_claims(&task, claims)?;
         if let Some(owed) = self.owed_settlement_hold(&task.id) {
             return Err(owed);
@@ -376,7 +366,7 @@ impl OrbitRuntime {
         };
         let candidate = Candidate {
             follower_prs,
-            requeued_handoff,
+            backlog_delivery,
             task,
             revoked,
         };
@@ -384,16 +374,6 @@ impl OrbitRuntime {
             return Err("Orbit recorded no delivery pull request for it".to_string());
         }
         Ok(candidate)
-    }
-
-    /// The task whose description and acceptance criteria the settlement
-    /// digest compares. A backlog candidate may be the envelope only; the
-    /// body is read when a preserved handoff receipt needs the digest.
-    fn task_spec_for_settlement(&self, task: &Task) -> Result<Task, OrbitError> {
-        Ok(self
-            .get_listed_task_row(&task.id)?
-            .map(|row| row.task)
-            .unwrap_or_else(|| task.clone()))
     }
 
     /// The task's unsettled claim as a stopped or revoked handoff that may
@@ -636,8 +616,30 @@ impl OrbitRuntime {
         if matching.peek().is_none() {
             return Ok(None);
         }
+        if matches!(
+            candidate.backlog_delivery,
+            Some(BacklogDelivery::OwnerPublication(_))
+        ) {
+            let task = self.get_task(&task.id)?;
+            let Some(owner_revision) = self.owner_publication_revision(&task)? else {
+                return Ok(None);
+            };
+            let proof = self.stopped_publication_identity(&task)?;
+            return Ok(matching
+                .find(|merged| {
+                    proof
+                        .as_ref()
+                        .is_some_and(|proof| proof.matches_exact_merge(merged))
+                })
+                .cloned()
+                .map(|merged| DeliveryLanding {
+                    merged,
+                    owner_revision: Some(owner_revision),
+                    refreshed_from: None,
+                }));
+        }
         if candidate.revoked.is_none()
-            && candidate.requeued_handoff.is_none()
+            && candidate.backlog_delivery.is_none()
             && let Some(proof) = self.stopped_publication_identity(task)?
         {
             let number = proof.number.parse::<u64>().map_err(|_| {
@@ -671,6 +673,7 @@ impl OrbitRuntime {
             ) {
                 Ok(()) => Ok(Some(DeliveryLanding {
                     merged: merged.clone(),
+                    owner_revision: None,
                     refreshed_from: Some(proof.head),
                 })),
                 Err(error) => Err(super::refusal::refused(
@@ -722,7 +725,7 @@ impl OrbitRuntime {
         base_branch: Option<&str>,
         head_sha: &str,
     ) -> Result<Option<String>, OrbitError> {
-        if candidate.revoked.is_some() || candidate.requeued_handoff.is_some() {
+        if candidate.revoked.is_some() || candidate.backlog_delivery.is_some() {
             return Ok(None);
         }
         let Some(proof) = self.stopped_publication_identity(&candidate.task)? else {

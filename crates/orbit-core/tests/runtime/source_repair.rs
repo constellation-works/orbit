@@ -48,6 +48,8 @@ mod preflight;
 mod publication;
 #[path = "source_repair/published_owner.rs"]
 mod published_owner;
+#[path = "source_repair/published_settlement.rs"]
+mod published_settlement;
 #[path = "source_repair/reconciliation.rs"]
 mod reconciliation;
 #[path = "source_repair/repair_reservations.rs"]

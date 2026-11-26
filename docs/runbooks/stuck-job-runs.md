@@ -2283,7 +2283,7 @@ naming `auto_drain.auto_fix`. An unknown task gets `404`.
 
 When you merge a task's delivery pull request on GitHub yourself, no run observes
 the merge, so the task stays `blocked`, `in-progress`, `review`, or `backlog`
-after a failure-handoff requeue. Orbit settles it
+after a requeue preserved its delivery. Orbit settles it
 to `done` from the merge. Each pass of a running owner drain (`orbit run auto`) does
 this after it reconciles stale runs, matching against the 100 most recently merged
 pull requests. To settle a task now, or one whose pull request merged before
@@ -2297,8 +2297,10 @@ orbit task settle-merged             # match every candidate against the recent 
 A task settles only when all of these hold:
 
 - it is `blocked`, `in-progress` or `review`, or `backlog` after a requeue preserved
-  the current failure-handoff candidate. In that backlog case only the handoff
-  receipt's pull request can settle it, and the task specification must still match;
+  the current failure-handoff candidate or owner publication. For a backlog task,
+  the specification must still match and only the preserved pull request can settle
+  it. A preserved owner publication must merge at its exact published head into the
+  original landing branch, with no later discard or successor delivery.
 - no run or unsettled execution claim of its own is live, and no live `run auto`
   leaf carries it. That run lands or fails the task itself. A handed-off claim
   whose completion authority an operator revoked is the one exception (see below);
@@ -2313,10 +2315,11 @@ A task settles only when all of these hold:
   that branch. Other delivery pull requests must merge into the base branch of
   the task's delivery run, else the workspace base branch. A local delivery held
   after it published its pull request is pinned to that publication's number,
-  branch and head. The pull request may also have merged after it was brought up to
-  its base (such as with `gh pr update-branch`), when every commit added after the
-  published head is a clean merge of commits already on the target branch before
-  this merge. The landing note then names the published head and the merged head.
+  branch and head. For a task outside backlog, the pull request may also have
+  merged after it was brought up to its base (such as with `gh pr update-branch`),
+  when every commit added after the published head is a clean merge of commits
+  already on the target branch before this merge. The landing note then names
+  the published head and the merged head.
   A merged head carrying any other commit does not settle the task;
 - it owes no post-deploy acceptance criterion still awaiting an operator's met
   record. Merging the pull request does not discharge that measurement.

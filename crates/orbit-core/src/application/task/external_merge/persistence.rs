@@ -6,11 +6,13 @@ use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_miss
 use crate::OrbitRuntime;
 use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
 use crate::application::task::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
-use crate::application::task::{TaskRecordUpdateParams, TaskRecords, TaskWorkspaceAutoPort};
+use crate::application::task::{
+    TaskJobPort, TaskRecordUpdateParams, TaskRecords, TaskWorkspaceAutoPort,
+};
 use crate::runtime::task_pr_forge::MergedPullRequest;
 
 use super::candidate::{Candidate, DeliveryLanding, RevokedHandoff};
-use super::model::ExternalMergeSettlement;
+use super::model::{BacklogDelivery, ExternalMergeSettlement};
 use super::{refusal, rescued};
 
 /// How the task landed (`pull request #N, merged into B at T as C outside Orbit`),
@@ -57,10 +59,42 @@ pub(super) enum SettlementNote<'a> {
     Rescued(&'a rescued::RecoveredMerge),
     /// A recorded delivery's merge, with the published head when the pull
     /// request merged at a verified base refresh of it.
-    Landing { refreshed_from: Option<&'a str> },
+    Landing {
+        refreshed_from: Option<&'a str>,
+        backlog_delivery: Option<BacklogDelivery>,
+        owner_revision: Option<&'a OwnerPublicationRevision>,
+    },
+}
+
+/// The mutable records used to authenticate an exact owner publication.
+/// Comparing them under the write lock needs no Git or forge call.
+#[derive(PartialEq, Eq)]
+pub(super) struct OwnerPublicationRevision {
+    run: blake3::Hash,
+    history: String,
 }
 
 impl OrbitRuntime {
+    pub(super) fn owner_publication_revision(
+        &self,
+        task: &Task,
+    ) -> Result<Option<OwnerPublicationRevision>, OrbitError> {
+        let Some(run) = self.current_publication_run_digest(task)? else {
+            return Ok(None);
+        };
+        let history = match self.stores().task_history().task_history_stamp(&task.id)? {
+            Some(stamp) => stamp,
+            None => {
+                let history =
+                    serde_json::to_vec(&self.get_task_history(&task.id)?).map_err(|error| {
+                        OrbitError::Store(format!("could not encode task history: {error}"))
+                    })?;
+                blake3::hash(&history).to_hex().to_string()
+            }
+        };
+        Ok(Some(OwnerPublicationRevision { run, history }))
+    }
+
     /// Settle `candidate` from `landing`, through its revoked handoff's claim
     /// when it has one.
     pub(super) fn write_settlement(
@@ -90,6 +124,8 @@ impl OrbitRuntime {
                 actor,
                 SettlementNote::Landing {
                     refreshed_from: landing.refreshed_from.as_deref(),
+                    backlog_delivery: candidate.backlog_delivery,
+                    owner_revision: landing.owner_revision.as_ref(),
                 },
             ),
         }
@@ -188,14 +224,18 @@ impl OrbitRuntime {
         let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
         let id = observed.id.as_str();
         let number = landing.pull.number;
-        let (landed, note, rescue) = match source {
+        let (landed, note, rescue, backlog_delivery, owner_revision) = match source {
             SettlementNote::Rescued(rescue) => {
                 let (landed, note) = rescue.landing_note(landing);
-                (landed, note, Some(rescue))
+                (landed, note, Some(rescue), None, None)
             }
-            SettlementNote::Landing { refreshed_from } => {
+            SettlementNote::Landing {
+                refreshed_from,
+                backlog_delivery,
+                owner_revision,
+            } => {
                 let (landed, note) = landing_note(landing, refreshed_from);
-                (landed, note, None)
+                (landed, note, None, backlog_delivery, owner_revision)
             }
         };
         let task = self.with_task_write_locked(id, || {
@@ -209,8 +249,14 @@ impl OrbitRuntime {
                     ),
                 ));
             }
-            if task.status != TaskStatus::Backlog && task.updated_at != observed.updated_at {
-                return Err(refusal::refused(id, "the task changed after the merge was matched"));
+            if (task.status != TaskStatus::Backlog
+                || matches!(backlog_delivery, Some(BacklogDelivery::OwnerPublication(_))))
+                && task.updated_at != observed.updated_at
+            {
+                return Err(refusal::refused(
+                    id,
+                    "the task changed after the merge was matched",
+                ));
             }
             if let Some(live) = self.live_task_delivery(&task) {
                 return Err(refusal::refused(id, &live));
@@ -218,14 +264,28 @@ impl OrbitRuntime {
             if task.status == TaskStatus::Backlog {
                 // Recheck the narrow backlog exception under the write lock:
                 // a later rewrite, discard or run binding must invalidate it.
-                let current = self.settlement_candidate(task.clone(), &self.live_leaf_task_ids()?)
+                let current = self
+                    .settlement_candidate(task.clone(), &self.live_leaf_task_ids()?)
                     .map_err(|reason| refusal::refused(id, &reason))?;
-                if !current.pr_numbers().contains(&number)
-                    || self.delivery_target_branch(&task) != landing.base_branch
+                let matches_landing = match current.backlog_delivery {
+                    Some(BacklogDelivery::OwnerPublication(_)) => {
+                        owner_revision.is_some()
+                            && self.owner_publication_revision(&task)?.as_ref() == owner_revision
+                    }
+                    Some(BacklogDelivery::FailureHandoff(_)) => {
+                        self.delivery_target_branch(&task) == landing.base_branch
+                    }
+                    None => false,
+                };
+                if current.backlog_delivery != backlog_delivery
+                    || task.job_run_id != observed.job_run_id
+                    || task.job_run_machine != observed.job_run_machine
+                    || !current.pr_numbers().contains(&number)
+                    || !matches_landing
                 {
                     return Err(refusal::refused(
                         id,
-                        "the preserved failure-handoff delivery changed after the merge was matched",
+                        "the preserved delivery changed after the merge was matched",
                     ));
                 }
             }

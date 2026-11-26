@@ -50,13 +50,14 @@ impl OrbitRuntime {
         let Some(source) = self.get_job_run_backend(run_id)? else {
             return Ok(None);
         };
+        let backlog = task.status == TaskStatus::Backlog;
         if source.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
             || source
                 .executed_on
                 .as_ref()
                 .is_none_or(|origin| origin.machine_id != machine.machine_id)
             || source.input.as_ref().is_none_or(|input| {
-                input["completion"] != "done"
+                (!backlog && input["completion"] != "done")
                     || input["claimed"] == true
                     || carried_task_ids(input) != BTreeSet::from([task.id.clone()])
             })

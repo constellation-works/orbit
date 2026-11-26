@@ -10,7 +10,9 @@
 //!
 //! A task settles when all of these hold:
 //! - it is `blocked`, `in-progress` or `review`, or a `backlog` task whose
-//!   current failure handoff was preserved by a requeue (only that PR settles it);
+//!   current delivery was preserved by a requeue (only that PR settles it).
+//!   For a retained owner publication, the merge must match its exact
+//!   published head, PR and landing branch;
 //! - no run or unsettled claim of its own is live, and no live `run auto`
 //!   leaf carries it: that run lands or fails the task itself;
 //! - one of its delivery PRs is merged into the task's target branch;

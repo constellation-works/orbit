@@ -422,6 +422,10 @@ impl Fixture {
 
     /// A live execution claim in `phase` on `shared.txt`.
     pub(crate) fn claim_with_phase(&self, task_id: &str, run_id: &str, phase: &str) {
+        Self::insert_claim(&self.runtime, task_id, run_id, phase);
+    }
+
+    pub(crate) fn insert_claim(runtime: &OrbitRuntime, task_id: &str, run_id: &str, phase: &str) {
         let claim_id = format!("claim-{run_id}");
         let claim = json!({
             "claim_id": claim_id,
@@ -434,13 +438,13 @@ impl Fixture {
             "reservation_expires_at": (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
             "phase": phase,
         });
-        rusqlite::Connection::open(self.runtime.global_root().join("orbit.db"))
+        rusqlite::Connection::open(runtime.global_root().join("orbit.db"))
             .unwrap()
             .execute(
                 "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
                  VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
                 rusqlite::params![
-                    self.runtime.workspace_id().unwrap(),
+                    runtime.workspace_id().unwrap(),
                     claim_id,
                     claim.to_string(),
                     Utc::now().to_rfc3339() ], ) .unwrap();

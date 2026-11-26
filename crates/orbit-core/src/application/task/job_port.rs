@@ -351,6 +351,15 @@ pub(in crate::application) trait TaskJobPort {
         task: &Task,
     ) -> Result<Option<NativePublicationIdentity>, OrbitError>;
 
+    /// The PR a final-recovery requeue preserved from the task's bound owner run.
+    fn preserved_owner_settlement_pr(&self, task: &Task) -> Result<Option<u64>, OrbitError>;
+
+    /// The stopped owner run's stored publication revision, if no delivery superseded it.
+    fn current_publication_run_digest(
+        &self,
+        task: &Task,
+    ) -> Result<Option<blake3::Hash>, OrbitError>;
+
     /// The enabled members of `purpose`'s `workflow.purpose_crews` pool,
     /// with the draw's source. With `inspection`, only members whose provider
     /// inspects source natively and that hold a ticket are kept. `None` when
