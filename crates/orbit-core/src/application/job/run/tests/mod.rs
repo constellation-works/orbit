@@ -1,7 +1,5 @@
 //! Shared test helpers and child module declarations for run command tests.
 
-use crate::OrbitRuntime;
-
 #[cfg(unix)]
 mod actions;
 mod admissions_stop;
@@ -9,6 +7,8 @@ mod drain_cancel;
 mod owner;
 #[cfg(unix)]
 mod reconcile;
+
+use crate::OrbitRuntime;
 
 use chrono::Utc;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};

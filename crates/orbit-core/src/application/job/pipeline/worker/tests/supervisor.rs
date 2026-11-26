@@ -6,6 +6,28 @@ use std::sync::mpsc;
 
 use super::super::supervisor::{WorkerLaunchError, handoff_worker};
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::Child;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
+use orbit_runtime::JobRuns;
+use orbit_store::Store;
+use orbit_store::contract::*;
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workspace::WorkspacePaths;
+
+use super::super::super::wait::{sleep_until_worker_exit, worker_exits_seen};
+use super::super::command::WorkerCommandConfig;
+use super::super::supervisor::{PipelineRunHost, PipelineWorkerSupervisor};
+use crate::application::job::run::audit_record::SupervisedRuns;
+use crate::runtime::event_bus::EventLog;
+
 #[test]
 fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -31,28 +53,6 @@ fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
         Some(libc::ESRCH)
     );
 }
-
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::process::Child;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
-
-use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
-use orbit_runtime::JobRuns;
-use orbit_store::Store;
-use orbit_store::contract::*;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
-use orbit_types::workspace::WorkspacePaths;
-
-use super::super::super::wait::{sleep_until_worker_exit, worker_exits_seen};
-use super::super::command::WorkerCommandConfig;
-use super::super::supervisor::{PipelineRunHost, PipelineWorkerSupervisor};
-use crate::application::job::run::audit_record::SupervisedRuns;
-use crate::runtime::event_bus::EventLog;
 
 struct ReadFaultStore {
     inner: Arc<JobRuns>,

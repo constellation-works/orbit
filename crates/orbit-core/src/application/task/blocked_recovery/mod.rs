@@ -45,9 +45,13 @@ mod input;
 mod next_step;
 mod readout;
 mod recheck;
-pub(in crate::application::task) use readout::block_json;
 pub(crate) mod steps;
 mod triage;
+
+#[cfg(test)]
+mod tests;
+
+pub(in crate::application::task) use readout::block_json;
 
 pub(crate) use episode::BlockSource;
 pub use episode::{BlockEpisode, EpisodeDisposition, FinalRecoveryRecord};
@@ -137,6 +141,3 @@ pub(crate) fn recovery_checkout_path(
     }
     Ok(state_dir.join("recovery-checkouts").join(run_id))
 }
-
-#[cfg(test)]
-mod tests;

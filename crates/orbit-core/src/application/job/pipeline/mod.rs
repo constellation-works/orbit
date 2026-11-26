@@ -1,3 +1,11 @@
+mod admission;
+mod claude_credential;
+mod notices;
+mod parked;
+mod submit;
+mod wait;
+mod worker;
+
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -51,14 +59,6 @@ use std::os::unix::process::ExitStatusExt;
 
 #[cfg(unix)]
 use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
-
-mod admission;
-mod claude_credential;
-mod notices;
-mod parked;
-mod submit;
-mod wait;
-mod worker;
 
 pub(crate) use admission::input_hash;
 pub use notices::{SubmissionKind, SubmissionNotices};

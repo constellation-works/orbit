@@ -53,6 +53,9 @@ use orbit_types::workflow::activity_job::ScriptGrantLimits;
 use crate::application::job::run::worker_scope::{
     SCOPE_UNIT_PREFIX, SCOPE_UNIT_SUFFIX, WorkerScopeCgroup, event_count, stat_value,
 };
+/// Inherited by a coordinator's child workers so one CLI invocation keeps its
+/// containment policy for every leaf it admits.
+pub(crate) use orbit_common::env_vars::ORBIT_WORKER_CONTAINMENT_STRICT as STRICT_WORKER_CONTAINMENT_ENV;
 
 /// Error code on the diagnostic step of a run that failed after its worker
 /// scope hit a memory or task limit.
@@ -70,9 +73,6 @@ const SYSTEMD_RUN: &str = "systemd-run";
 /// it, so a worker process is always killed before them.
 #[cfg(target_os = "linux")]
 pub(crate) const WORKER_OOM_SCORE_ADJ: i32 = 500;
-/// Inherited by a coordinator's child workers so one CLI invocation keeps its
-/// containment policy for every leaf it admits.
-pub(crate) use orbit_common::env_vars::ORBIT_WORKER_CONTAINMENT_STRICT as STRICT_WORKER_CONTAINMENT_ENV;
 
 /// The user-bus locators `systemd-run --user` needs to reach the user
 /// manager. They belong only in the scope launcher's environment: the

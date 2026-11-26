@@ -36,9 +36,9 @@ mod store;
 mod submission;
 mod token;
 
+pub(super) mod dkim;
+
 pub use model::DecisionChannelInfo;
 pub use model::DecisionDigest;
 pub use model::DecisionSubmitCaller;
 pub use model::DecisionSubmitParams;
-
-pub(super) mod dkim;

@@ -21,6 +21,12 @@ use crate::runtime::run_input::recorded_task_ids;
 
 use super::params::TaskUpdateParams;
 
+/// Status event recorded when Orbit settles a task to `done` from its delivery
+/// pull request merged outside Orbit (`external_merge`). Like the delivery
+/// pipeline's own completion, the settlement is not an edge of the table
+/// below: the forge's merge, not a caller's claim, is its evidence.
+pub use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
+
 const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 
 /// Status event recorded when a human overrides the lifecycle table from the
@@ -32,12 +38,6 @@ pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 /// Opens the note of the `forced` entry recorded when an operator moves a human
 /// crew's task without the lifecycle gates; the crew name follows.
 pub(crate) const HUMAN_CREW_BYPASS_NOTE: &str = "human-crew bypass: task is assigned to human crew";
-
-/// Status event recorded when Orbit settles a task to `done` from its delivery
-/// pull request merged outside Orbit (`external_merge`). Like the delivery
-/// pipeline's own completion, the settlement is not an edge of the table
-/// below: the forge's merge, not a caller's claim, is its evidence.
-pub use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 
 /// Refuse an ordinary surface's status change while a local run owns the
 /// task. Call under the task write lock, before recording any field edits.

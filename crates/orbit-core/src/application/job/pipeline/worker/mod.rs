@@ -16,17 +16,6 @@
 //! the supervisor for callers that
 //! already hold a runtime.
 
-use std::sync::Arc;
-
-use super::*;
-use command::*;
-use log::*;
-use supervisor::{PipelineWorkerSupervisor, WorkerLaunchError};
-
-use super::admission::pipeline_run_is_runnable;
-use super::wait::PIPELINE_WAIT_MIN_POLL_SECONDS;
-use crate::runtime::upgrade_handover;
-
 mod audit;
 pub(super) mod command;
 mod cwd;
@@ -41,3 +30,14 @@ mod usage;
 
 #[cfg(test)]
 mod tests;
+
+use std::sync::Arc;
+
+use super::*;
+use command::*;
+use log::*;
+use supervisor::{PipelineWorkerSupervisor, WorkerLaunchError};
+
+use super::admission::pipeline_run_is_runnable;
+use super::wait::PIPELINE_WAIT_MIN_POLL_SECONDS;
+use crate::runtime::upgrade_handover;

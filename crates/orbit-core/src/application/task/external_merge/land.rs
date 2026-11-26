@@ -17,6 +17,8 @@ use crate::OrbitRuntime;
 use crate::application::task::{TaskReviewPort, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::{PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge};
 
+use super::candidate::Candidate;
+
 /// How long a landing waits while GitHub reports mergeability `UNKNOWN`.
 ///
 /// A push to the base branch makes every open pull request `UNKNOWN` until
@@ -31,8 +33,6 @@ const MERGEABILITY_UNKNOWN_BUDGET: Duration = Duration::from_secs(90);
 /// Backoff before each further read, in seconds. The last read uses whatever
 /// of [`MERGEABILITY_UNKNOWN_BUDGET`] remains after these steps.
 const MERGEABILITY_UNKNOWN_BACKOFF_SECS: [u64; 4] = [5, 10, 20, 40];
-
-use super::candidate::Candidate;
 
 /// The audit step a merge requested through `orbit.workflow.land` names.
 const LAND_TOOL_MERGE_STEP: &str = "workflow.land";

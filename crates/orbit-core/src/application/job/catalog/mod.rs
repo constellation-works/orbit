@@ -1,13 +1,13 @@
+mod layers;
+mod loading;
+mod projection;
+mod roles;
+
 /// Shippable default workflow assets. The list lives beside the shipped
 /// activities in `runtime::assets` so the runtime kernel can answer "is this a
 /// job Orbit ships" — a plugin routine may target one — without reaching up
 /// into the application layer.
 pub(crate) use crate::runtime::assets::DEFAULT_JOB_FILES;
-
-mod layers;
-mod loading;
-mod projection;
-mod roles;
 
 pub use layers::CatalogReferenceLayer;
 

@@ -14,6 +14,9 @@ use sha2::{Digest, Sha256};
 
 use orbit_types::identity::lower_hex;
 
+use super::rendering::rewrite_rules_section;
+pub use super::rendering::set_rule_auto_in_markdown;
+
 const RULES_HEADING: &str = "## Rules";
 const REVIEW_WINDOW_DAYS: i64 = 90;
 pub(super) const OPERATOR_AUTO: &str = "operator";
@@ -726,6 +729,3 @@ fn new_topic_document(stem: &str) -> String {
         "---\ntype: decision\napplies_to: [agent_implement]\nstatus: active\nlinks: []\n---\n\n# {title}\n\n## Scope\n\nCurated rules for this topic. Only a current rule may be cited. A rule answers a new request only when the operator has set auto on it and a human has merged that edit.\n\n## Entries\n\nRaw decision history is not a rule. Human answers land here only as citations on a rule under Rules.\n\n"
     )
 }
-
-use super::rendering::rewrite_rules_section;
-pub use super::rendering::set_rule_auto_in_markdown;

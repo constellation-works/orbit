@@ -35,10 +35,16 @@
 mod prepare;
 mod proof;
 
+mod candidacy;
+mod recording;
+
 pub(crate) use prepare::prepare;
 pub(crate) use proof::TriageInspectionProof;
 
+pub(crate) use candidacy::{PilotWarningCandidacy, pilot_warning_candidacy, triaged_at};
 use orbit_types::task::DecisionOptionInput;
+
+use super::pilot::HeldPilotWarnings;
 
 /// History event that marks one pilot assessment's warning hold triaged.
 pub const PILOT_WARNING_TRIAGED_EVENT: &str = "pilot_warning_triaged";
@@ -75,9 +81,3 @@ pub struct PilotWarningTriageRequest {
     /// Who asked, named in the comment.
     pub requested_by: String,
 }
-
-mod candidacy;
-mod recording;
-pub(crate) use candidacy::{PilotWarningCandidacy, pilot_warning_candidacy, triaged_at};
-
-use super::pilot::HeldPilotWarnings;
