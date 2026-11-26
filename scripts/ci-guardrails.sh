@@ -664,6 +664,7 @@ if [[ "$checks" == false ]]; then
     fi
   fi
   run_guard "$repo_root/scripts/check-error-translation.sh"
+  run_guard "$repo_root/scripts/check-parent-module-imports.py"
   run_guard "$repo_root/scripts/check-unused-dependencies.py"
   run_guard "$repo_root/docs/standards/check.sh"
   run_guard "$repo_root/scripts/check-doc-links.py"
@@ -708,6 +709,7 @@ if [[ "$checks" == false ]]; then
   # Cargo target. Full CI always runs these; fast mode selects them by inputs.
   # The exclusive suites run in their own lane, above.
   run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
+  run_guard "$repo_root/scripts/test-check-parent-module-imports.py"
   run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
   run_guard "$repo_root/scripts/test-release-workflow.py"
   run_guard "$repo_root/scripts/test-release-promotion.py"
