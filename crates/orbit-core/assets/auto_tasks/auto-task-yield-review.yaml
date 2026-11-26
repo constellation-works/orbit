@@ -1,6 +1,6 @@
 schemaVersion: 1
 name: auto-task-yield-review
-description: Monthly yield review of enabled auto-task definitions - runs, cost, filed-task outcomes, regressions and duplicate or invalid rejections per definition over the last 30 days; files at most 3 proposed retuning tasks and never edits, toggles or mints definitions
+description: Monthly yield review of enabled auto-task definitions - runs, cost, chore deliveries, filed-task outcomes, regressions and duplicate or invalid rejections per definition over the last 30 days; files at most 3 proposed retuning tasks and never edits, toggles or mints definitions
 enabled: false
 schedule:
   cron: 0 9 1 * *
@@ -97,10 +97,15 @@ template:
        derived from it are `unknown`, never a count of the rows that were
        read. Each chore's final status (`done`, `rejected`, or still
        open in `proposed`, `backlog`, `in-progress`, `review` or
-       `blocked`), and how many were no-op successes: `done` chores whose
-       incoming `spawned_from` map entry (see Rules and step 3) is empty.
-       When the population scan behind that map is incomplete, the
-       no-op count is `unknown`, never zero, and no chore is classified
+       `blocked`), delivered, and no-op. For each `done` chore read
+       `orbit tool run orbit.task.show --input '{"id":"<chore>","field":"delivery","model":"<agent-family>"}'`
+       and use `delivery_status`: `landed` is delivered; a no-op has
+       `no_change` delivery and an empty incoming `spawned_from` map entry
+       (see Rules and step 3). An unreadable delivery or any other status
+       is `unknown`, never a no-op. Record unknown deliveries and make
+       affected delivered and no-op counts and derived metrics `unknown`,
+       never zero. When the population scan behind that map is incomplete,
+       the no-op count is `unknown`, never zero, and no chore is classified
        as a no-op from an incomplete scan.
     2. **Cost.** Tokens or cost per run from the run evidence above
        (`orbit run history --limit <n> --no-reconcile --json`, then
@@ -110,9 +115,11 @@ template:
        cost figure, report that run's cost as `unknown`, never as zero,
        and report the definition's cost per run as `unknown` when any
        counted run is unknown.
-    3. **Output.** The tasks the chores filed: for each minted chore of
-       this definition, the task IDs in its incoming `spawned_from` map
-       entry — the referencing tasks whose own outgoing `spawned_from`
+    3. **Output.** Count each `done` chore whose own delivery read in
+       step 1 reports `landed` as a delivered chore. Report this separately
+       from filed tasks that landed. The tasks the chores filed: for each
+       minted chore of this definition, the task IDs in its incoming
+       `spawned_from` map entry — the referencing tasks whose own outgoing `spawned_from`
        relation targets that chore, inverted in the Rules scan. Never
        find them by reading the chore itself. For each filed task record
        its outcome from that filed task's own `orbit.task.show` (or its
@@ -131,11 +138,12 @@ template:
        rejection whose reason the evidence does not state is counted as
        `rejected` with reason `unknown`, never assumed duplicate or
        invalid.
-    5. **Derived.** Landed tasks per run: filed tasks with outcome `done`
-       divided by runs in the window (`unknown` when runs is zero). Cost
-       per landed task: total known cost divided by landed tasks
-       (`unknown` when cost is unknown or landed tasks is zero). Never
-       report a derived value as zero when its inputs are unknown.
+    5. **Derived.** Landed output is filed tasks with outcome `done` plus
+       delivered chores. Landed output per run is that sum divided by runs
+       in the window (`unknown` when runs is zero). Cost per landed output
+       is total known cost divided by that same sum (`unknown` when cost is
+       unknown or the sum is zero). Never report a derived value as zero
+       when its inputs are unknown.
 
     ## Linkage gap
 
@@ -154,12 +162,13 @@ template:
     A definition whose chore read is incomplete is listed as `incomplete`
     in the artifact and the summary: it is not ranked and gets no filed
     task on partial counts. Rank the complete definitions by cost per
-    landed task (unknown cost last), then by duplicate or invalid
+    landed output (unknown cost last), then by duplicate or invalid
     rejections, then by no-op share. File at most 3
     proposed tasks per run, one per definition or merged pair, highest
     rank first. Each filed task names its definition and its numbers
-    (runs, no-op runs, cost per run, filed, landed, regressions,
-    duplicate or invalid rejections, landed per run, cost per landed)
+    (runs, no-op runs, delivered chores, cost per run, filed, filed-task
+    landings, regressions, duplicate or invalid rejections, landed output
+    per run, cost per landed output)
     and exactly one recommendation:
 
     - **Cadence:** change the definition's schedule (name the current and
@@ -169,12 +178,12 @@ template:
     - **Template fix:** fix the definition's template (name the failure
       the filed-task outcomes show, such as repeated duplicate filings).
     - **Disable:** disable the definition (name the runs and cost spent
-      with zero or unknown landed tasks behind the recommendation).
+      with zero or unknown landed output behind the recommendation).
 
     Before filing, search open and closed tasks with one distinctive
     token at a time (see above). Do not file what an open task already
     covers; record the mapping in the artifact instead. A definition with
-    healthy yield (landed tasks at known, proportionate cost, no
+    healthy yield (landed output at known, proportionate cost, no
     duplicate or invalid pattern) is reported, never filed. Record the
     overflow in the artifact; the next run files it first after
     re-verifying.
@@ -187,10 +196,11 @@ template:
     `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<prior task ID>","path":"auto-task-yield.json","model":"<agent-family>"}'`.
     Write `.orbit/tmp/auto-task-yield.json` with `schema_version: 1`, the
     window start and end, and per enabled definition: runs by final
-    status, no-op runs, per-run cost or `unknown`, total cost or
-    `unknown`, filed task IDs with outcomes, later regressions, duplicate
-    or invalid rejections, unknown-linkage counts, landed tasks per run,
-    cost per landed task, and each candidate's disposition (filed task
+    status, no-op runs, delivered chores and unknown deliveries, per-run
+    cost or `unknown`, total cost or `unknown`, filed task IDs with
+    outcomes and filed-task landings, later regressions, duplicate
+    or invalid rejections, unknown-linkage counts, landed output per run,
+    cost per landed output, and each candidate's disposition (filed task
     ID, already tracked by an existing task ID, or overflow). Also record
     whether the incoming-relation population scan was complete (its
     `total`, final `truncated` value and any tasks read through
@@ -202,18 +212,22 @@ template:
     with
     `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/auto-task-yield.json","path":"auto-task-yield.json","model":"<agent-family>"}'`.
     Diff it against the previous run's artifact and record the delta per
-    definition (runs, cost, landed, regressions and rejections moving)
-    in the execution summary; absent or unreadable means this is the
+    definition (runs, cost, delivered chores, filed-task landings,
+    regressions and rejections moving) in the execution summary. When a
+    previous artifact lacks delivery counts, report the delivery and combined
+    output deltas as unknown rather than comparing unlike measures; absent
+    or unreadable means this is the
     baseline run, say so. The execution summary also carries a short
     table, one row per enabled definition, with columns: definition,
-    runs, no-op, cost per run, filed, landed, landed per run, cost per
-    landed, regressions, duplicate/invalid — plus every filed task ID,
-    the overflow, the unknown-cost and unknown-linkage counts, and the
+    runs, no-op, delivered chores, cost per run, filed, filed-task landings,
+    landed output per run, cost per landed output, regressions,
+    duplicate/invalid — plus every filed task ID, the overflow, the
+    unknown-delivery, unknown-cost and unknown-linkage counts, and the
     delta against the previous run. A run with nothing to file attaches
     the record and succeeds.
   acceptance_criteria:
-  - Each enabled definition was measured over the last 30 days for runs by final status, no-op runs, cost per run, filed tasks and their outcomes, later regressions, and duplicate or invalid rejections, with `auto-task-yield.json` attached to this task
-  - Missing cost or `spawned_from` linkage is reported as `unknown` in `auto-task-yield.json` and the execution summary, never as zero, and landed tasks per run and cost per landed task are `unknown` when their inputs are unknown or zero
+  - Each enabled definition was measured over the last 30 days for runs by final status, no-op runs, delivered chores, cost per run, filed tasks and their outcomes, later regressions, and duplicate or invalid rejections, with `auto-task-yield.json` attached to this task
+  - Missing delivery, cost or `spawned_from` linkage is reported as `unknown` in `auto-task-yield.json` and the execution summary, never as zero, and landed output per run and cost per landed output are `unknown` when their inputs are unknown or zero
   - 'auto-task-yield.json was diffed against the previous run''s artifact fetched through the artifact tools, or the execution summary states this is the baseline run, and the summary carries the per-definition table'
   - At most 3 proposed tasks were filed, each naming its definition, its 30-day numbers and exactly one recommendation (cadence, merge, template fix or disable), with a `spawned_from` relation to this task and `context_files` naming a verified definition file, after a duplicate search
   - No auto-task definition was edited, toggled, enabled, disabled, deleted or minted during the run, and no filed task was approved
