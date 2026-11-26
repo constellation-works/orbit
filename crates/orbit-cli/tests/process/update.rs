@@ -12,16 +12,6 @@
 //! exported entry points directly, against the shell-script installation and
 //! signed mirror in `release_fixture`.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::test_env;
-use serde_json::Value;
-use tempfile::tempdir;
-
-// Integration-test crate roots resolve modules beside `tests/`, not in a
-// directory named after the test file, so the path is explicit.
 #[cfg(unix)]
 mod bundled_bwrap;
 #[cfg(unix)]
@@ -33,6 +23,17 @@ mod local_candidate;
 mod local_candidate_inputs;
 #[cfg(unix)]
 mod release_fixture;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
+use serde_json::Value;
+use tempfile::tempdir;
+
+// Integration-test crate roots resolve modules beside `tests/`, not in a
+// directory named after the test file, so the path is explicit.
 
 fn orbit(cwd: &Path, home: &Path, mirror: &Path) -> assert_cmd::Command {
     fixture_env(cargo_bin_cmd!("orbit"), cwd, home, mirror)

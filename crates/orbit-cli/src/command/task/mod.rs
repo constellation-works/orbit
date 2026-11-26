@@ -1,6 +1,3 @@
-use std::ffi::OsStr;
-
-use orbit_common::Env;
 mod archive;
 pub(crate) mod artifact;
 mod command;
@@ -21,6 +18,10 @@ pub(crate) mod review_reset;
 mod settle_merged;
 mod show;
 pub(crate) mod support;
+
+use std::ffi::OsStr;
+
+use orbit_common::Env;
 
 pub(crate) use show::{
     completion_hold_text, final_recovery_text, next_step_text, owed_criteria_lines,

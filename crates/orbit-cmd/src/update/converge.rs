@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+/// Environment variable bounding each `--version` and `update --contract`
+/// probe of a candidate or installed executable, in seconds.
+pub use orbit_common::env_vars::ORBIT_UPDATE_PROBE_TIMEOUT_SECS as PROBE_TIMEOUT_ENV;
 use orbit_common::fs::generation::{
     CompatibilityIdentity, GENERATION_CONTRACT, GenerationUpdate, HandoverCandidate,
     LEGACY_GENERATION_CONTRACT,
@@ -37,10 +40,6 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Bytes kept from each stream of a convergence step; reports read one line
 /// of stdout or the first 2000 characters of stderr.
 const STEP_OUTPUT_LIMIT: usize = 1024 * 1024;
-
-/// Environment variable bounding each `--version` and `update --contract`
-/// probe of a candidate or installed executable, in seconds.
-pub use orbit_common::env_vars::ORBIT_UPDATE_PROBE_TIMEOUT_SECS as PROBE_TIMEOUT_ENV;
 
 /// Default [`PROBE_TIMEOUT_ENV`]. The probes run while every generation
 /// authority is held exclusively, so a candidate that hangs must not hold

@@ -38,6 +38,9 @@
 //! rather than falling back to cwd-losing environment state or another
 //! registered workspace.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod host_output;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -49,9 +52,6 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 use crate::fixture_crew;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod host_output;
 
 struct Workspace {
     repo: PathBuf,

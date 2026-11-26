@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{blocking, map_runtime_error};
+// Compatibility shim. Retirement: callers import `crate::runtime_memo::RoutineMemoKey`.
+pub(crate) use crate::runtime_memo::RoutineMemoKey;
 use crate::state::{DashboardState, Ws};
 
 /// Freshness bound of a served routine health body. Sampled fires, pauses and
@@ -49,9 +51,6 @@ const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
 /// A request past the bound, or whose refresh failed or lands late, waits for
 /// compute.
 const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
-
-// Compatibility shim. Retirement: callers import `crate::runtime_memo::RoutineMemoKey`.
-pub(crate) use crate::runtime_memo::RoutineMemoKey;
 
 /// Inputs routine health reads that a live drain rewrites constantly: job runs
 /// and the task registry files. Keying on them recomputed synchronously, about

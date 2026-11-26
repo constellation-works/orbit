@@ -13,6 +13,9 @@
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "backend_guard.rs"]
+mod backend_guard;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::ops::{Deref, DerefMut};
@@ -26,8 +29,6 @@ use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::{Builder, TempDir};
 
-#[path = "backend_guard.rs"]
-mod backend_guard;
 use backend_guard::{BackendGuard, BackendReadiness};
 
 const BACKEND_ENTRY: &str = "supervised_parent_signal::signal_fixture_backend";

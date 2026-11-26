@@ -1,5 +1,9 @@
 //! Registry-aware runtime composition and workspace selection.
 
+mod callback_workspace;
+mod factory;
+mod selection;
+
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -19,10 +23,6 @@ use serde_json::Value;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity, workspace_registry};
 
 use crate::workspace_catalog::attach as attach_workspace_catalog;
-
-mod callback_workspace;
-mod factory;
-mod selection;
 
 pub use callback_workspace::refuse_cli_callback_workspace;
 pub use factory::{

@@ -10,6 +10,10 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[cfg(unix)]
+#[path = "../support/secret_sinks.rs"]
+mod secret_sinks;
+
 use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -18,10 +22,6 @@ use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
 use crate::git_repo;
-
-#[cfg(unix)]
-#[path = "../support/secret_sinks.rs"]
-mod secret_sinks;
 
 /// Distinctive enough that finding it anywhere is a leak, not a coincidence.
 const SECRET: &str = "orbit-test-secret-7f3a9c1e5b";

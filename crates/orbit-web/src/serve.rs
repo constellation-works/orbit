@@ -14,6 +14,8 @@ use axum::routing::get;
 use clap::Args;
 use orbit_cmd::registry_runtime;
 use orbit_common::Env;
+/// Set on a dashboard exec'd to take over from a replaced image.
+use orbit_common::env_vars::ORBIT_DASHBOARD_HANDOVER as HANDOVER_ENV;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use tokio::sync::Notify;
@@ -432,9 +434,6 @@ fn bind_lease_intake(_global_root: &Path) -> Result<Option<()>, OrbitError> {
 pub(crate) fn teardown_runtime(runtime: tokio::runtime::Runtime) {
     runtime.shutdown_background();
 }
-
-/// Set on a dashboard exec'd to take over from a replaced image.
-use orbit_common::env_vars::ORBIT_DASHBOARD_HANDOVER as HANDOVER_ENV;
 
 /// How often the dashboard checks for a replacement or a pending switch.
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(5);

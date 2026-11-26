@@ -5,6 +5,31 @@
 // tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod task_show_write_lock;
+mod upgrade;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod workspace_authority;
+
+mod plugins;
+mod repilot;
+mod serving_hosts;
+
+mod desktop;
+#[cfg(unix)]
+mod routine_outputs;
+mod workflow_ship_mode;
+
+mod roles;
+mod root_selection;
+mod transport_operations;
+
+mod internal_drain;
+mod tool_input_hints;
+
+mod search;
+#[cfg(unix)]
+mod worker_routing;
+
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -6170,15 +6195,6 @@ fn runtime_opens(log_path: &Path) -> usize {
         .count()
 }
 
-mod task_show_write_lock;
-mod upgrade;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod workspace_authority;
-
-mod plugins;
-mod repilot;
-mod serving_hosts;
-
 /// Read-only presentation uses the production host's task filter and audit path.
 fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fallback() {
     let workspace = McpWorkspace::init();
@@ -6299,22 +6315,6 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
         "text/html;profile=mcp-app"
     );
 }
-
-mod desktop;
-#[cfg(unix)]
-mod routine_outputs;
-mod workflow_ship_mode;
-
-mod roles;
-mod root_selection;
-mod transport_operations;
-
-mod internal_drain;
-mod tool_input_hints;
-
-mod search;
-#[cfg(unix)]
-mod worker_routing;
 
 #[test]
 fn governed_session_admission() {

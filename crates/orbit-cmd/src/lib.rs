@@ -38,15 +38,11 @@ mod migrate;
 mod registry;
 pub mod service_environment;
 mod task;
-pub use registry::{routines as registry_routines, runtime as registry_runtime};
-pub use task::{owner as task_owner, store as task_store};
 pub mod update;
+mod worker_coordination;
 mod workspace_catalog;
 pub mod workspace_rebind;
 pub mod workspace_removal;
-
-#[cfg(test)]
-mod tests;
 
 #[cfg(feature = "test-support")]
 pub use doctor::DoctorWorkerSpawnRefusal;
@@ -56,9 +52,11 @@ pub use doctor::{
     misplaced_plugin_enablement_row, provider_limit_findings, run_doctor_report,
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
-pub use task_store::{bound_partition_id, remove_checkout_task_stores, task_store_partition_path};
-
-mod worker_coordination;
-
 /// Materialize executor-local artifact bytes before an owner coordination call.
 pub use orbit_tools::prepare_remote_task_artifact_put;
+pub use registry::{routines as registry_routines, runtime as registry_runtime};
+pub use task::{owner as task_owner, store as task_store};
+pub use task_store::{bound_partition_id, remove_checkout_task_stores, task_store_partition_path};
+
+#[cfg(test)]
+mod tests;

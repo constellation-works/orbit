@@ -41,6 +41,15 @@
 //! for the server's lifetime, including after config and plugin changes. The
 //! synthetic `default` selector is never used to reconstruct their storage.
 
+mod dashboard;
+mod hosts;
+mod registry;
+mod remote_access;
+mod request;
+#[cfg(test)]
+mod tests;
+mod trusted_hosts;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -59,15 +68,6 @@ use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspaceStatus};
 use serde_json::json;
 
 use crate::host_tunnels::{HostTunnels, TunnelConfig};
-
-mod dashboard;
-mod hosts;
-mod registry;
-mod remote_access;
-mod request;
-#[cfg(test)]
-mod tests;
-mod trusted_hosts;
 
 pub(crate) use dashboard::DashboardState;
 use dashboard::StateInner;

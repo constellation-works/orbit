@@ -3,6 +3,8 @@
 
 //! Audit behavior through the real CLI, with disposable machine/workspace state.
 
+mod native_reads;
+
 use std::fs;
 use std::path::PathBuf;
 
@@ -14,8 +16,6 @@ use tempfile::{TempDir, tempdir};
 
 #[cfg(unix)]
 use crate::child_guard;
-
-mod native_reads;
 
 struct Fixture {
     _temp: TempDir,

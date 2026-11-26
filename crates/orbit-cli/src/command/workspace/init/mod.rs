@@ -1,12 +1,12 @@
-use std::path::PathBuf;
-
-use orbit_types::workspace::WorkspaceCheckoutRole;
-
 mod args;
 mod browser_kit;
 mod execute;
 mod report;
 mod validate;
+
+use std::path::PathBuf;
+
+use orbit_types::workspace::WorkspaceCheckoutRole;
 
 pub use args::WorkspaceInitArgs;
 

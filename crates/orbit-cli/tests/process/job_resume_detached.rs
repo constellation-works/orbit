@@ -4,9 +4,6 @@
 //! A CLI resume must hand ownership to a worker before its caller exits.
 
 #[cfg(unix)]
-use crate::fixture_crew;
-
-#[cfg(unix)]
 mod lifecycle;
 
 #[cfg(unix)]
@@ -855,3 +852,6 @@ spec:
         }
     }
 }
+
+#[cfg(unix)]
+use crate::fixture_crew;

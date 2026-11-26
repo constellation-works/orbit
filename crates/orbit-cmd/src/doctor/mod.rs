@@ -30,20 +30,6 @@
 //! fields ([`doctor_row_json`]). Repairs stay on [`DoctorCommands`] and are
 //! never part of the report.
 
-use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
-
-use fs2::FileExt;
-use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
-use orbit_core::application::health::artifact::ArtifactFinding;
-use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
-use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
-use orbit_types::workspace::WorkspacePaths;
-use serde::Serialize;
-
-use crate::task_store;
-
 mod automation;
 mod browser_kit;
 mod command;
@@ -61,6 +47,20 @@ mod task;
 mod worker_containment;
 mod worker_token;
 mod workspace;
+
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
+
+use fs2::FileExt;
+use orbit_common::OrbitError;
+use orbit_core::OrbitRuntime;
+use orbit_core::application::health::artifact::ArtifactFinding;
+use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
+use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
+use orbit_types::workspace::WorkspacePaths;
+use serde::Serialize;
+
+use crate::task_store;
 
 use automation::*;
 use command::*;
