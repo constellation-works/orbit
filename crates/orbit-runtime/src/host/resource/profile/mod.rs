@@ -45,6 +45,10 @@
 //! minute index or `job_runs` row moved since the cache's last load. Live
 //! load is never cached here.
 
+mod build;
+mod cache;
+mod lookup;
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -54,15 +58,12 @@ use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 use serde::Serialize;
 use serde_json::value::RawValue;
 
-mod build;
-mod cache;
-mod lookup;
-#[cfg(test)]
-mod tests;
-
 pub(crate) use build::{ProfileBounds, build_profiles, template_task_ids};
 pub(crate) use cache::{ResourceProfileCache, build_uncached};
 pub use lookup::{ProfileLookup, ProfileMatch, ProfileSource};
+
+#[cfg(test)]
+mod tests;
 
 /// Deliveries of each workspace, work class and complexity whose run minutes
 /// retention keeps whatever their age.

@@ -21,10 +21,10 @@ use std::sync::Arc;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 
+pub use crate::base::config::HOST_SHUTDOWN_HOLD_MINUTES;
+
 /// Where systemd-logind records a pending `shutdown` schedule.
 pub const SYSTEMD_SCHEDULED_SHUTDOWN_PATH: &str = "/run/systemd/shutdown/scheduled";
-
-pub use crate::base::config::HOST_SHUTDOWN_HOLD_MINUTES;
 
 /// Stable code every hold reports, so schedulers and readiness can branch on it.
 pub const HOST_SHUTDOWN_SCHEDULED: &str = "host_shutdown_scheduled";

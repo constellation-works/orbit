@@ -1,9 +1,5 @@
 //! One bounded delivery evaluator shared by task and job consumers.
 
-use crate::AutomationError;
-use chrono::{DateTime, Utc};
-use orbit_types::workflow::automation::*;
-
 pub mod adopt;
 mod digest;
 mod evaluate;
@@ -14,6 +10,10 @@ pub mod recovery;
 pub mod reset;
 pub mod stall;
 mod waiver;
+
+use crate::AutomationError;
+use chrono::{DateTime, Utc};
+use orbit_types::workflow::automation::*;
 
 pub(crate) use digest::json_definition_epoch;
 pub use digest::{definition_epoch, digest, input_digest};

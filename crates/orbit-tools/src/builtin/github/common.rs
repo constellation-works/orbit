@@ -1,6 +1,13 @@
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "the `gh_tool` re-export must follow the `macro_rules!` that defines it, because textual macro scope reaches only later items"
+)]
+
 use super::*;
 
 pub use crate::gh_request::gh_exec_request;
+
+pub(super) use crate::tool::tool_param;
 
 /// The checkout a repository-scoped `gh` call made through a registered tool
 /// runs in: the caller's selected workspace, else its cwd.
@@ -51,8 +58,6 @@ pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam
         builtin: true,
     }
 }
-
-pub(super) use crate::tool::tool_param;
 
 macro_rules! gh_tool {
     (

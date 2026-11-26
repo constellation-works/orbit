@@ -47,10 +47,6 @@
     deny(clippy::disallowed_methods)
 )]
 
-// A bare `cargo test` from a managed-run shell must match one from a clean shell.
-#[cfg(test)]
-orbit_common::isolate_test_process!();
-
 mod activity_catalog;
 /// Host-local application authority audit hooks.
 pub mod application_authority {
@@ -68,6 +64,16 @@ mod orbit_runtime;
 pub mod run;
 pub mod stored;
 pub mod task;
+
+/// Compatibility re-exports for actor identity, admitted settings and stores.
+pub mod context {
+    pub use crate::base::actor::{
+        ActorIdentity, ActorKind, resolve_write_actor_label, trusted_write_identity,
+    };
+    pub use crate::base::config::OrbitRuntimeSettings;
+    pub use crate::stored::stores::OrbitStores;
+}
+
 pub use task::{InfraBlockedTask, StaleTaskReservation};
 
 #[cfg(feature = "test-support")]
@@ -102,18 +108,6 @@ pub use run::upgrade_handover;
 pub use stored::audit;
 pub use stored::recovery_authority;
 pub use stored::workspace;
-
-/// Compatibility re-exports for actor identity, admitted settings and stores.
-pub mod context {
-    pub use crate::base::actor::{
-        ActorIdentity, ActorKind, resolve_write_actor_label, trusted_write_identity,
-    };
-    pub use crate::base::config::OrbitRuntimeSettings;
-    pub use crate::stored::stores::OrbitStores;
-}
-
-#[cfg(test)]
-mod tests;
 
 pub use application_port::ApplicationPort;
 pub use base::Base;
@@ -153,3 +147,10 @@ pub use builder::UNBOUND_DATA_DIR_PARTITION_ID;
 /// Guard this process's `gh` reads with the host's GitHub quota record. Only
 /// the `orbit` binary calls it, so test and library processes stay unguarded.
 pub use orbit_tools::github_quota::enable_host_guard as enable_github_quota_guard;
+
+// A bare `cargo test` from a managed-run shell must match one from a clean shell.
+#[cfg(test)]
+orbit_common::isolate_test_process!();
+
+#[cfg(test)]
+mod tests;

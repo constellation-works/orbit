@@ -1,16 +1,16 @@
-use std::sync::{Arc, Mutex};
-
-use orbit_common::OrbitError;
-use serde_json::{Value, json};
-
-use super::{BrokerDispatch, BrokerRequest};
-
 mod client;
 mod peer;
 mod protocol;
 mod sandbox;
 mod server;
 mod socket;
+
+use std::sync::{Arc, Mutex};
+
+use orbit_common::OrbitError;
+use serde_json::{Value, json};
+
+use super::{BrokerDispatch, BrokerRequest};
 
 /// Keep broker socket fixtures inside the Unix socket path limit on macOS.
 fn short_tempdir() -> tempfile::TempDir {

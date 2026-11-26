@@ -1,5 +1,7 @@
 //! Callback credential fixtures kept for the forged-descriptor guard.
 
+mod credential;
+
 #[cfg(unix)]
 use super::super::callback::{
     ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, PluginCallbackSession,
@@ -40,8 +42,6 @@ fn present_descriptor(
     ]);
     (file, env)
 }
-
-mod credential;
 
 /// A mint whose credential cannot be opened must not leave its record behind:
 /// the sweep skips a `pid: 0` record as a mint in progress, forever.

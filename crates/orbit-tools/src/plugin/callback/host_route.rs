@@ -39,440 +39,6 @@
 //! the route, which the host owns and which lives exactly as long as the
 //! session: the child can neither write it nor reset it by reconnecting.
 
-use std::cell::RefCell;
-use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
-
-use orbit_common::{DecisionRefusalCode, OrbitError};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
-
-use super::SessionRecord;
-
-/// The descriptor the host maps the route socket onto in a backend child.
-///
-/// Fixed, like [`super::PLUGIN_CALLBACK_FD`], so a descendant finds it without
-/// being told. A backend that closes it loses only the host route: its digest
-/// and submit callbacks are then answered by the child itself, which a
-/// confined child cannot do.
-pub const PLUGIN_HOST_ROUTE_FD: i32 = 4;
-
-/// Decision-channel callbacks: always host-routed, because they read the
-/// channel store no plugin child may read.
-const DECISION_CHANNEL_CALLBACK_TOOLS: [&str; 2] =
-    ["orbit.decision.digest", "orbit.decision.submit"];
-
-/// Whether `tool` is a callback the host route may run on the host: a
-/// decision-channel callback, or a tool an application consent may list as a
-/// callback.
-pub fn is_host_routed_callback_tool(tool: &str) -> bool {
-    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
-        || orbit_common::governance::authorization::application_callback_tool(tool)
-}
-
-/// Whether `record`'s child sends `tool` over the host route. An application
-/// callback tool is routed only for a session bound to an application;
-/// without one, a plugin granted the tool keeps calling it in its own
-/// sandbox, as before.
-pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
-    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
-        || (record.application.is_some()
-            && orbit_common::governance::authorization::application_callback_tool(tool))
-}
-
-/// The task a `pin` callback bound for one host route's session.
-type PinnedTask = Arc<Mutex<Option<String>>>;
-
-/// The session a host-route call runs under, and that session's pin.
-#[derive(Clone)]
-#[cfg_attr(
-    not(unix),
-    allow(
-        dead_code,
-        reason = "non-unix builds have no host route, so no RoutedCallback is ever built"
-    )
-)]
-struct RoutedCallback {
-    record: SessionRecord,
-    pinned: PinnedTask,
-}
-
-thread_local! {
-    /// The session a host-route call runs under, set only by the route's own
-    /// server thread for the length of one call.
-    static ROUTED_CALLBACK: RefCell<Option<RoutedCallback>> = const { RefCell::new(None) };
-}
-
-/// The session the current thread is answering a host-route call for, with
-/// the task its application invocation has pinned so far.
-pub(super) fn routed_callback_record() -> Option<SessionRecord> {
-    ROUTED_CALLBACK.with(|routed| {
-        routed.borrow().as_ref().map(|routed| {
-            let mut record = routed.record.clone();
-            if let Some(application) = record.application.as_mut() {
-                application
-                    .pinned_task
-                    .clone_from(&routed.pinned.lock().unwrap_or_else(PoisonError::into_inner));
-            }
-            record
-        })
-    })
-}
-
-/// Pin `task` for the rest of the application invocation the current
-/// host-route call runs under. Refused when another task is already pinned,
-/// and outside a host-route call, where no host-owned pin exists.
-pub fn pin_routed_application_task(task: &str) -> Result<(), OrbitError> {
-    ROUTED_CALLBACK.with(|routed| {
-        let routed = routed.borrow();
-        let Some(routed) = routed
-            .as_ref()
-            .filter(|routed| routed.record.application.is_some())
-        else {
-            return Err(OrbitError::CapabilityDenied(
-                "a pinned application callback runs only on the plugin host route".into(),
-            ));
-        };
-        let mut pinned = routed.pinned.lock().unwrap_or_else(PoisonError::into_inner);
-        match pinned.as_deref() {
-            Some(current) if current != task => Err(OrbitError::CapabilityDenied(
-                "application callback names a task other than the one this invocation pinned"
-                    .into(),
-            )),
-            Some(_) => Ok(()),
-            None => {
-                *pinned = Some(task.to_owned());
-                Ok(())
-            }
-        }
-    })
-}
-
-/// What a forwarded call came back with.
-#[derive(Debug)]
-pub enum HostRouteOutcome {
-    /// The host dispatched the call and wrote its audit row.
-    Answered(Result<Value, OrbitError>),
-    /// The call never reached the host's dispatch: the route was unusable or
-    /// the host refused the request first. The caller audits it.
-    Unanswered(OrbitError),
-}
-
-#[cfg(unix)]
-pub(super) use self::unix::HostRoute;
-#[cfg(unix)]
-pub use self::unix::forward_host_routed_callback;
-
-/// No other platform inherits descriptors, so no call is forwarded.
-#[cfg(not(unix))]
-pub fn forward_host_routed_callback(
-    _env: &orbit_common::Env,
-    _global_root: &Path,
-    _tool: &str,
-    _input: &Value,
-) -> Option<HostRouteOutcome> {
-    None
-}
-
-/// Largest request frame the host reads. A submission's raw message is
-/// bounded at 256 KiB before JSON escaping.
-const MAX_REQUEST_BYTES: u32 = 4 * 1024 * 1024;
-/// Largest response frame a caller reads: a digest lists every open request.
-const MAX_RESPONSE_BYTES: u32 = 64 * 1024 * 1024;
-const SCHEMA_VERSION: u64 = 1;
-
-/// The message a refusal carries when the frame names none a caller can read.
-const UNREADABLE_ERROR_MESSAGE: &str = "the host route answered with an unreadable error";
-
-/// A host error as the route carries it. The kinds a caller branches on keep
-/// their variant, decision refusals their stable code; everything else keeps
-/// its rendered message.
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum PluginHostRouteError {
-    DecisionRefused {
-        code: DecisionRefusalCode,
-        message: String,
-    },
-    PolicyDenied {
-        message: String,
-    },
-    CapabilityDenied {
-        message: String,
-    },
-    InvalidInput {
-        message: String,
-    },
-    Execution {
-        message: String,
-    },
-}
-
-impl From<&OrbitError> for PluginHostRouteError {
-    fn from(error: &OrbitError) -> Self {
-        match error {
-            OrbitError::DecisionRefused { code, message } => Self::DecisionRefused {
-                code: *code,
-                message: message.clone(),
-            },
-            OrbitError::PolicyDenied(message) => Self::PolicyDenied {
-                message: message.clone(),
-            },
-            OrbitError::CapabilityDenied(message) => Self::CapabilityDenied {
-                message: message.clone(),
-            },
-            OrbitError::InvalidInput(message) => Self::InvalidInput {
-                message: message.clone(),
-            },
-            OrbitError::Execution(message) => Self::Execution {
-                message: message.clone(),
-            },
-            other => Self::Execution {
-                message: other.to_string(),
-            },
-        }
-    }
-}
-
-impl From<PluginHostRouteError> for OrbitError {
-    fn from(error: PluginHostRouteError) -> Self {
-        match error {
-            PluginHostRouteError::DecisionRefused { code, message } => {
-                Self::DecisionRefused { code, message }
-            }
-            PluginHostRouteError::PolicyDenied { message } => Self::PolicyDenied(message),
-            PluginHostRouteError::CapabilityDenied { message } => Self::CapabilityDenied(message),
-            PluginHostRouteError::InvalidInput { message } => Self::InvalidInput(message),
-            PluginHostRouteError::Execution { message } => Self::Execution(message),
-        }
-    }
-}
-
-/// The error kinds a frame may name; any other kind reads as an execution
-/// failure, as an unrecognized kind always has.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ErrorFrameKind {
-    DecisionRefused,
-    PolicyDenied,
-    CapabilityDenied,
-    InvalidInput,
-    #[serde(other)]
-    Execution,
-}
-
-/// An error as a response frame spells it, read leniently: a field that is
-/// missing or of another type is absent, so an old or foreign frame still
-/// decodes to the same typed error it always did.
-#[derive(Debug, Default, Deserialize)]
-struct ErrorFrame {
-    #[serde(default, deserialize_with = "lenient")]
-    kind: Option<ErrorFrameKind>,
-    #[serde(default, deserialize_with = "lenient")]
-    code: Option<DecisionRefusalCode>,
-    #[serde(default, deserialize_with = "lenient")]
-    message: Option<String>,
-}
-
-impl From<ErrorFrame> for PluginHostRouteError {
-    fn from(frame: ErrorFrame) -> Self {
-        let message = frame
-            .message
-            .unwrap_or_else(|| UNREADABLE_ERROR_MESSAGE.to_string());
-        match (frame.kind, frame.code) {
-            (Some(ErrorFrameKind::DecisionRefused), Some(code)) => {
-                Self::DecisionRefused { code, message }
-            }
-            (Some(ErrorFrameKind::PolicyDenied), _) => Self::PolicyDenied { message },
-            (Some(ErrorFrameKind::CapabilityDenied), _) => Self::CapabilityDenied { message },
-            (Some(ErrorFrameKind::InvalidInput), _) => Self::InvalidInput { message },
-            _ => Self::Execution { message },
-        }
-    }
-}
-
-/// A value of `T` when the JSON has that shape, else absent.
-fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned,
-{
-    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
-}
-
-/// A frame section that is a JSON object of the expected shape, else its
-/// default: any other JSON value reads as an empty section.
-#[derive(Debug, Default)]
-struct Section<T>(T);
-
-impl<'de, T: DeserializeOwned + Default> Deserialize<'de> for Section<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Self(match Value::deserialize(deserializer)? {
-            object @ Value::Object(_) => serde_json::from_value(object).unwrap_or_default(),
-            _ => T::default(),
-        }))
-    }
-}
-
-/// A response frame as it arrives, before it is read as a reply.
-#[derive(Debug, Default, Deserialize)]
-struct ReplyFrame {
-    #[serde(default, deserialize_with = "lenient")]
-    answered: Option<bool>,
-    #[serde(default, deserialize_with = "lenient")]
-    ok: Option<bool>,
-    #[serde(default)]
-    output: Option<Value>,
-    #[serde(default)]
-    error: Section<ErrorFrame>,
-}
-
-/// One response frame of the v1 route: the host answered and the call
-/// succeeded, the host answered and refused, or the call never reached the
-/// host's dispatch. An answered refusal was dispatched and audited by the
-/// host; an unanswered one was not, so the caller audits it.
-#[derive(Debug)]
-enum PluginHostRouteReply {
-    AnsweredOk { output: Value },
-    AnsweredRefused { error: PluginHostRouteError },
-    Unanswered { error: PluginHostRouteError },
-}
-
-/// The wire shape of a reply: `answered`, then `ok` with `output` or `error`
-/// for an answered call, or `error` alone for an unanswered one.
-#[derive(Serialize)]
-struct ReplyEnvelope<'a> {
-    schema_version: u64,
-    answered: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ok: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<&'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a PluginHostRouteError>,
-}
-
-impl PluginHostRouteReply {
-    /// The reply to a call the host dispatched.
-    fn answered(result: Result<Value, OrbitError>) -> Self {
-        match result {
-            Ok(output) => Self::AnsweredOk { output },
-            Err(error) => Self::AnsweredRefused {
-                error: PluginHostRouteError::from(&error),
-            },
-        }
-    }
-
-    /// The reply to a call the host refused before it reached dispatch.
-    fn unanswered(error: &OrbitError) -> Self {
-        Self::Unanswered {
-            error: PluginHostRouteError::from(error),
-        }
-    }
-
-    /// The response frame body.
-    fn encode(&self) -> Vec<u8> {
-        let envelope = match self {
-            Self::AnsweredOk { output } => ReplyEnvelope {
-                schema_version: SCHEMA_VERSION,
-                answered: true,
-                ok: Some(true),
-                output: Some(output),
-                error: None,
-            },
-            Self::AnsweredRefused { error } => ReplyEnvelope {
-                schema_version: SCHEMA_VERSION,
-                answered: true,
-                ok: Some(false),
-                output: None,
-                error: Some(error),
-            },
-            Self::Unanswered { error } => ReplyEnvelope {
-                schema_version: SCHEMA_VERSION,
-                answered: false,
-                ok: None,
-                output: None,
-                error: Some(error),
-            },
-        };
-        serde_json::to_vec(&envelope).unwrap_or_else(|error| {
-            tracing::warn!(
-                target: "orbit.tools.plugin",
-                "the plugin host route could not encode a response: {error}"
-            );
-            Vec::new()
-        })
-    }
-
-    /// Read one complete response frame body. Anything that is not JSON is an
-    /// unanswered refusal; JSON of another shape decodes field by field with
-    /// a missing `output` as null and an unreadable error as an execution
-    /// failure, and only `answered: true` makes the reply an answer.
-    fn decode(body: &[u8]) -> Self {
-        let Ok(frame) = serde_json::from_slice::<Section<ReplyFrame>>(body) else {
-            return Self::Unanswered {
-                error: PluginHostRouteError::Execution {
-                    message: "the plugin host route answered with something other than JSON"
-                        .to_string(),
-                },
-            };
-        };
-        let ReplyFrame {
-            answered,
-            ok,
-            output,
-            error: Section(error),
-        } = frame.0;
-        let error = PluginHostRouteError::from(error);
-        match (answered, ok) {
-            (Some(true), Some(true)) => Self::AnsweredOk {
-                output: output.unwrap_or(Value::Null),
-            },
-            (Some(true), _) => Self::AnsweredRefused { error },
-            _ => Self::Unanswered { error },
-        }
-    }
-}
-
-impl From<PluginHostRouteReply> for HostRouteOutcome {
-    fn from(reply: PluginHostRouteReply) -> Self {
-        match reply {
-            PluginHostRouteReply::AnsweredOk { output } => Self::Answered(Ok(output)),
-            PluginHostRouteReply::AnsweredRefused { error } => Self::Answered(Err(error.into())),
-            PluginHostRouteReply::Unanswered { error } => Self::Unanswered(error.into()),
-        }
-    }
-}
-
-fn parse_request(body: &[u8]) -> Result<(String, Value), OrbitError> {
-    let request: Value = serde_json::from_slice(body).map_err(|error| {
-        OrbitError::InvalidInput(format!("plugin host route request is not JSON: {error}"))
-    })?;
-    if request.get("schema_version").and_then(Value::as_u64) != Some(SCHEMA_VERSION) {
-        return Err(OrbitError::InvalidInput(format!(
-            "plugin host route request must carry schema_version {SCHEMA_VERSION}"
-        )));
-    }
-    let tool = request
-        .get("tool")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            OrbitError::InvalidInput("plugin host route request must name a `tool`".to_string())
-        })?
-        .to_string();
-    let input = request
-        .get("input")
-        .filter(|input| input.is_object())
-        .cloned()
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "plugin host route request `input` must be a JSON object".to_string(),
-            )
-        })?;
-    Ok((tool, input))
-}
-
 #[cfg(unix)]
 mod unix {
     use std::io::{self, Read, Write};
@@ -858,4 +424,438 @@ mod unix {
         writer.write_all(body)?;
         writer.flush()
     }
+}
+
+use std::cell::RefCell;
+use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use orbit_common::{DecisionRefusalCode, OrbitError};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+
+use super::SessionRecord;
+
+#[cfg(unix)]
+pub(super) use self::unix::HostRoute;
+#[cfg(unix)]
+pub use self::unix::forward_host_routed_callback;
+
+/// The descriptor the host maps the route socket onto in a backend child.
+///
+/// Fixed, like [`super::PLUGIN_CALLBACK_FD`], so a descendant finds it without
+/// being told. A backend that closes it loses only the host route: its digest
+/// and submit callbacks are then answered by the child itself, which a
+/// confined child cannot do.
+pub const PLUGIN_HOST_ROUTE_FD: i32 = 4;
+
+/// Decision-channel callbacks: always host-routed, because they read the
+/// channel store no plugin child may read.
+const DECISION_CHANNEL_CALLBACK_TOOLS: [&str; 2] =
+    ["orbit.decision.digest", "orbit.decision.submit"];
+
+/// Whether `tool` is a callback the host route may run on the host: a
+/// decision-channel callback, or a tool an application consent may list as a
+/// callback.
+pub fn is_host_routed_callback_tool(tool: &str) -> bool {
+    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+        || orbit_common::governance::authorization::application_callback_tool(tool)
+}
+
+/// Whether `record`'s child sends `tool` over the host route. An application
+/// callback tool is routed only for a session bound to an application;
+/// without one, a plugin granted the tool keeps calling it in its own
+/// sandbox, as before.
+pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
+    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+        || (record.application.is_some()
+            && orbit_common::governance::authorization::application_callback_tool(tool))
+}
+
+/// The task a `pin` callback bound for one host route's session.
+type PinnedTask = Arc<Mutex<Option<String>>>;
+
+/// The session a host-route call runs under, and that session's pin.
+#[derive(Clone)]
+#[cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "non-unix builds have no host route, so no RoutedCallback is ever built"
+    )
+)]
+struct RoutedCallback {
+    record: SessionRecord,
+    pinned: PinnedTask,
+}
+
+thread_local! {
+    /// The session a host-route call runs under, set only by the route's own
+    /// server thread for the length of one call.
+    static ROUTED_CALLBACK: RefCell<Option<RoutedCallback>> = const { RefCell::new(None) };
+}
+
+/// The session the current thread is answering a host-route call for, with
+/// the task its application invocation has pinned so far.
+pub(super) fn routed_callback_record() -> Option<SessionRecord> {
+    ROUTED_CALLBACK.with(|routed| {
+        routed.borrow().as_ref().map(|routed| {
+            let mut record = routed.record.clone();
+            if let Some(application) = record.application.as_mut() {
+                application
+                    .pinned_task
+                    .clone_from(&routed.pinned.lock().unwrap_or_else(PoisonError::into_inner));
+            }
+            record
+        })
+    })
+}
+
+/// Pin `task` for the rest of the application invocation the current
+/// host-route call runs under. Refused when another task is already pinned,
+/// and outside a host-route call, where no host-owned pin exists.
+pub fn pin_routed_application_task(task: &str) -> Result<(), OrbitError> {
+    ROUTED_CALLBACK.with(|routed| {
+        let routed = routed.borrow();
+        let Some(routed) = routed
+            .as_ref()
+            .filter(|routed| routed.record.application.is_some())
+        else {
+            return Err(OrbitError::CapabilityDenied(
+                "a pinned application callback runs only on the plugin host route".into(),
+            ));
+        };
+        let mut pinned = routed.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        match pinned.as_deref() {
+            Some(current) if current != task => Err(OrbitError::CapabilityDenied(
+                "application callback names a task other than the one this invocation pinned"
+                    .into(),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                *pinned = Some(task.to_owned());
+                Ok(())
+            }
+        }
+    })
+}
+
+/// What a forwarded call came back with.
+#[derive(Debug)]
+pub enum HostRouteOutcome {
+    /// The host dispatched the call and wrote its audit row.
+    Answered(Result<Value, OrbitError>),
+    /// The call never reached the host's dispatch: the route was unusable or
+    /// the host refused the request first. The caller audits it.
+    Unanswered(OrbitError),
+}
+
+/// No other platform inherits descriptors, so no call is forwarded.
+#[cfg(not(unix))]
+pub fn forward_host_routed_callback(
+    _env: &orbit_common::Env,
+    _global_root: &Path,
+    _tool: &str,
+    _input: &Value,
+) -> Option<HostRouteOutcome> {
+    None
+}
+
+/// Largest request frame the host reads. A submission's raw message is
+/// bounded at 256 KiB before JSON escaping.
+const MAX_REQUEST_BYTES: u32 = 4 * 1024 * 1024;
+/// Largest response frame a caller reads: a digest lists every open request.
+const MAX_RESPONSE_BYTES: u32 = 64 * 1024 * 1024;
+const SCHEMA_VERSION: u64 = 1;
+
+/// The message a refusal carries when the frame names none a caller can read.
+const UNREADABLE_ERROR_MESSAGE: &str = "the host route answered with an unreadable error";
+
+/// A host error as the route carries it. The kinds a caller branches on keep
+/// their variant, decision refusals their stable code; everything else keeps
+/// its rendered message.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PluginHostRouteError {
+    DecisionRefused {
+        code: DecisionRefusalCode,
+        message: String,
+    },
+    PolicyDenied {
+        message: String,
+    },
+    CapabilityDenied {
+        message: String,
+    },
+    InvalidInput {
+        message: String,
+    },
+    Execution {
+        message: String,
+    },
+}
+
+impl From<&OrbitError> for PluginHostRouteError {
+    fn from(error: &OrbitError) -> Self {
+        match error {
+            OrbitError::DecisionRefused { code, message } => Self::DecisionRefused {
+                code: *code,
+                message: message.clone(),
+            },
+            OrbitError::PolicyDenied(message) => Self::PolicyDenied {
+                message: message.clone(),
+            },
+            OrbitError::CapabilityDenied(message) => Self::CapabilityDenied {
+                message: message.clone(),
+            },
+            OrbitError::InvalidInput(message) => Self::InvalidInput {
+                message: message.clone(),
+            },
+            OrbitError::Execution(message) => Self::Execution {
+                message: message.clone(),
+            },
+            other => Self::Execution {
+                message: other.to_string(),
+            },
+        }
+    }
+}
+
+impl From<PluginHostRouteError> for OrbitError {
+    fn from(error: PluginHostRouteError) -> Self {
+        match error {
+            PluginHostRouteError::DecisionRefused { code, message } => {
+                Self::DecisionRefused { code, message }
+            }
+            PluginHostRouteError::PolicyDenied { message } => Self::PolicyDenied(message),
+            PluginHostRouteError::CapabilityDenied { message } => Self::CapabilityDenied(message),
+            PluginHostRouteError::InvalidInput { message } => Self::InvalidInput(message),
+            PluginHostRouteError::Execution { message } => Self::Execution(message),
+        }
+    }
+}
+
+/// The error kinds a frame may name; any other kind reads as an execution
+/// failure, as an unrecognized kind always has.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ErrorFrameKind {
+    DecisionRefused,
+    PolicyDenied,
+    CapabilityDenied,
+    InvalidInput,
+    #[serde(other)]
+    Execution,
+}
+
+/// An error as a response frame spells it, read leniently: a field that is
+/// missing or of another type is absent, so an old or foreign frame still
+/// decodes to the same typed error it always did.
+#[derive(Debug, Default, Deserialize)]
+struct ErrorFrame {
+    #[serde(default, deserialize_with = "lenient")]
+    kind: Option<ErrorFrameKind>,
+    #[serde(default, deserialize_with = "lenient")]
+    code: Option<DecisionRefusalCode>,
+    #[serde(default, deserialize_with = "lenient")]
+    message: Option<String>,
+}
+
+impl From<ErrorFrame> for PluginHostRouteError {
+    fn from(frame: ErrorFrame) -> Self {
+        let message = frame
+            .message
+            .unwrap_or_else(|| UNREADABLE_ERROR_MESSAGE.to_string());
+        match (frame.kind, frame.code) {
+            (Some(ErrorFrameKind::DecisionRefused), Some(code)) => {
+                Self::DecisionRefused { code, message }
+            }
+            (Some(ErrorFrameKind::PolicyDenied), _) => Self::PolicyDenied { message },
+            (Some(ErrorFrameKind::CapabilityDenied), _) => Self::CapabilityDenied { message },
+            (Some(ErrorFrameKind::InvalidInput), _) => Self::InvalidInput { message },
+            _ => Self::Execution { message },
+        }
+    }
+}
+
+/// A value of `T` when the JSON has that shape, else absent.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
+}
+
+/// A frame section that is a JSON object of the expected shape, else its
+/// default: any other JSON value reads as an empty section.
+#[derive(Debug, Default)]
+struct Section<T>(T);
+
+impl<'de, T: DeserializeOwned + Default> Deserialize<'de> for Section<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(match Value::deserialize(deserializer)? {
+            object @ Value::Object(_) => serde_json::from_value(object).unwrap_or_default(),
+            _ => T::default(),
+        }))
+    }
+}
+
+/// A response frame as it arrives, before it is read as a reply.
+#[derive(Debug, Default, Deserialize)]
+struct ReplyFrame {
+    #[serde(default, deserialize_with = "lenient")]
+    answered: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    ok: Option<bool>,
+    #[serde(default)]
+    output: Option<Value>,
+    #[serde(default)]
+    error: Section<ErrorFrame>,
+}
+
+/// One response frame of the v1 route: the host answered and the call
+/// succeeded, the host answered and refused, or the call never reached the
+/// host's dispatch. An answered refusal was dispatched and audited by the
+/// host; an unanswered one was not, so the caller audits it.
+#[derive(Debug)]
+enum PluginHostRouteReply {
+    AnsweredOk { output: Value },
+    AnsweredRefused { error: PluginHostRouteError },
+    Unanswered { error: PluginHostRouteError },
+}
+
+/// The wire shape of a reply: `answered`, then `ok` with `output` or `error`
+/// for an answered call, or `error` alone for an unanswered one.
+#[derive(Serialize)]
+struct ReplyEnvelope<'a> {
+    schema_version: u64,
+    answered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ok: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a PluginHostRouteError>,
+}
+
+impl PluginHostRouteReply {
+    /// The reply to a call the host dispatched.
+    fn answered(result: Result<Value, OrbitError>) -> Self {
+        match result {
+            Ok(output) => Self::AnsweredOk { output },
+            Err(error) => Self::AnsweredRefused {
+                error: PluginHostRouteError::from(&error),
+            },
+        }
+    }
+
+    /// The reply to a call the host refused before it reached dispatch.
+    fn unanswered(error: &OrbitError) -> Self {
+        Self::Unanswered {
+            error: PluginHostRouteError::from(error),
+        }
+    }
+
+    /// The response frame body.
+    fn encode(&self) -> Vec<u8> {
+        let envelope = match self {
+            Self::AnsweredOk { output } => ReplyEnvelope {
+                schema_version: SCHEMA_VERSION,
+                answered: true,
+                ok: Some(true),
+                output: Some(output),
+                error: None,
+            },
+            Self::AnsweredRefused { error } => ReplyEnvelope {
+                schema_version: SCHEMA_VERSION,
+                answered: true,
+                ok: Some(false),
+                output: None,
+                error: Some(error),
+            },
+            Self::Unanswered { error } => ReplyEnvelope {
+                schema_version: SCHEMA_VERSION,
+                answered: false,
+                ok: None,
+                output: None,
+                error: Some(error),
+            },
+        };
+        serde_json::to_vec(&envelope).unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.tools.plugin",
+                "the plugin host route could not encode a response: {error}"
+            );
+            Vec::new()
+        })
+    }
+
+    /// Read one complete response frame body. Anything that is not JSON is an
+    /// unanswered refusal; JSON of another shape decodes field by field with
+    /// a missing `output` as null and an unreadable error as an execution
+    /// failure, and only `answered: true` makes the reply an answer.
+    fn decode(body: &[u8]) -> Self {
+        let Ok(frame) = serde_json::from_slice::<Section<ReplyFrame>>(body) else {
+            return Self::Unanswered {
+                error: PluginHostRouteError::Execution {
+                    message: "the plugin host route answered with something other than JSON"
+                        .to_string(),
+                },
+            };
+        };
+        let ReplyFrame {
+            answered,
+            ok,
+            output,
+            error: Section(error),
+        } = frame.0;
+        let error = PluginHostRouteError::from(error);
+        match (answered, ok) {
+            (Some(true), Some(true)) => Self::AnsweredOk {
+                output: output.unwrap_or(Value::Null),
+            },
+            (Some(true), _) => Self::AnsweredRefused { error },
+            _ => Self::Unanswered { error },
+        }
+    }
+}
+
+impl From<PluginHostRouteReply> for HostRouteOutcome {
+    fn from(reply: PluginHostRouteReply) -> Self {
+        match reply {
+            PluginHostRouteReply::AnsweredOk { output } => Self::Answered(Ok(output)),
+            PluginHostRouteReply::AnsweredRefused { error } => Self::Answered(Err(error.into())),
+            PluginHostRouteReply::Unanswered { error } => Self::Unanswered(error.into()),
+        }
+    }
+}
+
+fn parse_request(body: &[u8]) -> Result<(String, Value), OrbitError> {
+    let request: Value = serde_json::from_slice(body).map_err(|error| {
+        OrbitError::InvalidInput(format!("plugin host route request is not JSON: {error}"))
+    })?;
+    if request.get("schema_version").and_then(Value::as_u64) != Some(SCHEMA_VERSION) {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin host route request must carry schema_version {SCHEMA_VERSION}"
+        )));
+    }
+    let tool = request
+        .get("tool")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput("plugin host route request must name a `tool`".to_string())
+        })?
+        .to_string();
+    let input = request
+        .get("input")
+        .filter(|input| input.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "plugin host route request `input` must be a JSON object".to_string(),
+            )
+        })?;
+    Ok((tool, input))
 }

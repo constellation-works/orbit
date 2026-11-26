@@ -1,5 +1,10 @@
 //! Focused credential-mask, alias and descriptor safety guards.
 
+mod credentials;
+mod descriptor;
+mod mask;
+mod wrapper;
+
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
@@ -18,8 +23,3 @@ fn profile(modify: Vec<String>) -> ResolvedFsProfile {
         modify,
     }
 }
-
-mod credentials;
-mod descriptor;
-mod mask;
-mod wrapper;

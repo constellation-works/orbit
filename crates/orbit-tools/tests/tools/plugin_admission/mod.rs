@@ -1,5 +1,16 @@
 //! Plugin admission through exported profiles and tool execution.
 
+mod brokered;
+mod confinement;
+mod state_isolation;
+
+mod write_files;
+
+mod support;
+
+#[cfg(unix)]
+mod rotation;
+
 use std::path::Path;
 
 use orbit_types::plugin::{PluginFsPermissions, PluginGrant, PluginPermissions};
@@ -18,14 +29,3 @@ fn fs_state_permissions() -> PluginPermissions {
         ..PluginPermissions::default()
     }
 }
-
-mod brokered;
-mod confinement;
-mod state_isolation;
-
-mod write_files;
-
-mod support;
-
-#[cfg(unix)]
-mod rotation;

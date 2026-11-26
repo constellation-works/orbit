@@ -16,296 +16,6 @@
 //! macOS CI leg sets `ORBIT_REQUIRE_SANDBOX_EXEC=1`, which turns that skip
 //! into a failure.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::time::Duration;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use orbit_exec::{
-    ScriptRunEnd, ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxSpec,
-    run_script_sandboxed,
-};
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn script_sandbox_available(test: &str) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let probe = orbit_exec::probe_bwrap();
-        if !probe.available {
-            orbit_exec::report_bwrap_deferral(test, &probe.detail);
-            return false;
-        }
-    }
-    #[cfg(target_os = "macos")]
-    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
-        return false;
-    }
-    true
-}
-
-/// A physical scratch directory holding every scratch subdirectory.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn scratch_in(parent: &Path) -> PathBuf {
-    let scratch = parent.join("scratch");
-    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
-        std::fs::create_dir_all(scratch.join(name)).expect("scratch directory");
-    }
-    scratch.canonicalize().expect("physical scratch")
-}
-
-/// The script process runs under the design's `RLIMIT_*` limits: the
-/// open-file limit at [`orbit_exec::SCRIPT_OPEN_FILES_LIMIT`] (a descriptor
-/// past it cannot be opened, and the limit cannot be raised) and the CPU
-/// limit at the step's timeout in seconds.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_script_runs_under_its_cpu_and_open_file_limits() {
-    if !script_sandbox_available("a_script_runs_under_its_cpu_and_open_file_limits") {
-        return;
-    }
-    let dir = tempfile::tempdir().expect("fixture");
-    let cwd = dir.path().join("work");
-    std::fs::create_dir_all(&cwd).expect("cwd");
-    let cwd = cwd.canonicalize().expect("physical cwd");
-    let scratch = scratch_in(dir.path());
-    let limit = orbit_exec::SCRIPT_OPEN_FILES_LIMIT;
-    let script = format!(
-        "echo files=$(ulimit -n) cpu=$(ulimit -t); \
-         (exec {below}</dev/null) 2>/dev/null && echo below=opened || echo below=refused; \
-         (exec {above}</dev/null) 2>/dev/null && echo above=opened || echo above=refused; \
-         (ulimit -n {raise}) 2>/dev/null && echo raise=allowed || echo raise=refused",
-        below = limit - 24,
-        above = limit + 24,
-        raise = limit * 2,
-    );
-    let argv = vec!["/bin/bash".to_string(), "-c".to_string(), script];
-    let env = vec![("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let run = run_script_sandboxed(
-        &orbit_common::Env::capture(),
-        ScriptSandboxRequest {
-            sandbox: ScriptSandboxSpec {
-                cwd: &cwd,
-                cwd_writable: true,
-                scratch: &scratch,
-                readable: &[],
-                writable: &[],
-                masked: &[],
-                home: None,
-                inputs: &[],
-                network: ScriptSandboxNetwork::None,
-            },
-            argv: &argv,
-            env: &env,
-            launcher: &[],
-            launcher_env: &[],
-            stdin: Vec::new(),
-            timeout: Duration::from_secs(37),
-            scratch_cap_bytes: u64::MAX,
-        },
-    )
-    .expect("run the script");
-    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
-    assert_eq!(
-        run.end,
-        ScriptRunEnd::Exited(0),
-        "{}",
-        String::from_utf8_lossy(&run.log)
-    );
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        [
-            format!("files={limit} cpu=37").as_str(),
-            "below=opened",
-            "above=refused",
-            "raise=refused",
-        ],
-        "the script must run under RLIMIT_NOFILE={limit} and RLIMIT_CPU=37s"
-    );
-}
-
-/// `orbit script grant` and the job's process probe a granted root the
-/// same way: a missing root, one inside a credential path and a write root
-/// this process cannot write are refused, each naming the path; a usable
-/// root resolves to its physical path.
-#[cfg(unix)]
-#[test]
-fn granted_roots_are_probed_for_existence_credentials_and_access() {
-    use orbit_exec::{ScriptRootAccess, probe_script_root};
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().expect("fixture");
-    let home = dir.path().join("home");
-    let library = dir.path().join("library");
-    let sealed = dir.path().join("sealed");
-    for path in [&home.join(".ssh/keys"), &library, &sealed] {
-        std::fs::create_dir_all(path).expect("fixture directory");
-    }
-    let home_os = Some(home.as_os_str());
-
-    let physical = probe_script_root(
-        &orbit_common::Env::capture(),
-        &library,
-        ScriptRootAccess::Write,
-        home_os,
-    )
-    .expect("a readable, writable directory passes");
-    assert_eq!(physical, library.canonicalize().expect("physical"));
-    assert_eq!(
-        std::fs::read_dir(&library).expect("list").count(),
-        0,
-        "the write probe leaves nothing behind"
-    );
-
-    let missing = dir.path().join("gone");
-    let refused = probe_script_root(
-        &orbit_common::Env::capture(),
-        &missing,
-        ScriptRootAccess::Read,
-        home_os,
-    )
-    .expect_err("a missing root is refused");
-    assert!(
-        refused.contains(&missing.display().to_string()) && refused.contains("does not exist"),
-        "{refused}"
-    );
-
-    let credential = home.join(".ssh/keys");
-    let refused = probe_script_root(
-        &orbit_common::Env::capture(),
-        &credential,
-        ScriptRootAccess::Read,
-        home_os,
-    )
-    .expect_err("a root inside a credential path is refused");
-    assert!(
-        refused.contains(&credential.display().to_string()) && refused.contains("credential"),
-        "{refused}"
-    );
-
-    let refused = probe_script_root(
-        &orbit_common::Env::capture(),
-        Path::new("relative"),
-        ScriptRootAccess::Read,
-        home_os,
-    )
-    .expect_err("a relative root is refused");
-    assert!(refused.contains("not an absolute path"), "{refused}");
-
-    // SAFETY: `geteuid` has no preconditions.
-    if unsafe { libc::geteuid() } == 0 {
-        // Root ignores directory modes; the write-probe refusal needs a
-        // process that permissions bind.
-        return;
-    }
-    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).expect("chmod");
-    probe_script_root(
-        &orbit_common::Env::capture(),
-        &sealed,
-        ScriptRootAccess::Read,
-        home_os,
-    )
-    .expect("a read-only directory is a usable read root");
-    let refused = probe_script_root(
-        &orbit_common::Env::capture(),
-        &sealed,
-        ScriptRootAccess::Write,
-        home_os,
-    )
-    .expect_err("a write root this process cannot write is refused");
-    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    assert!(
-        refused.contains(&sealed.display().to_string()) && refused.contains("not accessible"),
-        "{refused}"
-    );
-    if cfg!(target_os = "macos") {
-        assert!(
-            refused.contains("Privacy & Security > Full Disk Access"),
-            "a macOS denial names the privacy pane to grant it in: {refused}"
-        );
-    }
-}
-
-/// A FIFO (or another non-regular kind) named as a read root is refused
-/// promptly, naming the path, instead of blocking on `File::open` for a
-/// writer that may never come. The probe runs on a thread with a bounded
-/// wait so the frozen blocking implementation fails this check instead of
-/// hanging it. A regular file replaced by a FIFO at the same path — the
-/// replacement a granted root can undergo before the run-time re-probe —
-/// is refused the same way, which also exercises the post-open type check:
-/// the non-blocking open succeeds on a FIFO and the opened handle's type
-/// is what refuses it.
-#[cfg(unix)]
-#[test]
-fn nonregular_read_roots_are_refused_promptly_without_blocking() {
-    use orbit_exec::{ScriptRootAccess, probe_script_root};
-    use std::sync::mpsc;
-
-    fn mkfifo(path: &Path) {
-        let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().into_owned())
-            .expect("fifo path has no NUL");
-        // SAFETY: `c_path` is a valid NUL-terminated path for the call.
-        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-        assert_eq!(
-            rc,
-            0,
-            "mkfifo {}: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        );
-    }
-
-    fn probe_bounded(root: PathBuf) -> Result<PathBuf, String> {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(probe_script_root(
-                &orbit_common::Env::capture(),
-                &root,
-                ScriptRootAccess::Read,
-                None,
-            ));
-        });
-        rx.recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the root probe must not block on a non-regular root")
-    }
-
-    let dir = tempfile::tempdir().expect("fixture");
-    let home = None;
-
-    let fifo = dir.path().join("fifo");
-    mkfifo(&fifo);
-    let refused = probe_bounded(fifo.clone()).expect_err("a FIFO read root is refused");
-    assert!(
-        refused.contains(&fifo.display().to_string())
-            && refused.contains("not a regular file or directory"),
-        "{refused}"
-    );
-
-    let socket = dir.path().join("socket");
-    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket fixture");
-    let refused = probe_bounded(socket.clone()).expect_err("a socket read root is refused");
-    assert!(refused.contains(&socket.display().to_string()), "{refused}");
-
-    // A granted regular file replaced by a FIFO at the same path.
-    let data = dir.path().join("data");
-    std::fs::write(&data, "data").expect("data file");
-    probe_script_root(
-        &orbit_common::Env::capture(),
-        &data,
-        ScriptRootAccess::Read,
-        home,
-    )
-    .expect("a regular file passes");
-    std::fs::remove_file(&data).expect("remove data");
-    mkfifo(&data);
-    let refused = probe_bounded(data.clone()).expect_err("a FIFO replacement is refused");
-    assert!(
-        refused.contains(&data.display().to_string())
-            && refused.contains("not a regular file or directory"),
-        "{refused}"
-    );
-}
-
 #[cfg(target_os = "macos")]
 mod macos {
     use std::path::Path;
@@ -703,4 +413,294 @@ mod macos {
         );
         assert!(!marker.exists(), "a nested start must run nothing");
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::time::Duration;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use orbit_exec::{
+    ScriptRunEnd, ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxSpec,
+    run_script_sandboxed,
+};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn script_sandbox_available(test: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let probe = orbit_exec::probe_bwrap();
+        if !probe.available {
+            orbit_exec::report_bwrap_deferral(test, &probe.detail);
+            return false;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
+        return false;
+    }
+    true
+}
+
+/// A physical scratch directory holding every scratch subdirectory.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn scratch_in(parent: &Path) -> PathBuf {
+    let scratch = parent.join("scratch");
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        std::fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    scratch.canonicalize().expect("physical scratch")
+}
+
+/// The script process runs under the design's `RLIMIT_*` limits: the
+/// open-file limit at [`orbit_exec::SCRIPT_OPEN_FILES_LIMIT`] (a descriptor
+/// past it cannot be opened, and the limit cannot be raised) and the CPU
+/// limit at the step's timeout in seconds.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_script_runs_under_its_cpu_and_open_file_limits() {
+    if !script_sandbox_available("a_script_runs_under_its_cpu_and_open_file_limits") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("fixture");
+    let cwd = dir.path().join("work");
+    std::fs::create_dir_all(&cwd).expect("cwd");
+    let cwd = cwd.canonicalize().expect("physical cwd");
+    let scratch = scratch_in(dir.path());
+    let limit = orbit_exec::SCRIPT_OPEN_FILES_LIMIT;
+    let script = format!(
+        "echo files=$(ulimit -n) cpu=$(ulimit -t); \
+         (exec {below}</dev/null) 2>/dev/null && echo below=opened || echo below=refused; \
+         (exec {above}</dev/null) 2>/dev/null && echo above=opened || echo above=refused; \
+         (ulimit -n {raise}) 2>/dev/null && echo raise=allowed || echo raise=refused",
+        below = limit - 24,
+        above = limit + 24,
+        raise = limit * 2,
+    );
+    let argv = vec!["/bin/bash".to_string(), "-c".to_string(), script];
+    let env = vec![("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    let run = run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd: &cwd,
+                cwd_writable: true,
+                scratch: &scratch,
+                readable: &[],
+                writable: &[],
+                masked: &[],
+                home: None,
+                inputs: &[],
+                network: ScriptSandboxNetwork::None,
+            },
+            argv: &argv,
+            env: &env,
+            launcher: &[],
+            launcher_env: &[],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(37),
+            scratch_cap_bytes: u64::MAX,
+        },
+    )
+    .expect("run the script");
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            format!("files={limit} cpu=37").as_str(),
+            "below=opened",
+            "above=refused",
+            "raise=refused",
+        ],
+        "the script must run under RLIMIT_NOFILE={limit} and RLIMIT_CPU=37s"
+    );
+}
+
+/// `orbit script grant` and the job's process probe a granted root the
+/// same way: a missing root, one inside a credential path and a write root
+/// this process cannot write are refused, each naming the path; a usable
+/// root resolves to its physical path.
+#[cfg(unix)]
+#[test]
+fn granted_roots_are_probed_for_existence_credentials_and_access() {
+    use orbit_exec::{ScriptRootAccess, probe_script_root};
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = dir.path().join("home");
+    let library = dir.path().join("library");
+    let sealed = dir.path().join("sealed");
+    for path in [&home.join(".ssh/keys"), &library, &sealed] {
+        std::fs::create_dir_all(path).expect("fixture directory");
+    }
+    let home_os = Some(home.as_os_str());
+
+    let physical = probe_script_root(
+        &orbit_common::Env::capture(),
+        &library,
+        ScriptRootAccess::Write,
+        home_os,
+    )
+    .expect("a readable, writable directory passes");
+    assert_eq!(physical, library.canonicalize().expect("physical"));
+    assert_eq!(
+        std::fs::read_dir(&library).expect("list").count(),
+        0,
+        "the write probe leaves nothing behind"
+    );
+
+    let missing = dir.path().join("gone");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        &missing,
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect_err("a missing root is refused");
+    assert!(
+        refused.contains(&missing.display().to_string()) && refused.contains("does not exist"),
+        "{refused}"
+    );
+
+    let credential = home.join(".ssh/keys");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        &credential,
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect_err("a root inside a credential path is refused");
+    assert!(
+        refused.contains(&credential.display().to_string()) && refused.contains("credential"),
+        "{refused}"
+    );
+
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        Path::new("relative"),
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect_err("a relative root is refused");
+    assert!(refused.contains("not an absolute path"), "{refused}");
+
+    // SAFETY: `geteuid` has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        // Root ignores directory modes; the write-probe refusal needs a
+        // process that permissions bind.
+        return;
+    }
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    probe_script_root(
+        &orbit_common::Env::capture(),
+        &sealed,
+        ScriptRootAccess::Read,
+        home_os,
+    )
+    .expect("a read-only directory is a usable read root");
+    let refused = probe_script_root(
+        &orbit_common::Env::capture(),
+        &sealed,
+        ScriptRootAccess::Write,
+        home_os,
+    )
+    .expect_err("a write root this process cannot write is refused");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    assert!(
+        refused.contains(&sealed.display().to_string()) && refused.contains("not accessible"),
+        "{refused}"
+    );
+    if cfg!(target_os = "macos") {
+        assert!(
+            refused.contains("Privacy & Security > Full Disk Access"),
+            "a macOS denial names the privacy pane to grant it in: {refused}"
+        );
+    }
+}
+
+/// A FIFO (or another non-regular kind) named as a read root is refused
+/// promptly, naming the path, instead of blocking on `File::open` for a
+/// writer that may never come. The probe runs on a thread with a bounded
+/// wait so the frozen blocking implementation fails this check instead of
+/// hanging it. A regular file replaced by a FIFO at the same path — the
+/// replacement a granted root can undergo before the run-time re-probe —
+/// is refused the same way, which also exercises the post-open type check:
+/// the non-blocking open succeeds on a FIFO and the opened handle's type
+/// is what refuses it.
+#[cfg(unix)]
+#[test]
+fn nonregular_read_roots_are_refused_promptly_without_blocking() {
+    use orbit_exec::{ScriptRootAccess, probe_script_root};
+    use std::sync::mpsc;
+
+    fn mkfifo(path: &Path) {
+        let c_path = std::ffi::CString::new(path.as_os_str().to_string_lossy().into_owned())
+            .expect("fifo path has no NUL");
+        // SAFETY: `c_path` is a valid NUL-terminated path for the call.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    fn probe_bounded(root: PathBuf) -> Result<PathBuf, String> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(probe_script_root(
+                &orbit_common::Env::capture(),
+                &root,
+                ScriptRootAccess::Read,
+                None,
+            ));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the root probe must not block on a non-regular root")
+    }
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = None;
+
+    let fifo = dir.path().join("fifo");
+    mkfifo(&fifo);
+    let refused = probe_bounded(fifo.clone()).expect_err("a FIFO read root is refused");
+    assert!(
+        refused.contains(&fifo.display().to_string())
+            && refused.contains("not a regular file or directory"),
+        "{refused}"
+    );
+
+    let socket = dir.path().join("socket");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket fixture");
+    let refused = probe_bounded(socket.clone()).expect_err("a socket read root is refused");
+    assert!(refused.contains(&socket.display().to_string()), "{refused}");
+
+    // A granted regular file replaced by a FIFO at the same path.
+    let data = dir.path().join("data");
+    std::fs::write(&data, "data").expect("data file");
+    probe_script_root(
+        &orbit_common::Env::capture(),
+        &data,
+        ScriptRootAccess::Read,
+        home,
+    )
+    .expect("a regular file passes");
+    std::fs::remove_file(&data).expect("remove data");
+    mkfifo(&data);
+    let refused = probe_bounded(data.clone()).expect_err("a FIFO replacement is refused");
+    assert!(
+        refused.contains(&data.display().to_string())
+            && refused.contains("not a regular file or directory"),
+        "{refused}"
+    );
 }

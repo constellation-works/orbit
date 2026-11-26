@@ -45,6 +45,10 @@ use std::time::{Duration, Instant};
 use crate::runner::run_probe_process;
 use crate::{EnvironmentMode, ExecRequest, StdinMode};
 
+/// Disables Python `.pyc` / `__pycache__/` writes in validation and agent
+/// subprocesses so repository scripts do not dirty delivery worktrees.
+use orbit_common::env_vars::PYTHONDONTWRITEBYTECODE as PYTHON_NO_BYTECODE_ENV;
+
 /// Variables a login shell contributes to the validation environment: PATH
 /// and the locators toolchains on it need to find their own installation.
 /// Everything else in the login environment stays behind.
@@ -75,10 +79,6 @@ pub const LOGIN_SHELL_CACHE_TTL: Duration = Duration::from_secs(120);
 
 /// Precedes the printed records, so profile output before it is ignored.
 const LOGIN_ENV_MARKER: &str = "__ORBIT_VALIDATION_LOGIN_ENV__";
-
-/// Disables Python `.pyc` / `__pycache__/` writes in validation and agent
-/// subprocesses so repository scripts do not dirty delivery worktrees.
-use orbit_common::env_vars::PYTHONDONTWRITEBYTECODE as PYTHON_NO_BYTECODE_ENV;
 
 /// Where the validation PATH came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

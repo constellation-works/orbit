@@ -2,6 +2,9 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../github_log_goldens/mod.rs"]
+mod github_log_goldens;
+
 use std::collections::BTreeSet;
 
 use orbit_tools::{ToolContext, ToolRegistry};
@@ -597,9 +600,6 @@ fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
     has("orbit.workflow.auto", "reason", "string");
     has("orbit.task.show", "run_id", "string");
 }
-
-#[path = "../github_log_goldens/mod.rs"]
-mod github_log_goldens;
 
 #[test]
 fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {

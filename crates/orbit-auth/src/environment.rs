@@ -14,56 +14,6 @@
 //! it that they do not own, and the entry below it is checked in turn. ACLs
 //! and mandatory access control are not read.
 
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
-
-use orbit_common::OrbitError;
-
-/// Refuse unless the running user, its executable and `orbit_home` are safe
-/// for listener-user authority. See the module documentation.
-pub fn check_listener_execution_environment(orbit_home: &Path) -> Result<(), OrbitError> {
-    platform::check(orbit_home)
-}
-
-/// The account the operator becomes to run listener-user commands, by
-/// convention.
-pub const LISTENER_USER: &str = "orbit-lease";
-
-fn refusal(detail: String) -> OrbitError {
-    OrbitError::PolicyDenied(format!(
-        "refusing to run as the lease listener user ({LISTENER_USER} by convention): {detail}"
-    ))
-}
-
-#[cfg(unix)]
-/// The paths a check covers: `path` itself and every directory above it.
-fn path_and_ancestors(path: &Path) -> Vec<PathBuf> {
-    path.ancestors().map(Path::to_path_buf).collect()
-}
-
-#[cfg(unix)]
-/// The existing path to check for `orbit_home`: the home itself, or its
-/// nearest existing ancestor when it does not exist yet.
-fn existing_prefix(path: &Path) -> Result<PathBuf, OrbitError> {
-    for candidate in path.ancestors() {
-        match candidate.canonicalize() {
-            Ok(resolved) => return Ok(resolved),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(refusal(format!(
-                    "cannot resolve {}: {error}",
-                    candidate.display()
-                )));
-            }
-        }
-    }
-    Err(refusal(format!(
-        "{} has no existing ancestor",
-        path.display()
-    )))
-}
-
 #[cfg(unix)]
 mod platform {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -134,4 +84,54 @@ mod platform {
             "the lease listener user needs a Unix host".to_string(),
         ))
     }
+}
+
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
+
+use orbit_common::OrbitError;
+
+/// Refuse unless the running user, its executable and `orbit_home` are safe
+/// for listener-user authority. See the module documentation.
+pub fn check_listener_execution_environment(orbit_home: &Path) -> Result<(), OrbitError> {
+    platform::check(orbit_home)
+}
+
+/// The account the operator becomes to run listener-user commands, by
+/// convention.
+pub const LISTENER_USER: &str = "orbit-lease";
+
+fn refusal(detail: String) -> OrbitError {
+    OrbitError::PolicyDenied(format!(
+        "refusing to run as the lease listener user ({LISTENER_USER} by convention): {detail}"
+    ))
+}
+
+#[cfg(unix)]
+/// The paths a check covers: `path` itself and every directory above it.
+fn path_and_ancestors(path: &Path) -> Vec<PathBuf> {
+    path.ancestors().map(Path::to_path_buf).collect()
+}
+
+#[cfg(unix)]
+/// The existing path to check for `orbit_home`: the home itself, or its
+/// nearest existing ancestor when it does not exist yet.
+fn existing_prefix(path: &Path) -> Result<PathBuf, OrbitError> {
+    for candidate in path.ancestors() {
+        match candidate.canonicalize() {
+            Ok(resolved) => return Ok(resolved),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(refusal(format!(
+                    "cannot resolve {}: {error}",
+                    candidate.display()
+                )));
+            }
+        }
+    }
+    Err(refusal(format!(
+        "{} has no existing ancestor",
+        path.display()
+    )))
 }

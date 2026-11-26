@@ -57,19 +57,6 @@ pub use write_grants::{
     linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
 };
 
-/// Every existing path matched by any of `rules`: absolute globs in the
-/// profile grammar, resolved canonically from one walk per search root. A
-/// matched dangling symlink is returned as its own entry, so an exclusion
-/// still names it; any other resolution failure is an error.
-///
-/// A kernel ruleset binds inodes, so a caller compiling one from glob rules
-/// needs the paths those rules name today: the plugin backend's boundary
-/// ([`crate::linux_landlock::LandlockBoundary::read_exclusions`]) and the
-/// write roots a brokered backend may keep.
-pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
-    expand_rules(rules)
-}
-
 use crate::credential_paths::CredentialReadDeny;
 use argv::base_namespace_args;
 use credentials::{append_credential_masks, host_credential_denies, host_mounts};
@@ -91,6 +78,19 @@ use spawn::inherit_mount_sources;
 use spawn::prepare_mount_source;
 use wrapper::verified_bwrap_path;
 use write_grants::{CompiledModifyRules, compile_rule_regex, render_glob_path};
+
+/// Every existing path matched by any of `rules`: absolute globs in the
+/// profile grammar, resolved canonically from one walk per search root. A
+/// matched dangling symlink is returned as its own entry, so an exclusion
+/// still names it; any other resolution failure is an error.
+///
+/// A kernel ruleset binds inodes, so a caller compiling one from glob rules
+/// needs the paths those rules name today: the plugin backend's boundary
+/// ([`crate::linux_landlock::LandlockBoundary::read_exclusions`]) and the
+/// write roots a brokered backend may keep.
+pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
+    expand_rules(rules)
+}
 
 #[cfg(test)]
 mod tests;

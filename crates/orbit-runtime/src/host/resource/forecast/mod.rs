@@ -46,13 +46,6 @@
 //! [`HostLoadForecast::accuracy_points`] is what the pass records of it, to
 //! check against the host's measured minutes.
 
-use std::sync::Arc;
-
-use chrono::{DateTime, Utc};
-use serde::Serialize;
-
-use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, ProfileSource};
-
 mod baseline;
 mod build;
 mod fit;
@@ -60,6 +53,13 @@ mod host_load;
 mod memory;
 mod record;
 mod simulated;
+
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+
+use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, ProfileSource};
 
 pub(crate) use build::build_forecast;
 pub use fit::{ForecastGap, GapMiss, GapResource, IdleHostAdmission};

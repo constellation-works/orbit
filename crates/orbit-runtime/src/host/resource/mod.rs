@@ -3,13 +3,6 @@
 //! against, and how well recorded forecasts matched the measured host. Only
 //! the forecast's admission lock writes: the reservations its caller decides.
 
-use chrono::{DateTime, Utc};
-use orbit_config::ResourceThrottleSettings;
-use orbit_types::workflow::ResourcePressure;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::time::Duration;
-
 pub mod accuracy;
 pub mod delivery;
 pub mod forecast;
@@ -19,6 +12,13 @@ mod pressure;
 mod probe;
 pub mod profile;
 mod usage;
+
+use chrono::{DateTime, Utc};
+use orbit_config::ResourceThrottleSettings;
+use orbit_types::workflow::ResourcePressure;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
 
 #[cfg(feature = "test-support")]
 pub use forecast::with_host_load_sampling_wait;

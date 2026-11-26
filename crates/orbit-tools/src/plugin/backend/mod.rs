@@ -7,6 +7,13 @@
 //! (`orbit-core`'s plugin host registers the tools inactive otherwise), so
 //! the profile resolved here is exactly the granted one.
 
+mod brokered;
+mod execution;
+mod model;
+mod programs;
+mod sandbox;
+mod write_file;
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt;
@@ -28,13 +35,6 @@ use super::callback::{PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD, PluginCallbackSe
 use super::loader::physical_with_missing_tail;
 use crate::program_policy::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext, upsert_env};
-
-mod brokered;
-mod execution;
-mod model;
-mod programs;
-mod sandbox;
-mod write_file;
 
 pub use self::brokered::*;
 pub use self::model::*;

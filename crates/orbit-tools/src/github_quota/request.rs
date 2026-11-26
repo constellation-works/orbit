@@ -1,6 +1,41 @@
 //! What a `gh` request spends, whose quota it spends, and the rate-limit
 //! endpoint read that refreshes the record.
 
+#[cfg(any(test, feature = "test-support"))]
+mod simulated_probe {
+    use orbit_exec::{ExecRequest, ExecutionResult};
+    use std::{cell::RefCell, rc::Rc};
+    type Observer = Rc<dyn Fn(&ExecRequest)>;
+    thread_local! { static OBSERVER: RefCell<Option<Observer>> = const { RefCell::new(None) }; }
+    pub(super) fn with<T>(observe: impl Fn(&ExecRequest) + 'static, body: impl FnOnce() -> T) -> T {
+        struct Reset(Option<Observer>);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                OBSERVER.with(|slot| {
+                    slot.replace(self.0.take());
+                });
+            }
+        }
+        let _reset = Reset(OBSERVER.with(|slot| slot.replace(Some(Rc::new(observe)))));
+        body()
+    }
+    /// The timed-out result of an observed probe, or `None` when no fixture is
+    /// armed and the probe must run for real.
+    pub(super) fn fire(request: &ExecRequest) -> Option<ExecutionResult> {
+        let observer = OBSERVER.with(|slot| slot.borrow().clone())?;
+        observer(request);
+        Some(ExecutionResult {
+            success: false,
+            timed_out: true,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            duration_ms: request.timeout_ms.unwrap_or(0),
+            output: None,
+        })
+    }
+}
+
 use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -204,41 +239,6 @@ pub fn with_simulated_clipped_probe<T>(
     body: impl FnOnce() -> T,
 ) -> T {
     simulated_probe::with(observe, || super::store::with_fixed_clock(body))
-}
-
-#[cfg(any(test, feature = "test-support"))]
-mod simulated_probe {
-    use orbit_exec::{ExecRequest, ExecutionResult};
-    use std::{cell::RefCell, rc::Rc};
-    type Observer = Rc<dyn Fn(&ExecRequest)>;
-    thread_local! { static OBSERVER: RefCell<Option<Observer>> = const { RefCell::new(None) }; }
-    pub(super) fn with<T>(observe: impl Fn(&ExecRequest) + 'static, body: impl FnOnce() -> T) -> T {
-        struct Reset(Option<Observer>);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                OBSERVER.with(|slot| {
-                    slot.replace(self.0.take());
-                });
-            }
-        }
-        let _reset = Reset(OBSERVER.with(|slot| slot.replace(Some(Rc::new(observe)))));
-        body()
-    }
-    /// The timed-out result of an observed probe, or `None` when no fixture is
-    /// armed and the probe must run for real.
-    pub(super) fn fire(request: &ExecRequest) -> Option<ExecutionResult> {
-        let observer = OBSERVER.with(|slot| slot.borrow().clone())?;
-        observer(request);
-        Some(ExecutionResult {
-            success: false,
-            timed_out: true,
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: None,
-            duration_ms: request.timeout_ms.unwrap_or(0),
-            output: None,
-        })
-    }
 }
 
 /// The tracked resources of a `GET /rate_limit` body. Anything else, and an

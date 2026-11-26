@@ -33,16 +33,16 @@
 //! expecting a second handshake. Replay keeps the client's metadata and
 //! restores the protocol version that handshake agreed.
 
-use std::path::PathBuf;
-
-use rmcp::model::InitializeRequestParams;
-
 mod input;
 mod lifecycle;
 mod tracking;
 #[cfg(unix)]
 mod unix;
 mod writer;
+
+use std::path::PathBuf;
+
+use rmcp::model::InitializeRequestParams;
 
 pub use lifecycle::stdin_supports_handover;
 pub(crate) use lifecycle::{lifecycle_interval, resumed_session, serve};

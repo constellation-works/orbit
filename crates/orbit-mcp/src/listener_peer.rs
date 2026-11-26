@@ -7,90 +7,6 @@
 //! never consulted. A missing, unreadable, or ambiguous record is a refusal:
 //! a remote TCP peer has no local socket to inspect.
 
-use std::net::SocketAddr;
-
-/// Why an accepted peer is not admitted. `None` from [`peer_refusal`] admits.
-pub(crate) type PeerRefusal = Option<&'static str>;
-
-/// Uids of the two established rows for one connection.
-///
-/// `client` owns the socket whose local address is the accepted peer.
-/// `server` owns the reversed row. Tests supply both so a lookup that reads
-/// the reversed row cannot pass as the client. Production always passes `None`.
-#[derive(Clone, Copy)]
-pub(crate) struct TcpUidRows {
-    client: u32,
-    server: u32,
-}
-
-impl TcpUidRows {
-    #[cfg(feature = "test-support")]
-    pub(crate) fn new(client: u32, server: u32) -> Self {
-        Self { client, server }
-    }
-}
-
-/// `Some` when the peer must be closed before any byte is read.
-pub(crate) fn peer_refusal(
-    local: SocketAddr,
-    peer: SocketAddr,
-    allowed_uid: u32,
-    rows: Option<TcpUidRows>,
-) -> PeerRefusal {
-    match client_uid(local, peer, rows) {
-        ClientUid::Uid(uid) if uid == allowed_uid => None,
-        ClientUid::Uid(_) => Some("peer uid differs from the server"),
-        ClientUid::Missing => Some("no local socket matches the peer"),
-        ClientUid::Ambiguous => Some("more than one uid matches the peer"),
-        ClientUid::Unreadable => Some("peer uid could not be read"),
-    }
-}
-
-/// Effective uid of this process, captured when the listener binds.
-///
-/// Callers of [`crate::McpListener::bind`] cannot supply a uid. `uid_t` is
-/// `u32` on the platforms Orbit ships.
-#[cfg(unix)]
-pub(crate) fn current_euid() -> u32 {
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    unsafe { libc::geteuid() }
-}
-
-#[cfg(not(unix))]
-pub(crate) fn current_euid() -> u32 {
-    // No peer credential is available, so the listener admits nobody.
-    u32::MAX
-}
-
-enum ClientUid {
-    Uid(u32),
-    Missing,
-    Ambiguous,
-    Unreadable,
-}
-
-fn client_uid(local: SocketAddr, peer: SocketAddr, rows: Option<TcpUidRows>) -> ClientUid {
-    // The fixture is the same two-row table the Linux reader parses, built
-    // from the accepted addresses. It runs ahead of the platform lookup so
-    // the direction check does not depend on a second operating-system user.
-    if let Some(rows) = rows {
-        return table::from_rows(local, peer, rows);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        linux::client_uid(local, peer)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos::client_uid(local, peer)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (local, peer);
-        ClientUid::Missing
-    }
-}
-
 /// `/proc/net/tcp` row parser. Linux reads that file; the test fixture builds
 /// the same text from the accepted addresses and uses this parser, so a
 /// reversed-row mistake fails the fixture on every platform.
@@ -547,5 +463,89 @@ mod macos {
         _unsi_conn_pcb: u64,
         _unsi_addr: [u8; SOCK_MAXADDRLEN],
         _unsi_caddr: [u8; SOCK_MAXADDRLEN],
+    }
+}
+
+use std::net::SocketAddr;
+
+/// Why an accepted peer is not admitted. `None` from [`peer_refusal`] admits.
+pub(crate) type PeerRefusal = Option<&'static str>;
+
+/// Uids of the two established rows for one connection.
+///
+/// `client` owns the socket whose local address is the accepted peer.
+/// `server` owns the reversed row. Tests supply both so a lookup that reads
+/// the reversed row cannot pass as the client. Production always passes `None`.
+#[derive(Clone, Copy)]
+pub(crate) struct TcpUidRows {
+    client: u32,
+    server: u32,
+}
+
+impl TcpUidRows {
+    #[cfg(feature = "test-support")]
+    pub(crate) fn new(client: u32, server: u32) -> Self {
+        Self { client, server }
+    }
+}
+
+/// `Some` when the peer must be closed before any byte is read.
+pub(crate) fn peer_refusal(
+    local: SocketAddr,
+    peer: SocketAddr,
+    allowed_uid: u32,
+    rows: Option<TcpUidRows>,
+) -> PeerRefusal {
+    match client_uid(local, peer, rows) {
+        ClientUid::Uid(uid) if uid == allowed_uid => None,
+        ClientUid::Uid(_) => Some("peer uid differs from the server"),
+        ClientUid::Missing => Some("no local socket matches the peer"),
+        ClientUid::Ambiguous => Some("more than one uid matches the peer"),
+        ClientUid::Unreadable => Some("peer uid could not be read"),
+    }
+}
+
+/// Effective uid of this process, captured when the listener binds.
+///
+/// Callers of [`crate::McpListener::bind`] cannot supply a uid. `uid_t` is
+/// `u32` on the platforms Orbit ships.
+#[cfg(unix)]
+pub(crate) fn current_euid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn current_euid() -> u32 {
+    // No peer credential is available, so the listener admits nobody.
+    u32::MAX
+}
+
+enum ClientUid {
+    Uid(u32),
+    Missing,
+    Ambiguous,
+    Unreadable,
+}
+
+fn client_uid(local: SocketAddr, peer: SocketAddr, rows: Option<TcpUidRows>) -> ClientUid {
+    // The fixture is the same two-row table the Linux reader parses, built
+    // from the accepted addresses. It runs ahead of the platform lookup so
+    // the direction check does not depend on a second operating-system user.
+    if let Some(rows) = rows {
+        return table::from_rows(local, peer, rows);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::client_uid(local, peer)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::client_uid(local, peer)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (local, peer);
+        ClientUid::Missing
     }
 }
