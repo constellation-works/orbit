@@ -200,7 +200,7 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         let task = self.get_task(task_id)?;
         self.check_owed_criteria(&task, owed)?;
-        if owed.is_empty() || self.worker_invocation().is_some() {
+        if owed.is_empty() || self.stored().task().held_by_owner() {
             return Ok(());
         }
         let note = serde_json::to_string(&PostDeployOwed {

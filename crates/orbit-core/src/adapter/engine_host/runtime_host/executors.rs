@@ -36,8 +36,9 @@ pub(super) fn register_worker_pid_namespace(
     pid: u32,
 ) -> Result<(), OrbitError> {
     #[cfg(target_os = "linux")]
-    if let Some(binding) = runtime.worker_invocation() {
-        RecoveryAuthority::open(&runtime.global_root())?.bind_worker_namespace(pid, binding)?;
+    if let Some(owner) = runtime.run().claim_owner() {
+        RecoveryAuthority::open(&runtime.global_root())?
+            .bind_worker_namespace(pid, owner.binding())?;
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (runtime, pid);

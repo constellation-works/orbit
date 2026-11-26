@@ -162,7 +162,7 @@ impl OrbitRuntime {
     /// `ORBIT_WORKER_CONTEXT_REQUIRED`, so the child refuses to run if it
     /// cannot resolve that binding back out of host authority.
     pub(crate) fn spawn_claimed_leaf_worker(&self, run_id: &str) -> Result<(), WorkerLaunchError> {
-        if self.worker_invocation().is_none() {
+        if !self.role().is_worker() {
             return Err(OrbitError::PolicyDenied(
                 "a claimed leaf worker must be launched from a bound runtime".into(),
             )

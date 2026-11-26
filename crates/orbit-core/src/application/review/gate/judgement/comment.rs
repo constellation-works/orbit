@@ -569,8 +569,8 @@ pub(in crate::application::review::gate) fn write_artifact(
     path: &str,
     content: &[u8],
 ) -> Result<(), OrbitError> {
-    if runtime.worker_invocation().is_some() {
-        runtime.route_worker_host_tool(
+    if let Some(owner) = runtime.run().claim_owner() {
+        owner.host_call(
             "orbit.task.artifact.put",
             serde_json::json!({
                 "id": task_id,

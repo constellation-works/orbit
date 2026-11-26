@@ -2,8 +2,8 @@
 title: Architecture Restructure — Decisions
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-25
-last_validated: 2026-11-25
+updated_date: 2026-11-26
+last_validated: 2026-11-26
 status: Accepted
 feature: architecture-restructure
 doc_role: decisions
@@ -17,7 +17,7 @@ related_artifacts: [ORB-28318, ORB-27886, ORB-15932]
 
 # Architecture Restructure — Decisions
 
-Daniel approved the design as proposed on 2026-11-25: "let's take it easy and go with your current design. design approved" [ORB-28318]. Each entry below is one or more of the eleven decisions in [1_overview.md](1_overview.md); the options that were not chosen are in [3_vision.md §1](3_vision.md#1-open-questions). Nothing here is built yet.
+Daniel approved the design as proposed on 2026-11-25: "let's take it easy and go with your current design. design approved" [ORB-28318]. Each entry below is one or more of the eleven decisions in [1_overview.md](1_overview.md); the options that were not chosen are in [3_vision.md §1](3_vision.md#1-open-questions). An entry recorded by a later task was decided while building, from the code.
 
 - **[Surfaces hold an opaque `Core` and call one `exec`](#surfaces-hold-an-opaque-core-and-call-one-exec)** — Accepted.
 - **[Operations are functions in one app per subject](#operations-are-functions-in-one-app-per-subject)** — Accepted.
@@ -28,6 +28,7 @@ Daniel approved the design as proposed on 2026-11-25: "let's take it easy and go
 - **[Existing tables keep their plural names](#existing-tables-keep-their-plural-names)** — Accepted.
 - **[One environment declaration and one capture](#one-environment-declaration-and-one-capture)** — Accepted.
 - **[Ratchets first, and the surface boundary before the inside of core](#ratchets-first-and-the-surface-boundary-before-the-inside-of-core)** — Accepted.
+- **[A worker's routed tool calls get their own path in `Run`](#a-workers-routed-tool-calls-get-their-own-path-in-run)** — Accepted.
 
 ## Surfaces hold an opaque `Core` and call one `exec`
 
@@ -256,11 +257,45 @@ the shared checker, including §R21 impl adjacency and §R22 member order.
 [tests-last lint](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/items_after_test_module.rs),
 [struct literal lint](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/inconsistent_struct_constructor.rs).
 
+## A worker's routed tool calls get their own path in `Run`
+
+**Recorded:** 2026-11 · [ORB-28393]
+**Code anchors:** `crates/orbit-runtime/src/run/transport.rs`, `crates/orbit-runtime/src/stored/task_access.rs`, `crates/orbit-runtime/src/base/role.rs`
+
+### Context
+
+A worker's task reads [ORB-28391] and the refusal of its local coordination writes [ORB-28392] are chosen when `Stored` is built. That left open whether what a worker sends its owner fits the same task access ([3_vision.md](3_vision.md#1-open-questions), question 19). The code says it does not:
+
+- The task access answers a read from one of two paths that return the same type: the local store or the owner's projection. A routed call is a whole tool call. It carries the caller's session, with its capabilities and whether the host itself is calling, and is checked for both before it leaves.
+- Routed calls are not only task writes. They reach notices, search, friction, auto-tasks and review artifacts.
+- The local half of each routed write is a use case in `orbit-core`, with lifecycle rules and audit. `Stored` could run it only by calling back into the application, which is the port this restructure empties.
+- A worker's local coordination write is refused, not redirected.
+
+### Decision
+
+Routed tool calls do not go through the task access. `Run::claim_owner()` returns a claimed worker's `ClaimOwner`, which holds the claim's binding and sends the calls (`call`, `host_call`). Each remaining read of the worker invocation outside the runtime became one of three:
+
+- `Stored::task().held_by_owner()`, where the check chose how a task record is read or whether a local one is written.
+- `Run::claim_owner()`, where a worker sends its owner a call or needs its binding.
+- `Role::is_worker()`, `claimed_run()` or `claimed_task()`, where a caller needs the fact: a refusal, or work only an owner does.
+
+`RuntimeKernel::worker_invocation` is deleted and `Role::invocation` is private to `orbit-runtime`.
+
+### Consequences
+
+- A flow that sends its owner a call takes `&Run`. One that only reads tasks still takes `&Stored`.
+- The engine still reads the invocation through `RuntimeHost::worker_invocation`: 18 calls in `orbit-engine` and the one implementation in `orbit-core`. The engine-host phase removes them, and `OrbitRuntime::worker_invocation` stays until then for that implementation and the drain tests.
+- Cost: each site that writes keeps a branch, the owner call for a worker and the local use case otherwise. One write access behind one type would remove the branch, and needs the callback this design deletes.
+- Cost: `held_by_owner()` and `is_worker()` are true in the same processes, so which of the two a site asks is a judgement made per site.
+>
 ## Task References
 
 - [ORB-28318] — carried the proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations this restructure answers.
 - [ORB-28969] — adopted the STD-12 declaration and literal order gate with a shrinking root baseline.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
+- [ORB-28391] — chose a worker's task reads when `Stored` is built.
+- [ORB-28392] — chose coordination writes from the role.
+- [ORB-28393] — folded the remaining worker-role checks and decided where routed tool calls belong.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

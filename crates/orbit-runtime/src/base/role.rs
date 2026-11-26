@@ -86,11 +86,30 @@ impl Role {
     }
 
     /// The bound worker invocation when this process is a claimed worker.
-    pub fn invocation(&self) -> Option<&WorkerInvocation> {
+    /// Outside this crate a caller asks a fact below, the task access or the
+    /// run's claim owner.
+    pub(crate) fn invocation(&self) -> Option<&WorkerInvocation> {
         match self {
             Self::Worker(invocation) => Some(invocation.as_ref()),
             Self::Operator | Self::DrainOwner | Self::Replica { .. } => None,
         }
+    }
+
+    /// Whether this process is a claimed worker.
+    pub fn is_worker(&self) -> bool {
+        matches!(self, Self::Worker(_))
+    }
+
+    /// The one run a claimed worker executes.
+    pub fn claimed_run(&self) -> Option<&str> {
+        self.invocation()
+            .map(|invocation| invocation.bound_run_id.as_str())
+    }
+
+    /// The task a claimed worker's claim names.
+    pub fn claimed_task(&self) -> Option<&str> {
+        self.invocation()
+            .map(|invocation| invocation.task_id.as_str())
     }
 
     /// Whether this process serves a replica checkout.
@@ -174,10 +193,6 @@ impl RuntimeKernel {
         );
         self.stored_mut().set_role(role);
         self
-    }
-
-    pub fn worker_invocation(&self) -> Option<&WorkerInvocation> {
-        self.base().role().invocation()
     }
 
     /// The owner machine id when this runtime is a replica checkout, so a

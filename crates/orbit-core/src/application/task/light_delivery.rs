@@ -106,7 +106,7 @@ pub(crate) fn record_light_delivery(
     task_ids: &[String],
     decision: &LightDeliveryDecision,
 ) -> Result<(), OrbitError> {
-    if runtime.worker_invocation().is_some() {
+    if runtime.stored().task().held_by_owner() {
         return Ok(());
     }
     for task_id in task_ids {

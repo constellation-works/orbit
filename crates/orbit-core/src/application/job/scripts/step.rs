@@ -514,9 +514,10 @@ fn admitted_grant(
 /// A replica checkout, or a worker bound to a claim another machine owns.
 fn runs_as_follower(runtime: &OrbitRuntime) -> bool {
     runtime.replica_owner_machine().is_some()
-        || crate::runtime::RuntimeKernel::worker_invocation(runtime).is_some_and(|invocation| {
-            invocation.execution.machine_id != invocation.owner_machine_id
-        })
+        || runtime
+            .run()
+            .claim_owner()
+            .is_some_and(|owner| owner.is_remote())
 }
 
 /// The launcher argv the grant recorded, as long as it still names the same

@@ -234,7 +234,9 @@ impl OrbitRuntime {
             error => error,
         })?;
 
-        if self.worker_invocation().is_some() && is_coordination_tool(name) {
+        if let Some(owner) = self.run().claim_owner()
+            && is_coordination_tool(name)
+        {
             let input = if name == "orbit.task.artifact.put" {
                 orbit_tools::prepare_remote_task_artifact_put(
                     input,
@@ -245,7 +247,7 @@ impl OrbitRuntime {
             } else {
                 input
             };
-            return self.route_worker_tool(name, input, tool_context.session_context);
+            return owner.call(name, input, tool_context.session_context);
         }
 
         if ((matches!(name, "orbit.task.show" | "orbit.task.artifact.get")

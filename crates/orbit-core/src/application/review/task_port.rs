@@ -42,7 +42,7 @@ impl TaskReviewPort for OrbitRuntime {
         {
             return Ok(true);
         }
-        let use_snapshot = manifest.is_some() && self.worker_invocation().is_none();
+        let use_snapshot = manifest.is_some() && !self.stored().task().held_by_owner();
         let loaded_manifest;
         let manifest = match manifest {
             Some(manifest) => manifest,

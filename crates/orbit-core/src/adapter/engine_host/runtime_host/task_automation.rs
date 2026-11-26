@@ -183,11 +183,11 @@ pub(super) fn apply_task_automation_update(
     task_id: &str,
     update: TaskAutomationUpdate,
 ) -> Result<(), OrbitError> {
-    if let Some(binding) = runtime.worker_invocation() {
+    if let Some(owner) = runtime.run().claim_owner() {
         if update
             .job_run_id
             .as_ref()
-            .is_some_and(|run| run != &binding.bound_run_id)
+            .is_some_and(|run| run != &owner.binding().bound_run_id)
         {
             return Err(OrbitError::PolicyDenied(
                 "worker run binding mismatch".into(),
@@ -218,7 +218,7 @@ pub(super) fn apply_task_automation_update(
         // through the separately fenced artifact adapter so transport errors
         // surface to callers (such as `persist_uncommitted_diff_artifact`).
         if !update.upsert_artifacts.is_empty() {
-            runtime.route_worker_tool(
+            owner.call(
                 "orbit.task.artifact.put",
                 serde_json::json!({
                     "id": task_id,
@@ -230,7 +230,7 @@ pub(super) fn apply_task_automation_update(
                 return Ok(());
             }
         }
-        runtime.route_worker_host_tool(
+        owner.host_call(
             "orbit.task.update",
             serde_json::json!({
                 "id": task_id,
@@ -251,7 +251,7 @@ pub(super) fn reject_invalid_finding(
     report: &FindingInvalidReport,
     base_branch: &str,
 ) -> Result<(), OrbitError> {
-    if runtime.worker_invocation().is_some() {
+    if runtime.role().is_worker() {
         return Err(OrbitError::PolicyDenied(
             "a claimed run cannot reject the owner's review finding".to_string(),
         ));

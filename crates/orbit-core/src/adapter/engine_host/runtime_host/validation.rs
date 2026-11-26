@@ -99,7 +99,7 @@ pub(super) fn record_validated_tree(
     tree: &orbit_engine::ValidatedTree,
 ) -> Result<(), OrbitError> {
     // A claimed leaf's validation is its owner's evidence, not this host's.
-    if runtime.worker_invocation().is_some() {
+    if runtime.role().is_worker() {
         return Ok(());
     }
     let mut trees = runtime
@@ -118,7 +118,7 @@ pub(super) fn validated_tree(
     runtime: &OrbitRuntime,
     run_id: &str,
 ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
-    if runtime.worker_invocation().is_some() {
+    if runtime.role().is_worker() {
         return Ok(None);
     }
     Ok(runtime

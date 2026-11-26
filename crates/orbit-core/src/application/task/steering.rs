@@ -45,6 +45,7 @@ use serde_json::{Value, json};
 use super::SYSTEM_ACTOR_LABEL;
 use super::helpers::is_automation_actor;
 use crate::OrbitRuntime;
+use crate::runtime::run::transport::ClaimOwner;
 use crate::runtime::run_input::carried_task_ids;
 
 /// Largest steering block text, in bytes. A long comment thread must not
@@ -175,7 +176,7 @@ impl OrbitRuntime {
             return Ok(SteeringGateReading::Disabled);
         }
         let reading = self.read_steering_gate(run_id, task_id, candidate_source);
-        if self.worker_invocation().is_none() {
+        if !self.stored().task().held_by_owner() {
             return reading;
         }
         reading.map_err(|error| {
@@ -243,7 +244,7 @@ impl OrbitRuntime {
         };
         // A claimed leaf's prompts record on its owner, never in this
         // machine's run state.
-        let claimed = self.worker_invocation().is_some();
+        let claimed = self.stored().task().held_by_owner();
         let mut run = record(run_id)?;
         let mut carried = candidate_source;
         let mut unresolved = None;
@@ -319,7 +320,7 @@ impl OrbitRuntime {
         task_id: &str,
         state: Option<&PipelineState>,
     ) -> Result<Option<SteeringWatermark>, OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(self.owner_claim_steering(task_id)?.claim);
         }
         Ok(state.and_then(|state| state.steering_watermarks.get(task_id).cloned()))
@@ -339,8 +340,9 @@ impl OrbitRuntime {
         step_id: &str,
         newest: Option<CommentLogMark>,
     ) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() {
-            return self.record_claim_steering(
+        if let Some(owner) = self.run().claim_owner() {
+            return record_claim_steering(
+                owner,
                 task_id,
                 ClaimSteeringRecord::Snapshot {
                     step_id: step_id.to_string(),
@@ -368,8 +370,9 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         // The owner records a claimed leaf's event and watermark in one
         // commit.
-        if self.worker_invocation().is_some() {
-            return self.record_claim_steering(
+        if let Some(owner) = self.run().claim_owner() {
+            return record_claim_steering(
+                owner,
                 task_id,
                 ClaimSteeringRecord::Delivery {
                     step_id: step_id.to_string(),
@@ -407,19 +410,6 @@ impl OrbitRuntime {
         self.update_steering_watermark(run_id, |state| {
             state.record_steering_delivery(task_id, step_id, through, delivered);
         })
-    }
-
-    /// Record a claimed leaf's steering on its owner, through its claim.
-    fn record_claim_steering(
-        &self,
-        task_id: &str,
-        record: ClaimSteeringRecord,
-    ) -> Result<(), OrbitError> {
-        self.route_worker_host_tool(
-            "orbit.task.update",
-            json!({"id": task_id, "_worker_steering": record}),
-        )
-        .map(|_| ())
     }
 
     /// Admit one more steering round of `run_id` for `task_id`, recording it
@@ -500,6 +490,20 @@ impl OrbitRuntime {
             ))),
         }
     }
+}
+
+/// Record a claimed leaf's steering on its owner, through its claim.
+fn record_claim_steering(
+    owner: ClaimOwner<'_>,
+    task_id: &str,
+    record: ClaimSteeringRecord,
+) -> Result<(), OrbitError> {
+    owner
+        .host_call(
+            "orbit.task.update",
+            json!({"id": task_id, "_worker_steering": record}),
+        )
+        .map(|_| ())
 }
 
 /// The gate's verdict on `outstanding` for a task in `status`: terminal

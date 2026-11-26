@@ -466,7 +466,9 @@ fn claim_binding<'a>(
     review_artifact: bool,
 ) -> Result<&'a WorkerInvocation, OrbitError> {
     let binding = runtime
-        .worker_invocation()
+        .run()
+        .claim_owner()
+        .map(|owner| owner.binding())
         .ok_or_else(|| denied("this run is not bound to a claim"))?;
     let machine = runtime.automation_machine_identity();
     let served = remote_owner(Some(binding), machine).is_some()

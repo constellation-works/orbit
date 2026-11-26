@@ -193,7 +193,7 @@ impl OrbitRuntime {
             // task lock as scope updates and pilot reassessment. The submitted
             // selection then reserves the task before setup binds job_run_id.
             let locked_task = crew_pools::crew_admission_task_id(job_name, &input)
-                .filter(|_| self.worker_invocation().is_none())
+                .filter(|_| !self.stored().task().held_by_owner())
                 .map(ToOwned::to_owned);
             let mut persist = || -> Result<PipelineCrewAdmission, OrbitError> {
                 // A task an auto-task job step minted starts only while its

@@ -320,7 +320,7 @@ pub(crate) fn open_auto_task_instances(
     // The generated index answers status and tag together, so a definition's
     // closed mints, which accumulate with every batch, cost no read. A worker
     // reads through its owner, and an index that cannot serve lists instead.
-    if runtime.worker_invocation().is_none()
+    if !runtime.stored().task().held_by_owner()
         && let Some(open) = runtime.task_candidate_keys(
             &TaskListFilter {
                 tags: vec![tag.clone()],

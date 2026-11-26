@@ -28,7 +28,7 @@ impl OrbitRuntime {
         &self,
         task_id: &str,
     ) -> Result<CapturedExperiments, OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             let capture = self
                 .current_claimed_leaf()?
                 .admission
@@ -120,10 +120,7 @@ impl OrbitRuntime {
             return Ok(());
         };
         // Claimed leaves never consult replica experiments, including on resume.
-        let mut capture = if self
-            .worker_invocation()
-            .is_some_and(|binding| binding.task_id == task_id)
-        {
+        let mut capture = if self.role().claimed_task() == Some(task_id.as_str()) {
             let leaf = self.current_claimed_leaf()?;
             leaf.admission
                 .receipt
@@ -199,7 +196,7 @@ impl OrbitRuntime {
         input: &mut Value,
         model: Option<&str>,
     ) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Ok(());
         }
         let Some(raw) = input.get(EXPERIMENT_CAPTURE_KEY).cloned() else {

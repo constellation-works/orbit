@@ -37,7 +37,7 @@ impl OrbitRuntime {
     ) -> Result<PrAutoFixAdmission, OrbitError> {
         // A claimed worker writes its owner's record only through the typed
         // handoff, so the ledger lives on the owning host.
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(PrAutoFixAdmission::Refused(
                 "auto-fix repairs run on the host that owns the task".to_string(),
             ));
@@ -196,7 +196,7 @@ impl OrbitRuntime {
         use orbit_types::workflow::{
             PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, decide_pr_infrastructure,
         };
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(PrInfrastructureAdmission::Refused(
                 "infrastructure recovery requires the owning host".into(),
             ));
@@ -332,7 +332,7 @@ impl OrbitRuntime {
             PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateRefusal,
             decide_pr_base_update,
         };
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(PrBaseUpdateAdmission::Refused(
                 PrBaseUpdateRefusal::RequiresOwningHost,
             ));
@@ -391,7 +391,7 @@ impl OrbitRuntime {
             CiRerunAdmission, CiRerunRefusal, decide_ci_rerun_with_policy,
         };
         self.ensure_coordination_task_write_permitted()?;
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(CiRerunAdmission::Refused(
                 CiRerunRefusal::RequiresOwningHost,
             ));

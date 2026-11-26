@@ -12,7 +12,7 @@ impl OrbitRuntime {
     /// block episode and pilot admission hold without changing task records.
     pub fn get_task_decision_requests(&self, id: &str) -> Result<Vec<DecisionRequest>, OrbitError> {
         // Owner-routed reads retain their authority and transport contract.
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             let task = self.get_task(id)?;
             let history = self.get_task_history(id)?;
             let comments = self.get_task_comments(id)?;
@@ -40,7 +40,7 @@ impl OrbitRuntime {
         &self,
         id: &str,
     ) -> Result<(Vec<DecisionRequest>, chrono::DateTime<chrono::Utc>), OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok((self.get_task_decision_requests(id)?, chrono::Utc::now()));
         }
         // Keep the row and its immutable payload checks in one task read

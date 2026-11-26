@@ -212,7 +212,9 @@ impl OrbitRuntime {
     /// leaf whose admission is unreadable, or whose older owner captured
     /// nothing, resolves on this replica instead and says so.
     pub(crate) fn claimed_tag_instructions(&self) -> Option<CapturedTagInstructions> {
-        self.worker_invocation()?;
+        if !self.role().is_worker() {
+            return None;
+        }
         let captured = self.current_claimed_leaf().map(|leaf| {
             leaf.admission
                 .receipt

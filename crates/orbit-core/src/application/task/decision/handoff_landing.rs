@@ -117,8 +117,7 @@ impl OrbitRuntime {
         answered: TaskHistoryEntry,
         corpus: Option<TaskHistoryEntry>,
     ) -> Result<(), OrbitError> {
-        if self.actor().kind != crate::runtime::context::ActorKind::Human
-            || self.worker_invocation().is_some()
+        if self.actor().kind != crate::runtime::context::ActorKind::Human || self.role().is_worker()
         {
             return Err(OrbitError::decision_refused(
                 DecisionRefusalCode::CallerNotAllowed,

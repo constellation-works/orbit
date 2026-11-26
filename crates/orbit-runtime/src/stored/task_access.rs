@@ -181,6 +181,14 @@ impl<'a> TaskAccess<'a> {
         self.stored.task_route.reads_visible()
     }
 
+    /// Whether the drain owner holds this process's task records, as it does
+    /// for a claimed worker. Reads are then answered from the owner's
+    /// projections, and nothing local describes a task or takes a write for
+    /// one: not the index, a read stamp, the history or a task lock.
+    pub fn held_by_owner(&self) -> bool {
+        self.stored.task_route.owner().is_some()
+    }
+
     /// The local task store for a coordination write, or this checkout's refusal.
     pub fn writer(&self) -> Result<&'a orbit_store::TaskV2Store, OrbitError> {
         self.stored.task_route.ensure_write()?;

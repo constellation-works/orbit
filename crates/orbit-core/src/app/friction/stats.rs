@@ -14,7 +14,7 @@ pub(super) fn stats(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     // wait expires with the same row still stale, scans and rebuilds the
     // workspace index. Dashboard list and stats polls hit that window on
     // every in-flight commit. A worker still reads through its owner.
-    let tasks = if runtime.worker_invocation().is_some() {
+    let tasks = if runtime.stored().task().held_by_owner() {
         runtime.list_task_metadata()?
     } else {
         runtime.observe_task_metadata()?

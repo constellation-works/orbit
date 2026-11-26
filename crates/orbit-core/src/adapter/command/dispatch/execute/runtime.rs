@@ -302,7 +302,7 @@ impl OrbitRuntime {
             super::super::claimed::bridge_claimed_owner_call_with_env(
                 env,
                 &self.global_root(),
-                self.worker_invocation(),
+                self.run().claim_owner().map(|owner| owner.binding()),
                 self.automation_machine_identity(),
                 name,
                 &input,
