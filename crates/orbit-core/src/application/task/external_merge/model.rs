@@ -1,3 +1,5 @@
+use crate::application::task::NativePublicationIdentity;
+use crate::runtime::task_pr_forge::MergedPullRequest;
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
@@ -8,6 +10,23 @@ pub(super) const SETTLEABLE_STATUSES: [TaskStatus; 4] = [
     TaskStatus::InProgress,
     TaskStatus::Review,
 ];
+
+/// The single PR a requeue preserved for a backlog task.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BacklogDelivery {
+    FailureHandoff(u64),
+    OwnerPublication(u64),
+}
+
+impl NativePublicationIdentity {
+    pub(super) fn matches_exact_merge(&self, merged: &MergedPullRequest) -> bool {
+        self.number.parse::<u64>().ok() == Some(merged.pull.number)
+            && self.url.as_deref() == Some(merged.url.as_str())
+            && self.branch == merged.pull.head_branch
+            && self.base_branch == merged.base_branch
+            && self.head == merged.head_sha
+    }
+}
 
 /// A task settled from its merged delivery PR.
 #[derive(Debug, Clone, PartialEq, Eq)]

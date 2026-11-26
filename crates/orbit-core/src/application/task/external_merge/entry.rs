@@ -1,13 +1,13 @@
 use std::cell::OnceCell;
 
 use orbit_common::OrbitError;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskStatus};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskListFilter;
 use crate::application::task::TaskWorkspaceAutoPort;
+use crate::application::task::{TaskJobPort, TaskListFilter};
 
-use super::model::{ExternalMergeSettlement, SETTLEABLE_STATUSES};
+use super::model::{BacklogDelivery, ExternalMergeSettlement, SETTLEABLE_STATUSES};
 use super::{candidate, refusal};
 
 impl OrbitRuntime {
@@ -91,14 +91,19 @@ impl OrbitRuntime {
             fetched.extend(forge.merged_pull_request(&repo_root, number)?);
         }
         let Some(landing) = self.delivery_merge(&candidate, &fetched, &OnceCell::new())? else {
-            let reason = match &candidate.revoked {
-                Some(revoked) => candidate::revoked_handoff_unmerged(
+            let reason = match (&candidate.revoked, candidate.backlog_delivery) {
+                (Some(revoked), _) => candidate::revoked_handoff_unmerged(
                     &self.settings().pr_settings().conventions.branch_name,
                     revoked,
                     fetched.first(),
                     id,
                 ),
-                None => format!(
+                (None, Some(BacklogDelivery::OwnerPublication(number))) => {
+                    format!(
+                        "pull request #{number} has no merge matching its preserved publication"
+                    )
+                }
+                (None, _) => format!(
                     "none of its delivery pull requests is merged into its target branch {}",
                     self.delivery_target_branch(&candidate.task)
                 ),
@@ -108,19 +113,41 @@ impl OrbitRuntime {
         self.write_settlement_as(&candidate, &landing, actor)
     }
 
+    pub(super) fn backlog_delivery(&self, task: &Task) -> Result<BacklogDelivery, OrbitError> {
+        // The indexed envelope is enough to skip owner runs without a recorded
+        // PR. The preservation check hydrates only tasks with a matching record.
+        if task.github_pr_number().is_some()
+            && let Some(number) = self.preserved_owner_settlement_pr(task)?
+        {
+            return Ok(BacklogDelivery::OwnerPublication(number));
+        }
+        if let Some(receipt) = self.handoff_receipt(task)?
+            && super::super::requeue::current_run_requeue_stands(
+                task,
+                &self.get_task_history(&task.id)?,
+            )
+            && self
+                .get_task(&task.id)?
+                .spec_digest_matches(&receipt.task_spec_digest)
+            && let Ok(number) = receipt.pull_request.parse()
+        {
+            return Ok(BacklogDelivery::FailureHandoff(number));
+        }
+        Err(OrbitError::InvalidInput(
+            "backlog task has no preserved delivery requeue".into(),
+        ))
+    }
+
     /// Tasks in `status` that external-merge settlement may consider.
     ///
     /// Backlog is the whole drain population, and a backlog task settles only
-    /// when a failure handoff preserved its run. Listing it through the index
+    /// when a requeue preserved its delivery. Listing it through the index
     /// envelopes avoids a bundle read per backlog task on every admission
-    /// pass; the body is read later, and only when that receipt exists.
+    /// pass; the body is read later, and only when preservation evidence exists.
     /// The other settleable statuses stay on the hydrated list: each is a
     /// task a run is already touching, and settlement reads fields the
     /// envelope does not carry.
-    fn settleable_tasks(
-        &self,
-        status: TaskStatus,
-    ) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+    fn settleable_tasks(&self, status: TaskStatus) -> Result<Vec<Task>, OrbitError> {
         if status != TaskStatus::Backlog {
             return self.stores().tasks().list_tasks_filtered(
                 Some(status),

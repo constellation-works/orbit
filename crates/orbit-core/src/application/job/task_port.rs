@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::{
     CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
@@ -367,6 +368,54 @@ impl TaskJobPort for OrbitRuntime {
         task: &Task,
     ) -> Result<Option<NativePublicationIdentity>, OrbitError> {
         Ok(self.stopped_native_settlement_proof(task)?.map(Into::into))
+    }
+
+    fn preserved_owner_settlement_pr(&self, task: &Task) -> Result<Option<u64>, OrbitError> {
+        Ok(self
+            .published_resume(task)?
+            .filter(|resume| task.job_run_id.as_deref() == Some(resume.source_run_id.as_str()))
+            .and_then(|resume| resume.pull_request)
+            .and_then(|number| number.parse().ok()))
+    }
+
+    fn current_publication_run_digest(
+        &self,
+        task: &Task,
+    ) -> Result<Option<blake3::Hash>, OrbitError> {
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(None);
+        };
+        let jobs = self.stores().jobs();
+        let Some(run) = jobs.get_job_run(run_id)? else {
+            return Ok(None);
+        };
+        // One indexed row per delivery job, including stopped successors
+        // whose submission never changed the task's run binding.
+        for job in workflow::DELIVERY_LEAF_JOBS {
+            let newest = jobs.list_job_runs_filtered(&JobRunQuery {
+                job_id: Some((*job).to_string()),
+                task_id: Some(task.id.clone()),
+                created_since: Some(run.created_at),
+                limit: Some(1),
+                include_steps: false,
+                ..Default::default()
+            })?;
+            if (*job == workflow::TASK_PR_PIPELINE_JOB && newest.is_empty())
+                || newest.first().is_some_and(|latest| latest.run_id != run_id)
+            {
+                return Ok(None);
+            }
+        }
+        let Some(state) = self.read_run_state_json(run_id)? else {
+            return Ok(None);
+        };
+        let mut digest = blake3::Hasher::new();
+        let run = serde_json::to_vec(&run).map_err(|error| {
+            OrbitError::Store(format!("could not encode publication run: {error}"))
+        })?;
+        digest.update(&run);
+        digest.update(state.as_bytes());
+        Ok(Some(digest.finalize()))
     }
 
     fn purpose_pool_members(

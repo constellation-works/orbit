@@ -195,9 +195,9 @@ fn external_merge_settlement_refuses_every_ineligible_status() {
         fx.merge(105, &task, BOT, &fx.base.clone());
         let error = fx.settle_err(&task, "ineligible status refuses");
         let condition = if status == TaskStatus::Backlog {
-            "backlog task has no preserved failure-handoff requeue"
+            "backlog task has no preserved delivery requeue"
         } else {
-            "only a blocked, in-progress, review or preserved failure-handoff backlog task settles"
+            "only a blocked, in-progress, review or backlog task with a preserved delivery settles"
         };
         assert!(error.contains(condition), "{status:?}: {error}");
         fx.assert_status(&task, status, "ineligible status unchanged");

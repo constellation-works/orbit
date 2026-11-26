@@ -14,7 +14,7 @@ fn fixture() -> (Fixture, PathBuf) {
     fixture_with_auto_fix(true)
 }
 
-fn fixture_with_auto_fix(auto_fix: bool) -> (Fixture, PathBuf) {
+pub(super) fn fixture_with_auto_fix(auto_fix: bool) -> (Fixture, PathBuf) {
     fixture_with(auto_fix, true, false)
 }
 
