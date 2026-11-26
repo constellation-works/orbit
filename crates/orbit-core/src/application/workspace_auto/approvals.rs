@@ -58,6 +58,11 @@ use crate::application::task::{
 use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::drains::{drain_run_id, live_admissions_stop};
+use super::pilot_coordination::{
+    PilotChild, is_decision_neutral, live_pilot_run, pilot_children, read_pilots, record_report,
+    reusable_explicit_promotion, unresolved_pilot_failed_independently,
+};
+pub(crate) use super::pilot_coordination::{await_approval_pilot, record_proposed_approvals};
 use crate::application::task::pilot::{
     ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
     approval_disqualification, classify_explicit_assessment_reuse, held_classification,
@@ -537,9 +542,3 @@ pub(super) fn readiness_approvals(
     value["awaiting_pilot"] = json!(snapshot.candidates.len());
     Ok(value)
 }
-
-use super::pilot_coordination::{
-    PilotChild, is_decision_neutral, live_pilot_run, pilot_children, read_pilots, record_report,
-    reusable_explicit_promotion, unresolved_pilot_failed_independently,
-};
-pub(crate) use super::pilot_coordination::{await_approval_pilot, record_proposed_approvals};

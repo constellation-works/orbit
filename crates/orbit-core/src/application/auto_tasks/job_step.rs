@@ -30,6 +30,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+use super::step_observation::{ReuseVerdict, StepContext, observe_with, reuse_verdict};
 use super::{completion, cursor_state_path, scheduler};
 use crate::OrbitRuntime;
 use crate::application::automation::condition::render_placeholders;
@@ -716,5 +717,3 @@ pub(super) fn parse_frozen_job(yaml: &str) -> Result<JobV2, OrbitError> {
 pub(super) fn serde_name<T: serde::Serialize>(value: &T) -> String {
     orbit_common::protocol::serde_string_label(value).unwrap_or_default()
 }
-
-use super::step_observation::{ReuseVerdict, StepContext, observe_with, reuse_verdict};

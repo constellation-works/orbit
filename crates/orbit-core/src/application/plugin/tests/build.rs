@@ -1,14 +1,15 @@
+use super::fixture::PluginFixture;
+use crate::runtime::plugin::build_witness::record_build_witness;
 use orbit_tools::plugin::plugin_artifact_digest;
 use orbit_types::plugin::{
     PLUGIN_BUILD_CONSENT_FLAG, PLUGIN_BUILD_PROFILE_LINUX, PluginBuildConsent,
 };
+use orbit_types::plugin::{PluginBuildOutputRecord, PluginBuildRecord};
+
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 fn commit_source() -> String {
     format!("git+https://example.test/demo.git#{COMMIT}")
 }
-use super::fixture::PluginFixture;
-use crate::runtime::plugin::build_witness::record_build_witness;
-use orbit_types::plugin::{PluginBuildOutputRecord, PluginBuildRecord};
 
 pub(super) fn build_record(outputs: Vec<PluginBuildOutputRecord>) -> PluginBuildRecord {
     PluginBuildRecord {

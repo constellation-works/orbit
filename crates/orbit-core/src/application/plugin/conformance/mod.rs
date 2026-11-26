@@ -38,6 +38,7 @@
 //! runs: the run defers to a host replay or refuses, typed
 //! ([`gate`]). A deferred run certifies nothing.
 
+mod gate;
 mod golden;
 mod model;
 mod runner;
@@ -48,4 +49,3 @@ pub use model::PluginTestOptions;
 pub use model::PluginTestOutcome;
 pub use model::PluginTestReport;
 pub use runner::test_plugin_dir;
-mod gate;

@@ -6,9 +6,12 @@
 //! the effective state a read reports, and the audit row each write and each
 //! refusal leaves (target type `notice`).
 
+mod audit;
 mod authority;
+mod close;
 pub mod limits;
 mod post;
+mod read;
 #[cfg(feature = "test-support")]
 pub(crate) mod test_support;
 
@@ -20,7 +23,9 @@ use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_types::record::{AuthorClass, EffectiveStatus, Notice, NoticeKind, NoticeScope};
 use serde::Serialize;
 
+pub(crate) use audit::{NoticeAudit, notice_row, parse_notice_row};
 pub use authority::NoticeCaller;
+use close::linked_done_at;
 pub use post::{NoticePostRawFields, NoticePostRequest, NoticePostResult};
 
 /// Which notice a close names.
@@ -138,12 +143,6 @@ pub struct NoticeView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<Vec<NoticeHistoryEntry>>,
 }
-
-mod audit;
-mod close;
-mod read;
-pub(crate) use audit::{NoticeAudit, notice_row, parse_notice_row};
-use close::linked_done_at;
 
 fn refuse(code: NoticeRefusalCode, message: impl Into<String>) -> OrbitError {
     OrbitError::notice_refused(code, message)

@@ -21,15 +21,14 @@ use super::correction::{self, Correction, ScriptCorrection};
 use super::model::{self, Delivery, Draw, Item, Script};
 use super::outcomes::{AwayWait, Episode};
 use super::schedule::HORIZON_HOURS;
-
-/// Bound generated nodes independently of the event bound.
-pub(super) const MAX_GENERATED: usize = 10_000;
-
 /// Count an isolated test fixture's server substitutes for
 /// [`MAX_GENERATED`]. Only dev-dependency builds with `test-support`
 /// recognize this variable.
 #[cfg(feature = "test-support")]
 pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_MAX_GENERATED as MAX_GENERATED_ENV;
+
+/// Bound generated nodes independently of the event bound.
+pub(super) const MAX_GENERATED: usize = 10_000;
 
 /// The generation bound: [`MAX_GENERATED`] unless a test fixture
 /// substituted another through [`MAX_GENERATED_ENV`].

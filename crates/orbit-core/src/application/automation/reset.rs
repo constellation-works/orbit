@@ -6,6 +6,37 @@
 //! together with its audit record. There is no second state writer here, and
 //! no hand-edited database row.
 
+#[cfg(feature = "test-support")]
+pub(crate) mod probe_hook {
+    use std::{cell::RefCell, rc::Rc};
+
+    type Hook = Rc<dyn Fn()>;
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    /// Interleave a consumer transition after reset inspects action liveness.
+    /// Scoped to this thread and restored on return or unwind.
+    pub fn with_reset_probe_hook<T>(hook: impl Fn() + 'static, operation: impl FnOnce() -> T) -> T {
+        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
+        operation()
+    }
+
+    struct Restore(Option<Hook>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOOK.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+
+    pub(super) fn after_probe() {
+        let hook = HOOK.with(|slot| slot.borrow().clone());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::automation_error_to_orbit;
@@ -227,35 +258,4 @@ fn delivery_consumer(
         return Ok(None);
     }
     super::consumer_key(runtime, "auto-task", &definition.name).map(Some)
-}
-
-#[cfg(feature = "test-support")]
-pub(crate) mod probe_hook {
-    use std::{cell::RefCell, rc::Rc};
-
-    type Hook = Rc<dyn Fn()>;
-    thread_local! {
-        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
-    }
-
-    /// Interleave a consumer transition after reset inspects action liveness.
-    /// Scoped to this thread and restored on return or unwind.
-    pub fn with_reset_probe_hook<T>(hook: impl Fn() + 'static, operation: impl FnOnce() -> T) -> T {
-        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
-        operation()
-    }
-
-    struct Restore(Option<Hook>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            HOOK.with(|slot| slot.replace(self.0.take()));
-        }
-    }
-
-    pub(super) fn after_probe() {
-        let hook = HOOK.with(|slot| slot.borrow().clone());
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
 }

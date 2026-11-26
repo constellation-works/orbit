@@ -10,20 +10,9 @@
 //! replica checkout schedules only host-local worktree GC [ORB-14173] and
 //! store GC [ORB-16354] (design in `docs/design/routines/`).
 
-use std::path::Path;
-
-use orbit_common::OrbitError;
-use orbit_store::Store;
-
-use crate::application::store_opener::StoreOpener;
-
-/// The host's OS clock, owned by the `orbit-clock` crate [ORB-22688]; this
-/// path is kept for existing consumers.
-pub use orbit_clock as clock;
-mod leases;
-pub use orbit_automation::routines::due;
 pub mod edit_contract;
 mod guarded_edit;
+mod leases;
 pub mod loader;
 pub(crate) mod materialize;
 mod resident_port;
@@ -33,6 +22,7 @@ pub mod sweep;
 pub(crate) mod template;
 pub mod trigger_edit;
 
+use crate::application::store_opener::StoreOpener;
 pub use clock::{
     ClockHealth, ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence,
     ClockUnitDrift, ClockUnitInspection, ClockUnitReload, ClockUnitRewrite, ClockUnitVerdict,
@@ -48,6 +38,13 @@ pub use loader::{
     RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
     collect_host_routines, declares_any_routine_name, runs_in_replica,
 };
+pub use orbit_automation::routines::due;
+pub use orbit_automation::routines::{breaker::request_breaker_bypass, sweep::record_fire_intent};
+/// The host's OS clock, owned by the `orbit-clock` crate [ORB-22688]; this
+/// path is kept for existing consumers.
+pub use orbit_clock as clock;
+use orbit_common::OrbitError;
+use orbit_store::Store;
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     FireField, RoutineBreakerAction, RoutineBreakerOutcome, RoutineField, RoutineStatus,
@@ -56,6 +53,7 @@ pub use status::{
     routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
     toggle_listed_routine,
 };
+use std::path::Path;
 pub use sweep::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     run_sweep_at_with_providers, run_sweep_with_providers,
@@ -125,5 +123,3 @@ fn open_existing_routine_store(
 
 #[cfg(test)]
 mod tests;
-
-pub use orbit_automation::routines::{breaker::request_breaker_bypass, sweep::record_fire_intent};

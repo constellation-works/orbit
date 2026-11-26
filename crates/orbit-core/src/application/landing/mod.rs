@@ -36,11 +36,11 @@ mod retry;
 mod review_port;
 mod waiting;
 
-/// The owner-local job that lands one authorized handoff.
-pub const LANDING_JOB: &str = "task_landing_pipeline";
-
 pub use dispatch::LandingDispatch;
 pub(crate) use dispatch::dispatch_recorded_authority;
 
 #[cfg(feature = "test-support")]
 pub use retry::retry_reservation_hook::with_landing_retry_reservation_hook;
+
+/// The owner-local job that lands one authorized handoff.
+pub const LANDING_JOB: &str = "task_landing_pipeline";

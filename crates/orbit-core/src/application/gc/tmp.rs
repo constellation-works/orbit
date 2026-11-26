@@ -1,96 +1,5 @@
 //! Checkout scratch collection. Run observation deliberately does not reconcile.
 
-use std::path::PathBuf;
-
-use orbit_common::fs::path::orbit_scratch_dir;
-use orbit_store::contract::JobRunQuery;
-use orbit_types::workflow::JobRunState;
-use serde::Serialize;
-
-use crate::{OrbitError, OrbitRuntime};
-
-#[derive(Debug, Serialize)]
-pub struct TmpGcReport {
-    #[serde(serialize_with = "display_path")]
-    pub path: PathBuf,
-    pub action: &'static str,
-    pub bytes_reclaimable: u64,
-    pub bytes_reclaimed: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TmpGcResult {
-    #[serde(serialize_with = "display_path")]
-    pub path: PathBuf,
-    pub dry_run: bool,
-    /// Number of top-level entries removed, including whole directory trees.
-    pub entries_removed: usize,
-    pub bytes_reclaimable: u64,
-    pub bytes_reclaimed: u64,
-    pub reports: Vec<TmpGcReport>,
-}
-
-// Reports use the same lossy display as human output, while traversal retains
-// the original byte names. A non-UTF-8 entry must not fail JSON after deletion.
-fn display_path<S: serde::Serializer>(
-    path: &std::path::Path,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&path.to_string_lossy())
-}
-
-impl OrbitRuntime {
-    /// Preview or empty this workspace checkout's `.orbit/tmp`, retaining the
-    /// directory. Pending, running, and retrying runs refuse deletion even with
-    /// stale owners.
-    pub fn gc_tmp(&self, delete: bool) -> Result<TmpGcResult, OrbitError> {
-        if delete {
-            self.refuse_active_tmp_gc()?;
-        }
-        let checkout = self.paths().repo_root.canonicalize()?;
-        let mut result = TmpGcResult {
-            path: orbit_scratch_dir(&checkout),
-            dry_run: !delete,
-            entries_removed: 0,
-            bytes_reclaimable: 0,
-            bytes_reclaimed: 0,
-            reports: Vec::new(),
-        };
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        filesystem::collect(&checkout, &mut result, || self.refuse_active_tmp_gc())?;
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        return Err(OrbitError::InvalidInput(
-            "tmp collection requires Linux or macOS directory-relative filesystem operations"
-                .into(),
-        ));
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        Ok(result)
-    }
-
-    fn refuse_active_tmp_gc(&self) -> Result<(), OrbitError> {
-        let jobs = self.stores().jobs();
-        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
-            active_only: true,
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?;
-        // `active_only` is pending/running only. A retrying run sleeps between
-        // attempts and then executes again, so its scratch is still in use.
-        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
-            state: Some(JobRunState::Retrying),
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?);
-        let mut run_ids: Vec<_> = runs.into_iter().map(|run| run.run_id).collect();
-        run_ids.sort();
-        if run_ids.is_empty() {
-            Ok(())
-        } else {
-            Err(OrbitError::TmpGcActiveRuns { run_ids })
-        }
-    }
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) mod filesystem {
     use std::ffi::{CStr, CString};
@@ -379,5 +288,96 @@ pub(super) mod filesystem {
             }
         }
         Ok(Some(tally))
+    }
+}
+
+use std::path::PathBuf;
+
+use orbit_common::fs::path::orbit_scratch_dir;
+use orbit_store::contract::JobRunQuery;
+use orbit_types::workflow::JobRunState;
+use serde::Serialize;
+
+use crate::{OrbitError, OrbitRuntime};
+
+#[derive(Debug, Serialize)]
+pub struct TmpGcReport {
+    #[serde(serialize_with = "display_path")]
+    pub path: PathBuf,
+    pub action: &'static str,
+    pub bytes_reclaimable: u64,
+    pub bytes_reclaimed: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TmpGcResult {
+    #[serde(serialize_with = "display_path")]
+    pub path: PathBuf,
+    pub dry_run: bool,
+    /// Number of top-level entries removed, including whole directory trees.
+    pub entries_removed: usize,
+    pub bytes_reclaimable: u64,
+    pub bytes_reclaimed: u64,
+    pub reports: Vec<TmpGcReport>,
+}
+
+// Reports use the same lossy display as human output, while traversal retains
+// the original byte names. A non-UTF-8 entry must not fail JSON after deletion.
+fn display_path<S: serde::Serializer>(
+    path: &std::path::Path,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.to_string_lossy())
+}
+
+impl OrbitRuntime {
+    /// Preview or empty this workspace checkout's `.orbit/tmp`, retaining the
+    /// directory. Pending, running, and retrying runs refuse deletion even with
+    /// stale owners.
+    pub fn gc_tmp(&self, delete: bool) -> Result<TmpGcResult, OrbitError> {
+        if delete {
+            self.refuse_active_tmp_gc()?;
+        }
+        let checkout = self.paths().repo_root.canonicalize()?;
+        let mut result = TmpGcResult {
+            path: orbit_scratch_dir(&checkout),
+            dry_run: !delete,
+            entries_removed: 0,
+            bytes_reclaimable: 0,
+            bytes_reclaimed: 0,
+            reports: Vec::new(),
+        };
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        filesystem::collect(&checkout, &mut result, || self.refuse_active_tmp_gc())?;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(OrbitError::InvalidInput(
+            "tmp collection requires Linux or macOS directory-relative filesystem operations"
+                .into(),
+        ));
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        Ok(result)
+    }
+
+    fn refuse_active_tmp_gc(&self) -> Result<(), OrbitError> {
+        let jobs = self.stores().jobs();
+        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
+            active_only: true,
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        // `active_only` is pending/running only. A retrying run sleeps between
+        // attempts and then executes again, so its scratch is still in use.
+        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
+            state: Some(JobRunState::Retrying),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?);
+        let mut run_ids: Vec<_> = runs.into_iter().map(|run| run.run_id).collect();
+        run_ids.sort();
+        if run_ids.is_empty() {
+            Ok(())
+        } else {
+            Err(OrbitError::TmpGcActiveRuns { run_ids })
+        }
     }
 }

@@ -18,9 +18,6 @@
 //! above the fleet average, pulled down toward it with K = 30. Cost is never
 //! a term.
 
-use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
-
 mod api;
 mod attribution;
 mod candidates;
@@ -40,7 +37,12 @@ mod score;
 mod tests;
 
 pub(crate) use api::AgentDetailSurface;
+pub use api::{
+    agent_attribution, agent_by_type_scorecard, agent_detail, agent_detail_with_effort,
+    agent_per_task_export, agent_scorecard, agent_size_curves,
+};
 pub use attribution::{Charge, Credit, Owner};
+use chrono::{DateTime, Utc};
 pub use ci_failures::CiFailureQuery;
 pub use effort_backfill::{
     ClaimedEffortBackfill, ClaimedEffortOutcome, ClaimedEffortRow, DispatchEffortBackfill,
@@ -48,6 +50,9 @@ pub use effort_backfill::{
 pub(crate) use facts::review_gate_verdicts;
 pub(crate) use facts::task_execution_modes;
 pub use facts::{AgentFacts, ExecutionMode, Problem};
+use orbit_common::OrbitError;
+pub(crate) use query::WindowBounds;
+pub use rank::{RankQuery, RankSeasons, agent_rank};
 
 /// The model of a row whose runs recorded none.
 pub(crate) const MODEL_UNKNOWN: &str = "model unknown";
@@ -187,10 +192,3 @@ enum WindowSpan {
     /// Back to the start of the newest this many delivery attempts.
     Attempts(usize),
 }
-
-pub use api::{
-    agent_attribution, agent_by_type_scorecard, agent_detail, agent_detail_with_effort,
-    agent_per_task_export, agent_scorecard, agent_size_curves,
-};
-pub(crate) use query::WindowBounds;
-pub use rank::{RankQuery, RankSeasons, agent_rank};

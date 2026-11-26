@@ -42,6 +42,8 @@ mod report;
 mod snapshot;
 
 pub(crate) use entry::file_ci_failure_tasks;
+/// Prefix of the dedupe tag, completed by the failure key.
+pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 
 /// Wire contract with `collect_ci_evidence` (`orbit-engine`'s
 /// `executor::automation::ci`), also stated in both activity assets' schemas.
@@ -60,8 +62,6 @@ const OUTCOME_HINT_RATE_LIMITED: &str = "rate_limited";
 /// Snapshot schema this step knows how to read.
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
-/// Prefix of the dedupe tag, completed by the failure key.
-pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 /// Title prefix on every task this step files, so a sweep-filed task is
 /// identifiable in a backlog listing without reading its tags.
 pub(super) const CI_FAILURE_SWEEP_TITLE_PREFIX: &str = "[ci-failure-sweep] ";

@@ -1,8 +1,5 @@
 //! Core composition of source facts, existing lifecycle actions and evidence.
 
-use crate::OrbitRuntime;
-use orbit_common::OrbitError;
-
 mod after_landing;
 mod auto_task_port;
 mod board_port;
@@ -31,6 +28,7 @@ mod source_cache;
 pub(crate) mod stall;
 mod task;
 
+use crate::OrbitRuntime;
 pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{AfterLandingHealth, AfterLandingSource};
 pub(crate) use after_landing::{after_landing_health, after_landing_switch};
@@ -54,6 +52,8 @@ pub use inspect::{
 pub(crate) use inspect::{
     delivery_ownership_refusal, inspect_auto_task, inspect_auto_task_with_open_instance,
 };
+use orbit_common::OrbitError;
+pub use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
 pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attempt_pins};
 pub(crate) use recovery::recover_auto_task;
 #[cfg(feature = "test-support")]
@@ -67,8 +67,6 @@ pub(crate) use task::accepted_action_coverage;
 
 #[cfg(test)]
 mod tests;
-
-pub use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
 
 /// Identity is machine/workspace-qualified in the authoritative host database.
 pub fn consumer_key(runtime: &OrbitRuntime, kind: &str, name: &str) -> Result<String, OrbitError> {
