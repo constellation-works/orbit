@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::TaskCommitBoundary;
 use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionTaskGuidance,
     ExecutorCapability, JobRunQuery,
 };
+use orbit_store::{AdmissionCall, TaskCommitBoundary};
 use orbit_types::task::{NO_DRAIN_TAG, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{
     CLAIMED_MODE_DENIED_TOOLS, is_claimed_leaf_reachable_tool, is_claimed_owner_tool,
@@ -200,10 +200,10 @@ impl OrbitRuntime {
             .flatten();
         #[cfg(feature = "test-support")]
         crate::application::distributed::admission_checkpoint::notify();
-        boundary.admit_task_with_crew_guidance(
+        boundary.admit_task(AdmissionCall {
             identity,
             request,
-            &AdmissionOrdering {
+            ordering: &AdmissionOrdering {
                 affinity: orbit_types::task::ADMISSION_AFFINITY,
                 census,
                 expiring_tasks,
@@ -216,12 +216,12 @@ impl OrbitRuntime {
                 honor_owner_local_perf_lane: self.requester_honors_owner_local_perf_lane(identity),
                 owner_local_carriers,
             },
-            owner_binary_version(),
-            &self.paths().repo_root,
-            &self.data_root(),
-            &admission_holds,
-            &self.baseline_held_tasks(&backlog, &history_by_task),
-            &|task, comments, history| {
+            owner_version: owner_binary_version(),
+            repo_root: &self.paths().repo_root,
+            orbit_dir: &self.data_root(),
+            admission_holds: &admission_holds,
+            held: &self.baseline_held_tasks(&backlog, &history_by_task),
+            validation_hold: &|task, comments, history| {
                 if let Some(hold) = no_drain_pull_hold(task) {
                     return Ok(Some(hold));
                 }
@@ -265,14 +265,14 @@ impl OrbitRuntime {
                     _ => Ok(None),
                 }
             },
-            &|task| self.fresh_claim_crew_task(task, request),
-            &|task| {
+            effective_task: Some(&|task: &Task| self.fresh_claim_crew_task(task, request)),
+            guidance_capture: Some(&|task: &Task| {
                 Ok(AdmissionTaskGuidance {
                     experiments: self.capture_pull_experiments(task, &request.ship)?,
                     artifacts: Vec::new(),
                 })
-            },
-        )
+            }),
+        })
     }
 
     /// The requester is this owner host, so owner-local perf work holds its lane.

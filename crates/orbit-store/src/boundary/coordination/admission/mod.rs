@@ -20,7 +20,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 pub use refusal::admission_refusal;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
@@ -36,6 +36,46 @@ pub type ValidationHold<'a> =
 /// Owner callback invoked only for the selected task, before claim persistence.
 pub type AdmissionGuidanceCapture<'a> =
     dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
+
+/// The owner's fresh crew policy for a candidate: the task it screens and summarizes.
+pub type EffectiveTaskPolicy<'a> = dyn Fn(&Task) -> Result<Task, OrbitError> + 'a;
+
+/// The inputs of one owner admission section, borrowed from the caller: the
+/// trusted identity and its request, the ordering and workspace it admits
+/// into, the holds that defer candidates and the owner's callbacks.
+#[derive(Clone, Copy)]
+pub struct AdmissionCall<'a> {
+    pub identity: &'a AdmissionIdentity,
+    pub request: &'a AdmissionRequest,
+    pub ordering: &'a AdmissionOrdering,
+    pub owner_version: &'a str,
+    pub repo_root: &'a Path,
+    pub orbit_dir: &'a Path,
+    /// Tasks a live owner-local delivery or pilot finding holds, with the
+    /// trusted diagnostic for each.
+    pub admission_holds: &'a BTreeMap<String, String>,
+    /// `backlog` tasks the owner withholds for a red base, with why.
+    pub held: &'a BTreeMap<String, String>,
+    pub validation_hold: &'a ValidationHold<'a>,
+    /// The owner's fresh crew policy for screening and the captured summary.
+    /// `None` keeps the stored task.
+    pub effective_task: Option<&'a EffectiveTaskPolicy<'a>>,
+    /// The owner's guidance for the selected task, captured before the claim
+    /// is persisted. `None` captures no experiments or artifacts.
+    pub guidance_capture: Option<&'a AdmissionGuidanceCapture<'a>>,
+}
+
+impl AdmissionCall<'_> {
+    /// The fresh-policy callback in force, or the stored task unchanged.
+    pub(super) fn effective_task_or_default(&self) -> &EffectiveTaskPolicy<'_> {
+        self.effective_task.unwrap_or(&keep_task)
+    }
+
+    /// The guidance callback in force, or none captured.
+    pub(super) fn guidance_capture_or_default(&self) -> &AdmissionGuidanceCapture<'_> {
+        self.guidance_capture.unwrap_or(&no_guidance)
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -81,4 +121,20 @@ pub(super) fn canonical_footprint(
         })
         .collect::<Result<BTreeSet<_>, _>>()
         .map(|files| files.into_iter().collect())
+}
+
+/// The stored task stands: no fresh crew policy is applied.
+fn keep_task(task: &Task) -> Result<Task, OrbitError> {
+    Ok(task.clone())
+}
+
+/// Nothing is captured: the claim records no experiments or artifacts.
+fn no_guidance(task: &Task) -> Result<AdmissionTaskGuidance, OrbitError> {
+    Ok(AdmissionTaskGuidance {
+        experiments: orbit_types::workflow::CapturedExperiments {
+            task_id: task.id.clone(),
+            assignments: Vec::new(),
+        },
+        artifacts: Vec::new(),
+    })
 }

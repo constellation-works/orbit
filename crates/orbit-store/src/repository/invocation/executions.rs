@@ -31,6 +31,16 @@ pub(crate) struct UnidentifiedInvocationTarget {
     pub(crate) model: Option<String>,
 }
 
+/// The launch slot an agent execution is recorded against: the run, activity,
+/// provider and model it was launched as.
+#[derive(Clone, Copy)]
+pub(crate) struct ExecutionSlotKey<'a> {
+    pub(crate) run_id: &'a str,
+    pub(crate) activity_id: &'a str,
+    pub(crate) provider: &'a str,
+    pub(crate) model: Option<&'a str>,
+}
+
 /// Decoded existing `agent_executions` row for coverage checks in backfill.
 pub(crate) struct AgentExecutionSlotRow {
     pub(crate) started_at: DateTime<Utc>,
@@ -70,18 +80,20 @@ pub(super) fn insert_agent_execution(
     Ok(conn.last_insert_rowid())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn insert_agent_execution_with_backfill(
     conn: &Connection,
     workspace: &str,
-    run_id: &str,
-    activity_id: &str,
-    provider: &str,
-    model: Option<&str>,
+    slot: &ExecutionSlotKey<'_>,
     started_at: DateTime<Utc>,
     identity: &AgentExecutionIdentity,
     backfill: &AgentExecutionBackfill,
 ) -> Result<i64, OrbitError> {
+    let ExecutionSlotKey {
+        run_id,
+        activity_id,
+        provider,
+        model,
+    } = *slot;
     let json = serde_json::to_string(&StoredAgentExecutionIdentity {
         identity: identity.clone(),
         backfill: Some(backfill.clone()),

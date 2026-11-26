@@ -123,7 +123,7 @@ use std::sync::Arc;
 // Shared with sibling modules through `super::`.
 use boundary::{BoundaryDepth, Section};
 
-pub use admission::admission_refusal;
+pub use admission::{AdmissionCall, admission_refusal};
 #[cfg(feature = "test-support")]
 pub(crate) use boundary::lock_timeout_hook;
 #[cfg(feature = "test-support")]
