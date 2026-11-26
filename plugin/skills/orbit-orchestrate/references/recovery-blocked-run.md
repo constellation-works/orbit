@@ -19,6 +19,18 @@ A sandbox denial or provider
 failure is not inherently transient; repeated identical failures need a repair
 or configuration correction before another attempt.
 
+A task blocked by an implementer's blocker (`task_blocked_by_agent`) keeps its
+candidate only as uncommitted files in the run's worktree. Resume refuses that
+held run, and no later run reuses those files, so save them before you requeue.
+Once the blocker is resolved, leave the worktree in place and, from your
+checkout, save its changes with `git -C <worktree> add -A && git -C <worktree>
+diff --cached --binary HEAD > .orbit/tmp/<task-id>-salvage.patch`. Attach the
+patch with `orbit task artifact put <task-id> .orbit/tmp/<task-id>-salvage.patch`,
+name it in a task comment, then return the task to backlog with `orbit task
+requeue <task-id> --reason '<why it can continue>'`. The refusal from
+`orbit job resume` and the blocker comment name the run's worktree and branch.
+Requeue waits until the run has stopped, so retry it then.
+
 Every return from `blocked` to `backlog` is authenticated the same way.
 
 `orbit task requeue`, a plain `orbit task update --status backlog`, and the

@@ -180,14 +180,26 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
          failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; no PR was opened",
         orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER
     );
+    // [ORB-29000] `orbit job resume` refuses this held run, so the comment
+    // names the worktree and the route that keeps its uncommitted candidate.
+    let task_id = task.id.as_str();
+    let worktree = workspace_path.display();
     let body = format!(
         "## Agent blocker\n\nThe implementer or step recovery stopped with kind `{kind}` and \
          asked the run not to continue. No final recovery ran, no review budget was spent, \
-         nothing was committed or pushed, and no PR was opened. The worktree still holds the \
-         candidate as the agent left it, including uncommitted files.\n\n- Run: `{run_id}`\n- Failed step: \
-         `{failed_step_id}`\n- Kind: `{kind}`\n- Branch: `{branch}`\n- Head: `{head_sha}`\n\n\
-         Move the task back to `in-progress` once the blocker is gone, then resume the run if the \
-         candidate should continue.\n\n## Failure\n\n```text\n{diagnostic}\n```"
+         nothing was committed or pushed, and no PR was opened. The candidate is uncommitted in \
+         the worktree below, and no other copy exists.\n\n- Run: `{run_id}`\n- Failed step: \
+         `{failed_step_id}`\n- Kind: `{kind}`\n- Worktree: `{worktree}`\n- Branch: `{branch}`\n\
+         - Head: `{head_sha}`\n\n`orbit job resume` refuses this held run, and a later run does not \
+         reuse uncommitted files. To keep the candidate once the blocker is resolved:\n\n\
+         1. Leave the worktree in place.\n\
+         2. Save its changes from your checkout: `git -C {worktree} add -A && git -C {worktree} \
+         diff --cached --binary HEAD > .orbit/tmp/{task_id}-salvage.patch`.\n\
+         3. Attach the patch with `orbit task artifact put {task_id} .orbit/tmp/{task_id}-salvage.patch` \
+         and name it in a task comment so the next run can read it.\n\
+         4. Once the run has stopped, return the task to backlog with `orbit task requeue {task_id} \
+         --reason '<why it can continue>'`; requeue is refused while the run still runs. The next run \
+         starts fresh.\n\n## Failure\n\n```text\n{diagnostic}\n```"
     );
     host.apply_task_automation_update(
         &task.id,

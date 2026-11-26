@@ -1303,4 +1303,123 @@ fn unresolved_policy_decision_holds_the_run_and_keeps_the_candidate() {
         std::fs::read_to_string(worktree.join("candidate.txt")).unwrap(),
         "partial candidate\n"
     );
+
+    // [ORB-29000] The blocker comment names the worktree and branch and gives
+    // the salvage route. It never tells the operator to resume the held run.
+    let branch = handoff.output["branch"].as_str().unwrap().to_string();
+    let worktree_text = worktree.display().to_string();
+    let comment = fx
+        .runtime
+        .get_task_comments(&task)
+        .unwrap()
+        .into_iter()
+        .map(|comment| comment.message)
+        .find(|message| message.contains("## Agent blocker"))
+        .expect("the blocker comment");
+    for expected in [
+        worktree_text.as_str(),
+        branch.as_str(),
+        "orbit task artifact put",
+        "orbit task requeue",
+    ] {
+        assert!(comment.contains(expected), "{expected} missing: {comment}");
+    }
+    assert!(!comment.contains("resume the run"), "{comment}");
+
+    // The operator clears the blocker by returning the task to in-progress.
+    // Resume stays refused and names the same worktree, branch and route. It
+    // starts no run and leaves the candidate uncommitted and in place.
+    let runs_before = fx
+        .runtime
+        .list_job_runs(JobRunListParams::default())
+        .unwrap()
+        .len();
+    fx.runtime
+        .update_task_as_human(
+            &task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            "human:test".into(),
+        )
+        .unwrap();
+    let Err(refusal) = fx
+        .runtime
+        .submit_resume_run(&stored.run_id, Some("operator"), None)
+    else {
+        panic!("a run held by an agent blocker must not resume");
+    };
+    let message = match refusal {
+        OrbitError::JobValidation(message) => message,
+        other => panic!("{other:?}"),
+    };
+    for expected in [
+        stored.run_id.as_str(),
+        worktree_text.as_str(),
+        branch.as_str(),
+        "agent's blocker",
+        "orbit task artifact put",
+        "orbit task requeue",
+    ] {
+        assert!(message.contains(expected), "{expected} missing: {message}");
+    }
+    assert_eq!(
+        fx.runtime.show_job_run(&stored.run_id).unwrap().state,
+        JobRunState::Held
+    );
+    assert_eq!(
+        fx.runtime
+            .list_job_runs(JobRunListParams::default())
+            .unwrap()
+            .len(),
+        runs_before,
+        "the refused resume inserts no run"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::InProgress);
+    assert_eq!(
+        git(worktree, &["status", "--short", "--", "candidate.txt"]),
+        "?? candidate.txt"
+    );
+
+    // The salvage command the comment and refusal name captures the untracked
+    // candidate in the worktree's diff.
+    git(worktree, &["add", "-A"]);
+    let patch = git(worktree, &["diff", "--cached", "--binary", "HEAD"]);
+    assert!(
+        patch.contains("+++ b/candidate.txt") && patch.contains("+partial candidate"),
+        "{patch}"
+    );
+
+    // The salvage route ends with a requeue. Requeue waits until the held
+    // run's owner has stopped; this test process is that owner and is still
+    // running, so the requeue is refused and the task stays blocked with the
+    // candidate in place. The owner is the per-run worker, which exits once
+    // the run stops, so the requeue succeeds after that.
+    fx.runtime
+        .update_task_as_human(
+            &task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+            "human:test".into(),
+        )
+        .unwrap();
+    let Err(error) =
+        fx.runtime
+            .requeue_blocked_task(&task, "blocker cleared; candidate saved", false)
+    else {
+        panic!("requeue must wait while the held run's owner is still running");
+    };
+    let refusal = error.to_string();
+    assert!(
+        refusal.contains("has not conclusively stopped"),
+        "{refusal}"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("candidate.txt")).unwrap(),
+        "partial candidate\n"
+    );
 }
