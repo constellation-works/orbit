@@ -91,11 +91,7 @@ fn remote_access_json(state: &DashboardState) -> Value {
         .iter()
         .map(|device| device.open_streams)
         .sum();
-    let active_devices = activity
-        .devices
-        .iter()
-        .filter(|device| device.requests_15m > 0 || device.open_streams > 0)
-        .count();
+    let active_devices = activity.active_devices();
     let refused: u64 = activity.refusals.iter().map(|item| item.count_24h).sum();
 
     json!({
