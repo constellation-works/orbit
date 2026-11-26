@@ -454,9 +454,9 @@ Host route (**new**): an app-bound session sends every consented callback tool t
 host, not only the two completion tools. The routed set is the ceiling table's callback
 column (`application_callback_tool` in
 `crates/orbit-common/src/governance/authorization/catalog/application.rs`), so `orbit.task.show` and
-`orbit.task.artifact` action `get` are routed too. The read executors run in the adapter
-(`execute_application_read`, `crates/orbit-core/src/adapter/tool_host/task/read.rs`),
-because the projection and artifact serialization they reuse live there.
+`orbit.task.artifact` action `get` are routed too. The read executors run beside the task
+handlers (`execute_application_read`, `crates/orbit-core/src/app/task/read.rs`),
+because the projection and artifact serialization they reuse are the handlers'.
 
 ### 5.1 Evaluating a constrained operation
 

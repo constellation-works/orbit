@@ -1,11 +1,10 @@
 use crate::command::locks::LocksContentionArgs;
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
-use orbit_common::Env;
 use orbit_common::governance::task::{TASK, TaskVerb};
-use orbit_core::OrbitRuntime;
 
 use super::super::operation_args::Invocation;
-use crate::command::{CommandOut, Execute};
+use crate::command::operation::DispatchContext;
+use crate::command::{CommandOut, Execute, ExecuteCore};
 
 use super::archive::TaskArchiveArgs;
 use super::export::TaskExportArgs;
@@ -36,8 +35,10 @@ pub struct TaskCommand {
 }
 
 impl TaskCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        self.command.execute_with_env(runtime, env)
+    /// Run the command. Every subcommand but lock contention, which has no
+    /// app yet, runs through the task app's `exec`.
+    pub(crate) fn execute_in(self, context: &DispatchContext<'_>) -> CommandOut {
+        self.command.execute_in(context)
     }
 }
 
@@ -68,17 +69,17 @@ pub enum TaskSubcommand {
 }
 
 impl TaskSubcommand {
-    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    fn execute_in(self, context: &DispatchContext<'_>) -> CommandOut {
         match self {
-            TaskSubcommand::Archive(args) => args.execute(runtime),
-            TaskSubcommand::Operation(invocation) => invocation.execute_with_env(runtime, env),
-            TaskSubcommand::Flow(args) => args.execute(runtime),
-            TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
-            TaskSubcommand::SettleMerged(args) => args.execute(runtime),
-            TaskSubcommand::Export(args) => args.execute(runtime),
-            TaskSubcommand::Import(args) => args.execute(runtime),
-            TaskSubcommand::Publication(command) => command.execute(runtime),
-            TaskSubcommand::Reindex(args) => args.execute(runtime),
+            TaskSubcommand::Archive(args) => ExecuteCore::execute(args, context.core()?),
+            TaskSubcommand::Operation(invocation) => invocation.execute_in(context),
+            TaskSubcommand::Flow(args) => ExecuteCore::execute(args, context.core()?),
+            TaskSubcommand::RecheckBlocked(args) => ExecuteCore::execute(args, context.core()?),
+            TaskSubcommand::SettleMerged(args) => ExecuteCore::execute(args, context.core()?),
+            TaskSubcommand::Export(args) => ExecuteCore::execute(args, context.core()?),
+            TaskSubcommand::Import(args) => ExecuteCore::execute(args, context.core()?),
+            TaskSubcommand::Publication(command) => ExecuteCore::execute(command, context.core()?),
+            TaskSubcommand::Reindex(args) => ExecuteCore::execute(args, context.core()?),
         }
     }
 }
@@ -131,10 +132,10 @@ impl FromArgMatches for TaskInvocation {
 }
 
 impl TaskInvocation {
-    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    fn execute_in(self, context: &DispatchContext<'_>) -> CommandOut {
         match self {
-            Self::Registry(invocation) => super::operation::execute(invocation, runtime, env),
-            Self::Contention(args) => args.execute(runtime),
+            Self::Registry(invocation) => super::operation::execute(invocation, context),
+            Self::Contention(args) => Execute::execute(args, context.runtime()?),
         }
     }
 }

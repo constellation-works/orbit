@@ -12,6 +12,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_SCRIPT_GRANT};
 use orbit_core::OrbitError;
+use orbit_core::app::task::{DashboardAction, Outcome};
 use orbit_core::application::task::DecisionListProfile;
 use orbit_types::task::DecisionGate;
 use serde::Deserialize;
@@ -20,7 +21,7 @@ use serde_json::json;
 use super::routines::{authorization_denied, authorized_caller};
 use super::tasks::human_comment_author;
 use super::{bad_request, blocking, non_empty_string, server_error};
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, Ws, WsCore};
 
 /// Query string for `GET /api/decisions`.
 #[derive(Debug, Default, Deserialize)]
@@ -123,21 +124,19 @@ pub(super) async fn answer_decision(
         json!({ "decision_id": id, "answer": answer }),
     );
     meta.role = Some(author.clone());
+    let WsCore(core) = WsCore::over(&runtime);
     match blocking("decision answer", move || {
         super::tasks::run_audited_web_task_mutation(
-            &runtime,
+            &core,
             meta,
-            |request: &orbit_types::task::DecisionRequest| Some(request.task_id.clone()),
-            move |runtime| {
-                runtime.answer_decision_request_as_human(
-                    &id,
-                    &answer,
-                    note,
-                    author,
-                    Some("dashboard".to_string()),
-                )
+            DashboardAction::AnswerDecision {
+                id,
+                answer,
+                note,
+                author,
             },
         )
+        .and_then(Outcome::into_decision_request)
     })
     .await
     {

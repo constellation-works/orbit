@@ -1,9 +1,10 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{self, Archive, Command, Outcome};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
-use super::output::task_to_json_for_runtime;
+use super::output::warn_unresolved_crew;
 
 #[derive(Args)]
 #[command(
@@ -17,20 +18,19 @@ pub struct TaskArchiveArgs {
     pub force: bool,
 }
 
-impl Execute for TaskArchiveArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        orbit_core::application::task::with_task_write_provenance(
-            orbit_types::task::TaskWriteProvenance::new(
-                Some(orbit_types::task::TaskWriteSurface::Cli),
-                None,
-            ),
-            || runtime.archive_task_as_operator(&self.id, self.force),
-        )?;
-        let task = runtime.get_task(&self.id)?;
-        Ok(Payload::detail(
-            task_to_json_for_runtime(runtime, &task)?,
-            format!("Archived task '{}'", self.id),
+impl ExecuteCore for TaskArchiveArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let document = task::exec(
+            core,
+            Command::Archive(Archive {
+                id: self.id.clone(),
+                force: self.force,
+            }),
         )
-        .into())
+        .and_then(Outcome::into_answer)?;
+        if let Some(doc) = document.as_object() {
+            warn_unresolved_crew(doc);
+        }
+        Ok(Payload::detail(document, format!("Archived task '{}'", self.id)).into())
     }
 }

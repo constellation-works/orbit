@@ -92,7 +92,7 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
             &self.runtime,
             &self.task_scope,
             self.brokered_resident,
-            super::dispatch::ToolCaller {
+            crate::app::task::ToolCaller {
                 session_context: &session,
                 agent,
                 model,
@@ -195,7 +195,7 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
             &self.runtime,
             &self.task_scope,
             self.brokered_resident,
-            super::dispatch::ToolCaller {
+            crate::app::task::ToolCaller {
                 session_context: &session,
                 agent: None,
                 model: Some(actor_label),

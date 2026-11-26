@@ -11,7 +11,7 @@ use serde_json::Value;
 /// present (accepting a JSON number or numeric string), otherwise the
 /// status-neutral default. A zero limit is rejected with a clear input error
 /// (ORB-10310).
-pub(super) fn task_list_limit(input: &Value) -> Result<usize, OrbitError> {
+pub(crate) fn task_list_limit(input: &Value) -> Result<usize, OrbitError> {
     let Some(value) = input.get("limit") else {
         return Ok(DEFAULT_TASK_LIST_LIMIT);
     };
@@ -43,7 +43,7 @@ pub(super) fn task_list_limit(input: &Value) -> Result<usize, OrbitError> {
     Ok(limit)
 }
 
-pub(super) fn parse_artifacts(input: &Value) -> Result<Vec<TaskArtifact>, OrbitError> {
+pub(crate) fn parse_artifacts(input: &Value) -> Result<Vec<TaskArtifact>, OrbitError> {
     let Some(value) = input.get("artifacts").or_else(|| input.get("artifact")) else {
         return Ok(Vec::new());
     };
@@ -130,7 +130,7 @@ fn parse_artifact_content(value: &Value) -> Result<Vec<u8>, OrbitError> {
     }
 }
 
-pub(super) fn parse_relations(input: &Value) -> Result<Option<Vec<TaskRelation>>, OrbitError> {
+pub(crate) fn parse_relations(input: &Value) -> Result<Option<Vec<TaskRelation>>, OrbitError> {
     let Some(value) = input.get("relations").or_else(|| input.get("relation")) else {
         return Ok(None);
     };
@@ -149,7 +149,7 @@ pub(super) fn parse_relations(input: &Value) -> Result<Option<Vec<TaskRelation>>
     }
 }
 
-pub(super) fn empty_string_to_none(raw: String) -> Option<String> {
+pub(crate) fn empty_string_to_none(raw: String) -> Option<String> {
     if raw.trim().is_empty() {
         None
     } else {
@@ -157,7 +157,7 @@ pub(super) fn empty_string_to_none(raw: String) -> Option<String> {
     }
 }
 
-pub(super) fn optional_bool_alias(
+pub(crate) fn optional_bool_alias(
     input: &Value,
     names: &[&str],
 ) -> Result<Option<bool>, OrbitError> {
@@ -182,12 +182,12 @@ pub(super) fn optional_bool_alias(
     Ok(None)
 }
 
-pub(super) fn parse_task_status(field: &str, raw: &str) -> Result<TaskStatus, OrbitError> {
+pub(crate) fn parse_task_status(field: &str, raw: &str) -> Result<TaskStatus, OrbitError> {
     TaskStatus::from_str(raw)
         .map_err(|error| OrbitError::InvalidInput(format!("`{field}` {error}")))
 }
 
-pub(super) fn parse_task_priority(field: &str, raw: &str) -> Result<TaskPriority, OrbitError> {
+pub(crate) fn parse_task_priority(field: &str, raw: &str) -> Result<TaskPriority, OrbitError> {
     TaskPriority::from_str(raw)
         .map_err(|error| OrbitError::InvalidInput(format!("`{field}` {error}")))
 }
@@ -206,14 +206,14 @@ fn parse_task_complexity(field: &str, raw: &str) -> Result<TaskComplexity, Orbit
 ///
 /// [`TaskComplexity::Unassessed`] is reserved for automated mint/import, so an
 /// agent cannot pass the create assessment and then clear it one update later.
-pub(super) fn parse_assessed_task_complexity(
+pub(crate) fn parse_assessed_task_complexity(
     field: &str,
     raw: &str,
 ) -> Result<TaskComplexity, OrbitError> {
     Ok(parse_task_complexity(field, raw)?.require_assessed()?)
 }
 
-pub(super) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitError> {
+pub(crate) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitError> {
     TaskType::from_str(raw).map_err(|error| {
         if raw.trim().eq_ignore_ascii_case("fix") {
             OrbitError::invalid_input_with_suggestions(
@@ -228,7 +228,7 @@ pub(super) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitE
 
 /// An optional `origin` from the closed enum; an unknown value is refused
 /// with the allowed list and directed to `description` (ORB-24229).
-pub(super) fn parse_optional_task_origin(
+pub(crate) fn parse_optional_task_origin(
     input: &Value,
     field: &str,
 ) -> Result<Option<TaskOrigin>, OrbitError> {
@@ -254,7 +254,7 @@ pub(super) fn parse_optional_task_origin(
 /// wire reads an explicit null as an omitted field), an empty string clears
 /// it (`Some(None)`), and an RFC 3339 instant with an offset sets it.
 /// Anything else is refused naming the input.
-pub(super) fn parse_optional_not_before(
+pub(crate) fn parse_optional_not_before(
     input: &Value,
 ) -> Result<Option<Option<chrono::DateTime<chrono::Utc>>>, OrbitError> {
     let field = orbit_types::task::NOT_BEFORE_FIELD;

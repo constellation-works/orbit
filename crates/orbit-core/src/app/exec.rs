@@ -9,7 +9,8 @@
 //!   before the command went through an app. It then marks the row as
 //!   recorded, so that guard writes no second one.
 //! - From a long-lived server, the chokepoint authorizes the command. No
-//!   invocation row is written for one today.
+//!   invocation row is written for one today; a task write records the
+//!   owner-side mutation row the dashboard wrote itself before.
 //! - From a tool handler, the generic tool entry authorized and audited the
 //!   call before the handler ran, so the chokepoint only runs it. This case
 //!   ends when the tool entry itself is converted to call the apps.
@@ -22,10 +23,12 @@ use orbit_common::governance::operation::OperationVerb;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::security::redaction::redact_sensitive_env_text;
 use orbit_store::AuditEventInsertParams;
+use orbit_types::task::TaskWriteSurface;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
+use crate::application::task::{TaskMutationAudit, audit_status_for_task_mutation_error};
 use crate::composition::Entry;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 use crate::{Core, Error};
@@ -42,6 +45,35 @@ pub(crate) trait App {
 
     /// Run `command`. The chokepoint has authorized it and started its audit.
     fn run(core: &Core, command: Self::Command) -> Result<Self::Outcome, Self::Error>;
+
+    /// The exit code a command line reports for `outcome`. A command that
+    /// ran but answers non-zero is audited as failed with that code.
+    fn exit_code(_outcome: &Self::Outcome) -> i32 {
+        0
+    }
+
+    /// The mutation row a server owes for `command`, if it is a write the
+    /// dashboard records.
+    fn mutation_audit(_command: &Self::Command) -> Option<MutationAudit> {
+        None
+    }
+
+    /// The record `outcome` wrote, when the command could not name it.
+    fn written_id(_outcome: &Self::Outcome) -> Option<String> {
+        None
+    }
+}
+
+/// What a server records about one write: the `task.mutation` row's verb,
+/// target, caller and detail. The role is the given one, or the one resolved
+/// for `model`.
+pub(crate) struct MutationAudit {
+    pub(crate) verb: &'static str,
+    pub(crate) target_id: Option<String>,
+    pub(crate) caller: Option<String>,
+    pub(crate) role: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) detail: Value,
 }
 
 /// One command's identity in the operation registry: the names its governance
@@ -49,8 +81,9 @@ pub(crate) trait App {
 pub(crate) struct Operation {
     command: &'static str,
     subcommand: String,
-    tool_name: &'static str,
-    target_type: &'static str,
+    /// The tool whose governance row this chokepoint decides, if any.
+    tool_name: Option<&'static str>,
+    target_type: Option<&'static str>,
     target_id: Option<String>,
 }
 
@@ -64,30 +97,109 @@ impl Operation {
         Self {
             command: noun.cli_name,
             subcommand: spec.cli_path.join("-"),
-            tool_name: spec.tool_name,
-            target_type: noun.audit_target_type,
+            tool_name: Some(spec.tool_name),
+            target_type: Some(noun.audit_target_type),
             target_id: fields
                 .get(noun.audit_target_param)
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
         }
     }
+
+    /// A command with no verb in the operation registry: it has no tool row
+    /// and no target until [`Self::target`] names one.
+    pub(crate) fn command(command: &'static str, subcommand: impl Into<String>) -> Self {
+        Self {
+            command,
+            subcommand: subcommand.into(),
+            tool_name: None,
+            target_type: None,
+            target_id: None,
+        }
+    }
+
+    /// Name the audit row's target where the noun's own is not the one.
+    pub(crate) fn target(
+        mut self,
+        target_type: Option<&'static str>,
+        target_id: Option<String>,
+    ) -> Self {
+        self.target_type = target_type;
+        self.target_id = target_id;
+        self
+    }
+
+    /// Decide no tool row here: the command either runs through the generic
+    /// tool entry, which decides the row, or never was a tool call. Deciding
+    /// it here too would record one decision twice.
+    pub(crate) fn without_tool_row(mut self) -> Self {
+        self.tool_name = None;
+        self
+    }
 }
 
 /// Run one command of app `A`: authorize it, audit it, run it.
 pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome, Error> {
     let operation = A::operation(&command);
-    let mut guard = match core.entry() {
-        Entry::Tool => return A::run(core, command).map_err(Into::into),
-        Entry::CommandLine => Some(AuditGuard::start(core, &operation)),
-        Entry::Service => None,
+    let admitted = |command| {
+        authorize(core, &operation).and_then(|()| A::run(core, command).map_err(Into::into))
     };
-    let result =
-        authorize(core, &operation).and_then(|()| A::run(core, command).map_err(Into::into));
-    if let Some(guard) = guard.as_mut() {
-        guard.outcome(result.as_ref().err());
+    match core.entry() {
+        Entry::Tool => A::run(core, command).map_err(Into::into),
+        Entry::CommandLine => {
+            let mut guard = AuditGuard::start(core, &operation);
+            let result = admitted(command);
+            match &result {
+                Ok(outcome) => guard.finished(A::exit_code(outcome)),
+                Err(error) => guard.failed(error),
+            }
+            result
+        }
+        Entry::Service => {
+            let Some(audit) = A::mutation_audit(&command) else {
+                return admitted(command);
+            };
+            let started = Instant::now();
+            let result = admitted(command);
+            record_mutation(core, audit, started, result.as_ref().map(A::written_id));
+            result
+        }
     }
-    result
+}
+
+/// Write the `task.mutation` row of one server write. A write that named no
+/// target is recorded against the record it wrote.
+fn record_mutation(
+    core: &Core,
+    audit: MutationAudit,
+    started: Instant,
+    result: Result<Option<String>, &Error>,
+) {
+    let runtime = core.runtime();
+    let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let role = audit
+        .role
+        .unwrap_or_else(|| runtime.resolve_task_mutation_audit_role(None, audit.model.as_deref()));
+    let (target_id, status, error_message) = match result {
+        Ok(written) => (written.or(audit.target_id), AuditEventStatus::Success, None),
+        Err(error) => (
+            audit.target_id,
+            audit_status_for_task_mutation_error(error),
+            Some(error.to_string()),
+        ),
+    };
+    runtime.record_task_mutation_audit(TaskMutationAudit {
+        verb: audit.verb,
+        target_id: target_id.as_deref(),
+        role: &role,
+        surface: TaskWriteSurface::Web,
+        caller: audit.caller.as_deref(),
+        status,
+        duration_ms,
+        error_message,
+        detail: audit.detail,
+        session_context: None,
+    });
 }
 
 /// Decide `operation` against its governance rows: the command row a
@@ -98,14 +210,13 @@ fn authorize(core: &Core, operation: &Operation) -> Result<(), Error> {
     if core.entry() == Entry::CommandLine {
         runtime.authorize_command_operation(operation.command, &operation.subcommand)?;
     }
+    let Some(tool_name) = operation.tool_name else {
+        return Ok(());
+    };
     // The session the tool entry decides the same call under.
     let mut session = ToolSessionContext::default();
     runtime.bind_worker_session(&mut session)?;
-    runtime.authorize_tool_operation(
-        operation.tool_name,
-        &session,
-        CapabilityEnforcement::Enforce,
-    )
+    runtime.authorize_tool_operation(tool_name, &session, CapabilityEnforcement::Enforce)
 }
 
 /// Writes one command's invocation audit row when dropped, so an early return
@@ -134,14 +245,18 @@ impl<'a> AuditGuard<'a> {
         }
     }
 
-    /// Record how the command ended: `None` for success, or its error.
-    fn outcome(&mut self, error: Option<&Error>) {
-        let Some(error) = error else {
-            self.status = AuditEventStatus::Success;
-            self.exit_code = 0;
-            self.error_message = None;
-            return;
+    /// Record that the command ran and answers `exit_code`.
+    fn finished(&mut self, exit_code: i32) {
+        self.status = match exit_code {
+            0 => AuditEventStatus::Success,
+            _ => AuditEventStatus::Failure,
         };
+        self.exit_code = exit_code;
+        self.error_message = None;
+    }
+
+    /// Record the error the command ended with.
+    fn failed(&mut self, error: &Error) {
         let denial = match error {
             OrbitError::PolicyDenied(message) | OrbitError::CapabilityDenied(message) => {
                 Some(message.clone())
@@ -178,7 +293,7 @@ impl<'a> AuditGuard<'a> {
             command: self.operation.command.to_string(),
             subcommand: Some(self.operation.subcommand.clone()),
             tool_name: None,
-            target_type: Some(self.operation.target_type.to_string()),
+            target_type: self.operation.target_type.map(ToOwned::to_owned),
             target_id: self.operation.target_id.clone(),
             role: runtime.actor().audit_role().to_string(),
             status: self.status,

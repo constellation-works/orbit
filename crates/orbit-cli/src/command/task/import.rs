@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{self, Command, Outcome};
 use orbit_core::application::task_bundle::migration::{ImportAction, ImportConflictPolicy};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 /// `orbit task import` — import task bundles from a tar.zst archive.
 #[derive(Args)]
@@ -60,13 +61,17 @@ fn action_label(action: ImportAction) -> &'static str {
     }
 }
 
-impl Execute for TaskImportArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let outcome = runtime.import_tasks(
-            &self.archive,
-            self.task_workspace.as_deref(),
-            self.on_conflict.into(),
-        )?;
+impl ExecuteCore for TaskImportArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let outcome = task::exec(
+            core,
+            Command::Import {
+                archive: self.archive,
+                task_workspace: self.task_workspace,
+                on_conflict: self.on_conflict.into(),
+            },
+        )
+        .and_then(Outcome::into_imported)?;
 
         let tasks: Vec<_> = outcome
             .tasks

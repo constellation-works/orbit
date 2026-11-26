@@ -200,6 +200,16 @@ impl FromRequestParts<DashboardState> for Ws {
 /// so a handler destructures it as `WsCore(core)` without naming the runtime.
 pub(crate) struct WsCore(pub(crate) Arc<Core>);
 
+impl WsCore {
+    /// The opaque [`Core`] over an already resolved workspace runtime, for a
+    /// handler that selected its workspace itself.
+    pub(crate) fn over(runtime: &Arc<OrbitRuntime>) -> Self {
+        Self(Arc::new(RegisteredRuntimeFactory::core_for_service(
+            runtime.as_ref().clone(),
+        )))
+    }
+}
+
 impl FromRequestParts<DashboardState> for WsCore {
     type Rejection = WsRejection;
 
@@ -208,9 +218,7 @@ impl FromRequestParts<DashboardState> for WsCore {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
-        Ok(WsCore(Arc::new(
-            RegisteredRuntimeFactory::core_for_service(runtime.as_ref().clone()),
-        )))
+        Ok(Self::over(&runtime))
     }
 }
 

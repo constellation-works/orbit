@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 
-use super::super::json::serialize_task_artifact_read;
+use crate::adapter::tool_host::json::serialize_task_artifact_read;
 
 /// Read one stored artifact's bytes through the task's own artifact owner.
 ///
@@ -125,7 +125,7 @@ impl OrbitRuntime {
                 ));
             }
             // `fields` is an array here, so even one field stays keyed.
-            super::super::json::task_fields_to_json(self, &task, &fields, true)?
+            crate::adapter::tool_host::json::task_fields_to_json(self, &task, &fields, true)?
         } else {
             let path = string("path")?;
             validate_relative_artifact_path(path)

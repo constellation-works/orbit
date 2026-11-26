@@ -7,14 +7,15 @@ use super::writes::{WebTaskMutationMeta, run_audited_web_task_mutation};
 use crate::api::helpers;
 use crate::api::routines::{authorization_denied, authorized_caller};
 use crate::api::{OptionalJson, bad_request, validate_id};
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, WsCore};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_TASK_PILOT_ADMISSION, DASHBOARD_TASK_POST_DEPLOY,
 };
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{DashboardAction, Outcome};
 use orbit_core::application::task::{PostDeployOperatorRecord, PostDeployRecordRefusal};
 use orbit_types::task::{PilotAdmissionOperatorRecord, PilotAdmissionRecordRefusal};
 use orbit_types::workflow::PostDeployOutcome;
@@ -36,7 +37,7 @@ fn evidence_required(code: &'static str, message: &'static str) -> Response {
 pub(in crate::api) async fn pilot_admission_task_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<PilotAdmissionBody>,
 ) -> Response {
@@ -82,13 +83,15 @@ pub(in crate::api) async fn pilot_admission_task_action(
     meta.role = Some(DASHBOARD_ACTOR.to_string());
     let result = helpers::blocking_join("task pilot admission", move || {
         run_audited_web_task_mutation(
-            &runtime,
+            &core,
             meta,
-            |_| None,
-            move |runtime| {
-                runtime.record_pilot_admission_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
+            DashboardAction::PilotAdmission {
+                id,
+                record,
+                actor: DASHBOARD_ACTOR,
             },
         )
+        .and_then(Outcome::into_task)
     })
     .await;
     match result {
@@ -108,7 +111,7 @@ pub(in crate::api) async fn pilot_admission_task_action(
 async fn record_post_deploy_met(
     state: DashboardState,
     headers: HeaderMap,
-    runtime: Arc<OrbitRuntime>,
+    core: Arc<Core>,
     id: String,
     criterion: Option<usize>,
     evidence: Option<String>,
@@ -150,13 +153,15 @@ async fn record_post_deploy_met(
     meta.role = Some(DASHBOARD_ACTOR.to_string());
     let result = helpers::blocking_join("task post-deploy record", move || {
         run_audited_web_task_mutation(
-            &runtime,
+            &core,
             meta,
-            |_| None,
-            move |runtime| {
-                runtime.record_post_deploy_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
+            DashboardAction::PostDeploy {
+                id,
+                record,
+                actor: DASHBOARD_ACTOR,
             },
         )
+        .and_then(Outcome::into_task)
     })
     .await;
     match result {
@@ -177,7 +182,7 @@ async fn record_post_deploy_met(
 pub(in crate::api) async fn post_deploy_task_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<PostDeployBody>,
 ) -> Response {
@@ -188,7 +193,7 @@ pub(in crate::api) async fn post_deploy_task_action(
     record_post_deploy_met(
         state,
         headers,
-        runtime,
+        core,
         id,
         body.criterion,
         body.evidence.or(body.reason),
@@ -201,7 +206,7 @@ pub(in crate::api) async fn post_deploy_task_action(
 pub(in crate::api) async fn post_deploy_met_task_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path((id, criterion)): Path<(String, String)>,
     OptionalJson(body): OptionalJson<PostDeployBody>,
 ) -> Response {
@@ -214,7 +219,7 @@ pub(in crate::api) async fn post_deploy_met_task_action(
     record_post_deploy_met(
         state,
         headers,
-        runtime,
+        core,
         id,
         criterion.parse().ok(),
         body.evidence.or(body.reason),

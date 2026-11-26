@@ -1,7 +1,7 @@
-use super::super::super::input::{
+use crate::OrbitRuntime;
+use crate::adapter::tool_host::input::{
     parse_optional_task_origin, parse_task_priority, parse_task_status, parse_task_type,
 };
-use crate::OrbitRuntime;
 use crate::application::task::{
     TaskEligibilityQuery, TaskFieldProjection, TaskListFilter, TaskListHydration, TaskListQuery,
     TaskOsReadout, TaskRow, task_listing_field_json,
@@ -113,7 +113,7 @@ pub(super) fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Val
             })
             .transpose()?,
         path: input.optional_string("path")?,
-        limit: super::super::super::input::task_list_limit(input.as_value())?,
+        limit: crate::adapter::tool_host::input::task_list_limit(input.as_value())?,
         hydration: if compact {
             TaskListHydration::EnvelopeOnly
         } else {
@@ -270,7 +270,7 @@ pub(super) fn eligible(
     let eligibility = runtime.task_eligibility(&TaskEligibilityQuery {
         statuses: statuses(input)?,
         path: input.optional_string("path")?,
-        limit: super::super::super::input::task_list_limit(input.as_value())?,
+        limit: crate::adapter::tool_host::input::task_list_limit(input.as_value())?,
     })?;
     let mut payload = Map::new();
     payload.insert(

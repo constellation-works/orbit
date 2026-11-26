@@ -1,9 +1,10 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{self, Command, Outcome, SettleMerged};
 use orbit_core::application::task::{ExternalMergeSettlement, ExternalMergeSettlementProfile};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 /// `orbit task settle-merged` — settle tasks to done whose delivery pull
 /// request was merged outside Orbit.
@@ -28,37 +29,32 @@ pub struct TaskSettleMergedArgs {
     pub published_head: Option<String>,
 }
 
-impl Execute for TaskSettleMergedArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let settled = orbit_core::application::task::with_task_write_provenance(
-            orbit_types::task::TaskWriteProvenance::new(
-                Some(orbit_types::task::TaskWriteSurface::Cli),
-                None,
-            ),
-            || -> Result<_, orbit_core::OrbitError> {
-                match (
-                    self.id.as_deref(),
-                    self.recovered_claim.as_deref(),
-                    self.pull_request,
-                    self.published_head.as_deref(),
-                ) {
-                    (Some(id), Some(claim), Some(number), Some(head)) => {
-                        Ok(vec![runtime.settle_recovered_claim_merge(
-                            id, claim, number, head,
-                        )?])
-                    }
-                    (_, Some(_), _, _) | (_, _, Some(_), _) | (_, _, _, Some(_)) => {
-                        Err(orbit_core::OrbitError::InvalidInput(
-                            "rescued settlement requires a task, --recovered-claim, --pull-request and --published-head".into(),
-                        ))
-                    }
-                    (Some(id), None, None, None) => {
-                        Ok(vec![runtime.settle_externally_merged_task(id)?])
-                    }
-                    (None, None, None, None) => runtime.settle_externally_merged_tasks(),
+impl ExecuteCore for TaskSettleMergedArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let settle = match (
+            self.id,
+            self.recovered_claim,
+            self.pull_request,
+            self.published_head,
+        ) {
+            (Some(id), Some(claim), Some(pull_request), Some(published_head)) => {
+                SettleMerged::RecoveredClaim {
+                    id,
+                    claim,
+                    pull_request,
+                    published_head,
                 }
-            },
-        )?;
+            }
+            (_, Some(_), _, _) | (_, _, Some(_), _) | (_, _, _, Some(_)) => {
+                return Err(orbit_core::OrbitError::InvalidInput(
+                    "rescued settlement requires a task, --recovered-claim, --pull-request and --published-head".into(),
+                ));
+            }
+            (Some(id), None, None, None) => SettleMerged::Task { id },
+            (None, None, None, None) => SettleMerged::All,
+        };
+        let settled =
+            task::exec(core, Command::SettleMerged(settle)).and_then(Outcome::into_settled)?;
         let rows: Vec<Value> = settled
             .iter()
             .map(|settlement| settlement.settlement_json(ExternalMergeSettlementProfile::Cli))

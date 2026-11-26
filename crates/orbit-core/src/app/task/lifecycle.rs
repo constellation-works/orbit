@@ -1,8 +1,8 @@
-use super::super::super::dispatch::ToolCaller;
-use super::super::super::json::{serialize_error, serialize_task_lint_report};
-use super::super::write::{TaskWriteOutput, write_response_fields};
+use super::ToolCaller;
 use super::listing::statuses;
+use super::write::{TaskWriteOutput, write_response_fields};
 use crate::OrbitRuntime;
+use crate::adapter::tool_host::json::{serialize_error, serialize_task_lint_report};
 use crate::application::task::{
     TaskWriteMetadata, TaskWriteResponsePolicy, task_write_response_json,
 };

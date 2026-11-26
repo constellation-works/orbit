@@ -6,24 +6,18 @@ use super::request::{
 use crate::api::forward::web_write_caller;
 use crate::api::helpers;
 use crate::api::{bad_request, map_runtime_error, non_empty_string, server_error, validate_id};
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, WsCore};
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::task::{
-    ScreenedTaskWrite, TaskAddParams, TaskMutationAudit, TaskUpdateAuthority, TaskUpdateParams,
-    TaskWriteResponsePolicy, TaskWriteScreen, audit_status_for_task_mutation_error,
-    screened_task_write_response_json, with_task_write_provenance,
-};
-use orbit_core::{OrbitRuntime, TaskComplexity};
+use orbit_core::app::task::{self, Command, DashboardAction, DashboardWrite, Outcome};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateAuthority, TaskUpdateParams};
+use orbit_core::{Core, TaskComplexity};
 use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
 };
-use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
-use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Audit and provenance metadata attached to one web task mutation.
 pub(in crate::api) struct WebTaskMutationMeta {
@@ -54,17 +48,14 @@ impl WebTaskMutationMeta {
     }
 }
 
-/// Run `mutate` on the current blocking worker with web write provenance active
-/// and record an owner-side `task.mutation` audit row.
-pub(in crate::api) fn run_audited_web_task_mutation<T, F>(
-    runtime: &OrbitRuntime,
+/// Run one dashboard write on the current blocking worker, through the task
+/// app. The app applies it with web write provenance active and records the
+/// owner-side `task.mutation` audit row.
+pub(in crate::api) fn run_audited_web_task_mutation(
+    core: &Core,
     meta: WebTaskMutationMeta,
-    resolved_target_id: impl FnOnce(&T) -> Option<String>,
-    mutate: F,
-) -> Result<T, orbit_core::OrbitError>
-where
-    F: FnOnce(&OrbitRuntime) -> Result<T, orbit_core::OrbitError>,
-{
+    action: DashboardAction,
+) -> Result<Outcome, orbit_core::OrbitError> {
     let WebTaskMutationMeta {
         verb,
         target_id,
@@ -73,44 +64,18 @@ where
         model,
         detail,
     } = meta;
-    let provenance = TaskWriteProvenance::new(Some(TaskWriteSurface::Web), caller.clone());
-    let started = Instant::now();
-    let result = with_task_write_provenance(provenance, || mutate(runtime));
-    let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
-    let resolved_role =
-        role.unwrap_or_else(|| runtime.resolve_task_mutation_audit_role(None, model.as_deref()));
-    match &result {
-        Ok(value) => {
-            let final_target = resolved_target_id(value).or(target_id);
-            runtime.record_task_mutation_audit(TaskMutationAudit {
-                verb,
-                target_id: final_target.as_deref(),
-                role: &resolved_role,
-                surface: TaskWriteSurface::Web,
-                caller: caller.as_deref(),
-                status: AuditEventStatus::Success,
-                duration_ms,
-                error_message: None,
-                detail,
-                session_context: None,
-            });
-        }
-        Err(error) => {
-            runtime.record_task_mutation_audit(TaskMutationAudit {
-                verb,
-                target_id: target_id.as_deref(),
-                role: &resolved_role,
-                surface: TaskWriteSurface::Web,
-                caller: caller.as_deref(),
-                status: audit_status_for_task_mutation_error(error),
-                duration_ms,
-                error_message: Some(error.to_string()),
-                detail,
-                session_context: None,
-            });
-        }
-    }
-    result
+    task::exec(
+        core,
+        Command::dashboard(DashboardWrite {
+            verb,
+            target_id,
+            caller,
+            role,
+            model,
+            detail,
+            action,
+        }),
+    )
 }
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
@@ -137,33 +102,21 @@ enum TaskMutationFailure {
 /// parks one async worker per request until the whole pool is blocked and the
 /// server stops accepting connections; moved here, the burst queues on the
 /// blocking pool and the async workers keep serving.
-pub(super) async fn task_mutation_response<F>(
-    runtime: Arc<OrbitRuntime>,
+pub(super) async fn task_mutation_response(
+    core: Arc<Core>,
     label: &'static str,
     meta: WebTaskMutationMeta,
-    mutate: F,
-) -> Response
-where
-    F: FnOnce(&OrbitRuntime) -> Result<ScreenedTaskWrite, orbit_core::OrbitError> + Send + 'static,
-{
+    action: DashboardAction,
+) -> Response {
     let rendered = helpers::blocking_join(label, move || {
-        let written = run_audited_web_task_mutation(
-            &runtime,
-            meta,
-            |written: &ScreenedTaskWrite| Some(written.task.id.clone()),
-            mutate,
-        )
-        .map_err(TaskMutationFailure::Mutation)?;
-        let mut value = screened_task_write_response_json(
-            &runtime,
-            &written,
-            &TaskWriteResponsePolicy::DashboardFullRecord,
-        )
-        .map_err(TaskMutationFailure::Render)?;
+        let written = run_audited_web_task_mutation(&core, meta, action)
+            .and_then(Outcome::into_screened)
+            .map_err(TaskMutationFailure::Mutation)?;
+        let mut value = written.document.map_err(TaskMutationFailure::Render)?;
         // The client reads human-crew identity off the task itself, so a
         // write response keeps it as the list and detail reads do.
         if let Some(object) = value.as_object_mut() {
-            crate::projections::stamp_human_crew_from_runtime(&runtime, object);
+            crate::projections::stamp_human_crew(object, written.human_crew.as_ref());
         }
         Ok(value)
     })
@@ -178,7 +131,7 @@ where
 
 /// `POST /tasks` — create a task in the request's workspace.
 ///
-/// Workspace selection is the [`Ws`] extractor's: the `?workspace=<id>` query
+/// Workspace selection is the [`WsCore`] extractor's: the `?workspace=<id>` query
 /// parameter picks the target workspace; omitting it falls back to the
 /// server's configured default workspace; an unknown id is a 404 and an
 /// inactive (stale-path) one a 400 — never a silent fallback. A stray
@@ -187,7 +140,7 @@ where
 pub(in crate::api) async fn create_task_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Json(body): Json<CreateTaskBody>,
 ) -> Response {
     if body.workspace.is_some() {
@@ -257,15 +210,16 @@ pub(in crate::api) async fn create_task_action(
         None,
         json!({ "status": params.status }),
     );
-    meta.model = model.clone();
-    task_mutation_response(runtime, "task creation", meta, move |runtime| {
-        runtime.add_task_screened(
-            params,
-            &TaskWriteScreen::unbound(allow_missing_context),
-            None,
-            model,
-        )
-    })
+    meta.model = model;
+    task_mutation_response(
+        core,
+        "task creation",
+        meta,
+        DashboardAction::Add {
+            params: Box::new(params),
+            allow_missing_context,
+        },
+    )
     .await
 }
 
@@ -284,7 +238,7 @@ pub(in crate::api) async fn create_task_action(
 pub(in crate::api) async fn update_task_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     Json(body): Json<UpdateTaskBody>,
 ) -> Response {
@@ -383,18 +337,19 @@ pub(in crate::api) async fn update_task_action(
             "force": body.force,
         }),
     );
-    meta.model = model.clone();
-    task_mutation_response(runtime, "task update", meta, move |runtime| {
-        runtime.update_task_screened_with_note(
-            &id,
-            params,
-            &TaskWriteScreen::unbound(allow_missing_context),
+    meta.model = model;
+    task_mutation_response(
+        core,
+        "task update",
+        meta,
+        DashboardAction::Update {
+            id,
+            params: Box::new(params),
+            allow_missing_context,
             authority,
-            None,
-            model,
             status_note,
-        )
-    })
+        },
+    )
     .await
 }
 
@@ -412,7 +367,7 @@ pub(in crate::api) async fn update_task_action(
 pub(in crate::api) async fn add_task_comment_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     Json(body): Json<CommentBody>,
 ) -> Response {
@@ -424,19 +379,20 @@ pub(in crate::api) async fn add_task_comment_action(
         return bad_request("comment message must not be empty".to_string());
     };
     let author = human_comment_author(body.author.as_deref());
-    let params = TaskUpdateParams {
-        comment: Some(message),
-        ..TaskUpdateParams::default()
-    };
     let id = id.to_string();
     let mut meta =
         WebTaskMutationMeta::new(&state, &headers, "comment", Some(id.clone()), json!({}));
     meta.role = Some(author.clone());
-    task_mutation_response(runtime, "task comment", meta, move |runtime| {
-        runtime
-            .update_task_as_human(&id, params, author)
-            .map(ScreenedTaskWrite::from)
-    })
+    task_mutation_response(
+        core,
+        "task comment",
+        meta,
+        DashboardAction::Comment {
+            id,
+            message,
+            author,
+        },
+    )
     .await
 }
 

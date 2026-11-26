@@ -56,8 +56,8 @@ pub(in crate::api) struct CreateTaskBody {
     /// Declares that missing `context_files` selectors name targets this task
     /// is about to create, mirroring `orbit task add --allow-missing-context`
     /// and the `orbit.task.add` tool's `allow_missing_context` input. Each
-    /// missing selector is recorded as durable creation intent; see
-    /// [`OrbitRuntime::add_task_screened`](orbit_core::OrbitRuntime::add_task_screened).
+    /// missing selector is recorded as durable creation intent by the task
+    /// app's add command.
     #[serde(default)]
     pub(super) allow_missing_context: bool,
     #[serde(default)]

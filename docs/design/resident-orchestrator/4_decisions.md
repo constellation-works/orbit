@@ -245,7 +245,7 @@ of 2026-11-20 (the chief's ruling on on-call [ORB-25951]); not Daniel's own appr
 
 **Code anchors:** `crates/orbit-runtime/src/authorization.rs` `RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS`;
 `crates/orbit-tools/src/builtin/orbit/task/operation.rs` `TaskVerb::preempt`;
-`crates/orbit-core/src/adapter/tool_host/task/operation.rs` `dispatch`
+`crates/orbit-core/src/app/task/operation.rs` `dispatch`
 
 ### Context
 

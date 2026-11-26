@@ -11,6 +11,7 @@ use orbit_common::{
     },
     security::release::sha256_hex,
 };
+use orbit_core::app::task::{DashboardAction, Outcome};
 use orbit_core::application::task::ProposedTaskInput;
 use orbit_types::{
     tool::{McpCapability, ToolSessionContext},
@@ -19,7 +20,7 @@ use orbit_types::{
 use serde_json::{Value, json};
 
 use crate::api::{bad_request, blocking};
-use crate::state::{DashboardState, WsEntry};
+use crate::state::{DashboardState, WsCore, WsEntry};
 
 /// Message and stable code for the environmental refusal when the frozen
 /// destination is not an active registered workspace. This state can change
@@ -139,12 +140,13 @@ pub(in crate::api) async fn create_proposal(
                 ));
             }
             let request_id = body.request_id.clone();
+            let WsCore(core) = WsCore::over(&runtime);
             let id = super::writes::run_audited_web_task_mutation(
-                &runtime,
+                &core,
                 meta,
-                |created_id: &String| Some(created_id.clone()),
-                move |runtime| runtime.create_proposed_task(body),
-            )?;
+                DashboardAction::Propose(Box::new(body)),
+            )
+            .and_then(Outcome::into_created)?;
             Ok(json!({"id": id, "workspace_id": workspace, "request_id": request_id}))
         })())
     })
