@@ -1,3 +1,6 @@
+#[path = "../../../orbit-store/tests/fixtures/policy_denials.rs"]
+mod policy_denials_fixture;
+
 use std::fs;
 
 use std::path::Path;
@@ -1220,9 +1223,6 @@ projections_test!(
         check!(fixture.runtime.list_tasks_by_tags(&["auto-task:qa-sweep".into()]).unwrap().is_empty(); "replica mint created a task");
     }
 );
-
-#[path = "../../../orbit-store/tests/fixtures/policy_denials.rs"]
-mod policy_denials_fixture;
 
 projections_test!(
     policy_kpi_counts_decisions_and_preserves_refusal_evidence,

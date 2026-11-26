@@ -29,8 +29,6 @@ mod heap;
 mod host_tunnels;
 #[cfg(unix)]
 mod lease;
-#[cfg(unix)]
-pub use lease::{intake as lease_intake, listener as lease_listener};
 mod log_format;
 mod parse;
 mod projections;
@@ -42,12 +40,14 @@ mod ssh_tunnel;
 mod state;
 mod why_stuck;
 
-#[cfg(test)]
-mod tests;
-
 pub use api::leases::{
     LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, LeaseNoticePages, lease_router,
 };
 pub use connect::{ConnectArgs, connect};
+#[cfg(unix)]
+pub use lease::{intake as lease_intake, listener as lease_listener};
 
 pub use serve::{ServeArgs, serve, serve_from_env};
+
+#[cfg(test)]
+mod tests;

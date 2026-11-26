@@ -8,6 +8,9 @@
 //! still succeeds, the names (never values) are in a drain or ship receipt's
 //! `warning` (stderr for a job start) and on the run record.
 
+mod cleanup;
+mod crew_readiness;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
@@ -31,9 +34,6 @@ const NOT_PASSED: &str = "FIXTURE_NOT_PASS_LISTED";
 const EMPTY: &str = "FIXTURE_EMPTY_TOKEN";
 const JOB: &str = "env_pass_fixture";
 const CREW_SOURCE: &str = "FIXTURE_CREW_ENV_SOURCE";
-
-mod cleanup;
-mod crew_readiness;
 
 struct Fixture {
     _temp: Option<TempDir>,

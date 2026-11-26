@@ -4,6 +4,11 @@
     reason = "listener and intake fixtures panic when a socket, token or permission setup fails"
 )]
 
+#[cfg(unix)]
+mod intake;
+#[cfg(unix)]
+mod listener;
+
 /// Open the workspace at `orbit_dir` with path leases enabled, which no
 /// configuration can do [ORB-22808].
 #[cfg(unix)]
@@ -17,8 +22,3 @@ fn enable_leases(orbit_dir: &std::path::Path) {
         },
     );
 }
-
-#[cfg(unix)]
-mod intake;
-#[cfg(unix)]
-mod listener;

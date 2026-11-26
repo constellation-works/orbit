@@ -5,6 +5,7 @@
 use std::fs;
 use std::process::Output;
 
+use crate::task_workspace::{TaskSeed, TestWorkspace};
 use serde_json::{Value, json};
 
 fn task_cli_roundtrips_filters_and_replaces_tags() {
@@ -586,8 +587,6 @@ fn assert_orbit_search_titles(output: &Output, expected: &[&str]) {
 
     assert_eq!(titles, expected);
 }
-
-use crate::task_workspace::{TaskSeed, TestWorkspace};
 
 fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");

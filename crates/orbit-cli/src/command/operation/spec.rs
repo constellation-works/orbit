@@ -6,6 +6,11 @@
 //! error suppression. Adding a [`Commands`] variant therefore requires one
 //! new operation arm and the compiler rejects an incomplete registry.
 
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "macro_rules! boxed_context_dispatch/core_dispatch/runtime_dispatch/runtime_env_dispatch must precede their pub(super) re-export for sibling operation::registry"
+)]
+
 use std::ffi::OsStr;
 use std::path::Path;
 

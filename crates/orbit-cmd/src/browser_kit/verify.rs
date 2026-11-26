@@ -18,6 +18,8 @@ use orbit_core::bootstrap::browser_kit::{
 };
 use serde::Serialize;
 
+use orbit_common::env_vars::ORBIT_BROWSER_KIT_SCREENSHOT as SCREENSHOT_ENV;
+
 use super::host::{require_host_operator, require_tool, run_probe};
 
 /// What a pass does not prove.
@@ -26,7 +28,6 @@ pub const HOST_ONLY_NOTE: &str = "A host pass does not prove the sandboxed worke
      browser check and attaches its screenshot.";
 
 const SMOKE_DEADLINE: Duration = Duration::from_secs(180);
-use orbit_common::env_vars::ORBIT_BROWSER_KIT_SCREENSHOT as SCREENSHOT_ENV;
 const SMOKE_SCRIPT: &str = r#"
 import http from "node:http";
 import { createRequire } from "node:module";

@@ -8,6 +8,8 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod env_reference;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -15,8 +17,6 @@ use std::path::{Component, Path, PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use tempfile::tempdir;
-
-mod env_reference;
 
 const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 

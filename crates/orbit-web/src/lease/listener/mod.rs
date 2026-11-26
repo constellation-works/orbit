@@ -21,7 +21,6 @@ mod admission;
 mod backend;
 mod config;
 mod limits;
-pub(crate) use limits::retain_response_allowance;
 mod router;
 mod startup;
 mod tls;
@@ -29,5 +28,6 @@ mod transport;
 
 pub use config::{LeaseListenerConfig, LeaseListenerSettings, LeaseListenerTlsSettings};
 pub use limits::LeaseListenerLimits;
+pub(crate) use limits::retain_response_allowance;
 pub use router::lease_listener_router;
 pub use startup::{run_lease_listener, serve_lease_listener, serve_lease_listener_on};

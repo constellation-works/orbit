@@ -26,9 +26,8 @@ pub mod mcp;
 pub mod migrate;
 pub mod notice;
 pub mod operation;
-pub mod resident;
-pub use operation::args as operation_args;
 pub mod plugin;
+pub mod resident;
 pub mod routine;
 pub mod run;
 pub mod script;
@@ -40,6 +39,8 @@ pub mod tool;
 pub mod update;
 pub mod web;
 pub mod workspace;
+
+pub use operation::args as operation_args;
 
 use std::path::PathBuf;
 

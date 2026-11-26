@@ -12,6 +12,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+use crate::task_workspace::{TaskSeed, TestWorkspace};
 use assert_cmd::cargo::cargo_bin_cmd;
 use chrono::Utc;
 use orbit_common::test_env;
@@ -1027,8 +1028,6 @@ fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed(workspace: &TestW
     let after = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
     assert!(after.as_array().expect("audit rows").is_empty());
 }
-
-use crate::task_workspace::{TaskSeed, TestWorkspace};
 
 fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");

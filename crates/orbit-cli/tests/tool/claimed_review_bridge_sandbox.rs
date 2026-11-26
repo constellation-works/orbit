@@ -22,6 +22,8 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+mod cleanup;
+
 use std::collections::BTreeMap;
 use std::fs;
 #[cfg(target_os = "linux")]
@@ -57,7 +59,6 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-mod cleanup;
 use cleanup::ProviderChild;
 
 const CHILD: &str = "ORBIT_CLAIMED_REVIEW_BRIDGE_FIXTURE";

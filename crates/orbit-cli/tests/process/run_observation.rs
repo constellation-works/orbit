@@ -19,18 +19,10 @@
 //! and the run must still end `cancelled`.
 //!
 //! A drain pass's surface reservation reaches readiness and `run show`.
-use crate::{fixture_crew, git_repo};
-use assert_cmd::Command;
-use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::test_env;
-use orbit_core::OrbitRuntime;
-use orbit_types::workflow::{DrainAdmissionPass, PipelineState};
-use rusqlite::{Connection, params};
-use serde_json::Value;
-use std::fs;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
+
 mod admission_forecast;
+#[cfg(unix)]
+mod agent_invoke;
 mod auth_exclusions;
 mod build_budget;
 mod capacity_backoff;
@@ -47,6 +39,18 @@ mod run_show_display;
 mod task_pilot_branch;
 mod wait;
 mod waiting_blockers;
+
+use crate::{fixture_crew, git_repo};
+use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
+use orbit_core::OrbitRuntime;
+use orbit_types::workflow::{DrainAdmissionPass, PipelineState};
+use rusqlite::{Connection, params};
+use serde_json::Value;
+use std::fs;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
@@ -2069,8 +2073,6 @@ fn doctor_warns_when_the_replicas_gates_differ_from_the_owners() {
             .contains("`.orbit/config.toml`")
     );
 }
-#[cfg(unix)]
-mod agent_invoke;
 fn force_cancel_reports_unstopped_local_children_and_exits_one() {
     for as_json in [true, false] {
         let fixture = Fixture::init();

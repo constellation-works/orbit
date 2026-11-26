@@ -21,6 +21,7 @@
 
 use std::process::Output;
 
+use crate::task_workspace::{TaskSeed, TestWorkspace};
 use orbit_types::task::TaskStatus;
 use serde_json::Value;
 
@@ -630,8 +631,6 @@ fn assert_record_lines(output: &Output, records: usize, header: bool, label: &st
         );
     }
 }
-
-use crate::task_workspace::{TaskSeed, TestWorkspace};
 
 fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");

@@ -1,5 +1,8 @@
 //! The same audit regression inputs over the production MCP stdio transport.
 
+#[path = "../../support/tool_input_hints.rs"]
+mod tool_input_hint_cases;
+
 use super::*;
 
 #[test]
@@ -32,9 +35,6 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
         assert!(error["message"].as_str().unwrap().contains(hint), "{error}");
     }
 }
-
-#[path = "../../support/tool_input_hints.rs"]
-mod tool_input_hint_cases;
 
 #[test]
 fn mcp_input_misses_return_actionable_suggestions() {

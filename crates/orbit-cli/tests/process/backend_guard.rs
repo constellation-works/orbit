@@ -4,73 +4,6 @@
 //! macOS identity. Cleanup signals the retained identity directly, without a
 //! racy liveness-probe/kill sequence or adoption of a stale PID marker.
 
-use std::io;
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub(super) struct BackendIdentity {
-    pub(super) pid: libc::pid_t,
-    generation: u64,
-    exec_version: u32,
-}
-
-pub(super) struct BackendReadiness(platform::Readiness);
-
-impl BackendReadiness {
-    pub(super) fn new(workspace: &std::path::Path) -> io::Result<Self> {
-        platform::Readiness::new(workspace).map(Self)
-    }
-
-    pub(super) fn receive(&self) -> io::Result<Option<BackendGuard>> {
-        self.0.receive()
-    }
-}
-
-pub(super) struct ReadyLease {
-    _inner: platform::ReadyLease,
-}
-
-pub(super) fn publish_readiness(workspace: &std::path::Path) -> io::Result<ReadyLease> {
-    platform::publish_readiness(workspace).map(|inner| ReadyLease { _inner: inner })
-}
-
-pub(super) struct BackendGuard {
-    pub(super) identity: BackendIdentity,
-    handle: Option<platform::ProcessHandle>,
-}
-
-impl BackendGuard {
-    pub(super) fn acquire(identity: BackendIdentity) -> io::Result<Self> {
-        if identity.pid <= 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "non-positive backend PID",
-            ));
-        }
-        Ok(Self {
-            identity,
-            handle: platform::ProcessHandle::open(identity)?,
-        })
-    }
-
-    pub(super) fn is_live(&self) -> io::Result<bool> {
-        self.handle
-            .as_ref()
-            .map_or(Ok(false), |handle| handle.is_live())
-    }
-}
-
-impl Drop for BackendGuard {
-    fn drop(&mut self) {
-        if let Some(handle) = &self.handle {
-            // Errors (including an already exited backend) cannot panic during
-            // unwinding. Neither platform falls back to signaling a bare PID.
-            let _ = handle.kill();
-        }
-    }
-}
-
 #[cfg(target_os = "linux")]
 mod platform {
     use std::hash::{Hash, Hasher};
@@ -242,7 +175,6 @@ mod platform {
         }
     }
 }
-
 #[cfg(target_os = "macos")]
 mod platform {
     use std::path::{Path, PathBuf};
@@ -369,6 +301,73 @@ mod platform {
             child.try_wait().unwrap().is_none(),
             "mismatched audit token killed child"
         );
+    }
+}
+
+use std::io;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(super) struct BackendIdentity {
+    pub(super) pid: libc::pid_t,
+    generation: u64,
+    exec_version: u32,
+}
+
+pub(super) struct BackendReadiness(platform::Readiness);
+
+impl BackendReadiness {
+    pub(super) fn new(workspace: &std::path::Path) -> io::Result<Self> {
+        platform::Readiness::new(workspace).map(Self)
+    }
+
+    pub(super) fn receive(&self) -> io::Result<Option<BackendGuard>> {
+        self.0.receive()
+    }
+}
+
+pub(super) struct ReadyLease {
+    _inner: platform::ReadyLease,
+}
+
+pub(super) fn publish_readiness(workspace: &std::path::Path) -> io::Result<ReadyLease> {
+    platform::publish_readiness(workspace).map(|inner| ReadyLease { _inner: inner })
+}
+
+pub(super) struct BackendGuard {
+    pub(super) identity: BackendIdentity,
+    handle: Option<platform::ProcessHandle>,
+}
+
+impl BackendGuard {
+    pub(super) fn acquire(identity: BackendIdentity) -> io::Result<Self> {
+        if identity.pid <= 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "non-positive backend PID",
+            ));
+        }
+        Ok(Self {
+            identity,
+            handle: platform::ProcessHandle::open(identity)?,
+        })
+    }
+
+    pub(super) fn is_live(&self) -> io::Result<bool> {
+        self.handle
+            .as_ref()
+            .map_or(Ok(false), |handle| handle.is_live())
+    }
+}
+
+impl Drop for BackendGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.handle {
+            // Errors (including an already exited backend) cannot panic during
+            // unwinding. Neither platform falls back to signaling a bare PID.
+            let _ = handle.kill();
+        }
     }
 }
 

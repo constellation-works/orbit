@@ -5,6 +5,11 @@
 //! head. These fixtures keep the objects on a local bare repo so the pass is
 //! the real fetch, not a stubbed revision.
 
+#[cfg(unix)]
+mod review_commit;
+#[cfg(unix)]
+mod tick;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -20,11 +25,6 @@ use serde_json::{Value, json};
 
 use crate::auto_task_lifecycle_cli::{git, publish_origin_if_configured};
 use crate::isolated_cli_fixture::Fixture;
-
-#[cfg(unix)]
-mod review_commit;
-#[cfg(unix)]
-mod tick;
 
 const BRANCH: &str = "fixture-delivery";
 const REPOSITORY: &str = "owner/repository";

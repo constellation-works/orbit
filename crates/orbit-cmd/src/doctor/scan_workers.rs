@@ -6,6 +6,28 @@
 //! which reports the refusal, and run whatever work no worker took on the
 //! calling thread.
 
+#[cfg(feature = "test-support")]
+mod seam {
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(super) static REFUSED: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn installed() -> bool {
+        REFUSED.with(|slot| slot.get().is_some())
+    }
+
+    pub(super) fn refuse() -> bool {
+        REFUSED.with(|slot| {
+            slot.get().is_some_and(|count| {
+                slot.set(Some(count + 1));
+                true
+            })
+        })
+    }
+}
+
 use std::io;
 use std::thread::{Scope, ScopedJoinHandle};
 
@@ -65,27 +87,5 @@ impl DoctorWorkerSpawnRefusal {
 impl Drop for DoctorWorkerSpawnRefusal {
     fn drop(&mut self) {
         seam::REFUSED.with(|slot| slot.set(None));
-    }
-}
-
-#[cfg(feature = "test-support")]
-mod seam {
-    use std::cell::Cell;
-
-    thread_local! {
-        pub(super) static REFUSED: Cell<Option<usize>> = const { Cell::new(None) };
-    }
-
-    pub(super) fn installed() -> bool {
-        REFUSED.with(|slot| slot.get().is_some())
-    }
-
-    pub(super) fn refuse() -> bool {
-        REFUSED.with(|slot| {
-            slot.get().is_some_and(|count| {
-                slot.set(Some(count + 1));
-                true
-            })
-        })
     }
 }

@@ -9,6 +9,26 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[cfg(unix)]
+#[path = "application_authority.rs"]
+mod application_authority;
+
+#[cfg(unix)]
+#[path = "application_consent.rs"]
+mod application_consent;
+
+#[cfg(unix)]
+#[path = "application_admission.rs"]
+mod application_admission;
+
+#[cfg(unix)]
+#[path = "application_callbacks.rs"]
+mod application_callbacks;
+
+#[cfg(unix)]
+#[path = "application_auto_tasks.rs"]
+mod application_auto_tasks;
+
 use std::path::Path;
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -3060,23 +3080,3 @@ fn write_greet_conformance_files(root: &Path, namespace: &str) {
     )
     .expect("write golden");
 }
-
-#[cfg(unix)]
-#[path = "application_authority.rs"]
-mod application_authority;
-
-#[cfg(unix)]
-#[path = "application_consent.rs"]
-mod application_consent;
-
-#[cfg(unix)]
-#[path = "application_admission.rs"]
-mod application_admission;
-
-#[cfg(unix)]
-#[path = "application_callbacks.rs"]
-mod application_callbacks;
-
-#[cfg(unix)]
-#[path = "application_auto_tasks.rs"]
-mod application_auto_tasks;

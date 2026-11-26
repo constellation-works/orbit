@@ -13,6 +13,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Environment variable naming the GitHub repository to read releases from.
+/// Shares its name with the variable `install.sh` reads.
+pub use orbit_common::env_vars::ORBIT_INSTALL_REPO as RELEASE_REPO_ENV;
+/// Environment variable naming a local release mirror directory.
+pub use orbit_common::env_vars::ORBIT_UPDATE_RELEASE_DIR as RELEASE_DIR_ENV;
 use orbit_common::observability::logging::format_error_chain;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
@@ -59,13 +64,6 @@ pub(super) fn read_bounded(
 
 /// Repository the HTTP source reads releases from unless overridden.
 pub const DEFAULT_RELEASE_REPO: &str = "constellation-works/orbit";
-
-/// Environment variable naming a local release mirror directory.
-pub use orbit_common::env_vars::ORBIT_UPDATE_RELEASE_DIR as RELEASE_DIR_ENV;
-
-/// Environment variable naming the GitHub repository to read releases from.
-/// Shares its name with the variable `install.sh` reads.
-pub use orbit_common::env_vars::ORBIT_INSTALL_REPO as RELEASE_REPO_ENV;
 
 /// File in a mirror directory naming the newest published version.
 pub const MIRROR_LATEST_FILE: &str = "latest-version.txt";
