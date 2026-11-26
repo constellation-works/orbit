@@ -1,8 +1,7 @@
 use clap::Args;
 use orbit_common::{Env, env_vars};
+use orbit_core::OrbitError;
 use orbit_core::bootstrap::init::{InitOptions, allocated_task_prefix, init_global};
-use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::workspace_registry::global_orbit_dir;
 use orbit_registry::{
     MachineIdentityOutcome, MachineIdentityState, NewMachineIdentity, ensure_machine_identity,
     inspect_machine_identity, os_hostname,
@@ -17,7 +16,8 @@ use super::prompt_stdin;
 use super::registered_workspaces::{WorkspaceSeed, seed_registered_workspaces};
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, CommandOutput, Payload};
+use crate::entry::resolved::Resolved;
 
 #[derive(Args)]
 #[command(
@@ -76,12 +76,6 @@ pub struct InitCommand {
     pub human_name: Option<String>,
 }
 
-impl Execute for InitCommand {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        self.run(None, &Env::default())
-    }
-}
-
 impl InitCommand {
     /// Prepare the Linux sandbox prerequisites unless the operator opted out.
     #[cfg(target_os = "linux")]
@@ -100,11 +94,16 @@ impl InitCommand {
         }
     }
 
-    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
-        self.run(root_override, env)
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        env: &Env,
+        resolved: &Resolved,
+    ) -> CommandOut {
+        self.run(root_override, env, resolved)
     }
 
-    fn run(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
+    fn run(self, root_override: Option<&Path>, env: &Env, resolved: &Resolved) -> CommandOut {
         if self.host_prerequisites_only {
             if root_override.is_some()
                 || self.force
@@ -128,16 +127,18 @@ impl InitCommand {
         // [ORB-12112].
         reject_invalid_fresh_identity_inputs(
             root_override,
+            resolved,
             self.force,
             self.non_interactive,
             self.machine_name.as_deref(),
             self.task_prefix.as_deref(),
         )?;
         human_crew::reject_unusable_human_name(
-            &resolve_global_root(root_override)?.join("config.toml"),
+            &resolve_global_root(root_override, resolved)?.join("config.toml"),
             self.force,
             self.non_interactive,
             self.human_name.as_deref(),
+            env,
         )?;
         // A custom root is used for isolated fixtures and does not authorize
         // changes to the machine's package/security policy. Normal init and
@@ -154,8 +155,13 @@ impl InitCommand {
         };
         #[cfg(target_os = "linux")]
         linux_sandbox.report();
-        let config_seed =
-            collect_config_seed_for_init(root_override, self.force, self.non_interactive, env)?;
+        let config_seed = collect_config_seed_for_init(
+            root_override,
+            resolved,
+            self.force,
+            self.non_interactive,
+            env,
+        )?;
         let result = init_global(
             root_override,
             InitOptions {
@@ -171,6 +177,7 @@ impl InitCommand {
         // document rather than replacing one.
         let identity = ensure_machine_identity_for_init(
             root_override,
+            resolved,
             self.non_interactive,
             self.machine_name,
             self.task_prefix,
@@ -178,22 +185,25 @@ impl InitCommand {
         // After the identity, like it a `config.toml` edit init alone makes:
         // the operator's own crew for work no agent picks up.
         let human_crew = human_crew::ensure_human_crew_for_init(
-            &resolve_global_root(root_override)?.join("config.toml"),
+            &resolve_global_root(root_override, resolved)?.join("config.toml"),
             self.non_interactive,
             self.human_name,
+            env,
         )?;
         // First-run creation of the scheduler store belongs to init, so the
         // routine reads that follow find it (STD-01 R31). The store rejects
         // parent-relative paths, so it takes the canonical root.
-        let global_root = std::fs::canonicalize(resolve_global_root(root_override)?)?;
+        let global_root = std::fs::canonicalize(resolve_global_root(root_override, resolved)?)?;
         orbit_core::application::routines::ensure_routine_store(&global_root)?;
         // A release that ships a workspace routine or auto-task must reach
         // every registered workspace here, not only at the next `workspace sync`.
-        let registered =
-            seed_registered_workspaces(&resolve_global_root(root_override)?, &identity.id);
+        let registered = seed_registered_workspaces(
+            &resolve_global_root(root_override, resolved)?,
+            &identity.id,
+        );
         let mut managed_asset_warnings = result.managed_asset_warnings;
         managed_asset_warnings.extend(registered.warnings);
-        let paths = reported_init_paths(root_override);
+        let paths = reported_init_paths(root_override, env);
         Ok(init_payload(
             &identity,
             &human_crew,
@@ -218,10 +228,13 @@ impl InitCommand {
     }
 }
 
-fn resolve_global_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+fn resolve_global_root(
+    root_override: Option<&Path>,
+    resolved: &Resolved,
+) -> Result<PathBuf, OrbitError> {
     match root_override {
         Some(root) => Ok(root.to_path_buf()),
-        None => global_orbit_dir(&orbit_core::composition::composition_env()),
+        None => resolved.global_orbit_dir().map(Path::to_path_buf),
     }
 }
 
@@ -275,12 +288,13 @@ fn validate_fresh_identity_flags(
 /// An ordinary re-init preserves a present identity and ignores these flags.
 fn reject_invalid_fresh_identity_inputs(
     root_override: Option<&Path>,
+    resolved: &Resolved,
     force: bool,
     non_interactive: bool,
     machine_name: Option<&str>,
     task_prefix: Option<&str>,
 ) -> Result<(), OrbitError> {
-    let global_root = resolve_global_root(root_override)?;
+    let global_root = resolve_global_root(root_override, resolved)?;
     let identity = inspect_machine_identity(&global_root)?;
     if !force && !matches!(identity, MachineIdentityState::Absent) {
         return Ok(());
@@ -345,11 +359,12 @@ fn minted_prefix_conflict(
 /// create); a present identity is preserved unchanged.
 fn ensure_machine_identity_for_init(
     root_override: Option<&Path>,
+    resolved: &Resolved,
     non_interactive: bool,
     machine_name: Option<String>,
     task_prefix: Option<String>,
 ) -> Result<IdentityReport, OrbitError> {
-    let global_root = resolve_global_root(root_override)?;
+    let global_root = resolve_global_root(root_override, resolved)?;
     let requested_name = machine_name.clone();
     let requested_prefix = task_prefix.clone();
     let closure_root = global_root.clone();
@@ -657,13 +672,8 @@ struct ReportedInitPaths {
     config_path: &'static str,
 }
 
-fn reported_init_paths(root_override: Option<&Path>) -> ReportedInitPaths {
-    if root_override.is_some_and(|path| {
-        !orbit_core::runtime::is_global_orbit_root(
-            &orbit_core::composition::composition_env(),
-            path,
-        )
-    }) {
+fn reported_init_paths(root_override: Option<&Path>, env: &Env) -> ReportedInitPaths {
+    if root_override.is_some_and(|path| !orbit_core::runtime::is_global_orbit_root(env, path)) {
         ReportedInitPaths {
             skills_root: "<custom orbit root>/skills",
             config_path: "<custom orbit root>/config.toml",

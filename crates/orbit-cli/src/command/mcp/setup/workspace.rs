@@ -22,10 +22,11 @@ pub(super) struct WorkspaceLayout {
 
 pub(super) fn resolve_workspace_layout(
     root_override: Option<&Path>,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<WorkspaceLayout, OrbitError> {
     let cwd = env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
-    resolve_workspace_layout_for_cwd(&cwd, root_override, env)
+    resolve_workspace_layout_for_cwd(&cwd, root_override, global_orbit_dir, env)
 }
 
 /// Resolve the checkout these MCP setup commands operate on.
@@ -38,6 +39,7 @@ pub(super) fn resolve_workspace_layout(
 fn resolve_workspace_layout_for_cwd(
     cwd: &Path,
     root_override: Option<&Path>,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<WorkspaceLayout, OrbitError> {
     let explicit_root = explicit_orbit_root(cwd, root_override, env)?;
@@ -51,7 +53,7 @@ fn resolve_workspace_layout_for_cwd(
         .flatten();
     let (repo_root, orbit_root) = match registered_paths {
         Some(paths) => paths,
-        None => unregistered_checkout_paths(cwd, explicit_root, env)?,
+        None => unregistered_checkout_paths(cwd, explicit_root, global_orbit_dir, env)?,
     };
     let workspace_id = registry_root
         .as_deref()
@@ -83,14 +85,8 @@ fn explicit_orbit_root(
                 .filter(|value| !value.trim().is_empty())
                 .map(std::borrow::Cow::Borrowed)
         });
-    raw.map(|raw| {
-        orbit_core::runtime::resolve_root_path_value(
-            &orbit_core::composition::composition_env(),
-            &raw,
-            cwd,
-        )
-    })
-    .transpose()
+    raw.map(|raw| orbit_core::runtime::resolve_root_path_value(env, &raw, cwd))
+        .transpose()
 }
 
 /// The Orbit data root whose workspace catalog describes this checkout.
@@ -118,13 +114,16 @@ fn has_registry(global_root: &Path) -> bool {
 /// catalog needs to be embedded. A repo-local `.orbit` is workspace data and
 /// has no catalog of its own, so it is not a launch root. Callers omit the
 /// result from federated entries.
-pub(super) fn embedded_launch_root(candidate: &Path) -> Option<PathBuf> {
+pub(super) fn embedded_launch_root(
+    candidate: &Path,
+    global_orbit_dir: Option<&Path>,
+) -> Option<PathBuf> {
     if candidate.as_os_str().is_empty() || !has_registry(candidate) {
         return None;
     }
     let candidate = canonical_or_original(candidate);
-    match workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env()) {
-        Ok(default_root) if paths_equivalent(&candidate, &default_root) => None,
+    match global_orbit_dir {
+        Some(default_root) if paths_equivalent(&candidate, default_root) => None,
         _ => Some(candidate),
     }
 }
@@ -227,10 +226,11 @@ fn sole_checkout_for_root<'a>(
 fn unregistered_checkout_paths(
     cwd: &Path,
     root_override: Option<&Path>,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<(PathBuf, PathBuf), OrbitError> {
     let Some(root) = root_override else {
-        return walk_up_checkout_paths(cwd, env);
+        return walk_up_checkout_paths(cwd, global_orbit_dir, env);
     };
 
     let repo_root = root
@@ -246,10 +246,14 @@ fn unregistered_checkout_paths(
     Ok((repo_root.to_path_buf(), root.to_path_buf()))
 }
 
-fn walk_up_checkout_paths(cwd: &Path, env: &Env) -> Result<(PathBuf, PathBuf), OrbitError> {
+fn walk_up_checkout_paths(
+    cwd: &Path,
+    global_orbit_dir: Option<&Path>,
+    env: &Env,
+) -> Result<(PathBuf, PathBuf), OrbitError> {
     if cwd.file_name().is_some_and(|name| name == ".orbit")
         && cwd.is_dir()
-        && !is_global_orbit_dir(cwd)
+        && !is_global_orbit_dir(cwd, global_orbit_dir)
     {
         return Ok((cwd.parent().unwrap_or(cwd).to_path_buf(), cwd.to_path_buf()));
     }
@@ -260,7 +264,7 @@ fn walk_up_checkout_paths(cwd: &Path, env: &Env) -> Result<(PathBuf, PathBuf), O
     let home = env_home_dir(env);
     for ancestor in cwd.ancestors() {
         let orbit_root = ancestor.join(".orbit");
-        if orbit_root.is_dir() && !is_global_orbit_dir(&orbit_root) {
+        if orbit_root.is_dir() && !is_global_orbit_dir(&orbit_root, global_orbit_dir) {
             return Ok((ancestor.to_path_buf(), orbit_root));
         }
         if home
@@ -295,13 +299,8 @@ fn registered_workspace_id(global_root: &Path, repo_root: &Path) -> Option<Strin
         .map(|selected| selected.workspace.id)
 }
 
-fn is_global_orbit_dir(candidate: &Path) -> bool {
-    let Ok(global) =
-        workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())
-    else {
-        return false;
-    };
-    paths_equivalent(candidate, &global)
+fn is_global_orbit_dir(candidate: &Path, global_orbit_dir: Option<&Path>) -> bool {
+    global_orbit_dir.is_some_and(|global| paths_equivalent(candidate, global))
 }
 
 fn paths_equivalent(left: &Path, right: &Path) -> bool {

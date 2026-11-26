@@ -5,6 +5,7 @@ use orbit_common::{Env, env_vars};
 
 use super::host_ssh::host_ssh_command;
 use super::output_args::{install_output_args, plain_header, requested_output};
+use super::resolved::generation_root;
 use crate::command;
 use crate::output::sink::FormatArg;
 use crate::plugin_cli;
@@ -84,11 +85,8 @@ fn plugin_root_override() -> Option<std::path::PathBuf> {
 /// does not use. Any failure below that is this host's plugin problem, not
 /// this command's: the built-in CLI must stay usable, so it is logged and
 /// the groups are simply absent (§4.9).
-fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
-    let Ok(root) = orbit_core::runtime::resolve_generation_root(
-        &orbit_core::composition::composition_env(),
-        plugin_root_override().as_deref(),
-    ) else {
+fn plugin_cli_groups(env: &Env) -> Vec<orbit_core::adapter::command::PluginCliGroup> {
+    let Ok(root) = generation_root(env, plugin_root_override().as_deref()) else {
         return Vec::new();
     };
     if !root.join("plugins").is_dir() {
@@ -157,7 +155,7 @@ fn exit_parse_error(err: clap::error::Error, args: &[std::ffi::OsString], env: &
     let (requested, legacy) = usage_error::pre_parse_format(args);
     let err = usage_error::suggest_help_flag(repair_crew_flag_suggestion(err));
     let err = if usage_error::is_unknown_host_flag(&err) {
-        usage_error::suggest_host_command(err, host_ssh_command(args))
+        usage_error::suggest_host_command(err, host_ssh_command(args, env))
     } else {
         err
     };
@@ -178,7 +176,7 @@ pub(super) fn parse_cli(env: &Env) -> (command::Cli, Option<FormatArg>, bool, bo
     let (groups, matches) = match cli_command(&[], env).try_get_matches_from(&args) {
         Ok(matches) => (Vec::new(), matches),
         Err(built_in_error) => {
-            let groups = plugin_cli_groups();
+            let groups = plugin_cli_groups(env);
             if groups.is_empty() {
                 exit_parse_error(built_in_error, &args, env);
             }

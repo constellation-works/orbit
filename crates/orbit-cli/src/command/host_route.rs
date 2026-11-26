@@ -16,14 +16,16 @@ use orbit_common::Env;
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::task::TaskVerb;
+use orbit_core::OrbitError;
 use orbit_core::application::task::TaskArtifactRead;
-use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
 use orbit_registry::hosts::HostEntry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::tool::{McpCapability, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value, json};
+
+use crate::entry::resolved::Resolved;
 
 use super::run::RunSubcommand;
 use super::task::TaskInvocation;
@@ -41,13 +43,16 @@ pub(crate) enum Preflight {
 
 /// Route `cli` before bootstrap: resolve `--host`, then deliver a call that
 /// belongs to another host there.
-pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitError> {
+pub(crate) fn preflight(
+    cli: &mut Cli,
+    env: &Env,
+    resolved: &Resolved,
+) -> Result<Preflight, OrbitError> {
     let host = requested_host(&cli.command);
     if host.is_none() && !may_route(cli) {
         return Ok(Preflight::Local);
     }
-    let global_root =
-        orbit_core::runtime::resolve_global_root(&orbit_core::composition::composition_env())?;
+    let global_root = resolved.global_root()?;
     // Plugin callbacks cannot use the host's SSH credentials. Refuse before
     // discovery as well as delivery, using the same root that authenticates
     // local callback sessions. Resolving --host can itself attempt SSH.
@@ -56,22 +61,18 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
         && let Some(selector) = workspace_value(cli)?
     {
         let destination = if let Some(host) = host.as_deref()
-            && hosts::host_ssh_target(&global_root, host)?.is_some()
+            && hosts::host_ssh_target(global_root, host)?.is_some()
         {
             Some(format!("--host {host} --workspace {selector}"))
-        } else if hosts::selector_remote_host(&global_root, &selector)?.is_some() {
+        } else if hosts::selector_remote_host(global_root, &selector)?.is_some() {
             Some(selector)
         } else {
             None
         };
         if let Some(destination) = destination {
-            let callback_root = orbit_core::runtime::resolve_generation_root(
-                &orbit_core::composition::composition_env(),
-                cli.root.as_deref(),
-            )?;
             orbit_core::adapter::command::refuse_plugin_child_remote_callback(
-                &orbit_core::composition::composition_env(),
-                &callback_root,
+                env,
+                resolved.generation_root()?,
                 &args.name,
                 &destination,
             )?;
@@ -81,23 +82,14 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
         && let ToolSubcommand::Run(args) = &tool.command
         && let Some(selector) = workspace_value(cli)?
     {
-        let callback_root = orbit_core::runtime::resolve_generation_root(
-            &orbit_core::composition::composition_env(),
-            cli.root.as_deref(),
-        )?;
         orbit_cmd::registry_runtime::refuse_cli_callback_workspace(
-            &callback_root,
+            resolved.generation_root()?,
             &args.name,
             &selector,
         )?;
     }
     // A claimed worker's calls follow its owner binding, never a prefix.
-    if OrbitRuntime::current_worker_invocation(
-        &orbit_core::composition::composition_env(),
-        &global_root,
-    )?
-    .is_some()
-    {
+    if resolved.worker_binding(env)?.is_some() {
         if host.is_some() {
             return Err(OrbitError::InvalidInput(
                 "--host is not available to a claimed worker; its calls follow the owner \
@@ -112,7 +104,7 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
         && let Some(selector) = workspace_value(cli)?
         && let Ok(qualified) = selector.parse::<MachineQualifiedSelector>()
         && !matches!(
-            inspect_machine_identity(&global_root)?,
+            inspect_machine_identity(global_root)?,
             MachineIdentityState::Present(identity) if identity.id == qualified.machine_id()
         )
     {
@@ -127,15 +119,15 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
         && let RunSubcommand::Auto(auto) = &mut run.command
     {
         if let Some(pull) = auto.pull.as_mut() {
-            *pull = hosts::pull_selector(&global_root, auto.host.as_deref(), pull)?;
+            *pull = hosts::pull_selector(global_root, auto.host.as_deref(), pull)?;
         }
         return Ok(Preflight::Local);
     }
     if matches!(&cli.command, Commands::Notice(_)) {
-        return notice_preflight(cli, &global_root, env);
+        return notice_preflight(cli, global_root, env);
     }
     if let Commands::Attention(attention) = &cli.command {
-        return attention_preflight(cli, attention, &global_root, env);
+        return attention_preflight(cli, attention, global_root, env);
     }
     if let Some(host) = host {
         let value = workspace_value(cli)?.ok_or_else(|| {
@@ -145,43 +137,39 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
                     .into(),
             )
         })?;
-        let resolved = match hosts::resolve_host_workspace(&global_root, &host, &value)? {
+        let resolved = match hosts::resolve_host_workspace(global_root, &host, &value)? {
             HostWorkspaceRoute::Local { workspace_id } => workspace_id,
             HostWorkspaceRoute::Remote { selector, .. } => selector,
         };
         set_workspace_value(cli, resolved)?;
     }
     let Some(task_id) = routed_task_id(&cli.command)? else {
-        return deliver_by_selector(cli, &global_root, env);
+        return deliver_by_selector(cli, global_root, env);
     };
     if let Some(selector) = workspace_value(cli)? {
-        let Some(holder) = hosts::selector_remote_host(&global_root, &selector)? else {
+        let Some(holder) = hosts::selector_remote_host(global_root, &selector)? else {
             return Ok(Preflight::Local);
         };
-        return deliver(cli, &global_root, &holder, Some(selector), env);
+        return deliver(cli, global_root, &holder, Some(selector), env);
     }
     // `--root` / `ORBIT_ROOT` names the store explicitly, as a selector does.
     if explicit_root(cli, env) {
         return Ok(Preflight::Local);
     }
-    match hosts::route_task_id(&global_root, &task_id)? {
+    match hosts::route_task_id(global_root, &task_id)? {
         TaskIdRoute::Local => Ok(Preflight::Local),
         TaskIdRoute::Remote(holder) => {
             if let Commands::Tool(tool) = &cli.command
                 && let ToolSubcommand::Run(args) = &tool.command
             {
-                let callback_root = orbit_core::runtime::resolve_generation_root(
-                    &orbit_core::composition::composition_env(),
-                    cli.root.as_deref(),
-                )?;
                 orbit_core::adapter::command::refuse_plugin_child_remote_callback(
-                    &orbit_core::composition::composition_env(),
-                    &callback_root,
+                    env,
+                    resolved.generation_root()?,
                     &args.name,
                     &task_id,
                 )?;
             }
-            deliver(cli, &global_root, &holder, None, env)
+            deliver(cli, global_root, &holder, None, env)
         }
     }
 }
@@ -260,7 +248,7 @@ fn attention_preflight(
     // is a way around that: it is refused here as the local read refuses a
     // bare call. A shell waits only through a grant its session minted.
     let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
-        &orbit_core::composition::composition_env(),
+        env,
         &ToolSessionContext::default(),
     ));
     if !caller.grants().contains(&McpCapability::Agent)
@@ -281,8 +269,11 @@ fn attention_preflight(
             "this machine has no [machine] identity yet; run `orbit init` first".into(),
         ));
     }
-    let client =
-        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority(), env)?;
+    let client = super::mcp::federated_aggregate_client(
+        global_root.to_path_buf(),
+        caller_authority(env),
+        env,
+    )?;
     let answer = orbit_mcp::McpHost::call_tool(
         &client,
         attention.query.spec.tool_name,
@@ -334,7 +325,8 @@ fn deliver_notice_aggregate(
             "this machine has no [machine] identity yet; run `orbit init` first".into(),
         ));
     }
-    let authority = caller_authority_for_declared_model(input_declared_model(&input).as_deref());
+    let authority =
+        caller_authority_for_declared_model(input_declared_model(&input).as_deref(), env);
     let client = super::mcp::federated_aggregate_client(global_root.to_path_buf(), authority, env)?;
     let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| match render {
@@ -523,11 +515,8 @@ fn set_workspace_value(cli: &mut Cli, selector: String) -> Result<(), OrbitError
 /// The authority a routed call asks for: an operator only when this process
 /// resolves as one and declares no agent. An agent never propagates
 /// `--operator`; the destination's own rules decide the rest.
-pub(crate) fn caller_authority() -> McpSessionAuthority {
-    let envelope = CallerEnvelope::from_process_env(
-        &orbit_core::composition::composition_env(),
-        &ToolSessionContext::default(),
-    );
+pub(crate) fn caller_authority(env: &Env) -> McpSessionAuthority {
+    let envelope = CallerEnvelope::from_process_env(env, &ToolSessionContext::default());
     let caller = CallerCapabilities::resolve(&envelope);
     if caller.grants().contains(&McpCapability::Operator) && !envelope.agent_declared {
         McpSessionAuthority::Operator
@@ -585,11 +574,11 @@ fn carry_declared_model(agent: Option<&str>, model: Option<&str>, input: &mut Va
 /// The authority for a routed call whose forwarded input declares a model:
 /// never Operator, exactly as a local agent call is attributed. A call
 /// that declares none keeps the caller's own authority.
-fn caller_authority_for_declared_model(declared: Option<&str>) -> McpSessionAuthority {
+fn caller_authority_for_declared_model(declared: Option<&str>, env: &Env) -> McpSessionAuthority {
     if trimmed_identity(declared).is_some() {
         McpSessionAuthority::Agent
     } else {
-        caller_authority()
+        caller_authority(env)
     }
 }
 
@@ -804,7 +793,7 @@ fn deliver(
         }
     };
     let authority =
-        caller_authority_for_declared_model(input_declared_model(&call.input).as_deref());
+        caller_authority_for_declared_model(input_declared_model(&call.input).as_deref(), env);
     let client = hosts::routed_client(global_root, &caller, authority)?;
     let mut input = call.input;
     if let Some(selector) = selector

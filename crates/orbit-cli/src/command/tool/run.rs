@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
+use orbit_common::Env;
 use orbit_common::governance::task::select_fields;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
@@ -15,7 +16,7 @@ use orbit_types::task::is_task_show_projection_field;
 use orbit_types::tool::{McpTransport, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 
 /// Runtime route for one `orbit tool run` invocation, chosen before bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,12 +131,10 @@ impl ToolRunArgs {
     /// caller. Collapsing that error into "no selector" makes `main` open the
     /// cwd workspace — applying pending layout and schema migrations — or exit
     /// with the bootstrap error before `execute` can report the input error.
-    pub(crate) fn bootstrap_route(&self) -> Result<ToolRunBootstrap, OrbitError> {
+    pub(crate) fn bootstrap_route(&self, env: &Env) -> Result<ToolRunBootstrap, OrbitError> {
         let value = self.parsed_input()?;
-        if route_resident_delivery_recovery_to_broker(
-            &orbit_core::composition::composition_env(),
-            tool_operation_name(&self.name, &value),
-        ) {
+        if route_resident_delivery_recovery_to_broker(env, tool_operation_name(&self.name, &value))
+        {
             return Ok(ToolRunBootstrap::CwdWorkspace);
         }
         if let Some(selector) = trimmed_string_field(&value, "workspace") {
@@ -228,8 +227,8 @@ fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-impl Execute for ToolRunArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ToolRunArgs {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         // A tool invocation owns only the ledger key produced by this call.
         orbit_core::application::resident::take_failed_resident_action_key();
         let mut input = self.prepare_tool_run_input()?;
@@ -253,7 +252,7 @@ impl Execute for ToolRunArgs {
         let bound = if claimed_owner_call
             || self.name == "orbit.attention"
             || route_resident_delivery_recovery_to_broker(
-                &orbit_core::composition::composition_env(),
+                env,
                 tool_operation_name(&self.name, &input),
             ) {
             None

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Args;
 use orbit_cmd::workspace_rebind::{self, CheckoutRebindOptions};
@@ -7,6 +7,7 @@ use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
+use crate::entry::resolved::Resolved;
 
 #[derive(Args)]
 #[command(
@@ -25,29 +26,22 @@ pub struct WorkspaceRebindArgs {
 impl WorkspaceRebindArgs {
     pub fn execute_workspace_rebind_without_runtime(
         self,
-        root_override: Option<&Path>,
         workspace_selector: Option<&str>,
+        resolved: &Resolved,
     ) -> CommandOut {
         let selector = workspace_selector.ok_or_else(|| {
             OrbitError::InvalidInput(
                 "workspace rebind requires --workspace <registered-name-or-id>".into(),
             )
         })?;
-        let global_root = orbit_core::runtime::resolve_generation_root(
-            &orbit_core::composition::composition_env(),
-            root_override,
-        )?;
+        let global_root = resolved.generation_root()?;
         let result = workspace_rebind::rebind_checkout_directory(
-            &global_root,
+            global_root,
             selector,
             &self.path,
             CheckoutRebindOptions {
                 dry_run: self.dry_run,
-                audit_role: orbit_core::ActorIdentity::from_env(
-                    &orbit_core::composition::composition_env(),
-                )
-                .audit_role()
-                .to_string(),
+                audit_role: resolved.actor().audit_role().to_string(),
             },
         )?;
         let text = format!(

@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 
 use crate::command::{CommandOut, Execute};
@@ -29,9 +30,9 @@ pub struct ToolCommand {
     pub command: ToolSubcommand,
 }
 
-impl Execute for ToolCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl ToolCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        self.command.execute_with_env(runtime, env)
     }
 }
 
@@ -55,12 +56,12 @@ pub enum ToolSubcommand {
     Doctor(ToolDoctorArgs),
 }
 
-impl Execute for ToolSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ToolSubcommand {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
             ToolSubcommand::List(args) => args.execute(runtime),
             ToolSubcommand::Show(args) => args.execute(runtime),
-            ToolSubcommand::Run(args) => args.execute(runtime),
+            ToolSubcommand::Run(args) => args.execute_with_env(runtime, env),
             ToolSubcommand::Add(args) => args.execute(runtime),
             ToolSubcommand::Remove(args) => args.execute(runtime),
             ToolSubcommand::Enable(args) => args.execute(runtime),

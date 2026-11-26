@@ -20,6 +20,7 @@ pub fn preflight_indirect_workspace_write(
     root_override: Option<&Path>,
     global: bool,
     explicit_workspace: bool,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     if global || root_override.is_some() || explicit_workspace {
         return Ok(());
@@ -27,7 +28,7 @@ pub fn preflight_indirect_workspace_write(
     let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, None)?;
     orbit_core::runtime::refuse_indirect_uninitialized_caller_orbit(
-        &orbit_core::composition::composition_env(),
+        env,
         &cwd,
         &roots.shared_root,
         false,

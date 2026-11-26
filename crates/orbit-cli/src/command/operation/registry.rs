@@ -504,7 +504,7 @@ impl Commands {
                     DecisionVerb::RuleAuto => (true, "rule-auto"),
                     _ => (false, "answer"),
                 };
-                registry_operation(&command.command, runtime_dispatch!(Decision))
+                registry_operation(&command.command, runtime_env_dispatch!(Decision))
                     .governed_when(governed, "decision", subcommand)
             }
             Commands::Audit(command) => {
@@ -713,7 +713,7 @@ impl Commands {
                     Some(false),
                     |command, context| match command {
                         Commands::PluginGroup(invocation) => {
-                            (*invocation).execute(context.runtime()?)
+                            (*invocation).execute_with_env(context.runtime()?, context.env)
                         }
                         _ => dispatch_mismatch("PluginGroup"),
                     },

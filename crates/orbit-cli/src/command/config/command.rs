@@ -44,8 +44,8 @@ pub enum ConfigSubcommand {
 impl ConfigSubcommand {
     fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
-            ConfigSubcommand::Show(args) => args.execute(runtime),
-            ConfigSubcommand::Get(args) => args.execute(runtime),
+            ConfigSubcommand::Show(args) => args.execute_with_env(runtime, env),
+            ConfigSubcommand::Get(args) => args.execute_with_env(runtime, env),
             ConfigSubcommand::Set(args) => args.execute_with_env(runtime, env),
             ConfigSubcommand::Keys(args) => args.execute(runtime),
             ConfigSubcommand::Path(args) => args.execute(runtime),

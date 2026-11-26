@@ -12,7 +12,10 @@ fn is_plain_shell_word(word: &str) -> bool {
 
 /// `ssh <target> orbit <args without --host>` for a command that rejected
 /// `--host`, when the named host resolves to a remote entry.
-pub(super) fn host_ssh_command(args: &[std::ffi::OsString]) -> Option<String> {
+pub(super) fn host_ssh_command(
+    args: &[std::ffi::OsString],
+    env: &orbit_common::Env,
+) -> Option<String> {
     let args = args
         .iter()
         .skip(1)
@@ -37,9 +40,7 @@ pub(super) fn host_ssh_command(args: &[std::ffi::OsString]) -> Option<String> {
             rest.push(quoted);
         }
     }
-    let global_root =
-        orbit_core::runtime::resolve_global_root(&orbit_core::composition::composition_env())
-            .ok()?;
+    let global_root = super::resolved::global_root(env).ok()?;
     let target = orbit_cmd::hosts::host_ssh_target(&global_root, host?.trim()).ok()??;
     let command = if rest.is_empty() {
         "orbit".to_string()

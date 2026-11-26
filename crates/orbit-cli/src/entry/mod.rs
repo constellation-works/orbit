@@ -6,6 +6,7 @@ mod discover;
 mod finish;
 mod host_ssh;
 mod output_args;
+pub(crate) mod resolved;
 pub(super) mod run;
 
 #[cfg(test)]

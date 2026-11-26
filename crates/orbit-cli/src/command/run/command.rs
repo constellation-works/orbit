@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 
 use crate::command::{CommandOut, Execute};
@@ -47,9 +48,9 @@ pub struct RunCommand {
     pub command: RunSubcommand,
 }
 
-impl Execute for RunCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl RunCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        self.command.execute_with_env(runtime, env)
     }
 }
 
@@ -91,8 +92,8 @@ pub enum RunSubcommand {
     Job(JobRunArgs),
 }
 
-impl Execute for RunSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl RunSubcommand {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
             RunSubcommand::Auto(command) => command.execute(runtime),
             RunSubcommand::Ship(command) => command.execute(runtime),
@@ -101,11 +102,11 @@ impl Execute for RunSubcommand {
             RunSubcommand::Profiles(command) => command.execute(runtime),
             RunSubcommand::History(command) => command.execute(runtime),
             RunSubcommand::Show(command) => command.execute(runtime),
-            RunSubcommand::Logs(command) => command.execute(runtime),
+            RunSubcommand::Logs(command) => command.execute_with_env(runtime, env),
             RunSubcommand::Events(command) => command.execute(runtime),
             RunSubcommand::Trace(command) => command.execute(runtime),
             RunSubcommand::Settlements(command) => command.execute(runtime),
-            RunSubcommand::SettlementsHydrate(command) => command.execute(runtime),
+            RunSubcommand::SettlementsHydrate(command) => command.execute_with_env(runtime, env),
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Extend(command) => command.execute(runtime),

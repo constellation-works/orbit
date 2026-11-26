@@ -1,5 +1,4 @@
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_core::ActorIdentity;
 use orbit_core::composition::pin_executable_generation_as;
 
 use super::classify::{
@@ -8,6 +7,7 @@ use super::classify::{
 };
 use super::discover::{explicit_root_source, parse_cli};
 use super::finish::{finish_command, print_error, refuse_plugin_child_cli};
+use super::resolved::Resolved;
 use crate::audit_middleware;
 use crate::command;
 use crate::command::operation::{CommandOperation, DispatchContext, RuntimeNeed};
@@ -54,14 +54,15 @@ pub(crate) fn run(env: orbit_common::Env) {
     // pin so a read-only unpinned `~/.orbit` cannot block scratch init. A
     // managed macOS child joins its parent's host registry pin even when
     // ORBIT_ROOT selects workspace data; update still checks both roots.
-    let actor = ActorIdentity::from_env(&env);
+    let resolved = Resolved::resolve(&env, cli.root.as_deref());
+    let actor = resolved.actor();
     // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
     // call, which the callback allowlist gates against the plugin's
     // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
     // host routing, generation pinning, runtime bootstrap and dispatch — so no
     // plain command reads governed data around that allowlist.
     {
-        let operation = cli.command.operation(&env).attribute_to(&actor);
+        let operation = cli.command.operation(&env).attribute_to(actor);
         if env.orbit_application_credential_fd().is_some()
             && operation.audit_meta.as_ref().is_none_or(|meta| {
                 meta.command != "tool" || meta.subcommand.as_deref() != Some("run")
@@ -77,7 +78,7 @@ pub(crate) fn run(env: orbit_common::Env) {
             orbit_common::observability::logging::exit(1);
         }
         if !operation.plugin_callback_entry_point
-            && let Err(error) = refuse_plugin_child_cli(&operation.audit_meta, cli.root.as_deref())
+            && let Err(error) = refuse_plugin_child_cli(&operation.audit_meta, &resolved, &env)
         {
             print_error(&error, &sink, operation.json_error_preference);
             orbit_common::observability::logging::exit(1);
@@ -86,7 +87,7 @@ pub(crate) fn run(env: orbit_common::Env) {
     // A task id another host's prefix names, a selector another host lists,
     // or `--host` naming one: deliver there and open nothing here. `--host`
     // naming this machine rewrites the selector and runs on [ORB-14449].
-    match command::host_route::preflight(&mut cli, &env) {
+    match command::host_route::preflight(&mut cli, &env, &resolved) {
         Ok(command::host_route::Preflight::Local) => {}
         Ok(command::host_route::Preflight::Remote(result)) => {
             let json_error_preference = cli.command.operation(&env).json_error_preference;
@@ -120,7 +121,7 @@ pub(crate) fn run(env: orbit_common::Env) {
         dispatch,
         governed,
         plugin_callback_entry_point: _,
-    } = cli.command.operation(&env).attribute_to(&actor);
+    } = cli.command.operation(&env).attribute_to(actor);
     let clock_tick = is_clock_tick(&cli.command);
     let quiet_clock_tick =
         clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
@@ -131,10 +132,9 @@ pub(crate) fn run(env: orbit_common::Env) {
     // Successful rebinds still take normal executable-generation admission.
     if matches!(&cli.command, command::Commands::Workspace(workspace)
         if matches!(&workspace.command, command::workspace::WorkspaceSubcommand::Rebind(_)))
-        && let Err(error) =
-            orbit_core::runtime::resolve_generation_root(&env, root_override.as_deref()).and_then(
-                |root| orbit_cmd::workspace_rebind::require_checkout_rebind_host_store(&root),
-            )
+        && let Err(error) = resolved
+            .generation_root()
+            .and_then(orbit_cmd::workspace_rebind::require_checkout_rebind_host_store)
     {
         print_error(&error, &sink, json_error_preference);
         orbit_common::observability::logging::exit(1);
@@ -145,10 +145,7 @@ pub(crate) fn run(env: orbit_common::Env) {
     {
         None
     } else {
-        let root = match orbit_core::runtime::resolve_process_generation_root(
-            &env,
-            root_override.as_deref(),
-        ) {
+        let root = match resolved.process_generation_root() {
             Ok(root) => root,
             Err(error) => {
                 print_error(&error, &sink, None);
@@ -158,13 +155,13 @@ pub(crate) fn run(env: orbit_common::Env) {
         let root_source = explicit_root_source(root_override.as_deref(), &env);
         let root_existed = root.exists();
         if let Some(source) = root_source
-            && let Err(error) = root_check::validate_explicit_root(&root, source)
+            && let Err(error) = root_check::validate_explicit_root(root, source)
         {
             print_error(&error, &sink, None);
             orbit_common::observability::logging::exit(1);
         }
         match pin_executable_generation_as(
-            &root,
+            root,
             matches!(
                 runtime_need,
                 RuntimeNeed::ReadOnly
@@ -180,7 +177,7 @@ pub(crate) fn run(env: orbit_common::Env) {
                     && let Ok(digest) = orbit_common::fs::generation::process_generation(&env)
                     && let Ok(Some(summary)) =
                         orbit_common::fs::generation::finish_clock_generation_hold(
-                            &root,
+                            root,
                             digest,
                             chrono::Utc::now(),
                         )
@@ -191,12 +188,12 @@ pub(crate) fn run(env: orbit_common::Env) {
             }
             Err(error) => {
                 if clock_tick && orbit_common::fs::generation::is_clock_upgrade_refusal(&error) {
-                    report_refused_clock_tick(&root, &error);
+                    report_refused_clock_tick(root, &error, &env);
                 } else if clock_tick
                     && orbit_common::fs::generation::is_clock_generation_hold(&error)
                     && let Ok(digest) = orbit_common::fs::generation::process_generation(&env)
                     && orbit_common::fs::generation::record_clock_generation_hold(
-                        &root,
+                        root,
                         digest,
                         chrono::Utc::now(),
                     )
@@ -207,7 +204,7 @@ pub(crate) fn run(env: orbit_common::Env) {
                 }
                 let error = match root_source {
                     Some(source) if !root_existed => {
-                        root_check::missing_root_error(&root, source, &error)
+                        root_check::missing_root_error(root, source, &error)
                     }
                     _ => error,
                 };
@@ -227,14 +224,7 @@ pub(crate) fn run(env: orbit_common::Env) {
     let claimed_owner_worker = if unusable_tool_input {
         false
     } else if claimed_owner_call {
-        let global_root = match orbit_core::runtime::resolve_global_root(&env) {
-            Ok(root) => root,
-            Err(error) => {
-                print_error(&error, &sink, json_error_preference);
-                orbit_common::observability::logging::exit(1);
-            }
-        };
-        match orbit_core::OrbitRuntime::current_worker_invocation(&env, &global_root) {
+        match resolved.worker_binding(&env) {
             Ok(binding) => binding
                 .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id),
             Err(error) => {
@@ -251,6 +241,7 @@ pub(crate) fn run(env: orbit_common::Env) {
             root_override.as_deref(),
             args.global,
             workspace_selector.is_some(),
+            &env,
         )
     {
         print_error(&error, &sink, json_error_preference);
@@ -279,6 +270,7 @@ pub(crate) fn run(env: orbit_common::Env) {
                         root_override.as_deref(),
                         workspace_selector.as_deref(),
                         &env,
+                        &resolved,
                     ),
                 );
                 finish_command(result, &sink, json_error_preference, None);
@@ -355,13 +347,14 @@ pub(crate) fn run(env: orbit_common::Env) {
             orbit_common::observability::logging::exit(1);
         }
     }
-    .with_actor(actor);
+    .with_actor(actor.clone());
 
     let context = DispatchContext::with_runtime(
         &runtime,
         root_override.as_deref(),
         workspace_selector.as_deref(),
         &env,
+        &resolved,
     );
     // ORB-10453: the CLI's single authorization chokepoint. Every command
     // traverses it before dispatch, so a governed operation cannot be reached

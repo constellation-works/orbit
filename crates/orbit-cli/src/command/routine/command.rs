@@ -14,7 +14,6 @@ use std::path::Path;
 use clap::{Args, Subcommand};
 use orbit_common::Env;
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::workspace_registry;
 
 use super::breaker::RoutineBreakerArgs;
 use super::init::RoutineInitArgs;
@@ -24,6 +23,7 @@ use super::resume::RoutineResumeArgs;
 use super::show::RoutineShowArgs;
 use super::toggle::{RoutineDisableArgs, RoutineEnableArgs};
 use crate::command::CommandOut;
+use crate::entry::resolved::Resolved;
 
 #[derive(Args)]
 #[command(
@@ -62,8 +62,9 @@ impl RoutineCommand {
         workspace_selector: Option<&str>,
         runtime: Option<&OrbitRuntime>,
         env: &Env,
+        resolved: &Resolved,
     ) -> CommandOut {
-        let global_root = selected_global_root(root_override, env)?;
+        let global_root = selected_global_root(root_override, env, resolved)?;
         self.command
             .execute_without_runtime(&global_root, workspace_selector, runtime)
     }
@@ -72,6 +73,7 @@ impl RoutineCommand {
 fn selected_global_root(
     root_override: Option<&Path>,
     env: &Env,
+    resolved: &Resolved,
 ) -> Result<std::path::PathBuf, OrbitError> {
     let has_env_override = env
         .orbit_root()
@@ -82,7 +84,7 @@ fn selected_global_root(
         return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)
             .map(|roots| roots.global_root);
     }
-    workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())
+    resolved.global_orbit_dir().map(Path::to_path_buf)
 }
 
 #[derive(Subcommand)]

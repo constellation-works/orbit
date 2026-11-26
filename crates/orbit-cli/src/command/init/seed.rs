@@ -11,9 +11,10 @@ use std::path::{Path, PathBuf};
 use orbit_common::Env;
 use orbit_config::ConfigSeed;
 use orbit_core::OrbitError;
-use orbit_registry::workspace_registry::global_orbit_dir;
 
 use super::agent_detect::{DetectedAgents, available_crew_families, detect};
+use crate::entry::resolved::Resolved;
+
 use super::agent_prompt::{Prompter, StdinPrompter, collect_default_crew};
 
 /// Probe the host and build the seed for `orbit init`.
@@ -27,13 +28,14 @@ use super::agent_prompt::{Prompter, StdinPrompter, collect_default_crew};
 /// seed's own recommendations; only the crew prompts are skipped.
 pub(crate) fn collect_config_seed_for_init(
     root_override: Option<&Path>,
+    resolved: &Resolved,
     force: bool,
     non_interactive: bool,
     env: &Env,
 ) -> Result<ConfigSeed, OrbitError> {
     let detected = detect(env);
     let seed = config_seed_from_detection(&detected);
-    if non_interactive || !config_would_be_written(root_override, force)? {
+    if non_interactive || !config_would_be_written(root_override, resolved, force)? {
         return Ok(seed);
     }
     let mut prompter = StdinPrompter;
@@ -49,8 +51,12 @@ pub(crate) fn config_seed_from_detection(detected: &DetectedAgents) -> ConfigSee
 
 /// Whether init will write a fresh config.toml, which is the only case worth
 /// prompting for — `orbit init` is idempotent over an existing global root.
-fn config_would_be_written(root_override: Option<&Path>, force: bool) -> Result<bool, OrbitError> {
-    Ok(force || !resolve_config_path(root_override)?.exists())
+fn config_would_be_written(
+    root_override: Option<&Path>,
+    resolved: &Resolved,
+    force: bool,
+) -> Result<bool, OrbitError> {
+    Ok(force || !resolve_config_path(root_override, resolved)?.exists())
 }
 
 /// Prompt for the default crew by seeded crew name. System work draws from the
@@ -67,10 +73,13 @@ fn collect_interactive_crew_choices(
     Ok(seed)
 }
 
-fn resolve_config_path(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+fn resolve_config_path(
+    root_override: Option<&Path>,
+    resolved: &Resolved,
+) -> Result<PathBuf, OrbitError> {
     let root = match root_override {
         Some(root) => root.to_path_buf(),
-        None => global_orbit_dir(&orbit_core::composition::composition_env())?,
+        None => resolved.global_orbit_dir()?.to_path_buf(),
     };
     Ok(root.join("config.toml"))
 }

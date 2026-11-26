@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::super::json::error_payload;
 use crate::command::tool::{ToolCommand, ToolRunArgs, ToolSubcommand};
-use crate::command::{Cli, Commands, Execute};
+use crate::command::{Cli, Commands};
 
 fn run_isolated_test(test_name: &str) -> bool {
     const CHILD: &str = "ORBIT_TEST_ISOLATED_OUTPUT_JSON";
@@ -173,7 +173,7 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     ]);
     let error = orbit_core::test_support::with_resident_action_close_failure(
         || OrbitError::Store("injected terminal ledger append failure".into()),
-        || args.execute(&runtime),
+        || args.execute_with_env(&runtime, &orbit_common::Env::capture()),
     )
     .expect_err("failed terminal ledger append must remain an error");
     let payload: Value = error_payload(&error);
@@ -210,7 +210,7 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     let refused_args =
         parse_tool_run(&["orbit", "tool", "run", "orbit.task.update", "--input", "{}"]);
     let refusal = refused_args
-        .execute(&runtime)
+        .execute_with_env(&runtime, &orbit_common::Env::capture())
         .expect_err("empty update input must be refused");
     let denied = error_payload(&refusal);
     assert!(denied.get("action_key").is_none(), "{denied}");

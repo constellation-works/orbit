@@ -4,11 +4,12 @@ use std::path::Path;
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_common::Env;
 use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::OrbitError;
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
 use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, CommandOutput};
+use crate::entry::resolved::Resolved;
 
 use super::listen::ListenArgs;
 use super::setup::{InitArgs, RemoveArgs};
@@ -22,12 +23,6 @@ use super::setup::{InitArgs, RemoveArgs};
 pub struct McpCommand {
     #[command(subcommand)]
     pub command: McpSubcommand,
-}
-
-impl Execute for McpCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
-    }
 }
 
 #[derive(Subcommand)]
@@ -66,22 +61,6 @@ pub enum McpSubcommand {
     /// announces a workspace, or passes one on a call, still takes precedence.
     /// Without it each session names its own.
     Listen(ListenArgs),
-}
-
-impl Execute for McpSubcommand {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        let env = Env::default();
-        match self {
-            // All MCP subcommands are dispatched runtime-free by the operation
-            // registry (`RuntimeNeed::Forbidden`, `dispatch_mcp`) before runtime
-            // initialization. They reach this path only if invoked indirectly
-            // (currently never), so use the same runtime-less call chain for safety.
-            Self::Init(args) => args.execute_without_runtime(None, &env),
-            Self::Remove(args) => args.execute_without_runtime(None, &env),
-            Self::Serve(args) => args.execute_without_runtime(None, &env),
-            Self::Listen(args) => args.execute_without_runtime(None, None, &env),
-        }
-    }
 }
 
 /// Which side of the wire this invocation is on.
@@ -154,7 +133,12 @@ pub struct ServeArgs {
 }
 
 impl ServeArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        env: &Env,
+        resolved: &Resolved,
+    ) -> CommandOut {
         if matches!(self.mode, Some(ServeMode::Remote))
             && (root_override.is_some()
                 || env
@@ -167,14 +151,8 @@ impl ServeArgs {
                     .to_string(),
             ));
         }
-        let global_root = orbit_core::runtime::resolve_generation_root(
-            &orbit_core::composition::composition_env(),
-            root_override,
-        )?;
-        let worker = orbit_core::OrbitRuntime::current_worker_invocation(
-            &orbit_core::composition::composition_env(),
-            &global_root,
-        )?;
+        let global_root = resolved.generation_root()?.to_path_buf();
+        let worker = resolved.worker_binding_in_generation_root(env)?.cloned();
         if worker.is_some()
             && (self.operator
                 || self.internal_drain
@@ -227,6 +205,7 @@ impl ServeArgs {
                     self.orchestrator,
                     requested_authority(self.operator),
                     toolsets,
+                    worker,
                     env,
                 )?
             }
@@ -251,17 +230,15 @@ impl ServeArgs {
                     global_root,
                     self.remote_caller_machine_id,
                     requested_authority(self.operator),
-                    self.workspace.or_else(|| {
-                        orbit_core::runtime::managed_workspace_selector_from_env(
-                            &orbit_core::composition::composition_env(),
-                        )
-                    }),
+                    self.workspace
+                        .or_else(|| resolved.managed_workspace().map(ToOwned::to_owned)),
                     self.orchestrator,
                     super::server::StdioLaunch {
                         internal_drain: self.internal_drain,
                         worker_host: self.worker_host,
                     },
                     toolsets,
+                    worker,
                     env,
                 )?
             }
@@ -289,7 +266,7 @@ pub(super) fn resolve_mcp_toolsets(
         .and_then(OsStr::to_str)
         .filter(|value| !value.trim().is_empty())
     else {
-        return configured_mcp_toolsets(global_root, role_flag, toolset_flag);
+        return configured_mcp_toolsets(global_root, role_flag, toolset_flag, env);
     };
     let selection = McpToolsetSelection::default_only();
     match selection.clone().with_stamped_names(stamped.split(',')) {
@@ -324,6 +301,7 @@ fn configured_mcp_toolsets(
     global_root: &Path,
     role_flag: Option<&str>,
     toolset_flag: Option<&str>,
+    env: &Env,
 ) -> Result<McpToolsetSelection, OrbitError> {
     let flagged_role = role_flag
         .map(|role| {
@@ -336,7 +314,7 @@ fn configured_mcp_toolsets(
         None
     } else {
         match orbit_config::ResolvedConfig::load(
-            &orbit_core::composition::composition_env(),
+            env,
             &orbit_config::ConfigRoots::global_only(global_root),
         ) {
             Ok(config) => Some(config.snapshot),

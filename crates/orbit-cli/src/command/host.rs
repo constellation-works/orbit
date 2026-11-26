@@ -9,7 +9,6 @@
 //! reported an OS have none until they are removed and added again.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use clap::{Args, Subcommand};
 use orbit_cmd::hosts::{self, HostChange, HostDetail, HostList, HostRow, HostWorkspace};
@@ -17,6 +16,7 @@ use orbit_core::OrbitError;
 use serde_json::Value;
 
 use crate::command::{CommandOut, Payload};
+use crate::entry::resolved::Resolved;
 use crate::output::table::{Column, Table};
 
 #[derive(Args)]
@@ -113,36 +113,31 @@ pub struct HostRemoveArgs {
 }
 
 impl HostCommand {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        let global_root = orbit_core::runtime::resolve_generation_root(
-            &orbit_core::composition::composition_env(),
-            root_override,
-        )?;
+    pub fn execute_without_runtime(self, resolved: &Resolved) -> CommandOut {
+        let global_root = resolved.generation_root()?;
         match self.command {
             HostSubcommand::Add(args) => change_payload(hosts::add_host(
-                &global_root,
+                global_root,
                 &args.ssh_target,
                 args.name.as_deref(),
             )?),
             HostSubcommand::List(args) => {
-                list_payload(hosts::list_hosts(&global_root, !args.no_probe)?)
+                list_payload(hosts::list_hosts(global_root, !args.no_probe)?)
             }
-            HostSubcommand::Show(args) => show_payload(hosts::show_host(&global_root, &args.host)?),
-            HostSubcommand::Rename(args) => change_payload(hosts::rename_host(
-                &global_root,
-                &args.host,
-                &args.new_name,
-            )?),
+            HostSubcommand::Show(args) => show_payload(hosts::show_host(global_root, &args.host)?),
+            HostSubcommand::Rename(args) => {
+                change_payload(hosts::rename_host(global_root, &args.host, &args.new_name)?)
+            }
             HostSubcommand::Offline(args) => change_payload(hosts::set_host_offline(
-                &global_root,
+                global_root,
                 &args.target.host,
                 Some((&args.reason, args.until.as_deref())),
             )?),
             HostSubcommand::Online(args) => {
-                change_payload(hosts::set_host_offline(&global_root, &args.host, None)?)
+                change_payload(hosts::set_host_offline(global_root, &args.host, None)?)
             }
             HostSubcommand::Remove(args) => {
-                change_payload(hosts::remove_host(&global_root, &args.host, args.force)?)
+                change_payload(hosts::remove_host(global_root, &args.host, args.force)?)
             }
         }
     }

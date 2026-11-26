@@ -1,13 +1,13 @@
 //! `orbit mcp listen` — serve the same MCP host over a TCP socket.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 
 use clap::Args;
 use orbit_common::Env;
 use orbit_mcp::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure};
 
 use crate::command::{CommandOut, CommandOutput};
+use crate::entry::resolved::Resolved;
 
 /// Bind address used when the operator names none.
 const DEFAULT_LISTEN_ADDR: SocketAddr =
@@ -45,14 +45,11 @@ pub struct ListenArgs {
 impl ListenArgs {
     pub fn execute_without_runtime(
         self,
-        root_override: Option<&Path>,
         workspace_selector: Option<&str>,
         env: &Env,
+        resolved: &Resolved,
     ) -> CommandOut {
-        let global_root = orbit_core::runtime::resolve_generation_root(
-            &orbit_core::composition::composition_env(),
-            root_override,
-        )?;
+        let global_root = resolved.generation_root()?.to_path_buf();
         let toolsets = super::command::resolve_mcp_toolsets(
             &global_root,
             self.role.as_deref(),
@@ -65,6 +62,7 @@ impl ListenArgs {
             self.exposure(),
             workspace_selector.map(ToOwned::to_owned),
             toolsets,
+            resolved.worker_binding_in_generation_root(env)?.cloned(),
             env,
         )?;
         Ok(CommandOutput::Silent)

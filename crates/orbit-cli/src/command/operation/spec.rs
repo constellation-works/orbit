@@ -18,6 +18,8 @@ use orbit_types::identity::{
 };
 use serde_json::Value;
 
+use crate::entry::resolved::Resolved;
+
 use super::super::{CommandOut, CommandOutput, Commands, Execute};
 use super::args::Invocation;
 
@@ -82,6 +84,9 @@ pub struct DispatchContext<'a> {
     /// that resolve their own workspaces instead of being handed one runtime.
     workspace_selector: Option<&'a str>,
     pub(super) env: &'a Env,
+    /// The roots, worker invocation, actor and managed workspace the entry
+    /// resolved once from `env`.
+    pub(super) resolved: &'a Resolved,
 }
 
 impl<'a> DispatchContext<'a> {
@@ -90,12 +95,14 @@ impl<'a> DispatchContext<'a> {
         root_override: Option<&'a Path>,
         workspace_selector: Option<&'a str>,
         env: &'a Env,
+        resolved: &'a Resolved,
     ) -> Self {
         Self {
             runtime: Some(runtime),
             root_override,
             workspace_selector,
             env,
+            resolved,
         }
     }
 
@@ -103,12 +110,14 @@ impl<'a> DispatchContext<'a> {
         root_override: Option<&'a Path>,
         workspace_selector: Option<&'a str>,
         env: &'a Env,
+        resolved: &'a Resolved,
     ) -> Self {
         Self {
             runtime: None,
             root_override,
             workspace_selector,
             env,
+            resolved,
         }
     }
 
@@ -385,7 +394,7 @@ pub(super) fn task_operation(
 pub(super) fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Init(command) => {
-            command.execute_without_runtime(context.root_override, context.env)
+            command.execute_without_runtime(context.root_override, context.env, context.resolved)
         }
         _ => dispatch_mismatch("Init"),
     }
@@ -396,16 +405,18 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
     match command {
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Init(args),
-        }) => args.execute_without_runtime(context.root_override, context.env),
+        }) => args.execute_without_runtime(context.root_override, context.env, context.resolved),
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Sync(args),
-        }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
-        Commands::Workspace(WorkspaceCommand {
-            command: WorkspaceSubcommand::Rebind(args),
-        }) => args.execute_workspace_rebind_without_runtime(
+        }) => args.execute_without_runtime(
             context.root_override,
             context.workspace_selector,
+            context.resolved,
         ),
+        Commands::Workspace(WorkspaceCommand {
+            command: WorkspaceSubcommand::Rebind(args),
+        }) => args
+            .execute_workspace_rebind_without_runtime(context.workspace_selector, context.resolved),
         Commands::Workspace(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Workspace"),
     }
@@ -416,27 +427,25 @@ pub(super) fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> C
     match command {
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Init(args),
-        }) => args.execute_without_runtime(context.root_override, context.env),
+        }) => args.execute_without_runtime(context.root_override, context.env, context.resolved),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Remove(args),
-        }) => args.execute_without_runtime(context.root_override, context.env),
+        }) => args.execute_without_runtime(context.root_override, context.env, context.resolved),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Serve(args),
-        }) => args.execute_without_runtime(context.root_override, context.env),
+        }) => args.execute_without_runtime(context.root_override, context.env, context.resolved),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Listen(args),
-        }) => args.execute_without_runtime(
-            context.root_override,
-            context.workspace_selector,
-            context.env,
-        ),
+        }) => {
+            args.execute_without_runtime(context.workspace_selector, context.env, context.resolved)
+        }
         _ => dispatch_mismatch("Mcp"),
     }
 }
 
 pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Host(command) => command.execute_without_runtime(context.root_override),
+        Commands::Host(command) => command.execute_without_runtime(context.resolved),
         _ => dispatch_mismatch("Host"),
     }
 }
@@ -476,7 +485,7 @@ pub(super) fn dispatch_update(command: Commands, context: DispatchContext<'_>) -
 
 pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Run(command) => command.execute(context.runtime()?),
+        Commands::Run(command) => command.execute_with_env(context.runtime()?, context.env),
         _ => dispatch_mismatch("Run"),
     }
 }
@@ -498,6 +507,7 @@ pub(super) fn dispatch_clock(command: Commands, context: DispatchContext<'_>) ->
             context.root_override,
             context.workspace_selector,
             context.env,
+            context.resolved,
         ),
         _ => dispatch_mismatch("Clock"),
     }
@@ -510,6 +520,7 @@ pub(super) fn dispatch_routine(command: Commands, context: DispatchContext<'_>) 
             context.workspace_selector,
             context.runtime,
             context.env,
+            context.resolved,
         ),
         _ => dispatch_mismatch("Routine"),
     }
@@ -627,7 +638,7 @@ pub(super) fn tool_operation(
         ),
     };
     let runtime_need = match &command.command {
-        ToolSubcommand::Run(args) => match args.bootstrap_route() {
+        ToolSubcommand::Run(args) => match args.bootstrap_route(env) {
             Ok(super::super::tool::ToolRunBootstrap::SelectedWorkspace(selector)) => {
                 RuntimeNeed::SelectedWorkspace { selector }
             }
@@ -660,7 +671,7 @@ pub(super) fn tool_operation(
             job_run_id: None,
         }),
         json_output,
-        runtime_dispatch!(Tool),
+        runtime_env_dispatch!(Tool),
     )
     .plugin_callback_entry_point(matches!(&command.command, ToolSubcommand::Run(_)))
 }

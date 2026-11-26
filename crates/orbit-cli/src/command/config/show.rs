@@ -1,9 +1,10 @@
 use clap::Args;
+use orbit_common::Env;
 use orbit_config::{EffectiveConfigValue, load_effective_config};
 use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, Payload};
 use crate::output::payload::ConfigShow;
 
 use super::render;
@@ -24,13 +25,10 @@ pub struct ConfigShowArgs {
     pub all: bool,
 }
 
-impl Execute for ConfigShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ConfigShowArgs {
+    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
-            let effective = load_effective_config(
-                &orbit_core::composition::composition_env(),
-                &runtime_config_roots(runtime),
-            )?;
+            let effective = load_effective_config(env, &runtime_config_roots(runtime))?;
             let review = review_switches(runtime);
             let mut json = effective_json(runtime, effective.values());
             json["review"] = review.json;
@@ -51,7 +49,7 @@ impl Execute for ConfigShowArgs {
             return Ok(Payload::blocks(json, vec![Block::config_show(text)]).into());
         }
 
-        let store = open_store_for_scope(runtime, self.scope)?;
+        let store = open_store_for_scope(runtime, self.scope, env)?;
         let snapshot = store.snapshot_with_global(&runtime.global_root())?;
         let settings = snapshot.all_values();
 

@@ -44,7 +44,7 @@ pub(super) fn offer_browser_kit(
     let Some(marker) = browser_kit::web_ui_marker(root) else {
         return BrowserKitOutcome::NoWebUi;
     };
-    let layout = match KitLayout::current_user(&orbit_core::composition::composition_env()) {
+    let layout = match KitLayout::current_user(env) {
         Ok(layout) => layout,
         Err(error) if install_requested => {
             return BrowserKitOutcome::Installed {
