@@ -3,7 +3,7 @@ title: Operations as Data — Vision
 owner: claude
 created_date: 2026-07-26
 updated_date: 2026-10-20
-last_validated: 2026-11-11
+last_validated: 2026-11-26
 status: Accepted
 feature: operations-as-data
 doc_role: vision
