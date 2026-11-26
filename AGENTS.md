@@ -35,6 +35,9 @@ Orbit is a local-first Rust coding-agent runtime. `CLAUDE.md` imports this file;
 
 ## Code
 
+- Apply [STD-12@4](docs/standards/STD-12-source-style/STD-12.md) to new and changed Rust. Separate module docs, the import block, top-level items and impl methods with blank lines (§R4, §R12). Within functions, prefer a blank line between logical steps (§R7).
+- Order declarations as module docs → child modules → imports and re-exports → macros → constants and statics → types with their impls → free functions → tests (§R20). Follow §R21–R22 for impl adjacency and method order, and write struct literals in field declaration order (§R23). Prefer callers before their helpers (§R25).
+- Run `scripts/check-source-style-diff.py` before submitting Rust changes. Review declaration and struct-literal order manually until the full §R20 and §R23 gates land. Keep unrelated historical cleanup separate.
 - Layering, scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
 - `[workspace.lints]` warns on `unwrap`/`expect`. Propagate `OrbitError` across crates. Use `tracing`. No `print!` or locks across `.await`. `missing_docs` warns in `orbit-auth`, `orbit-cli` (binary), `orbit-clock`, `orbit-common`, `orbit-config`, `orbit-web` and `orbit-desktop`. Other library roots opt out.
 - Default to `pub(crate)`, `.workspace = true` deps, bounded channels, typed `thiserror` variants.
