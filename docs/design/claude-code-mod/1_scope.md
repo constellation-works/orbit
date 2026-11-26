@@ -65,8 +65,9 @@ this scope reaches a Codex session.
 ## Goal
 
 In Claude Code, a task id or a run id in the transcript is a link to its page on the
-dashboard, with one setting and no background work. Everything else the mod draws or injects is removed. The plugin's skills,
-MCP server and the session-start workspace check are unchanged.
+dashboard, with one setting and no background work. Everything else the mod draws or
+injects is removed. The plugin's skills, MCP server and the session-start workspace check
+are unchanged.
 
 ## Shape
 
