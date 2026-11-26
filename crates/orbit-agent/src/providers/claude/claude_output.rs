@@ -24,6 +24,15 @@ use orbit_types::telemetry::ToolCallTrace;
 use super::super::usage_window::{percent, top_level_frames};
 use crate::types::{request_usage, tool_calls_in_documents};
 
+struct ClaudeRequestUsage {
+    usage: TokenUsage,
+    excluded: bool,
+    started: bool,
+    stopped: bool,
+    cache_ttl_split_complete: bool,
+    final_output: Option<u64>,
+}
+
 /// Tool calls on a Claude message stream.
 ///
 /// `None` for a single `--output-format json` result document, which has no
@@ -159,15 +168,6 @@ pub(crate) fn claude_long_prompt_requests(
             })
         })
         .collect()
-}
-
-struct ClaudeRequestUsage {
-    usage: TokenUsage,
-    excluded: bool,
-    started: bool,
-    stopped: bool,
-    cache_ttl_split_complete: bool,
-    final_output: Option<u64>,
 }
 
 fn record_request_start(

@@ -200,20 +200,6 @@ impl TaskPrefixTable {
     }
 }
 
-/// The refusal for an id whose prefix no host claims. Routing never searches
-/// hosts, so the caller registers the host or names a workspace explicitly.
-pub fn unknown_task_prefix(task_id: &str, prefix: &str) -> OrbitError {
-    OrbitError::host_registry(
-        HostRegistryCode::UnknownTaskPrefix,
-        format!(
-            "task {task_id} has prefix '{prefix}', which is neither this host's nor a registered \
-             host's. Run `orbit host list` to see the registered hosts, or `orbit host add \
-             <ssh-target>` to register the host that minted it; to read a local mirror, pass \
-             --workspace explicitly"
-        ),
-    )
-}
-
 /// The bytes both files held when they were loaded. A commit compares them
 /// again under the lock, so a concurrent edit is refused rather than lost.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,77 +224,6 @@ pub struct HostRegistry {
     local: Option<MachineIdentity>,
     hosts: RegisteredHosts,
     snapshot: FileSnapshot,
-}
-
-/// `global_root` unchanged when it is absolute and has no `.` or `..`
-/// component, so the fixed host-file names joined to it stay inside the
-/// selected root. A caller holding a root it did not resolve itself, such as
-/// a served dashboard, passes it through here before deriving any host path.
-pub fn validated_host_root(global_root: &Path) -> Result<PathBuf, OrbitError> {
-    let plain = global_root.is_absolute()
-        && global_root.components().all(|component| {
-            matches!(
-                component,
-                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
-            )
-        });
-    if !plain {
-        return Err(OrbitError::InvalidInput(format!(
-            "Orbit root '{}' must be an absolute path without '.' or '..' components",
-            global_root.display()
-        )));
-    }
-    Ok(global_root.to_path_buf())
-}
-
-pub fn hosts_path(global_root: &Path) -> PathBuf {
-    global_root.join(HOSTS_FILE)
-}
-
-pub fn legacy_destinations_path(global_root: &Path) -> PathBuf {
-    global_root.join(LEGACY_DESTINATIONS_FILE)
-}
-
-/// Load and validate the host file, refusing the retired destinations file.
-///
-/// Missing files are a valid local-only configuration. Invalid content, an
-/// unsupported schema or a legacy destinations file fail closed and leave the bytes
-/// untouched.
-pub fn load_host_registry(global_root: &Path) -> Result<HostRegistry, OrbitError> {
-    load_host_registry_with_identity(global_root, &inspect_machine_identity(global_root)?)
-}
-
-/// [`load_host_registry`] for a caller that already classified this machine.
-///
-/// A runtime open has that classification in hand. Threading it here keeps
-/// the host file from parsing global `config.toml` a second time.
-pub fn load_host_registry_with_identity(
-    global_root: &Path,
-    identity: &MachineIdentityState,
-) -> Result<HostRegistry, OrbitError> {
-    let local = match identity {
-        MachineIdentityState::Present(identity) => Some(identity.clone()),
-        MachineIdentityState::Absent => None,
-    };
-    let snapshot = FileSnapshot::read(global_root)?;
-    let hosts = parse_hosts(global_root, &snapshot, local.as_ref())?;
-    Ok(HostRegistry {
-        global_root: global_root.to_path_buf(),
-        local,
-        hosts,
-        snapshot,
-    })
-}
-
-/// The SSH routes every multi-host consumer opens: federated serve, pull
-/// drains and replica worktree GC.
-pub fn load_host_routes(global_root: &Path) -> Result<Vec<HostRoute>, OrbitError> {
-    Ok(load_host_registry(global_root)?.hosts.routes())
-}
-
-/// The prefix table from the host file and this machine's identity.
-pub fn load_task_prefix_table(global_root: &Path) -> Result<TaskPrefixTable, OrbitError> {
-    Ok(load_host_registry(global_root)?.task_prefix_table())
 }
 
 impl HostRegistry {
@@ -410,6 +325,91 @@ impl HostRegistry {
             Ok(())
         })
     }
+}
+
+/// The refusal for an id whose prefix no host claims. Routing never searches
+/// hosts, so the caller registers the host or names a workspace explicitly.
+pub fn unknown_task_prefix(task_id: &str, prefix: &str) -> OrbitError {
+    OrbitError::host_registry(
+        HostRegistryCode::UnknownTaskPrefix,
+        format!(
+            "task {task_id} has prefix '{prefix}', which is neither this host's nor a registered \
+             host's. Run `orbit host list` to see the registered hosts, or `orbit host add \
+             <ssh-target>` to register the host that minted it; to read a local mirror, pass \
+             --workspace explicitly"
+        ),
+    )
+}
+
+/// `global_root` unchanged when it is absolute and has no `.` or `..`
+/// component, so the fixed host-file names joined to it stay inside the
+/// selected root. A caller holding a root it did not resolve itself, such as
+/// a served dashboard, passes it through here before deriving any host path.
+pub fn validated_host_root(global_root: &Path) -> Result<PathBuf, OrbitError> {
+    let plain = global_root.is_absolute()
+        && global_root.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        });
+    if !plain {
+        return Err(OrbitError::InvalidInput(format!(
+            "Orbit root '{}' must be an absolute path without '.' or '..' components",
+            global_root.display()
+        )));
+    }
+    Ok(global_root.to_path_buf())
+}
+
+pub fn hosts_path(global_root: &Path) -> PathBuf {
+    global_root.join(HOSTS_FILE)
+}
+
+pub fn legacy_destinations_path(global_root: &Path) -> PathBuf {
+    global_root.join(LEGACY_DESTINATIONS_FILE)
+}
+
+/// Load and validate the host file, refusing the retired destinations file.
+///
+/// Missing files are a valid local-only configuration. Invalid content, an
+/// unsupported schema or a legacy destinations file fail closed and leave the bytes
+/// untouched.
+pub fn load_host_registry(global_root: &Path) -> Result<HostRegistry, OrbitError> {
+    load_host_registry_with_identity(global_root, &inspect_machine_identity(global_root)?)
+}
+
+/// [`load_host_registry`] for a caller that already classified this machine.
+///
+/// A runtime open has that classification in hand. Threading it here keeps
+/// the host file from parsing global `config.toml` a second time.
+pub fn load_host_registry_with_identity(
+    global_root: &Path,
+    identity: &MachineIdentityState,
+) -> Result<HostRegistry, OrbitError> {
+    let local = match identity {
+        MachineIdentityState::Present(identity) => Some(identity.clone()),
+        MachineIdentityState::Absent => None,
+    };
+    let snapshot = FileSnapshot::read(global_root)?;
+    let hosts = parse_hosts(global_root, &snapshot, local.as_ref())?;
+    Ok(HostRegistry {
+        global_root: global_root.to_path_buf(),
+        local,
+        hosts,
+        snapshot,
+    })
+}
+
+/// The SSH routes every multi-host consumer opens: federated serve, pull
+/// drains and replica worktree GC.
+pub fn load_host_routes(global_root: &Path) -> Result<Vec<HostRoute>, OrbitError> {
+    Ok(load_host_registry(global_root)?.hosts.routes())
+}
+
+/// The prefix table from the host file and this machine's identity.
+pub fn load_task_prefix_table(global_root: &Path) -> Result<TaskPrefixTable, OrbitError> {
+    Ok(load_host_registry(global_root)?.task_prefix_table())
 }
 
 /// Validate one SSH target: an SSH alias or `user@host`. Refuses a leading

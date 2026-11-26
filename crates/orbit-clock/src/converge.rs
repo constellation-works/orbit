@@ -383,12 +383,15 @@ pub(super) fn installed_clock_unit_at(
     platform: ClockPlatform,
 ) -> Option<InstalledClockUnit> {
     match discover_clock_unit_program(home, platform)? {
-        Ok((unit_path, program, legacy_invocation)) => Some(InstalledClockUnit {
-            safety_issue: systemd_unit_safety_issue(&unit_path, platform),
-            unit_path,
-            program: Some(program),
-            legacy_invocation,
-        }),
+        Ok((unit_path, program, legacy_invocation)) => {
+            let safety_issue = systemd_unit_safety_issue(&unit_path, platform);
+            Some(InstalledClockUnit {
+                unit_path,
+                program: Some(program),
+                legacy_invocation,
+                safety_issue,
+            })
+        }
         Err((unit_path, _reason)) => Some(InstalledClockUnit {
             unit_path,
             program: None,

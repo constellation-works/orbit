@@ -11,6 +11,9 @@ use orbit_types::workflow::automation::*;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+/// One edit to a configured trigger.
+type Edit = fn(&mut DeliveryTrigger);
+
 fn tick(
     store: &Store,
     host: &Host,
@@ -364,9 +367,6 @@ fn assert_held(store: &Store, host: &Host, trigger: &DeliveryTrigger, expected: 
     );
     assert!(host.adoptions.lock().unwrap().is_empty());
 }
-
-/// One edit to a configured trigger.
-type Edit = fn(&mut DeliveryTrigger);
 
 #[test]
 fn edits_that_change_what_the_debt_means_are_never_adopted() {

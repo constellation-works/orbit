@@ -2,20 +2,6 @@ use crate::providers::common::render_prompt_with_embedded_envelope;
 use crate::types::response_envelope_json_schema_arg;
 use orbit_types::identity::ReasoningEffort;
 
-fn claude_cli_model_arg(model: &str) -> String {
-    let trimmed = model.trim();
-    if let Some(version) = trimmed.strip_prefix("opus-") {
-        return format!("claude-opus-{}", version.replace('.', "-"));
-    }
-    if let Some(version) = trimmed.strip_prefix("sonnet-") {
-        return format!("claude-sonnet-{}", version.replace('.', "-"));
-    }
-    if let Some(version) = trimmed.strip_prefix("fable-") {
-        return format!("claude-fable-{}", version.replace('.', "-"));
-    }
-    trimmed.to_string()
-}
-
 /// [ORB-13664] Headless `-p --json-schema` mode forces the StructuredOutput
 /// call as soon as the agent ends its turn, so a validation gate started with
 /// Bash `run_in_background` and awaited through `Monitor` is still running when
@@ -118,4 +104,18 @@ impl ClaudeCliTransport {
     pub(crate) fn model_name(&self) -> Option<&str> {
         self.model.as_deref()
     }
+}
+
+fn claude_cli_model_arg(model: &str) -> String {
+    let trimmed = model.trim();
+    if let Some(version) = trimmed.strip_prefix("opus-") {
+        return format!("claude-opus-{}", version.replace('.', "-"));
+    }
+    if let Some(version) = trimmed.strip_prefix("sonnet-") {
+        return format!("claude-sonnet-{}", version.replace('.', "-"));
+    }
+    if let Some(version) = trimmed.strip_prefix("fable-") {
+        return format!("claude-fable-{}", version.replace('.', "-"));
+    }
+    trimmed.to_string()
 }

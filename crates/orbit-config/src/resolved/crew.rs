@@ -18,6 +18,23 @@ use crate::crew_defaults::builtin_default_crews;
 use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::raw::RawCrewEntry;
 
+/// The crew name the retired system lane used [ORB-15663].
+///
+/// Shipped templates and job steps named `crew: system`, which an alias
+/// resolved onto `workflow.system_crew`. System work now draws from the
+/// complexity pools like every other task. While no `[crews.system]` table
+/// exists, a template, task or job step that still names it is routed
+/// through the complexity pool for its work and warned about with
+/// [`RETIRED_SYSTEM_CREW_WARNING`]; a configured `[crews.system]` is an
+/// ordinary crew.
+pub const RETIRED_SYSTEM_CREW: &str = "system";
+
+/// Warning logged whenever a retired `system` crew reference is routed
+/// through the complexity pools instead.
+pub const RETIRED_SYSTEM_CREW_WARNING: &str = "crew `system` is retired and routes through \
+     workflow.<tier>_complexity_crews for the work's complexity; remove the crew name, or \
+     name a configured crew";
+
 /// An optional per-crew setting that was present in `config.toml` but dropped
 /// at admission because it had no safe typed value.
 ///
@@ -63,30 +80,6 @@ impl IgnoredCrewProperty {
     }
 }
 
-/// The crew name the retired system lane used [ORB-15663].
-///
-/// Shipped templates and job steps named `crew: system`, which an alias
-/// resolved onto `workflow.system_crew`. System work now draws from the
-/// complexity pools like every other task. While no `[crews.system]` table
-/// exists, a template, task or job step that still names it is routed
-/// through the complexity pool for its work and warned about with
-/// [`RETIRED_SYSTEM_CREW_WARNING`]; a configured `[crews.system]` is an
-/// ordinary crew.
-pub const RETIRED_SYSTEM_CREW: &str = "system";
-
-/// Warning logged whenever a retired `system` crew reference is routed
-/// through the complexity pools instead.
-pub const RETIRED_SYSTEM_CREW_WARNING: &str = "crew `system` is retired and routes through \
-     workflow.<tier>_complexity_crews for the work's complexity; remove the crew name, or \
-     name a configured crew";
-
-// compat-until: 2026-11-10 (c9ebc0bc6079, ORB-15663)
-/// Whether `name` is the retired `system` crew rather than a crew `crews`
-/// defines.
-pub fn names_retired_system_crew(name: &str, crews: &BTreeMap<String, Crew>) -> bool {
-    name.trim() == RETIRED_SYSTEM_CREW && !crews.contains_key(RETIRED_SYSTEM_CREW)
-}
-
 /// `workflow.default_crew` naming a disabled crew. Loading still succeeds —
 /// unrelated commands keep working — but dispatch on that lane refuses, so
 /// `orbit doctor` reports it ahead of time.
@@ -117,20 +110,6 @@ impl DisabledLaneCrew {
     }
 }
 
-/// Refusal text for dispatching a disabled crew: names the crew, the crew
-/// table that disables it, and the one-line edit that enables it.
-pub fn disabled_crew_message(crew: &str) -> String {
-    format!(
-        "{}; enable it with `orbit config set crews.{crew}.enabled true` (or set \
-         `enabled = true` in [crews.{crew}]), or select an enabled crew",
-        disabled_crew_subject(crew)
-    )
-}
-
-fn disabled_crew_subject(crew: &str) -> String {
-    format!("crew `{crew}`, which is disabled ([crews.{crew}] enabled = false)")
-}
-
 impl ResolvedConfig {
     /// Lane keys whose crew is disabled. Only a crew this registry defines can
     /// be reported; an unknown name already fails elsewhere.
@@ -147,6 +126,27 @@ impl ResolvedConfig {
             .into_iter()
             .collect()
     }
+}
+
+// compat-until: 2026-11-10 (c9ebc0bc6079, ORB-15663)
+/// Whether `name` is the retired `system` crew rather than a crew `crews`
+/// defines.
+pub fn names_retired_system_crew(name: &str, crews: &BTreeMap<String, Crew>) -> bool {
+    name.trim() == RETIRED_SYSTEM_CREW && !crews.contains_key(RETIRED_SYSTEM_CREW)
+}
+
+/// Refusal text for dispatching a disabled crew: names the crew, the crew
+/// table that disables it, and the one-line edit that enables it.
+pub fn disabled_crew_message(crew: &str) -> String {
+    format!(
+        "{}; enable it with `orbit config set crews.{crew}.enabled true` (or set \
+         `enabled = true` in [crews.{crew}]), or select an enabled crew",
+        disabled_crew_subject(crew)
+    )
+}
+
+fn disabled_crew_subject(crew: &str) -> String {
+    format!("crew `{crew}`, which is disabled ([crews.{crew}] enabled = false)")
 }
 
 /// Host operating systems `provider`'s executor declares, when it declares any.
@@ -491,6 +491,7 @@ fn ignore_optional_crew_property(
         error_message,
     });
 }
+
 fn required_crew_field(crew: &str, field: &str, value: Option<&str>) -> Result<String, OrbitError> {
     let value = value.map(str::trim).filter(|value| !value.is_empty());
     value.map(ToOwned::to_owned).ok_or_else(|| {

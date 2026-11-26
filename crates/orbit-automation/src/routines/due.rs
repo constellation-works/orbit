@@ -29,20 +29,10 @@ use super::cron_instant::CronInstant;
 /// slot as missed.
 pub const NATURAL_SLOT_GRACE_SECONDS: i64 = 120;
 
-/// Derive the natural-slot grace from the cadence of the host clock that
-/// invokes the sweep. The scheduler permits one missed or delayed poll, so a
-/// slot remains natural for two configured cadence intervals. The default
-/// cadence deliberately preserves [`NATURAL_SLOT_GRACE_SECONDS`].
-pub fn natural_slot_grace_for_cadence(cadence_seconds: u64) -> Result<Duration, OrbitError> {
-    let seconds = cadence_seconds.checked_mul(2).ok_or_else(|| {
-        OrbitError::InvalidInput("sweep cadence is too large for natural-slot grace".to_string())
-    })?;
-    let seconds = i64::try_from(seconds).map_err(|_| {
-        OrbitError::InvalidInput("sweep cadence is too large for natural-slot grace".to_string())
-    })?;
-
-    Ok(Duration::seconds(seconds))
-}
+/// Detail stored on a fire when `missed_run: skip` consumes a slot without
+/// dispatching. Stable so `orbit routine list --json` and run history can
+/// show why the slot was skipped.
+pub const MISSED_SLOT_SKIP_DETAIL: &str = "missed_run: skip";
 
 /// Outcome of the due check for one routine on one sweep pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,11 +55,6 @@ pub enum DueDecision<Tz: TimeZone> {
     },
 }
 
-/// Detail stored on a fire when `missed_run: skip` consumes a slot without
-/// dispatching. Stable so `orbit routine list --json` and run history can
-/// show why the slot was skipped.
-pub const MISSED_SLOT_SKIP_DETAIL: &str = "missed_run: skip";
-
 /// Slots the sweep may record for one `missed_run: skip` pass. Due math stays
 /// O(1); this walk is capped by the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +63,21 @@ pub struct MissedSlotWalk<Tz: TimeZone> {
     pub slots: Vec<DateTime<Tz>>,
     /// Another qualifying slot remains after `slots`.
     pub more: bool,
+}
+
+/// Derive the natural-slot grace from the cadence of the host clock that
+/// invokes the sweep. The scheduler permits one missed or delayed poll, so a
+/// slot remains natural for two configured cadence intervals. The default
+/// cadence deliberately preserves [`NATURAL_SLOT_GRACE_SECONDS`].
+pub fn natural_slot_grace_for_cadence(cadence_seconds: u64) -> Result<Duration, OrbitError> {
+    let seconds = cadence_seconds.checked_mul(2).ok_or_else(|| {
+        OrbitError::InvalidInput("sweep cadence is too large for natural-slot grace".to_string())
+    })?;
+    let seconds = i64::try_from(seconds).map_err(|_| {
+        OrbitError::InvalidInput("sweep cadence is too large for natural-slot grace".to_string())
+    })?;
+
+    Ok(Duration::seconds(seconds))
 }
 
 /// Pin a scheduled occurrence to its minute (seconds and sub-seconds

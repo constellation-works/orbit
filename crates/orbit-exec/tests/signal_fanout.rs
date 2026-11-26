@@ -30,6 +30,76 @@ static FORWARD_PROBE_PID: AtomicI32 = AtomicI32::new(0);
 static FORWARDED_CHILD_PROBE: AtomicI32 = AtomicI32::new(0);
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+const SIGTERM_HELPER_ENV: &str = "ORBIT_EXEC_SIGTERM_HELPER";
+
+const SIGTERM_MARKER_ENV: &str = "ORBIT_EXEC_SIGTERM_MARKER";
+
+struct PausedSpawn {
+    before_spawn: bool,
+    ready: mpsc::SyncSender<()>,
+    resume: Mutex<mpsc::Receiver<()>>,
+    group: Mutex<SpawnGroup>,
+}
+
+impl Sandbox for PausedSpawn {
+    fn validate(&self, _req: &ExecRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+        if !self.before_spawn {
+            let mut group = self.group.lock().expect("fixture group");
+            group.child = Some(NoSandbox.spawn(req)?);
+            let pid = group.child.as_ref().expect("group leader").id();
+            group.pid = Some(pid);
+            FORWARD_PROBE_PID.store(pid as i32, Ordering::SeqCst);
+            group.peer = Some(
+                Command::new("/bin/sleep")
+                    .arg("60")
+                    .process_group(pid as i32)
+                    .spawn()
+                    .expect("peer in child process group"),
+            );
+        }
+        self.ready.send(()).expect("announce held spawn window");
+        self.resume
+            .lock()
+            .expect("resume receiver")
+            .recv_timeout(Duration::from_secs(30))
+            .expect("release spawn window");
+        if self.before_spawn {
+            return Err(OrbitError::Execution("injected spawn failure".to_string()));
+        }
+        Ok(self
+            .group
+            .lock()
+            .expect("fixture group")
+            .child
+            .take()
+            .expect("group leader"))
+    }
+}
+
+#[derive(Default)]
+struct SpawnGroup {
+    pid: Option<u32>,
+    child: Option<Child>,
+    peer: Option<Child>,
+}
+
+impl Drop for SpawnGroup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            // SAFETY: only the unreleased fixture group is signalled.
+            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+        }
+        for child in self.child.iter_mut().chain(self.peer.iter_mut()) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 unsafe extern "C" fn record_previous_handler(signal: libc::c_int) {
     let pid = FORWARD_PROBE_PID.load(Ordering::SeqCst);
     if pid != 0 {
@@ -261,72 +331,6 @@ fn signals_after_the_callers_spawn_are_deferred_until_the_group_is_reaped() {
     }
 }
 
-struct PausedSpawn {
-    before_spawn: bool,
-    ready: mpsc::SyncSender<()>,
-    resume: Mutex<mpsc::Receiver<()>>,
-    group: Mutex<SpawnGroup>,
-}
-
-impl Sandbox for PausedSpawn {
-    fn validate(&self, _req: &ExecRequest) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
-        if !self.before_spawn {
-            let mut group = self.group.lock().expect("fixture group");
-            group.child = Some(NoSandbox.spawn(req)?);
-            let pid = group.child.as_ref().expect("group leader").id();
-            group.pid = Some(pid);
-            FORWARD_PROBE_PID.store(pid as i32, Ordering::SeqCst);
-            group.peer = Some(
-                Command::new("/bin/sleep")
-                    .arg("60")
-                    .process_group(pid as i32)
-                    .spawn()
-                    .expect("peer in child process group"),
-            );
-        }
-        self.ready.send(()).expect("announce held spawn window");
-        self.resume
-            .lock()
-            .expect("resume receiver")
-            .recv_timeout(Duration::from_secs(30))
-            .expect("release spawn window");
-        if self.before_spawn {
-            return Err(OrbitError::Execution("injected spawn failure".to_string()));
-        }
-        Ok(self
-            .group
-            .lock()
-            .expect("fixture group")
-            .child
-            .take()
-            .expect("group leader"))
-    }
-}
-
-#[derive(Default)]
-struct SpawnGroup {
-    pid: Option<u32>,
-    child: Option<Child>,
-    peer: Option<Child>,
-}
-
-impl Drop for SpawnGroup {
-    fn drop(&mut self) {
-        if let Some(pid) = self.pid {
-            // SAFETY: only the unreleased fixture group is signalled.
-            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
-        }
-        for child in self.child.iter_mut().chain(self.peer.iter_mut()) {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
 #[test]
 fn ctrl_c_terminates_every_live_child_process_group() {
     let _lock = TEST_LOCK.lock().expect("signal test lock");
@@ -456,9 +460,6 @@ fn pending_sigterm_interrupts_late_supervisors_without_delaying_forwarding() {
     );
     assert_eq!(fresh.exit_code, Some(0));
 }
-
-const SIGTERM_HELPER_ENV: &str = "ORBIT_EXEC_SIGTERM_HELPER";
-const SIGTERM_MARKER_ENV: &str = "ORBIT_EXEC_SIGTERM_MARKER";
 
 /// SIGTERM with the default disposition must actually exit the supervisor
 /// process (the `orbit mcp listen` / systemd-stop case).

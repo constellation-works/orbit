@@ -8,6 +8,14 @@ use orbit_common::process::run_bounded_capped;
 
 use super::status::manager_probe_failure;
 
+/// How long one `launchctl` or `systemctl` call may take. These answer in
+/// milliseconds; a manager that does not is wedged, and clock status, repair
+/// and `orbit update` convergence must report that instead of hanging.
+pub(super) const MANAGER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Unit properties and `list` output are far smaller than this.
+const MANAGER_OUTPUT_LIMIT: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClockPlatform {
     Launchd,
@@ -70,13 +78,6 @@ pub(super) struct ManagerCommandOutput {
 }
 
 pub(super) struct NativeClockCommandRunner;
-
-/// How long one `launchctl` or `systemctl` call may take. These answer in
-/// milliseconds; a manager that does not is wedged, and clock status, repair
-/// and `orbit update` convergence must report that instead of hanging.
-pub(super) const MANAGER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-/// Unit properties and `list` output are far smaller than this.
-const MANAGER_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 impl NativeClockCommandRunner {
     pub(super) fn execute(

@@ -305,15 +305,6 @@ impl KitInspection {
     }
 }
 
-/// The variables a worker whose home is `home` receives from its kit.
-pub fn worker_env_for_home(home: &Path) -> Vec<(String, String)> {
-    let layout = KitLayout::for_home(home);
-    if !layout.root().is_dir() {
-        return Vec::new();
-    }
-    KitInspection::inspect(&layout).worker_env(&layout)
-}
-
 #[derive(Debug, Default)]
 struct ManifestRevisions {
     chromium: Option<String>,
@@ -337,6 +328,15 @@ impl ManifestRevisions {
             ffmpeg: revision("ffmpeg"),
         }
     }
+}
+
+/// The variables a worker whose home is `home` receives from its kit.
+pub fn worker_env_for_home(home: &Path) -> Vec<(String, String)> {
+    let layout = KitLayout::for_home(home);
+    if !layout.root().is_dir() {
+        return Vec::new();
+    }
+    KitInspection::inspect(&layout).worker_env(&layout)
 }
 
 /// Headless-shell and ffmpeg revisions in `browsers/` that the installed

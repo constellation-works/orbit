@@ -2,18 +2,6 @@
 //  isolated process because the fixture changes its own descriptor limit and
 //  exhausts its descriptor table after a real spawn.
 
-fn request(script: &str) -> ExecRequest {
-    ExecRequest {
-        program: "/bin/sh".to_string(),
-        args: vec!["-c".to_string(), script.to_string()],
-        current_dir: None,
-        timeout_ms: Some(5_000),
-        stdin_mode: StdinMode::Null,
-        environment_mode: EnvironmentMode::Inherit,
-        debug: false,
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 enum SetupFailure {
     MissingStdout,
@@ -115,6 +103,18 @@ impl Drop for DescriptorLimit {
     fn drop(&mut self) {
         // SAFETY: restore only the soft limit this process lowered.
         unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &self.0) };
+    }
+}
+
+fn request(script: &str) -> ExecRequest {
+    ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), script.to_string()],
+        current_dir: None,
+        timeout_ms: Some(5_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::Inherit,
+        debug: false,
     }
 }
 

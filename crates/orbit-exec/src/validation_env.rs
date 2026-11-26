@@ -80,6 +80,26 @@ pub const LOGIN_SHELL_CACHE_TTL: Duration = Duration::from_secs(120);
 /// Precedes the printed records, so profile output before it is ignored.
 const LOGIN_ENV_MARKER: &str = "__ORBIT_VALIDATION_LOGIN_ENV__";
 
+/// The former `workflow.validation_env.shell_probe = "interactive"` default,
+/// fixed when the key was removed [ORB-22808]: required validation resolves
+/// PATH and toolchain locators from the owner's login shell.
+pub const VALIDATION_LOGIN_SHELL: bool = true;
+
+/// The interactive half of the former `workflow.validation_env.shell_probe =
+/// "interactive"` default [ORB-22808]: an interactive login shell is tried
+/// before the login-only fallback.
+pub const VALIDATION_INTERACTIVE_PROBE: bool = true;
+
+/// The former `workflow.validation_env.path_mode` default, fixed when the key
+/// was removed [ORB-22808]: configured PATH entries come before the resolved
+/// PATH.
+pub const VALIDATION_PATH_MODE: ValidationPathMode = ValidationPathMode::Prepend;
+
+/// The former `workflow.validation_env.cargo_incremental` default, fixed when
+/// the key was removed [ORB-22808]: a runner that binds a host validation
+/// target forces `CARGO_INCREMENTAL=0`.
+pub const VALIDATION_CARGO_INCREMENTAL: bool = false;
+
 /// Where the validation PATH came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationEnvSource {
@@ -120,23 +140,6 @@ impl LoginShellMode {
         }
     }
 }
-
-/// The former `workflow.validation_env.shell_probe = "interactive"` default,
-/// fixed when the key was removed [ORB-22808]: required validation resolves
-/// PATH and toolchain locators from the owner's login shell.
-pub const VALIDATION_LOGIN_SHELL: bool = true;
-/// The interactive half of the former `workflow.validation_env.shell_probe =
-/// "interactive"` default [ORB-22808]: an interactive login shell is tried
-/// before the login-only fallback.
-pub const VALIDATION_INTERACTIVE_PROBE: bool = true;
-/// The former `workflow.validation_env.path_mode` default, fixed when the key
-/// was removed [ORB-22808]: configured PATH entries come before the resolved
-/// PATH.
-pub const VALIDATION_PATH_MODE: ValidationPathMode = ValidationPathMode::Prepend;
-/// The former `workflow.validation_env.cargo_incremental` default, fixed when
-/// the key was removed [ORB-22808]: a runner that binds a host validation
-/// target forces `CARGO_INCREMENTAL=0`.
-pub const VALIDATION_CARGO_INCREMENTAL: bool = false;
 
 /// How `workflow.validation_env.path` combines with the resolved PATH.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

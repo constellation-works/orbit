@@ -64,6 +64,21 @@ pub struct ExecRequest {
     pub debug: bool,
 }
 
+/// Outcome of supervising a process, including trusted stop metadata.
+///
+/// The deadline verdict is retained separately for callers that need it
+/// alongside the complete process result.
+#[derive(Debug, Clone)]
+pub struct SupervisedOutcome {
+    pub result: ExecutionResult,
+    /// The wall-clock deadline elapsed and the supervisor terminated the
+    /// child's process group.
+    pub timed_out: bool,
+    /// A capture stop, incoming signal, or child termination without an exit
+    /// code observed by supervision, never inferred from child output.
+    pub stop_cause: Option<crate::ProcessStopCause>,
+}
+
 /// Run a process after applying the supplied Orbit sandbox strategy.
 ///
 /// The strategy can add validation or containment before spawning the child.
@@ -150,21 +165,6 @@ fn stdin_payload(req: &ExecRequest) -> Option<Vec<u8>> {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),
         StdinMode::Inherit | StdinMode::Null => None,
     }
-}
-
-/// Outcome of supervising a process, including trusted stop metadata.
-///
-/// The deadline verdict is retained separately for callers that need it
-/// alongside the complete process result.
-#[derive(Debug, Clone)]
-pub struct SupervisedOutcome {
-    pub result: ExecutionResult,
-    /// The wall-clock deadline elapsed and the supervisor terminated the
-    /// child's process group.
-    pub timed_out: bool,
-    /// A capture stop, incoming signal, or child termination without an exit
-    /// code observed by supervision, never inferred from child output.
-    pub stop_cause: Option<crate::ProcessStopCause>,
 }
 
 /// Supervise a child that the caller already spawned.

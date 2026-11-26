@@ -92,15 +92,15 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 
+/// The account the operator becomes to run listener-user commands, by
+/// convention.
+pub const LISTENER_USER: &str = "orbit-lease";
+
 /// Refuse unless the running user, its executable and `orbit_home` are safe
 /// for listener-user authority. See the module documentation.
 pub fn check_listener_execution_environment(orbit_home: &Path) -> Result<(), OrbitError> {
     platform::check(orbit_home)
 }
-
-/// The account the operator becomes to run listener-user commands, by
-/// convention.
-pub const LISTENER_USER: &str = "orbit-lease";
 
 fn refusal(detail: String) -> OrbitError {
     OrbitError::PolicyDenied(format!(

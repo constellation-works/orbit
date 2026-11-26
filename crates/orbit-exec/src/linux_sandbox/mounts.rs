@@ -1,5 +1,11 @@
 use super::*;
 
+/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
+const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
+
+/// `$CARGO_HOME` lock files that serialize concurrent writers of those caches.
+const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
+
 pub(super) fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bool {
     // A writable descendant cannot justify binding the entire cwd writable
     // through the stable aliases: ungranted siblings would become writable.
@@ -68,12 +74,6 @@ pub(super) fn append_stable_toolchain_mounts(
     }
     Ok(())
 }
-
-/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
-const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
-
-/// `$CARGO_HOME` lock files that serialize concurrent writers of those caches.
-const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
 
 /// Whether the effective profile grants any write at all. A profile whose
 /// `modify` rules are all negated confines the child to a read-only host, and

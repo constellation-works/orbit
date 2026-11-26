@@ -84,6 +84,54 @@ enum Purpose {
     Rewrite,
 }
 
+/// `machine.worker_containment`: how detached pipeline workers are bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerContainmentMode {
+    /// Launch workers in the caller's cgroup.
+    Off,
+    /// Launch each worker in its own scope, or in the caller's cgroup with a
+    /// warning when no user manager is reachable (the default).
+    Warn,
+    /// Refuse a launch that cannot get its own scope.
+    Strict,
+}
+
+impl WorkerContainmentMode {
+    /// Every value `worker_containment` admits.
+    pub const CHOICES: &'static [&'static str] = &["off", "warn", "strict"];
+
+    /// The configured spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Warn => "warn",
+            Self::Strict => "strict",
+        }
+    }
+
+    /// The mode a configured spelling names.
+    pub fn parse(raw: &str) -> Result<Self, OrbitError> {
+        match raw.trim() {
+            "off" => Ok(Self::Off),
+            "warn" => Ok(Self::Warn),
+            "strict" => Ok(Self::Strict),
+            other => Err(OrbitError::InvalidInput(format!(
+                "{WORKER_CONTAINMENT_KEY} has invalid value '{other}'; expected one of: {}",
+                Self::CHOICES.join(", ")
+            ))),
+        }
+    }
+}
+
+/// `machine.worker_containment` as written: a mode, or the deprecated
+/// boolean (`true` is `warn`, `false` is `off`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(untagged)]
+pub(crate) enum WorkerContainmentSetting {
+    Mode(String),
+    Legacy(bool),
+}
+
 /// Translate `document`'s deprecated spellings into their replacements, in
 /// place, before anything reads it. `lower` is the layer beneath `document`
 /// as read from disk (the global file under a workspace file), or `None` for
@@ -323,54 +371,6 @@ fn translate_worker_containment(
         toml::Value::String(mode.to_string()),
     );
     Ok(())
-}
-
-/// `machine.worker_containment`: how detached pipeline workers are bounded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkerContainmentMode {
-    /// Launch workers in the caller's cgroup.
-    Off,
-    /// Launch each worker in its own scope, or in the caller's cgroup with a
-    /// warning when no user manager is reachable (the default).
-    Warn,
-    /// Refuse a launch that cannot get its own scope.
-    Strict,
-}
-
-impl WorkerContainmentMode {
-    /// Every value `worker_containment` admits.
-    pub const CHOICES: &'static [&'static str] = &["off", "warn", "strict"];
-
-    /// The configured spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Warn => "warn",
-            Self::Strict => "strict",
-        }
-    }
-
-    /// The mode a configured spelling names.
-    pub fn parse(raw: &str) -> Result<Self, OrbitError> {
-        match raw.trim() {
-            "off" => Ok(Self::Off),
-            "warn" => Ok(Self::Warn),
-            "strict" => Ok(Self::Strict),
-            other => Err(OrbitError::InvalidInput(format!(
-                "{WORKER_CONTAINMENT_KEY} has invalid value '{other}'; expected one of: {}",
-                Self::CHOICES.join(", ")
-            ))),
-        }
-    }
-}
-
-/// `machine.worker_containment` as written: a mode, or the deprecated
-/// boolean (`true` is `warn`, `false` is `off`).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(untagged)]
-pub(crate) enum WorkerContainmentSetting {
-    Mode(String),
-    Legacy(bool),
 }
 
 pub(crate) fn resolve_worker_containment(

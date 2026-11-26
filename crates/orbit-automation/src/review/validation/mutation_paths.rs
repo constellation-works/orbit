@@ -7,6 +7,18 @@ use orbit_types::workflow::{FindingDisposition, ReviewFinding, ReviewValidation}
 
 use super::defects::ValidationDefect;
 
+/// One file a control says it temporarily mutated ([`mutation_targets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationTarget<'a> {
+    /// The command of the record that names it.
+    pub command: &'a str,
+    /// The target as a normalized repository-relative path.
+    pub path: String,
+    /// [ORB-16447] The blob id the record declares for the target's
+    /// repaired state, if any.
+    pub repaired_blob: Option<&'a str>,
+}
+
 /// [ORB-14616] Every file a record says it temporarily mutated, as the
 /// repository-relative path settlement compares between the reviewed and the
 /// final candidate, paired with the record's command. Only the repository can
@@ -47,18 +59,6 @@ pub fn mutation_targets(
         }
     }
     Ok(targets)
-}
-
-/// One file a control says it temporarily mutated ([`mutation_targets`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MutationTarget<'a> {
-    /// The command of the record that names it.
-    pub command: &'a str,
-    /// The target as a normalized repository-relative path.
-    pub path: String,
-    /// [ORB-16447] The blob id the record declares for the target's
-    /// repaired state, if any.
-    pub repaired_blob: Option<&'a str>,
 }
 
 /// [ORB-16447] Every path a `repaired` finding lists, as a normalized

@@ -68,6 +68,8 @@ mod antigravity {
 mod claude {
     use orbit_agent::project_cli_response;
 
+    const ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+
     fn projected(stdout: &str) -> String {
         String::from_utf8(
             project_cli_response(
@@ -78,8 +80,6 @@ mod claude {
         )
         .expect("utf8 projected response")
     }
-
-    const ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
 
     /// [ORB-14696] Claude's response projection answers with the stream's
     /// terminal `result` and nothing else through the public byte boundary:

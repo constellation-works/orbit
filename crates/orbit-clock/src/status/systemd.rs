@@ -8,6 +8,61 @@ use crate::settings::SYSTEMD_UNIT;
 
 use super::{manager_error, query};
 
+struct SystemdServiceHealth {
+    running: bool,
+    issue: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SystemdClockDetails {
+    pub(super) loaded: Option<bool>,
+    pub(super) running: Option<bool>,
+    pub(super) last_tick_at: Option<String>,
+    /// Wall-clock next elapse from `NextElapseUSecRealtime`. Monotonic values
+    /// are durations from boot, not a next-tick timestamp.
+    pub(super) next_tick_at: Option<String>,
+    next_elapse_known: bool,
+}
+
+impl SystemdClockDetails {
+    fn parse(output: &str) -> Self {
+        let property = |name: &str| {
+            output.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key == name)
+                    .then(|| manager_error::useful_manager_value(value))
+                    .flatten()
+            })
+        };
+        let next_tick_at = property("NextElapseUSecRealtime");
+        let next_elapse_monotonic = property("NextElapseUSecMonotonic");
+        let next_elapse_known = next_tick_at.is_some() || next_elapse_monotonic.is_some();
+        Self {
+            loaded: property("LoadState").map(|value| value == "loaded"),
+            running: match property("ActiveState").as_deref() {
+                Some("active") => Some(true),
+                Some("inactive") => Some(false),
+                _ => None,
+            },
+            last_tick_at: property("LastTriggerUSec"),
+            next_tick_at,
+            next_elapse_known,
+        }
+    }
+
+    pub(crate) fn is_schedulable(&self) -> bool {
+        self.loaded == Some(true) && self.running == Some(true) && self.next_elapse_known
+    }
+
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.running == Some(false) && !self.next_elapse_known
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.running == Some(true)
+    }
+}
+
 fn query_systemd_service_health(
     runner: &dyn ClockCommandRunner,
     now_usec: Option<u64>,
@@ -63,11 +118,6 @@ pub(crate) fn systemd_schedulability_with_health(
             )),
         ),
     }
-}
-
-struct SystemdServiceHealth {
-    running: bool,
-    issue: Option<String>,
 }
 
 /// Use the manager's monotonic start timestamp, so wall-clock adjustments
@@ -178,55 +228,6 @@ pub(crate) fn systemd_reports_missing(output: &ManagerCommandOutput) -> bool {
 /// that follows.
 fn systemd_reports_transport_failure(lowercase_diagnostic: &str) -> bool {
     lowercase_diagnostic.contains("failed to connect to")
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct SystemdClockDetails {
-    pub(super) loaded: Option<bool>,
-    pub(super) running: Option<bool>,
-    pub(super) last_tick_at: Option<String>,
-    /// Wall-clock next elapse from `NextElapseUSecRealtime`. Monotonic values
-    /// are durations from boot, not a next-tick timestamp.
-    pub(super) next_tick_at: Option<String>,
-    next_elapse_known: bool,
-}
-
-impl SystemdClockDetails {
-    fn parse(output: &str) -> Self {
-        let property = |name: &str| {
-            output.lines().find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                (key == name)
-                    .then(|| manager_error::useful_manager_value(value))
-                    .flatten()
-            })
-        };
-        let next_tick_at = property("NextElapseUSecRealtime");
-        let next_elapse_monotonic = property("NextElapseUSecMonotonic");
-        Self {
-            loaded: property("LoadState").map(|value| value == "loaded"),
-            running: match property("ActiveState").as_deref() {
-                Some("active") => Some(true),
-                Some("inactive") => Some(false),
-                _ => None,
-            },
-            last_tick_at: property("LastTriggerUSec"),
-            next_elapse_known: next_tick_at.is_some() || next_elapse_monotonic.is_some(),
-            next_tick_at,
-        }
-    }
-
-    pub(crate) fn is_schedulable(&self) -> bool {
-        self.loaded == Some(true) && self.running == Some(true) && self.next_elapse_known
-    }
-
-    pub(crate) fn is_stopped(&self) -> bool {
-        self.running == Some(false) && !self.next_elapse_known
-    }
-
-    pub(crate) fn is_running(&self) -> bool {
-        self.running == Some(true)
-    }
 }
 
 pub(crate) fn query_systemd_clock_details(

@@ -21,54 +21,6 @@ use std::{
 
 pub(super) const CONSUMER: &str = "ws/qa";
 
-pub(super) fn revision(n: usize) -> SourceRevision {
-    SourceRevision {
-        commit: format!("c{n}"),
-        tree: format!("t{n}"),
-    }
-}
-
-pub(super) fn now() -> chrono::DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 9, 6, 0, 0, 0).unwrap()
-}
-
-pub(super) fn trigger() -> DeliveryTrigger {
-    DeliveryTrigger {
-        owner_machine: Some("fixture-machine".into()),
-        branch: "agent-main".into(),
-        threshold: 2,
-        max_wait_minutes: 60,
-        coverage: CoverageClass::IntegratedQaV1,
-        max_items: 2,
-        retries: 1,
-    }
-}
-
-pub(super) fn landing(n: usize) -> Delivery {
-    Delivery {
-        key: format!("pr:owner/repo:{n}"),
-        repository: "owner/repo".into(),
-        branch: "agent-main".into(),
-        before: revision(n - 1),
-        after: revision(n),
-        commits: vec![revision(n).commit],
-        task_ids: vec!["task-a".into(), "task-b".into()],
-        unattributed: None,
-        evidence_reference: format!("https://github.com/owner/repo/pull/{n}"),
-        evidence_digest: format!("evidence-{n}"),
-        landed_at: now(),
-    }
-}
-
-/// The paths each fixture delivery's diff changes: one source file and a
-/// lockfile that complete evidence skips with a reason.
-fn changed_paths(delivery: &Delivery) -> Vec<String> {
-    vec![
-        format!("src/{}.rs", delivery.after.commit),
-        "Cargo.lock".into(),
-    ]
-}
-
 pub(super) struct Host {
     pub(super) page: Mutex<SourcePage>,
     pub(super) actions: Mutex<BTreeMap<String, String>>,
@@ -250,6 +202,54 @@ impl DeliveryHost for Host {
                 .collect(),
         }))
     }
+}
+
+pub(super) fn revision(n: usize) -> SourceRevision {
+    SourceRevision {
+        commit: format!("c{n}"),
+        tree: format!("t{n}"),
+    }
+}
+
+pub(super) fn now() -> chrono::DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 9, 6, 0, 0, 0).unwrap()
+}
+
+pub(super) fn trigger() -> DeliveryTrigger {
+    DeliveryTrigger {
+        owner_machine: Some("fixture-machine".into()),
+        branch: "agent-main".into(),
+        threshold: 2,
+        max_wait_minutes: 60,
+        coverage: CoverageClass::IntegratedQaV1,
+        max_items: 2,
+        retries: 1,
+    }
+}
+
+pub(super) fn landing(n: usize) -> Delivery {
+    Delivery {
+        key: format!("pr:owner/repo:{n}"),
+        repository: "owner/repo".into(),
+        branch: "agent-main".into(),
+        before: revision(n - 1),
+        after: revision(n),
+        commits: vec![revision(n).commit],
+        task_ids: vec!["task-a".into(), "task-b".into()],
+        unattributed: None,
+        evidence_reference: format!("https://github.com/owner/repo/pull/{n}"),
+        evidence_digest: format!("evidence-{n}"),
+        landed_at: now(),
+    }
+}
+
+/// The paths each fixture delivery's diff changes: one source file and a
+/// lockfile that complete evidence skips with a reason.
+fn changed_paths(delivery: &Delivery) -> Vec<String> {
+    vec![
+        format!("src/{}.rs", delivery.after.commit),
+        "Cargo.lock".into(),
+    ]
 }
 
 /// Evaluate the consumer under epoch `v1` at `now() + minutes`.

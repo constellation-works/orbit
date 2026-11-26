@@ -19,6 +19,17 @@ use serde::Serialize;
 use super::ast::{children, conjuncts, flatten, path_of};
 use super::check::CheckedExpression;
 
+/// The definition's own accepted-result history, as `self` reads it.
+const SELF_LAST_SUCCEEDED: &str = "self.last_succeeded_at";
+
+/// Why a board aggregate left `None` could not be read. The concrete store
+/// error stays on the gatherer's unavailable notes; this is the evaluator's
+/// reason, shared by conditions, guards, explain and job waits.
+const UNREAD_BOARD_AGGREGATE: &str = "could not be read";
+
+/// The variables an expression may read from outside a comprehension.
+const ROOTS: &[&str] = &["task", "tasks", "auto_tasks", "board", "self", "now"];
+
 /// A condition-created task's provenance, read as `task.origin`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OriginFacts {
@@ -385,13 +396,103 @@ impl ConditionEvaluator {
     }
 }
 
-/// The definition's own accepted-result history, as `self` reads it.
-const SELF_LAST_SUCCEEDED: &str = "self.last_succeeded_at";
+struct SourceText {
+    chars: Vec<char>,
+    info: Arc<cel::common::ast::SourceInfo>,
+}
 
-/// Why a board aggregate left `None` could not be read. The concrete store
-/// error stays on the gatherer's unavailable notes; this is the evaluator's
-/// reason, shared by conditions, guards, explain and job waits.
-const UNREAD_BOARD_AGGREGATE: &str = "could not be read";
+impl SourceText {
+    fn new(expression: &CheckedExpression) -> Self {
+        Self {
+            chars: expression.source.chars().collect(),
+            info: Arc::clone(&expression.info),
+        }
+    }
+
+    /// The source text of a subtree: from its first token to its last,
+    /// widened to a call's name and to the closing brackets it opened.
+    pub(crate) fn of(&self, expr: &IdedExpr) -> String {
+        let Some((mut start, end)) = self.span(expr) else {
+            return String::new();
+        };
+        let end = end.min(self.chars.len().saturating_sub(1));
+        if start > end {
+            return String::new();
+        }
+        // A global call or `has()` macro is recorded at its `(`.
+        if self.chars.get(start) == Some(&'(') {
+            let mut cursor = start;
+            while cursor > 0 && self.chars[cursor - 1].is_whitespace() {
+                cursor -= 1;
+            }
+            let name_end = cursor;
+            while cursor > 0
+                && (self.chars[cursor - 1].is_alphanumeric() || self.chars[cursor - 1] == '_')
+            {
+                cursor -= 1;
+            }
+            if cursor < name_end {
+                start = cursor;
+            }
+        }
+        let mut text: String = self.chars[start..=end].iter().collect();
+        let mut open = unclosed(&text);
+        let mut cursor = end + 1;
+        while open > 0 && cursor < self.chars.len() {
+            let character = self.chars[cursor];
+            if matches!(character, ')' | ']') {
+                text.push(character);
+                open -= 1;
+            } else if !character.is_whitespace() {
+                break;
+            }
+            cursor += 1;
+        }
+        text.trim().to_string()
+    }
+
+    /// The first and last character a subtree's tokens cover. A selection is
+    /// recorded at its `.`, so its field name is added after the operand.
+    fn span(&self, expr: &IdedExpr) -> Option<(usize, usize)> {
+        let mut range = self
+            .info
+            .offset_for(expr.id)
+            .map(|(start, stop)| (start as usize, stop as usize));
+        for child in children(expr) {
+            if let Some((start, stop)) = self.span(child) {
+                range = Some(match range {
+                    Some((low, high)) => (low.min(start), high.max(stop)),
+                    None => (start, stop),
+                });
+            }
+        }
+        if let Expr::Select(select) = &expr.expr
+            && let Some((_, operand_end)) = self.span(&select.operand)
+            && let Some(field_end) = self.field_end(operand_end, &select.field)
+        {
+            range = range.map(|(low, high)| (low, high.max(field_end)));
+        }
+        range
+    }
+
+    /// Where `.field` written after `operand_end` ends.
+    fn field_end(&self, operand_end: usize, field: &str) -> Option<usize> {
+        let skip = |mut cursor: usize| {
+            while self.chars.get(cursor).is_some_and(|c| c.is_whitespace()) {
+                cursor += 1;
+            }
+            cursor
+        };
+        let dot = skip(operand_end + 1);
+        if self.chars.get(dot) != Some(&'.') {
+            return None;
+        }
+        let start = skip(dot + 1);
+        let length = field.chars().count();
+        let written: String = self.chars.get(start..start + length)?.iter().collect();
+        (written == field).then(|| start + length - 1)
+    }
+}
 
 /// Board aggregates a `None` count leaves unread. The field stays out of the
 /// bound map, and the path is unavailable so `has()` is unknown rather than
@@ -494,9 +595,6 @@ fn clause_node(
     }
 }
 
-/// The variables an expression may read from outside a comprehension.
-const ROOTS: &[&str] = &["task", "tasks", "auto_tasks", "board", "self", "now"];
-
 /// The maximal reads in a leaf clause, each with its value.
 fn operands(
     expr: &IdedExpr,
@@ -578,104 +676,6 @@ fn collect_reads<'e>(
 fn is_root_read(path: &str, locals: &[String]) -> bool {
     let root = path.split(['.', '[']).next().unwrap_or_default();
     ROOTS.contains(&root) && !locals.iter().any(|local| local == root)
-}
-
-struct SourceText {
-    chars: Vec<char>,
-    info: Arc<cel::common::ast::SourceInfo>,
-}
-
-impl SourceText {
-    fn new(expression: &CheckedExpression) -> Self {
-        Self {
-            chars: expression.source.chars().collect(),
-            info: Arc::clone(&expression.info),
-        }
-    }
-
-    /// The source text of a subtree: from its first token to its last,
-    /// widened to a call's name and to the closing brackets it opened.
-    pub(crate) fn of(&self, expr: &IdedExpr) -> String {
-        let Some((mut start, end)) = self.span(expr) else {
-            return String::new();
-        };
-        let end = end.min(self.chars.len().saturating_sub(1));
-        if start > end {
-            return String::new();
-        }
-        // A global call or `has()` macro is recorded at its `(`.
-        if self.chars.get(start) == Some(&'(') {
-            let mut cursor = start;
-            while cursor > 0 && self.chars[cursor - 1].is_whitespace() {
-                cursor -= 1;
-            }
-            let name_end = cursor;
-            while cursor > 0
-                && (self.chars[cursor - 1].is_alphanumeric() || self.chars[cursor - 1] == '_')
-            {
-                cursor -= 1;
-            }
-            if cursor < name_end {
-                start = cursor;
-            }
-        }
-        let mut text: String = self.chars[start..=end].iter().collect();
-        let mut open = unclosed(&text);
-        let mut cursor = end + 1;
-        while open > 0 && cursor < self.chars.len() {
-            let character = self.chars[cursor];
-            if matches!(character, ')' | ']') {
-                text.push(character);
-                open -= 1;
-            } else if !character.is_whitespace() {
-                break;
-            }
-            cursor += 1;
-        }
-        text.trim().to_string()
-    }
-
-    /// The first and last character a subtree's tokens cover. A selection is
-    /// recorded at its `.`, so its field name is added after the operand.
-    fn span(&self, expr: &IdedExpr) -> Option<(usize, usize)> {
-        let mut range = self
-            .info
-            .offset_for(expr.id)
-            .map(|(start, stop)| (start as usize, stop as usize));
-        for child in children(expr) {
-            if let Some((start, stop)) = self.span(child) {
-                range = Some(match range {
-                    Some((low, high)) => (low.min(start), high.max(stop)),
-                    None => (start, stop),
-                });
-            }
-        }
-        if let Expr::Select(select) = &expr.expr
-            && let Some((_, operand_end)) = self.span(&select.operand)
-            && let Some(field_end) = self.field_end(operand_end, &select.field)
-        {
-            range = range.map(|(low, high)| (low, high.max(field_end)));
-        }
-        range
-    }
-
-    /// Where `.field` written after `operand_end` ends.
-    fn field_end(&self, operand_end: usize, field: &str) -> Option<usize> {
-        let skip = |mut cursor: usize| {
-            while self.chars.get(cursor).is_some_and(|c| c.is_whitespace()) {
-                cursor += 1;
-            }
-            cursor
-        };
-        let dot = skip(operand_end + 1);
-        if self.chars.get(dot) != Some(&'.') {
-            return None;
-        }
-        let start = skip(dot + 1);
-        let length = field.chars().count();
-        let written: String = self.chars.get(start..start + length)?.iter().collect();
-        (written == field).then(|| start + length - 1)
-    }
 }
 
 /// Brackets opened and not closed in `text`, outside string literals.

@@ -10,6 +10,11 @@ pub(crate) enum DefinitionDirectoryError {
     Invalid(String),
 }
 
+pub(crate) enum DefinitionEntryError {
+    Read(io::Error),
+    Inspect(PathBuf, io::Error),
+}
+
 pub(crate) fn canonical_definition_root(root: &Path) -> Result<PathBuf, DefinitionDirectoryError> {
     fs::canonicalize(root).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
@@ -58,11 +63,6 @@ pub(crate) fn resolve_definition_child(
         return Err(invalid());
     }
     Ok(canonical)
-}
-
-pub(crate) enum DefinitionEntryError {
-    Read(io::Error),
-    Inspect(PathBuf, io::Error),
 }
 
 pub(crate) fn list_definition_yaml(

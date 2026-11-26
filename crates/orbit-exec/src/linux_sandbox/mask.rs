@@ -15,6 +15,17 @@ use super::*;
 /// recursive `--ro-bind / /` hands to the child.
 const MOUNTINFO: &str = "/proc/self/mountinfo";
 
+/// One `/proc/self/mountinfo` line, reduced to what an alias check needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MountEntry {
+    /// `major:minor` of the filesystem, as mountinfo prints it.
+    pub(super) device: String,
+    /// The directory inside that filesystem the mount shows.
+    pub(super) root: PathBuf,
+    /// Where it is mounted.
+    pub(super) mount_point: PathBuf,
+}
+
 pub(super) fn append_mask_mounts(
     out: &mut Vec<String>,
     mask: &LinuxBwrapMask,
@@ -134,17 +145,6 @@ pub(super) fn plan_alias(args: &[String], target: &Path) -> Option<PathBuf> {
                 None
             }
         })
-}
-
-/// One `/proc/self/mountinfo` line, reduced to what an alias check needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct MountEntry {
-    /// `major:minor` of the filesystem, as mountinfo prints it.
-    pub(super) device: String,
-    /// The directory inside that filesystem the mount shows.
-    pub(super) root: PathBuf,
-    /// Where it is mounted.
-    pub(super) mount_point: PathBuf,
 }
 
 pub(super) fn parse_mountinfo(text: &str) -> Vec<MountEntry> {

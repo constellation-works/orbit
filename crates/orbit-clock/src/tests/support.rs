@@ -11,18 +11,6 @@ pub(super) struct MockRunner {
     commands: Mutex<Vec<String>>,
 }
 
-pub(super) fn systemd_activation_outputs(
-    next_elapse: &str,
-    service: Option<&str>,
-) -> Vec<Result<Option<String>, OrbitError>> {
-    vec![
-        Ok(Some(format!(
-            "LoadState=loaded\nActiveState=active\nNextElapseUSecRealtime={next_elapse}\nNextElapseUSecMonotonic={next_elapse}\n"
-        ))),
-        Ok(service.map(str::to_string)),
-    ]
-}
-
 impl MockRunner {
     pub(super) fn new(results: Vec<Result<bool, OrbitError>>) -> Self {
         Self {
@@ -113,4 +101,16 @@ impl ClockCommandRunner for MockRunner {
             stderr: String::new(),
         })
     }
+}
+
+pub(super) fn systemd_activation_outputs(
+    next_elapse: &str,
+    service: Option<&str>,
+) -> Vec<Result<Option<String>, OrbitError>> {
+    vec![
+        Ok(Some(format!(
+            "LoadState=loaded\nActiveState=active\nNextElapseUSecRealtime={next_elapse}\nNextElapseUSecMonotonic={next_elapse}\n"
+        ))),
+        Ok(service.map(str::to_string)),
+    ]
 }

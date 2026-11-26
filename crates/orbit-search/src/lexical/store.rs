@@ -15,20 +15,29 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+/// Coverage of a task indexed from its [`Task`] fields alone.
+const FIELDS_VERSION_TASK_ONLY: i64 = 1;
+/// Coverage of a task also indexed with its comment bodies and artifact
+/// paths: every field the bundle matcher reads is in `chunks`. Version 2
+/// chunks joined words with single spaces and answered short needles with
+/// SQLite's ASCII-only `lower()`, so they do not preserve raw-whitespace
+/// or Unicode substring matches; only version 3 (raw-preserving chunks)
+/// counts as covered, and earlier rows fall back to the bundle matcher
+/// until a write or reindex rebuilds them.
+const FIELDS_VERSION_SIDECARS: i64 = 3;
 #[derive(Clone)]
 pub struct LexicalStore {
     conn: Arc<Mutex<Connection>>,
     fts_queries: Arc<AtomicU64>,
     read_only: bool,
 }
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchIndexStats {
     pub chunks: usize,
     pub tasks: usize,
 }
-fn err(error: rusqlite::Error) -> OrbitError {
-    orbit_common::storage::sqlite::sqlite_store_error(error)
-}
+
 impl LexicalStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
         let opened = orbit_common::storage::sqlite::open_private(path)?;
@@ -345,16 +354,10 @@ impl LexicalStore {
             .map_err(err)
     }
 }
-/// Coverage of a task indexed from its [`Task`] fields alone.
-const FIELDS_VERSION_TASK_ONLY: i64 = 1;
-/// Coverage of a task also indexed with its comment bodies and artifact
-/// paths: every field the bundle matcher reads is in `chunks`. Version 2
-/// chunks joined words with single spaces and answered short needles with
-/// SQLite's ASCII-only `lower()`, so they do not preserve raw-whitespace
-/// or Unicode substring matches; only version 3 (raw-preserving chunks)
-/// counts as covered, and earlier rows fall back to the bundle matcher
-/// until a write or reindex rebuilds them.
-const FIELDS_VERSION_SIDECARS: i64 = 3;
+
+fn err(error: rusqlite::Error) -> OrbitError {
+    orbit_common::storage::sqlite::sqlite_store_error(error)
+}
 
 /// The coverage version an index write records: sidecar coverage only when
 /// the caller indexed the sidecar text.

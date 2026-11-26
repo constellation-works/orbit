@@ -14,30 +14,6 @@ use super::ast::{path_of, string_list_literal, string_literal};
 use super::check::{ConditionReads, MAX_COMPREHENSION_NESTING};
 use super::schema::{self, CelType, Environment, ObjectKind, Statuses, require_status};
 
-/// Type-check `ast` in `env`, recording what it reads into `reads`. The
-/// whole expression must be `bool`.
-pub(super) fn check_types(
-    ast: &IdedExpr,
-    info: &SourceInfo,
-    env: Environment<'_>,
-    reads: &mut ConditionReads,
-) -> Result<(), Failure> {
-    let mut checker = Checker {
-        env,
-        info,
-        locals: Vec::new(),
-        guards: Vec::new(),
-        reads,
-        types: HashMap::new(),
-        nesting: 0,
-    };
-    let ty = checker.check(ast)?;
-    if ty != CelType::Bool {
-        return checker.fail(ast, format!("expression is {}, not bool", ty.name()));
-    }
-    Ok(())
-}
-
 /// A refusal at a character offset of the expression.
 pub(super) struct Failure {
     pub(super) offset: Option<u32>,
@@ -772,6 +748,30 @@ impl Checker<'_> {
         self.guards.truncate(depth);
         outcome
     }
+}
+
+/// Type-check `ast` in `env`, recording what it reads into `reads`. The
+/// whole expression must be `bool`.
+pub(super) fn check_types(
+    ast: &IdedExpr,
+    info: &SourceInfo,
+    env: Environment<'_>,
+    reads: &mut ConditionReads,
+) -> Result<(), Failure> {
+    let mut checker = Checker {
+        env,
+        info,
+        locals: Vec::new(),
+        guards: Vec::new(),
+        reads,
+        types: HashMap::new(),
+        nesting: 0,
+    };
+    let ty = checker.check(ast)?;
+    if ty != CelType::Bool {
+        return checker.fail(ast, format!("expression is {}, not bool", ty.name()));
+    }
+    Ok(())
 }
 
 /// Paths a true result proves present: `has(p)` conjuncts.

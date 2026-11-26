@@ -26,6 +26,18 @@ const EXPLICIT_CREWS_KEY: &str = "workflow.provider_limit_explicit_crews";
 /// The word that turns one provider's pre-dispatch usage gate off.
 const OFF: &str = "off";
 
+/// The former `workflow.usage_pressure_cap` default, fixed when the key was
+/// removed [ORB-22808]: the largest factor usage pressure scales a crew's
+/// draw weight up or down by.
+pub const USAGE_PRESSURE_CAP: f64 = 8.0;
+
+/// The former `workflow.usage_pressure_strength` default, fixed when the key
+/// was removed [ORB-22808]: the exponent applied to usage pressure before
+/// the cap.
+pub const USAGE_PRESSURE_STRENGTH: f64 = 1.0;
+
+const CREW_SELECTION_KEY: &str = "workflow.crew_selection";
+
 /// How close to a window's limit one provider may run, or not at all.
 ///
 /// JSON and the readiness payload write a [`Self::Percent`] as a number and
@@ -181,17 +193,6 @@ impl Default for ProviderLimitPolicy {
         }
     }
 }
-
-/// The former `workflow.usage_pressure_cap` default, fixed when the key was
-/// removed [ORB-22808]: the largest factor usage pressure scales a crew's
-/// draw weight up or down by.
-pub const USAGE_PRESSURE_CAP: f64 = 8.0;
-/// The former `workflow.usage_pressure_strength` default, fixed when the key
-/// was removed [ORB-22808]: the exponent applied to usage pressure before
-/// the cap.
-pub const USAGE_PRESSURE_STRENGTH: f64 = 1.0;
-
-const CREW_SELECTION_KEY: &str = "workflow.crew_selection";
 
 /// How a task's automatic crew draw weighs its pool members
 /// (`workflow.crew_selection`).

@@ -6,10 +6,6 @@ use orbit_config::{
 
 use tempfile::tempdir;
 
-fn write_config(root: &std::path::Path, body: &str) {
-    std::fs::write(root.join("config.toml"), body).expect("write config");
-}
-
 const PERMISSIVE_GLOBAL: &str = r#"
 [execution.codex]
 sandbox = "danger-full-access"
@@ -17,6 +13,10 @@ sandbox = "danger-full-access"
 [execution.env]
 pass = ["GLOBAL_TOKEN"]
 "#;
+
+fn write_config(root: &std::path::Path, body: &str) {
+    std::fs::write(root.join("config.toml"), body).expect("write config");
+}
 
 #[test]
 fn global_plugin_enablement_is_refused_at_load() {

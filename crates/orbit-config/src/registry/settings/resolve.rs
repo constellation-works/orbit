@@ -17,6 +17,71 @@ use super::super::{
 };
 use crate::memory_limit::MemoryLimit;
 
+/// `workflow.test_paths` default: test directories and test-file naming
+/// conventions shared across languages, not one toolchain's layout.
+const DEFAULT_TEST_PATHS: &[&str] = &[
+    "**/test/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/spec/**",
+    "**/testdata/**",
+    "**/*_test.*",
+    "**/*.test.*",
+    "**/test_*.*",
+    "**/*_spec.*",
+    "**/*.spec.*",
+];
+
+/// `workflow.non_code_paths` default: prose, configuration, data and media.
+const DEFAULT_NON_CODE_PATHS: &[&str] = &[
+    "docs/**",
+    "**/*.md",
+    "**/*.mdx",
+    "**/*.rst",
+    "**/*.txt",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.lock",
+    "**/*.csv",
+    "**/*.golden",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.webp",
+    "**/*.svg",
+    "**/*.ico",
+    "**/LICENSE*",
+];
+
+/// Built-in `workflow.purpose_crews.final_recovery`: the strongest reasoning crews, so
+/// the last automated look at a failed task is the most capable one.
+pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
+
+/// Default `retention.audit_days` and `retention.runs_days`.
+pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
+
+/// Default `machine.worker_memory_high`: throttle one run well before it can
+/// crowd out the host (2026-09-23 OOM outage, ORB-12903).
+pub(super) const DEFAULT_WORKER_MEMORY_HIGH: MemoryLimit = MemoryLimit::Percent(40);
+
+/// Default `machine.worker_memory_max`: one runaway run keeps at most half of
+/// physical RAM, leaving the rest for the host and sibling runs.
+pub(super) const DEFAULT_WORKER_MEMORY_MAX: MemoryLimit = MemoryLimit::Percent(50);
+
+const DEFAULT_WORKER_TASKS_MAX: u32 = 4096;
+
+/// Default `workflow.mid_run_steering.max_rounds`.
+const DEFAULT_MID_RUN_STEERING_MAX_ROUNDS: u8 = 2;
+
+/// Default `workflow.standing_drain.window`: the 24-hour drain window cap.
+pub(super) const DEFAULT_STANDING_DRAIN_WINDOW_SECONDS: u64 = 86_400;
+
+/// Default `workflow.standing_drain.min_resubmit_interval`: ten minutes.
+pub(super) const DEFAULT_STANDING_DRAIN_MIN_RESUBMIT_SECONDS: u64 = 600;
+
 /// Add the physical layer to value-admission errors while preserving other
 /// error kinds for callers that distinguish I/O and store failures.
 pub(super) fn resolve_at<T>(
@@ -81,45 +146,6 @@ pub(super) fn resolve_light_delivery_paths(
         orbit_types::task::DEFAULT_LIGHT_DELIVERY_PATHS,
     )
 }
-
-/// `workflow.test_paths` default: test directories and test-file naming
-/// conventions shared across languages, not one toolchain's layout.
-const DEFAULT_TEST_PATHS: &[&str] = &[
-    "**/test/**",
-    "**/tests/**",
-    "**/__tests__/**",
-    "**/spec/**",
-    "**/testdata/**",
-    "**/*_test.*",
-    "**/*.test.*",
-    "**/test_*.*",
-    "**/*_spec.*",
-    "**/*.spec.*",
-];
-
-/// `workflow.non_code_paths` default: prose, configuration, data and media.
-const DEFAULT_NON_CODE_PATHS: &[&str] = &[
-    "docs/**",
-    "**/*.md",
-    "**/*.mdx",
-    "**/*.rst",
-    "**/*.txt",
-    "**/*.json",
-    "**/*.yaml",
-    "**/*.yml",
-    "**/*.toml",
-    "**/*.lock",
-    "**/*.csv",
-    "**/*.golden",
-    "**/*.png",
-    "**/*.jpg",
-    "**/*.jpeg",
-    "**/*.gif",
-    "**/*.webp",
-    "**/*.svg",
-    "**/*.ico",
-    "**/LICENSE*",
-];
 
 fn resolve_path_filter_default(
     key: &str,
@@ -191,10 +217,6 @@ pub(super) fn resolve_generated_paths(
     Ok(resolved)
 }
 
-/// Built-in `workflow.purpose_crews.final_recovery`: the strongest reasoning crews, so
-/// the last automated look at a failed task is the most capable one.
-pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
-
 /// Trim forge logins, drop blanks and duplicates, and keep a stable order.
 /// Forge logins are case-insensitive, so they are compared lowercased.
 pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
@@ -207,9 +229,6 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
     logins.dedup();
     logins
 }
-
-/// Default `retention.audit_days` and `retention.runs_days`.
-pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
 
 pub(super) fn resolve_retention_days(
     raw: Option<u32>,
@@ -236,14 +255,6 @@ pub(super) fn resolve_retention_days(
         _ => resolve_bounded_range(raw, default, key),
     }
 }
-
-/// Default `machine.worker_memory_high`: throttle one run well before it can
-/// crowd out the host (2026-09-23 OOM outage, ORB-12903).
-pub(super) const DEFAULT_WORKER_MEMORY_HIGH: MemoryLimit = MemoryLimit::Percent(40);
-/// Default `machine.worker_memory_max`: one runaway run keeps at most half of
-/// physical RAM, leaving the rest for the host and sibling runs.
-pub(super) const DEFAULT_WORKER_MEMORY_MAX: MemoryLimit = MemoryLimit::Percent(50);
-const DEFAULT_WORKER_TASKS_MAX: u32 = 4096;
 
 /// Admit a systemd memory size through [`MemoryLimit::parse`].
 ///
@@ -277,9 +288,6 @@ pub(super) fn resolve_machine_labels(raw: Option<Vec<String>>) -> Result<Vec<Str
     orbit_types::task::normalize_host_labels(raw.unwrap_or_default(), "machine.labels")
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
-
-/// Default `workflow.mid_run_steering.max_rounds`.
-const DEFAULT_MID_RUN_STEERING_MAX_ROUNDS: u8 = 2;
 
 /// Each steering round re-dispatches an agent step, so the key's declared
 /// maximum bounds how many a run may spend before it holds instead.
@@ -810,11 +818,6 @@ pub(super) fn resolve_tag_requires_labels(
     orbit_types::task::TagLabelRequirements::try_from(raw.unwrap_or_default())
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
-
-/// Default `workflow.standing_drain.window`: the 24-hour drain window cap.
-pub(super) const DEFAULT_STANDING_DRAIN_WINDOW_SECONDS: u64 = 86_400;
-/// Default `workflow.standing_drain.min_resubmit_interval`: ten minutes.
-pub(super) const DEFAULT_STANDING_DRAIN_MIN_RESUBMIT_SECONDS: u64 = 600;
 
 /// A `workflow.standing_drain.*` duration (`30m`, `24h`): `default_seconds`
 /// when unset, else the parsed value within `min..=max` seconds.

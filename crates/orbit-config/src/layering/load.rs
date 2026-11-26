@@ -22,6 +22,17 @@ use super::document::{empty_document, merge_tables, parse_config_document, read_
 use super::provenance::{effective_values, source_for_crew_field};
 use super::{EffectiveConfig, WORKSPACE_REPLACE_ONLY_KEYS};
 
+pub(super) struct ConfigDocument {
+    pub(super) path: PathBuf,
+    pub(super) value: toml::Value,
+}
+
+pub(crate) struct LoadedResolvedConfig {
+    pub(crate) resolved: ResolvedConfig,
+    global: Option<ConfigDocument>,
+    workspace: Option<ConfigDocument>,
+}
+
 /// Load the layered config and attribute every value to the layer it came from.
 pub fn load_effective_config(
     env: &orbit_common::Env,
@@ -38,17 +49,6 @@ pub fn load_effective_config(
         snapshot: loaded.resolved.snapshot,
         values,
     })
-}
-
-pub(super) struct ConfigDocument {
-    pub(super) path: PathBuf,
-    pub(super) value: toml::Value,
-}
-
-pub(crate) struct LoadedResolvedConfig {
-    pub(crate) resolved: ResolvedConfig,
-    global: Option<ConfigDocument>,
-    workspace: Option<ConfigDocument>,
 }
 
 pub(crate) fn load_layered_resolved(

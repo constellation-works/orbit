@@ -17,6 +17,25 @@ use std::collections::HashMap;
 use orbit_types::telemetry::ToolCallTrace;
 use serde_json::{Map, Value};
 
+const GROK_EVENT_TYPES: [&str; 6] = [
+    "text",
+    "thought",
+    "tool_call",
+    "tool_call_update",
+    "usage",
+    "end",
+];
+
+enum GrokStream {
+    /// More than one JSON object, at least one `end` or named `tool_call`,
+    /// and every non-empty line a JSON object.
+    Recognized(Vec<Value>),
+    /// At least one Grok event type was seen, but a non-empty line was not
+    /// a JSON object. The parsed events are kept for telemetry only.
+    MalformedRecognized(Vec<Value>),
+    Unrecognized,
+}
+
 /// Return the final answer when `stdout` is a recognized Grok capture.
 ///
 /// A json wrapper yields its `text`. A `streaming-json` capture yields the
@@ -148,25 +167,6 @@ pub(crate) fn recorded_grok_tool_calls(stdout: &[u8]) -> Option<Vec<ToolCallTrac
     }
     Some(calls)
 }
-
-enum GrokStream {
-    /// More than one JSON object, at least one `end` or named `tool_call`,
-    /// and every non-empty line a JSON object.
-    Recognized(Vec<Value>),
-    /// At least one Grok event type was seen, but a non-empty line was not
-    /// a JSON object. The parsed events are kept for telemetry only.
-    MalformedRecognized(Vec<Value>),
-    Unrecognized,
-}
-
-const GROK_EVENT_TYPES: [&str; 6] = [
-    "text",
-    "thought",
-    "tool_call",
-    "tool_call_update",
-    "usage",
-    "end",
-];
 
 fn grok_streaming_events(stdout: &[u8]) -> GrokStream {
     // A complete JSON document belongs to the wrapper/direct-envelope path.

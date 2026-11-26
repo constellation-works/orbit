@@ -64,6 +64,175 @@ use orbit_types::workflow::{
     MissedRunPolicy,
 };
 
+/// Berlin's 2025 rule: CET (+01) with CEST (+02) from 02:00 on the last
+/// Sunday of March to 03:00 on the last Sunday of October.
+const BERLIN_POSIX_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+/// One due-decision row evaluated in zone `Tz`, with every time given in UTC.
+struct DueRow {
+    name: &'static str,
+    cron: &'static str,
+    policy: MissedRunPolicy,
+    cadence: u64,
+    lower: &'static str,
+    now: &'static str,
+    fire: Option<(&'static str, bool)>,
+    skip: Option<&'static str>,
+}
+
+impl DueRow {
+    fn check<Tz: TimeZone>(&self, zone: &Tz) {
+        let cron = parse_cron(self.cron).unwrap();
+        let grace = natural_slot_grace_for_cadence(self.cadence).unwrap();
+        let lower = at(self.lower).with_timezone(zone);
+        let now = at(self.now).with_timezone(zone);
+        let actual = due_decision_with_grace(&cron, self.policy, &lower, &now, grace)
+            .unwrap_or_else(|error| panic!("{}: {error}", self.name));
+        let expected = match (self.skip, self.fire) {
+            (Some(slot), _) => DueDecision::RecordSkip { slot: at(slot) },
+            (None, Some((slot, is_catch_up))) => DueDecision::Fire {
+                slot: at(slot),
+                is_catch_up,
+            },
+            (None, None) => DueDecision::NotDue,
+        };
+        assert_eq!(in_utc(actual.clone()), expected, "{}", self.name);
+        let consumed = match actual {
+            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(slot),
+            DueDecision::NotDue => None,
+        };
+        if let Some(slot) = consumed {
+            let again = due_decision_with_grace(&cron, self.policy, &slot, &now, grace).unwrap();
+            assert_eq!(
+                in_utc(again),
+                DueDecision::NotDue,
+                "{}: consuming the latest slot must collapse every older slot",
+                self.name,
+            );
+        }
+    }
+}
+
+#[derive(Default)]
+struct RoutineHost {
+    submitted: RefCell<Vec<String>>,
+    states: RefCell<BTreeMap<String, JobRunState>>,
+}
+
+impl RoutineDispatch for RoutineHost {
+    fn submit(&self, _: &Path, _: &str, _: &str, slot: &str) -> Result<String, OrbitError> {
+        let mut submitted = self.submitted.borrow_mut();
+        submitted.push(slot.into());
+        Ok(format!("fixture-run-{}", submitted.len()))
+    }
+    fn run_state(&self, _: &Path, run: &str) -> Option<JobRunState> {
+        self.states.borrow().get(run).copied()
+    }
+    fn run_owner_liveness(&self, _: &Path, _: &str) -> RunOwnerLiveness {
+        RunOwnerLiveness::Alive
+    }
+}
+
+struct AutoHost {
+    root: PathBuf,
+    minted: Cell<usize>,
+    skip_version: RefCell<Option<String>>,
+    /// The blocked-candidate probe's next answer; `Err` is a probe failure.
+    blocked: RefCell<Option<Result<BlockedCandidateProbe, String>>>,
+}
+
+impl AutoTaskDispatch for AutoHost {
+    fn definition_root(&self) -> PathBuf {
+        self.root.clone()
+    }
+    fn state_dir(&self) -> PathBuf {
+        self.root.join("state")
+    }
+    fn evaluate_delivery(
+        &self,
+        _: &AutoTaskDefinition,
+        _: bool,
+        _: DateTime<Utc>,
+    ) -> Result<AutomationDiagnostic, OrbitError> {
+        panic!("time fixture cannot evaluate deliveries")
+    }
+    fn has_open_instance(&self, _: &AutoTaskDefinition) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+    fn skip_reason(
+        &self,
+        _: &AutoTaskDefinition,
+    ) -> Option<orbit_automation::auto_tasks::scheduler::InactivePluginSkip> {
+        self.skip_version.borrow().as_ref().map(|version| {
+            orbit_automation::auto_tasks::scheduler::InactivePluginSkip {
+                plugin: "fixture".into(),
+                version: version.clone(),
+                reason: "inactive fixture plugin".into(),
+            }
+        })
+    }
+    fn mint_task(&self, _: &AutoTaskDefinition) -> Result<String, OrbitError> {
+        let count = self.minted.get() + 1;
+        self.minted.set(count);
+        Ok(format!("fixture-task-{count}"))
+    }
+    fn probe_change_since_last_sweep(
+        &self,
+        _: &AutoTaskDefinition,
+        _: &orbit_types::workflow::SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError> {
+        panic!("time fixture has no change precondition")
+    }
+    fn probe_blocked_candidates(
+        &self,
+        _: &AutoTaskDefinition,
+        _: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError> {
+        self.blocked
+            .borrow()
+            .clone()
+            .expect("this fixture has no blocked-candidate precondition")
+            .map_err(OrbitError::Store)
+    }
+}
+
+struct CoverageHost {
+    evidence: RefCell<Option<MemberBatchEvidence>>,
+    member: StateMember,
+}
+
+impl MemberHost for CoverageHost {
+    fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
+        Ok(("fixture-repo".into(), self.member.source.clone()))
+    }
+    fn observe(&self, _: Option<&str>, _: DateTime<Utc>) -> Result<MemberPage, AutomationError> {
+        Ok(MemberPage {
+            candidates: vec![self.member.clone()],
+            withheld: BTreeMap::new(),
+            next: None,
+        })
+    }
+    fn admission(&self, _: &StateMember) -> Result<MemberAdmission, AutomationError> {
+        Ok(MemberAdmission::Admit)
+    }
+    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+        Ok(keys.clone())
+    }
+    fn lookup(&self, _: &MemberAttempt) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+    fn admit(&self, _: &MemberAttempt) -> Result<String, AutomationError> {
+        Ok("fixture-run".into())
+    }
+    fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
+        Ok(self
+            .evidence
+            .borrow()
+            .clone()
+            .map_or(MemberOutcome::Pending, MemberOutcome::Settled))
+    }
+}
+
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .unwrap()
@@ -455,10 +624,6 @@ fn extract_wildcard_suggestion(message: &str) -> Option<&str> {
     Some(&message[start..start + end])
 }
 
-/// Berlin's 2025 rule: CET (+01) with CEST (+02) from 02:00 on the last
-/// Sunday of March to 03:00 on the last Sunday of October.
-const BERLIN_POSIX_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
-
 /// The DST rows mean nothing if the child's host zone silently fell back to
 /// UTC, so prove the zone first.
 fn assert_host_zone_is_berlin() {
@@ -468,51 +633,6 @@ fn assert_host_zone_is_berlin() {
             hours * 3600,
             "host-local zone must follow {BERLIN_POSIX_TZ} at {instant}",
         );
-    }
-}
-
-/// One due-decision row evaluated in zone `Tz`, with every time given in UTC.
-struct DueRow {
-    name: &'static str,
-    cron: &'static str,
-    policy: MissedRunPolicy,
-    cadence: u64,
-    lower: &'static str,
-    now: &'static str,
-    fire: Option<(&'static str, bool)>,
-    skip: Option<&'static str>,
-}
-
-impl DueRow {
-    fn check<Tz: TimeZone>(&self, zone: &Tz) {
-        let cron = parse_cron(self.cron).unwrap();
-        let grace = natural_slot_grace_for_cadence(self.cadence).unwrap();
-        let lower = at(self.lower).with_timezone(zone);
-        let now = at(self.now).with_timezone(zone);
-        let actual = due_decision_with_grace(&cron, self.policy, &lower, &now, grace)
-            .unwrap_or_else(|error| panic!("{}: {error}", self.name));
-        let expected = match (self.skip, self.fire) {
-            (Some(slot), _) => DueDecision::RecordSkip { slot: at(slot) },
-            (None, Some((slot, is_catch_up))) => DueDecision::Fire {
-                slot: at(slot),
-                is_catch_up,
-            },
-            (None, None) => DueDecision::NotDue,
-        };
-        assert_eq!(in_utc(actual.clone()), expected, "{}", self.name);
-        let consumed = match actual {
-            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(slot),
-            DueDecision::NotDue => None,
-        };
-        if let Some(slot) = consumed {
-            let again = due_decision_with_grace(&cron, self.policy, &slot, &now, grace).unwrap();
-            assert_eq!(
-                in_utc(again),
-                DueDecision::NotDue,
-                "{}: consuming the latest slot must collapse every older slot",
-                self.name,
-            );
-        }
     }
 }
 
@@ -626,89 +746,6 @@ fn interval_decisions_validate_ranges_and_preserve_the_anchor() {
         .is_err(),
         "unrepresentable future boundary must fail without wrapping"
     );
-}
-
-#[derive(Default)]
-struct RoutineHost {
-    submitted: RefCell<Vec<String>>,
-    states: RefCell<BTreeMap<String, JobRunState>>,
-}
-
-impl RoutineDispatch for RoutineHost {
-    fn submit(&self, _: &Path, _: &str, _: &str, slot: &str) -> Result<String, OrbitError> {
-        let mut submitted = self.submitted.borrow_mut();
-        submitted.push(slot.into());
-        Ok(format!("fixture-run-{}", submitted.len()))
-    }
-    fn run_state(&self, _: &Path, run: &str) -> Option<JobRunState> {
-        self.states.borrow().get(run).copied()
-    }
-    fn run_owner_liveness(&self, _: &Path, _: &str) -> RunOwnerLiveness {
-        RunOwnerLiveness::Alive
-    }
-}
-
-struct AutoHost {
-    root: PathBuf,
-    minted: Cell<usize>,
-    skip_version: RefCell<Option<String>>,
-    /// The blocked-candidate probe's next answer; `Err` is a probe failure.
-    blocked: RefCell<Option<Result<BlockedCandidateProbe, String>>>,
-}
-
-impl AutoTaskDispatch for AutoHost {
-    fn definition_root(&self) -> PathBuf {
-        self.root.clone()
-    }
-    fn state_dir(&self) -> PathBuf {
-        self.root.join("state")
-    }
-    fn evaluate_delivery(
-        &self,
-        _: &AutoTaskDefinition,
-        _: bool,
-        _: DateTime<Utc>,
-    ) -> Result<AutomationDiagnostic, OrbitError> {
-        panic!("time fixture cannot evaluate deliveries")
-    }
-    fn has_open_instance(&self, _: &AutoTaskDefinition) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-    fn skip_reason(
-        &self,
-        _: &AutoTaskDefinition,
-    ) -> Option<orbit_automation::auto_tasks::scheduler::InactivePluginSkip> {
-        self.skip_version.borrow().as_ref().map(|version| {
-            orbit_automation::auto_tasks::scheduler::InactivePluginSkip {
-                plugin: "fixture".into(),
-                version: version.clone(),
-                reason: "inactive fixture plugin".into(),
-            }
-        })
-    }
-    fn mint_task(&self, _: &AutoTaskDefinition) -> Result<String, OrbitError> {
-        let count = self.minted.get() + 1;
-        self.minted.set(count);
-        Ok(format!("fixture-task-{count}"))
-    }
-    fn probe_change_since_last_sweep(
-        &self,
-        _: &AutoTaskDefinition,
-        _: &orbit_types::workflow::SkipIfUnchanged,
-    ) -> Result<ChangeProbe, OrbitError> {
-        panic!("time fixture has no change precondition")
-    }
-    fn probe_blocked_candidates(
-        &self,
-        _: &AutoTaskDefinition,
-        _: DateTime<Utc>,
-    ) -> Result<BlockedCandidateProbe, OrbitError> {
-        self.blocked
-            .borrow()
-            .clone()
-            .expect("this fixture has no blocked-candidate precondition")
-            .map_err(OrbitError::Store)
-    }
 }
 
 #[test]
@@ -967,43 +1004,6 @@ fn a_zero_limit_missed_slot_walk_still_reports_a_due_slot() {
         [at("2026-10-01T10:01:00Z"), at("2026-10-01T10:02:00Z")]
     );
     assert!(page.more);
-}
-
-struct CoverageHost {
-    evidence: RefCell<Option<MemberBatchEvidence>>,
-    member: StateMember,
-}
-
-impl MemberHost for CoverageHost {
-    fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
-        Ok(("fixture-repo".into(), self.member.source.clone()))
-    }
-    fn observe(&self, _: Option<&str>, _: DateTime<Utc>) -> Result<MemberPage, AutomationError> {
-        Ok(MemberPage {
-            candidates: vec![self.member.clone()],
-            withheld: BTreeMap::new(),
-            next: None,
-        })
-    }
-    fn admission(&self, _: &StateMember) -> Result<MemberAdmission, AutomationError> {
-        Ok(MemberAdmission::Admit)
-    }
-    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
-        Ok(keys.clone())
-    }
-    fn lookup(&self, _: &MemberAttempt) -> Result<Option<String>, AutomationError> {
-        Ok(None)
-    }
-    fn admit(&self, _: &MemberAttempt) -> Result<String, AutomationError> {
-        Ok("fixture-run".into())
-    }
-    fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
-        Ok(self
-            .evidence
-            .borrow()
-            .clone()
-            .map_or(MemberOutcome::Pending, MemberOutcome::Settled))
-    }
 }
 
 fn member_tick(

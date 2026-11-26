@@ -15,10 +15,27 @@ use orbit_common::process::supervisor::{
 
 use super::{BuildPhaseEnd, BuildPhaseRequest};
 
+/// The hard limit this process holds for `$resource`, or infinity when it
+/// cannot be read. A macro because the resource type differs by platform.
+#[cfg(unix)]
+macro_rules! current_hard_limit {
+    ($resource:expr) => {{
+        let mut current = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `getrlimit` writes only the struct it is handed.
+        if unsafe { libc::getrlimit($resource, &mut current) } == 0 {
+            current.rlim_max
+        } else {
+            libc::RLIM_INFINITY
+        }
+    }};
+}
+
 /// The most build output a host keeps: the first and last half of this many
 /// bytes, with the middle elided (§3.6).
 pub const PLUGIN_BUILD_LOG_CAP_BYTES: usize = 1024 * 1024;
-
 /// How often the build directory is measured. The cap can be overshot by
 /// what a build writes in one interval.
 const SIZE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -26,6 +43,7 @@ const SIZE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// that escaped the process group can hold the pipe open; it is not waited
 /// for.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 const BUILD_DIR_CAP_REASON: &str = "build directory cap exceeded";
 
 /// The build log of one install: both phases' stdout and stderr, and Orbit's
@@ -93,28 +111,6 @@ impl BuildLog {
     }
 }
 
-/// Spawn `command` (the sandbox wrapper) and supervise it. `guard` holds what
-/// the wrapper needs until it ends (a ruleset descriptor).
-pub(super) fn run<G>(
-    command: Command,
-    guard: G,
-    request: &BuildPhaseRequest<'_>,
-    log: &mut BuildLog,
-) -> Result<BuildPhaseEnd, OrbitError> {
-    let phase = Phase {
-        env: request.env,
-        cwd: request.cwd,
-        timeout: request.timeout,
-        size_root: request.sandbox.build_dir,
-        size_cap: request.build_dir_cap_bytes,
-        stdin: None,
-        stdout_cap: None,
-        grace: crate::supervision::TERMINATION_GRACE_PERIOD,
-        limits: None,
-    };
-    Ok(run_phase(command, guard, &phase, log)?.end)
-}
-
 /// One supervised sandbox start: the wrapper's environment and working
 /// directory, the bounds that kill its process group, and its stdio.
 pub(super) struct Phase<'a> {
@@ -153,22 +149,86 @@ pub(super) struct ProcessLimits {
     pub(super) open_files: u64,
 }
 
-/// The hard limit this process holds for `$resource`, or infinity when it
-/// cannot be read. A macro because the resource type differs by platform.
-#[cfg(unix)]
-macro_rules! current_hard_limit {
-    ($resource:expr) => {{
-        let mut current = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        // SAFETY: `getrlimit` writes only the struct it is handed.
-        if unsafe { libc::getrlimit($resource, &mut current) } == 0 {
-            current.rlim_max
-        } else {
-            libc::RLIM_INFINITY
+/// What one supervised start produced.
+pub(super) struct PhaseRun {
+    pub(super) end: BuildPhaseEnd,
+    /// The stdout kept apart from the log (empty without `stdout_cap`).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) stdout: Vec<u8>,
+    /// Stdout went past `stdout_cap`; what is kept is its head.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) stdout_over_cap: bool,
+}
+
+/// Stdout of a script: every byte also goes to the shared log, and the
+/// first `cap` bytes are kept apart as the script's answer. One byte past
+/// the cap is kept to mark an overflow; the child keeps running and its
+/// pipe stays open.
+struct CappedStdoutSink {
+    log: Arc<Mutex<BuildLog>>,
+    kept: Vec<u8>,
+    cap: usize,
+    over_cap: bool,
+}
+
+impl OutputSink for CappedStdoutSink {
+    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+        self.log
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(bytes);
+        if !self.over_cap {
+            let room = (self.cap + 1).saturating_sub(self.kept.len());
+            let taken = room.min(bytes.len());
+            self.kept.extend_from_slice(&bytes[..taken]);
+            self.over_cap = self.kept.len() > self.cap;
         }
-    }};
+        SinkVerdict::Continue
+    }
+
+    fn finish(self: Box<Self>) -> Vec<u8> {
+        self.kept
+    }
+}
+
+/// Each stream shares one log; reaching its cap elides output without
+/// stopping the build or closing either pipe.
+struct BuildLogSink(Arc<Mutex<BuildLog>>);
+
+impl OutputSink for BuildLogSink {
+    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(bytes);
+        SinkVerdict::Continue
+    }
+
+    fn finish(self: Box<Self>) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+/// Spawn `command` (the sandbox wrapper) and supervise it. `guard` holds what
+/// the wrapper needs until it ends (a ruleset descriptor).
+pub(super) fn run<G>(
+    command: Command,
+    guard: G,
+    request: &BuildPhaseRequest<'_>,
+    log: &mut BuildLog,
+) -> Result<BuildPhaseEnd, OrbitError> {
+    let phase = Phase {
+        env: request.env,
+        cwd: request.cwd,
+        timeout: request.timeout,
+        size_root: request.sandbox.build_dir,
+        size_cap: request.build_dir_cap_bytes,
+        stdin: None,
+        stdout_cap: None,
+        grace: crate::supervision::TERMINATION_GRACE_PERIOD,
+        limits: None,
+    };
+    Ok(run_phase(command, guard, &phase, log)?.end)
 }
 
 /// The CPU and open-file limits to set, each clamped to the hard limit this
@@ -198,17 +258,6 @@ fn clamped_limits(limits: ProcessLimits) -> (libc::rlimit, libc::rlimit) {
             rlim_max: files,
         },
     )
-}
-
-/// What one supervised start produced.
-pub(super) struct PhaseRun {
-    pub(super) end: BuildPhaseEnd,
-    /// The stdout kept apart from the log (empty without `stdout_cap`).
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) stdout: Vec<u8>,
-    /// Stdout went past `stdout_cap`; what is kept is its head.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) stdout_over_cap: bool,
 }
 
 pub(super) fn run_phase<G>(
@@ -347,55 +396,6 @@ pub(super) fn run_phase<G>(
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         stdout_over_cap,
     })
-}
-
-/// Stdout of a script: every byte also goes to the shared log, and the
-/// first `cap` bytes are kept apart as the script's answer. One byte past
-/// the cap is kept to mark an overflow; the child keeps running and its
-/// pipe stays open.
-struct CappedStdoutSink {
-    log: Arc<Mutex<BuildLog>>,
-    kept: Vec<u8>,
-    cap: usize,
-    over_cap: bool,
-}
-
-impl OutputSink for CappedStdoutSink {
-    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
-        self.log
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push(bytes);
-        if !self.over_cap {
-            let room = (self.cap + 1).saturating_sub(self.kept.len());
-            let taken = room.min(bytes.len());
-            self.kept.extend_from_slice(&bytes[..taken]);
-            self.over_cap = self.kept.len() > self.cap;
-        }
-        SinkVerdict::Continue
-    }
-
-    fn finish(self: Box<Self>) -> Vec<u8> {
-        self.kept
-    }
-}
-
-/// Each stream shares one log; reaching its cap elides output without
-/// stopping the build or closing either pipe.
-struct BuildLogSink(Arc<Mutex<BuildLog>>);
-
-impl OutputSink for BuildLogSink {
-    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push(bytes);
-        SinkVerdict::Continue
-    }
-
-    fn finish(self: Box<Self>) -> Vec<u8> {
-        Vec::new()
-    }
 }
 
 fn exit_end(status: std::process::ExitStatus) -> BuildPhaseEnd {

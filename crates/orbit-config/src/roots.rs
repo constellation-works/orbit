@@ -32,10 +32,8 @@ impl ConfigRoots {
     /// (global-only inspection such as `orbit migrate --dry-run`).
     pub fn global_only(global: impl Into<PathBuf>) -> Self {
         let global = global.into();
-        Self {
-            workspace: global.clone(),
-            global,
-        }
+        let workspace = global.clone();
+        Self { global, workspace }
     }
 
     /// The machine-wide root.

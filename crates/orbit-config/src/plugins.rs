@@ -26,6 +26,12 @@ use serde_json::Value as JsonValue;
 /// Dotted prefix of the plugin configuration table.
 const PLUGIN_CONFIG_PREFIX: &str = "plugins";
 
+/// How many registrations have been applied in this process. Resolution
+/// results admit against the registered contracts, so a cache of resolved
+/// values keys on this count: a re-registered (upgraded) contract
+/// re-resolves instead of serving values admitted against its predecessor.
+static SCHEMA_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// One installed plugin's configuration contract.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PluginConfigSchema {
@@ -162,6 +168,15 @@ impl PluginConfigSchema {
     }
 }
 
+/// One live field on a plugin section, as `orbit config get`/`set` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PluginFieldKey<'a> {
+    /// Namespace between `plugins.` and the key.
+    pub namespace: &'a str,
+    /// A key in the plugin's configuration table.
+    pub key: &'a str,
+}
+
 fn registry() -> &'static RwLock<BTreeMap<String, PluginConfigSchema>> {
     static REGISTRY: OnceLock<RwLock<BTreeMap<String, PluginConfigSchema>>> = OnceLock::new();
     REGISTRY.get_or_init(|| RwLock::new(BTreeMap::new()))
@@ -186,12 +201,6 @@ pub fn register_plugin_config_schemas(schemas: Vec<PluginConfigSchema>) {
     SCHEMA_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
-/// How many registrations have been applied in this process. Resolution
-/// results admit against the registered contracts, so a cache of resolved
-/// values keys on this count: a re-registered (upgraded) contract
-/// re-resolves instead of serving values admitted against its predecessor.
-static SCHEMA_GENERATION: AtomicU64 = AtomicU64::new(0);
-
 /// The current registration generation, counting every applied
 /// [`register_plugin_config_schemas`] call in this process.
 pub fn plugin_config_schema_generation() -> u64 {
@@ -212,15 +221,6 @@ fn registered_plugin_namespaces() -> Vec<String> {
         .read()
         .map(|registry| registry.keys().cloned().collect())
         .unwrap_or_default()
-}
-
-/// One live field on a plugin section, as `orbit config get`/`set` names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PluginFieldKey<'a> {
-    /// Namespace between `plugins.` and the key.
-    pub namespace: &'a str,
-    /// A key in the plugin's configuration table.
-    pub key: &'a str,
 }
 
 /// Parse `plugins.<ns>.<key>` when `key` is a plugin-table path.

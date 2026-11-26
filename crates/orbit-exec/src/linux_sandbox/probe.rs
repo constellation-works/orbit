@@ -21,6 +21,10 @@ const PROBE_OUTPUT_LIMIT: usize = 256 * 1024;
 /// compiler so a plan names the wrapper the probe selected.
 static SETTLED: OnceLock<BwrapProbeOutcome> = OnceLock::new();
 
+/// Fixed wording `orbit init` keys on to install a capable wrapper.
+const MISSING_BIND_FD: &str =
+    "does not support the required --bind-fd and --ro-bind-fd object-authority mounts";
+
 /// One probe attempt classified for the process-level memo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum BwrapProbeMemo {
@@ -236,10 +240,6 @@ fn select_wrapper(identity: Option<(u32, u32)>) -> Result<BwrapSource, BwrapProb
         Err(outcome) => Err(outcome),
     }
 }
-
-/// Fixed wording `orbit init` keys on to install a capable wrapper.
-const MISSING_BIND_FD: &str =
-    "does not support the required --bind-fd and --ro-bind-fd object-authority mounts";
 
 fn advertises_bind_fd(
     source: BwrapSource,

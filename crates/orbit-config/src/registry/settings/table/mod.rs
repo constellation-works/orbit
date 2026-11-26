@@ -71,17 +71,6 @@ macro_rules! define_config_settings {
             resolve: $resolve:expr $(,)?
         }
     ),+ $(,)?) => {
-        /// Fully admitted, defaulted view of every fixed configuration key.
-        #[derive(Debug, Clone)]
-        pub struct ConfigSnapshot {
-            /// Derived security invariant, shown by `config show` but not settable.
-            pub execution_env_inherit: bool,
-            $(
-                #[doc = $description]
-                pub $field: $resolved,
-            )+
-        }
-
         /// Every settable key, in declaration order.
         pub const CONFIG_KEY_REGISTRY: &[ConfigKeyDescriptor] = &[
             $(ConfigKeyDescriptor {
@@ -95,6 +84,17 @@ macro_rules! define_config_settings {
                 detail: define_config_settings!(@detail $($detail)?),
             },)+
         ];
+
+        /// Fully admitted, defaulted view of every fixed configuration key.
+        #[derive(Debug, Clone)]
+        pub struct ConfigSnapshot {
+            /// Derived security invariant, shown by `config show` but not settable.
+            pub execution_env_inherit: bool,
+            $(
+                #[doc = $description]
+                pub $field: $resolved,
+            )+
+        }
 
         impl ConfigSnapshot {
             /// Check only a supplied fixed key's raw type. Full staged-document

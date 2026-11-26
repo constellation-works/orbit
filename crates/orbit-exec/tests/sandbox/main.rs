@@ -115,6 +115,99 @@ use tempfile::TempDir;
 #[cfg(unix)]
 use wait_timeout::ChildExt;
 
+// `validation_env.rs` fixtures; the included files share this scope, so
+// their constants and types precede every included function.
+
+/// What `env -i PATH=/usr/bin:/bin orbit run auto …` hands the worker.
+#[cfg(unix)]
+const MINIMAL_PATH: &str = "/usr/bin:/bin";
+
+#[cfg(unix)]
+struct Host {
+    _dir: TempDir,
+    home: PathBuf,
+    tools: PathBuf,
+}
+
+#[cfg(unix)]
+impl Host {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tools = home.join(".toolchain/bin");
+        fs::create_dir_all(&tools).unwrap();
+        executable(
+            &tools.join("orbit-fake-tool-13987"),
+            "#!/bin/sh\necho toolchain-ok\n",
+        );
+        Self {
+            _dir: dir,
+            home,
+            tools,
+        }
+    }
+
+    /// The minimal environment a non-interactive launcher provides.
+    fn launcher_env(&self) -> Vec<(String, String)> {
+        vec![
+            ("HOME".to_string(), self.home.display().to_string()),
+            ("PATH".to_string(), MINIMAL_PATH.to_string()),
+            ("USER".to_string(), "orbit-test".to_string()),
+        ]
+    }
+
+    /// A login shell whose profile prints a banner, extends PATH, exports a
+    /// toolchain locator and an unrelated secret, then runs `-c`.
+    fn fake_login_shell(&self, name: &str, body_before_exec: &str) -> PathBuf {
+        let shell = self.home.join(name);
+        executable(
+            &shell,
+            &format!(
+                "#!/bin/sh\n\
+                 [ \"$1\" = -i ] && shift\n\
+                 [ \"$1\" = -l ] && [ \"$2\" = -c ] || exit 64\n\
+                 echo 'Welcome to the fake login shell'\n\
+                 {body_before_exec}\n\
+                 PATH=\"{tools}:$PATH\"; export PATH\n\
+                 CARGO_HOME=\"$HOME/.cargo\"; export CARGO_HOME\n\
+                 ORBIT_TEST_LOGIN_SECRET=leaked; export ORBIT_TEST_LOGIN_SECRET\n\
+                 eval \"$3\"\n",
+                tools = self.tools.display()
+            ),
+        );
+        shell
+    }
+
+    /// A real bash login profile sources an rc with the usual interactive
+    /// guard. Profile logging records startup reaching the profile, which a
+    /// timed-out probe need not do, without using real dotfiles.
+    fn bash_rc(&self, profile_setup: &str, interactive_setup: &str) {
+        fs::write(
+            self.home.join(".bash_profile"),
+            format!(
+                "export PATH={MINIMAL_PATH}\n\
+                 printf '%s\\n' \"$-\" >> \"$HOME/probes\"\n\
+                 {profile_setup}\n\
+                 . \"$HOME/.bashrc\"\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            self.home.join(".bashrc"),
+            format!(
+                "case $- in *i*) ;; *) return ;; esac\n\
+                 echo 'rc banner'\n\
+                 {interactive_setup}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn login_path(&self) -> String {
+        format!("{}:{MINIMAL_PATH}", self.tools.display())
+    }
+}
+
 #[cfg(unix)]
 include!("streaming_stdout.rs");
 #[cfg(unix)]

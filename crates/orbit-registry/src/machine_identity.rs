@@ -31,6 +31,8 @@ pub const CONFIG_TOML_FILE: &str = "config.toml";
 /// is the sole identity source.
 const LEGACY_HOST_TOML_FILE: &str = "host.toml";
 
+static MACHINE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 /// This machine's identity, as admitted from the global `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineIdentity {
@@ -280,8 +282,6 @@ pub fn os_hostname() -> Option<String> {
         .map(|name| name.to_string_lossy().trim().to_string())
         .filter(|name| !name.is_empty())
 }
-
-static MACHINE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Generate an opaque, stable `hm_<hex>` machine id. Called exactly once per
 /// machine (at create); the persisted value is never regenerated.

@@ -345,72 +345,12 @@ impl Default for ConfigSnapshot {
     }
 }
 
-/// The built-in crew registry a config without `[crews]` resolves to, so the
-/// built-in snapshot admits the same defaults such a config does.
-fn default_admission_crews() -> BTreeMap<String, Crew> {
-    crate::crew_defaults::builtin_default_crews()
-}
-
 /// Whether a pool's key admits `<crew>@auto` entries, and the bands they
 /// need (`None`: a single-file view, whose bands the layered load checks).
 #[derive(Clone, Copy)]
 enum AutoEntries<'a> {
     Admitted(Option<&'a BTreeMap<String, Vec<crate::AutoEffortBand>>>),
     Refused,
-}
-
-/// Admit one `workflow.*_complexity_crews` or `workflow.purpose_crews.*` value
-/// in place, replacing it with its canonical `name[:weight]` rendering.
-fn admit_crew_pool(
-    pool: &mut Vec<String>,
-    crews: &BTreeMap<String, Crew>,
-    setting: &str,
-    auto: AutoEntries<'_>,
-) -> Result<(), OrbitError> {
-    *pool = crate::canonical_crew_pool(pool, crews, setting)?.to_setting_value();
-    match auto {
-        AutoEntries::Refused => {
-            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, None)
-        }
-        AutoEntries::Admitted(Some(bands)) => {
-            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, Some(bands))
-        }
-        AutoEntries::Admitted(None) => Ok(()),
-    }
-}
-
-/// Admit `workflow.purpose_crews.final_recovery`.
-///
-/// A written pool is admitted exactly like the complexity pools, so a typo
-/// fails at load. An unset key is the built-in default, which names crews a
-/// custom `[crews]` registry may not define; it keeps only the members that
-/// registry does define rather than failing every command on such a host, and
-/// a registry with none of them leaves final recovery disabled.
-fn admit_final_recovery_crews(
-    raw: Option<Vec<String>>,
-    crews: &BTreeMap<String, Crew>,
-) -> Result<Vec<String>, OrbitError> {
-    let pool = match raw {
-        Some(pool) => pool,
-        None => DEFAULT_FINAL_RECOVERY_CREWS
-            .iter()
-            .filter(|entry| {
-                let name = entry
-                    .rsplit_once(crate::crew_pools::WEIGHT_SEPARATOR)
-                    .map_or(**entry, |(name, _)| name);
-                crews.contains_key(name)
-            })
-            .map(ToString::to_string)
-            .collect(),
-    };
-    let pool = crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
-        .to_setting_value();
-    crate::crew_auto_effort::check_auto_effort_entries(
-        &pool,
-        "workflow.purpose_crews.final_recovery",
-        None,
-    )?;
-    Ok(pool)
 }
 
 impl ConfigSnapshot {
@@ -523,4 +463,64 @@ impl ConfigSnapshot {
                 .unwrap_or(defaults.branch_name),
         }
     }
+}
+
+/// The built-in crew registry a config without `[crews]` resolves to, so the
+/// built-in snapshot admits the same defaults such a config does.
+fn default_admission_crews() -> BTreeMap<String, Crew> {
+    crate::crew_defaults::builtin_default_crews()
+}
+
+/// Admit one `workflow.*_complexity_crews` or `workflow.purpose_crews.*` value
+/// in place, replacing it with its canonical `name[:weight]` rendering.
+fn admit_crew_pool(
+    pool: &mut Vec<String>,
+    crews: &BTreeMap<String, Crew>,
+    setting: &str,
+    auto: AutoEntries<'_>,
+) -> Result<(), OrbitError> {
+    *pool = crate::canonical_crew_pool(pool, crews, setting)?.to_setting_value();
+    match auto {
+        AutoEntries::Refused => {
+            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, None)
+        }
+        AutoEntries::Admitted(Some(bands)) => {
+            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, Some(bands))
+        }
+        AutoEntries::Admitted(None) => Ok(()),
+    }
+}
+
+/// Admit `workflow.purpose_crews.final_recovery`.
+///
+/// A written pool is admitted exactly like the complexity pools, so a typo
+/// fails at load. An unset key is the built-in default, which names crews a
+/// custom `[crews]` registry may not define; it keeps only the members that
+/// registry does define rather than failing every command on such a host, and
+/// a registry with none of them leaves final recovery disabled.
+fn admit_final_recovery_crews(
+    raw: Option<Vec<String>>,
+    crews: &BTreeMap<String, Crew>,
+) -> Result<Vec<String>, OrbitError> {
+    let pool = match raw {
+        Some(pool) => pool,
+        None => DEFAULT_FINAL_RECOVERY_CREWS
+            .iter()
+            .filter(|entry| {
+                let name = entry
+                    .rsplit_once(crate::crew_pools::WEIGHT_SEPARATOR)
+                    .map_or(**entry, |(name, _)| name);
+                crews.contains_key(name)
+            })
+            .map(ToString::to_string)
+            .collect(),
+    };
+    let pool = crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
+        .to_setting_value();
+    crate::crew_auto_effort::check_auto_effort_entries(
+        &pool,
+        "workflow.purpose_crews.final_recovery",
+        None,
+    )?;
+    Ok(pool)
 }

@@ -3,48 +3,6 @@
 //  and no longer defines or aliases a `system` crew; system work routes
 //  through the complexity pools.
 
-const RETIRED_SYSTEM_CREW_KEY: &str = "workflow.system_crew";
-
-const LEGACY: &str = r#"[workflow]
-default_crew = "opus"
-system_crew = "haiku"
-low_complexity_crews = ["haiku"]
-
-[crews.opus]
-provider = "claude"
-model = "fixture-opus"
-
-[crews.haiku]
-provider = "claude"
-model = "fixture-haiku"
-
-[crews.qa]
-provider = "codex"
-model = "fixture-qa"
-"#;
-
-#[derive(Clone)]
-struct Capture(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Capture {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().expect("capture").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Capture {
-    type Writer = Capture;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
 /// Load `body` as the workspace config, returning it with the warnings the
 /// load logged.
 fn load_workspace(body: &str) -> (ResolvedConfig, String) {

@@ -4,9 +4,6 @@
 //  that is not `NAME` / `NAME=SOURCE` over non-`ORBIT_*` variable names fails
 //  the load naming the entry.
 
-const CREW_ENV_CREW: &str = "[workflow]\ndefault_crew = \"opus-credits\"\n\n\
-     [crews.opus-credits]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n";
-
 fn crew_env_write_config(root: &Path, body: &str) {
     std::fs::write(root.join("config.toml"), body).expect("write config");
 }

@@ -16,6 +16,78 @@ use crate::registry;
 /// The retired invocation-level agent backend override.
 pub(crate) use orbit_common::env_vars::ORBIT_BACKEND as RETIRED_BACKEND_ENV;
 
+/// [ORB-12723] A key retired from the registry is accepted and ignored for
+/// one release so an existing `config.toml` keeps loading; delete the
+/// [`registry::REMOVED_CONFIG_KEYS`] entry after that, when the key becomes
+/// an ordinary unknown setting.
+pub(crate) const REMOVED_CONFIG_KEY_WARNING: &str =
+    "config key is removed and ignored; delete it from config.toml";
+
+/// [ORB-13992] A deprecated key still loads — translated into its
+/// replacement when the document is read ([`crate::alias`]), or ignored
+/// where its note says so (`workflow.system_crew`, [ORB-15663]) — and is
+/// warned on every load.
+/// The note names the replacement. A later release makes it an error; delete
+/// its [`registry::DEPRECATED_CONFIG_KEYS`] entry and translation then.
+pub(crate) const DEPRECATED_CONFIG_KEY_WARNING: &str = "config key is deprecated; its note says \
+     how this release reads it — move it to its replacement before a later release makes it \
+     an error";
+
+// compat-until: 2026-12-01 (9365d1f462ba)
+/// [ORB-12236] Registering an owner checkout is the automation opt-in, so the
+/// versioned `[routines] role` key no longer selects anything. Accepted and
+/// ignored for one release; delete this guard after 2026-12-01, when the key
+/// becomes an ordinary unknown section.
+pub(crate) const RETIRED_ROUTINES_CONFIG_WARNING: &str = "[routines] is retired and ignored; every registered owner checkout is a routine source — \
+     remove the section from config.toml";
+
+pub(super) struct CompatibilityKeys {
+    pub(super) retired_routines: bool,
+    /// Fixed keys from [`registry::REMOVED_CONFIG_KEYS`] the document still
+    /// sets, with their migration notes.
+    pub(super) removed_keys: Vec<(&'static str, &'static str)>,
+    /// Keys from [`registry::DEPRECATED_CONFIG_KEYS`] the document still
+    /// sets: translated on load, with their deprecation notes.
+    pub(super) deprecated_keys: Vec<(&'static str, &'static str)>,
+}
+
+impl CompatibilityKeys {
+    pub(super) fn warn(&self, config_path: &Path) {
+        if self.retired_routines {
+            warn_retired_routines_config(config_path);
+        }
+        for (key, note) in &self.removed_keys {
+            warn_removed_key(config_path, key, note);
+        }
+        for (key, note) in &self.deprecated_keys {
+            warn_deprecated_key(config_path, key, note);
+        }
+    }
+}
+
+/// Whether a key load still accepts is removed (ignored) or deprecated (still read).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompatibilityConfigKeyDisposition {
+    /// Load ignores the key and warns. `orbit config get` and `set` refuse it.
+    Removed,
+    /// Load still reads the key and warns. `orbit config get` and `set` refuse it.
+    Deprecated,
+    /// A live key written in a deprecated value form: load still reads it and
+    /// warns, and the repair rewrites the value rather than deleting the key.
+    DeprecatedValue,
+}
+
+/// One retired or deprecated registry key still set in a config document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompatibilityConfigKey {
+    /// Dotted registry key, or a table name such as `assistance`.
+    pub key: &'static str,
+    /// Migration note shown when the key is warned about or refused.
+    pub note: &'static str,
+    /// Whether load ignores the key or still translates it.
+    pub disposition: CompatibilityConfigKeyDisposition,
+}
+
 // compat-until: 2026-09-14 (fa44a7107e0e, ORB-10801)
 /// [ORB-10801] `ORBIT_BACKEND` and `[runtime] backend` were tiers 2 and 3 of
 /// the retired agent-loop backend precedence chain. Both are refused rather
@@ -72,30 +144,6 @@ pub(super) fn reject_retired_crew_backend(crew: &str, raw: Option<&str>) -> Resu
     };
     check_retired_backend_value(value)
         .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}] {error}")))
-}
-
-pub(super) struct CompatibilityKeys {
-    pub(super) retired_routines: bool,
-    /// Fixed keys from [`registry::REMOVED_CONFIG_KEYS`] the document still
-    /// sets, with their migration notes.
-    pub(super) removed_keys: Vec<(&'static str, &'static str)>,
-    /// Keys from [`registry::DEPRECATED_CONFIG_KEYS`] the document still
-    /// sets: translated on load, with their deprecation notes.
-    pub(super) deprecated_keys: Vec<(&'static str, &'static str)>,
-}
-
-impl CompatibilityKeys {
-    pub(super) fn warn(&self, config_path: &Path) {
-        if self.retired_routines {
-            warn_retired_routines_config(config_path);
-        }
-        for (key, note) in &self.removed_keys {
-            warn_removed_key(config_path, key, note);
-        }
-        for (key, note) in &self.deprecated_keys {
-            warn_deprecated_key(config_path, key, note);
-        }
-    }
 }
 
 pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path) {
@@ -159,29 +207,6 @@ fn deprecated_value_forms_present(document: &toml::Value) -> Vec<(&'static str, 
         .collect()
 }
 
-/// Whether a key load still accepts is removed (ignored) or deprecated (still read).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompatibilityConfigKeyDisposition {
-    /// Load ignores the key and warns. `orbit config get` and `set` refuse it.
-    Removed,
-    /// Load still reads the key and warns. `orbit config get` and `set` refuse it.
-    Deprecated,
-    /// A live key written in a deprecated value form: load still reads it and
-    /// warns, and the repair rewrites the value rather than deleting the key.
-    DeprecatedValue,
-}
-
-/// One retired or deprecated registry key still set in a config document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompatibilityConfigKey {
-    /// Dotted registry key, or a table name such as `assistance`.
-    pub key: &'static str,
-    /// Migration note shown when the key is warned about or refused.
-    pub note: &'static str,
-    /// Whether load ignores the key or still translates it.
-    pub disposition: CompatibilityConfigKeyDisposition,
-}
-
 /// Retired and deprecated registry keys `document` still sets.
 ///
 /// Removed keys come first, then deprecated keys, then deprecated value
@@ -235,13 +260,6 @@ fn keys_present(
         .collect()
 }
 
-/// [ORB-12723] A key retired from the registry is accepted and ignored for
-/// one release so an existing `config.toml` keeps loading; delete the
-/// [`registry::REMOVED_CONFIG_KEYS`] entry after that, when the key becomes
-/// an ordinary unknown setting.
-pub(crate) const REMOVED_CONFIG_KEY_WARNING: &str =
-    "config key is removed and ignored; delete it from config.toml";
-
 fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
     let path = redact_home_dir(&config_path.display().to_string());
     tracing::warn!(
@@ -252,16 +270,6 @@ fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
     );
 }
 
-/// [ORB-13992] A deprecated key still loads — translated into its
-/// replacement when the document is read ([`crate::alias`]), or ignored
-/// where its note says so (`workflow.system_crew`, [ORB-15663]) — and is
-/// warned on every load.
-/// The note names the replacement. A later release makes it an error; delete
-/// its [`registry::DEPRECATED_CONFIG_KEYS`] entry and translation then.
-pub(crate) const DEPRECATED_CONFIG_KEY_WARNING: &str = "config key is deprecated; its note says \
-     how this release reads it — move it to its replacement before a later release makes it \
-     an error";
-
 fn warn_deprecated_key(config_path: &Path, key: &str, note: &str) {
     let path = redact_home_dir(&config_path.display().to_string());
     tracing::warn!(
@@ -271,14 +279,6 @@ fn warn_deprecated_key(config_path: &Path, key: &str, note: &str) {
         DEPRECATED_CONFIG_KEY_WARNING,
     );
 }
-
-// compat-until: 2026-12-01 (9365d1f462ba)
-/// [ORB-12236] Registering an owner checkout is the automation opt-in, so the
-/// versioned `[routines] role` key no longer selects anything. Accepted and
-/// ignored for one release; delete this guard after 2026-12-01, when the key
-/// becomes an ordinary unknown section.
-pub(crate) const RETIRED_ROUTINES_CONFIG_WARNING: &str = "[routines] is retired and ignored; every registered owner checkout is a routine source — \
-     remove the section from config.toml";
 
 fn warn_retired_routines_config(config_path: &Path) {
     let path = redact_home_dir(&config_path.display().to_string());

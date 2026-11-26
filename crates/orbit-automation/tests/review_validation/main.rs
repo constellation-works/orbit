@@ -58,6 +58,17 @@ static SCOPE: LazyLock<Vec<String>> = LazyLock::new(|| {
 /// is the same command, not this fixture [ORB-14302].
 const CORRECTED: &str = "cargo test --package orbit-core --locked";
 
+const AFFECTED: &str = "make ci-test-affected";
+
+/// A Bubblewrap-gated test run inside an agent lane, whose own sandbox
+/// refuses a nested one: the test printed its deferral and returned, so the
+/// run passed without executing the confined path [ORB-14334].
+const CONFINED: &str =
+    "cargo test -p orbit-exec --test sandbox bwrap_child_gets_only_the_supplied_environment";
+
+const DEFERRAL: &str = "DEFERRED: bubblewrap unavailable: \
+     bwrap_child_gets_only_the_supplied_environment: No permissions to create new namespace";
+
 #[test]
 fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_fail_closed() {
     let core = Some("orbit-core-tests");
@@ -1176,8 +1187,6 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
     assert_eq!(observed, Err(ValidationDefect::HostContractMissing));
 }
 
-const AFFECTED: &str = "make ci-test-affected";
-
 /// ORB-14684's reviewer filed its failed `make ci-test-affected` run as a
 /// diagnostic whose sources lie outside the candidate.
 fn incident_records() -> Vec<ReviewValidation> {
@@ -1297,14 +1306,6 @@ fn a_certificate_without_the_baseline_snapshot_stays_readable_and_gains_no_pass(
     let observed = certificate_acceptable(&legacy(&contractless));
     assert_eq!(observed, Err(ValidationContractMissing));
 }
-
-/// A Bubblewrap-gated test run inside an agent lane, whose own sandbox
-/// refuses a nested one: the test printed its deferral and returned, so the
-/// run passed without executing the confined path [ORB-14334].
-const CONFINED: &str =
-    "cargo test -p orbit-exec --test sandbox bwrap_child_gets_only_the_supplied_environment";
-const DEFERRAL: &str = "DEFERRED: bubblewrap unavailable: \
-     bwrap_child_gets_only_the_supplied_environment: No permissions to create new namespace";
 
 fn deferred(passed: bool, notices: &[&str]) -> ReviewValidation {
     let mut record = required(CONFINED, None, passed);

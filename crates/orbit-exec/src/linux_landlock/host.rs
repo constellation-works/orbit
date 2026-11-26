@@ -99,14 +99,6 @@ pub(crate) const RESOLVER_FILES: &[&str] = &[
 /// Certificate authority stores.
 pub(crate) const TRUST_DIRS: &[&str] = &["/etc/ca-certificates", "/etc/pki", "/etc/ssl"];
 
-/// A tool's state directory: the environment variable that names it, and the
-/// tool's documented default when that variable is absent. A relative default
-/// is resolved against `$HOME`; an absolute one is used as written.
-struct ToolState {
-    variable: &'static str,
-    default_path: Option<&'static str>,
-}
-
 /// Tool state Orbit's own shipped activity allowlists depend on.
 ///
 /// Every entry here is a *specific* directory. Adding one is a security
@@ -207,6 +199,14 @@ const XDG_TOOL_STATE: &[&str] = &["git"];
 /// documented locations, and recursing a Cargo registry to look for them would
 /// cost more than compiling the whole ruleset.
 const CREDENTIAL_FILE_NAMES: &[&str] = &["credentials", "credentials.json", "credentials.toml"];
+
+/// A tool's state directory: the environment variable that names it, and the
+/// tool's documented default when that variable is absent. A relative default
+/// is resolved against `$HOME`; an absolute one is used as written.
+struct ToolState {
+    variable: &'static str,
+    default_path: Option<&'static str>,
+}
 
 /// Compile the host half of the ruleset for a child running with
 /// `environment`.

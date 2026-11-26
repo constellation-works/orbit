@@ -3,14 +3,6 @@ use serde_json::Value;
 
 use super::{JsonMap, ToolCallCollector, usage::value_as_u64};
 
-pub(super) fn extract_tool_calls(documents: &[Value]) -> Vec<ToolCallTrace> {
-    let mut collector = ToolCallCollector::default();
-    for document in documents {
-        collector.walk(document);
-    }
-    collector.finish()
-}
-
 impl ToolCallCollector {
     // Only provider frames and their documented event containers are traversed.
     // Answer text, reasoning, histories and tool inputs/results are opaque even
@@ -176,6 +168,14 @@ impl ToolCallCollector {
     fn finish(self) -> Vec<ToolCallTrace> {
         self.calls
     }
+}
+
+pub(super) fn extract_tool_calls(documents: &[Value]) -> Vec<ToolCallTrace> {
+    let mut collector = ToolCallCollector::default();
+    for document in documents {
+        collector.walk(document);
+    }
+    collector.finish()
 }
 
 fn tool_name_from_map(map: &JsonMap) -> String {

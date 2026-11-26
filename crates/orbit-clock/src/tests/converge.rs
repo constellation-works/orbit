@@ -14,6 +14,49 @@ use super::super::program::discover_clock_unit_program;
 use super::super::settings::ClockSettings;
 use super::support::MockRunner;
 
+struct Case {
+    platform: ClockPlatform,
+    probes: Vec<Result<ManagerCommandOutput, OrbitError>>,
+    runs: Vec<Result<bool, OrbitError>>,
+    follow_up: bool,
+}
+
+struct DriftFixture {
+    root: TempDir,
+    home: TempDir,
+    current: PathBuf,
+}
+
+impl DriftFixture {
+    fn new(platform: ClockPlatform) -> Self {
+        let root = tempfile::tempdir().expect("global root");
+        let home = tempfile::tempdir().expect("home");
+        let stale = home.path().join("missing-orbit-bin");
+        let current = root.path().join("current-orbit-bin");
+        fs::write(&current, b"orbit").expect("write running binary");
+        match platform {
+            ClockPlatform::Systemd => {
+                write_systemd_units(path_text(&stale), ClockSettings::default(), home.path())
+                    .expect("write stale systemd unit");
+            }
+            ClockPlatform::Launchd => {
+                write_launchd_unit(
+                    root.path(),
+                    path_text(&stale),
+                    ClockSettings::default(),
+                    home.path(),
+                )
+                .expect("write stale launchd unit");
+            }
+        }
+        Self {
+            root,
+            home,
+            current,
+        }
+    }
+}
+
 /// An unqueryable manager is not a paused clock, and a recognized pause still is.
 ///
 /// Guards the convergence path that used to treat every non-zero manager
@@ -113,13 +156,6 @@ fn unqueryable_manager_leaves_follow_up_and_recognized_pause_does_not() {
     }
 }
 
-struct Case {
-    platform: ClockPlatform,
-    probes: Vec<Result<ManagerCommandOutput, OrbitError>>,
-    runs: Vec<Result<bool, OrbitError>>,
-    follow_up: bool,
-}
-
 fn failed(stdout: &str, stderr: &str) -> Result<ManagerCommandOutput, OrbitError> {
     Ok(ManagerCommandOutput {
         success: false,
@@ -127,42 +163,6 @@ fn failed(stdout: &str, stderr: &str) -> Result<ManagerCommandOutput, OrbitError
         stdout: stdout.to_string(),
         stderr: stderr.to_string(),
     })
-}
-
-struct DriftFixture {
-    root: TempDir,
-    home: TempDir,
-    current: PathBuf,
-}
-
-impl DriftFixture {
-    fn new(platform: ClockPlatform) -> Self {
-        let root = tempfile::tempdir().expect("global root");
-        let home = tempfile::tempdir().expect("home");
-        let stale = home.path().join("missing-orbit-bin");
-        let current = root.path().join("current-orbit-bin");
-        fs::write(&current, b"orbit").expect("write running binary");
-        match platform {
-            ClockPlatform::Systemd => {
-                write_systemd_units(path_text(&stale), ClockSettings::default(), home.path())
-                    .expect("write stale systemd unit");
-            }
-            ClockPlatform::Launchd => {
-                write_launchd_unit(
-                    root.path(),
-                    path_text(&stale),
-                    ClockSettings::default(),
-                    home.path(),
-                )
-                .expect("write stale launchd unit");
-            }
-        }
-        Self {
-            root,
-            home,
-            current,
-        }
-    }
 }
 
 fn path_text(path: &Path) -> &str {

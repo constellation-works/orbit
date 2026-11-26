@@ -5,6 +5,12 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 
+enum LogicalWorkspaceMatch<'a> {
+    Found(&'a Workspace),
+    NotFound,
+    Ambiguous,
+}
+
 /// Finds a workspace by id or name, rejecting ambiguous selectors.
 pub fn find_workspace<'a>(
     registry: &'a WorkspaceRegistry,
@@ -47,12 +53,6 @@ pub fn resolve_logical_workspace<'a>(
         LogicalWorkspaceMatch::NotFound => Err(unknown_workspace_selector(selector)),
         LogicalWorkspaceMatch::Ambiguous => Err(ambiguous_workspace_selector(selector)),
     }
-}
-
-enum LogicalWorkspaceMatch<'a> {
-    Found(&'a Workspace),
-    NotFound,
-    Ambiguous,
 }
 
 fn resolve_logical_workspace_match<'a>(

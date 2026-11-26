@@ -52,11 +52,6 @@ pub const DEFAULT_WINDOW_MINUTES: u32 = DEFAULT_STALL_WINDOW_MINUTES;
 /// How many obligations a divergence record names before it truncates.
 const MAX_REPORTED_OBLIGATIONS: usize = 50;
 
-/// Reason reported while a blocking stall suspends evaluation.
-pub fn stalled_reason(reason: &str) -> String {
-    format!("stalled: {reason}")
-}
-
 /// What the host needs to file one deduped friction about a stall.
 pub struct StallReport<'a> {
     pub consumer: &'a str,
@@ -71,6 +66,11 @@ pub struct StallReport<'a> {
     /// records what happened rather than asking for operator action.
     pub repaired: bool,
     pub at: DateTime<Utc>,
+}
+
+/// Reason reported while a blocking stall suspends evaluation.
+pub fn stalled_reason(reason: &str) -> String {
+    format!("stalled: {reason}")
 }
 
 fn is_stuck(reason: &DeferredReason) -> bool {

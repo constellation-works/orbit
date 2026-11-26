@@ -102,15 +102,6 @@ pub enum BreakerGate {
     Skip(String),
 }
 
-/// Backoff before the trial that follows the `trips`-th trip.
-pub fn breaker_backoff(trips: u32) -> Duration {
-    let doublings = trips.saturating_sub(1).min(16);
-    let minutes = BREAKER_BASE_BACKOFF_MINUTES
-        .saturating_mul(1_i64 << doublings)
-        .min(BREAKER_MAX_BACKOFF_MINUTES);
-    Duration::minutes(minutes)
-}
-
 /// Outcome of one gate attempt against a breaker snapshot.
 enum GateAttempt {
     /// The gate is decided.
@@ -118,6 +109,15 @@ enum GateAttempt {
     /// The snapshot changed before the transition landed (a concurrent
     /// operator reset or bypass); re-decide from the fresh row.
     Conflict,
+}
+
+/// Backoff before the trial that follows the `trips`-th trip.
+pub fn breaker_backoff(trips: u32) -> Duration {
+    let doublings = trips.saturating_sub(1).min(16);
+    let minutes = BREAKER_BASE_BACKOFF_MINUTES
+        .saturating_mul(1_i64 << doublings)
+        .min(BREAKER_MAX_BACKOFF_MINUTES);
+    Duration::minutes(minutes)
 }
 
 /// Decide whether `routine` may be evaluated this pass, tripping, arming,

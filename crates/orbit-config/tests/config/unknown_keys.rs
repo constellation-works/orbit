@@ -158,14 +158,6 @@ fn unknown_literal_dotted_key_cleanup_never_removes_a_known_path() {
     assert_eq!(config.snapshot.workflow_base_branch, "agent-main");
 }
 
-const HOST_EVIDENCE_RULE: &str = "[[review.host_evidence]]\n\
-    kind = \"codeql\"\n\
-    name = \"Rust CodeQL (Linux)\"\n\
-    paths = [\"**/*.rs\"]\n\
-    os = \"linux\"\n\
-    command = \"scripts/codeql-rust-local.sh\"\n\
-    artifact = \"evidence/codeql.json\"\n";
-
 #[test]
 fn review_host_evidence_is_a_known_setting_and_its_neighbours_stay_unknown() {
     if !isolated("review_host_evidence_is_a_known_setting_and_its_neighbours_stay_unknown") {

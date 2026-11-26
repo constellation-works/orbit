@@ -70,39 +70,6 @@ pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Why a routine targeting `job` is retired, when that job is one a prior
-/// release shipped and this one dropped.
-pub fn retired_routine_job_reason(job: &str) -> Option<&'static str> {
-    RETIRED_ROUTINE_JOBS
-        .iter()
-        .find(|(name, _)| *name == job)
-        .map(|(_, reason)| *reason)
-}
-
-/// Compose a retired definition's reason: why the target is gone, then the
-/// single step that clears the file. The advice is a parameter because only
-/// the layer that owns the managed-routine templates can tell which step
-/// applies — see [`sync_retirement_advice`] and [`manual_retirement_advice`].
-pub fn retired_routine_reason(job: &str, retirement: &str, advice: &str) -> String {
-    format!("target 'job:{job}' is retired in this Orbit ({retirement}); {advice}")
-}
-
-/// The step that clears a definition Orbit seeded: synchronization retires a
-/// managed routine by content provenance.
-pub fn sync_retirement_advice(workspace: &str) -> String {
-    format!("run `orbit workspace sync` in workspace '{workspace}' to retire the definition")
-}
-
-/// The step that clears a definition Orbit did not write. Synchronization
-/// never deletes an operator's own routine, so advertising it would leave the
-/// operator running a command that reports `unchanged` forever [DANI-10502].
-pub fn manual_retirement_advice(path: &Path) -> String {
-    format!(
-        "delete '{}' or retarget it at a job this Orbit ships",
-        path.display()
-    )
-}
-
 /// State-trigger kinds a prior release shipped routines on and this one
 /// retired, each with its trigger token and why. The job they target
 /// (`escalation_triage_pipeline`) still ships for the dashboard's manual
@@ -121,32 +88,6 @@ const RETIRED_STATE_TRIGGERS: &[(StateTriggerKind, &str, &str)] = &[
          Triage action, which still runs escalation_triage_pipeline",
     ),
 ];
-
-/// Whether `kind` is a retired state trigger.
-pub fn is_retired_state_trigger(kind: StateTriggerKind) -> bool {
-    RETIRED_STATE_TRIGGERS
-        .iter()
-        .any(|(retired, ..)| *retired == kind)
-}
-
-/// Compose the reason for a routine on a retired state trigger, then the
-/// single step that clears the file.
-pub fn retired_trigger_reason(kind: StateTriggerKind, advice: &str) -> String {
-    let (_, token, why) = RETIRED_STATE_TRIGGERS
-        .iter()
-        .find(|(retired, ..)| *retired == kind)
-        .copied()
-        .unwrap_or((kind, "unknown", "this trigger is retired"));
-    format!("trigger 'state:{token}' is retired in this Orbit ({why}); {advice}")
-}
-
-/// The retired trigger whose [`retired_trigger_reason`] composed `reason`.
-pub fn retired_trigger_of_reason(reason: &str) -> Option<StateTriggerKind> {
-    RETIRED_STATE_TRIGGERS
-        .iter()
-        .find(|(_, token, _)| reason.starts_with(&format!("trigger 'state:{token}' is retired")))
-        .map(|(kind, ..)| *kind)
-}
 
 /// Where a routine definition was found on disk. The directory decides; git
 /// status is not consulted. Both locations are evaluated identically.
@@ -265,6 +206,93 @@ pub struct RoutineSource {
 /// would log the same load error on every clock tick. Reported as a skip so
 /// `routine list` shows it, names the plugin, and stays quiet otherwise.
 pub type RoutineSkipRule<'a> = dyn Fn(&Path, &RoutineDefinition) -> Option<String> + 'a;
+
+#[derive(Debug)]
+enum RoutinesDirectoryError {
+    Missing,
+    Invalid(String),
+    List(std::io::Error),
+}
+
+impl fmt::Display for RoutinesDirectoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("routines directory is missing"),
+            Self::Invalid(message) => formatter.write_str(message),
+            Self::List(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+/// A definition that parsed: either evaluable this pass, or retired.
+enum RoutineLoad {
+    Active(Box<LoadedRoutine>),
+    Retired(RetiredRoutine),
+}
+
+struct RoutineLoadOutcome {
+    routine: RoutineLoad,
+    catalog_error: Option<String>,
+}
+
+/// Why a routine targeting `job` is retired, when that job is one a prior
+/// release shipped and this one dropped.
+pub fn retired_routine_job_reason(job: &str) -> Option<&'static str> {
+    RETIRED_ROUTINE_JOBS
+        .iter()
+        .find(|(name, _)| *name == job)
+        .map(|(_, reason)| *reason)
+}
+
+/// Compose a retired definition's reason: why the target is gone, then the
+/// single step that clears the file. The advice is a parameter because only
+/// the layer that owns the managed-routine templates can tell which step
+/// applies — see [`sync_retirement_advice`] and [`manual_retirement_advice`].
+pub fn retired_routine_reason(job: &str, retirement: &str, advice: &str) -> String {
+    format!("target 'job:{job}' is retired in this Orbit ({retirement}); {advice}")
+}
+
+/// The step that clears a definition Orbit seeded: synchronization retires a
+/// managed routine by content provenance.
+pub fn sync_retirement_advice(workspace: &str) -> String {
+    format!("run `orbit workspace sync` in workspace '{workspace}' to retire the definition")
+}
+
+/// The step that clears a definition Orbit did not write. Synchronization
+/// never deletes an operator's own routine, so advertising it would leave the
+/// operator running a command that reports `unchanged` forever [DANI-10502].
+pub fn manual_retirement_advice(path: &Path) -> String {
+    format!(
+        "delete '{}' or retarget it at a job this Orbit ships",
+        path.display()
+    )
+}
+
+/// Whether `kind` is a retired state trigger.
+pub fn is_retired_state_trigger(kind: StateTriggerKind) -> bool {
+    RETIRED_STATE_TRIGGERS
+        .iter()
+        .any(|(retired, ..)| *retired == kind)
+}
+
+/// Compose the reason for a routine on a retired state trigger, then the
+/// single step that clears the file.
+pub fn retired_trigger_reason(kind: StateTriggerKind, advice: &str) -> String {
+    let (_, token, why) = RETIRED_STATE_TRIGGERS
+        .iter()
+        .find(|(retired, ..)| *retired == kind)
+        .copied()
+        .unwrap_or((kind, "unknown", "this trigger is retired"));
+    format!("trigger 'state:{token}' is retired in this Orbit ({why}); {advice}")
+}
+
+/// The retired trigger whose [`retired_trigger_reason`] composed `reason`.
+pub fn retired_trigger_of_reason(reason: &str) -> Option<StateTriggerKind> {
+    RETIRED_STATE_TRIGGERS
+        .iter()
+        .find(|(_, token, _)| reason.starts_with(&format!("trigger 'state:{token}' is retired")))
+        .map(|(kind, ..)| *kind)
+}
 
 /// Load routines from every source workspace among `workspaces` (the same
 /// runtimes are later used for dispatch), from both origins. Cross-origin
@@ -409,23 +437,6 @@ fn load_origin_files(
     }
 }
 
-#[derive(Debug)]
-enum RoutinesDirectoryError {
-    Missing,
-    Invalid(String),
-    List(std::io::Error),
-}
-
-impl fmt::Display for RoutinesDirectoryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Missing => formatter.write_str("routines directory is missing"),
-            Self::Invalid(message) => formatter.write_str(message),
-            Self::List(error) => write!(formatter, "{error}"),
-        }
-    }
-}
-
 fn map_directory_error(error: DefinitionDirectoryError) -> RoutinesDirectoryError {
     match error {
         DefinitionDirectoryError::Missing => RoutinesDirectoryError::Missing,
@@ -540,12 +551,6 @@ fn check_routine_definition(definition: &RoutineDefinition) -> Result<(), String
             .map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-/// A definition that parsed: either evaluable this pass, or retired.
-enum RoutineLoad {
-    Active(Box<LoadedRoutine>),
-    Retired(RetiredRoutine),
 }
 
 fn load_routine_file(
@@ -666,11 +671,6 @@ fn load_routine_file(
         })),
         catalog_error: catalog_lookup.error,
     })
-}
-
-struct RoutineLoadOutcome {
-    routine: RoutineLoad,
-    catalog_error: Option<String>,
 }
 
 /// Names must be unique across every routine source on a host; a collision is

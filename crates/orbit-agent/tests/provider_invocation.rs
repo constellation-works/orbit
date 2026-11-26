@@ -20,15 +20,6 @@ use orbit_types::workflow::Provider;
 use serde_json::{Value, json};
 use support::{ChildGuard, HOSTILE_ENV, STATE_ROOT_OVERRIDES, WAIT, isolated, scratch};
 
-struct CliCase {
-    provider: &'static str,
-    binary: &'static str,
-    model: &'static str,
-    emitted_model: &'static str,
-    model_flag: &'static str,
-    effort_flag: Option<&'static str>,
-}
-
 const CLI_CASES: &[CliCase] = &[
     CliCase {
         provider: "claude",
@@ -95,6 +86,15 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: Some("--reasoning-effort"),
     },
 ];
+
+struct CliCase {
+    provider: &'static str,
+    binary: &'static str,
+    model: &'static str,
+    emitted_model: &'static str,
+    model_flag: &'static str,
+    effort_flag: Option<&'static str>,
+}
 
 /// State/cache root overrides each provider owns. Shared XDG names belong
 /// only to providers whose sandbox roots resolve through them; every other

@@ -11,14 +11,6 @@ use serde_json::{Value, json};
 
 pub const CONTRACT: &str = "material_v2";
 
-/// Only unstarted work carries material worth fingerprinting, and an explicit
-/// no-diff tag opts a task out entirely — by default. The consumer's resolved
-/// `eligibility` block narrows or widens that rule [ORB-12745]; every caller
-/// that decides for the same consumer must evaluate the same resolved value.
-pub fn eligible(task: &Task, eligibility: &PreparationEligibility) -> bool {
-    eligibility.admits(task)
-}
-
 /// Evidence Core reads from outside the task. Each value is consulted only
 /// when the policy makes it material, so Core may leave the rest `Null`.
 #[derive(Debug, Clone, Default)]
@@ -32,6 +24,14 @@ pub struct MaterialEvidence {
     pub assignment: Value,
     /// Pinned repository instruction bytes (`instructions`).
     pub instructions: Value,
+}
+
+/// Only unstarted work carries material worth fingerprinting, and an explicit
+/// no-diff tag opts a task out entirely — by default. The consumer's resolved
+/// `eligibility` block narrows or widens that rule [ORB-12745]; every caller
+/// that decides for the same consumer must evaluate the same resolved value.
+pub fn eligible(task: &Task, eligibility: &PreparationEligibility) -> bool {
+    eligibility.admits(task)
 }
 
 /// Hash the task inputs `policy.freshness` names [ORB-13638]. Comments, audit

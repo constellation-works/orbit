@@ -9,6 +9,14 @@ use orbit_store::Store;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::*;
 
+/// What admitting the claimed attempt left behind.
+enum Admission {
+    /// The action was minted and its id recorded.
+    Admitted(AutomationState),
+    /// The host holds the claim; the consumer is stalled until it clears.
+    Held(AutomationDiagnostic),
+}
+
 /// Evaluate explicit configuration without another scheduler or ticking loop.
 ///
 /// A deferred reason that survives the pass is classified rather than simply
@@ -373,14 +381,6 @@ fn evaluate_pass(
         },
         Some(state),
     )
-}
-
-/// What admitting the claimed attempt left behind.
-enum Admission {
-    /// The action was minted and its id recorded.
-    Admitted(AutomationState),
-    /// The host holds the claim; the consumer is stalled until it clears.
-    Held(AutomationDiagnostic),
 }
 
 /// Hand the claimed attempt to Core and record the durable action id it

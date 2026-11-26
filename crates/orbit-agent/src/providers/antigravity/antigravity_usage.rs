@@ -7,6 +7,26 @@ use serde_json::Value;
 
 use super::super::usage_window::percent;
 
+/// Bucket ids `reading` knows. One that is enabled yet unreadable is still
+/// reported by agy, so it is not a removed window.
+const KNOWN_BUCKET_IDS: &[&str] = &[
+    "gemini-weekly",
+    "gemini-5h",
+    "3p-weekly",
+    "3p-5h",
+    "gemini-argon-wtu-weekly",
+];
+
+/// Model scopes of the shared "Gemini Models" group when the reading gives
+/// Argon its own bucket. agy 1.5.13's `/usage` group description lists Gemini 4
+/// Neon, Carbon, Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it, and
+/// Argon only when no separate Argon bucket exists; `pro` keeps the slugs agy 1.4.6
+/// grouped there. Scopes match model ids by substring, so `gemini` here would
+/// also gate Argon. [ORB-25818] [ORB-25944]
+const SHARED_GEMINI_SCOPES: &[&str] = &["flash", "pro", "neon", "carbon", "hydrogen"];
+
+type Reading<'a> = (&'a str, &'static [&'static str], u32, f64, DateTime<Utc>);
+
 /// Read provider control data only; the human-readable `response` is ignored.
 /// The second value is whether every known, enabled bucket was readable: only
 /// then does the reading name every window the account still has, so a window
@@ -58,16 +78,6 @@ pub(crate) fn antigravity_usage_windows(
     (observations, complete)
 }
 
-/// Bucket ids `reading` knows. One that is enabled yet unreadable is still
-/// reported by agy, so it is not a removed window.
-const KNOWN_BUCKET_IDS: &[&str] = &[
-    "gemini-weekly",
-    "gemini-5h",
-    "3p-weekly",
-    "3p-5h",
-    "gemini-argon-wtu-weekly",
-];
-
 fn unreadable_known_bucket(bucket: &Value) -> bool {
     let disabled = bucket
         .get("disabled")
@@ -98,16 +108,6 @@ fn buckets(body: &[u8]) -> Option<Vec<Value>> {
             .collect(),
     )
 }
-
-/// Model scopes of the shared "Gemini Models" group when the reading gives
-/// Argon its own bucket. agy 1.5.13's `/usage` group description lists Gemini 4
-/// Neon, Carbon, Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it, and
-/// Argon only when no separate Argon bucket exists; `pro` keeps the slugs agy 1.4.6
-/// grouped there. Scopes match model ids by substring, so `gemini` here would
-/// also gate Argon. [ORB-25818] [ORB-25944]
-const SHARED_GEMINI_SCOPES: &[&str] = &["flash", "pro", "neon", "carbon", "hydrogen"];
-
-type Reading<'a> = (&'a str, &'static [&'static str], u32, f64, DateTime<Utc>);
 
 fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
     if bucket

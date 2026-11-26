@@ -71,6 +71,36 @@ pub struct PassOutcome {
     pub reason: &'static str,
 }
 
+/// Counts skips by reason and keeps the latest.
+struct Skips<'a> {
+    state: &'a mut ConditionState,
+    now: DateTime<Utc>,
+}
+
+impl Skips<'_> {
+    fn record(&mut self, reason: &str, subject: Option<&str>, detail: Option<String>) {
+        *self
+            .state
+            .skip_counts
+            .entry(reason.to_string())
+            .or_default() += 1;
+        self.state.last_skip = Some(ConditionSkip {
+            at: self.now,
+            reason: reason.to_string(),
+            subject: subject.map(str::to_owned),
+            detail,
+        });
+    }
+}
+
+struct FireMeta<'a> {
+    epoch: &'a str,
+    now: DateTime<Utc>,
+    depth: u32,
+    state: ConditionFireState,
+    detail: Option<String>,
+}
+
 /// The longest observation gap a hold survives.
 pub fn continuity_limit(cadence_seconds: u64) -> Duration {
     let three =
@@ -149,28 +179,6 @@ fn negate(truth: &Truth) -> Truth {
         Truth::True => Truth::False,
         Truth::False => Truth::True,
         Truth::Unknown(reason) => Truth::Unknown(reason.clone()),
-    }
-}
-
-/// Counts skips by reason and keeps the latest.
-struct Skips<'a> {
-    state: &'a mut ConditionState,
-    now: DateTime<Utc>,
-}
-
-impl Skips<'_> {
-    fn record(&mut self, reason: &str, subject: Option<&str>, detail: Option<String>) {
-        *self
-            .state
-            .skip_counts
-            .entry(reason.to_string())
-            .or_default() += 1;
-        self.state.last_skip = Some(ConditionSkip {
-            at: self.now,
-            reason: reason.to_string(),
-            subject: subject.map(str::to_owned),
-            detail,
-        });
     }
 }
 
@@ -626,14 +634,6 @@ pub fn advance_pass(
         fired,
         reason,
     })
-}
-
-struct FireMeta<'a> {
-    epoch: &'a str,
-    now: DateTime<Utc>,
-    depth: u32,
-    state: ConditionFireState,
-    detail: Option<String>,
 }
 
 fn new_fire(

@@ -71,13 +71,6 @@ impl AddressRange {
     }
 }
 
-fn address_bits(address: IpAddr) -> u8 {
-    match address {
-        IpAddr::V4(_) => 32,
-        IpAddr::V6(_) => 128,
-    }
-}
-
 /// The parsed lease listener `trusted_proxy` list.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrustedProxies(Vec<AddressRange>);
@@ -135,6 +128,13 @@ impl ClientAddressRefusal {
 impl fmt::Display for ClientAddressRefusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+fn address_bits(address: IpAddr) -> u8 {
+    match address {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
     }
 }
 

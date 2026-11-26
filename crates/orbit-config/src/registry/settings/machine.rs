@@ -9,6 +9,31 @@ use super::resolve::{
 use crate::config_document;
 use crate::memory_limit::MemoryLimit;
 
+/// Maximum forecast non-reclaimable memory as a share of host memory.
+///
+/// The former `machine.auto_concurrency.admit_memory_percent` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT: u8 = 75;
+
+/// Number of recent completed deliveries retained per profile key.
+///
+/// The former `machine.auto_concurrency.profile_window` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_PROFILE_WINDOW: u32 = 50;
+
+/// Maximum forecast horizon for a candidate, in minutes.
+///
+/// The former `machine.auto_concurrency.horizon_cap_minutes` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_HORIZON_CAP_MINUTES: u32 = 120;
+
+/// Maximum time the queue head may wait before it blocks backfilling, in minutes.
+///
+/// The former `machine.auto_concurrency.head_max_wait_minutes` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES: u32 = 30;
+
+/// Consecutive protected passes without a better miss before the queue head is reported stuck.
+///
+/// The former `machine.auto_concurrency.head_stuck_passes` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_HEAD_STUCK_PASSES: u32 = 20;
+
 /// Resource limits for each detached pipeline worker (`machine.worker_*`).
 ///
 /// Values are already admitted: memory limits are typed [`MemoryLimit`]s, so
@@ -167,31 +192,6 @@ pub struct AutoConcurrencySettings {
     /// Minimum completed deliveries a profile key needs before use without fallback.
     pub min_profile_deliveries: u32,
 }
-
-/// Maximum forecast non-reclaimable memory as a share of host memory.
-///
-/// The former `machine.auto_concurrency.admit_memory_percent` default, fixed when the key was removed [ORB-22808].
-pub const AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT: u8 = 75;
-
-/// Number of recent completed deliveries retained per profile key.
-///
-/// The former `machine.auto_concurrency.profile_window` default, fixed when the key was removed [ORB-22808].
-pub const AUTO_CONCURRENCY_PROFILE_WINDOW: u32 = 50;
-
-/// Maximum forecast horizon for a candidate, in minutes.
-///
-/// The former `machine.auto_concurrency.horizon_cap_minutes` default, fixed when the key was removed [ORB-22808].
-pub const AUTO_CONCURRENCY_HORIZON_CAP_MINUTES: u32 = 120;
-
-/// Maximum time the queue head may wait before it blocks backfilling, in minutes.
-///
-/// The former `machine.auto_concurrency.head_max_wait_minutes` default, fixed when the key was removed [ORB-22808].
-pub const AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES: u32 = 30;
-
-/// Consecutive protected passes without a better miss before the queue head is reported stuck.
-///
-/// The former `machine.auto_concurrency.head_stuck_passes` default, fixed when the key was removed [ORB-22808].
-pub const AUTO_CONCURRENCY_HEAD_STUCK_PASSES: u32 = 20;
 
 impl AutoConcurrencySettings {
     pub(crate) fn validate_memory_high_percent(

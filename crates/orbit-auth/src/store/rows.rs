@@ -10,29 +10,6 @@ use crate::scope::{LeaseTokenRecord, LeaseTokenScope};
 /// store rather than a SQLite error.
 pub(super) type DecodedRow = Result<LeaseTokenRecord, OrbitError>;
 
-pub(super) fn token_from_row(row: &Row<'_>) -> rusqlite::Result<DecodedRow> {
-    token_from_offset_row(row, 0)
-}
-
-pub(super) fn token_from_offset_row(row: &Row<'_>, offset: usize) -> rusqlite::Result<DecodedRow> {
-    let text = |index: usize| row.get::<_, String>(offset + index);
-    let optional_text = |index: usize| row.get::<_, Option<String>>(offset + index);
-    let stored = StoredToken {
-        token_id: text(0)?,
-        principal: text(1)?,
-        principal_class: text(2)?,
-        workspaces: text(3)?,
-        verbs: text(4)?,
-        max_priority: text(5)?,
-        hard: text(6)?,
-        created_at: text(7)?,
-        expires_at: text(8)?,
-        last_used_at: optional_text(9)?,
-        revoked_at: optional_text(10)?,
-    };
-    Ok(stored.decode())
-}
-
 /// A `lease_tokens` row as stored text.
 struct StoredToken {
     token_id: String,
@@ -96,4 +73,27 @@ impl StoredToken {
             revoked_at,
         })
     }
+}
+
+pub(super) fn token_from_row(row: &Row<'_>) -> rusqlite::Result<DecodedRow> {
+    token_from_offset_row(row, 0)
+}
+
+pub(super) fn token_from_offset_row(row: &Row<'_>, offset: usize) -> rusqlite::Result<DecodedRow> {
+    let text = |index: usize| row.get::<_, String>(offset + index);
+    let optional_text = |index: usize| row.get::<_, Option<String>>(offset + index);
+    let stored = StoredToken {
+        token_id: text(0)?,
+        principal: text(1)?,
+        principal_class: text(2)?,
+        workspaces: text(3)?,
+        verbs: text(4)?,
+        max_priority: text(5)?,
+        hard: text(6)?,
+        created_at: text(7)?,
+        expires_at: text(8)?,
+        last_used_at: optional_text(9)?,
+        revoked_at: optional_text(10)?,
+    };
+    Ok(stored.decode())
 }

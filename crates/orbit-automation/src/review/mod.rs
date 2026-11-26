@@ -35,6 +35,46 @@ pub const REBASED_CLEAN_ASSURANCE: &str = "rebased_clean";
 /// Contract label folded into every task-meaning digest.
 pub const TASK_MEANING_CONTRACT: &str = "review_task_meaning_v1";
 
+/// Facts Core verified about a delivery before asking for an exclusion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandingFacts {
+    /// The certificate's base, reviewed, and final candidate objects are
+    /// still present in the repository.
+    pub objects_present: bool,
+    /// Every task named by the certificate still has the reviewed meaning.
+    pub task_meaning_current: bool,
+    /// The managed landing record for this certificate, when completion
+    /// wrote one.
+    pub managed_landing: Option<ReviewLanding>,
+    /// The head commit the provider reports the landed pull request had.
+    /// `None` for a landing with no pull request identity, or one recorded
+    /// before the head was kept.
+    pub landed_head: Option<String>,
+    /// The tree of a conflict-free three-way merge of the certificate's
+    /// final candidate onto the delivery's actual base, with the
+    /// certificate's base as the merge base. `None` when the merge
+    /// conflicts, the reviewed base is not an ancestor of the actual base,
+    /// or Core did not compute it because the exact-tree rule applies.
+    pub rebased_tree: Option<String>,
+}
+
+/// Facts about the commit that actually landed, gathered by Core after a
+/// managed merge, for the record completion writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandedCandidate {
+    pub landed_commit: String,
+    pub landed_tree: String,
+    /// The tree of the integration branch immediately before the landing
+    /// span: the first parent of the span's first commit.
+    pub base_at_landing_tree: String,
+    /// The landed commit equals the reviewed candidate commit.
+    pub is_candidate_commit: bool,
+    /// Number of parents of the landed commit.
+    pub parents: usize,
+    /// First-parent commits the landing added to the branch.
+    pub span_commits: usize,
+}
+
 /// The digest of what a reviewer is asked to judge: title, description,
 /// acceptance criteria, plan, selectors, tags, relations, and type. Comments,
 /// history, priority, execution summaries, and status are deliberately absent
@@ -118,29 +158,6 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
     Ok(())
 }
 
-/// Facts Core verified about a delivery before asking for an exclusion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LandingFacts {
-    /// The certificate's base, reviewed, and final candidate objects are
-    /// still present in the repository.
-    pub objects_present: bool,
-    /// Every task named by the certificate still has the reviewed meaning.
-    pub task_meaning_current: bool,
-    /// The managed landing record for this certificate, when completion
-    /// wrote one.
-    pub managed_landing: Option<ReviewLanding>,
-    /// The head commit the provider reports the landed pull request had.
-    /// `None` for a landing with no pull request identity, or one recorded
-    /// before the head was kept.
-    pub landed_head: Option<String>,
-    /// The tree of a conflict-free three-way merge of the certificate's
-    /// final candidate onto the delivery's actual base, with the
-    /// certificate's base as the merge base. `None` when the merge
-    /// conflicts, the reviewed base is not an ancestor of the actual base,
-    /// or Core did not compute it because the exact-tree rule applies.
-    pub rebased_tree: Option<String>,
-}
-
 /// Decide whether an actual delivery is covered by a certificate.
 ///
 /// The exact-tree rule: the landing starts from the reviewed base tree and
@@ -204,23 +221,6 @@ pub fn exclusion(
         task_meaning_digest: certificate.task_meaning_digest.clone(),
         final_candidate_tree: certificate.final_candidate.tree.clone(),
     })
-}
-
-/// Facts about the commit that actually landed, gathered by Core after a
-/// managed merge, for the record completion writes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LandedCandidate {
-    pub landed_commit: String,
-    pub landed_tree: String,
-    /// The tree of the integration branch immediately before the landing
-    /// span: the first parent of the span's first commit.
-    pub base_at_landing_tree: String,
-    /// The landed commit equals the reviewed candidate commit.
-    pub is_candidate_commit: bool,
-    /// Number of parents of the landed commit.
-    pub parents: usize,
-    /// First-parent commits the landing added to the branch.
-    pub span_commits: usize,
 }
 
 /// Classify a managed landing against its certificate. Returns the

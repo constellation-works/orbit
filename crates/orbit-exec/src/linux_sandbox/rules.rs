@@ -2,6 +2,37 @@ use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+/// The existing paths each glob rule body matches, keyed by that body.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct GlobMatch {
+    pub entry: PathBuf,
+    pub target: MatchTarget,
+}
+
+/// What a matched directory entry resolves to.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum MatchTarget {
+    /// The entry's canonical path.
+    Resolved(PathBuf),
+    /// The entry is a symlink whose target does not exist; this holds the
+    /// link's own contents. It grants and mounts nothing. A later target
+    /// creation or retarget changes the match, so the post-run guard still
+    /// sees it as a new match.
+    Dangling(PathBuf),
+}
+
+impl MatchTarget {
+    /// The canonical path, or `None` for a dangling link.
+    pub(super) fn resolved(&self) -> Option<&Path> {
+        match self {
+            Self::Resolved(path) => Some(path),
+            Self::Dangling(_) => None,
+        }
+    }
+}
+
+pub(super) type GlobMatches<'a> = BTreeMap<&'a str, BTreeSet<GlobMatch>>;
+
 pub(super) fn positive_mount_roots(
     profile: &ResolvedFsProfile,
     expanded: &GlobMatches<'_>,
@@ -162,37 +193,6 @@ pub(super) fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitE
         })
         .collect())
 }
-
-/// The existing paths each glob rule body matches, keyed by that body.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct GlobMatch {
-    pub entry: PathBuf,
-    pub target: MatchTarget,
-}
-
-/// What a matched directory entry resolves to.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum MatchTarget {
-    /// The entry's canonical path.
-    Resolved(PathBuf),
-    /// The entry is a symlink whose target does not exist; this holds the
-    /// link's own contents. It grants and mounts nothing. A later target
-    /// creation or retarget changes the match, so the post-run guard still
-    /// sees it as a new match.
-    Dangling(PathBuf),
-}
-
-impl MatchTarget {
-    /// The canonical path, or `None` for a dangling link.
-    pub(super) fn resolved(&self) -> Option<&Path> {
-        match self {
-            Self::Resolved(path) => Some(path),
-            Self::Dangling(_) => None,
-        }
-    }
-}
-
-pub(super) type GlobMatches<'a> = BTreeMap<&'a str, BTreeSet<GlobMatch>>;
 
 /// Every existing path matched by each of `rules`, keyed by rule.
 ///

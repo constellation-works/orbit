@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
+// Names are supplied by trusted surfaces, but cap slots even for a buggy caller.
+const MAX_SLOTS_PER_KEY: usize = 16;
+
 /// A caller's non-secret rate-limit identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LimitKey {
@@ -111,9 +114,6 @@ pub struct KeyedLimiter {
     last_flush: Instant,
     urgent_flush: bool,
 }
-
-// Names are supplied by trusted surfaces, but cap slots even for a buggy caller.
-const MAX_SLOTS_PER_KEY: usize = 16;
 
 impl KeyedLimiter {
     /// Track at most `capacity` keys, including two reserved overflow buckets.

@@ -20,6 +20,18 @@ use super::codex::codex_usage_windows;
 use super::grok::grok_usage_windows;
 use super::muse::muse_usage_windows;
 
+/// One provider reading: its windows and whether they are the account's whole
+/// set. [ORB-26000]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageSnapshot {
+    /// What [`provider_usage_windows`] returns.
+    pub observations: Vec<ProviderLimitObservation>,
+    /// Whether a window the reading lacks is gone from the account. `false`
+    /// when a still-reported window could not be read, so the reading must not
+    /// retire what an earlier one stored.
+    pub complete: bool,
+}
+
 /// The usage windows `provider` reported about its own account during one
 /// run, one observation per window with source `event`, read at `now`.
 ///
@@ -38,18 +50,6 @@ pub fn provider_usage_windows(
     now: DateTime<Utc>,
 ) -> Vec<ProviderLimitObservation> {
     provider_usage_snapshot(provider, stdout, codex_home, now).observations
-}
-
-/// One provider reading: its windows and whether they are the account's whole
-/// set. [ORB-26000]
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderUsageSnapshot {
-    /// What [`provider_usage_windows`] returns.
-    pub observations: Vec<ProviderLimitObservation>,
-    /// Whether a window the reading lacks is gone from the account. `false`
-    /// when a still-reported window could not be read, so the reading must not
-    /// retire what an earlier one stored.
-    pub complete: bool,
 }
 
 /// [`provider_usage_windows`] with whether the reading is complete. Only

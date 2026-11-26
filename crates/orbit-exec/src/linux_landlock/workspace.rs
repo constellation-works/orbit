@@ -31,29 +31,6 @@ pub(super) struct WorkspaceReadGrants {
     pub(super) unenforced_exclusions: Vec<String>,
 }
 
-/// Compile the workspace half of the ruleset for `profile`.
-pub(super) fn workspace_read_grants(
-    workspace_root: &Path,
-    profile: &ResolvedFsProfile,
-) -> Result<WorkspaceReadGrants, OrbitError> {
-    let rules = profile.compile(FsOperation::Read)?;
-    if rules.grants_nothing() {
-        return Ok(WorkspaceReadGrants::default());
-    }
-
-    let reach = DenyReach::compile(workspace_root, &rules)?;
-    let grants = if rules.allows(".")? {
-        grant_read_tree(workspace_root, workspace_root, &rules, &reach)?
-    } else {
-        allowed_subtrees(workspace_root, workspace_root, &rules, &reach)?
-    };
-
-    Ok(WorkspaceReadGrants {
-        grants,
-        unenforced_exclusions: reach.unenforced,
-    })
-}
-
 /// Where the profile's exclusions can still name a path that does not exist.
 ///
 /// # Why a ruleset needs this
@@ -141,6 +118,29 @@ impl<'a> DenyReach<'a> {
             .iter()
             .any(|reach| reach.names_beneath(&relative)))
     }
+}
+
+/// Compile the workspace half of the ruleset for `profile`.
+pub(super) fn workspace_read_grants(
+    workspace_root: &Path,
+    profile: &ResolvedFsProfile,
+) -> Result<WorkspaceReadGrants, OrbitError> {
+    let rules = profile.compile(FsOperation::Read)?;
+    if rules.grants_nothing() {
+        return Ok(WorkspaceReadGrants::default());
+    }
+
+    let reach = DenyReach::compile(workspace_root, &rules)?;
+    let grants = if rules.allows(".")? {
+        grant_read_tree(workspace_root, workspace_root, &rules, &reach)?
+    } else {
+        allowed_subtrees(workspace_root, workspace_root, &rules, &reach)?
+    };
+
+    Ok(WorkspaceReadGrants {
+        grants,
+        unenforced_exclusions: reach.unenforced,
+    })
 }
 
 /// Grant `root` as a readable tree, carving out every path the profile denies

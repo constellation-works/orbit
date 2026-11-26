@@ -21,6 +21,11 @@ pub use evaluate::evaluate;
 pub use reconcile::{ActionLiveness, action_liveness};
 pub use waiver::waive;
 
+/// An edited definition the evaluator may not adopt on its own pauses new
+/// admission until it is restored or recovered. Hosts that layer their own
+/// reasons over this one report it ahead of theirs.
+pub const DEFINITION_CHANGED: &str = "definition_changed";
+
 /// Authority/source owner, implemented by Core. It never decides coverage rules.
 pub trait DeliveryHost {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
@@ -123,11 +128,6 @@ pub enum ActionOutcome {
         reason: String,
     },
 }
-
-/// An edited definition the evaluator may not adopt on its own pauses new
-/// admission until it is restored or recovered. Hosts that layer their own
-/// reasons over this one report it ahead of theirs.
-pub const DEFINITION_CHANGED: &str = "definition_changed";
 
 /// Inputs supplied by the existing sweep clock.
 #[derive(Clone, Copy)]

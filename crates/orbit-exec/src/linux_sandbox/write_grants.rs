@@ -48,6 +48,39 @@ pub struct PreparedWriteGrants {
     pub unsatisfied: Vec<UnsatisfiedWriteGrant>,
 }
 
+/// The profile's `modify` rules compiled once, in rule order. Every
+/// last-match-wins lookup a compile makes shares these regexes instead of
+/// rebuilding one per rule per lookup.
+pub(super) struct CompiledModifyRules<'a> {
+    rules: Vec<(&'a str, Regex)>,
+}
+
+impl<'a> CompiledModifyRules<'a> {
+    pub(super) fn compile(profile: &'a ResolvedFsProfile) -> Result<Self, OrbitError> {
+        let rules = profile
+            .modify
+            .iter()
+            .map(|rule| compile_rule_regex(rule).map(|regex| (rule.as_str(), regex)))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { rules })
+    }
+
+    /// The rule that decides `path` under last-match-wins, if any matches.
+    fn deciding_rule(&self, path: &Path) -> Option<&'a str> {
+        let rendered = render_glob_path(path);
+        self.rules
+            .iter()
+            .rev()
+            .find(|(_, regex)| regex.is_match(&rendered))
+            .map(|(rule, _)| *rule)
+    }
+
+    pub(super) fn grants_write(&self, path: &Path) -> bool {
+        self.deciding_rule(path)
+            .is_some_and(|rule| !rule.starts_with('!'))
+    }
+}
+
 /// Every narrow write re-allow in the effective profile — the positive
 /// exact/subtree rules nested under an earlier deny — paired with the anchor
 /// each one needs. Broad writable roots are excluded: they are required to
@@ -353,39 +386,6 @@ fn write_anchor_kind(rule: &str) -> WriteAnchorKind {
         WriteAnchorKind::Directory
     } else {
         WriteAnchorKind::File
-    }
-}
-
-/// The profile's `modify` rules compiled once, in rule order. Every
-/// last-match-wins lookup a compile makes shares these regexes instead of
-/// rebuilding one per rule per lookup.
-pub(super) struct CompiledModifyRules<'a> {
-    rules: Vec<(&'a str, Regex)>,
-}
-
-impl<'a> CompiledModifyRules<'a> {
-    pub(super) fn compile(profile: &'a ResolvedFsProfile) -> Result<Self, OrbitError> {
-        let rules = profile
-            .modify
-            .iter()
-            .map(|rule| compile_rule_regex(rule).map(|regex| (rule.as_str(), regex)))
-            .collect::<Result<_, _>>()?;
-        Ok(Self { rules })
-    }
-
-    /// The rule that decides `path` under last-match-wins, if any matches.
-    fn deciding_rule(&self, path: &Path) -> Option<&'a str> {
-        let rendered = render_glob_path(path);
-        self.rules
-            .iter()
-            .rev()
-            .find(|(_, regex)| regex.is_match(&rendered))
-            .map(|(rule, _)| *rule)
-    }
-
-    pub(super) fn grants_write(&self, path: &Path) -> bool {
-        self.deciding_rule(path)
-            .is_some_and(|rule| !rule.starts_with('!'))
     }
 }
 

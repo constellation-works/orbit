@@ -14,6 +14,23 @@ use serde_json::Value;
 
 use super::WorkspaceRegistryMachineContext;
 
+/// The fields checked before a typed deserialize is trusted to explain a
+/// failure: a missing `schema_version` selects the pre-path-free refusal, and a
+/// version or role-token problem is reported in registry terms rather than as
+/// a serde variant error.
+#[derive(Debug, Deserialize)]
+struct RegistryProbe {
+    schema_version: Option<Value>,
+    #[serde(default)]
+    checkouts: Vec<CheckoutRoleProbe>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckoutRoleProbe {
+    workspace_id: Option<String>,
+    role: Option<Value>,
+}
+
 /// Validates local checkout paths, marking their logical workspace invalid
 /// when the local repository root no longer exists. Checkoutless logical
 /// workspaces retain their catalog status.
@@ -64,23 +81,6 @@ pub fn parse_workspace_registry(
     check_schema_version(u64::from(registry.schema_version))?;
     let changed = validate_workspace_registry(&mut registry, context)?;
     Ok((registry, changed))
-}
-
-/// The fields checked before a typed deserialize is trusted to explain a
-/// failure: a missing `schema_version` selects the pre-path-free refusal, and a
-/// version or role-token problem is reported in registry terms rather than as
-/// a serde variant error.
-#[derive(Debug, Deserialize)]
-struct RegistryProbe {
-    schema_version: Option<Value>,
-    #[serde(default)]
-    checkouts: Vec<CheckoutRoleProbe>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CheckoutRoleProbe {
-    workspace_id: Option<String>,
-    role: Option<Value>,
 }
 
 /// Explain why the typed deserialize of `content` failed. `typed_error` is

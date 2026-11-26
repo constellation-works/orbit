@@ -18,6 +18,9 @@ use super::missed_slots::{SkipWindow, missed_skip_report, record_missed_slots};
 use super::report::{action, failure_report, skipped};
 use super::retry::{next_retry_attempt, retry_candidate, retryable_failure};
 
+/// Report reason of a fire an operator's breaker bypass dispatched.
+pub(super) const BREAKER_BYPASS_FIRE_REASON: &str = "breaker_bypass";
+
 /// The dispatch-agnostic core of one sweep pass: outcome-sync
 /// (unless dry-run), then per-routine due evaluation and fire/skip. Split out
 /// from Core assembly — which owns the lock, store, and workspace discovery
@@ -121,9 +124,6 @@ fn ownership_conflicts(left: &LoadedRoutine, right: &LoadedRoutine) -> bool {
         _ => true,
     }
 }
-
-/// Report reason of a fire an operator's breaker bypass dispatched.
-pub(super) const BREAKER_BYPASS_FIRE_REASON: &str = "breaker_bypass";
 
 /// [ORB-25103] The trial an operator's breaker bypass admitted. A cron
 /// routine fires once now, due slot or not, under an unscheduled slot key:
