@@ -14,9 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{
-    RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
-};
+use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
@@ -293,8 +291,7 @@ impl Fixture {
     }
 
     fn tick(&self) {
-        let sweep = run_sweep_at_with_providers(
-            orbit_core::composition::store_opener(),
+        let sweep = orbit_core::test_support::run_sweep_at(
             &self.global,
             SweepOptions::default(),
             RoutineMachineIdentity {
@@ -302,6 +299,7 @@ impl Fixture {
                 machine_name: "test-host".into(),
             },
             &SingleWorkspace(self.runtime.clone()),
+            chrono::Utc::now(),
         )
         .expect("sweep runs");
         assert!(!sweep.lock_busy);

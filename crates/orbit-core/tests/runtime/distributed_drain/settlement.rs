@@ -751,8 +751,7 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
     assert_eq!(pair.owner_status(&task), "in-progress");
 
     *pair.wire.unreachable.lock().unwrap() = false;
-    let sweep = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let sweep = orbit_core::test_support::run_sweep_at(
         &pair.follower.global_root(),
         SweepOptions::default(),
         RoutineMachineIdentity {
@@ -760,6 +759,7 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
             machine_name: "follower".into(),
         },
         &ReplicaOnly(pair.follower.clone()),
+        chrono::Utc::now(),
     )
     .expect("sweep");
     assert!(!sweep.lock_busy);

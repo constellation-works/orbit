@@ -1,11 +1,12 @@
 //! A workspace that uses up the tick budget cannot renew it for later phases.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::super::RoutineMachineIdentity;
 use super::super::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use super::super::sweep::{SweepOptions, run_sweep_at_with_providers_at};
+use super::super::sweep::{SweepContext, SweepOptions, run_sweep_pass};
 use crate::{OrbitError, OrbitRuntime};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
@@ -62,9 +63,14 @@ fn blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces() {
         workspaces.push((workspace, runtime));
     }
     let started = Instant::now();
-    let outcome = run_sweep_at_with_providers_at(
+    let outcome = run_sweep_pass(
         crate::composition::store_opener(),
-        &global,
+        SweepContext {
+            global_root: &global,
+            workspace_provider: &BlockedWorkspace(workspaces),
+            host_signals: Arc::new(crate::runtime::host_signal::FixedHostSignals::none()),
+            now_utc: chrono::Utc::now(),
+        },
         SweepOptions {
             deadline: Some(started + Duration::from_millis(100)),
             ..SweepOptions::default()
@@ -73,9 +79,6 @@ fn blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces() {
             machine_id: "fixture".into(),
             machine_name: "fixture".into(),
         },
-        &BlockedWorkspace(workspaces),
-        &crate::runtime::host_signal::FixedHostSignals::none(),
-        chrono::Utc::now(),
     )
     .unwrap();
     assert!(
@@ -156,17 +159,21 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
             scheduled_at: now + chrono::Duration::minutes(shutdown_in),
             source: "fixture".into(),
         };
-        run_sweep_at_with_providers_at(
+        run_sweep_pass(
             crate::composition::store_opener(),
-            &global,
+            SweepContext {
+                global_root: &global,
+                workspace_provider: &OneWorkspace(runtime.clone()),
+                host_signals: Arc::new(crate::runtime::host_signal::FixedHostSignals::scheduled(
+                    shutdown,
+                )),
+                now_utc: at,
+            },
             SweepOptions::default(),
             RoutineMachineIdentity {
                 machine_id: "horizon-host".into(),
                 machine_name: "horizon-host".into(),
             },
-            &OneWorkspace(runtime.clone()),
-            &crate::runtime::host_signal::FixedHostSignals::scheduled(shutdown),
-            at,
         )
         .expect("tick")
     };

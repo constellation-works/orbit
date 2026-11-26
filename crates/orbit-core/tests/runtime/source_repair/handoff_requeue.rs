@@ -14,9 +14,7 @@ use super::published_owner::{checkpoint, next, save_run};
 use super::*;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{
-    RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
-};
+use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
@@ -101,8 +99,7 @@ impl RoutineWorkspaceProvider for SingleWorkspace {
 
 /// One owner clock tick over the fixture's workspace.
 fn tick(f: &Fixture) {
-    let sweep = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let sweep = orbit_core::test_support::run_sweep_at(
         &f._root.path().join("global"),
         SweepOptions::default(),
         RoutineMachineIdentity {
@@ -110,6 +107,7 @@ fn tick(f: &Fixture) {
             machine_name: "fixture".into(),
         },
         &SingleWorkspace(f.runtime.clone()),
+        chrono::Utc::now(),
     )
     .unwrap();
     assert!(!sweep.lock_busy);

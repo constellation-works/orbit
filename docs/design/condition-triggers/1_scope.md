@@ -467,7 +467,7 @@ is the shipped exception:
   both owner entries and replica checkouts and keeps only the replica-local cron
   routines targeting worktree GC or store GC (`collect_host_routines` and
   `runs_in_replica`, `crates/orbit-core/src/application/routines/loader.rs`,
-  consumed at `crates/orbit-core/src/application/routines/sweep/tick.rs::run_sweep_at_with_providers_at`).
+  consumed at `crates/orbit-core/src/application/routines/sweep/tick.rs::run_sweep_pass`).
   Delivery and state triggers stay owner-only even for those jobs.
 - Every coordination-state action write passes `ensure_coordination_task_write_permitted`
   (`crates/orbit-runtime/src/run/identity.rs`), so a replica checkout

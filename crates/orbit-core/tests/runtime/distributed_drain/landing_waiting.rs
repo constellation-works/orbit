@@ -388,8 +388,7 @@ fn the_owner_clock_resumes_waiting_landings_but_dry_runs_do_not() {
     fixture.phase("green");
     let provider = WaitingOwnerProvider(runtime.clone());
     for dry_run in [true, false] {
-        run_sweep_at_with_providers(
-            orbit_core::composition::store_opener(),
+        orbit_core::test_support::run_sweep_at(
             &runtime.global_root(),
             SweepOptions {
                 dry_run,
@@ -400,6 +399,7 @@ fn the_owner_clock_resumes_waiting_landings_but_dry_runs_do_not() {
                 machine_name: "owner".into(),
             },
             &provider,
+            chrono::Utc::now(),
         )
         .unwrap();
         assert_eq!(fixture.attempt().attempt, if dry_run { 1 } else { 2 });

@@ -4,7 +4,7 @@
 //! a catalog target, and a retry/overlap policy — living under
 //! `.orbit/routines/` in a registered owner checkout. That directory is
 //! per-user state, not a repository artifact. The stateless
-//! [`run_sweep_with_providers`] pass, invoked every minute by the OS clock
+//! [`run_sweep`] pass, invoked every minute by the OS clock
 //! (see [`clock`]), fires whatever is due on this host through the existing
 //! v2 run machinery. Every owner checkout is an independent schedule; a
 //! replica checkout schedules only host-local worktree GC [ORB-14173] and
@@ -55,8 +55,8 @@ pub use status::{
 };
 use std::path::Path;
 pub use sweep::{
-    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
-    run_sweep_at_with_providers, run_sweep_with_providers,
+    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepContext, SweepOptions,
+    SweepOutcome, run_sweep, run_sweep_pass,
 };
 pub use trigger_edit::{
     RoutineTriggerOptions, edit_listed_routine_trigger, set_routine_trigger, trigger_options,

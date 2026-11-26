@@ -222,14 +222,17 @@ pub mod test_support {
         workspace_provider: &dyn RoutineWorkspaceProvider,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<SweepOutcome, crate::OrbitError> {
-        crate::application::routines::sweep::run_sweep_at_with_providers_at(
+        crate::application::routines::sweep::run_sweep_pass(
             crate::composition::store_opener(),
-            global_root,
+            crate::application::routines::sweep::SweepContext {
+                now_utc: now,
+                ..crate::application::routines::sweep::SweepContext::production(
+                    global_root,
+                    workspace_provider,
+                )
+            },
             options,
             local_machine,
-            workspace_provider,
-            crate::runtime::host_signal::default_host_signal_probe().as_ref(),
-            now,
         )
     }
 }

@@ -94,7 +94,6 @@ use orbit_common::security::release::sha256_hex;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::routines::{
     DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
-    run_sweep_at_with_providers,
 };
 use orbit_core::runtime::JobRuns;
 use orbit_engine::RuntimeHost;
