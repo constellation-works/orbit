@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-core: what it owns, main modules, dependencies and entry points.
-last_validated: 2026-11-25
+last_validated: 2026-11-26
 tags: [architecture, orbit-core]
 ---
 
@@ -122,6 +122,8 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 
 New apps with no `application/` entry: `friction` (built, `app/friction/`), `host`, `update`. They have no row, since there is no entry.
 
+A module beside `application/`: `metrics` dissolves into `app::run` (order 2) in two steps, ORB-28962 then ORB-28963 ([design §3](../design/architecture-restructure/2_design.md#metrics-dissolves-into-the-run-app)). It has no row, since it is not an `application/` entry.
+
 ### Decided by callers
 
 Callers were checked at base `2f18287`, by module path and by inherent-method name across `crates/`. Method names are matched by name, so counts can include port calls.
@@ -142,4 +144,5 @@ Callers were checked at base `2f18287`, by module path and by inherent-method na
   - `workflow.rs` → `app::run`: the ship and auto workflow and drain-window rules; `job` is the only app user, and `distributed` and `workspace_auto` are units above `run` that reach it downward.
 - Kept as units though no app imports them directly: `pull_drain`, `workspace_auto`, `sweep_filing`, `backlog_forecast` and `landing`. Their callers are units, the engine action dispatch, the runtime or the dashboard. `workspace_auto` stays above `admission` and `pull_drain`, which it calls.
 - Kept as an app: `crew_memory`. Its engine adapter and `experiment` callers are internal, but its run-bound crew memory tools are a user-facing surface.
+- `metrics` → `app::run`, checked at `84f63223cd`: the only production caller of its reliability reads is `app::run::Command::fleet_reliability`; `orbit-web` names it in four files, one of which calls `aggregate`; its `cost` is an alias for the runtime's module.
 - Existing edge to resolve with the move: `distributed` calls `auto_tasks::job_step` directly, and `auto_tasks` is unordered.
