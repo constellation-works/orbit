@@ -962,22 +962,15 @@ jobs:
           time ./scripts/ci-guardrails.sh --test-archive "$RUNNER_TEMP/nextest-archive.tar.zst"
           ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
 
-      # Repeated linked executables extend beyond nextest's default 2 MiB
-      # compression window. Use a larger window only for transfer, split into
-      # NEXTEST_ARCHIVE_PARTS byte ranges; the original archive remains here
-      # for the partition proof below.
-      - name: Pack nextest archive for transfer
-        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py pack "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/nextest-transfer.tar.zst" --parts "$NEXTEST_ARCHIVE_PARTS"
-
       # The partition proof reads only the original archive, never the
-      # transfer parts, so it runs while the network-bound uploads below do
-      # instead of after them: every test job waits for this whole job, and
-      # the proof took 7-11 s of it hosted. The background subshell itself
-      # inherits an exclusive lock acquired before it starts and holds it
-      # until it has recorded the proof's status and exited. Acquiring it
-      # before forking prevents the later wait from overtaking the worker.
-      # "Prove the shards cover every test" blocks on that lock, prints the
-      # proof's output and exits with its status.
+      # transfer parts, so it starts as soon as the archive exists and runs
+      # concurrently with both the transfer repack and the uploads below
+      # instead of waiting behind repack (where it trailed the last upload by
+      # 3-5 s hosted). The background subshell itself inherits an exclusive lock
+      # acquired before it starts and holds it until it has recorded the proof's
+      # status and exited. Acquiring it before forking prevents the later wait
+      # from overtaking the worker. "Prove the shards cover every test" blocks on
+      # that lock, prints the proof's output and exits with its status.
       - name: Start the shard coverage proof
         env:
           CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
@@ -992,6 +985,13 @@ jobs:
             ./scripts/ci-guardrails.sh --test-partitions "$RUNNER_TEMP/nextest-archive.tar.zst" || status=$?
             echo "$status" >"$proof/status"
           ) >"$proof/output" 2>&1 </dev/null &
+
+      # Repeated linked executables extend beyond nextest's default 2 MiB
+      # compression window. Use a larger window only for transfer, split into
+      # NEXTEST_ARCHIVE_PARTS byte ranges; the original archive remains intact
+      # for the concurrent partition proof started above.
+      - name: Pack nextest archive for transfer
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py pack "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/nextest-transfer.tar.zst" --parts "$NEXTEST_ARCHIVE_PARTS"
 
       # The transfer is already zstd-compressed. The steps run in order; the
       # test jobs `needs:` this job, so they start once all of it has finished.
