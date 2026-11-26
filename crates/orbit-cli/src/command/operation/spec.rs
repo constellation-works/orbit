@@ -127,7 +127,7 @@ impl<'a> DispatchContext<'a> {
         }
     }
 
-    pub(super) fn runtime(&self) -> Result<&'a OrbitRuntime, OrbitError> {
+    pub(crate) fn runtime(&self) -> Result<&'a OrbitRuntime, OrbitError> {
         self.runtime.ok_or_else(|| {
             OrbitError::Execution(
                 "command operation required a runtime but dispatch did not provide one".to_string(),
@@ -135,12 +135,17 @@ impl<'a> DispatchContext<'a> {
         })
     }
 
-    pub(super) fn core(&self) -> Result<&'a Core, OrbitError> {
+    pub(crate) fn core(&self) -> Result<&'a Core, OrbitError> {
         self.core.ok_or_else(|| {
             OrbitError::Execution(
                 "command operation required a core but dispatch did not provide one".to_string(),
             )
         })
+    }
+
+    /// The process environment the entry captured.
+    pub(crate) fn env(&self) -> &'a Env {
+        self.env
     }
 }
 
@@ -279,21 +284,20 @@ macro_rules! runtime_env_dispatch {
     }};
 }
 
-macro_rules! boxed_runtime_env_dispatch {
+/// Dispatch a part-migrated command: its subcommands run through an app's
+/// `exec`, and the one that has no app yet takes the runtime from the
+/// dispatch context.
+macro_rules! boxed_context_dispatch {
     ($variant:ident) => {{
         |command, context| match command {
-            Commands::$variant(command) => {
-                (*command).execute_with_env(context.runtime()?, context.env)
-            }
+            Commands::$variant(command) => (*command).execute_in(&context),
             _ => dispatch_mismatch(stringify!($variant)),
         }
     }};
 }
 
 // Shared only with the sibling registry; dispatch helpers stay inside operation.
-pub(super) use {
-    boxed_runtime_env_dispatch, core_dispatch, runtime_dispatch, runtime_env_dispatch,
-};
+pub(super) use {boxed_context_dispatch, core_dispatch, runtime_dispatch, runtime_env_dispatch};
 
 pub(super) fn dispatch_mismatch(variant: &str) -> CommandOut {
     Err(OrbitError::Execution(format!(

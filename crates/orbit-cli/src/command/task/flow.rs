@@ -17,11 +17,12 @@
 
 use chrono::{DateTime, Duration, Utc};
 use clap::{ArgAction, Args};
-use orbit_core::{OrbitError, OrbitRuntime, Task, TaskStatus, TaskType};
+use orbit_core::app::task::{self, Command, Outcome};
+use orbit_core::{Core, OrbitError, Task, TaskStatus, TaskType};
 use orbit_types::task::TaskHistoryEntry;
 use serde_json::json;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::output::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 
@@ -284,8 +285,8 @@ pub(crate) fn compute_flow(
     }
 }
 
-impl Execute for TaskFlowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for TaskFlowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let width = bucket_width(&self.window)?;
         let now = Utc::now();
         report_start(now, width, self.buckets).ok_or_else(|| {
@@ -294,16 +295,17 @@ impl Execute for TaskFlowArgs {
                 self.window, self.buckets
             ))
         })?;
-        let points: Vec<FlowPoint> = runtime
-            .list_tasks_by_tags(&self.tags)?
-            .iter()
-            .filter(|task| self.task_type.is_none_or(|kind| task.task_type == kind))
-            .map(|task| {
-                runtime
-                    .get_task_history(&task.id)
-                    .map(|history| FlowPoint::from_task(task, &history))
-            })
-            .collect::<Result<_, _>>()?;
+        let points: Vec<FlowPoint> = task::exec(
+            core,
+            Command::Flow {
+                tags: self.tags,
+                task_type: self.task_type,
+            },
+        )
+        .and_then(Outcome::into_flow)?
+        .iter()
+        .map(|(task, history)| FlowPoint::from_task(task, history))
+        .collect();
 
         let report = compute_flow(&points, now, width, self.buckets);
 

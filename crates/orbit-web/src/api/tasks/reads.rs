@@ -4,11 +4,13 @@ use crate::api::helpers;
 use crate::api::pagination::TaskPageQuery;
 use crate::api::{bad_request, blocking, server_error, validate_id};
 use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail_json};
-use crate::state::{DashboardState, Ws, WsRejection};
+use crate::state::{DashboardState, Ws, WsCore, WsRejection};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::task::DashboardPageReads;
-use orbit_core::{OrbitRuntime, Task, TaskStatus};
+use orbit_core::app::task::{
+    self, Command, Outcome, PageRead, PageSelect, PageSelection, Read, RowRead, TaskPages,
+};
+use orbit_core::application::task::{DashboardPageReads, TaskListQuery};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -97,7 +99,7 @@ use std::sync::Arc;
 /// form is opt-in; a read without `group` keeps the envelope above.
 pub(in crate::api) async fn list_tasks(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: Ws,
     RawQuery(query): RawQuery,
 ) -> Response {
     let query = match TaskPageQuery::parse(query.as_deref()) {
@@ -109,17 +111,30 @@ pub(in crate::api) async fn list_tasks(
     {
         return bad_request(message);
     }
-    let riskiness = cached_riskiness_model(&state, &runtime).await;
+    let riskiness = cached_riskiness_model(&state, &ws.0).await;
+    let WsCore(core) = WsCore::over(&ws.0);
     match blocking("task list", move || {
-        let scope = format!("workspace:{}", runtime.workspace_id()?);
+        let select = query.clone();
+        let read = Read::Pages {
+            select: PageSelect::new(move |workspace_id| select_pages(select, workspace_id)),
+            detail: query.detail_id().map(ToOwned::to_owned),
+        };
+        let TaskPages {
+            workspace_id,
+            pages,
+        } = task::exec(&core, Command::Read(read)).and_then(Outcome::into_pages)?;
+        let scope = workspace_scope(&workspace_id);
         let mut query = query;
         query
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
-        if query.groups_by_status() {
-            return Ok(status_sections_json(&runtime, &query, &scope, riskiness));
-        }
-        Ok(task_list_page_json(&runtime, &query, &scope, riskiness))
+        Ok(pages.and_then(|pages| {
+            if query.groups_by_status() {
+                status_sections_json(&ws, &query, &scope, riskiness, pages)
+            } else {
+                task_list_page_json(&ws, &query, &scope, riskiness, pages)
+            }
+        }))
     })
     .await
     {
@@ -129,33 +144,56 @@ pub(in crate::api) async fn list_tasks(
     }
 }
 
+/// The cursor scope of one workspace's task pages.
+fn workspace_scope(workspace_id: &str) -> String {
+    format!("workspace:{workspace_id}")
+}
+
+/// Name the pages `query` asks of the workspace: one page per status for
+/// `group=status`, selected in one batch so the request validates the task
+/// index's freshness once rather than once per section, else one page.
+fn select_pages(
+    mut query: TaskPageQuery,
+    workspace_id: &str,
+) -> Result<PageSelection, orbit_core::OrbitError> {
+    query
+        .bind_cursor(&workspace_scope(workspace_id))
+        .map_err(orbit_core::OrbitError::InvalidInput)?;
+    if query.groups_by_status() {
+        return Ok(PageSelection::Sections {
+            query: TaskListQuery {
+                pilot_warnings: query.pilot_warnings(),
+                ..Default::default()
+            },
+            sections: query
+                .status_section_queries()
+                .iter()
+                .map(|(_, section)| (section.filter(), section.limit()))
+                .collect(),
+        });
+    }
+    Ok(PageSelection::One(TaskListQuery {
+        filter: query.filter(),
+        pilot_warnings: query.pilot_warnings(),
+        limit: query.limit(),
+        ..Default::default()
+    }))
+}
+
 /// Build the `group=status` answer for `GET /api/tasks`: one
-/// [`task_page_json`] page per status, each bound to that status alone. The
-/// sections are selected in one batch, so the request validates the task
-/// index's freshness once rather than once per section.
+/// [`task_page_json`] page per status, each bound to that status alone.
 fn status_sections_json(
-    runtime: &OrbitRuntime,
+    ws: &Ws,
     query: &TaskPageQuery,
     scope: &str,
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
+    pages: Vec<PageRead>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let mut result = json!({ "group": "status", "limit": query.limit() });
-    let section_queries = query.status_section_queries();
-    let filters = section_queries
-        .iter()
-        .map(|(_, section)| (section.filter(), section.limit()))
-        .collect::<Vec<_>>();
-    let pages = runtime.query_task_row_pages(
-        &orbit_core::application::task::TaskListQuery {
-            pilot_warnings: query.pilot_warnings(),
-            ..Default::default()
-        },
-        &filters,
-    )?;
     let mut sections = Vec::new();
     let mut total = 0_u64;
-    for ((status, section_query), page) in section_queries.into_iter().zip(pages) {
-        let mut section = task_page_json(runtime, &section_query, scope, riskiness.clone(), page)?;
+    for ((status, section_query), page) in query.status_section_queries().into_iter().zip(pages) {
+        let mut section = task_page_json(ws, &section_query, scope, riskiness.clone(), page)?;
         if let Value::Object(map) = &mut section {
             // The selected task's detail sits on whichever section holds it.
             for key in ["detail", "detail_runs", "detail_runs_error"] {
@@ -175,35 +213,40 @@ fn status_sections_json(
 
 /// Build the `{ items, total, limit, truncated }` page for `GET /api/tasks`.
 fn task_list_page_json(
-    runtime: &OrbitRuntime,
+    ws: &Ws,
     query: &TaskPageQuery,
     scope: &str,
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
+    pages: Vec<PageRead>,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-        filter: query.filter(),
-        pilot_warnings: query.pilot_warnings(),
-        limit: query.limit(),
-        ..Default::default()
+    let page = pages.into_iter().next().ok_or_else(|| {
+        orbit_core::OrbitError::Execution("task list read answered no page".to_string())
     })?;
-    task_page_json(runtime, query, scope, riskiness, page)
+    task_page_json(ws, query, scope, riskiness, page)
 }
 
 /// Project one selected page of `query` into its response envelope.
 fn task_page_json(
-    runtime: &OrbitRuntime,
+    ws: &Ws,
     query: &TaskPageQuery,
     scope: &str,
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
-    page: orbit_core::application::task::TaskPage,
+    read: PageRead,
 ) -> Result<Value, orbit_core::OrbitError> {
+    // The projections still read the workspace's runtime.
+    let runtime = &ws.0;
+    let PageRead {
+        page,
+        delivery_attention,
+        run_branches,
+        detail_dependency_statuses,
+    } = read;
     let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
-    let attention = runtime.delivery_attention_map(page.items.iter())?;
     let detail_riskiness = riskiness.clone();
     let projection = TaskListProjection::new(runtime)
-        .with_delivery_attention(attention)
-        .with_run_branches(runtime.local_run_branches(page.items.iter()))
+        .with_delivery_attention(delivery_attention)
+        .with_run_branches(run_branches)
         .with_riskiness(riskiness);
     let items = page
         .items
@@ -235,12 +278,13 @@ fn task_page_json(
     });
     if let Some(detail_id) = query.detail_id()
         && let Some(row) = page.items.iter().find(|row| row.task.id == detail_id)
+        && let Some(dependency_statuses) = detail_dependency_statuses
     {
         // The page's rows already read the workspace-wide triage, pilot
         // preparation, pull-request links and delivery attention this detail
         // shows; it borrows them rather than reading each again [ORB-21825].
         let page_reads = projection.detail_page_reads();
-        match dashboard_status_index(runtime, &row.task).and_then(|statuses| {
+        match dependency_statuses.and_then(|statuses| {
             task_detail_json(
                 runtime,
                 row,
@@ -270,29 +314,23 @@ fn task_page_json(
     Ok(result)
 }
 
-pub(in crate::api) async fn list_task_locks(Ws(runtime): Ws) -> Response {
-    match blocking("task locks", move || Ok(runtime.task_locks_snapshot())).await {
+pub(in crate::api) async fn list_task_locks(WsCore(core): WsCore) -> Response {
+    match blocking("task locks", move || {
+        Ok(task::exec(&core, Command::Read(Read::Locks)).and_then(Outcome::into_answer))
+    })
+    .await
+    {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(e)) => server_error(e),
         Err(response) => *response,
     }
 }
 
-/// Dependency-status projection for dashboard task serialization.
-///
-/// Uses the coordination registry's global status index
-/// ([`OrbitRuntime::task_status_index`]) rather than a workspace-scoped
-/// task list, so a task depending on another registered workspace's
-/// task resolves that dependency's real status instead of `[missing]`
-/// (ORB-10291). Task *listing* stays workspace-scoped: this index is only
-/// consulted to label dependencies, never to add tasks to the response body.
-/// `task`'s archived dependencies that reached `done` first label as `done`
-/// ([`OrbitRuntime::dependency_status_index`]).
-fn dashboard_status_index(
-    runtime: &OrbitRuntime,
-    task: &Task,
-) -> Result<std::collections::BTreeMap<String, TaskStatus>, orbit_core::OrbitError> {
-    runtime.dependency_status_index([task])
+/// One task's row and the statuses of its dependencies, read through the
+/// task app.
+fn read_task_row(ws: &Ws, id: &str) -> Result<Box<RowRead>, orbit_core::OrbitError> {
+    let WsCore(core) = WsCore::over(&ws.0);
+    task::exec(&core, Command::Read(Read::Row { id: id.to_string() })).and_then(Outcome::into_row)
 }
 
 /// `GET /api/tasks/{id}` — one task's full projection.
@@ -329,28 +367,22 @@ pub(in crate::api) async fn get_task(
             id,
             name,
             root,
-            runtime,
-            row,
+            ws,
+            read,
         } = owner;
-        return task_detail_response(
-            &state,
-            runtime,
-            row,
-            Some((id, name, root)),
-            include_candidate,
-        )
-        .await;
+        return task_detail_response(&state, ws, read, Some((id, name, root)), include_candidate)
+            .await;
     }
-    let Ws(runtime) = match ws {
+    let ws = match ws {
         Ok(ws) => ws,
         Err(rejection) => return rejection.into_response(),
     };
-    let lookup = Arc::clone(&runtime);
-    let row = match blocking("task detail", move || lookup.get_task_row(&id)).await {
-        Ok(row) => row,
+    let lookup = Ws(Arc::clone(&ws.0));
+    let read = match blocking("task detail", move || read_task_row(&lookup, &id)).await {
+        Ok(read) => read,
         Err(response) => return *response,
     };
-    task_detail_response(&state, runtime, row, None, include_candidate).await
+    task_detail_response(&state, ws, read, None, include_candidate).await
 }
 
 /// The workspace that owns a task, with the row read from it.
@@ -358,8 +390,8 @@ struct TaskOwner {
     id: String,
     name: String,
     root: String,
-    runtime: Arc<OrbitRuntime>,
-    row: orbit_core::application::task::TaskRow,
+    ws: Ws,
+    read: Box<RowRead>,
 }
 
 fn has_query_value(query: Option<&str>, name: &str, expected: &str) -> bool {
@@ -387,8 +419,8 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
         .filter(|entry| entry.active)
         .filter(|entry| crate::api::workspaces::entry_is_owned(entry))
     {
-        let runtime = match pinned.runtime_for(&entry.id) {
-            Ok(runtime) => runtime,
+        let ws = match pinned.runtime_for(&entry.id) {
+            Ok(runtime) => Ws(runtime),
             Err(_) => {
                 tracing::warn!(workspace = %entry.id, "task owner lookup could not open workspace");
                 skipped.get_or_insert_with(|| {
@@ -400,8 +432,8 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
                 continue;
             }
         };
-        match runtime.get_task_row(id) {
-            Ok(row) => {
+        match read_task_row(&ws, id) {
+            Ok(read) => {
                 return Ok(TaskOwner {
                     id: entry.id.clone(),
                     name: entry.name.clone(),
@@ -409,8 +441,8 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
                         &entry.repo_root,
                         home.as_deref(),
                     ),
-                    runtime,
-                    row,
+                    ws,
+                    read,
                 });
             }
             Err(orbit_core::OrbitError::NotFound {
@@ -428,21 +460,25 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
     }))
 }
 
-/// Render `row`'s full projection from `runtime`, stamping the owning
-/// workspace's `(id, name, root)` on it when the read resolved through the
-/// aggregate.
+/// Render the read row's full projection from its workspace, stamping the
+/// owning workspace's `(id, name, root)` on it when the read resolved through
+/// the aggregate.
 async fn task_detail_response(
     state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
-    row: orbit_core::application::task::TaskRow,
+    ws: Ws,
+    read: Box<RowRead>,
     stamp: Option<(String, String, String)>,
     include_candidate: bool,
 ) -> Response {
-    let riskiness = cached_riskiness_model(state, &runtime).await;
+    let riskiness = cached_riskiness_model(state, &ws.0).await;
     match blocking("task detail", move || {
-        let statuses = dashboard_status_index(&runtime, &row.task)?;
+        let RowRead {
+            row,
+            dependency_statuses,
+        } = *read;
+        let statuses = dependency_statuses?;
         let mut value = task_detail_json(
-            &runtime,
+            &ws.0,
             &row,
             &statuses,
             riskiness.as_deref(),
@@ -465,10 +501,10 @@ async fn task_detail_response(
 
 /// Status distribution per complexity bucket, including the explicit `unset`
 /// band. Counts come from the generated task index — no per-request YAML reads.
-pub(in crate::api) async fn completion_by_complexity(Ws(runtime): Ws) -> Response {
-    let runtime_clone = runtime.clone();
+pub(in crate::api) async fn completion_by_complexity(WsCore(core): WsCore) -> Response {
     let rows = match helpers::blocking_join("completion-by-complexity aggregation", move || {
-        runtime_clone.task_completion_by_complexity()
+        task::exec(&core, Command::Read(Read::CompletionByComplexity))
+            .and_then(Outcome::into_completion)
     })
     .await
     {

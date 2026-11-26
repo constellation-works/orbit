@@ -3,20 +3,22 @@
 //! Task reads, writes, artifacts, locks and the review verbs are declared
 //! once in `orbit_common::governance::task`; the clap tree is the
 //! noun-agnostic adapter in [`super::super::operation_args`], and every verb
-//! runs through the tool. The task subcommands with no tool stay hand-wired
-//! in [`super::command`].
+//! runs through the task app's one `exec`. The task subcommands with no
+//! registry verb stay hand-wired in [`super::command`].
 //!
 //! What stays here is CLI-specific: [`prepare`] consumes the CLI-only flags,
-//! and [`render`] builds the text output from the tool's answer. Both are
+//! and [`render`] builds the text output from the app's answer. Both are
 //! exhaustive matches on [`TaskVerb`].
 
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::OrbitError;
+use orbit_core::app::task::{self, Command, Input, Outcome};
 use serde_json::{Map, Value, json};
 
 use super::super::operation_args::Invocation;
+use crate::command::operation::DispatchContext;
 use crate::command::{CommandOut, Payload};
 
 /// Explicit owner selection is resolved before opening the CLI runtime.
@@ -49,13 +51,15 @@ pub(super) struct ListView {
 
 pub(super) fn execute(
     invocation: Invocation<TaskVerb>,
-    runtime: &OrbitRuntime,
-    env: &Env,
+    context: &DispatchContext<'_>,
 ) -> CommandOut {
     let Invocation { spec, mut input } = invocation;
-    let view = prepare(spec.verb, runtime, &mut input, env)?;
-    let value = runtime.run_tool(spec.tool_name, Value::Object(input.clone()))?;
-    render(spec.verb, runtime, &input, value, view)
+    let view = prepare(spec.verb, context, &mut input)?;
+    let outcome = task::exec(
+        context.core()?,
+        Command::Operation(spec.verb, Input::new(input.clone())),
+    )?;
+    render(spec.verb, &input, outcome, view)
 }
 
 /// `orbit task add`'s CLI-only flags, carried to the handler as its CLI
@@ -82,13 +86,14 @@ const UPDATE_MODIFIERS: [&str; 4] = [
 /// Shape a task request for the CLI before it reaches the tool. Each
 /// CLI-only parameter is consumed here, so none reaches the tool as a field
 /// of its own: the write verbs carry theirs as the handler's CLI options,
-/// which also mark the request as the operator command's.
+/// which also mark the request as the operator command's. The app names
+/// this checkout as the workspace of the verbs that act on it.
 fn prepare(
     verb: TaskVerb,
-    runtime: &OrbitRuntime,
+    context: &DispatchContext<'_>,
     input: &mut Map<String, Value>,
-    env: &Env,
 ) -> Result<ListView, OrbitError> {
+    let env = context.env();
     match verb {
         TaskVerb::Add => {
             let mut options = Map::new();
@@ -99,7 +104,6 @@ fn prepare(
             }
             super::support::shape_not_before_flags(input)?;
             input.insert(TASK_CLI_OPTIONS_PARAM.to_string(), Value::Object(options));
-            input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             insert_env_model(input, env);
             Ok(ListView::default())
         }
@@ -178,8 +182,11 @@ fn prepare(
         // routed them, which the preflight did before dispatch.
         TaskVerb::RetryHandoff => {
             if let Some(Value::String(selector)) = input.shift_remove("owner_workspace") {
-                let workspace =
-                    RegisteredRuntimeFactory::resolve_cli_owner_workspace(runtime, &selector)?;
+                // Owner selection has no app yet; it reads the opened runtime.
+                let workspace = RegisteredRuntimeFactory::resolve_cli_owner_workspace(
+                    context.runtime()?,
+                    &selector,
+                )?;
                 input.insert("workspace".into(), json!(workspace));
             }
             Ok(ListView::default())
@@ -191,7 +198,6 @@ fn prepare(
         | TaskVerb::RecoverClaim
         | TaskVerb::RevokeHandoff => {
             input.shift_remove("host");
-            input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             Ok(ListView::default())
         }
         // Block triage, reject and delete have no command line.
@@ -345,14 +351,14 @@ fn unroutable_update_refusals(input: &Map<String, Value>, id: &str, host_ssh: &s
 /// Build a task response's text payload.
 fn render(
     verb: TaskVerb,
-    runtime: &OrbitRuntime,
     input: &Map<String, Value>,
-    value: Value,
+    outcome: Outcome,
     view: ListView,
 ) -> CommandOut {
+    let answer = |outcome: Outcome| outcome.into_answer();
     match verb {
         TaskVerb::Add => {
-            let (document, task) = super::output::task_write_json(runtime, &value)?;
+            let (document, task) = super::output::task_write_json(*outcome.into_written()?);
             // Stdout stays the bare id scripts capture; the schedule echo
             // goes beside the write's other notices.
             if let Some(line) = super::support::not_before_line(&task) {
@@ -361,7 +367,7 @@ fn render(
             Ok(Payload::detail(document, task.id).into())
         }
         TaskVerb::Update => {
-            let (document, task) = super::output::task_write_json(runtime, &value)?;
+            let (document, task) = super::output::task_write_json(*outcome.into_written()?);
             let approved = input
                 .get(TASK_CLI_OPTIONS_PARAM)
                 .and_then(|options| options.get("approve"))
@@ -377,7 +383,7 @@ fn render(
             Ok(Payload::detail(document, text).into())
         }
         TaskVerb::ArtifactPut => {
-            let (document, task) = super::output::task_write_json(runtime, &value)?;
+            let (document, task) = super::output::task_write_json(*outcome.into_written()?);
             let path = input
                 .get("path")
                 .and_then(Value::as_str)
@@ -395,22 +401,27 @@ fn render(
             )
             .into())
         }
-        TaskVerb::ArtifactGet => super::artifact::render_get(value, view.artifact_out.as_deref()),
-        TaskVerb::LocksList | TaskVerb::LocksReserve | TaskVerb::LocksRelease => {
-            crate::command::locks::render(verb, value)
+        TaskVerb::ArtifactGet => {
+            super::artifact::render_get(answer(outcome)?, view.artifact_out.as_deref())
         }
-        TaskVerb::List => super::list::render(input, value, view),
-        TaskVerb::Eligible => super::eligible::render(input, value),
-        TaskVerb::Show => super::show::render(runtime, input, value),
-        TaskVerb::Lint => super::lint::render(input, value),
+        TaskVerb::LocksReserve => crate::command::locks::render(verb, outcome.into_reservation()?),
+        TaskVerb::LocksList | TaskVerb::LocksRelease => {
+            crate::command::locks::render(verb, answer(outcome)?)
+        }
+        TaskVerb::List => super::list::render(input, answer(outcome)?, view),
+        TaskVerb::Eligible => super::eligible::render(input, answer(outcome)?),
+        TaskVerb::Show => super::show::render(input, outcome),
+        TaskVerb::Lint => super::lint::render(input, answer(outcome)?),
         TaskVerb::ReviewReset => {
-            Ok(Payload::detail(value, super::review_reset::REVIEW_RESET_TEXT).into())
+            Ok(Payload::detail(answer(outcome)?, super::review_reset::REVIEW_RESET_TEXT).into())
         }
         TaskVerb::Requeue => {
+            let value = answer(outcome)?;
             let text = requeue_text(&value);
             Ok(Payload::detail(value, text).into())
         }
         TaskVerb::ReconcileReview => {
+            let value = answer(outcome)?;
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
         }
@@ -421,7 +432,7 @@ fn render(
         | TaskVerb::BlockTriage
         | TaskVerb::ResumeDelivery
         | TaskVerb::Reject
-        | TaskVerb::Delete => Ok(Payload::document(value).into()),
+        | TaskVerb::Delete => Ok(Payload::document(answer(outcome)?).into()),
     }
 }
 

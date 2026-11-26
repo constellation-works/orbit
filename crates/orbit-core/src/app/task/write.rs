@@ -30,8 +30,8 @@ use crate::application::task::{
     is_operator_rescue_close, screened_task_write_response_json,
 };
 
-use super::super::dispatch::ToolCaller;
-use super::super::input::{
+use super::ToolCaller;
+use crate::adapter::tool_host::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
     parse_optional_not_before, parse_optional_task_origin, parse_relations, parse_task_priority,
     parse_task_status, parse_task_type,

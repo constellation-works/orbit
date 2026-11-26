@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::task::TaskVerb;
-use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
+use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope};
 use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
@@ -12,25 +12,13 @@ use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::app::task::{ToolCall, ToolCaller};
 use crate::application::agents::AgentDetailSurface;
 use crate::application::resident::{ResidentActionTicket, ResidentCallAdmission};
 use crate::application::task::{
     TaskMutationAudit, audit_status_for_task_mutation_error, with_task_write_provenance,
 };
 use crate::runtime::authorization::resolved_caller_capabilities;
-
-/// Everything the dispatch table knows about *who* is making this call.
-///
-/// Grouped rather than passed as four more parameters because the handlers
-/// consume different subsets of it: attribution for a persisted record, the
-/// reservation owner for a lock write, and the session itself for the one
-/// operation whose decision depends on the caller [ORB-11354].
-pub(super) struct ToolCaller<'a> {
-    pub(super) session_context: &'a ToolSessionContext,
-    pub(super) agent: Option<String>,
-    pub(super) model: Option<String>,
-    pub(super) reservation_owner: Option<ReservationOwnerContext>,
-}
 
 /// Provenance for a run this call submits [ORB-13016].
 ///
@@ -281,12 +269,20 @@ fn execute_admitted(
             let started = Instant::now();
             let result = with_task_write_provenance(provenance, || {
                 super::decision_tools::dispatch(
-                    runtime,
+                    &crate::Core::within_tool_entry(runtime.clone()),
+                    ToolCall {
+                        caller: ToolCaller {
+                            session_context,
+                            agent,
+                            model,
+                            reservation_owner,
+                        },
+                        operator,
+                        resident_action_key,
+                        resident_ticket: resident_call.map(|(ticket, _)| ticket),
+                    },
                     verb,
                     input,
-                    session_context,
-                    agent.as_deref(),
-                    model.as_deref(),
                 )
             });
             if matches!(verb, DecisionVerb::Submit | DecisionVerb::Raise)
@@ -391,17 +387,19 @@ fn execute_admitted(
                 })
                 .flatten();
             let result = with_task_write_provenance(provenance, || {
-                super::task::operation::dispatch(
-                    runtime,
-                    ToolCaller {
-                        session_context,
-                        agent,
-                        model,
-                        reservation_owner,
+                super::task::dispatch(
+                    &crate::Core::within_tool_entry(runtime.clone()),
+                    ToolCall {
+                        caller: ToolCaller {
+                            session_context,
+                            agent,
+                            model,
+                            reservation_owner,
+                        },
+                        operator,
+                        resident_action_key,
+                        resident_ticket: resident_call.map(|(ticket, _)| ticket),
                     },
-                    operator,
-                    resident_action_key,
-                    resident_call.map(|(ticket, _)| ticket),
                     verb,
                     input,
                 )

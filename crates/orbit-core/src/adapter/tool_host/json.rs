@@ -20,7 +20,7 @@ pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Valu
 /// The full `orbit.task.show` record. This is [`task_show_json`] and nothing
 /// else: `next_step` and `final_recovery` are part of that record, present
 /// only when they apply.
-pub(super) fn serialize_task_show(
+pub(crate) fn serialize_task_show(
     runtime: &OrbitRuntime,
     row: &TaskRow,
 ) -> Result<Value, OrbitError> {
@@ -28,11 +28,11 @@ pub(super) fn serialize_task_show(
     task_show_json(runtime, row, &status_by_id).map(Value::Object)
 }
 
-pub(super) fn serialize_task_lint_report(report: &TaskLintReport) -> Result<Value, OrbitError> {
+pub(crate) fn serialize_task_lint_report(report: &TaskLintReport) -> Result<Value, OrbitError> {
     serde_json::to_value(report).map_err(serialize_error("serialize task lint report"))
 }
 
-pub(super) fn task_fields_to_json(
+pub(crate) fn task_fields_to_json(
     runtime: &OrbitRuntime,
     task: &Task,
     fields: &[String],
@@ -43,7 +43,7 @@ pub(super) fn task_fields_to_json(
 
 /// [`task_fields_to_json`] over the row `orbit.task.show` already hydrated,
 /// so its sidecar fields do not re-read the store.
-pub(super) fn task_fields_to_json_from_row(
+pub(crate) fn task_fields_to_json_from_row(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     fields: &[String],
@@ -59,7 +59,7 @@ pub(super) fn task_fields_to_json_from_row(
     )
 }
 
-pub(super) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {
+pub(crate) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {
     move |error| OrbitError::Execution(format!("{label}: {error}"))
 }
 
@@ -75,7 +75,7 @@ pub(super) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Er
 /// Bounded by the shared attach limit. An oversize artifact is a clear error
 /// rather than a truncated payload, because a partial image is indistinguishable
 /// from a corrupt one; the dashboard download route still serves it whole.
-pub(super) fn serialize_task_artifact_read(
+pub(crate) fn serialize_task_artifact_read(
     task_id: &str,
     artifact: &TaskArtifact,
 ) -> Result<Value, OrbitError> {

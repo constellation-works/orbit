@@ -8,6 +8,7 @@ targets=(
   "crates/orbit-core/src/adapter/tool_host/task"
   "crates/orbit-core/src/adapter/tool_host/friction_tools.rs"
   "crates/orbit-core/src/app/friction"
+  "crates/orbit-core/src/app/task"
   "crates/orbit-tools/src/builtin/orbit/task"
   "crates/orbit-tools/src/builtin/orbit/operation.rs"
   # [ORB-00417] Write-time redaction paths: task creation (dashboard + core

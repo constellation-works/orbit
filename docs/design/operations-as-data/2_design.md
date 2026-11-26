@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: The operation spec kernel v2, generic MCP/CLI adapters, and tool-entry validation are implemented for friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase, agent scorecard, resident checkpoint and evolution operations. The original migration phases are complete, with explicit verdicts for the remaining single-surface or wider CLI contracts.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation/**", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs", "crates/orbit-core/src/application/agents/**"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/app/task/**", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs", "crates/orbit-core/src/application/agents/**"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15939, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-23582, ORB-21243, ORB-21248]
 ---
@@ -51,9 +51,9 @@ allowed for a migrated noun. Friction's tables in `app/friction/mod.rs`,
 `worker_tools.rs`, `artifact_redaction/policy.rs` and `command/friction.rs` follow it,
 as do auto-task's in `auto_task_tools.rs`, the same two core tables,
 `builtin/orbit/auto_task.rs` (MCP guarded modes) and `command/auto_task/`.
-The task read verbs' tables are `task/operation/dispatch.rs` (the handler
-table; `list` and `eligible` are in `task/operation/listing.rs`, `show` in
-`task/operation/show.rs` and `lint` in `task/operation/lifecycle.rs`), the same
+The task read verbs' tables are `app/task/operation.rs` (the handler
+table; `list` and `eligible` are in `app/task/listing.rs`, `show` in
+`app/task/show.rs` and `lint` in `app/task/lifecycle.rs`), the same
 two core tables,
 `builtin/orbit/task/operation.rs` (MCP guarded modes),
 `command/task/operation.rs` and `task_operation` in `command/operation/spec.rs`.
@@ -746,7 +746,7 @@ are not redacted or rewritten.
 `orbit.task.lint` are declared in
 [governance/task/operations.rs](../../../crates/orbit-common/src/governance/task/operations.rs)
 and served by `OperationTool<TaskVerb>`. The handlers in
-[task/operation](../../../crates/orbit-core/src/adapter/tool_host/task/operation/mod.rs)
+[app/task/operation.rs](../../../crates/orbit-core/src/app/task/operation.rs)
 answer every surface, so the CLI and MCP read the same record: the full `show`
 record (`task_show_json`) carries `next_step` for a run-blocked task and the
 `final_recovery` decision (`run_id`, `decision`, `outcome`, `at`). The
@@ -769,8 +769,8 @@ listed in
 `orbit.task.add` and `orbit.task.update` are declared in
 [write_operations.rs](../../../crates/orbit-common/src/governance/task/write_operations.rs)
 and served by `OperationTool<TaskVerb>`. `orbit task add` and `orbit task
-update` execute through `run_tool`, and the one handler in
-[task/write.rs](../../../crates/orbit-core/src/adapter/tool_host/task/write.rs)
+update` execute through `app::task::exec`, and the one handler in
+[app/task/write.rs](../../../crates/orbit-core/src/app/task/write.rs)
 assembles `TaskAddParams` and `TaskUpdateParams` for every surface. The help
 goldens under `crates/orbit-cli/tests/help_goldens/task/` (`add.txt`,
 `update.txt`) were captured before the migration and pass unchanged, and the
@@ -847,9 +847,9 @@ and `orbit.task.recover` action `retry_handoff`, the operator tools, and the ina
 `orbit.task.reject` and `orbit.task.delete` are declared in
 [lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs)
 and served by `OperationTool<TaskVerb>`. The handler table in
-[task/operation/dispatch.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation/dispatch.rs)
+[app/task/operation.rs](../../../crates/orbit-core/src/app/task/operation.rs)
 calls the review application services, and the
-[task/operation/lifecycle.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation/lifecycle.rs)
+[app/task/lifecycle.rs](../../../crates/orbit-core/src/app/task/lifecycle.rs)
 module holds the reject and delete handlers. The CLI names stay hyphenated
 (`review-reset`, `reconcile-review`) and the tool names underscored; reject
 and delete have no CLI and no MCP placement.

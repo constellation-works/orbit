@@ -1,11 +1,7 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::application::task::{
-    TaskWriteMetadata, TaskWriteResponsePolicy, task_write_response_from_tool_answer,
-    task_write_response_json,
-};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::task::Written;
 use orbit_types::task::TaskHistoryEntry;
 use serde_json::Value;
 
@@ -34,22 +30,6 @@ pub(super) fn format_task_history_event(entry: &TaskHistoryEntry) -> String {
     }
 }
 
-pub(crate) fn task_to_json_for_runtime(
-    runtime: &OrbitRuntime,
-    task: &orbit_core::Task,
-) -> Result<Value, OrbitError> {
-    let document = task_write_response_json(
-        runtime,
-        task,
-        &TaskWriteResponsePolicy::FullRecord,
-        &TaskWriteMetadata::default(),
-    )?;
-    if let Some(doc) = document.as_object() {
-        warn_unresolved_crew(doc);
-    }
-    Ok(document)
-}
-
 /// A crew this host cannot resolve is a configuration gap, not a corrupt
 /// task, so the record still renders (ORB-10968); the reason also goes to
 /// stderr rather than being swallowed.
@@ -61,27 +41,29 @@ pub(super) fn warn_unresolved_crew(doc: &serde_json::Map<String, Value>) {
 }
 
 /// A task write's document: the shared full-record projection of the
-/// stored task, carrying the tool answer's write metadata. Rendering
-/// stays here: each warning is also printed to stderr so a text-mode
-/// caller sees it, as is an unresolved crew.
-pub(super) fn task_write_json(
-    runtime: &OrbitRuntime,
-    answer: &Value,
-) -> Result<(Value, orbit_core::Task), OrbitError> {
-    let (document, task, metadata) = task_write_response_from_tool_answer(runtime, answer)?;
-    for warning in &metadata.warnings {
+/// stored task, carrying the write's metadata. Rendering stays here: each
+/// warning is also printed to stderr so a text-mode caller sees it, as is
+/// an unresolved crew.
+pub(super) fn task_write_json(written: Written) -> (Value, orbit_core::Task) {
+    let Written {
+        document,
+        task,
+        warnings,
+        context_files_unverified,
+    } = written;
+    for warning in &warnings {
         eprintln!("warning: {warning}");
     }
-    if !metadata.context_files_unverified.is_empty() {
+    if !context_files_unverified.is_empty() {
         eprintln!(
             "warning: context selectors stored without a verified target: {}",
-            metadata.context_files_unverified.join(", ")
+            context_files_unverified.join(", ")
         );
     }
     if let Some(doc) = document.as_object() {
         warn_unresolved_crew(doc);
     }
-    Ok((document, task))
+    (document, task)
 }
 
 /// Which columns the caller filtered on, and so must keep even when the filter

@@ -411,7 +411,7 @@ impl Commands {
                     // The registry-derived task verbs take their runtime need,
                     // audit metadata and id routing from the spec.
                     TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
-                        return task_operation(invocation, boxed_runtime_env_dispatch!(Task));
+                        return task_operation(invocation, boxed_context_dispatch!(Task));
                     }
                     TaskSubcommand::Operation(TaskInvocation::Contention(_)) => {
                         ("locks-contention", None, None)
@@ -456,24 +456,15 @@ impl Commands {
                     // be routed from the ID alone.
                     _ => RuntimeNeed::Required,
                 };
+                // The task app's `exec` authorizes the command and writes
+                // its audit row; the metadata here covers a refusal before
+                // the command reaches it, and lock contention, which has no
+                // app yet.
                 CommandOperation::new(
                     runtime_need,
                     Some(admin_meta("task", Some(subcommand), target_type, target_id)),
                     None,
-                    boxed_runtime_env_dispatch!(Task),
-                )
-                .governed_when(
-                    matches!(
-                        &command.command,
-                        TaskSubcommand::Publication(publication)
-                            if matches!(
-                                publication.command,
-                                TaskPublicationSubcommand::Publish(_)
-                                    | TaskPublicationSubcommand::Restore(_)
-                            )
-                    ),
-                    "task",
-                    subcommand,
+                    boxed_context_dispatch!(Task),
                 )
             }
             Commands::Search(command) => {
@@ -496,18 +487,11 @@ impl Commands {
             }
             // Decision requests are registry-driven like friction; the
             // answer verb's write effect makes its runtime need required.
-            // Answering is the operator's, so it is authorized before
-            // dispatch; the handler applies it as a human write.
+            // They run through the task app's `exec`. Answering, reversing
+            // and marking a rule auto are the operator's: `exec` authorizes
+            // them and applies each as a human write.
             Commands::Decision(command) => {
-                use orbit_common::governance::decision::DecisionVerb;
-                let (governed, subcommand) = match command.command.spec.verb {
-                    DecisionVerb::Answer => (true, "answer"),
-                    DecisionVerb::Reverse => (true, "reverse"),
-                    DecisionVerb::RuleAuto => (true, "rule-auto"),
-                    _ => (false, "answer"),
-                };
-                registry_operation(&command.command, runtime_env_dispatch!(Decision))
-                    .governed_when(governed, "decision", subcommand)
+                registry_operation(&command.command, core_dispatch!(Decision))
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;

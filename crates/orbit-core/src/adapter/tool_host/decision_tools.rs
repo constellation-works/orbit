@@ -1,162 +1,29 @@
-use crate::OrbitRuntime;
-use crate::application::task::decision_request_json;
-use crate::application::task::{
-    AgentDecisionRaise, DecisionListProfile, DecisionSubmitCaller, DecisionSubmitParams,
-};
-use crate::runtime::authorization::resolved_caller_capabilities;
-use orbit_common::governance::decision::DecisionVerb;
-use orbit_common::governance::operation::OperationVerb;
-use orbit_common::{DecisionRefusalCode, OrbitError};
-use orbit_types::task::AgentDecisionOptionInput;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
-use serde_json::{Value, json};
+//! The decision tool handler.
+//!
+//! Decision verbs are declared once as data in
+//! `orbit_common::governance::decision::operations`. The handler half of the
+//! table lives in the task app (`crate::app::task`), joined to the spec half
+//! by [`DecisionVerb`]: this entry turns the tool call into the app's command
+//! and calls its one `exec`.
 
+use orbit_common::OrbitError;
+use orbit_common::governance::decision::DecisionVerb;
+use serde_json::Value;
+
+use crate::Core;
+use crate::app::task::{self, Command, Input, Outcome, ToolCall};
+
+/// Run one decision verb the generic tool entry admitted.
 pub(super) fn dispatch(
-    runtime: &OrbitRuntime,
+    core: &Core,
+    call: ToolCall<'_>,
     verb: DecisionVerb,
     input: Value,
-    session_context: &ToolSessionContext,
-    agent: Option<&str>,
-    model: Option<&str>,
 ) -> Result<Value, OrbitError> {
-    let input = verb.spec().parse_input(input)?;
-    match verb {
-        DecisionVerb::List => {
-            let gate = input.optional_string("gate")?;
-            let task_id = input.optional_string("task_id")?;
-            let topic = input.optional_string("topic")?;
-            let include_closed = input.optional_bool("include_closed")?.unwrap_or(false);
-            runtime.list_decision_requests_projected(
-                gate.as_deref(),
-                task_id.as_deref(),
-                topic.as_deref(),
-                include_closed,
-                DecisionListProfile::Tool,
-            )
-        }
-        DecisionVerb::Show => {
-            let id = input.required_string("id")?;
-            let request = runtime.get_decision_request(&id)?.ok_or_else(|| {
-                OrbitError::decision_refused(
-                    DecisionRefusalCode::RequestNotFound,
-                    format!("no decision request `{id}` in this workspace; see `orbit decision list --all` or `orbit.decision` with action `list` and `include_closed: true` for valid request IDs"),
-                )
-            })?;
-            Ok(decision_request_json(&request))
-        }
-        DecisionVerb::Raise => {
-            let options = input
-                .as_value()
-                .get("options")
-                .cloned()
-                .ok_or_else(|| OrbitError::InvalidInput("`options` is required".into()))?;
-            let options: Vec<AgentDecisionOptionInput> =
-                serde_json::from_value(options).map_err(|error| {
-                    OrbitError::InvalidInput(format!(
-                        "`options` must be an array of {{label, consequence, recommended}} objects: {error}"
-                    ))
-                })?;
-            let filer = runtime.actor().resolve_write_label(agent, model)?;
-            let raised = runtime.raise_agent_decision_request(AgentDecisionRaise {
-                task_id: input.required_string("task_id")?,
-                question: input.required_string("question")?,
-                options,
-                topic: input.optional_string("topic")?,
-                filer,
-            })?;
-            let mut value = decision_request_json(&raised.request);
-            value["deduplicated"] = json!(raised.deduplicated);
-            Ok(value)
-        }
-        DecisionVerb::Digest => {
-            let caller = submit_caller(runtime, session_context, agent, model)?;
-            let digest =
-                runtime.decision_digest(&input.required_string("channel")?, caller)?;
-            let mut value = json!({
-                "requests": digest.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
-                "raised": digest.raised.iter().map(decision_request_json).collect::<Vec<_>>(),
-                "expiring": digest.expiring.iter().map(decision_request_json).collect::<Vec<_>>(),
-                "count": digest.requests.len(),
-            });
-            if !digest.warnings.is_empty() {
-                value["warnings"] = json!(digest.warnings);
-            }
-            Ok(value)
-        }
-        DecisionVerb::Submit => {
-            let caller = submit_caller(runtime, session_context, agent, model)?;
-            let request = runtime.submit_decision_via_channel(DecisionSubmitParams {
-                channel: input.required_string("channel")?,
-                request_id: input.required_string("id")?,
-                answer_id: input.required_string("answer")?,
-                note: input.optional_string("note")?,
-                token: input.required_string("token")?,
-                sender: input.optional_string("sender")?,
-                auth_results: input.optional_string("auth_results")?,
-                raw_message: input.optional_raw_string("raw_message")?,
-                caller,
-            })?;
-            Ok(decision_request_json(&request))
-        }
-        // The tool entry refuses these verbs before dispatch and registers
-        // them inactive; refusing here too keeps the invariant in core.
-        DecisionVerb::Answer => Err(OrbitError::PolicyDenied(
-            "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
-        )),
-        DecisionVerb::Reverse => Err(OrbitError::PolicyDenied(
-            "reversing a precedent or model answer is the operator's: use `orbit decision reverse`".into(),
-        )),
-        DecisionVerb::RuleAuto => Err(OrbitError::PolicyDenied(
-            "setting auto on a decision rule is the operator's: use `orbit decision rule-auto`".into(),
-        )),
-        DecisionVerb::Consolidate => Err(OrbitError::PolicyDenied(
-            "a consolidation proposal is a CLI read: use `orbit decision consolidate`".into(),
-        )),
-        DecisionVerb::ChannelRegister
-        | DecisionVerb::ChannelList
-        | DecisionVerb::ChannelRevoke
-        | DecisionVerb::ChannelRotateKey => Err(OrbitError::PolicyDenied(
-            "decision channels are registered from the operator CLI: use `orbit decision channel register|list|revoke|rotate-key`".into(),
-        )),
-    }
-}
-
-/// Who is submitting, from trusted seams only: the host-issued plugin
-/// callback session this process inherited, or the caller's resolved
-/// capability. Tool input never names its own caller. A caller carrying
-/// an agent identity is an agent even on an operator-capable session —
-/// the governed row already refused plain agent sessions, and this
-/// derivation is the handler's own statement of the same rule.
-fn submit_caller(
-    runtime: &OrbitRuntime,
-    session_context: &ToolSessionContext,
-    agent: Option<&str>,
-    model: Option<&str>,
-) -> Result<DecisionSubmitCaller, OrbitError> {
-    use orbit_tools::plugin::{CallbackResolution, resolve_plugin_callback_session};
-
-    // A claimed or remote run never submits a decision (design §1): a
-    // worker-bound session is an agent for this derivation whatever else
-    // this process inherited.
-    if session_context.worker_invocation.is_some() {
-        return Ok(DecisionSubmitCaller::Agent);
-    }
-    if let CallbackResolution::Identified(identity) =
-        resolve_plugin_callback_session(runtime.env(), &runtime.global_root())?
-    {
-        return Ok(DecisionSubmitCaller::PluginCallback {
-            plugin: identity.provenance.name,
-        });
-    }
-    if agent.is_some() || model.is_some() {
-        return Ok(DecisionSubmitCaller::Agent);
-    }
-    let capabilities = resolved_caller_capabilities(runtime.env(), session_context);
-    if capabilities.contains(&McpCapability::Operator) {
-        return Ok(DecisionSubmitCaller::Operator);
-    }
-    if capabilities.contains(&McpCapability::Agent) {
-        return Ok(DecisionSubmitCaller::Agent);
-    }
-    Ok(DecisionSubmitCaller::Unknown)
+    task::exec(
+        core,
+        Command::Decision(verb, Input::from_tool_entry(input, call)),
+    )
+    .and_then(Outcome::into_tool_answer)
+    .map(|(answer, _)| answer)
 }

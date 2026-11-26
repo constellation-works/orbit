@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{self, Command, Outcome};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 /// `orbit task reindex` — rebuild the registry index from on-disk bundles.
 #[derive(Args)]
@@ -12,9 +13,15 @@ pub struct TaskReindexArgs {
     pub task_workspace: Option<String>,
 }
 
-impl Execute for TaskReindexArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let outcome = runtime.reindex_tasks(self.task_workspace.as_deref())?;
+impl ExecuteCore for TaskReindexArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let outcome = task::exec(
+            core,
+            Command::Reindex {
+                task_workspace: self.task_workspace,
+            },
+        )
+        .and_then(Outcome::into_reindexed)?;
 
         let doc = json!({
             "workspace_id": outcome.workspace_id,

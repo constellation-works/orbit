@@ -1,12 +1,13 @@
-use super::super::super::dispatch::ToolCaller;
-use super::super::super::input::parse_task_status;
-use super::super::super::json::serialize_error;
-use super::super::write::TaskWriteOutput;
+//! The task verbs' handler table for a call the generic tool entry admitted.
+
+use super::ToolCall;
 use super::lifecycle::{block_triage, delete, lint, reject};
 use super::listing::{eligible, list};
 use super::show::show;
+use super::write::TaskWriteOutput;
 use crate::OrbitRuntime;
-use crate::application::resident::ResidentActionTicket;
+use crate::adapter::tool_host::input::parse_task_status;
+use crate::adapter::tool_host::json::serialize_error;
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::task::TaskVerb;
@@ -15,19 +16,22 @@ use serde_json::Value;
 /// Run one migrated task verb. A write also answers the id it persisted, for
 /// the redaction audit. A resident action key comes from the authenticated
 /// broker and records that the live cycle held the right this write needs.
-pub(in crate::adapter::tool_host) fn dispatch(
+pub(super) fn dispatch(
     runtime: &OrbitRuntime,
-    caller: ToolCaller<'_>,
-    operator: bool,
-    resident_action_key: Option<&str>,
-    resident_ticket: Option<&ResidentActionTicket>,
+    call: ToolCall<'_>,
     verb: TaskVerb,
     input: Value,
 ) -> Result<(Value, Option<String>), OrbitError> {
+    let ToolCall {
+        caller,
+        operator,
+        resident_action_key,
+        resident_ticket,
+    } = call;
     // The attachment surface has already authenticated/prepared its path-free
     // payload. Its public source_path parameter is no longer present here.
     if verb == TaskVerb::ArtifactPut {
-        let output = super::super::write::artifact_put(runtime, caller, &input, operator)?;
+        let output = super::write::artifact_put(runtime, caller, &input, operator)?;
         return Ok((output.response, Some(output.persisted_id)));
     }
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
@@ -38,8 +42,8 @@ pub(in crate::adapter::tool_host) fn dispatch(
         output.map(|output| (output.response, Some(output.persisted_id)))
     };
     match verb {
-        TaskVerb::Add => written(super::super::write::add(runtime, caller, input.as_value())),
-        TaskVerb::Update => written(super::super::write::update(
+        TaskVerb::Add => written(super::write::add(runtime, caller, input.as_value())),
+        TaskVerb::Update => written(super::write::update(
             runtime,
             caller,
             input.as_value(),
@@ -49,7 +53,7 @@ pub(in crate::adapter::tool_host) fn dispatch(
         TaskVerb::ArtifactPut => Err(OrbitError::Execution(
             "artifact preparation dispatch invariant violated".into(),
         )),
-        TaskVerb::ArtifactGet => read(super::super::read::artifact_get(
+        TaskVerb::ArtifactGet => read(super::read::artifact_get(
             runtime,
             caller.session_context,
             &input,

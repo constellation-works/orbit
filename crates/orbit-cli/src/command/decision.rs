@@ -1,29 +1,29 @@
 //! The decision-request CLI, derived from the decision operation registry.
 //!
-//! `list` and `show` call the read-only `orbit.decision.*` tools. `answer`
-//! is the operator's and never goes through the tool surface: it applies
-//! the answer in core as this CLI's human writer. That is why an agent
-//! session can list a request it is waiting on but cannot answer it.
-//! `submit` goes through the governed `orbit.decision.submit` tool so the
-//! operator tests a channel on exactly the path its plugin uses.
+//! Every verb runs through the task app's one `exec`, which authorizes and
+//! audits it. `list` and `show` reach the read-only `orbit.decision.*`
+//! tools. `answer` is the operator's and never goes through the tool
+//! surface: core applies the answer as this CLI's human writer. That is why
+//! an agent session can list a request it is waiting on but cannot answer
+//! it. `submit` goes through the governed `orbit.decision.submit` tool so
+//! the operator tests a channel on exactly the path its plugin uses.
 //! `digest` likewise goes through the governed `orbit.decision.digest`
 //! tool, raising the approval requests the plugin's digest presents.
 //! `channel …` administers this host's registrations in core directly;
-//! registering, revoking and rotating are refused from an agent envelope
-//! here, and the CLI's pre-dispatch gate already refuses every plain
-//! command to a plugin callback, so no running code can mint itself a
-//! human.
+//! core refuses registering, revoking and rotating from an agent envelope,
+//! and the CLI's pre-dispatch gate already refuses every plain command to a
+//! plugin callback, so no running code can mint itself a human.
 
 use std::fmt::Write as _;
 
 use clap::Args;
-use orbit_common::Env;
 use orbit_common::governance::decision::DecisionVerb;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::task::{self, Command, Input};
+use orbit_core::{Core, OrbitError};
 use serde_json::Value;
 
 use super::operation_args::Invocation;
-use crate::command::{CommandOut, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::payload::Block;
 use crate::output::table::{Column, Table};
 
@@ -34,16 +34,21 @@ pub struct DecisionCommand {
     pub command: Invocation<DecisionVerb>,
 }
 
-impl DecisionCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+impl ExecuteCore for DecisionCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, input } = self.command;
+        let answer = input
+            .get("answer")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let outcome = task::exec(core, Command::Decision(spec.verb, Input::new(input)))?;
         match spec.verb {
             DecisionVerb::List
             | DecisionVerb::Show
             | DecisionVerb::Raise
             | DecisionVerb::Submit
             | DecisionVerb::Digest => {
-                let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+                let value = outcome.into_answer()?;
                 let blocks = match spec.verb {
                     DecisionVerb::List => list_blocks(&value),
                     DecisionVerb::Digest => digest_blocks(&value),
@@ -58,59 +63,22 @@ impl DecisionCommand {
                 };
                 Ok(Payload::blocks(value, blocks).into())
             }
-            DecisionVerb::ChannelRegister
-            | DecisionVerb::ChannelList
-            | DecisionVerb::ChannelRevoke
-            | DecisionVerb::ChannelRotateKey => channel_execute(runtime, spec.verb, &input, env),
             DecisionVerb::Answer => {
-                let id = required(&input, "id")?;
-                let answer = required(&input, "answer")?;
-                let note = input
-                    .get("note")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let label = runtime.actor_label().trim();
-                let actor = if label.is_empty() {
-                    "human".to_string()
-                } else {
-                    label.to_string()
-                };
-                let request = orbit_core::application::task::with_task_write_provenance(
-                    orbit_types::task::TaskWriteProvenance::new(
-                        Some(orbit_types::task::TaskWriteSurface::Cli),
-                        None,
-                    ),
-                    || {
-                        runtime.answer_decision_request_as_human(
-                            &id,
-                            &answer,
-                            note,
-                            actor,
-                            Some("cli".to_string()),
-                        )
-                    },
-                )?;
+                let request = outcome.into_decision_request()?;
                 let value = serde_json::to_value(&request).map_err(|error| {
                     OrbitError::Execution(format!("serialize decision request: {error}"))
                 })?;
                 let blocks = vec![Block::text(format!(
-                    "Answered {} with `{answer}`; the request on {} now reads {}.",
+                    "Answered {} with `{}`; the request on {} now reads {}.",
                     request.id,
+                    answer.unwrap_or_default(),
                     request.task_id,
                     request.state.as_str(),
                 ))];
                 Ok(Payload::blocks(value, blocks).into())
             }
             DecisionVerb::Reverse => {
-                let id = required(&input, "id")?;
-                let actor = operator_label(runtime);
-                let request = orbit_core::application::task::with_task_write_provenance(
-                    orbit_types::task::TaskWriteProvenance::new(
-                        Some(orbit_types::task::TaskWriteSurface::Cli),
-                        None,
-                    ),
-                    || runtime.reverse_decision_answer(&id, &actor),
-                )?;
+                let request = outcome.into_decision_request()?;
                 let value = serde_json::to_value(&request).map_err(|error| {
                     OrbitError::Execution(format!("serialize decision request: {error}"))
                 })?;
@@ -123,27 +91,20 @@ impl DecisionCommand {
                 Ok(Payload::blocks(value, blocks).into())
             }
             DecisionVerb::RuleAuto => {
-                let rule = required(&input, "rule")?;
-                let setting = required(&input, "auto")?;
-                let auto = match setting.as_str() {
-                    "on" => true,
-                    "off" => false,
-                    other => {
-                        return Err(OrbitError::InvalidInput(format!(
-                            "`auto` must be on or off, not `{other}`"
-                        )));
-                    }
+                let value = outcome.into_answer()?;
+                let word = if value["auto"] == Value::Bool(true) {
+                    "on"
+                } else {
+                    "off"
                 };
-                let actor = operator_label(runtime);
-                runtime.set_decision_rule_auto(&rule, auto, &actor)?;
-                let value = serde_json::json!({ "rule": rule, "auto": auto });
-                let word = if auto { "on" } else { "off" };
-                let blocks = vec![Block::text(format!("Set auto {word} on `{rule}`."))];
+                let blocks = vec![Block::text(format!(
+                    "Set auto {word} on `{}`.",
+                    value["rule"].as_str().unwrap_or_default()
+                ))];
                 Ok(Payload::blocks(value, blocks).into())
             }
             DecisionVerb::Consolidate => {
-                let since = input.get("since").and_then(Value::as_str);
-                let value = runtime.consolidate_decision_precedent(since)?;
+                let value = outcome.into_answer()?;
                 let count = value.get("count").and_then(Value::as_u64).unwrap_or(0);
                 let paths = value
                     .get("proposals")
@@ -161,129 +122,68 @@ impl DecisionCommand {
                 ))];
                 Ok(Payload::blocks(value, blocks).into())
             }
-        }
-    }
-}
-
-fn operator_label(runtime: &OrbitRuntime) -> String {
-    let label = runtime.actor_label().trim();
-    if label.is_empty() {
-        "human".to_string()
-    } else {
-        label.to_string()
-    }
-}
-
-fn channel_execute(
-    runtime: &OrbitRuntime,
-    verb: DecisionVerb,
-    input: &serde_json::Map<String, Value>,
-    env: &Env,
-) -> CommandOut {
-    if !matches!(verb, DecisionVerb::ChannelList)
-        && orbit_common::governance::authorization::agent_context_declared(env)
-    {
-        return Err(OrbitError::PolicyDenied(
-            "registering, revoking or rotating a decision channel is the operator's: it is refused from an agent envelope, so no running code can mint itself a human".into(),
-        ));
-    }
-    fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
-        serde_json::to_value(value)
-            .map_err(|error| OrbitError::Execution(format!("serialize decision channels: {error}")))
-    }
-    match verb {
-        DecisionVerb::ChannelRegister => {
-            let channel = required(input, "channel")?;
-            let human = required(input, "human")?;
-            let plugin = required(input, "plugin")?;
-            let allowed_senders = input
-                .get("allowed_senders")
-                .and_then(Value::as_array)
-                .map(|senders| {
-                    senders
-                        .iter()
-                        .filter_map(|sender| sender.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let require_dkim_verification = input
-                .get("require_dkim_verification")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let info = runtime.register_decision_channel_with_dkim_requirement(
-                &channel,
-                &human,
-                &plugin,
-                allowed_senders,
-                require_dkim_verification,
-            )?;
-            let blocks = vec![Block::text(format!(
-                "Registered decision channel `{}` for {} via plugin {} (key epoch {}, fingerprint sha256:{}).",
-                info.channel, info.human, info.plugin, info.epoch, info.key_fingerprint
-            ))];
-            Ok(Payload::blocks(serialize(&info)?, blocks).into())
-        }
-        DecisionVerb::ChannelList => {
-            let channels = runtime.list_decision_channels()?;
-            let value = serialize(&channels)?;
-            let mut table = Table::new(vec![
-                Column::new("CHANNEL").fixed(),
-                Column::new("HUMAN").fixed(),
-                Column::new("PLUGIN").fixed(),
-                Column::new("EPOCH").fixed(),
-                Column::new("STATE").fixed(),
-                Column::new("DKIM").fixed(),
-                Column::new("SENDERS"),
-            ])
-            .empty_message("no decision channels registered on this host");
-            for channel in &channels {
-                table.add_row(vec![
-                    channel.channel.clone(),
-                    channel.human.clone(),
-                    channel.plugin.clone(),
-                    channel.epoch.to_string(),
-                    if channel.revoked { "revoked" } else { "active" }.to_string(),
-                    if channel.require_dkim_verification {
-                        "required"
-                    } else {
-                        "optional"
-                    }
-                    .to_string(),
-                    channel.allowed_senders.join(", "),
-                ]);
+            DecisionVerb::ChannelRegister => {
+                let info = outcome.into_channel()?;
+                let blocks = vec![Block::text(format!(
+                    "Registered decision channel `{}` for {} via plugin {} (key epoch {}, fingerprint sha256:{}).",
+                    info.channel, info.human, info.plugin, info.epoch, info.key_fingerprint
+                ))];
+                Ok(Payload::blocks(serialize(&info)?, blocks).into())
             }
-            Ok(Payload::blocks(value, vec![Block::table(table)]).into())
+            DecisionVerb::ChannelList => {
+                let channels = outcome.into_channels()?;
+                let value = serialize(&channels)?;
+                let mut table = Table::new(vec![
+                    Column::new("CHANNEL").fixed(),
+                    Column::new("HUMAN").fixed(),
+                    Column::new("PLUGIN").fixed(),
+                    Column::new("EPOCH").fixed(),
+                    Column::new("STATE").fixed(),
+                    Column::new("DKIM").fixed(),
+                    Column::new("SENDERS"),
+                ])
+                .empty_message("no decision channels registered on this host");
+                for channel in &channels {
+                    table.add_row(vec![
+                        channel.channel.clone(),
+                        channel.human.clone(),
+                        channel.plugin.clone(),
+                        channel.epoch.to_string(),
+                        if channel.revoked { "revoked" } else { "active" }.to_string(),
+                        if channel.require_dkim_verification {
+                            "required"
+                        } else {
+                            "optional"
+                        }
+                        .to_string(),
+                        channel.allowed_senders.join(", "),
+                    ]);
+                }
+                Ok(Payload::blocks(value, vec![Block::table(table)]).into())
+            }
+            DecisionVerb::ChannelRevoke => {
+                let info = outcome.into_channel()?;
+                let blocks = vec![Block::text(format!(
+                    "Revoked decision channel `{}`; its outstanding tokens no longer verify.",
+                    info.channel
+                ))];
+                Ok(Payload::blocks(serialize(&info)?, blocks).into())
+            }
+            DecisionVerb::ChannelRotateKey => {
+                let info = outcome.into_channel()?;
+                let blocks = vec![Block::text(format!(
+                    "Rotated decision channel `{}` to key epoch {} (fingerprint sha256:{}); every outstanding token is invalidated.",
+                    info.channel, info.epoch, info.key_fingerprint
+                ))];
+                Ok(Payload::blocks(serialize(&info)?, blocks).into())
+            }
         }
-        DecisionVerb::ChannelRevoke => {
-            let channel = required(input, "channel")?;
-            let info = runtime.revoke_decision_channel(&channel)?;
-            let blocks = vec![Block::text(format!(
-                "Revoked decision channel `{}`; its outstanding tokens no longer verify.",
-                info.channel
-            ))];
-            Ok(Payload::blocks(serialize(&info)?, blocks).into())
-        }
-        DecisionVerb::ChannelRotateKey => {
-            let channel = required(input, "channel")?;
-            let info = runtime.rotate_decision_channel_key(&channel)?;
-            let blocks = vec![Block::text(format!(
-                "Rotated decision channel `{}` to key epoch {} (fingerprint sha256:{}); every outstanding token is invalidated.",
-                info.channel, info.epoch, info.key_fingerprint
-            ))];
-            Ok(Payload::blocks(serialize(&info)?, blocks).into())
-        }
-        _ => Err(OrbitError::Execution(
-            "decision channel dispatch reached a non-channel verb".into(),
-        )),
     }
 }
 
-fn required(input: &serde_json::Map<String, Value>, name: &str) -> Result<String, OrbitError> {
-    input
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| OrbitError::InvalidInput(format!("`{name}` is required")))
+fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
+    serde_json::to_value(value)
+        .map_err(|error| OrbitError::Execution(format!("serialize decision channels: {error}")))
 }
 
 fn list_blocks(value: &Value) -> Vec<Block> {

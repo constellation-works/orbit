@@ -1,10 +1,11 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{self, Command, Outcome, Rechecked};
 use orbit_core::application::task::TransientInfraBlockedTask;
 use orbit_core::runtime::InfraBlockedTask;
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 /// `orbit task recheck-blocked` — re-check tasks blocked by a missing provider
 /// launcher or by transient infrastructure, and requeue the cleared ones.
@@ -18,26 +19,20 @@ pub struct TaskRecheckBlockedArgs {
     pub confirm: bool,
 }
 
-impl Execute for TaskRecheckBlockedArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let found = runtime.infra_blocked_tasks()?;
-        let transient = runtime.transient_infra_blocked_tasks()?;
-        let (requeued, transient_requeued) = if self.confirm {
-            orbit_core::application::task::with_task_write_provenance(
-                orbit_types::task::TaskWriteProvenance::new(
-                    Some(orbit_types::task::TaskWriteSurface::Cli),
-                    None,
-                ),
-                || {
-                    Ok::<_, orbit_core::OrbitError>((
-                        runtime.requeue_cleared_infra_blocked_tasks()?,
-                        runtime.requeue_cleared_transient_infra_blocks()?,
-                    ))
-                },
-            )?
-        } else {
-            (Vec::new(), Vec::new())
-        };
+impl ExecuteCore for TaskRecheckBlockedArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Rechecked {
+            found,
+            transient,
+            requeued,
+            transient_requeued,
+        } = task::exec(
+            core,
+            Command::RecheckBlocked {
+                confirm: self.confirm,
+            },
+        )
+        .and_then(Outcome::into_rechecked)?;
         let is_transient_requeued = |blocked: &TransientInfraBlockedTask| {
             transient_requeued
                 .iter()

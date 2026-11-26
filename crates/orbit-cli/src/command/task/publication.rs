@@ -1,21 +1,17 @@
-use std::path::PathBuf;
-
 use clap::{Args, Subcommand, ValueEnum};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::task::{self, Command, Outcome, Publication, PublicationSource};
 use orbit_core::application::task_bundle::publication::{
-    AttachmentPolicy, AttachmentPolicyKind, PublicationFreshness, PublicationInspectRequest,
-    PublicationInspection, PublicationPublishOutcome, PublicationPublishStatus,
-    PublicationRecoveryCompleteness, PublicationRenderAuthority, PublicationRestoreMode,
-    PublicationRestoreRequest, ScannerFailureBehavior,
+    AttachmentPolicy, AttachmentPolicyKind, PublicationFreshness, PublicationInspection,
+    PublicationPublishOutcome, PublicationPublishStatus, PublicationRecoveryCompleteness,
+    PublicationRenderAuthority, ScannerFailureBehavior,
 };
-use orbit_registry::{load_machine_identity, workspace_registry};
 use orbit_types::workspace::{
-    DEFAULT_PUBLICATION_BRANCH, WorkspaceCheckoutRole, WorkspacePublicationBinding,
-    redact_git_remote,
+    DEFAULT_PUBLICATION_BRANCH, WorkspacePublicationBinding, redact_git_remote,
 };
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload, require_confirmation};
+use crate::command::{CommandOut, ExecuteCore, Payload, require_confirmation};
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
@@ -47,13 +43,13 @@ pub enum TaskPublicationSubcommand {
     Restore(TaskPublicationRestoreArgs),
 }
 
-impl Execute for TaskPublicationCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for TaskPublicationCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self.command {
-            TaskPublicationSubcommand::Publish(args) => args.execute(runtime),
-            TaskPublicationSubcommand::Status(args) => args.execute(runtime),
-            TaskPublicationSubcommand::Inspect(args) => args.execute(runtime),
-            TaskPublicationSubcommand::Restore(args) => args.execute(runtime),
+            TaskPublicationSubcommand::Publish(args) => args.execute(core),
+            TaskPublicationSubcommand::Status(args) => args.execute(core),
+            TaskPublicationSubcommand::Inspect(args) => args.execute(core),
+            TaskPublicationSubcommand::Restore(args) => args.execute(core),
         }
     }
 }
@@ -94,8 +90,8 @@ pub struct TaskPublicationPublishArgs {
     allow_unscanned_attachments: bool,
 }
 
-impl Execute for TaskPublicationPublishArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for TaskPublicationPublishArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         if self.allow_unscanned_attachments
             && !matches!(self.attachments, CliAttachmentPolicy::Include)
         {
@@ -120,12 +116,9 @@ impl Execute for TaskPublicationPublishArgs {
                 ScannerFailureBehavior::Reject
             },
         };
-        let workspace_id = selected_workspace_id(runtime)?;
-        let (binding, outcome) = runtime.publish_bound_task_publication(&policy)?
-            .ok_or_else(|| orbit_core::OrbitError::WorkspaceError(format!(
-                "workspace '{}' has no publication binding; run `orbit workspace publication bind` first",
-                workspace_id
-            )))?;
+        let (binding, outcome) =
+            *task::exec(core, Command::Publication(Publication::Publish { policy }))
+                .and_then(Outcome::into_published)?;
 
         Ok(Payload::detail(
             publish_json(&binding, &outcome),
@@ -138,19 +131,13 @@ impl Execute for TaskPublicationPublishArgs {
 #[derive(Args)]
 pub struct TaskPublicationStatusArgs {}
 
-impl Execute for TaskPublicationStatusArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let workspace_id = selected_workspace_id(runtime)?;
-        let registry = workspace_registry::load_registry_from(
-            &workspace_registry::registry_path_for(&runtime.global_root()),
-        )?;
-        let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
-            .ok_or_else(|| {
-                orbit_core::OrbitError::WorkspaceError(format!(
-                    "workspace '{workspace_id}' has no publication binding"
-                ))
-            })?;
-        let Some(local_commit) = binding.last_success_commit.as_deref() else {
+impl ExecuteCore for TaskPublicationStatusArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let (binding, inspection) = *task::exec(core, Command::Publication(Publication::Status))
+            .and_then(Outcome::into_publication_status)?;
+        let (Some(local_commit), Some(inspection)) =
+            (binding.last_success_commit.as_deref(), inspection)
+        else {
             return Ok(Payload::detail(
                 json!({
                     "workspace_id": binding.workspace_id,
@@ -169,11 +156,6 @@ impl Execute for TaskPublicationStatusArgs {
             .into());
         };
 
-        let inspection = runtime.inspect_task_publication(inspect_request_from_binding(
-            binding,
-            publication_cache(runtime),
-            None,
-        ))?;
         let state = if inspection.label.commit_id == local_commit {
             "current"
         } else {
@@ -232,16 +214,15 @@ struct PublicationConsumerArgs {
 }
 
 impl PublicationConsumerArgs {
-    fn request(&self, runtime: &OrbitRuntime, cache_leaf: &str) -> PublicationInspectRequest {
-        PublicationInspectRequest {
-            workspace_id: self.workspace_id.clone(),
-            source_repository_fingerprint: self.source_repository_fingerprint.clone(),
-            publication_id: self.publication_id.clone(),
-            authority_machine_id: self.authority_machine_id.clone(),
-            publication_remote: self.remote.clone(),
-            publication_branch: self.branch.clone(),
-            cache_dir: publication_cache(runtime).join(cache_leaf),
-            commit: self.commit.clone(),
+    fn source(self) -> PublicationSource {
+        PublicationSource {
+            workspace_id: self.workspace_id,
+            source_repository_fingerprint: self.source_repository_fingerprint,
+            publication_id: self.publication_id,
+            authority_machine_id: self.authority_machine_id,
+            remote: self.remote,
+            branch: self.branch,
+            commit: self.commit,
         }
     }
 }
@@ -252,10 +233,13 @@ pub struct TaskPublicationInspectArgs {
     publication: PublicationConsumerArgs,
 }
 
-impl Execute for TaskPublicationInspectArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let inspection =
-            runtime.inspect_task_publication(self.publication.request(runtime, "inspect"))?;
+impl ExecuteCore for TaskPublicationInspectArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let inspection = task::exec(
+            core,
+            Command::Publication(Publication::Inspect(self.publication.source())),
+        )
+        .and_then(Outcome::into_inspected)?;
         Ok(Payload::detail(inspection_json(&inspection), format_inspection(&inspection)).into())
     }
 }
@@ -272,28 +256,20 @@ pub struct TaskPublicationRestoreArgs {
     pub confirm: bool,
 }
 
-impl Execute for TaskPublicationRestoreArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for TaskPublicationRestoreArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         require_confirmation(
             self.confirm,
             "restoring a task publication into the canonical destination store",
         )?;
-        assert_restore_authority(runtime, &self.publication)?;
-        let task_workspace_id = selected_task_workspace_id(runtime)?;
-        runtime.record_task_publication_source(
-            &task_workspace_id,
-            &self.publication.source_repository_fingerprint,
-        )?;
-        let request = PublicationRestoreRequest {
-            task_workspace_id,
-            publication: self.publication.request(runtime, "restore"),
-            mode: if self.allow_identical_retry {
-                PublicationRestoreMode::AllowIdenticalRetry
-            } else {
-                PublicationRestoreMode::EmptyDestination
-            },
-        };
-        let outcome = runtime.restore_task_publication(request)?;
+        let outcome = task::exec(
+            core,
+            Command::Publication(Publication::Restore {
+                source: self.publication.source(),
+                allow_identical_retry: self.allow_identical_retry,
+            }),
+        )
+        .and_then(Outcome::into_restored)?;
         let completeness = match outcome.completeness {
             PublicationRecoveryCompleteness::Complete => "complete",
             PublicationRecoveryCompleteness::IncompleteAttachments => "incomplete-attachments",
@@ -333,93 +309,6 @@ impl Execute for TaskPublicationRestoreArgs {
         )
         .into())
     }
-}
-
-fn selected_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::OrbitError> {
-    runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone())
-        .map_or_else(|| runtime.workspace_id(), Ok)
-}
-
-fn selected_task_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::OrbitError> {
-    runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.task_partition_id.clone())
-        .map_or_else(|| runtime.workspace_id(), Ok)
-}
-
-fn publication_cache(runtime: &OrbitRuntime) -> PathBuf {
-    runtime.global_root().join("state").join("task-publication")
-}
-
-fn inspect_request_from_binding(
-    binding: &WorkspacePublicationBinding,
-    cache_dir: PathBuf,
-    commit: Option<String>,
-) -> PublicationInspectRequest {
-    PublicationInspectRequest {
-        workspace_id: binding.workspace_id.clone(),
-        source_repository_fingerprint: binding.source_repository_fingerprint.clone(),
-        publication_id: binding.publication_id.clone(),
-        authority_machine_id: binding.authority_machine_id.clone(),
-        publication_remote: binding.publication_remote.clone(),
-        publication_branch: binding.publication_branch.clone(),
-        cache_dir,
-        commit,
-    }
-}
-
-fn assert_restore_authority(
-    runtime: &OrbitRuntime,
-    expected: &PublicationConsumerArgs,
-) -> Result<(), orbit_core::OrbitError> {
-    let selected = selected_workspace_id(runtime)?;
-    if selected != expected.workspace_id {
-        return Err(orbit_core::OrbitError::PolicyDenied(format!(
-            "publication restore targets workspace '{}', but the selected destination is '{selected}'",
-            expected.workspace_id
-        )));
-    }
-    let global_root = runtime.global_root();
-    let local_machine_id = load_machine_identity(&global_root)?.id;
-    if local_machine_id != expected.authority_machine_id {
-        return Err(orbit_core::OrbitError::PolicyDenied(format!(
-            "publication restore authority '{}' does not match local machine '{}'",
-            expected.authority_machine_id, local_machine_id
-        )));
-    }
-    let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
-        &global_root,
-    ))?;
-    let workspace =
-        workspace_registry::find_workspace_by_id(&registry, &selected).ok_or_else(|| {
-            orbit_core::OrbitError::WorkspaceError(format!(
-                "workspace '{selected}' is not registered"
-            ))
-        })?;
-    if workspace.owner_machine_id.as_deref() != Some(local_machine_id.as_str()) {
-        return Err(orbit_core::OrbitError::PolicyDenied(format!(
-            "workspace '{selected}' is not owned by local machine '{local_machine_id}'"
-        )));
-    }
-    let checkout =
-        workspace_registry::find_checkout_by_id(&registry, &selected).ok_or_else(|| {
-            orbit_core::OrbitError::WorkspaceError(format!(
-                "workspace '{selected}' has no local checkout"
-            ))
-        })?;
-    if checkout.role != Some(WorkspaceCheckoutRole::Owner) {
-        return Err(orbit_core::OrbitError::PolicyDenied(format!(
-            "workspace '{selected}' is a replica checkout; restore requires the declared owner destination"
-        )));
-    }
-    if workspace.git_remote.as_deref() != Some(expected.source_repository_fingerprint.as_str()) {
-        return Err(orbit_core::OrbitError::PolicyDenied(format!(
-            "publication restore source remote does not match selected workspace '{selected}'"
-        )));
-    }
-    Ok(())
 }
 
 fn publication_status_label(status: PublicationPublishStatus) -> &'static str {

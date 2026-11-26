@@ -4,14 +4,16 @@
 //! `final_recovery`) all arrive in the tool's JSON. Two things are added here
 //! for the human reader: the workspace the task was read from, and the status
 //! of each relation target, a presentation lookup the tool's `relations`
-//! projection does not carry.
+//! projection does not carry. Both arrive with the answer, as does the run
+//! that owns the task.
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use orbit_cmd::task_owner::bound_workspace_identity;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_cmd::task_owner::WorkspaceIdentity;
+use orbit_core::OrbitError;
+use orbit_core::app::task::{Outcome, Shown};
 use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskComment, TaskHistoryEntry};
+use orbit_types::workflow::JobRun;
 use serde_json::{Map, Value};
 
 use super::output::{
@@ -22,13 +24,10 @@ use super::support::attach_bound_workspace_identity;
 use crate::command::{Block, CommandOut, Payload};
 use crate::output::color::{Domain, bold, dimmed, text};
 
-pub(super) fn render(
-    runtime: &OrbitRuntime,
-    input: &Map<String, Value>,
-    value: Value,
-) -> CommandOut {
+pub(super) fn render(input: &Map<String, Value>, outcome: Outcome) -> CommandOut {
     match input.get("fields").map(strings) {
         Some(fields) => {
+            let value = outcome.into_answer()?;
             // The tool's `fields` projection keys even one field; the CLI
             // keeps its bare single-field JSON, so unwrap that one key
             // before rendering either surface.
@@ -36,14 +35,20 @@ pub(super) fn render(
             let text = fields_text(&value, &fields)?;
             Ok(Payload::blocks(value, vec![Block::prose(text)]).into())
         }
-        None => record(runtime, input, value),
+        None => record(input, *outcome.into_shown()?),
     }
 }
 
 /// The full record. The task may have been reached through the global
 /// registry rather than the cwd, so it names where it was read from.
-fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> CommandOut {
-    let owner = bound_workspace_identity(runtime);
+fn record(input: &Map<String, Value>, shown: Shown) -> CommandOut {
+    let Shown {
+        answer: value,
+        workspace,
+        relation_statuses: status_by_id,
+        run,
+    } = shown;
+    let owner = workspace.map(|(id, name)| WorkspaceIdentity { id, name });
     let mut doc = attach_bound_workspace_identity(
         "orbit.task.show",
         &Value::Object(input.clone()),
@@ -84,7 +89,7 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         bold("Status:"),
         text(field("status").unwrap_or_default(), Domain::TaskStatus)
     );
-    if let Some(run) = run_summary(runtime, task) {
+    if let Some(run) = run_summary(run, task) {
         let _ = writeln!(out, "{run}");
     }
     let pr = pr_summary(task);
@@ -130,12 +135,6 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
     if !relations.is_empty() {
-        let targets = relations
-            .iter()
-            .filter_map(|relation| relation.get("target").and_then(Value::as_str))
-            .map(ToOwned::to_owned)
-            .collect::<BTreeSet<_>>();
-        let status_by_id = runtime.task_status_index_for(&targets)?;
         let _ = writeln!(out, "{}", bold("Relations:"));
         for relation in relations {
             let target = relation
@@ -396,30 +395,12 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     Ok(Payload::blocks(doc, vec![Block::prose(out)]).into())
 }
 
-/// The operator-facing run summary belongs only on active and review tasks.
-/// The observed read avoids reconciling or changing a stale run while showing a task.
-fn run_summary(runtime: &OrbitRuntime, task: &Map<String, Value>) -> Option<String> {
-    let status = task.get("status").and_then(Value::as_str)?;
-    if !matches!(status, "in-progress" | "in_progress" | "review") {
-        return None;
-    }
-    let run_id = task
-        .get("job_run_id")
-        .and_then(Value::as_str)
-        .filter(|run_id| !run_id.is_empty())?;
-
-    let run = match runtime.show_job_run_observed(run_id) {
-        Ok(run) => Some(run),
-        Err(error) => {
-            tracing::warn!(
-                target: "orbit.cli.task",
-                %run_id,
-                %error,
-                "task run state could not be read"
-            );
-            None
-        }
-    };
+/// The operator-facing run summary belongs only on active and review tasks,
+/// which is when the answer carries the run. A run that could not be read
+/// shows as unknown.
+fn run_summary(run: Option<Option<JobRun>>, task: &Map<String, Value>) -> Option<String> {
+    let run = run?;
+    let run_id = task.get("job_run_id").and_then(Value::as_str)?;
     let state = run
         .as_ref()
         .map(|run| format!("{:?}", run.state).to_ascii_lowercase())
