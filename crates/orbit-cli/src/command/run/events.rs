@@ -2,6 +2,8 @@ use clap::Args;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::audit::run::RunAuditEvent;
 use orbit_core::runtime::audit::run_events::RunEventsSelection;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -90,103 +92,291 @@ fn run_events_payload(
     Ok(Payload::detail_table(doc, table).into())
 }
 
+/// The plain-text summary of one audit event: the typed body decoded once
+/// from the event type and raw payload, then rendered.
 pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {
-    let raw = &event.raw;
-    match event.event_type.as_deref() {
-        Some("run.started") => field_summary(raw, "job_name"),
-        Some("run.finished") => field_summary(raw, "outcome"),
-        Some("run.cancelled") => join_present(&[
-            ("actor", raw_str(raw, "actor")),
-            ("reason", raw_str(raw, "reason")),
-        ]),
-        Some("step.started") => field_summary(raw, "step_id"),
-        Some("step.finished") => join_present(&[
-            ("step", raw_str(raw, "step_id")),
-            ("outcome", raw_str(raw, "outcome")),
-        ]),
-        Some("step.skipped") => join_present(&[
-            ("step", raw_str(raw, "step_id")),
-            ("reason", raw_str(raw, "reason")),
-        ]),
-        Some("step.denied") => join_present(&[
-            ("step", raw_str(raw, "step_id")),
-            ("reason", raw_str(raw, "reason")),
-        ]),
-        Some("activity.started") => join_present(&[
-            ("activity", raw_str(raw, "activity_name")),
-            ("type", raw_str(raw, "activity_type")),
-        ]),
-        Some("activity.finished") => join_present(&[
-            ("activity", raw_str(raw, "activity_name")),
-            ("outcome", raw_str(raw, "outcome")),
-        ]),
-        Some("cli.invocation.started") => join_present(&[
-            ("provider", raw_str(raw, "provider")),
-            ("model", raw_str(raw, "model")),
-        ]),
-        Some("cli.invocation.finished") => join_present(&[
-            ("provider", raw_str(raw, "provider")),
-            ("exit", raw_i64(raw, "exit_code")),
-            ("duration_ms", raw_u64(raw, "duration_ms")),
-            ("timed_out", raw_bool(raw, "timed_out")),
-        ]),
-        Some("tool.denied") => join_present(&[
-            ("tool", raw_str(raw, "tool_name")),
-            ("reason", raw_str(raw, "reason")),
-        ]),
-        Some("fs.call.request" | "fs.call.result" | "fs.call.denied") => join_present(&[
-            ("op", raw_str(raw, "op")),
-            ("path", raw_str(raw, "path")),
-            ("allowed", raw_bool(raw, "allowed")),
-        ]),
-        Some("fanout.dispatched") => join_present(&[
-            ("step", raw_str(raw, "step_id")),
-            ("workers", raw_u64(raw, "worker_count")),
-        ]),
-        Some("worker.state") => join_present(&[
-            ("step", raw_str(raw, "step_id")),
-            ("worker", raw_u64(raw, "worker_index")),
-            ("state", raw_str(raw, "state")),
-        ]),
-        Some("fanin.joined") => join_present(&[
-            ("step", raw_str(raw, "step_id")),
-            ("collected", raw_u64(raw, "collected")),
-            ("failed", raw_u64(raw, "failed")),
-        ]),
-        _ => field_summary(raw, "body_kind"),
+    RunEventSummaryBody::decode(event.event_type.as_deref(), &event.raw).render()
+}
+
+/// Decodes one payload field leniently: a missing, null or wrong-typed value
+/// is absent, and the event's other fields are kept.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(Value::deserialize(deserializer)
+        .ok()
+        .and_then(|value| T::deserialize(value).ok()))
+}
+
+#[derive(Default, Deserialize)]
+struct RunStartedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    job_name: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct RunFinishedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    outcome: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct RunCancelledFields {
+    #[serde(default, deserialize_with = "lenient")]
+    actor: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    reason: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct StepStartedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    step_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct StepFinishedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    outcome: Option<String>,
+}
+
+/// Shared by `step.skipped` and `step.denied`, which render identically.
+#[derive(Default, Deserialize)]
+struct StepReasonFields {
+    #[serde(default, deserialize_with = "lenient")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    reason: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct ActivityStartedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    activity_name: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    activity_type: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct ActivityFinishedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    activity_name: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    outcome: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct CliInvocationStartedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    provider: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    model: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct CliInvocationFinishedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    provider: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    exit_code: Option<i64>,
+    #[serde(default, deserialize_with = "lenient")]
+    duration_ms: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    timed_out: Option<bool>,
+}
+
+#[derive(Default, Deserialize)]
+struct ToolDeniedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    tool_name: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    reason: Option<String>,
+}
+
+/// Shared by `fs.call.request`, `fs.call.result` and `fs.call.denied`.
+#[derive(Default, Deserialize)]
+struct FsCallFields {
+    #[serde(default, deserialize_with = "lenient")]
+    op: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    path: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    allowed: Option<bool>,
+}
+
+#[derive(Default, Deserialize)]
+struct FanoutDispatchedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    worker_count: Option<u64>,
+}
+
+#[derive(Default, Deserialize)]
+struct WorkerStateFields {
+    #[serde(default, deserialize_with = "lenient")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    worker_index: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    state: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct FaninJoinedFields {
+    #[serde(default, deserialize_with = "lenient")]
+    step_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    collected: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    failed: Option<u64>,
+}
+
+#[derive(Default, Deserialize)]
+struct UnknownEventFields {
+    #[serde(default, deserialize_with = "lenient")]
+    body_kind: Option<String>,
+}
+
+/// The fields the plain audit renderers show, selected by the event type.
+/// Every field is optional and independent: a missing or wrong-typed field is
+/// absent without dropping its siblings. The raw payload stays on the event
+/// for JSON and detail output.
+enum RunEventSummaryBody {
+    RunStarted(RunStartedFields),
+    RunFinished(RunFinishedFields),
+    RunCancelled(RunCancelledFields),
+    StepStarted(StepStartedFields),
+    StepFinished(StepFinishedFields),
+    StepSkipped(StepReasonFields),
+    StepDenied(StepReasonFields),
+    ActivityStarted(ActivityStartedFields),
+    ActivityFinished(ActivityFinishedFields),
+    CliInvocationStarted(CliInvocationStartedFields),
+    CliInvocationFinished(CliInvocationFinishedFields),
+    ToolDenied(ToolDeniedFields),
+    FsCall(FsCallFields),
+    FanoutDispatched(FanoutDispatchedFields),
+    WorkerState(WorkerStateFields),
+    FaninJoined(FaninJoinedFields),
+    Unknown(UnknownEventFields),
+}
+
+impl RunEventSummaryBody {
+    fn decode(event_type: Option<&str>, raw: &Value) -> Self {
+        match event_type {
+            Some("run.started") => Self::RunStarted(decode_fields(raw)),
+            Some("run.finished") => Self::RunFinished(decode_fields(raw)),
+            Some("run.cancelled") => Self::RunCancelled(decode_fields(raw)),
+            Some("step.started") => Self::StepStarted(decode_fields(raw)),
+            Some("step.finished") => Self::StepFinished(decode_fields(raw)),
+            Some("step.skipped") => Self::StepSkipped(decode_fields(raw)),
+            Some("step.denied") => Self::StepDenied(decode_fields(raw)),
+            Some("activity.started") => Self::ActivityStarted(decode_fields(raw)),
+            Some("activity.finished") => Self::ActivityFinished(decode_fields(raw)),
+            Some("cli.invocation.started") => Self::CliInvocationStarted(decode_fields(raw)),
+            Some("cli.invocation.finished") => Self::CliInvocationFinished(decode_fields(raw)),
+            Some("tool.denied") => Self::ToolDenied(decode_fields(raw)),
+            Some("fs.call.request" | "fs.call.result" | "fs.call.denied") => {
+                Self::FsCall(decode_fields(raw))
+            }
+            Some("fanout.dispatched") => Self::FanoutDispatched(decode_fields(raw)),
+            Some("worker.state") => Self::WorkerState(decode_fields(raw)),
+            Some("fanin.joined") => Self::FaninJoined(decode_fields(raw)),
+            _ => Self::Unknown(decode_fields(raw)),
+        }
+    }
+
+    fn render(&self) -> String {
+        match self {
+            Self::RunStarted(f) => join_present(&[("", shown(&f.job_name))]),
+            Self::RunFinished(f) => join_present(&[("", shown(&f.outcome))]),
+            Self::RunCancelled(f) => {
+                join_present(&[("actor", shown(&f.actor)), ("reason", shown(&f.reason))])
+            }
+            Self::StepStarted(f) => join_present(&[("", shown(&f.step_id))]),
+            Self::StepFinished(f) => {
+                join_present(&[("step", shown(&f.step_id)), ("outcome", shown(&f.outcome))])
+            }
+            Self::StepSkipped(f) | Self::StepDenied(f) => {
+                join_present(&[("step", shown(&f.step_id)), ("reason", shown(&f.reason))])
+            }
+            Self::ActivityStarted(f) => join_present(&[
+                ("activity", shown(&f.activity_name)),
+                ("type", shown(&f.activity_type)),
+            ]),
+            Self::ActivityFinished(f) => join_present(&[
+                ("activity", shown(&f.activity_name)),
+                ("outcome", shown(&f.outcome)),
+            ]),
+            Self::CliInvocationStarted(f) => {
+                join_present(&[("provider", shown(&f.provider)), ("model", shown(&f.model))])
+            }
+            Self::CliInvocationFinished(f) => join_present(&[
+                ("provider", shown(&f.provider)),
+                ("exit", shown(&f.exit_code)),
+                ("duration_ms", shown(&f.duration_ms)),
+                ("timed_out", shown(&f.timed_out)),
+            ]),
+            Self::ToolDenied(f) => {
+                join_present(&[("tool", shown(&f.tool_name)), ("reason", shown(&f.reason))])
+            }
+            Self::FsCall(f) => join_present(&[
+                ("op", shown(&f.op)),
+                ("path", shown(&f.path)),
+                ("allowed", shown(&f.allowed)),
+            ]),
+            Self::FanoutDispatched(f) => join_present(&[
+                ("step", shown(&f.step_id)),
+                ("workers", shown(&f.worker_count)),
+            ]),
+            Self::WorkerState(f) => join_present(&[
+                ("step", shown(&f.step_id)),
+                ("worker", shown(&f.worker_index)),
+                ("state", shown(&f.state)),
+            ]),
+            Self::FaninJoined(f) => join_present(&[
+                ("step", shown(&f.step_id)),
+                ("collected", shown(&f.collected)),
+                ("failed", shown(&f.failed)),
+            ]),
+            Self::Unknown(f) => join_present(&[("", shown(&f.body_kind))]),
+        }
     }
 }
 
-fn field_summary(raw: &Value, field: &str) -> String {
-    raw_str(raw, field).unwrap_or_else(|| "-".to_string())
+/// Decodes the typed fields from an object payload; a payload that is not an
+/// object has none of them.
+fn decode_fields<T: DeserializeOwned + Default>(raw: &Value) -> T {
+    if raw.is_object() {
+        T::deserialize(raw).unwrap_or_default()
+    } else {
+        T::default()
+    }
 }
 
-fn raw_str(raw: &Value, field: &str) -> Option<String> {
-    raw.get(field).and_then(Value::as_str).map(str::to_string)
+fn shown<T: ToString>(value: &Option<T>) -> Option<String> {
+    value.as_ref().map(ToString::to_string)
 }
 
-fn raw_i64(raw: &Value, field: &str) -> Option<String> {
-    raw.get(field)
-        .and_then(Value::as_i64)
-        .map(|value| value.to_string())
-}
-
-fn raw_u64(raw: &Value, field: &str) -> Option<String> {
-    raw.get(field)
-        .and_then(Value::as_u64)
-        .map(|value| value.to_string())
-}
-
-fn raw_bool(raw: &Value, field: &str) -> Option<String> {
-    raw.get(field)
-        .and_then(Value::as_bool)
-        .map(|value| value.to_string())
-}
-
+/// Joins the present fields as `label=value`; an empty label prints the bare
+/// value. Nothing present is a dash.
 fn join_present(fields: &[(&str, Option<String>)]) -> String {
     let summary = fields
         .iter()
-        .filter_map(|(label, value)| value.as_ref().map(|value| format!("{label}={value}")))
+        .filter_map(|(label, value)| {
+            value.as_ref().map(|value| {
+                if label.is_empty() {
+                    value.clone()
+                } else {
+                    format!("{label}={value}")
+                }
+            })
+        })
         .collect::<Vec<_>>()
         .join(" ");
     if summary.is_empty() {
