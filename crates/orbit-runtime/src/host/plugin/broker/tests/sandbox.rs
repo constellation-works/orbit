@@ -32,7 +32,7 @@ use super::super::PluginBroker;
 use super::super::protocol::{MAX_REQUEST_BYTES, read_frame, write_frame};
 use super::EchoDispatch;
 
-const CLIENT_TEST: &str = "plugin::broker::tests::sandbox::broker_client";
+const CLIENT_TEST: &str = "host::plugin::broker::tests::sandbox::broker_client";
 const CLIENT_ENV: &str = "ORBIT_BROKER_TEST_CLIENT";
 const RESULT_ENV: &str = "ORBIT_BROKER_TEST_RESULT";
 const TARGET_ENV: &str = "ORBIT_BROKER_TEST_TARGET";
