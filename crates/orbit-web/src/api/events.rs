@@ -102,30 +102,6 @@ struct WorkspaceWatch {
     scanned_at: DateTime<Utc>,
 }
 
-/// The previous task scan. `snapshot` is the registry's shared stamp list:
-/// the same pointer means the registry has not committed since this baseline.
-struct TaskBaseline {
-    snapshot: Arc<Vec<TaskChangeStamp>>,
-    by_id: BTreeMap<String, TaskStamp>,
-}
-
-impl Default for WorkspaceWatch {
-    fn default() -> Self {
-        let now = Utc::now();
-        Self {
-            tasks: None,
-            active_triage: None,
-            runs: None,
-            run_read_at: now,
-            reservations: None,
-            drain_phase: None,
-            executor_readiness: None,
-            drain_read_at: None,
-            scanned_at: now,
-        }
-    }
-}
-
 impl WorkspaceWatch {
     /// Compare the store with the previous scan and name what changed. A read
     /// that fails keeps its previous baseline, so its changes surface on the
@@ -308,6 +284,30 @@ impl WorkspaceWatch {
     }
 }
 
+impl Default for WorkspaceWatch {
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            tasks: None,
+            active_triage: None,
+            runs: None,
+            run_read_at: now,
+            reservations: None,
+            drain_phase: None,
+            executor_readiness: None,
+            drain_read_at: None,
+            scanned_at: now,
+        }
+    }
+}
+
+/// The previous task scan. `snapshot` is the registry's shared stamp list:
+/// the same pointer means the registry has not committed since this baseline.
+struct TaskBaseline {
+    snapshot: Arc<Vec<TaskChangeStamp>>,
+    by_id: BTreeMap<String, TaskStamp>,
+}
+
 struct ReceiverSseStream {
     rx: mpsc::Receiver<String>,
 }
@@ -359,6 +359,7 @@ fn drain_recheck_interval(env: &orbit_common::Env) -> StdDuration {
     let _ = env;
     DRAIN_RECHECK_INTERVAL
 }
+
 fn events_stream_gate() -> &'static Arc<Semaphore> {
     static GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
     GATE.get_or_init(|| Arc::new(Semaphore::new(EVENTS_STREAM_MAX_CONCURRENT)))

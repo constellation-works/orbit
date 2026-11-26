@@ -102,6 +102,7 @@ impl PollBackoff {
         self.delay
     }
 }
+
 /// Connection gate for log SSE streams.
 ///
 /// Wraps a `tokio::sync::Semaphore` so the handler can `try_acquire` a permit
@@ -129,10 +130,6 @@ impl LogStreamGate {
 struct FeedCursor {
     offset: u64,
     generation: Option<String>,
-}
-
-struct ReceiverSseStream {
-    rx: mpsc::Receiver<String>,
 }
 
 impl FeedCursor {
@@ -165,6 +162,10 @@ impl FeedCursor {
             None => self.offset.to_string(),
         }
     }
+}
+
+struct ReceiverSseStream {
+    rx: mpsc::Receiver<String>,
 }
 
 impl Stream for ReceiverSseStream {

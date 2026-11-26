@@ -232,13 +232,6 @@ struct Cell {
     excluded: u64,
 }
 
-/// Done tasks per bucket, in the window and in the previous one.
-struct Denominator {
-    points: Vec<u64>,
-    total: u64,
-    previous: u64,
-}
-
 impl Cell {
     fn add(&mut self, value: f64, part: &'static str) {
         self.count += value;
@@ -270,6 +263,13 @@ impl Cell {
         }
         cell
     }
+}
+
+/// Done tasks per bucket, in the window and in the previous one.
+struct Denominator {
+    points: Vec<u64>,
+    total: u64,
+    previous: u64,
 }
 
 impl Denominator {

@@ -1,5 +1,6 @@
 use super::support::{Fixture, Server, isolated, json_ok, spawn_server};
 use serde_json::{Value, json};
+
 #[derive(serde::Deserialize)]
 struct Rendered {
     message_html: String,

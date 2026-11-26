@@ -37,10 +37,6 @@ struct Gate<'a> {
     record: bool,
 }
 
-/// A trusted-path refusal worth recording: its reason and, for an unlisted
-/// login, the login attempted. `None` for a refusal off that path.
-type Refusal = Option<(RefusalReason, Option<String>)>;
-
 impl<'a> Gate<'a> {
     /// Admit the Host, or record a trusted-path refusal and return `None`
     /// (the caller answers 403).
@@ -100,6 +96,10 @@ impl<'a> Gate<'a> {
         }
     }
 }
+
+/// A trusted-path refusal worth recording: its reason and, for an unlisted
+/// login, the login attempted. `None` for a refusal off that path.
+type Refusal = Option<(RefusalReason, Option<String>)>;
 
 /// Browser CSRF and DNS-rebinding mitigation on the loopback path, and the
 /// identity check on the trusted-host path.

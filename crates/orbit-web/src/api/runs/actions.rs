@@ -123,6 +123,36 @@ pub(in crate::api) struct AutoDrainBody {
     claim_token: Option<String>,
 }
 
+impl AutoDrainBody {
+    fn complexity_crews(&self) -> orbit_core::ComplexityCrewPools {
+        orbit_core::ComplexityCrewPools {
+            low: self.low_complexity_crews.clone(),
+            medium: self.medium_complexity_crews.clone(),
+            hard: self.hard_complexity_crews.clone(),
+            xhard: self.xhard_complexity_crews.clone(),
+        }
+    }
+
+    /// Which pull-start options this body supplied, for the shared decision.
+    fn pull_start_options(&self) -> PullStartOptionsSupplied {
+        PullStartOptionsSupplied {
+            pull: self.pull.is_some(),
+            host: self.host.is_some(),
+            auto_concurrency: self.auto_concurrency.is_some(),
+            complete: self.complete,
+            approve_proposed: self.approve_proposed,
+            auto_fix: self.auto_fix,
+            strict_worker_containment: self.strict_worker_containment,
+            low_complexity_crews: self.low_complexity_crews.is_some(),
+            medium_complexity_crews: self.medium_complexity_crews.is_some(),
+            hard_complexity_crews: self.hard_complexity_crews.is_some(),
+            xhard_complexity_crews: self.xhard_complexity_crews.is_some(),
+            claim_token: self.claim_token.is_some(),
+            review: self.review.is_some(),
+        }
+    }
+}
+
 #[derive(serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(in crate::api) struct AutoDrainStopBody {
@@ -152,36 +182,6 @@ pub(in crate::api) struct AutoDrainReadinessQuery {
     /// Comma-separated configured crews to evaluate.
     #[serde(default)]
     allow_crew: Option<String>,
-}
-
-impl AutoDrainBody {
-    fn complexity_crews(&self) -> orbit_core::ComplexityCrewPools {
-        orbit_core::ComplexityCrewPools {
-            low: self.low_complexity_crews.clone(),
-            medium: self.medium_complexity_crews.clone(),
-            hard: self.hard_complexity_crews.clone(),
-            xhard: self.xhard_complexity_crews.clone(),
-        }
-    }
-
-    /// Which pull-start options this body supplied, for the shared decision.
-    fn pull_start_options(&self) -> PullStartOptionsSupplied {
-        PullStartOptionsSupplied {
-            pull: self.pull.is_some(),
-            host: self.host.is_some(),
-            auto_concurrency: self.auto_concurrency.is_some(),
-            complete: self.complete,
-            approve_proposed: self.approve_proposed,
-            auto_fix: self.auto_fix,
-            strict_worker_containment: self.strict_worker_containment,
-            low_complexity_crews: self.low_complexity_crews.is_some(),
-            medium_complexity_crews: self.medium_complexity_crews.is_some(),
-            hard_complexity_crews: self.hard_complexity_crews.is_some(),
-            xhard_complexity_crews: self.xhard_complexity_crews.is_some(),
-            claim_token: self.claim_token.is_some(),
-            review: self.review.is_some(),
-        }
-    }
 }
 
 /// Submit a `ship` workflow run (`POST /workflows/ship?workspace=<id>`).

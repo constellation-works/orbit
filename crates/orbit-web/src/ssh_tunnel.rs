@@ -163,33 +163,6 @@ struct ForwardMarker {
     dir: PathBuf,
 }
 
-/// Limits one readiness observation.
-///
-/// [`poll_until_ready`] can only check the clock and `cancel` between calls.
-/// The probe has to stop on its own when [`Self::deadline`] passes or
-/// [`Self::cancel`] is set, including while bytes are still arriving: a
-/// socket read timeout resets on every fragment and does not enforce this
-/// deadline.
-pub(crate) struct ProbeLimit<'a> {
-    /// Absolute instant by which the probe must have returned.
-    pub(crate) deadline: Instant,
-    /// Set when establish should stop. Observed between reads.
-    pub(crate) cancel: Option<&'a AtomicBool>,
-}
-
-/// RAII owner of the `ssh` child that guarantees teardown of the forward on
-/// drop.
-///
-/// When this invocation spawned a remote command ([`TunnelOrigin::Spawned`]),
-/// closing `ssh` also delivers SIGHUP to the remote pty and stops that process.
-/// When it only attached via a bare `-N` forward ([`TunnelOrigin::Attached`]),
-/// there is no remote command tied to this session, so teardown just closes the
-/// forward and leaves the pre-existing remote process running.
-pub(crate) struct SshTunnel {
-    child: Option<Child>,
-    marker: Option<ForwardMarker>,
-}
-
 impl ForwardMarker {
     fn diagnostics(&self) -> (String, bool) {
         let mut bytes = Vec::new();
@@ -255,6 +228,39 @@ impl ForwardMarker {
     }
 }
 
+impl Drop for ForwardMarker {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Limits one readiness observation.
+///
+/// [`poll_until_ready`] can only check the clock and `cancel` between calls.
+/// The probe has to stop on its own when [`Self::deadline`] passes or
+/// [`Self::cancel`] is set, including while bytes are still arriving: a
+/// socket read timeout resets on every fragment and does not enforce this
+/// deadline.
+pub(crate) struct ProbeLimit<'a> {
+    /// Absolute instant by which the probe must have returned.
+    pub(crate) deadline: Instant,
+    /// Set when establish should stop. Observed between reads.
+    pub(crate) cancel: Option<&'a AtomicBool>,
+}
+
+/// RAII owner of the `ssh` child that guarantees teardown of the forward on
+/// drop.
+///
+/// When this invocation spawned a remote command ([`TunnelOrigin::Spawned`]),
+/// closing `ssh` also delivers SIGHUP to the remote pty and stops that process.
+/// When it only attached via a bare `-N` forward ([`TunnelOrigin::Attached`]),
+/// there is no remote command tied to this session, so teardown just closes the
+/// forward and leaves the pre-existing remote process running.
+pub(crate) struct SshTunnel {
+    child: Option<Child>,
+    marker: Option<ForwardMarker>,
+}
+
 impl SshTunnel {
     fn proven_port_conflict(&mut self, port: u16) -> bool {
         if !matches!(self.try_wait(), Ok(Some(status)) if status.code() == Some(255))
@@ -303,12 +309,6 @@ impl SshTunnel {
             }
         }
         drop(marker);
-    }
-}
-
-impl Drop for ForwardMarker {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
