@@ -95,7 +95,7 @@ impl ExecuteCore for PluginSecretSetArgs {
 /// terminal. One trailing newline is dropped: `echo token |` and a typed
 /// line both end with one that is not part of the value.
 fn read_secret_value(plugin: &str, name: &str) -> Result<PluginSecretValue, OrbitError> {
-    let mut raw = if crate::output::sink::stdin_is_terminal() {
+    let mut raw = if crate::output::common::sink::stdin_is_terminal() {
         prompt_without_echo(&format!("Value for {plugin} secret '{name}': "))?
     } else {
         let mut raw = String::new();
@@ -172,7 +172,7 @@ pub struct PluginSecretListArgs {
 
 impl ExecuteCore for PluginSecretListArgs {
     fn execute(self, core: &Core) -> CommandOut {
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         use comfy_table::Cell;
 
         let Outcome::SecretsListed(secrets) =

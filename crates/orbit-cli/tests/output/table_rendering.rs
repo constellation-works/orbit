@@ -1230,7 +1230,7 @@ fn render_overflow_child() {
         false,
     );
     writeln!(std::io::stdout(), "BEGIN_TABLE").expect("start marker");
-    crate::output::render::emit(
+    crate::output::common::render::emit(
         Payload::blocks(doc, vec![Block::table(table)]).into(),
         &sink,
     )

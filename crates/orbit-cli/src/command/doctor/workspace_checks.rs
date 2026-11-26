@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::command::DoctorCommand;
 use super::support::status_label;
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::color::{Domain, Role};
+use crate::output::common::color::{Domain, Role};
 
 impl DoctorCommand {
     /// The report `orbit doctor` can still give when the runtime would not
@@ -299,7 +299,7 @@ fn report_output(
     }
 
     {
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         let mut table = Table::new(vec![
             Column::new("CHECK").fixed(),
             Column::new("STATUS").fixed(),
@@ -314,7 +314,7 @@ fn report_output(
             use comfy_table::Cell;
             table.add_row(vec![
                 Cell::new(&row.check_name),
-                crate::output::color::cell(status_label(row.status), Domain::DoctorStatus),
+                crate::output::common::color::cell(status_label(row.status), Domain::DoctorStatus),
                 Cell::new(human_detail(row).replace('\n', " | ")),
             ]);
         }
@@ -324,7 +324,7 @@ fn report_output(
         if failures == 0 && warnings == 0 {
             blocks.push(Block::notice(format!(
                 "\n{}",
-                crate::output::color::text("Workspace healthy.", Role::Ok)
+                crate::output::common::color::text("Workspace healthy.", Role::Ok)
             )));
         }
     }

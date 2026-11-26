@@ -36,7 +36,7 @@ Second, structured output is opt-in per command. 86 of 150 `#[derive(Args)]` str
 
 Nothing in the CLI detects whether stdout is a terminal, except `command/log/tail.rs`, which does it locally for one colorized stream. So `orbit tool list | grep` receives the same box-drawn, width-adapted, ANSI-styled output a human sees.
 
-The one place output mode is already resolved centrally is `main.rs::print_error`, which routes an `OrbitError` through `output/json.rs::error_payload` when the command declared a JSON preference. That function is the closest thing the CLI has to an output contract, and this decision generalizes its shape to normal output.
+The one place output mode is already resolved centrally is `main.rs::print_error`, which routes an `OrbitError` through `output/common/json.rs::error_payload` when the command declared a JSON preference. That function is the closest thing the CLI has to an output contract, and this decision generalizes its shape to normal output.
 
 ### Decision
 
@@ -63,11 +63,11 @@ Rejected alternative: make `--format json` the default and have humans opt into 
 ## Borderless Tables With Truncate-to-Width Rows
 
 **Recorded:** 2026-08-02 02:33:47.634255Z · [T20260411-0335]
-**Paths:** `crates/orbit-cli/src/output/table.rs`
+**Paths:** `crates/orbit-cli/src/output/common/table.rs`
 
 ### Context
 
-`crates/orbit-cli/src/output/table.rs` builds every list view (21 call sites) with `presets::UTF8_BORDERS_ONLY` and `ContentArrangement::DynamicFullWidth`. Two properties follow from that pairing.
+`crates/orbit-cli/src/output/common/table.rs` builds every list view (21 call sites) with `presets::UTF8_BORDERS_ONLY` and `ContentArrangement::DynamicFullWidth`. Two properties follow from that pairing.
 
 The preset draws box rules around and between the header and body. Those glyphs carry no information that column alignment does not already carry, and they are noise to `grep`, `cut`, and `awk` — the tools an operator reaches for when a list is longer than a screen.
 
@@ -97,11 +97,11 @@ Rejected alternative: an `--wide` flag that restores wrapping for full values. R
 ## One Semantic Color Vocabulary, Gated at the Sink
 
 **Recorded:** 2026-08-02 02:33:49.306446Z · [T20260427-43], [ORB-10202]
-**Paths:** `crates/orbit-cli/src/output/color.rs`
+**Paths:** `crates/orbit-cli/src/output/common/color.rs`
 
 ### Context
 
-`crates/orbit-cli/src/output/color.rs` defines the same status vocabulary twice, in two incompatible type systems. `status_color_cell` returns a `comfy_table::Cell` for table rows; `status_color` returns a `String` styled by the `colored` crate for line output. `job_state_color_cell`/`job_state_color` and `priority_color_cell`/`priority_color` are the same duplication. Two further cell-returning functions, `doctor_status_color_cell` and `task_type_color_cell`, have no String counterpart at all — and `task_type_color_cell` applies no styling whatsoever, existing only to satisfy the cell-returning shape. Eight functions, three genuine pairs, no consistent rule about which values get a pair.
+`crates/orbit-cli/src/output/common/color.rs` defines the same status vocabulary twice, in two incompatible type systems. `status_color_cell` returns a `comfy_table::Cell` for table rows; `status_color` returns a `String` styled by the `colored` crate for line output. `job_state_color_cell`/`job_state_color` and `priority_color_cell`/`priority_color` are the same duplication. Two further cell-returning functions, `doctor_status_color_cell` and `task_type_color_cell`, have no String counterpart at all — and `task_type_color_cell` applies no styling whatsoever, existing only to satisfy the cell-returning shape. Eight functions, three genuine pairs, no consistent rule about which values get a pair.
 
 The duplication exists because the styling backend is chosen by the call site's rendering shape rather than by the meaning of the value. It means every new status needs two edits, and nothing detects when only one lands. The two-edit cost shows up in the history: [T20260427-43] added a `friction` arm to both halves, and [ORB-10202] removed it from both when the status was retired. The copies have nevertheless drifted — the string form maps `backlog` explicitly, the cell form does not.
 
@@ -132,13 +132,13 @@ Rejected alternative: drop `colored` and route all line output through `comfy-ta
 ## The Output Sink Is a Process Global, Not a Renderer Parameter
 
 **Recorded:** 2026-08-02 04:39:37.628708Z · [ORB-10570], [ORB-10585]
-**Paths:** `crates/orbit-cli/src/output/sink.rs`, `crates/orbit-cli/src/output/table.rs`, `crates/orbit-cli/src/output/color.rs`
+**Paths:** `crates/orbit-cli/src/output/common/sink.rs`, `crates/orbit-cli/src/output/common/table.rs`, `crates/orbit-cli/src/output/common/color.rs`
 
 ### Context
 
 [Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload) resolves the output sink once per invocation and requires every renderer to read it rather than re-derive terminal state. [One Semantic Color Vocabulary, Gated at the Sink](#one-semantic-color-vocabulary-gated-at-the-sink) adds that color emission must be decided in exactly one place. Both presuppose that a renderer can *reach* the sink.
 
-It cannot, by parameter. Rendering in `orbit-cli` happens inside `Execute::execute(self, &OrbitRuntime) -> Result<(), OrbitError>`, which takes no renderer argument, across 154 `impl Execute` blocks and 98 command modules that call `println!` or `Table::print()` directly. `output/table.rs::Table::print` and `output/color.rs` are free functions those bodies call; neither has a call-site-provided sink to consult.
+It cannot, by parameter. Rendering in `orbit-cli` happens inside `Execute::execute(self, &OrbitRuntime) -> Result<(), OrbitError>`, which takes no renderer argument, across 154 `impl Execute` blocks and 98 command modules that call `println!` or `Table::print()` directly. `output/common/table.rs::Table::print` and `output/common/color.rs` are free functions those bodies call; neither has a call-site-provided sink to consult.
 
 [Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload)'s migration step 3 changes that signature so commands return payloads, and is explicitly the expensive step. [ORB-10570]'s scope — gate color and width at the sink — is independent of it and was sequenced before it precisely so that `NO_COLOR=1` stops emitting escape sequences without waiting on a 154-impl refactor.
 
@@ -146,11 +146,11 @@ So the sink has to be reachable from a free function called by a body that was n
 
 ### Decision
 
-`main` resolves the sink and publishes it into a `OnceLock` (`output::sink::install`); renderers read `output::sink::active()`.
+`main` resolves the sink and publishes it into a `OnceLock` (`output::common::sink::install`); renderers read `output::common::sink::active()`.
 
 - Before `install` runs, `active()` answers with a **piped** sink: not a terminal, width 0, no color, plain mode. The default is chosen so the failure mode of forgetting to install is unstyled untruncated output, never escape sequences written into a file.
 - A duplicate `install` is logged at `debug` and ignored, not a panic. The sink is read-mostly configuration; aborting a user's command over it, or changing rendering halfway through one, are both worse than the second call being inert.
-- `main` also calls `sink.apply_color_policy()`, which overrides the `colored` crate's own process-global env detection. `comfy_table` has no equivalent global, so `output::table` passes the same answer per render via `enforce_styling` / `force_no_tty`.
+- `main` also calls `sink.apply_color_policy()`, which overrides the `colored` crate's own process-global env detection. `comfy_table` has no equivalent global, so `output::common::table` passes the same answer per render via `enforce_styling` / `force_no_tty`.
 - Tests never call `OutputSink::from_process`. They build a sink with `OutputSink::resolve` and pass its answers to `Table::render(width, styled)` directly. The one test that flips the `colored` global serializes on a mutex and restores detection on drop.
 
 Rejected alternative: **thread the sink through `Execute::execute`.** This is the correct end state and is what [Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload) step 3 does. Rejected *for now* because it is the same 154-impl signature change that step 3 already owns; doing it here would either duplicate that churn or merge two independently reviewable changes, and would delay the `NO_COLOR` fix behind it. When step 3 lands, `active()` becomes removable in favor of the threaded value, and this ADR should be superseded rather than extended.
@@ -161,7 +161,7 @@ Rejected alternative: **a thread-local rather than a `OnceLock`.** Correct for c
 
 ### Consequences
 
-- `Table::print`, `output::color`, and `command/log/tail.rs` all read one answer, so the two styling backends can no longer disagree about `NO_COLOR`. That is the property [ORB-10570] exists to establish, and it is testable without a running `main`.
+- `Table::print`, `output::common::color`, and `command/log/tail.rs` all read one answer, so the two styling backends can no longer disagree about `NO_COLOR`. That is the property [ORB-10570] exists to establish, and it is testable without a running `main`.
 - The guard script's allowlist shrinks to the sink and its tests; `command/log/tail.rs` is no longer a grandfathered exception.
 - Cost: a renderer's behavior depends on whether `main` ran. A unit test gets the piped default, which is the safe answer but not the interactive one, so a test that means to exercise the terminal path must build a sink explicitly and pass it — `Table::render(width, styled)` exists for exactly that, and `Table::print()` is the only function that reads the global.
 - Cost: two sinks cannot be active concurrently in one process. An embedded or in-process invocation that wanted to render for a different destination would have to wait for the threaded sink of [Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload) step 3. No such consumer exists today.

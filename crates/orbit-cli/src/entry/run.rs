@@ -12,7 +12,7 @@ use crate::audit_middleware;
 use crate::command;
 use crate::command::operation::{CommandOperation, DispatchContext, RuntimeNeed};
 use crate::output;
-use crate::output::sink::{OutputMode, OutputSink};
+use crate::output::common::sink::{OutputMode, OutputSink};
 use crate::root_check;
 
 pub(crate) fn run(env: orbit_common::Env) {
@@ -27,7 +27,7 @@ pub(crate) fn run(env: orbit_common::Env) {
         "warn",
         "warn,orbit_engine::activity_job::cli_runner::supervisor=info,orbit::mcp_config=info",
     );
-    output::pipe::install_handler();
+    output::common::pipe::install_handler();
 
     let (mut cli, requested_format, legacy_json, header) = parse_cli(&env);
     if command_rotates_jsonl_on_start(&cli.command) {

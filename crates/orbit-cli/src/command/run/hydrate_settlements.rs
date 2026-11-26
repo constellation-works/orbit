@@ -90,7 +90,7 @@ impl RunHydrateSettlementsArgs {
         )?
         .value;
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         let mut table = Table::new(vec![
             Column::new("TASK").fixed(),
             Column::new("MACHINE").fixed(),

@@ -10,7 +10,7 @@
 //! The CLI "table" form (a real terminal, pinned width, truncation) cannot be
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
 //! so `std::io::stdout().is_terminal()` is always `false` inside the child
-//! process, and both `crate::output::table::sink_width` and comfy-table's own
+//! process, and both `crate::output::common::table::sink_width` and comfy-table's own
 //! `should_style` gate on that same check.
 //!
 //! ## Regenerating goldens
@@ -50,7 +50,7 @@ struct Command {
 }
 
 /// List commands covered across plain and json. Each renders through
-/// `output::table::Table` for its non-`--json` form.
+/// `output::common::table::Table` for its non-`--json` form.
 const COMMANDS: &[Command] = &[
     Command {
         name: "tool_list",

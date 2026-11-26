@@ -21,7 +21,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
-use crate::output::sink::OutputMode;
+use crate::output::common::sink::OutputMode;
 
 use super::format::{self, LevelFilter};
 
@@ -85,7 +85,7 @@ impl TailArgs {
                     Ok(()) => Ok(()),
                     // The reader closing the pipe is how `orbit log tail -f |
                     // head` ends, not a failure to report (spec §5).
-                    Err(err) if crate::output::pipe::is_broken_pipe(&err) => Ok(()),
+                    Err(err) if crate::output::common::pipe::is_broken_pipe(&err) => Ok(()),
                     Err(err) => Err(io_to_orbit(err)),
                 }
             }),

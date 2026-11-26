@@ -10,7 +10,7 @@ use orbit_common::Env;
 use orbit_core::bootstrap::browser_kit::{KitInspection, KitLayout};
 use serde_json::{Value, json};
 
-use crate::output::sink::{stderr_is_terminal, stdin_is_terminal};
+use crate::output::common::sink::{stderr_is_terminal, stdin_is_terminal};
 
 const INSTALL: &str = "orbit config browser-kit install";
 

@@ -7,7 +7,7 @@ use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 use super::format::{
     LockHolders, format_admissions_stop_line, format_child_dispatch_lines,
@@ -21,7 +21,7 @@ pub(crate) fn run_header_text_with_lock_holders(
     state: Option<&PipelineState>,
     holders: &LockHolders,
 ) -> String {
-    use crate::output::color::{Domain, bold, dimmed, text};
+    use crate::output::common::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
         format!(
             "{} {} ({})",
@@ -172,8 +172,8 @@ pub(crate) fn activity_provenance_lines(
         .collect()
 }
 
-pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::table::Table {
-    use crate::output::table::{Column, Table};
+pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::common::table::Table {
+    use crate::output::common::table::{Column, Table};
     // `orbit run show <run_id> -s <step>` prints one step's untruncated record.
     let mut columns = vec![
         Column::new("#").number(),
@@ -198,7 +198,7 @@ pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::tabl
             // zero-based in `--json`.
             Cell::new(step.step_index + 1),
             Cell::new(&step.target_id),
-            crate::output::color::cell(&step.state, Domain::JobState),
+            crate::output::common::color::cell(&step.state, Domain::JobState),
             Cell::new(format_duration(step.duration_ms)),
             Cell::new(step.error_code.as_deref().unwrap_or("-")),
             Cell::new(summarize_error_message(step.error_message.as_deref())),
@@ -231,7 +231,7 @@ pub(crate) fn step_record_payload(
         "step_output": step_output,
     });
 
-    use crate::output::color::{Domain, bold, dimmed, text};
+    use crate::output::common::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
         format!(
             "{} {} ({})",

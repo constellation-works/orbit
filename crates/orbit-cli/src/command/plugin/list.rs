@@ -3,7 +3,7 @@ use orbit_core::Core;
 use orbit_core::app::plugin::{Command, Outcome, exec};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 use super::support;
 
@@ -19,7 +19,7 @@ impl ExecuteCore for PluginListArgs {
         };
         let records = plugins.iter().map(plugin_record).collect::<Vec<_>>();
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         use comfy_table::Cell;
         let mut table = Table::new(vec![
             Column::new("NAME").fixed(),
@@ -36,7 +36,7 @@ impl ExecuteCore for PluginListArgs {
                 Cell::new(&plugin.name),
                 Cell::new(&plugin.version),
                 Cell::new(host_state(plugin)),
-                crate::output::color::cell(plugin.status.as_str(), Domain::JobState),
+                crate::output::common::color::cell(plugin.status.as_str(), Domain::JobState),
                 Cell::new(plugin.tools.len().to_string()),
                 Cell::new(support::declared_agent_tool_names(plugin)),
                 Cell::new(state_reason(plugin).unwrap_or_default()),

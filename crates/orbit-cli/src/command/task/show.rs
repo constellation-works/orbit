@@ -22,7 +22,7 @@ use super::output::{
 };
 use super::support::attach_bound_workspace_identity;
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::color::{Domain, bold, dimmed, text};
+use crate::output::common::color::{Domain, bold, dimmed, text};
 
 pub(super) fn render(input: &Map<String, Value>, outcome: Outcome) -> CommandOut {
     match input.get("fields").map(strings) {

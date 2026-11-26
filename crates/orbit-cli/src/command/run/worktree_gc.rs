@@ -9,7 +9,7 @@ use serde_json::Value;
 /// `Rescued worktree:` line for each dirty worktree it removed (where the
 /// candidate went), so a leak shows in `orbit run show` without reading code.
 pub(super) fn worktree_gc_lines(state: Option<&PipelineState>) -> Vec<String> {
-    let bold = crate::output::color::bold;
+    let bold = crate::output::common::color::bold;
     let mut lines = Vec::new();
     for (_, output) in state
         .into_iter()

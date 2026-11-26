@@ -22,7 +22,7 @@ impl ExecuteCore for PluginShowArgs {
             unreachable!("plugin command returned an unrelated outcome");
         };
 
-        use crate::output::color::{Domain, bold, text};
+        use crate::output::common::color::{Domain, bold, text};
         let mut header = format!(
             "{} {}\n{} {}\n{} {}\n{} {}\n{} {}",
             bold("Name:"),
@@ -131,7 +131,7 @@ impl ExecuteCore for PluginShowArgs {
         if !plugin.permissions.is_empty() {
             blocks.push(Block::text(bold("Permissions:")));
             let mut permissions =
-                crate::output::table::build_table(&["GRANT", "REQUESTED", "GRANTED"])
+                crate::output::common::table::build_table(&["GRANT", "REQUESTED", "GRANTED"])
                     .keep_all_columns();
             for permission in &plugin.permissions {
                 permissions.add_row(vec![
@@ -158,7 +158,7 @@ impl ExecuteCore for PluginShowArgs {
         if !plugin.programs.is_empty() {
             blocks.push(Block::text(bold("Programs:")));
             let mut programs =
-                crate::output::table::build_table(&["PROGRAM", "RESOLVED PATH", "GRANTED"])
+                crate::output::common::table::build_table(&["PROGRAM", "RESOLVED PATH", "GRANTED"])
                     .keep_all_columns();
             for program in &plugin.programs {
                 programs.add_row(vec![
@@ -185,7 +185,8 @@ impl ExecuteCore for PluginShowArgs {
         if !plugin.panels.is_empty() || !plugin.links.is_empty() {
             blocks.push(Block::text(bold("Dashboard:")));
             let mut dashboard =
-                crate::output::table::build_table(&["KIND", "NAME", "SOURCE"]).keep_all_columns();
+                crate::output::common::table::build_table(&["KIND", "NAME", "SOURCE"])
+                    .keep_all_columns();
             for panel in &plugin.panels {
                 dashboard.add_row(vec![
                     format!("panel ({})", panel.render.as_str()),
@@ -208,9 +209,14 @@ impl ExecuteCore for PluginShowArgs {
             return Ok(Payload::blocks(doc, blocks).into());
         }
         blocks.push(Block::text(bold("Tools:")));
-        let mut table =
-            crate::output::table::build_table(&["NAME", "MCP", "KIND", "AGENT CALLABLE", "STATUS"])
-                .keep_all_columns();
+        let mut table = crate::output::common::table::build_table(&[
+            "NAME",
+            "MCP",
+            "KIND",
+            "AGENT CALLABLE",
+            "STATUS",
+        ])
+        .keep_all_columns();
         for tool in &plugin.tools {
             table.add_row(vec![
                 tool.name.clone(),

@@ -2,7 +2,7 @@ use clap::{Arg, ArgMatches, Command};
 
 use crate::command;
 use crate::help;
-use crate::output::sink::FormatArg;
+use crate::output::common::sink::FormatArg;
 
 /// Clap id and long name of the global output-format argument.
 const FORMAT_ARG_ID: &str = "format";

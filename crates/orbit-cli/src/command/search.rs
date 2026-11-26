@@ -119,8 +119,8 @@ fn render(value: &Value) -> CommandOut {
     Ok(Payload::blocks(value.clone(), blocks).into())
 }
 
-fn search_table(results: &[Value]) -> crate::output::table::Table {
-    use crate::output::table::{Column, Table};
+fn search_table(results: &[Value]) -> crate::output::common::table::Table {
+    use crate::output::common::table::{Column, Table};
     // A federated query labels every hit; a single-workspace one labels none,
     // so the column appears exactly when it carries information [ORB-11027].
     let federated = results.iter().any(|hit| hit.get("workspace").is_some());

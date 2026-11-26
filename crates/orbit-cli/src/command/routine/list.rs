@@ -8,7 +8,7 @@ use orbit_core::application::routines::{FireField, RetiredRoutine, RoutineField,
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
-use crate::output::table::{Column, Table};
+use crate::output::common::table::{Column, Table};
 
 const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("name", RoutineField::Name),

@@ -5,7 +5,7 @@ use orbit_core::app::task::Written;
 use orbit_types::task::TaskHistoryEntry;
 use serde_json::Value;
 
-use crate::output::color::Domain;
+use crate::output::common::color::Domain;
 
 /// Legacy bare `commented` history entries duplicate the authoritative Comments
 /// list, so human-facing history rendering omits them (ORB-10311). Raw JSON/MCP
@@ -111,8 +111,8 @@ pub(super) fn task_table(
     tasks: &[Value],
     full: bool,
     filtered: TaskTableFilters,
-) -> crate::output::table::Table {
-    use crate::output::table::Column;
+) -> crate::output::common::table::Table {
+    use crate::output::common::table::Column;
     use comfy_table::Cell;
     let show_tools = tasks.iter().any(|task| {
         ["required_tools", "granted_tools"].iter().any(|key| {
@@ -164,16 +164,16 @@ pub(super) fn task_table(
             Column::new("UPDATED_AT").fixed(),
         ]);
     }
-    let mut table = crate::output::table::Table::new(columns)
+    let mut table = crate::output::common::table::Table::new(columns)
         .empty_message("no tasks matching the given filters");
     for task in tasks {
         let field = |key: &str| task.get(key).and_then(Value::as_str).unwrap_or_default();
         let mut row = vec![
             Cell::new(field("id")),
             Cell::new(field("title")),
-            crate::output::color::cell(field("status"), Domain::TaskStatus),
-            crate::output::color::cell(field("priority"), Domain::Priority),
-            crate::output::color::cell(field("type"), Domain::TaskType),
+            crate::output::common::color::cell(field("status"), Domain::TaskStatus),
+            crate::output::common::color::cell(field("priority"), Domain::Priority),
+            crate::output::common::color::cell(field("type"), Domain::TaskType),
             Cell::new(runs_on_cell(task, field("crew").is_empty())),
         ];
         if show_schedule {

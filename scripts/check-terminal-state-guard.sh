@@ -23,8 +23,8 @@ fi
 cli_src="crates/orbit-cli/src"
 
 allowed=(
-  "$cli_src/output/sink.rs"
-  "$cli_src/output/tests/sink.rs"
+  "$cli_src/output/common/sink.rs"
+  "$cli_src/output/common/tests/sink.rs"
 )
 
 # `IsTerminal` covers `x.is_terminal()` too when the trait is imported by name
@@ -96,7 +96,7 @@ done
 rm -f "$rg_tmp_out" "$rg_tmp_err"
 
 if [[ "$failed" -ne 0 ]]; then
-  echo "resolve it once in crates/orbit-cli/src/output/sink.rs and read it from there" >&2
+  echo "resolve it once in crates/orbit-cli/src/output/common/sink.rs and read it from there" >&2
   exit 1
 fi
 

@@ -2055,9 +2055,9 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
 
     def write_clean_terminal_tree(self):
         cli_src = self.root / "crates/orbit-cli/src"
-        (cli_src / "output/tests").mkdir(parents=True, exist_ok=True)
-        (cli_src / "output/sink.rs").write_text("pub fn sink() {}\n")
-        (cli_src / "output/tests/sink.rs").write_text("// clean fixture\n")
+        (cli_src / "output/common/tests").mkdir(parents=True, exist_ok=True)
+        (cli_src / "output/common/sink.rs").write_text("pub fn sink() {}\n")
+        (cli_src / "output/common/tests/sink.rs").write_text("// clean fixture\n")
         (cli_src / "lib.rs").write_text("// clean fixture\n")
         return cli_src
 

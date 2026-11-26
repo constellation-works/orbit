@@ -80,7 +80,7 @@ impl ExecuteCore for RunProfilesArgs {
                 })?,
         });
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         use comfy_table::Cell;
         let mut table = Table::new(vec![
             Column::new("WORKSPACE").fixed(),
@@ -199,7 +199,7 @@ fn accuracy(
     report_at: DateTime<Utc>,
     wide: bool,
 ) -> CommandOut {
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     use comfy_table::Cell;
     use orbit_types::workflow::DrainPassOutcome;
 
@@ -291,8 +291,8 @@ fn accuracy(
 
 /// Every per-offset column: maturity counts, raw and attributed errors with
 /// their worst misses (`--accuracy --wide`).
-fn wide_offsets(report: &ForecastAccuracy) -> crate::output::table::Table {
-    use crate::output::table::{Column, Table};
+fn wide_offsets(report: &ForecastAccuracy) -> crate::output::common::table::Table {
+    use crate::output::common::table::{Column, Table};
     use comfy_table::Cell;
 
     let mut offsets = Table::new(vec![
@@ -356,8 +356,8 @@ fn wide_offsets(report: &ForecastAccuracy) -> crate::output::table::Table {
 /// The per-offset summary `--accuracy` prints by default: pairs and the raw
 /// CPU and memory errors an operator reads first, with each unit named once
 /// in its header.
-fn summary_offsets(report: &ForecastAccuracy) -> crate::output::table::Table {
-    use crate::output::table::{Column, Table};
+fn summary_offsets(report: &ForecastAccuracy) -> crate::output::common::table::Table {
+    use crate::output::common::table::{Column, Table};
     use comfy_table::Cell;
 
     let mut offsets = Table::new(vec![

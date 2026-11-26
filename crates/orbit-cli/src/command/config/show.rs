@@ -5,7 +5,7 @@ use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::payload::ConfigShow;
+use crate::output::config::ConfigShow;
 
 use super::render;
 use super::support::{

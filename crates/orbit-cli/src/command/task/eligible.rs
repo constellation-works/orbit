@@ -4,8 +4,8 @@ use comfy_table::Cell;
 use serde_json::{Map, Value};
 
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::color::Domain;
-use crate::output::table::{Column, Table};
+use crate::output::common::color::Domain;
+use crate::output::common::table::{Column, Table};
 
 pub(super) fn render(input: &Map<String, Value>, value: Value) -> CommandOut {
     let explain = input.get("explain") == Some(&Value::Bool(true));
@@ -26,8 +26,8 @@ fn eligible_blocks(doc: &Value, explain: bool) -> Vec<Block> {
     for task in tasks {
         table.add_row(vec![
             Cell::new(text(&task["id"])),
-            crate::output::color::cell(text(&task["status"]), Domain::TaskStatus),
-            crate::output::color::cell(text(&task["priority"]), Domain::Priority),
+            crate::output::common::color::cell(text(&task["status"]), Domain::TaskStatus),
+            crate::output::common::color::cell(text(&task["priority"]), Domain::Priority),
             Cell::new(task["complexity"].as_str().unwrap_or("-")),
             Cell::new(text(&task["title"])),
         ]);
@@ -61,7 +61,7 @@ fn eligible_blocks(doc: &Value, explain: bool) -> Vec<Block> {
         for conflict in task["conflicts"].as_array().map_or(&[][..], Vec::as_slice) {
             held.add_row(vec![
                 Cell::new(text(&task["id"])),
-                crate::output::color::cell(text(&task["status"]), Domain::TaskStatus),
+                crate::output::common::color::cell(text(&task["status"]), Domain::TaskStatus),
                 Cell::new(text(&conflict["requested_file"])),
                 Cell::new(text(&conflict["locking_task_id"])),
             ]);

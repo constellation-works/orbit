@@ -14,7 +14,7 @@ pub struct ProvidersArgs {}
 /// provider CLI it launches, where dispatch would find that CLI, and the
 /// sandbox mode the effective definition resolves to.
 pub(super) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
 
     let defs = runtime.list_executor_defs()?;
     // One fresh user-scoped probe for this diagnostic. The configured executor

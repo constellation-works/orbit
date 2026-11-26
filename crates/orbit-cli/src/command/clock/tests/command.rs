@@ -1,7 +1,7 @@
 //! `orbit clock status` keeps its own state token for every clock status.
 
 use super::super::command::clock_status_payload;
-use crate::output::payload::{Block, View};
+use crate::output::common::payload::{Block, View};
 use orbit_core::application::routines::ClockStatus;
 
 #[test]

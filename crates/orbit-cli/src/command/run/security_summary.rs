@@ -45,8 +45,8 @@ pub(super) fn security_alert_sweep_lines(run: &JobRun, state: Option<&PipelineSt
         .join(", ");
     format!(
         "\n{} filed={filed} min_severity={floor} ({source})\n{} {}{}",
-        crate::output::color::bold("Security alerts:"),
-        crate::output::color::bold("Excluded below floor:"),
+        crate::output::common::color::bold("Security alerts:"),
+        crate::output::common::color::bold("Excluded below floor:"),
         excluded.len(),
         if alerts.is_empty() {
             String::new()

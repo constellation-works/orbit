@@ -35,7 +35,7 @@ impl ExecuteCore for RunSettlementsArgs {
         let settlements = exec(core, Command::settlements(since, !self.no_reconcile))?.value;
         let doc = json!({ "settlements": settlements });
 
-        use crate::output::table::{Column, Table};
+        use crate::output::common::table::{Column, Table};
         let mut table = Table::new(vec![
             Column::new("SETTLED_AT").fixed(),
             Column::new("TASK").fixed(),

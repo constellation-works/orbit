@@ -4,7 +4,7 @@ use orbit_types::plugin::PluginStatus;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
-use crate::output::color::{Domain, Role};
+use crate::output::common::color::{Domain, Role};
 
 pub(super) fn execute_doctor(core: &Core) -> CommandOut {
     let Outcome::Diagnosed {
@@ -16,7 +16,7 @@ pub(super) fn execute_doctor(core: &Core) -> CommandOut {
         unreachable!("plugin command returned an unrelated outcome");
     };
 
-    use crate::output::table::{Column, Table};
+    use crate::output::common::table::{Column, Table};
     use comfy_table::Cell;
     let mut table = Table::new(vec![
         Column::new("PLUGIN").fixed(),
@@ -34,7 +34,7 @@ pub(super) fn execute_doctor(core: &Core) -> CommandOut {
         }
         table.add_row(vec![
             Cell::new(&result.plugin),
-            crate::output::color::cell(result.status.as_str(), Domain::JobState),
+            crate::output::common::color::cell(result.status.as_str(), Domain::JobState),
             Cell::new(&result.message),
         ]);
     }
@@ -55,7 +55,7 @@ pub(super) fn execute_doctor(core: &Core) -> CommandOut {
         );
         table.add_row(vec![
             Cell::new("plugin callbacks"),
-            crate::output::color::cell("inactive", Domain::JobState),
+            crate::output::common::color::cell("inactive", Domain::JobState),
             Cell::new(&message),
         ]);
         records.push(json!({
@@ -81,7 +81,7 @@ pub(super) fn execute_doctor(core: &Core) -> CommandOut {
         let separator = if results.is_empty() { "" } else { "\n" };
         blocks.push(Block::text(format!(
             "{separator}{}",
-            crate::output::color::text(&summary, Role::Ok)
+            crate::output::common::color::text(&summary, Role::Ok)
         )));
     } else {
         eprintln!("\n{issues} plugin(s) need attention.");
