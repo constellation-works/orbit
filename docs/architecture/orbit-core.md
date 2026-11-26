@@ -9,7 +9,7 @@ tags: [architecture, orbit-core]
 
 ## What it owns
 
-Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. Internal graph `runtime ← application ← adapter`, `composition` joins config/bootstrap/runtime/adapters.
+Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. Internal graph `runtime ← application ← adapter`, `composition` joins config/bootstrap/runtime/adapters. Surfaces are being moved off `OrbitRuntime`: a converted surface holds a `Core` and calls an app's `exec` (see [Core, apps and the chokepoint](#core-apps-and-the-chokepoint)).
 
 ## Layering
 
@@ -22,7 +22,18 @@ Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. In
 
 ## Main modules and types
 
-`application` (task, job, review, landing, distributed, pull_drain, admission, routines, search, notice), `adapter`, `composition`, `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
+`application` (task, job, review, landing, distributed, pull_drain, admission, routines, search, notice), `app` (`friction`), `adapter`, `composition` (`Core` in `crates/orbit-core/src/composition/core.rs`), `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
+
+## Core, apps and the chokepoint
+
+The entry every surface is being moved to ([design §2, §3](../design/architecture-restructure/2_design.md)). `friction` is the only subject converted; every other subject is still reached through `OrbitRuntime`.
+
+- **`Core`** (`orbit_core::Core`) is what composition returns for one opened workspace. It has no public field and no public method, so a surface can only pass it to an app's `exec`. It holds the `OrbitRuntime` privately. `composition::core_for_command` opens it for a process that runs one command, and `composition::core_for_service` for a long-lived server; `orbit-cmd`'s `RegisteredRuntimeFactory` hands both out beside the runtime it opened. The CLI gives a command its `Core` through the `ExecuteCore` trait, and the dashboard through the `WsCore` extractor.
+- **`app/<subject>/`** is one app: `mod.rs` holds `Command`, `Outcome`, `Error` and one `exec(&core, command)`, and each verb's flow is a private child module that takes `&OrbitRuntime`. `app::friction::Command` has one variant per `FrictionVerb`; its fields stay named and typed as the verb's spec in `orbit-common` declares, and that spec stays the contract every surface shares. A sibling may call only what `mod.rs` re-exports.
+- **`app/exec.rs`** is the chokepoint every `exec` runs through. It authorizes the command against its operation's governance rows (the command row for a command-line caller, then the tool row), starts the audit guard, runs the app, tells the guard the outcome, and maps the app's error into `orbit_core::Error`. A refusal is audited, because the guard starts first.
+- **What is audited.** A command from a command-line `Core` gets the invocation row the CLI's own guard wrote before: `command` is the noun, `subcommand` the CLI path, the target is the noun's audit parameter, and reads are audited like writes. `exec` then marks the row as recorded, so the CLI guard writes no second one; that guard still writes the row of a command refused before it reaches `exec`. The row records the command's outcome, not a later failure to print it. A command from a service `Core` gets no invocation row, as before.
+- **The three friction entries** (`orbit friction` in `orbit-cli`, the dashboard's friction API in `orbit-web`, and the tool handler `adapter/tool_host/friction_tools.rs`) call only `app::friction::exec`.
+- **Until the generic tool entry is converted**, a surface's friction command still runs through it: the app passes the command to the tool entry, which checks the fields against the spec, applies tool policy, routes a worker's call to its owner and reaches the tool handler. The handler calls `exec` with a `Core` marked as inside the tool entry, and for that call the chokepoint only runs the flow, because the tool entry authorized and audited it. `app` reaches the tool entry through `contracts::ToolInvocationPort`.
 
 ## Dependencies
 
@@ -39,7 +50,8 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 
 ## Ownership by module
 
-- `adapter`: Protocol adapters translating tool-host, command, and engine-host requests into Core operations; imports `application`, `runtime`, and lower workspace crates (never `bootstrap` or `composition`).
+- `app`: The apps, one per subject, each with `Command`, `Outcome`, `Error` and one `exec`, and the chokepoint that authorizes and audits every command; imports `application`, `runtime`, `composition` (for `Core` and its `Entry` only) and lower workspace crates.
+- `adapter`: Protocol adapters translating tool-host, command, and engine-host requests into Core operations; imports `app`, `application`, `runtime`, and lower workspace crates (never `bootstrap` or `composition`).
 - `application`: Directional domain operations exposed on `OrbitRuntime` over one workspace and host; imports `runtime` and lower workspace crates (never `adapter`, `bootstrap`, or `composition`).
 - `bootstrap`: Workspace initialization, managed asset seeding, and forward-only startup migrations; imports `application`, `runtime`, and lower workspace crates (never `composition`).
 - `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, `CoreApplicationPort`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
@@ -103,7 +115,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `workspace` | `app::workspace` | above task |
 | `workspace_auto` | `unit::workspace_auto` | 8 |
 
-New apps with no module today: `friction`, `host`, `update`. They have no row, since there is no entry.
+New apps with no `application/` entry: `friction` (built, `app/friction/`), `host`, `update`. They have no row, since there is no entry.
 
 ### Decided by callers
 

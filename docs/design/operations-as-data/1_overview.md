@@ -136,7 +136,7 @@ and again in the tool handler.
 | Task CLI surface tables (request shaping, renderers) | [crates/orbit-cli/src/command/task/operation.rs](../../../crates/orbit-cli/src/command/task/operation.rs) | [ORB-15937] |
 | CLI audit metadata and runtime need (`registry_operation`; `task_operation` adds task-owner binding and `lint`'s read-only runtime) | [crates/orbit-cli/src/command/operation/spec.rs](../../../crates/orbit-cli/src/command/operation/spec.rs) | [ORB-15932], [ORB-15937] |
 | Web handlers over registry field names | [crates/orbit-web/src/api/frictions.rs](../../../crates/orbit-web/src/api/frictions.rs) | [ORB-10358] |
-| Handler table, keyed on `FrictionVerb` | [crates/orbit-core/src/adapter/tool_host/friction_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/friction_tools.rs) | [ORB-10358] |
+| Handler table, keyed on `FrictionVerb` (the friction app; `adapter/tool_host/friction_tools.rs` is its tool entry) | [crates/orbit-core/src/app/friction/mod.rs](../../../crates/orbit-core/src/app/friction/mod.rs) | [ORB-10358], [ORB-28396] |
 | Handler table, keyed on `AutoTaskVerb` | [crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs) | [ORB-15935] |
 | Handler table, keyed on `DrainVerb` | [crates/orbit-core/src/adapter/tool_host/drain_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/drain_tools.rs) | [ORB-15936] |
 | Handler table, keyed on `WorkspaceClaimVerb` | [crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs) | [ORB-15936] |

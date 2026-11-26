@@ -47,7 +47,7 @@ verb into exactly one of two homes:
 The second home keeps the property that makes the split table work: adding a
 verb fails to compile in every surface table that has not decided what to do
 with it. A wildcard arm (`_ =>`) in a surface table defeats that and is not
-allowed for a migrated noun. Friction's tables in `friction_tools.rs`,
+allowed for a migrated noun. Friction's tables in `app/friction/mod.rs`,
 `worker_tools.rs`, `artifact_redaction/policy.rs` and `command/friction.rs` follow it,
 as do auto-task's in `auto_task_tools.rs`, the same two core tables,
 `builtin/orbit/auto_task.rs` (MCP guarded modes) and `command/auto_task/`.

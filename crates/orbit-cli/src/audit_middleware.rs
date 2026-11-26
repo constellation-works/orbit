@@ -109,6 +109,9 @@ impl Drop for AuditGuard<'_> {
         // that dispatch without executing a runtime tool call, such as
         // `--dry-run`, leave the flag clear and still get a guard-side row.
         // Invalid JSON is refused before bootstrap, before a guard exists.
+        // An app's `exec` (`orbit_core::app::<subject>::exec`) sets the same
+        // flag once it has written the invocation row of a command that ran
+        // through it, so that command is audited once, by `exec`.
         if take_tool_audit_recorded() {
             return;
         }

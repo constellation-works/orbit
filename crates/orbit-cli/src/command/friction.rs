@@ -15,11 +15,12 @@
 
 use clap::Args;
 use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::friction::{self, Command, Input, Outcome};
 use serde_json::{Map, Value};
 
 use super::operation_args::Invocation;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::payload::Block;
 
 #[derive(Args)]
@@ -29,21 +30,19 @@ pub struct FrictionCommand {
     pub command: Invocation<FrictionVerb>,
 }
 
-impl Execute for FrictionCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for FrictionCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         self.command.require_at_least_one_of()?;
         let Invocation { spec, mut input } = self.command;
         prepare(spec.verb, &mut input)?;
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value = friction::exec(core, Command::new(spec.verb, Input::new(input)))
+            .map(Outcome::into_value)?;
         render(spec.verb, &value)
     }
 }
 
 /// Shape a friction request for the CLI before it reaches the tool.
-fn prepare(
-    verb: FrictionVerb,
-    input: &mut Map<String, Value>,
-) -> Result<(), orbit_core::OrbitError> {
+fn prepare(verb: FrictionVerb, input: &mut Map<String, Value>) -> Result<(), orbit_core::Error> {
     match verb {
         // The table renderer shows the tool's guidance notes.
         FrictionVerb::List => {

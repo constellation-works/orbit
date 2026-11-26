@@ -6,10 +6,10 @@
     "env_process_env_method_calls": 511,
     "from_kernel_ref_uses": 21,
     "impl_orbit_runtime_files": 337,
-    "orbit_runtime_naming_files.orbit-cli": 128,
+    "orbit_runtime_naming_files.orbit-cli": 127,
     "orbit_runtime_naming_files.orbit-cmd": 30,
-    "orbit_runtime_naming_files.orbit-web": 53,
-    "orbit_runtime_ref_param_fns": 1371,
+    "orbit_runtime_naming_files.orbit-web": 52,
+    "orbit_runtime_ref_param_fns": 1369,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
     "worker_or_owner_reads": 219

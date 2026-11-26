@@ -349,8 +349,12 @@ pub(crate) fn run(env: orbit_common::Env) {
     }
     .with_actor(actor.clone());
 
+    // The opaque handle over this command's runtime, for a command that runs
+    // through an app's `exec`.
+    let core = RegisteredRuntimeFactory::core_for_command(runtime.clone());
     let context = DispatchContext::with_runtime(
         &runtime,
+        &core,
         root_override.as_deref(),
         workspace_selector.as_deref(),
         &env,
@@ -358,7 +362,9 @@ pub(crate) fn run(env: orbit_common::Env) {
     );
     // ORB-10453: the CLI's single authorization chokepoint. Every command
     // traverses it before dispatch, so a governed operation cannot be reached
-    // by adding a subcommand that forgets its own guard.
+    // by adding a subcommand that forgets its own guard. A command that runs
+    // through an app's `exec` declares no governed operation here: `exec`
+    // authorizes it.
     let authorize = |runtime: &orbit_core::OrbitRuntime| match governed {
         Some(operation) => {
             runtime.authorize_command_operation(operation.command, operation.subcommand)
@@ -367,7 +373,8 @@ pub(crate) fn run(env: orbit_common::Env) {
     };
     // The runtime appends telemetry separately from write-free state handles.
     // Foreign-generation reads still need their native command outcome; the
-    // guard itself suppresses emission when tool dispatch already owns it.
+    // guard itself suppresses emission when tool dispatch or an app's `exec`
+    // already owns it.
     let guard = audit_meta.map(|meta| audit_middleware::AuditGuard::new(&runtime, meta, &env));
     let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
 

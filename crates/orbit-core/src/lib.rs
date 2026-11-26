@@ -19,6 +19,10 @@
 //! [`runtime::ApplicationPort`]; [`composition`] implements that port with
 //! `CoreApplicationPort`.
 //!
+//! A converted surface holds a [`Core`] instead of the runtime and calls an
+//! app in [`app`]: one `exec(&core, command)` per subject, each run through
+//! the chokepoint that authorizes and audits the command.
+//!
 //! # Root re-export policy (ORB-10016)
 //! Every root `pub use` below is justified by a real import in a consumer
 //! crate (`orbit-cli`, `orbit-web`, `orbit-cmd`), except `GlobalSearchParams`,
@@ -65,6 +69,7 @@ mod task_params_test_support;
 orbit_common::isolate_test_process!();
 
 pub mod adapter;
+pub mod app;
 pub mod application;
 pub mod bootstrap;
 pub mod composition;
@@ -274,6 +279,10 @@ pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
 pub use application::auto_tasks::AutoTaskAddParams;
+/// The opaque handle a surface holds for one opened workspace.
+pub use composition::Core;
+/// What an app's `exec` returns when a command fails.
+pub use orbit_common::OrbitError as Error;
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{
