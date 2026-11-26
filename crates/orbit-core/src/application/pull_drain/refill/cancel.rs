@@ -1,5 +1,7 @@
 //! A pass of a gracefully cancelled pull drain [ORB-13663].
 
+use std::fmt::Display;
+
 use orbit_common::OrbitError;
 use orbit_store::contract::{LocalPullAdmission, PullDestination};
 use orbit_types::workflow::{DrainAdmissionPass, DrainCancelRequest};
@@ -24,7 +26,7 @@ pub(super) fn cancelling_pass(
     let cause = cancel_cause(cancel);
     // Only what this drain carries: another live drain's work is its own.
     let mut error = None;
-    let carried = carried_admissions(runtime, run_id, &mut error);
+    let carried = carried_admissions(|| runtime.pull_drain_admissions(run_id), &mut error);
     let carries = |record: &LocalPullAdmission| {
         carried
             .iter()
@@ -52,7 +54,7 @@ pub(super) fn cancelling_pass(
             None
         }
     };
-    let waiting_leaves = waiting_leaves(runtime, run_id, &mut error);
+    let waiting_leaves = waiting_leaves(|| runtime.pull_drain_claimed_leaves(run_id), &mut error);
     let mut done = unsettled == Some(0);
     if done && let Err(failure) = runtime.complete_graceful_drain_cancel(run_id) {
         // The drain stays running and the next pass tries again.
@@ -96,13 +98,11 @@ fn cancel_cause(cancel: &DrainCancelRequest) -> String {
 
 /// The admissions this drain carries, as destination and request id; an
 /// unreadable list is kept as the pass's error.
-fn carried_admissions(
-    runtime: &OrbitRuntime,
-    run_id: &str,
+fn carried_admissions<E: Display>(
+    read: impl FnOnce() -> Result<Vec<LocalPullAdmission>, E>,
     error: &mut Option<String>,
 ) -> Vec<(PullDestination, String)> {
-    runtime
-        .pull_drain_admissions(run_id)
+    read()
         .map(|records| {
             records
                 .into_iter()
@@ -117,12 +117,11 @@ fn carried_admissions(
 
 /// The claimed leaves a cancelling drain still waits on; an unreadable list
 /// is kept as the pass's error.
-fn waiting_leaves(
-    runtime: &OrbitRuntime,
-    run_id: &str,
+fn waiting_leaves<E: Display>(
+    read: impl FnOnce() -> Result<Vec<DrainClaimedLeaf>, E>,
     error: &mut Option<String>,
 ) -> Vec<DrainClaimedLeaf> {
-    match runtime.pull_drain_claimed_leaves(run_id) {
+    match read() {
         Ok(leaves) => leaves,
         Err(failure) => {
             error.get_or_insert(failure.to_string());
