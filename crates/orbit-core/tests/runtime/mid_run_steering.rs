@@ -11,6 +11,10 @@
 //! advances the watermark past what it carried in full. Before `commit`, the
 //! promotion gate ([`gate`]) refuses while such a comment is undelivered.
 
+mod claimed;
+mod gate;
+mod replay;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,10 +26,6 @@ use orbit_engine::RuntimeHost;
 use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringWatermark};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-mod claimed;
-mod gate;
-mod replay;
 
 const ENABLED: &str = "[workflow.mid_run_steering]\nenabled = true\n";
 

@@ -24,6 +24,9 @@ use support::*;
 
 pub(super) use support::{LeafEnd, Shelf, fixture, repair_skip, started};
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
 /// Records `rounds` as the checkpoints of steps 4.. as production writes them:
 /// each is a Success, and a step that failed or never ran has no entry.
 fn checkpoint_rounds(fx: &Fixture, leaf: &Leaf, rounds: &[(&str, Value)]) {
@@ -1355,9 +1358,6 @@ fn unknown_mergeability_on_the_newest_pull_request_does_not_defer_older_repairs(
     fx.assert_resumed(&older_conflicting, 1);
     fx.assert_not_resumed(&newest_unknown);
 }
-
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 struct EnvelopeSelections(Arc<AtomicUsize>);
 impl<S: tracing::Subscriber> Layer<S> for EnvelopeSelections {

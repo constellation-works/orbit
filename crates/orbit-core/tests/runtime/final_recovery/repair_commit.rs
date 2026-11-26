@@ -1,5 +1,7 @@
 //! A recovery commit is a new candidate, with an exact host-recorded HEAD.
 
+mod evidence;
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -19,8 +21,6 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use super::super::review_gate_audit::Fixture;
-
-mod evidence;
 
 fn git(fixture: &Fixture, args: &[&str]) -> String {
     let mut command = crate::git_test_support::command();

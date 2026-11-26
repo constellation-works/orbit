@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
+use super::checkpoints::StepCheckpoint;
 use crate::OrbitRuntime;
 
 pub(super) fn source_repair_admission(
@@ -52,8 +53,6 @@ pub(super) fn validate_step_recovery_mutation(
         workspace_path,
     )
 }
-
-use super::checkpoints::StepCheckpoint;
 
 pub(super) fn checkpoint_step(
     runtime: &OrbitRuntime,

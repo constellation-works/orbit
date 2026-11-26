@@ -3,6 +3,8 @@
 //! The fixture composes the host OS, so a muse crew waits on Linux and is
 //! admitted on macOS whether this process runs on either.
 
+mod readiness;
+
 use std::collections::BTreeSet;
 
 use orbit_core::application::task::TaskAddParams;
@@ -16,8 +18,6 @@ use orbit_types::task::HostOs;
 use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-mod readiness;
 
 /// Muse weighs far more than sol. A Linux draw still selects sol, because the
 /// muse executor's `host_os` removes muse-wonder before the draw.

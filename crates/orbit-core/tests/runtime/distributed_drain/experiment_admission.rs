@@ -7,6 +7,12 @@ use orbit_core::application::crew_memory::{MemoryFile, MemoryWrite};
 use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
+use super::*;
+use orbit_core::application::experiment::{
+    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+};
+use orbit_types::tool::WorkerInvocation;
+
 fn execute_empty_claim_worker(pair: &Pair, bound: &OrbitRuntime, run_id: &str) {
     // The real worker performs admission and persists the selection. An empty
     // job snapshot isolates that boundary from providers and delivery actions.
@@ -29,12 +35,6 @@ fn execute_empty_claim_worker(pair: &Pair, bound: &OrbitRuntime, run_id: &str) {
         .unwrap();
     bound.execute_pipeline_run_worker(run_id).unwrap();
 }
-
-use super::*;
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
-};
-use orbit_types::tool::WorkerInvocation;
 
 fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
     for end in [

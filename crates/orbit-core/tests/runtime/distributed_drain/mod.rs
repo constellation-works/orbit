@@ -19,42 +19,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
-
-use chrono::Utc;
-use orbit_common::OrbitError;
-use orbit_common::security::release::sha256_hex;
-use orbit_core::OrbitRuntime;
-use orbit_core::application::routines::{
-    DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
-    run_sweep_at_with_providers,
-};
-use orbit_core::runtime::JobRuns;
-use orbit_engine::RuntimeHost;
-use orbit_store::contract::{
-    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
-    LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
-};
-use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
-use orbit_types::task::TaskArtifact;
-use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
-use orbit_types::workflow::automation::SourceRevision;
-use orbit_types::workflow::handoff::{
-    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
-    HandoffValidationLog, TaskHandoff,
-};
-use orbit_types::workflow::{
-    ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome,
-    FinalRecoveryDecision, FinalRecoveryKey, JobRunState, JobTargetType, PipelineState,
-    ReviewTiming,
-};
-use orbit_types::workspace::{Workspace, WorkspaceStatus};
-use serde_json::{Value, json};
-use tempfile::TempDir;
-
 mod admission;
 mod allow_crew;
 #[cfg(unix)]
@@ -118,6 +82,42 @@ mod window_extension;
 #[cfg(unix)]
 mod worker_exit_settlement;
 mod worktree_gc;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
+use orbit_core::OrbitRuntime;
+use orbit_core::application::routines::{
+    DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
+    run_sweep_at_with_providers,
+};
+use orbit_core::runtime::JobRuns;
+use orbit_engine::RuntimeHost;
+use orbit_store::contract::{
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
+    LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
+};
+use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
+use orbit_types::task::TaskArtifact;
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
+use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::handoff::{
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
+    HandoffValidationLog, TaskHandoff,
+};
+use orbit_types::workflow::{
+    ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome,
+    FinalRecoveryDecision, FinalRecoveryKey, JobRunState, JobTargetType, PipelineState,
+    ReviewTiming,
+};
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use serde_json::{Value, json};
+use tempfile::TempDir;
 
 const OWNER: &str = "hm_owner";
 const FOLLOWER: &str = "hm_follower";

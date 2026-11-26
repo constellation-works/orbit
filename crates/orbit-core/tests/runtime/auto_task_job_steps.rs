@@ -6,15 +6,15 @@
 //! fields remain; any of the fields under `schemaVersion: 2`, even null, is
 //! refused. [ORB-20158] An enabled one loads.
 
-use orbit_core::application::job::JobRunListParams;
-use orbit_core::{AutoTaskAddParams, OrbitRuntime, TaskPriority, TaskStatus, TaskType};
-use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
-use serde_json::{Value, json};
-
 #[path = "auto_task_reuse.rs"]
 mod reuse;
 #[path = "auto_task_shared_completion.rs"]
 mod shared_completion;
+
+use orbit_core::application::job::JobRunListParams;
+use orbit_core::{AutoTaskAddParams, OrbitRuntime, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use serde_json::{Value, json};
 
 const READINESS: &str = "\
 schemaVersion: 3

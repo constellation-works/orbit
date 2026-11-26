@@ -8,6 +8,11 @@
 //! through the applier — once, even when a crash or a failed run-state write
 //! interrupts the settlement.
 
+mod recorded_decision;
+mod repair_commit;
+mod revision;
+mod terminalization;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,11 +28,6 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-mod recorded_decision;
-mod repair_commit;
-mod revision;
-mod terminalization;
 
 struct Fixture {
     // Shared with worker guards, which retain it if a worker outlives teardown.

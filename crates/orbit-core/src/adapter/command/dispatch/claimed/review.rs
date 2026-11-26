@@ -28,6 +28,7 @@ use serde_json::{Map, Value, json};
 
 use super::owner::{self, GET, PUT, artifact_put_input, put_content, require_claimed_task};
 use crate::OrbitRuntime;
+pub(super) use orbit_types::workflow::is_reserved_review_artifact as is_review_artifact;
 
 /// The review contract's artifacts the reviewer may always read: its pinned
 /// manifest and the prior evidence it continues from. Any other read must be
@@ -38,8 +39,6 @@ const CONTRACT_READS: [&str; 4] = [
     REVIEW_REPORT_HISTORY_ARTIFACT,
     REVIEW_EVIDENCE_HOLD_ARTIFACT,
 ];
-
-pub(super) use orbit_types::workflow::is_reserved_review_artifact as is_review_artifact;
 
 /// The review attempt a broker serves, derived from host records.
 struct ClaimedReviewScope<'a> {

@@ -1,14 +1,14 @@
 //! An unchanged published candidate continues its native completion prefix.
-use super::*;
-use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_engine::{FinalRecoveryAdmissionRequest, V2AuditWriter, execute_job_with_resume};
-
 #[path = "completion/mutation.rs"]
 pub(super) mod mutation;
 #[path = "completion/policy.rs"]
 pub(super) mod policy;
 #[path = "completion/prerequisite.rs"]
 pub(super) mod prerequisite;
+
+use super::*;
+use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
+use orbit_engine::{FinalRecoveryAdmissionRequest, V2AuditWriter, execute_job_with_resume};
 
 fn fixture() -> (Fixture, PathBuf) {
     fixture_with_auto_fix(true)

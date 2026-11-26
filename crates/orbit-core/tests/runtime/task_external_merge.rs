@@ -3,6 +3,9 @@
 //! by-number lookup); claims and handoffs use the owner's own mutations, so
 //! the store's guards decide.
 
+mod auto_landing;
+mod pr_supersession;
+
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::TaskStatus;
@@ -18,9 +21,6 @@ use std::time::{Duration, Instant};
 
 use crate::external_merge_fixture::*;
 pub(crate) use crate::external_merge_fixture::{Fixture, Handoff};
-
-mod auto_landing;
-mod pr_supersession;
 
 crate::scenario_table!(
     released_claims,

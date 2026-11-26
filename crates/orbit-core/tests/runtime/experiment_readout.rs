@@ -1,6 +1,10 @@
 //! Public readouts preserve sample ratios and distinguish missing evidence
 //! from a measured comparison after the experiment's horizon.
 
+mod delivery;
+mod per_line;
+mod shadow_memory;
+
 use chrono::{Duration, Utc};
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentReadout,
@@ -1837,7 +1841,3 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
     assert_eq!(control.estimate.mean, Some(0.0));
     assert_eq!(control.unmeasured, 2);
 }
-
-mod delivery;
-mod per_line;
-mod shadow_memory;

@@ -11,11 +11,12 @@ use std::path::Path;
 
 use serde_json::json;
 
-const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 
 use orbit_core::runtime::plugin::paths::plugin_install_path;
+
+const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
 
 fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
     let root = plugin_install_path(&runtime.global_root(), "callback", "1.0.0");

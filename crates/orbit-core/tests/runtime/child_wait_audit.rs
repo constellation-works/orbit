@@ -17,6 +17,9 @@
 //! inherits the listener's nonblocking flag, so readiness alone cannot prove
 //! the identity is readable. A gated real worker covers that preparation gap.
 
+#[cfg(unix)]
+mod stop;
+
 use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::io::{self, BufRead, Write};
@@ -786,6 +789,3 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         }
     }
 }
-
-#[cfg(unix)]
-mod stop;

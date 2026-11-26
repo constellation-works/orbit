@@ -4,6 +4,18 @@
 //! pilot finish records the approvals and admits the approved work. The
 //! deterministic steps run in an isolated child against real stores; the
 //! agent pilot's output is supplied as fixture data.
+mod advisory;
+#[cfg(unix)]
+mod explicit_pilot_reuse;
+mod landed_creation;
+mod leaf_dispatch;
+mod no_diff_tag;
+mod pilot_mutations;
+#[cfg(unix)]
+mod required_tools;
+mod step_graph;
+mod unresolved_footprint;
+
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::runtime::JobRuns;
@@ -23,17 +35,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
-mod advisory;
-#[cfg(unix)]
-mod explicit_pilot_reuse;
-mod landed_creation;
-mod leaf_dispatch;
-mod no_diff_tag;
-mod pilot_mutations;
-#[cfg(unix)]
-mod required_tools;
-mod step_graph;
-mod unresolved_footprint;
+
 struct Workspace {
     // Shared with the worker guard, which keeps it if a worker outlives teardown.
     _root: Arc<TempDir>,

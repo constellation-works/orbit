@@ -5,8 +5,10 @@ use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactHealth, ArtifactKind};
-const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
+
 use orbit_common::security::release::sha256_hex;
+
+const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 
 fn workspace_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
     let global_root = root.join("global");

@@ -1,5 +1,7 @@
 //! Experiment reweight events distinguish weight edits from arm retirement.
 
+mod admission;
+
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
@@ -8,8 +10,6 @@ use orbit_core::application::experiment::{
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{TaskComplexity, TaskStatus, TaskType};
 use serde_json::json;
-
-mod admission;
 
 #[test]
 fn disabled_and_stale_admissions_enroll_once_experiments_run() {

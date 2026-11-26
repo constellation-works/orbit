@@ -1,6 +1,11 @@
 //! Task delivery selection through the composed runtime, with a bounded,
 //! opt-in Linux measurement of the same public operation.
 
+mod local_landing;
+mod resume;
+#[path = "source_repair.rs"]
+mod source_repair;
+
 use std::path::Path;
 
 use chrono::{Duration, TimeZone, Utc};
@@ -11,10 +16,6 @@ use orbit_types::workflow::{CommitObservationStatus, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-mod local_landing;
-mod resume;
-#[path = "source_repair.rs"]
-mod source_repair;
 use local_landing::completion_held_local_merge_is_observed_as_no_landing;
 use resume::{
     already_resolved_checkpoint_is_observed_as_no_change,

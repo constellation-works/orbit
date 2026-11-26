@@ -3,6 +3,8 @@
 //! operator answers; the answer lands in the task's history, completes the
 //! task and unblocks its `blocked_by` dependents.
 
+mod listing;
+
 use std::path::PathBuf;
 
 use orbit_core::application::task::TaskAddParams;
@@ -14,8 +16,6 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::git_test_support;
-
-mod listing;
 
 const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n\
      [crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n\

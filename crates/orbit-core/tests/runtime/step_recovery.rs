@@ -13,6 +13,9 @@
 //! `external_blocker` decision ends the step as a typed blocker that final
 //! recovery skips.
 
+/// [ORB-14822] The host commits a recovery's repair before the retry.
+mod repair_commit;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -36,9 +39,6 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::dispatch_admission::isolated;
-
-/// [ORB-14822] The host commits a recovery's repair before the retry.
-mod repair_commit;
 
 const ORIGINAL_FAILURE: &str = "required validation is red on the candidate (exit 3; failing: actual_failure). Candidate log: `validation/run-observed/0.json`; base log: `validation/run-observed/0.baseline.json`. Base verdict: passed";
 /// The recovery draw's resolved model, which authors the host's repair
