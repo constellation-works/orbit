@@ -33,6 +33,7 @@ mod routine_status_port;
 mod steps;
 mod task_port;
 mod view;
+mod wake;
 mod worktree;
 
 #[cfg(feature = "test-support")]

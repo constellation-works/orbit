@@ -273,11 +273,7 @@ impl OrbitRuntime {
         }
         // Older acted-on tasks can remain in the baseline after the last
         // checkpoint stops naming them. Their open decisions matter too.
-        for id in due
-            .wake_items
-            .keys()
-            .filter_map(|key| key.strip_prefix("task:"))
-        {
+        for (id, _) in due.wake_observation.tasks() {
             if self
                 .get_task_decision_requests(id)?
                 .iter()
@@ -371,7 +367,7 @@ impl OrbitRuntime {
             recovery_of: due.dead_cycle.as_ref().map(|dead| dead.cycle.clone()),
             digest: due.digest.clone(),
             reasons: grant_reasons,
-            wake_items: Some(due.wake_items.clone()),
+            wake_items: Some(due.wake_observation.to_legacy()),
         };
         self.append_resident_history(
             task_id,
