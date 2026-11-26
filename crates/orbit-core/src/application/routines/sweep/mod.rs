@@ -14,6 +14,4 @@ pub use orbit_automation::routines::sweep::{
     RunOwnerLiveness, SweepOptions, SweepOutcome,
 };
 
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use tick::run_sweep_at_with_providers_at;
-pub use tick::{run_sweep_at_with_providers, run_sweep_with_providers};
+pub use tick::{SweepContext, run_sweep, run_sweep_pass};

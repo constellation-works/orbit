@@ -7,9 +7,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{
-    RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
-};
+use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
@@ -86,8 +84,7 @@ fn a_peer_collision_scan_past_the_deadline_defers_the_workspace() {
     };
     let deadline = Instant::now() + Duration::from_secs(3);
 
-    let outcome = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let outcome = orbit_core::test_support::run_sweep_at(
         &global,
         SweepOptions {
             deadline: Some(deadline),
@@ -99,6 +96,7 @@ fn a_peer_collision_scan_past_the_deadline_defers_the_workspace() {
             machine_name: "fixture".into(),
         },
         &provider,
+        chrono::Utc::now(),
     )
     .expect("run scoped sweep");
 

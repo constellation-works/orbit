@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
@@ -24,9 +25,40 @@ use crate::application::automation::SourceCache;
 use crate::application::store_opener::StoreOpener;
 use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
 
+/// What one sweep pass reads, and the clock and host probe it judges due work
+/// against. Production builds it with [`SweepContext::production`]; a test
+/// sets the instant or the probe it needs.
+pub struct SweepContext<'a> {
+    /// The global root. The sweep lock and the host's scheduler state live
+    /// under it.
+    pub global_root: &'a Path,
+    /// Discovers this host's workspaces and hands back their runtimes.
+    pub workspace_provider: &'a dyn RoutineWorkspaceProvider,
+    /// Reports a pending host shutdown, which holds admission.
+    pub host_signals: Arc<dyn HostSignalProbe>,
+    /// The instant due work is judged at.
+    pub now_utc: chrono::DateTime<Utc>,
+}
+
+impl<'a> SweepContext<'a> {
+    /// The default context: this host's shutdown probe and the wall clock.
+    #[must_use]
+    pub fn production(
+        global_root: &'a Path,
+        workspace_provider: &'a dyn RoutineWorkspaceProvider,
+    ) -> Self {
+        Self {
+            global_root,
+            workspace_provider,
+            host_signals: default_host_signal_probe(),
+            now_utc: Utc::now(),
+        }
+    }
+}
+
 /// Run one sweep pass against the default global root with a caller-supplied
-/// workspace provider.
-pub fn run_sweep_with_providers(
+/// workspace provider, using the production context.
+pub fn run_sweep(
     opener: StoreOpener,
     env: &orbit_common::Env,
     options: SweepOptions,
@@ -38,53 +70,34 @@ pub fn run_sweep_with_providers(
     // redirects stdout/stderr into `logs/sweep.log`. Opportunistically roll +
     // prune it here (rename-based, best-effort) so an always-on host cannot
     // grow it without bound. No-op until the file exceeds the
-    // configured per-file budget. `run_sweep_at_with_providers` (the explicit
-    // root seam) is left
-    // untouched so tests never rotate real logs.
+    // configured per-file budget. `run_sweep_pass` (the explicit-context seam)
+    // is left untouched so tests never rotate real logs.
     log_rotation::rotate_and_prune(
         &super::super::clock::sweep_log_path(&global_root),
         &LogRotationConfig::default(),
     );
-    run_sweep_at_with_providers(
+    run_sweep_pass(
         opener,
-        &global_root,
+        SweepContext::production(&global_root, workspace_provider),
         options,
         local_machine,
-        workspace_provider,
     )
 }
 
-/// Run one sweep pass against an explicit global root using injected
-/// composition. Provider calls occur only after the sweep lock is held.
-pub fn run_sweep_at_with_providers(
+/// Run one sweep pass against the context's global root, clock and probes.
+/// Provider calls occur only after the sweep lock is held.
+pub fn run_sweep_pass(
     opener: StoreOpener,
-    global_root: &Path,
+    context: SweepContext<'_>,
     options: SweepOptions,
     local_machine: RoutineMachineIdentity,
-    workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
-    run_sweep_at_with_providers_at(
-        opener,
+    let SweepContext {
         global_root,
-        options,
-        local_machine,
         workspace_provider,
-        default_host_signal_probe().as_ref(),
-        Utc::now(),
-    )
-}
-
-/// Test seam for one scheduler tick at an explicit instant, with an injected
-/// host-signal probe.
-pub(crate) fn run_sweep_at_with_providers_at(
-    opener: StoreOpener,
-    global_root: &Path,
-    options: SweepOptions,
-    local_machine: RoutineMachineIdentity,
-    workspace_provider: &dyn RoutineWorkspaceProvider,
-    host_signals: &dyn HostSignalProbe,
-    now_utc: chrono::DateTime<Utc>,
-) -> Result<SweepOutcome, OrbitError> {
+        host_signals,
+        now_utc,
+    } = context;
     let deadline = options
         .deadline
         .unwrap_or_else(|| Instant::now() + TICK_DEADLINE);
@@ -307,7 +320,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // the host is back, each routine's own `missed_run` policy decides what
     // the held slots become, exactly as after any other downtime. The fixed
     // horizon is judged against this tick's clock.
-    if let Some(shutdown) = workspaces::shutdown_holding_admission(host_signals, now_utc) {
+    if let Some(shutdown) = workspaces::shutdown_holding_admission(host_signals.as_ref(), now_utc) {
         let reason = shutdown.hold_reason();
         tracing::warn!(
             target: "orbit.core.sweep",

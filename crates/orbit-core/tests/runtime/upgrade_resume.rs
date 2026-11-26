@@ -22,9 +22,7 @@ use orbit_common::fs::generation::{
     CompatibilityIdentity, LedgerCompatibility, ParticipantRole, PendingSwitch, pending_switch,
 };
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{
-    RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
-};
+use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::metrics::reliability::ReliabilityWindow;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -346,12 +344,12 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
     assert!(pending_switch(&ctx.global).is_some());
 
     // Clock tick during pending generation switch must NOT resume anything.
-    let sweep = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let sweep = orbit_core::test_support::run_sweep_at(
         &ctx.global,
         SweepOptions::default(),
         machine.clone(),
         &provider,
+        chrono::Utc::now(),
     )
     .expect("sweep runs");
     assert!(!sweep.lock_busy);
@@ -370,12 +368,12 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
     assert!(pending_switch(&ctx.global).is_none());
 
     // Clock tick after generation settles must resume the upgrade run.
-    let sweep = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let sweep = orbit_core::test_support::run_sweep_at(
         &ctx.global,
         SweepOptions::default(),
         machine.clone(),
         &provider,
+        chrono::Utc::now(),
     )
     .expect("sweep runs");
     assert!(!sweep.lock_busy);
@@ -414,12 +412,12 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
 
     // ---- Phase 3: Repeat clock sweep (second tick) ----
     // Subsequent clock ticks must NOT re-resume the already-resumed run.
-    let sweep2 = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let sweep2 = orbit_core::test_support::run_sweep_at(
         &ctx.global,
         SweepOptions::default(),
         machine.clone(),
         &provider,
+        chrono::Utc::now(),
     )
     .expect("sweep runs");
     assert!(!sweep2.lock_busy);
@@ -452,8 +450,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         .unwrap();
     record_upgrade_interruption(ctx.jobs.as_ref(), &run_dry.run_id);
 
-    let dry_sweep = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let dry_sweep = orbit_core::test_support::run_sweep_at(
         &ctx.global,
         SweepOptions {
             dry_run: true,
@@ -462,6 +459,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         },
         machine,
         &provider,
+        chrono::Utc::now(),
     )
     .expect("dry run sweep");
     assert!(!dry_sweep.lock_busy);
@@ -675,12 +673,12 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
         machine_name: "test-host".into(),
     };
     let tick = || {
-        let sweep = run_sweep_at_with_providers(
-            orbit_core::composition::store_opener(),
+        let sweep = orbit_core::test_support::run_sweep_at(
             &ctx.global,
             SweepOptions::default(),
             machine.clone(),
             &provider,
+            chrono::Utc::now(),
         )
         .expect("sweep runs");
         assert!(!sweep.lock_busy);
@@ -816,8 +814,7 @@ fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
     };
     let provider = SingleWorkspace(ctx.runtime.clone());
     let tick = || {
-        let sweep = run_sweep_at_with_providers(
-            orbit_core::composition::store_opener(),
+        let sweep = orbit_core::test_support::run_sweep_at(
             &ctx.global,
             SweepOptions::default(),
             RoutineMachineIdentity {
@@ -825,6 +822,7 @@ fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
                 machine_name: "test-host".into(),
             },
             &provider,
+            chrono::Utc::now(),
         )
         .expect("sweep runs");
         assert!(!sweep.lock_busy);
@@ -940,12 +938,12 @@ fn upgrade_quiesced_runs_stay_resumable_outside_the_failure_count() {
         machine_id: "test-mach".into(),
         machine_name: "test-host".into(),
     };
-    run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    orbit_core::test_support::run_sweep_at(
         &ctx.global,
         SweepOptions::default(),
         machine,
         &provider,
+        chrono::Utc::now(),
     )
     .expect("sweep runs");
     assert_eq!(
@@ -980,12 +978,12 @@ fn clock_sweep_caps_successful_upgrade_resumes_per_tick() {
         machine_name: "test-host".into(),
     };
     let tick = || {
-        let sweep = run_sweep_at_with_providers(
-            orbit_core::composition::store_opener(),
+        let sweep = orbit_core::test_support::run_sweep_at(
             &ctx.global,
             SweepOptions::default(),
             machine.clone(),
             &provider,
+            chrono::Utc::now(),
         )
         .expect("sweep runs");
         assert!(!sweep.lock_busy);
@@ -1030,12 +1028,12 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
         machine_name: "test-host".into(),
     };
     let tick = || {
-        let sweep = run_sweep_at_with_providers(
-            orbit_core::composition::store_opener(),
+        let sweep = orbit_core::test_support::run_sweep_at(
             &ctx.global,
             SweepOptions::default(),
             machine.clone(),
             &provider,
+            chrono::Utc::now(),
         )
         .expect("sweep runs");
         assert!(!sweep.lock_busy);
@@ -1118,12 +1116,12 @@ fn clock_sweep_defers_one_unreadable_upgrade_run_and_resumes_the_later_page() {
         machine_id: "test-mach".into(),
         machine_name: "test-host".into(),
     };
-    let sweep = run_sweep_at_with_providers(
-        orbit_core::composition::store_opener(),
+    let sweep = orbit_core::test_support::run_sweep_at(
         &ctx.global,
         SweepOptions::default(),
         machine,
         &provider,
+        chrono::Utc::now(),
     )
     .expect("one unreadable run does not fail the sweep");
     assert!(!sweep.lock_busy);

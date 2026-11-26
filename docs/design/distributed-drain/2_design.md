@@ -1746,7 +1746,7 @@ on the near side of the horizon can finish before the reboot. A schedule already
 holds. A horizon that cannot be added to now holds, rather than starting work into an unknown
 reboot.
 
-- **Scheduler tick.** Inside the horizon, `run_sweep_at_with_providers` fires no routine (cron,
+- **Scheduler tick.** Inside the horizon, `run_sweep` fires no routine (cron,
   delivery, or state) and mints no auto-task. Each routine row reads `skipped` with a
   `host_shutdown_scheduled: …` reason naming the mode and time, and every such tick logs
   `sweep.host_shutdown_hold`. Cursors do not advance, so each routine's `missed_run` policy decides
