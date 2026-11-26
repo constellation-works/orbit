@@ -6,11 +6,11 @@ updated_date: 2026-11-26
 last_validated: 2026-11-26
 status: Draft
 stage: designing
-next: "Daniel reviews this proposal; no task is filed until he approves it"
+next: "Daniel reviews the revised proposal; no task is filed until he approves it"
 feature: claude-code-mod
 doc_role: scope
 type: design
-summary: "Scope: replace the Orbit plugin's band, status line, toasts, pane, prompt cards and commit trailer with one behaviour, task and run ids in the transcript drawn as links to the dashboard, with task prefixes read from the host registry and dashboard permalinks that resolve the host"
+summary: "Scope: replace the Orbit plugin's band, status line, toasts, pane, prompt cards and commit trailer with one behaviour, task and run ids in the transcript drawn as links to the dashboard, with task prefixes read from the host registry, dashboard permalinks that pin the host, and a Codex Desktop trial of links the model writes from a result's url"
 tags: [claude-code-mod, plugin, dashboard, host-registry]
 ---
 
@@ -59,15 +59,17 @@ it cannot ship:
   plain.
 - It links tasks only. A run id, which a failure report usually leads with, stays plain.
 
-Codex loads the plugin's skills and MCP server only. It has no hooks module, so nothing in
-this scope reaches a Codex session.
+Codex loads the plugin's skills and MCP server only. It has no hooks module, and the review
+of this proposal found no documented Codex equivalent of Claude Code's `ui.render` for
+redrawing a transcript row. In Codex a link can exist only where the model writes one.
 
 ## Goal
 
 In Claude Code, a task id or a run id in the transcript is a link to its page on the
-dashboard, with one setting and no background work. Everything else the mod draws or
-injects is removed. The plugin's skills, MCP server and the session-start workspace check
-are unchanged.
+dashboard, with no plugin setting and no background work. In Codex Desktop, a reply that
+reports a task or a run links it, if a trial shows the link works there. Everything else
+the mod draws or injects is removed. The plugin's skills, MCP server and the session-start
+workspace check are unchanged.
 
 ## Shape
 
@@ -100,8 +102,8 @@ The rules of the personal mod carry over unchanged, with its 54 cases:
   link or its definition, an HTML tag and a bare URL. An id in a command stays copyable.
 - The stored message is not changed, only its drawing. A reply whose rewritten text would
   pass the engine's 100,000-character limit is drawn as it was.
-- The function is pure (text, prefixes and address in, text out), so it is tested without Claude
-  Code.
+- The function is pure (text, prefixes and address in, text out), so it is tested without
+  Claude Code.
 
 ### Which words are ids
 
@@ -123,38 +125,85 @@ could not be read.
 
 ### Where a link goes
 
-The dashboard gains a permalink, `GET /t/<id>`. It resolves the id's prefix as the CLI
-does (`hosts/route.rs`): the serving machine's own prefix redirects to
-`/?workspace=all#tasks/<id>`, a registered host's to the same with `?host=<name>`, and an
-unknown prefix to the dashboard's not-found view for that id. The redirect target is the
-dashboard's to change; a link written into a pull request, a mail or a transcript keeps
-working.
+The dashboard gains two permalinks. Their redirect targets are the dashboard's to change, so
+a link written into a transcript, a pull request or a mail keeps working. Every redirect
+names the host. The dashboard restores the last remote host a browser chose when the query
+has no `host`, and an explicit empty `host=` selects the serving machine
+(`dashboard/js/host-switch.js`), so a target without it would open on whichever host was
+used last.
 
-A second permalink, `GET /r/<id>`, does the same for a run and redirects to
-`#runs/<id>`. A run id carries no prefix, so it does not say which host ran it. The
-dashboard looks on the serving machine; on a miss it shows not found for that id beside
-the host switch. It does not search the other hosts.
+**A task: `GET /t/<id>`.** The id's prefix is resolved as the CLI does (`hosts/route.rs`).
 
-The mod's links are then `<dashboardUrl>/t/<id>` and `<dashboardUrl>/r/<id>`.
+| Prefix | Redirect |
+|---|---|
+| The serving machine's | `/?host=&workspace=all#tasks/<id>` |
+| A registered host's | `/?host=<name>&workspace=all#tasks/<id>` |
+| Unknown | The dashboard's not-found view for that id |
+
+**A run: `GET /r/<id>`.** A run id carries no prefix. Ids are allocated per host
+(`repository/job_run/write.rs`), so two hosts can mint the same id in the same minute, and
+the id alone does not say which run is meant. The permalink has two forms:
+
+| Form | Meaning | Redirect |
+|---|---|---|
+| `/r/<id>?machine=<machine id>&workspace=<workspace>` | That exact run. `machine` is the stable `[machine] id`; the dashboard maps it to the serving machine or to a registered host's name. | `/?host=<name or empty>&workspace=<workspace>#runs/<id>` |
+| `/r/<id>` | A lookup on the serving machine only | `/?host=&workspace=all#runs/<id>` |
+
+A `machine` the serving machine has not registered is not found, and names that machine. It
+never falls back to a local lookup: that is how a link would open an unrelated run with the
+same id. A producer that knows where a run executed writes the first form. The mod sees only
+text, so it writes the second.
+
+The mod's links are `<address>/t/<id>` and `<address>/r/<id>`.
+
+### Codex Desktop
+
+Codex cannot redraw a row, so the link has to be in the reply the model writes. Two parts
+make that cheap:
+
+- **A result carries its own link.** A tool or CLI result that describes one task or one
+  run gains `url`: the task permalink, or the run permalink in its exact form, with the
+  machine and workspace the producer already knows. A list result carries none, since a URL
+  per row would spend context on rows nobody opens.
+- **One skill line.** When a result carries `url`, write the id in prose as a Markdown
+  link to it; leave an id in a command or in code as text, so it stays copyable.
+
+This needs no polling and no extra lookup: the address arrives with the record. It covers
+newly written replies only, not earlier rows or messages from other sessions.
+
+It ships only after a trial in Codex Desktop, which needs no code: give the session the
+address of one task and one run by hand, have it reply with each id linked in prose and
+repeated in a command, click both links, and record the host, the workspace and the record
+that open. In Claude Code the mod links ids without the model's help, and it leaves an
+existing link alone, so a link the model wrote from `url` is kept as written.
 
 ### Configuration
 
-| Option | Default | Meaning |
+| Key | Default | Meaning |
 |---|---|---|
-| `dashboardUrl` | `http://localhost:7878` | Where the dashboard is reached from this machine: a local `orbit web serve`, an `orbit web connect` tunnel, or a Tailscale Serve name. Empty turns linking off. A value that contains `{id}` is used whole as the task link template, for a dashboard older than the permalinks; run ids are then not linked. |
+| `machine.web.public_url` | unset | The address this machine's operator opens the dashboard at: a Tailscale Serve name, or `http://localhost:7878` for a local server or an `orbit web connect` tunnel. `http` or `https` only. Global. |
 
-Only `http`, `https` and `file` addresses are accepted, as today.
+One fact, two readers:
+
+- **Results** carry `url` only when the producing machine has the key set. An unset key
+  adds nothing, since `localhost` would be wrong on the machine that reads the result.
+- **The mod** reads the key at `session.start` on the machine it runs on. Unset, it uses
+  `http://localhost:7878`, which is right wherever a local server or a tunnel listens.
+
+The plugin has no setting of its own.
 
 ### Surfaces
 
 - **Claude Code** terminal, desktop app and VS Code: the engine raises the assistant
   message's `ui.render` on every surface, so one hook covers them.
-- **Codex**: none.
+- **Codex Desktop**: links in replies the model writes, from a result's `url`, after the
+  trial.
+- **MCP and CLI results**: `url` on a result that describes one task or one run.
 - **Docs**: the mod's README and the website page
   [Use the Claude Code mod](../../../website/src/content/docs/how-to/claude-code.md) are
-  rewritten; `hooks.json` and the plugin description lose the band and pane. Removing the
-  settings and commands is a breaking change, so the implementing task carries the
-  `breaking-change` tag.
+  rewritten; `hooks.json` and the plugin description lose the band and pane;
+  [CONFIG.md](../../CONFIG.md) gains the key. Removing the settings and commands is a
+  breaking change, so the implementing task carries the `breaking-change` tag.
 - **CI**: the pure linking cases run under Node in `make ci-guards`. The two tests that
   mount the hook stay under `claude plugin test`, run by hand.
 
@@ -165,8 +214,9 @@ Only `http`, `https` and `file` addresses are accepted, as today.
 - **Actions from the session.** Approve, ship, accept and rescue stay with the MCP tools,
   the CLI and the dashboard.
 - **Friction, decision and notice ids.** Only task and run ids are linked.
-- **Codex.** A skill line telling the model to write ids as links would spend tokens on
-  every reply and depend on the model doing it.
+- **Redrawing Codex's transcript.** No hook for it is documented. Earlier rows and other
+  sessions' messages stay plain there.
+- **A link on every list row.** A list result carries no `url`.
 - **Rewriting what the model reads.** The link exists in the drawing only.
 
 ## Concerns and honest limitations
@@ -174,28 +224,32 @@ Only `http`, `https` and `file` addresses are accepted, as today.
 - **Removal is breaking and there is no usage data.** Anyone who uses the band, the pane
   or the three commands loses them. The one known user asked for the removal. Old settings
   left in a user's configuration are ignored.
-- **A dead link when no dashboard listens.** The default address assumes a local server or
-  a tunnel. A click then fails in the browser; the mod does not probe.
+- **A dead link when no dashboard listens.** With the key unset the mod assumes a local
+  server or a tunnel. A click then fails in the browser; the mod does not probe.
+- **Codex links cost output and depend on the model.** Each link is about 25 more tokens
+  than the bare id, and the model may skip one. The trial records how often it does.
 - **The markdown reading is the mod's own.** It is a 274-line scanner, not the engine's
   parser. Where they could disagree it leaves the id plain: a missed link, never broken
   markdown. The 54 cases are the record of what it handles.
 - **A host registered mid-session is not linked** until the next session.
-- **A run on another host is not found by its link.** The id does not name its host, and
-  `/r/<id>` looks only on the serving machine. The reader picks the host from the switch.
-  Searching the registered hosts on a miss would cost one call per host and is left out
-  until the miss is felt.
+- **The mod's run link is a lookup, not an exact address.** It is written from text and
+  cannot know the host. When the serving machine and another host both hold the id, it
+  opens the serving machine's run. The run page names its host and workspace. A link
+  written from a result's `url` is exact.
 - **The task permalink trusts the serving machine's registry.** A prefix that machine has not
   registered is not found, even when the linking machine knows it.
 
 ## Phasing
 
-1. **Dashboard permalinks.** `GET /t/<id>` with the three outcomes above, and `GET /r/<id>`.
-2. **Replace the mod.** Move the linking function and its cases into `plugin/hooks/mod`,
-   add the run pattern, read the prefixes at session start, add `dashboardUrl`, delete the
-   rest, update the docs. Task links do not wait for phase 1, since a `{id}` template covers
-   the gap. Run links do.
-3. **Messages from other sessions (a trial first).** A peer's message, a task
-   notification and hook feedback arrive as user rows, and their ids stay plain. The
+1. **Codex Desktop trial.** No code. It decides whether phase 4 is built.
+2. **Dashboard permalinks and the address key.** `GET /t/<id>`, both forms of
+   `GET /r/<id>`, every redirect naming the host, and `machine.web.public_url`.
+3. **Replace the mod.** Move the linking function and its cases into `plugin/hooks/mod`,
+   add the run pattern, read the prefixes and the address at session start, delete the
+   rest, update the docs.
+4. **A result's `url` and the skill line**, if the trial passed.
+5. **Messages from other sessions in Claude Code (a trial first).** A peer's message, a
+   task notification and hook feedback arrive as user rows, and their ids stay plain. The
    engine documents an assistant message's text as markdown and a user row's as printable
    text. The trial: rewrite a user row's text with a markdown link, and separately draw
    the row from the hook's own tree with link elements, on terminal and desktop. Whichever
@@ -204,9 +258,9 @@ Only `http`, `https` and `file` addresses are accepted, as today.
 
 ## Open questions
 
-1. **Should the address come from Orbit, not a plugin setting?** If a host's registry
-   entry recorded where its dashboard is reached, the mod would need no setting. That adds
-   a field to the registry for one reader.
+1. **Should the skill line apply in Claude Code too?** There the mod already links ids for
+   nothing, and the model's link would add only the exact run address. Proposed: Codex
+   only, unless a wrong run is opened in practice.
 2. **An id inside code.** A desktop context-menu row ("Open ORB-123 in Orbit") could cover
    ids in code blocks and tool output without touching the text. It is left out until
    someone misses it.
@@ -214,18 +268,27 @@ Only `http`, `https` and `file` addresses are accepted, as today.
 ## Acceptance (feature level)
 
 - Given a reply that names `ORB-12` in a sentence and in a fenced command, Claude Code
-  draws the first as a link to `<dashboardUrl>/t/ORB-12` and leaves the second as text.
+  draws the first as a link to `<address>/t/ORB-12` and leaves the second as text.
 - Given a machine whose registry holds prefixes `ORB` and `ORBA`, `ORBA-5` and `ORB-5` link
   to their own ids, and `STD-12` is not linked.
+- Given a browser that last selected a remote host, a permalink for a task of the serving
+  machine, opened in a new tab, shows that task on the serving machine.
 - Given `GET /t/<id>` for a registered host's prefix, the dashboard opens that host's view
   of the task; for an unknown prefix it shows not found.
-- Given a reply that names `jrun-20261126-0531-c3`, Claude Code draws it as a link to
-  `<dashboardUrl>/r/jrun-20261126-0531-c3`, and the dashboard opens that run when the
-  serving machine holds it.
-- Given a session with the plugin loaded and idle for an hour, the mod has started one
-  process (the host list at session start) and no timer.
-- The plugin has no band, pane, status line entry, toast, prompt card, commit rewrite or
-  slash command, and its only setting is `dashboardUrl`.
+- Given two hosts that each hold a run with the same id, a link emitted for the remote run
+  (`/r/<id>?machine=…&workspace=…`) opens the remote record, and the bare `/r/<id>` opens
+  the serving machine's.
+- Given `/r/<id>?machine=<an unregistered machine>`, the dashboard shows not found and
+  names the machine; it does not open a local run.
+- Given a Codex Desktop reply that reports one task and one run from results carrying
+  `url`, each id in prose is a link that opens the right host, workspace and record when
+  clicked, and the same ids in a command are plain text.
+- Given a reply in Claude Code that names `jrun-20261126-0531-c3`, it is drawn as a link to
+  `<address>/r/jrun-20261126-0531-c3`.
+- Given a session with the plugin loaded and idle for an hour, the mod has run two short
+  local commands at session start (the host list and the address) and no timer.
+- The plugin has no band, pane, status line entry, toast, prompt card, commit rewrite,
+  slash command or setting.
 
 ## Task References
 
