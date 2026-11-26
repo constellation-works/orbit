@@ -16,16 +16,16 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 
-/// Wall time, from the start of a forecast, that a scenario with arrivals may
-/// use before it is cut. The dashboard abandons a read at 30 seconds, and
-/// serializing and scoring what follows the simulation need the margin.
-pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
-
 /// Milliseconds an isolated test fixture's server substitutes for
 /// [`ARRIVALS_COMPUTE_BUDGET`]. Only dev-dependency builds with `test-support`
 /// recognize this variable.
 #[cfg(feature = "test-support")]
 pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS as COMPUTE_BUDGET_ENV;
+
+/// Wall time, from the start of a forecast, that a scenario with arrivals may
+/// use before it is cut. The dashboard abandons a read at 30 seconds, and
+/// serializing and scoring what follows the simulation need the margin.
+pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
 
 /// Resolved generation and compute bounds for one forecast simulation.
 #[derive(Clone, Copy)]

@@ -1,205 +1,5 @@
 //! Managed-routine writes are atomic and stay confined to the catalog.
 
-use orbit_common::security::release::sha256_hex;
-
-use super::super::seed::{
-    BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
-    RETIRED_ROUTINE_FILES,
-};
-use crate::application::managed_assets::{
-    MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, ManagedAssetOutcome,
-    ManagedAssetReconciliation, encode_managed_asset_manifest, load_managed_asset_manifest,
-};
-
-/// Render a shipped template the way a release of that vintage would have
-/// written it for `workspace` on the test host (`hm_test`, observing `main`,
-/// the identity `seed_default_routines` uses).
-pub(super) fn render(template: &str, stem: &str, workspace: &str) -> String {
-    template
-        .replace(
-            "__ORBIT_ROUTINE_NAME__",
-            &format!("{}-{workspace}", stem.replace('_', "-")),
-        )
-        .replace(OWNER_MACHINE_PLACEHOLDER, "hm_test")
-        .replace(BASE_BRANCH_PLACEHOLDER, "main")
-}
-
-fn retired_template(stem: &str) -> &'static str {
-    RETIRED_ROUTINE_FILES
-        .iter()
-        .find(|(name, _)| *name == stem)
-        .map(|(_, template)| *template)
-        .expect("retired template is shipped as a provenance shape")
-}
-
-pub(super) fn current_template(stem: &str) -> &'static str {
-    DEFAULT_ROUTINE_FILES
-        .iter()
-        .find(|(name, _)| *name == stem)
-        .map(|(_, template)| *template)
-        .expect("stem is a currently shipped default")
-}
-
-/// Record `body` in the routines manifest as the bytes Orbit wrote for
-/// `stem`, exactly as the seeding release would have.
-fn record_as_orbit_written(routines_dir: &std::path::Path, stem: &str, body: &str) {
-    let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
-    let mut manifest =
-        load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)
-            .expect("load manifest")
-            .expect("seeding records a manifest");
-    let digest = sha256_hex(body.as_bytes());
-    manifest.assets.insert(stem.to_string(), digest.clone());
-    manifest.routine_provenance.remove(stem);
-    std::fs::write(
-        &manifest_path,
-        encode_managed_asset_manifest(&manifest).expect("encode manifest"),
-    )
-    .expect("write manifest");
-}
-
-/// Whether the routines manifest claims `stem` at all.
-fn manifest_tracks(routines_dir: &std::path::Path, stem: &str) -> bool {
-    load_managed_asset_manifest(
-        &routines_dir.join(MANAGED_ASSET_MANIFEST_FILE),
-        "routine",
-        ManagedAssetLayout::YamlStem,
-    )
-    .expect("load manifest")
-    .is_some_and(|manifest| manifest.assets.contains_key(stem))
-}
-
-fn outcome_of(reconciled: &ManagedAssetReconciliation, stem: &str) -> Vec<ManagedAssetOutcome> {
-    reconciled
-        .actions
-        .iter()
-        .filter(|action| action.name == stem)
-        .map(|action| action.outcome)
-        .collect()
-}
-
-/// An open reader must keep the previous complete definition across a write,
-/// while a new reader sees the complete replacement (ORB-14347).
-#[test]
-fn confined_writer_replaces_the_file_without_changing_an_open_readers_content() {
-    use std::io::Read;
-
-    use super::super::materialize::write_confined_routine;
-
-    let root = tempfile::tempdir().expect("create tempdir");
-    let path = root.path().join("routines/task_pilot.yaml");
-    let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
-    write_confined_routine(&path, &previous).expect("create the definition");
-    let mut reader = std::fs::File::open(&path).expect("open a reader before replacement");
-    let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
-
-    write_confined_routine(&path, &replacement).expect("replace the definition");
-
-    let mut observed = String::new();
-    reader
-        .read_to_string(&mut observed)
-        .expect("finish the old reader");
-    assert_eq!(
-        observed, previous,
-        "an open reader retains the complete old file"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&path).expect("open the replacement"),
-        replacement,
-        "a new reader sees the complete replacement"
-    );
-}
-
-/// A real kernel write failure after partial staging must leave the old routine
-/// intact (ORB-14347). Isolate the process-wide file-size limit and signal handler.
-#[cfg(target_os = "linux")]
-#[test]
-fn confined_writer_preserves_the_previous_file_when_staging_write_fails() {
-    const CHILD: &str = "application::routines::tests::materialize::staging_write_failure_child";
-    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command.args([
-        "--exact",
-        CHILD,
-        "--ignored",
-        "--nocapture",
-        "--test-threads=1",
-    ]);
-    let output =
-        orbit_common::process::run_bounded(&mut command, std::time::Duration::from_secs(10))
-            .expect("fault-injection child finishes before its deadline");
-    orbit_common::test_env::assert_child_test_passed(
-        CHILD,
-        output.status,
-        output.stdout,
-        output.stderr,
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "runs only in the isolated file-size fault-injection child"]
-fn staging_write_failure_child() {
-    use super::super::materialize::write_confined_routine;
-
-    struct FileSizeLimit(libc::rlimit);
-
-    impl Drop for FileSizeLimit {
-        fn drop(&mut self) {
-            // SAFETY: restore the soft limit this isolated child lowered,
-            // including on assertion failure before LLVM writes its profile.
-            unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &self.0) };
-        }
-    }
-
-    let root = tempfile::tempdir().expect("create tempdir");
-    let path = root.path().join("task_pilot.yaml");
-    let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
-    write_confined_routine(&path, &previous).expect("create the definition before limiting writes");
-    let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
-    // SAFETY: getrlimit initializes this valid struct for the current process.
-    let original = unsafe {
-        let mut original: libc::rlimit = std::mem::zeroed();
-        assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut original), 0);
-        original
-    };
-    let restore_limit = FileSizeLimit(original);
-    let limit = libc::rlimit {
-        rlim_cur: 1024,
-        rlim_max: original.rlim_max,
-    };
-    // SAFETY: this isolated child owns its signal disposition and resource
-    // limits. `limit` is a valid rlimit and lives through the synchronous call.
-    unsafe {
-        assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
-        assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
-    }
-
-    let error = write_confined_routine(&path, &replacement)
-        .expect_err("the kernel must refuse a write larger than the file-size limit");
-    assert!(matches!(error, orbit_common::OrbitError::Io(_)));
-    assert_eq!(
-        std::fs::read_to_string(&path).expect("read the previous definition"),
-        previous,
-        "a failed partial staging write must not truncate the managed routine"
-    );
-    assert_eq!(
-        std::fs::read_dir(root.path())
-            .expect("list staging residue")
-            .count(),
-        1,
-        "the failed staging file is cleaned up"
-    );
-
-    // LLVM writes its profile at process exit. Leaving the fault-injection
-    // limit active truncated that profile to 1 KiB (ORB-14387).
-    drop(restore_limit);
-    std::fs::write(root.path().join("after-limit"), [0u8; 2048])
-        .expect("the restored limit permits writes larger than the injected limit");
-}
-
 /// Routine catalog confinement: a link anywhere on a routine's route —
 /// the definition, the catalog, its manifest, or the preservation directory —
 /// is refused and reported, and nothing outside the catalog is created,
@@ -425,4 +225,204 @@ mod confinement {
         assert_eq!(std::fs::read_to_string(&untracked).expect("read"), triage);
         assert!(only_entries(backups.path()).is_empty());
     }
+}
+
+use orbit_common::security::release::sha256_hex;
+
+use super::super::seed::{
+    BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
+    RETIRED_ROUTINE_FILES,
+};
+use crate::application::managed_assets::{
+    MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, ManagedAssetOutcome,
+    ManagedAssetReconciliation, encode_managed_asset_manifest, load_managed_asset_manifest,
+};
+
+/// Render a shipped template the way a release of that vintage would have
+/// written it for `workspace` on the test host (`hm_test`, observing `main`,
+/// the identity `seed_default_routines` uses).
+pub(super) fn render(template: &str, stem: &str, workspace: &str) -> String {
+    template
+        .replace(
+            "__ORBIT_ROUTINE_NAME__",
+            &format!("{}-{workspace}", stem.replace('_', "-")),
+        )
+        .replace(OWNER_MACHINE_PLACEHOLDER, "hm_test")
+        .replace(BASE_BRANCH_PLACEHOLDER, "main")
+}
+
+fn retired_template(stem: &str) -> &'static str {
+    RETIRED_ROUTINE_FILES
+        .iter()
+        .find(|(name, _)| *name == stem)
+        .map(|(_, template)| *template)
+        .expect("retired template is shipped as a provenance shape")
+}
+
+pub(super) fn current_template(stem: &str) -> &'static str {
+    DEFAULT_ROUTINE_FILES
+        .iter()
+        .find(|(name, _)| *name == stem)
+        .map(|(_, template)| *template)
+        .expect("stem is a currently shipped default")
+}
+
+/// Record `body` in the routines manifest as the bytes Orbit wrote for
+/// `stem`, exactly as the seeding release would have.
+fn record_as_orbit_written(routines_dir: &std::path::Path, stem: &str, body: &str) {
+    let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let mut manifest =
+        load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)
+            .expect("load manifest")
+            .expect("seeding records a manifest");
+    let digest = sha256_hex(body.as_bytes());
+    manifest.assets.insert(stem.to_string(), digest.clone());
+    manifest.routine_provenance.remove(stem);
+    std::fs::write(
+        &manifest_path,
+        encode_managed_asset_manifest(&manifest).expect("encode manifest"),
+    )
+    .expect("write manifest");
+}
+
+/// Whether the routines manifest claims `stem` at all.
+fn manifest_tracks(routines_dir: &std::path::Path, stem: &str) -> bool {
+    load_managed_asset_manifest(
+        &routines_dir.join(MANAGED_ASSET_MANIFEST_FILE),
+        "routine",
+        ManagedAssetLayout::YamlStem,
+    )
+    .expect("load manifest")
+    .is_some_and(|manifest| manifest.assets.contains_key(stem))
+}
+
+fn outcome_of(reconciled: &ManagedAssetReconciliation, stem: &str) -> Vec<ManagedAssetOutcome> {
+    reconciled
+        .actions
+        .iter()
+        .filter(|action| action.name == stem)
+        .map(|action| action.outcome)
+        .collect()
+}
+
+/// An open reader must keep the previous complete definition across a write,
+/// while a new reader sees the complete replacement (ORB-14347).
+#[test]
+fn confined_writer_replaces_the_file_without_changing_an_open_readers_content() {
+    use std::io::Read;
+
+    use super::super::materialize::write_confined_routine;
+
+    let root = tempfile::tempdir().expect("create tempdir");
+    let path = root.path().join("routines/task_pilot.yaml");
+    let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
+    write_confined_routine(&path, &previous).expect("create the definition");
+    let mut reader = std::fs::File::open(&path).expect("open a reader before replacement");
+    let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
+
+    write_confined_routine(&path, &replacement).expect("replace the definition");
+
+    let mut observed = String::new();
+    reader
+        .read_to_string(&mut observed)
+        .expect("finish the old reader");
+    assert_eq!(
+        observed, previous,
+        "an open reader retains the complete old file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("open the replacement"),
+        replacement,
+        "a new reader sees the complete replacement"
+    );
+}
+
+/// A real kernel write failure after partial staging must leave the old routine
+/// intact (ORB-14347). Isolate the process-wide file-size limit and signal handler.
+#[cfg(target_os = "linux")]
+#[test]
+fn confined_writer_preserves_the_previous_file_when_staging_write_fails() {
+    const CHILD: &str = "application::routines::tests::materialize::staging_write_failure_child";
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command.args([
+        "--exact",
+        CHILD,
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    let output =
+        orbit_common::process::run_bounded(&mut command, std::time::Duration::from_secs(10))
+            .expect("fault-injection child finishes before its deadline");
+    orbit_common::test_env::assert_child_test_passed(
+        CHILD,
+        output.status,
+        output.stdout,
+        output.stderr,
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "runs only in the isolated file-size fault-injection child"]
+fn staging_write_failure_child() {
+    use super::super::materialize::write_confined_routine;
+
+    struct FileSizeLimit(libc::rlimit);
+
+    impl Drop for FileSizeLimit {
+        fn drop(&mut self) {
+            // SAFETY: restore the soft limit this isolated child lowered,
+            // including on assertion failure before LLVM writes its profile.
+            unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &self.0) };
+        }
+    }
+
+    let root = tempfile::tempdir().expect("create tempdir");
+    let path = root.path().join("task_pilot.yaml");
+    let previous = render(current_template("task_pilot"), "task_pilot", "workspace");
+    write_confined_routine(&path, &previous).expect("create the definition before limiting writes");
+    let replacement = format!("{previous}{}", "# refreshed content\n".repeat(4096));
+    // SAFETY: getrlimit initializes this valid struct for the current process.
+    let original = unsafe {
+        let mut original: libc::rlimit = std::mem::zeroed();
+        assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut original), 0);
+        original
+    };
+    let restore_limit = FileSizeLimit(original);
+    let limit = libc::rlimit {
+        rlim_cur: 1024,
+        rlim_max: original.rlim_max,
+    };
+    // SAFETY: this isolated child owns its signal disposition and resource
+    // limits. `limit` is a valid rlimit and lives through the synchronous call.
+    unsafe {
+        assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
+        assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
+    }
+
+    let error = write_confined_routine(&path, &replacement)
+        .expect_err("the kernel must refuse a write larger than the file-size limit");
+    assert!(matches!(error, orbit_common::OrbitError::Io(_)));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read the previous definition"),
+        previous,
+        "a failed partial staging write must not truncate the managed routine"
+    );
+    assert_eq!(
+        std::fs::read_dir(root.path())
+            .expect("list staging residue")
+            .count(),
+        1,
+        "the failed staging file is cleaned up"
+    );
+
+    // LLVM writes its profile at process exit. Leaving the fault-injection
+    // limit active truncated that profile to 1 KiB (ORB-14387).
+    drop(restore_limit);
+    std::fs::write(root.path().join("after-limit"), [0u8; 2048])
+        .expect("the restored limit permits writes larger than the injected limit");
 }

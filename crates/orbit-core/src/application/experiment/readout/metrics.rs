@@ -12,8 +12,14 @@ use super::model::{
     ArmEstimate, ComplexityDifference, CostCoverage, Difference, DifferenceEstimate, Estimate,
     ReadoutMetric, SegmentEstimate,
 };
+use super::outcomes::REGRESSION_WINDOW_DAYS;
 use super::stats;
 use crate::application::statistics;
+use chrono::{DateTime, Duration, Utc};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
+use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
 pub(super) fn values<'a>(tasks: impl Iterator<Item = &'a TaskOutcome>, metric: &str) -> Vec<f64> {
     tasks
@@ -388,12 +394,6 @@ fn ratio_difference(
     }
 }
 
-use super::outcomes::REGRESSION_WINDOW_DAYS;
-use chrono::{DateTime, Duration, Utc};
-use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
-use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
-use serde::Deserialize;
-use std::collections::BTreeMap;
 /// The task history event of an auto-fix started outside the run.
 const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
 

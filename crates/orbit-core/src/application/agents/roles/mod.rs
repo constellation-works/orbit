@@ -10,6 +10,11 @@ mod reviewers;
 
 use super::score::{RowInput, Term};
 use super::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
+/// Each implementer row's tasks with the scorecard's per-task counts and
+/// expectations, for the model ranking.
+pub(super) use implementers::{
+    LedgerRow, LedgerTask, crew_label_run_identities, implementer_ledger,
+};
 
 /// Builds a role's rows for the window, requested minimum support and
 /// execution scope. Only implementers read the scope: the other roles score
@@ -65,12 +70,6 @@ pub(super) fn implementer_size_curves(
 ) -> serde_json::Map<String, serde_json::Value> {
     implementers::size_curves(facts, window, complexity, execution)
 }
-
-/// Each implementer row's tasks with the scorecard's per-task counts and
-/// expectations, for the model ranking.
-pub(super) use implementers::{
-    LedgerRow, LedgerTask, crew_label_run_identities, implementer_ledger,
-};
 
 /// The tiers [`implementer_size_curves`] can narrow to.
 pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;

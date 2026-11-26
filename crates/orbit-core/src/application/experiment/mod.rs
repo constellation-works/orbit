@@ -2,34 +2,35 @@
 //! treatment arms, defined in draft and changed only through recorded events
 //! once started.
 
-use chrono::{DateTime, Datelike, Days, Utc};
-
 mod assignment;
 mod capture;
 mod definition;
 mod distributed_port;
 mod job_port;
-pub(crate) use capture::validate_claimed_experiment_capture;
-pub use definition::{
-    EXPERIMENT_COMPLEXITIES, experiment_metric_is_review_derived, experiment_metric_is_step_local,
-    experiment_metric_names, step_local_metric_names,
-};
 mod lifecycle;
 mod memory_arms;
-pub(crate) use memory_arms::memory_arm_names;
 mod overlay;
 mod progress;
 mod promotion;
 mod readout;
 mod records;
-pub use records::{ExperimentAssignmentDecision, assign_experiments, write_experiment};
 mod run_policy;
 mod skills;
 mod tag_instruction_port;
 mod task_port;
 mod view;
 
+pub(crate) use capture::validate_claimed_experiment_capture;
+use chrono::{DateTime, Datelike, Days, Utc};
+pub use definition::{
+    EXPERIMENT_COMPLEXITIES, experiment_metric_is_review_derived, experiment_metric_is_step_local,
+    experiment_metric_names, step_local_metric_names,
+};
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};
+pub(crate) use memory_arms::memory_arm_names;
+pub use readout::ExperimentReadout;
+pub use records::{ExperimentAssignmentDecision, assign_experiments, write_experiment};
+pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};
 
 /// Experiments that may run at once in one workspace.
 ///
@@ -41,8 +42,6 @@ pub const EXPERIMENTS_MAX_RUNNING: u32 = 3;
 ///
 /// The former `experiments.min_delivered_rate` default, fixed when the key was removed [ORB-22808].
 pub(crate) const EXPERIMENTS_MIN_DELIVERED_RATE: f64 = 0.9;
-pub use readout::ExperimentReadout;
-pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};
 
 /// Use the four-digit RFC 3339 calendar shared by the API and the dashboard.
 fn experiment_horizon_at(start: DateTime<Utc>, days: u32) -> Option<DateTime<Utc>> {

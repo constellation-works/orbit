@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::application::experiment::readout::stats::Interval;
+use orbit_types::workflow::TagInstructionRole;
 
 /// The readout shape's version; bump it on any breaking change.
 pub(crate) const EXPERIMENT_READOUT_SCHEMA_VERSION: u32 = 1;
@@ -406,8 +407,6 @@ pub struct ReadoutWarning {
     pub kind: &'static str,
     pub message: String,
 }
-
-use orbit_types::workflow::TagInstructionRole;
 
 /// One task's value for one metric.
 #[derive(Debug, Clone, Copy, PartialEq)]

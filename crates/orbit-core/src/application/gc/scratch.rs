@@ -5,104 +5,6 @@
 //! top-level entries that nothing has touched for the retention window and
 //! leaves anything it cannot prove unused.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use orbit_common::fs::path::orbit_scratch_dir;
-use orbit_engine::ScratchGcReport;
-use orbit_store::contract::JobRunQuery;
-use orbit_types::workflow::JobRunState;
-
-use crate::{OrbitError, OrbitRuntime};
-
-impl OrbitRuntime {
-    /// Prune top-level `.orbit/tmp` entries whose newest mtime is more than
-    /// `retention_hours` old. A missing directory is an empty sweep.
-    pub(crate) fn gc_scratch_by_age(
-        &self,
-        retention_hours: u64,
-    ) -> Result<ScratchGcReport, OrbitError> {
-        let too_large = || OrbitError::InvalidInput("scratch_older_than_hours is too large".into());
-        let retention =
-            Duration::from_secs(retention_hours.checked_mul(3600).ok_or_else(too_large)?);
-        let cutoff = SystemTime::now()
-            .checked_sub(retention)
-            .ok_or_else(too_large)?;
-        self.gc_scratch_before(cutoff, retention_hours)
-    }
-
-    fn gc_scratch_before(
-        &self,
-        cutoff: SystemTime,
-        retention_hours: u64,
-    ) -> Result<ScratchGcReport, OrbitError> {
-        let checkout = self.paths().repo_root.canonicalize()?;
-        let mut report = ScratchGcReport {
-            path: orbit_scratch_dir(&checkout),
-            retention_hours,
-            bytes_reclaimed: 0,
-            entries_removed: 0,
-            entries_skipped: 0,
-            entries_kept: 0,
-            entries: Vec::new(),
-        };
-        // Read before any traversal: a run list that cannot be read means no
-        // entry can be shown unnamed, so nothing is removed.
-        let active_runs = self.active_run_documents()?;
-        let since_epoch = cutoff.duration_since(UNIX_EPOCH).unwrap_or_default();
-        let cutoff = (
-            i64::try_from(since_epoch.as_secs()).unwrap_or(i64::MAX),
-            i64::from(since_epoch.subsec_nanos()),
-        );
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            filesystem::sweep(&checkout, cutoff, &active_runs, &mut report)?;
-            Ok(report)
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            let _ = (cutoff, active_runs, &mut report);
-            Err(OrbitError::InvalidInput(
-                "scratch collection requires Linux or macOS directory-relative filesystem \
-                 operations"
-                    .into(),
-            ))
-        }
-    }
-
-    /// Every pending, running or retrying run's record and pipeline state, as JSON, so
-    /// a path an active run was handed is found wherever it appears. Observed
-    /// without reconciling: a stale owner still counts as active.
-    fn active_run_documents(&self) -> Result<Vec<String>, OrbitError> {
-        let jobs = self.stores().jobs();
-        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
-            active_only: true,
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?;
-        // `active_only` covers pending/running. Retrying runs sleep between
-        // attempts and still need their input and saved-state scratch paths.
-        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
-            state: Some(JobRunState::Retrying),
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?);
-        let mut documents = Vec::with_capacity(runs.len() * 2);
-        for run in runs {
-            documents.push(serde_json::to_string(&run).map_err(encode_error)?);
-            if let Some(state) = self.read_run_state(&run.run_id)? {
-                documents.push(serde_json::to_string(&state).map_err(encode_error)?);
-            }
-        }
-        Ok(documents)
-    }
-}
-
-fn encode_error(error: serde_json::Error) -> OrbitError {
-    OrbitError::Execution(format!(
-        "failed to encode an active run for scratch GC: {error}"
-    ))
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod filesystem {
     use std::collections::BTreeSet;
@@ -311,4 +213,102 @@ mod filesystem {
         }
         Ok(held)
     }
+}
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use orbit_common::fs::path::orbit_scratch_dir;
+use orbit_engine::ScratchGcReport;
+use orbit_store::contract::JobRunQuery;
+use orbit_types::workflow::JobRunState;
+
+use crate::{OrbitError, OrbitRuntime};
+
+impl OrbitRuntime {
+    /// Prune top-level `.orbit/tmp` entries whose newest mtime is more than
+    /// `retention_hours` old. A missing directory is an empty sweep.
+    pub(crate) fn gc_scratch_by_age(
+        &self,
+        retention_hours: u64,
+    ) -> Result<ScratchGcReport, OrbitError> {
+        let too_large = || OrbitError::InvalidInput("scratch_older_than_hours is too large".into());
+        let retention =
+            Duration::from_secs(retention_hours.checked_mul(3600).ok_or_else(too_large)?);
+        let cutoff = SystemTime::now()
+            .checked_sub(retention)
+            .ok_or_else(too_large)?;
+        self.gc_scratch_before(cutoff, retention_hours)
+    }
+
+    fn gc_scratch_before(
+        &self,
+        cutoff: SystemTime,
+        retention_hours: u64,
+    ) -> Result<ScratchGcReport, OrbitError> {
+        let checkout = self.paths().repo_root.canonicalize()?;
+        let mut report = ScratchGcReport {
+            path: orbit_scratch_dir(&checkout),
+            retention_hours,
+            bytes_reclaimed: 0,
+            entries_removed: 0,
+            entries_skipped: 0,
+            entries_kept: 0,
+            entries: Vec::new(),
+        };
+        // Read before any traversal: a run list that cannot be read means no
+        // entry can be shown unnamed, so nothing is removed.
+        let active_runs = self.active_run_documents()?;
+        let since_epoch = cutoff.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let cutoff = (
+            i64::try_from(since_epoch.as_secs()).unwrap_or(i64::MAX),
+            i64::from(since_epoch.subsec_nanos()),
+        );
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            filesystem::sweep(&checkout, cutoff, &active_runs, &mut report)?;
+            Ok(report)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (cutoff, active_runs, &mut report);
+            Err(OrbitError::InvalidInput(
+                "scratch collection requires Linux or macOS directory-relative filesystem \
+                 operations"
+                    .into(),
+            ))
+        }
+    }
+
+    /// Every pending, running or retrying run's record and pipeline state, as JSON, so
+    /// a path an active run was handed is found wherever it appears. Observed
+    /// without reconciling: a stale owner still counts as active.
+    fn active_run_documents(&self) -> Result<Vec<String>, OrbitError> {
+        let jobs = self.stores().jobs();
+        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
+            active_only: true,
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        // `active_only` covers pending/running. Retrying runs sleep between
+        // attempts and still need their input and saved-state scratch paths.
+        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
+            state: Some(JobRunState::Retrying),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?);
+        let mut documents = Vec::with_capacity(runs.len() * 2);
+        for run in runs {
+            documents.push(serde_json::to_string(&run).map_err(encode_error)?);
+            if let Some(state) = self.read_run_state(&run.run_id)? {
+                documents.push(serde_json::to_string(&state).map_err(encode_error)?);
+            }
+        }
+        Ok(documents)
+    }
+}
+
+fn encode_error(error: serde_json::Error) -> OrbitError {
+    OrbitError::Execution(format!(
+        "failed to encode an active run for scratch GC: {error}"
+    ))
 }

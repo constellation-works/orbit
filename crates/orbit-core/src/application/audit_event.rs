@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
-
 mod incidents;
+
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;

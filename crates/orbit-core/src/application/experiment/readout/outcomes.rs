@@ -16,6 +16,10 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+use super::metrics::{failed_check_heads, landing, regressions};
+pub(super) use super::model::{
+    CostSource, Observed, Outcome, ReviewableDenominator, TaskMemoryDelivery, TaskOutcome,
+};
 use crate::OrbitRuntime;
 use crate::application::agents::{self, ExecutionMode, task_execution_modes};
 
@@ -904,8 +908,3 @@ impl OrbitRuntime {
         Ok(outcomes)
     }
 }
-
-use super::metrics::{failed_check_heads, landing, regressions};
-pub(super) use super::model::{
-    CostSource, Observed, Outcome, ReviewableDenominator, TaskMemoryDelivery, TaskOutcome,
-};

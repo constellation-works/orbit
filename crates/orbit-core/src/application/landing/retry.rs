@@ -1,5 +1,37 @@
 //! Guarded operator admission for an existing authorized owner handoff.
 
+#[cfg(feature = "test-support")]
+pub(crate) mod retry_reservation_hook {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    pub(super) fn notify() {
+        let hook = HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Rendezvous a public retry after durable reservation and before submission.
+    pub fn with_landing_retry_reservation_hook<T>(
+        hook: impl FnOnce() + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                HOOK.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        let _guard = Clear;
+        operation()
+    }
+}
+
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contract::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
 use orbit_types::workflow::handoff::{LandingAttemptState, LandingRetryRequest};
@@ -183,37 +215,5 @@ impl OrbitRuntime {
             },
         )?;
         Ok(())
-    }
-}
-
-#[cfg(feature = "test-support")]
-pub(crate) mod retry_reservation_hook {
-    use std::cell::RefCell;
-
-    thread_local! {
-        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    }
-
-    pub(super) fn notify() {
-        let hook = HOOK.with(|slot| slot.borrow_mut().take());
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
-
-    /// Rendezvous a public retry after durable reservation and before submission.
-    pub fn with_landing_retry_reservation_hook<T>(
-        hook: impl FnOnce() + 'static,
-        operation: impl FnOnce() -> T,
-    ) -> T {
-        struct Clear;
-        impl Drop for Clear {
-            fn drop(&mut self) {
-                HOOK.with(|slot| *slot.borrow_mut() = None);
-            }
-        }
-        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-        let _guard = Clear;
-        operation()
     }
 }

@@ -37,13 +37,9 @@
 //! - [`settings`] — operator settings layered over bundled bodies, and the
 //!   sync migration of settings-only forks.
 
-use std::borrow::Cow;
-
 mod body_history;
 mod change_probe;
 mod completion;
-#[cfg(feature = "test-support")]
-pub(crate) use completion::test_support as completion_test_support;
 pub mod crud;
 pub mod delete;
 pub(crate) mod demoted;
@@ -52,13 +48,18 @@ pub mod listing;
 pub mod projection;
 mod read;
 pub(crate) mod retired;
-pub use orbit_automation::auto_tasks::loader;
-pub use orbit_automation::auto_tasks::schedule;
 pub mod schedule_edit;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
+pub mod step_observation;
 pub mod toggle;
+
+#[cfg(feature = "test-support")]
+pub(crate) use completion::test_support as completion_test_support;
+pub use orbit_automation::auto_tasks::loader;
+pub use orbit_automation::auto_tasks::schedule;
+use std::borrow::Cow;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
 pub use delete::{
@@ -202,5 +203,3 @@ pub(crate) fn render_default_auto_task<'a>(content: &'a str, base_branch: &str) 
 
 #[cfg(test)]
 mod tests;
-
-mod step_observation;

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{Seek, Write as _};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use orbit_automation::delivery::digest;
 use orbit_automation::delivery::recovery::{
@@ -1027,8 +1028,6 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
 }
 
 // Kernel process cleanup and lock contention fault injection.
-
-use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 #[test]

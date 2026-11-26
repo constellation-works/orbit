@@ -24,9 +24,9 @@ mod key;
 mod operations;
 mod proposals;
 mod records;
-pub use records::{decide_proposal, open_proposal};
 mod validate;
 
+pub use records::{decide_proposal, open_proposal};
 use serde::{Deserialize, Serialize};
 
 pub use agent::MemoryToolCaller;

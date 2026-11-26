@@ -1,3 +1,47 @@
+/// Test-only gate directory (`ORBIT_TEST_CONFIG_WRITE_GATE`) for ordering
+/// concurrent config writes deterministically: a point is active only when
+/// `<point>.armed` exists there. A waiting point records `<point>.reached`
+/// and blocks until `<point>.release` appears; a signal point only records
+/// `<point>.reached`. Inert unless a test arms it. Only builds with
+/// `test-support` compile it, so production builds ignore the variable.
+#[cfg(feature = "test-support")]
+mod write_gate {
+    use std::path::PathBuf;
+
+    use orbit_common::Env;
+
+    fn armed(env: &Env, point: &str) -> Option<PathBuf> {
+        let dir = PathBuf::from(env.orbit_test_config_write_gate()?);
+        dir.join(format!("{point}.armed")).exists().then_some(dir)
+    }
+
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+    )]
+    pub(super) fn wait(env: &Env, point: &str) {
+        let Some(dir) = armed(env, point) else {
+            return;
+        };
+        let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+        let release = dir.join(format!("{point}.release"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !release.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+    )]
+    pub(super) fn signal(env: &Env, point: &str) {
+        if let Some(dir) = armed(env, point) {
+            let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+        }
+    }
+}
+
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
@@ -493,50 +537,6 @@ fn write_store_conditional<T, R>(
         ConfigStore::with_write_lock(&global_config_path(runtime), transaction)
     } else {
         transaction()
-    }
-}
-
-/// Test-only gate directory (`ORBIT_TEST_CONFIG_WRITE_GATE`) for ordering
-/// concurrent config writes deterministically: a point is active only when
-/// `<point>.armed` exists there. A waiting point records `<point>.reached`
-/// and blocks until `<point>.release` appears; a signal point only records
-/// `<point>.reached`. Inert unless a test arms it. Only builds with
-/// `test-support` compile it, so production builds ignore the variable.
-#[cfg(feature = "test-support")]
-mod write_gate {
-    use std::path::PathBuf;
-
-    use orbit_common::Env;
-
-    fn armed(env: &Env, point: &str) -> Option<PathBuf> {
-        let dir = PathBuf::from(env.orbit_test_config_write_gate()?);
-        dir.join(format!("{point}.armed")).exists().then_some(dir)
-    }
-
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
-    )]
-    pub(super) fn wait(env: &Env, point: &str) {
-        let Some(dir) = armed(env, point) else {
-            return;
-        };
-        let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
-        let release = dir.join(format!("{point}.release"));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        while !release.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-    }
-
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
-    )]
-    pub(super) fn signal(env: &Env, point: &str) {
-        if let Some(dir) = armed(env, point) {
-            let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
-        }
     }
 }
 

@@ -7,143 +7,6 @@
 //! a candidate: `<executable>.previous` and any deployment whose candidate
 //! manifest names the bytes installed now or at the rollback path.
 
-use std::path::PathBuf;
-
-use serde::Serialize;
-
-use crate::{OrbitError, OrbitRuntime};
-
-/// The retention applied when the caller does not choose one.
-pub const DEFAULT_DEPLOYMENT_KEEP: usize = 2;
-
-/// Which kind of leftover an entry is. Retention counts each kind separately.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeploymentGcClass {
-    /// A top-level entry of `<global>/deployments/`.
-    Deployment,
-    /// A copy of a replaced executable in `<global>/bin/`.
-    BinaryBackup,
-    /// A copy of the host store, `<global>/orbit.db.bak*`, or one of its sidecars.
-    StoreBackup,
-}
-
-impl DeploymentGcClass {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Deployment => "deployment",
-            Self::BinaryBackup => "binary_backup",
-            Self::StoreBackup => "store_backup",
-        }
-    }
-
-    /// Report order, and the index of the class's retention counter.
-    fn rank(self) -> usize {
-        match self {
-            Self::Deployment => 0,
-            Self::BinaryBackup => 1,
-            Self::StoreBackup => 2,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct DeploymentGcEntry {
-    pub class: DeploymentGcClass,
-    #[serde(serialize_with = "display_path")]
-    pub path: PathBuf,
-    /// `kept`, `would_remove` or `removed`.
-    pub action: &'static str,
-    /// Why the entry is kept or selected: `newest`, `rollback_target`,
-    /// `installed_candidate`, `rollback_candidate` or `beyond_retention`.
-    pub reason: &'static str,
-    /// Bytes of the entry and everything beneath it, without following links.
-    pub bytes: u64,
-    /// Newest modification time of the entry or anything beneath it.
-    pub modified_at: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DeploymentGcResult {
-    #[serde(serialize_with = "display_path")]
-    pub root: PathBuf,
-    pub dry_run: bool,
-    /// Newest entries kept per class, besides the rollback-pinned ones.
-    pub keep: usize,
-    pub entries_removed: usize,
-    pub bytes_reclaimable: u64,
-    pub bytes_reclaimed: u64,
-    pub bytes_kept: u64,
-    pub entries: Vec<DeploymentGcEntry>,
-}
-
-fn display_path<S: serde::Serializer>(
-    path: &std::path::Path,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&path.to_string_lossy())
-}
-
-impl OrbitRuntime {
-    /// Preview or remove deployment directories, executable backups and
-    /// store backups beyond the newest `keep` of each class. The rollback
-    /// executable and the deployments that built the installed or rollback
-    /// bytes are always kept and never count toward `keep`.
-    pub fn gc_deployments(
-        &self,
-        delete: bool,
-        keep: usize,
-    ) -> Result<DeploymentGcResult, OrbitError> {
-        if keep == 0 {
-            return Err(OrbitError::InvalidInput(
-                "deployment retention must keep at least one entry of each class".into(),
-            ));
-        }
-        let root = self.global_root();
-        let root = match root.canonicalize() {
-            Ok(root) => root,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => root,
-            Err(error) => return Err(error.into()),
-        };
-        let mut result = DeploymentGcResult {
-            root,
-            dry_run: !delete,
-            keep,
-            entries_removed: 0,
-            bytes_reclaimable: 0,
-            bytes_reclaimed: 0,
-            bytes_kept: 0,
-            entries: Vec::new(),
-        };
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        filesystem::collect(&mut result)?;
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        return Err(OrbitError::InvalidInput(
-            "deployment collection requires Linux or macOS directory-relative filesystem \
-             operations"
-                .into(),
-        ));
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        Ok(result)
-    }
-}
-
-/// Name markers that identify a copy of a replaced executable. The installed
-/// executable, its `.previous` rollback copy and other tools never carry one.
-const BACKUP_MARKERS: [&str; 5] = [".bak", ".before-", ".pre-", ".stale", "-stale-"];
-
-/// The executable `orbit update` installs and backs up to `.previous`.
-const INSTALLED_NAME: &str = "orbit";
-const ROLLBACK_SUFFIX: &str = ".previous";
-const STORE_BACKUP_PREFIX: &str = "orbit.db.bak";
-const CANDIDATE_MANIFEST_KIND: &str = "orbit-local-candidate";
-/// Candidate manifests are a few hundred bytes; anything larger is not one.
-const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
-
-fn is_binary_backup(name: &str) -> bool {
-    BACKUP_MARKERS.iter().any(|marker| name.contains(marker))
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod filesystem {
     use std::cmp::Reverse;
@@ -528,4 +391,141 @@ mod filesystem {
         }
         Ok(Some(file))
     }
+}
+
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+use crate::{OrbitError, OrbitRuntime};
+
+/// The retention applied when the caller does not choose one.
+pub const DEFAULT_DEPLOYMENT_KEEP: usize = 2;
+
+/// Which kind of leftover an entry is. Retention counts each kind separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentGcClass {
+    /// A top-level entry of `<global>/deployments/`.
+    Deployment,
+    /// A copy of a replaced executable in `<global>/bin/`.
+    BinaryBackup,
+    /// A copy of the host store, `<global>/orbit.db.bak*`, or one of its sidecars.
+    StoreBackup,
+}
+
+impl DeploymentGcClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Deployment => "deployment",
+            Self::BinaryBackup => "binary_backup",
+            Self::StoreBackup => "store_backup",
+        }
+    }
+
+    /// Report order, and the index of the class's retention counter.
+    fn rank(self) -> usize {
+        match self {
+            Self::Deployment => 0,
+            Self::BinaryBackup => 1,
+            Self::StoreBackup => 2,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeploymentGcEntry {
+    pub class: DeploymentGcClass,
+    #[serde(serialize_with = "display_path")]
+    pub path: PathBuf,
+    /// `kept`, `would_remove` or `removed`.
+    pub action: &'static str,
+    /// Why the entry is kept or selected: `newest`, `rollback_target`,
+    /// `installed_candidate`, `rollback_candidate` or `beyond_retention`.
+    pub reason: &'static str,
+    /// Bytes of the entry and everything beneath it, without following links.
+    pub bytes: u64,
+    /// Newest modification time of the entry or anything beneath it.
+    pub modified_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeploymentGcResult {
+    #[serde(serialize_with = "display_path")]
+    pub root: PathBuf,
+    pub dry_run: bool,
+    /// Newest entries kept per class, besides the rollback-pinned ones.
+    pub keep: usize,
+    pub entries_removed: usize,
+    pub bytes_reclaimable: u64,
+    pub bytes_reclaimed: u64,
+    pub bytes_kept: u64,
+    pub entries: Vec<DeploymentGcEntry>,
+}
+
+fn display_path<S: serde::Serializer>(
+    path: &std::path::Path,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.to_string_lossy())
+}
+
+impl OrbitRuntime {
+    /// Preview or remove deployment directories, executable backups and
+    /// store backups beyond the newest `keep` of each class. The rollback
+    /// executable and the deployments that built the installed or rollback
+    /// bytes are always kept and never count toward `keep`.
+    pub fn gc_deployments(
+        &self,
+        delete: bool,
+        keep: usize,
+    ) -> Result<DeploymentGcResult, OrbitError> {
+        if keep == 0 {
+            return Err(OrbitError::InvalidInput(
+                "deployment retention must keep at least one entry of each class".into(),
+            ));
+        }
+        let root = self.global_root();
+        let root = match root.canonicalize() {
+            Ok(root) => root,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => root,
+            Err(error) => return Err(error.into()),
+        };
+        let mut result = DeploymentGcResult {
+            root,
+            dry_run: !delete,
+            keep,
+            entries_removed: 0,
+            bytes_reclaimable: 0,
+            bytes_reclaimed: 0,
+            bytes_kept: 0,
+            entries: Vec::new(),
+        };
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        filesystem::collect(&mut result)?;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(OrbitError::InvalidInput(
+            "deployment collection requires Linux or macOS directory-relative filesystem \
+             operations"
+                .into(),
+        ));
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        Ok(result)
+    }
+}
+
+/// Name markers that identify a copy of a replaced executable. The installed
+/// executable, its `.previous` rollback copy and other tools never carry one.
+const BACKUP_MARKERS: [&str; 5] = [".bak", ".before-", ".pre-", ".stale", "-stale-"];
+
+/// The executable `orbit update` installs and backs up to `.previous`.
+const INSTALLED_NAME: &str = "orbit";
+const ROLLBACK_SUFFIX: &str = ".previous";
+const STORE_BACKUP_PREFIX: &str = "orbit.db.bak";
+const CANDIDATE_MANIFEST_KIND: &str = "orbit-local-candidate";
+/// Candidate manifests are a few hundred bytes; anything larger is not one.
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+
+fn is_binary_backup(name: &str) -> bool {
+    BACKUP_MARKERS.iter().any(|marker| name.contains(marker))
 }

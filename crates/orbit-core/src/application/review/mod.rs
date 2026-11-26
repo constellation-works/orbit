@@ -20,8 +20,6 @@
 //! mechanics. The internal handoff seam records explicit operator completion
 //! approval; it never merges or reads a verdict from a tag or timestamp.
 
-use orbit_common::OrbitError;
-
 mod admission;
 mod automation_port;
 mod candidate_size_port;
@@ -31,8 +29,6 @@ mod distributed_port;
 pub(crate) mod evidence;
 pub(crate) mod flaky;
 mod fulfilment;
-#[cfg(feature = "test-support")]
-pub(crate) use fulfilment::test_support as fulfilment_test_support;
 mod gate;
 mod handoff;
 mod landing;
@@ -51,6 +47,8 @@ pub(crate) use admission::{
 pub(in crate::application) use candidate_size_port::ReviewCandidateSizePort;
 pub(in crate::application) use distributed_port::ReviewDistributedPort;
 pub(crate) use fulfilment::fulfil_review_evidence;
+#[cfg(feature = "test-support")]
+pub(crate) use fulfilment::test_support as fulfilment_test_support;
 pub use fulfilment::{
     EVIDENCE_FULFILMENT_AUDIT, EvidenceFulfilmentTick, REVIEW_EVIDENCE_FULFILMENT_JOB,
 };
@@ -64,6 +62,7 @@ pub(crate) use gate::{
 pub use handoff::{DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal};
 pub(crate) use landing::record_review_landing;
 pub(in crate::application) use landing_dispatch_port::ReviewLandingDispatchPort;
+use orbit_common::OrbitError;
 pub(crate) use projection::task_review_projection;
 pub use switches::{
     AfterLandingSwitch, BeforeLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches,
