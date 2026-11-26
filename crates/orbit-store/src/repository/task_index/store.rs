@@ -16,9 +16,12 @@ use crate::driver::sqlite::task_index::TaskIndexDb;
 /// `TaskIndexDb::write` (derived caches use `TaskIndexDb::cache_write`).
 #[derive(Clone)]
 pub struct TaskRegistryStore {
-    pub(super) db: TaskIndexDb,
     pub(super) index_snapshots: Arc<TaskIndexSnapshots>,
     pub(super) change_stamps: Arc<TaskChangeStamps>,
+    // Drop the retained read-only cache connections before the writer and its
+    // writable read pool. The final writable connection checkpoints committed
+    // WAL frames so a closed registry's main file remains a complete snapshot.
+    pub(super) db: TaskIndexDb,
 }
 
 impl TaskRegistryStore {
