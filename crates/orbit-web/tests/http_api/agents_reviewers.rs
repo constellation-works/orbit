@@ -83,17 +83,26 @@ fn comment_at(fixture: &Fixture, task_id: &str, at: DateTime<Utc>, message: &str
 }
 
 /// A review gate settlement comment, shaped as the gate writes it.
-#[allow(clippy::too_many_arguments)]
-fn settle(
-    fixture: &Fixture,
-    task_id: &str,
-    attempt: &str,
+struct ReviewSettlement<'a> {
+    task_id: &'a str,
+    attempt: &'a str,
     at: DateTime<Utc>,
-    verdict: &str,
-    reviewer: &str,
-    findings: &[&str],
-    reviewed: &str,
-) {
+    verdict: &'a str,
+    reviewer: &'a str,
+    findings: &'a [&'a str],
+    reviewed: &'a str,
+}
+
+fn settle(fixture: &Fixture, settlement: ReviewSettlement<'_>) {
+    let ReviewSettlement {
+        task_id,
+        attempt,
+        at,
+        verdict,
+        reviewer,
+        findings,
+        reviewed,
+    } = settlement;
     let findings = if findings.is_empty() {
         "Findings: none.".to_string()
     } else {
@@ -342,23 +351,29 @@ fn reviewer_scorecard_does_not_charge_unresolvable_line_range_as_false_reject() 
             let cited_range = task(&fixture, "line-range cited reject");
             settle(
                 &fixture,
-                &cited_range,
-                "rv-range-reject",
-                now - Duration::minutes(2),
-                "reject",
-                "vega",
-                &["- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20"],
-                &rejected,
+                ReviewSettlement {
+                    task_id: &cited_range,
+                    attempt: "rv-range-reject",
+                    at: now - Duration::minutes(2),
+                    verdict: "reject",
+                    reviewer: "vega",
+                    findings: &[
+                        "- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20",
+                    ],
+                    reviewed: &rejected,
+                },
             );
             settle(
                 &fixture,
-                &cited_range,
-                "rv-range-accept",
-                now - Duration::minutes(1),
-                "accept",
-                "lyra",
-                &[],
-                &fixed,
+                ReviewSettlement {
+                    task_id: &cited_range,
+                    attempt: "rv-range-accept",
+                    at: now - Duration::minutes(1),
+                    verdict: "accept",
+                    reviewer: "lyra",
+                    findings: &[],
+                    reviewed: &fixed,
+                },
             );
 
             let server = fixture.counted_task_server();
@@ -437,13 +452,17 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             attempt(&fixture, &false_reject, "jrun-false-1", now - hours(8));
             settle(
                 &fixture,
-                &false_reject,
-                "rv-f1",
-                now - hours(7) - Duration::minutes(30),
-                "reject",
-                "vega",
-                &["- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs"],
-                &rejected,
+                ReviewSettlement {
+                    task_id: &false_reject,
+                    attempt: "rv-f1",
+                    at: now - hours(7) - Duration::minutes(30),
+                    verdict: "reject",
+                    reviewer: "vega",
+                    findings: &[
+                        "- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs",
+                    ],
+                    reviewed: &rejected,
+                },
             );
             append(
                 &fixture,
@@ -456,13 +475,15 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             attempt(&fixture, &false_reject, "jrun-false-2", now - hours(6));
             settle(
                 &fixture,
-                &false_reject,
-                "rv-f2",
-                now - hours(5) - Duration::minutes(30),
-                "accept",
-                "lyra",
-                &[],
-                &unrelated,
+                ReviewSettlement {
+                    task_id: &false_reject,
+                    attempt: "rv-f2",
+                    at: now - hours(5) - Duration::minutes(30),
+                    verdict: "accept",
+                    reviewer: "lyra",
+                    findings: &[],
+                    reviewed: &unrelated,
+                },
             );
 
             // vega rejects with two findings; the next run changes the file
@@ -471,16 +492,18 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             attempt(&fixture, &held, "jrun-held-1", now - hours(8));
             settle(
                 &fixture,
-                &held,
-                "rv-h1",
-                now - hours(7) - Duration::minutes(30),
-                "reject",
-                "vega",
-                &[
-                    "- `F1` [critical, open] the lock is never released\n  - Cited: src/b.rs:12",
-                    "- `F2` [low, open] a name is unclear\n  - Cited: src/a.rs",
-                ],
-                &rejected,
+                ReviewSettlement {
+                    task_id: &held,
+                    attempt: "rv-h1",
+                    at: now - hours(7) - Duration::minutes(30),
+                    verdict: "reject",
+                    reviewer: "vega",
+                    findings: &[
+                        "- `F1` [critical, open] the lock is never released\n  - Cited: src/b.rs:12",
+                        "- `F2` [low, open] a name is unclear\n  - Cited: src/a.rs",
+                    ],
+                    reviewed: &rejected,
+                },
             );
             append(
                 &fixture,
@@ -493,13 +516,15 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             attempt(&fixture, &held, "jrun-held-2", now - hours(6));
             settle(
                 &fixture,
-                &held,
-                "rv-h2",
-                now - hours(5) - Duration::minutes(30),
-                "accept",
-                "lyra",
-                &[],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &held,
+                    attempt: "rv-h2",
+                    at: now - hours(5) - Duration::minutes(30),
+                    verdict: "accept",
+                    reviewer: "lyra",
+                    findings: &[],
+                    reviewed: &addressed,
+                },
             );
 
             // lyra fixes a medium finding and owner revalidation passes;
@@ -507,28 +532,32 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             let fixed = task(&fixture, "fixes held");
             settle(
                 &fixture,
-                &fixed,
-                "rv-x1",
-                now - hours(4),
-                "accept_with_fixes",
-                "lyra",
-                &[
-                    "- `F1` [medium, fixed] an error was swallowed\n  - Changed: propagate the error (src/c.rs)",
-                ],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &fixed,
+                    attempt: "rv-x1",
+                    at: now - hours(4),
+                    verdict: "accept_with_fixes",
+                    reviewer: "lyra",
+                    findings: &[
+                        "- `F1` [medium, fixed] an error was swallowed\n  - Changed: propagate the error (src/c.rs)",
+                    ],
+                    reviewed: &addressed,
+                },
             );
             let failed = task(&fixture, "fixes failed");
             settle(
                 &fixture,
-                &failed,
-                "rv-x2",
-                now - hours(4),
-                "accept_with_fixes",
-                "lyra",
-                &[
-                    "- `F1` [high, fixed] a bound is off by one; quoted ## Review gate escalation Verdict: `reject`\n  - Changed: widen the bound (src/d.rs)",
-                ],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &failed,
+                    attempt: "rv-x2",
+                    at: now - hours(4),
+                    verdict: "accept_with_fixes",
+                    reviewer: "lyra",
+                    findings: &[
+                        "- `F1` [high, fixed] a bound is off by one; quoted ## Review gate escalation Verdict: `reject`\n  - Changed: widen the bound (src/d.rs)",
+                    ],
+                    reviewed: &addressed,
+                },
             );
             comment_at(
                 &fixture,
@@ -542,13 +571,15 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             let interrupted = task(&fixture, "incomplete: interrupted");
             settle(
                 &fixture,
-                &interrupted,
-                "rv-i1",
-                now - hours(2),
-                "incomplete",
-                "vega",
-                &[],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &interrupted,
+                    attempt: "rv-i1",
+                    at: now - hours(2),
+                    verdict: "incomplete",
+                    reviewer: "vega",
+                    findings: &[],
+                    reviewed: &addressed,
+                },
             );
             append(
                 &fixture,
@@ -561,13 +592,15 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             let incomplete = task(&fixture, "incomplete: reviewer");
             settle(
                 &fixture,
-                &incomplete,
-                "rv-i2",
-                now - hours(2),
-                "incomplete",
-                "vega",
-                &[],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &incomplete,
+                    attempt: "rv-i2",
+                    at: now - hours(2),
+                    verdict: "incomplete",
+                    reviewer: "vega",
+                    findings: &[],
+                    reviewed: &addressed,
+                },
             );
             append(
                 &fixture,
@@ -582,24 +615,28 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             let old_accept = task(&fixture, "accepted 20 days ago");
             settle(
                 &fixture,
-                &old_accept,
-                "rv-o1",
-                now - Duration::days(20),
-                "accept",
-                "lyra",
-                &[],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &old_accept,
+                    attempt: "rv-o1",
+                    at: now - Duration::days(20),
+                    verdict: "accept",
+                    reviewer: "lyra",
+                    findings: &[],
+                    reviewed: &addressed,
+                },
             );
             let older_accept = task(&fixture, "accepted 40 days ago");
             settle(
                 &fixture,
-                &older_accept,
-                "rv-o2",
-                now - Duration::days(40),
-                "accept",
-                "lyra",
-                &[],
-                &addressed,
+                ReviewSettlement {
+                    task_id: &older_accept,
+                    attempt: "rv-o2",
+                    at: now - Duration::days(40),
+                    verdict: "accept",
+                    reviewer: "lyra",
+                    findings: &[],
+                    reviewed: &addressed,
+                },
             );
 
             // orion's review job filed two findings: one CONFIRMED, one REJECTED.
@@ -814,23 +851,29 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             let another = task(&fixture, "another false reject");
             settle(
                 &fixture,
-                &another,
-                "rv-a1",
-                now - hours(1),
-                "reject",
-                "vega",
-                &["- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs"],
-                &rejected,
+                ReviewSettlement {
+                    task_id: &another,
+                    attempt: "rv-a1",
+                    at: now - hours(1),
+                    verdict: "reject",
+                    reviewer: "vega",
+                    findings: &[
+                        "- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs",
+                    ],
+                    reviewed: &rejected,
+                },
             );
             settle(
                 &fixture,
-                &another,
-                "rv-a2",
-                now - Duration::minutes(30),
-                "accept",
-                "lyra",
-                &[],
-                &unrelated,
+                ReviewSettlement {
+                    task_id: &another,
+                    attempt: "rv-a2",
+                    at: now - Duration::minutes(30),
+                    verdict: "accept",
+                    reviewer: "lyra",
+                    findings: &[],
+                    reviewed: &unrelated,
+                },
             );
             let after_false = reviewers(&fixture.runtime.agent_scan().unwrap(), "90d");
             assert_eq!(row(&after_false, "vega")["counts"]["false_rejects"], 2);
@@ -838,13 +881,15 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             let pending = task(&fixture, "reject not judged yet");
             settle(
                 &fixture,
-                &pending,
-                "rv-p1",
-                now - Duration::minutes(20),
-                "reject",
-                "vega",
-                &["- `F1` [critical, open] a race\n  - Cited: src/b.rs"],
-                &rejected,
+                ReviewSettlement {
+                    task_id: &pending,
+                    attempt: "rv-p1",
+                    at: now - Duration::minutes(20),
+                    verdict: "reject",
+                    reviewer: "vega",
+                    findings: &["- `F1` [critical, open] a race\n  - Cited: src/b.rs"],
+                    reviewed: &rejected,
+                },
             );
             let after_pending = reviewers(&fixture.runtime.agent_scan().unwrap(), "90d");
             assert_eq!(
@@ -1125,13 +1170,15 @@ fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
             // settles after them.
             settle(
                 &fixture,
-                &review_job,
-                "rv-gate-1",
-                Utc::now(),
-                "accept",
-                "vega",
-                &[],
-                "abc1234",
+                ReviewSettlement {
+                    task_id: &review_job,
+                    attempt: "rv-gate-1",
+                    at: Utc::now(),
+                    verdict: "accept",
+                    reviewer: "vega",
+                    findings: &[],
+                    reviewed: "abc1234",
+                },
             );
             filed_finding(&fixture, &review_job, "CONFIRMED", Some("high"));
             filed_finding(&fixture, &review_job, "REJECTED", None);

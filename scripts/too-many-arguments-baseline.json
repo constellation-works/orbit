@@ -9,7 +9,7 @@
     "orbit-runtime": 10,
     "orbit-search": 1,
     "orbit-store": 12,
-    "orbit-web": 4
+    "orbit-web": 0
   },
   "schema_version": 1
 }

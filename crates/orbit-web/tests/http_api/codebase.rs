@@ -22,8 +22,8 @@ use super::support::{Fixture, isolated, json_ok};
 
 use fixtures::*;
 pub(super) use fixtures::{
-    add, add_with_status, append_event, append_row, bundle_dir, init_repo, land, pilot_receipt,
-    pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
+    TaskEventFixture, add, add_with_status, append_event, append_row, bundle_dir, init_repo, land,
+    pilot_receipt, pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
 };
 
 const WS: &str = "workspace=ws_http_fixture";
