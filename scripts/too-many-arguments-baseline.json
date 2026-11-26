@@ -1,0 +1,15 @@
+{
+  "crates": {
+    "orbit-cli": 10,
+    "orbit-common": 1,
+    "orbit-config": 1,
+    "orbit-core": 26,
+    "orbit-engine": 36,
+    "orbit-exec": 2,
+    "orbit-runtime": 10,
+    "orbit-search": 1,
+    "orbit-store": 12,
+    "orbit-web": 4
+  },
+  "schema_version": 1
+}
