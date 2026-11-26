@@ -54,7 +54,6 @@ pub fn bm25_or_page(
     query_page(store, query, kind, field, offset, limit, true)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn query_page(
     store: &LexicalStore,
     query: &str,
