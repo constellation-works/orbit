@@ -21,10 +21,10 @@ use crate::OrbitRuntime;
 use crate::application::task::{TaskAutomationPort, TaskResidentPort};
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
-use super::TaskRow;
 use super::human_format::human_task_format_warnings;
 use super::params::{TaskAddParams, TaskUpdateParams};
 use super::paths::{ContextCreationAuthorization, compute_task_add_warnings};
+use super::{ResidentMandateAttachment, TaskRow};
 
 /// How a surface's task write screens its `context_files`, and the managed
 /// run its caller is bound to.
@@ -86,6 +86,8 @@ pub struct ScreenedTaskWrite {
     /// task's owning run declared them from its worktree. Empty for every
     /// strict write and for an explicit `allow_missing_context`.
     pub context_files_unverified: Vec<String>,
+    /// Cycle-routine status for a written mandate, if any.
+    pub(crate) resident_mandate_attachment: Option<ResidentMandateAttachment>,
 }
 
 impl From<Task> for ScreenedTaskWrite {
@@ -96,6 +98,7 @@ impl From<Task> for ScreenedTaskWrite {
             row: None,
             warnings: Vec::new(),
             context_files_unverified: Vec::new(),
+            resident_mandate_attachment: None,
         }
     }
 }
@@ -171,6 +174,7 @@ impl OrbitRuntime {
             row: None,
             warnings,
             context_files_unverified: Vec::new(),
+            resident_mandate_attachment: None,
         })
     }
 
@@ -320,15 +324,31 @@ impl OrbitRuntime {
         let writes_coverage = params.upsert_artifacts.iter().any(|artifact| {
             canonical_artifact_path(&artifact.path).ok().as_deref() == Some(COVERAGE_ARTIFACT)
         });
+        let mandate_artifact = params
+            .upsert_artifacts
+            .iter()
+            .find(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT);
+        let attaches_mandate = mandate_artifact.is_some();
+        let mandate_crew = mandate_artifact
+            .and_then(|artifact| self.resident_crew_from_mandate(&artifact.content));
         let needs_prior_task = params.relations.is_some()
             || params.status == Some(TaskStatus::InProgress)
             || params.tags.is_some()
-            || writes_coverage;
+            || writes_coverage
+            || mandate_crew.is_some();
         let stored = if needs_prior_task {
             Some(self.get_task(id)?)
         } else {
             None
         };
+        // Keep the crew change in the same write as the mandate artifact.
+        if let Some(crew) = mandate_crew
+            && stored
+                .as_ref()
+                .is_some_and(|task| task.tags.iter().any(|tag| tag == RESIDENT_TAG))
+        {
+            params.crew = Some(Some(crew));
+        }
         if let (Some(relations), Some(stored)) = (params.relations.as_mut(), stored.as_ref()) {
             self.admit_regression_sites(Some(relations), Some(&stored.relations))?;
         }
@@ -388,7 +408,7 @@ impl OrbitRuntime {
             && stored
                 .as_ref()
                 .is_some_and(|task| task.status != TaskStatus::InProgress);
-        let (task, row) = write(params)?;
+        let (mut task, mut row) = write(params)?;
         if stored
             .as_ref()
             .is_some_and(|prior| !prior.tags.iter().any(|tag| tag == RESIDENT_TAG))
@@ -410,11 +430,22 @@ impl OrbitRuntime {
                  drain needed)"
             ));
         }
+        let resident_mandate_attachment = attaches_mandate.then(|| {
+            let (activated, attachment) = self.apply_task_mandate_attachment(&task.id);
+            if let Some(activated) = activated {
+                task = activated;
+                // A row captured before activation no longer represents the task.
+                row = None;
+            }
+            warnings.extend(attachment.resident_task_warning(&task.id));
+            attachment
+        });
         Ok(ScreenedTaskWrite {
             task,
             row,
             warnings,
             context_files_unverified,
+            resident_mandate_attachment,
         })
     }
 
@@ -500,6 +531,7 @@ impl OrbitRuntime {
             row: None,
             warnings,
             context_files_unverified: Vec::new(),
+            resident_mandate_attachment: None,
         }
     }
 

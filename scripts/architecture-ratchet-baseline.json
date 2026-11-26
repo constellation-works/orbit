@@ -10,7 +10,7 @@
     "orbit_runtime_naming_files.orbit-cli": 128,
     "orbit_runtime_naming_files.orbit-cmd": 30,
     "orbit_runtime_naming_files.orbit-web": 53,
-    "orbit_runtime_ref_param_fns": 1372,
+    "orbit_runtime_ref_param_fns": 1371,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
     "store_backend_traits": 4,

@@ -5,7 +5,7 @@ use orbit_types::task::{DecisionRequest, Task};
 
 use super::comments::ensure_resident_comment_redaction_safe;
 use crate::OrbitRuntime;
-use crate::application::task::TaskResidentPort;
+use crate::application::task::{ResidentMandateAttachment, TaskResidentPort};
 
 impl TaskResidentPort for OrbitRuntime {
     fn apply_resident_authority_decision_answer(
@@ -32,5 +32,18 @@ impl TaskResidentPort for OrbitRuntime {
 
     fn resident_mandate_error(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(super::resident_mandate_from_artifact(self, task_id)?.err())
+    }
+
+    fn resident_crew_from_mandate(&self, content: &[u8]) -> Option<String> {
+        self.check_resident_mandate(content)
+            .ok()
+            .map(|mandate| mandate.crew)
+    }
+
+    fn apply_task_mandate_attachment(
+        &self,
+        task_id: &str,
+    ) -> (Option<Task>, ResidentMandateAttachment) {
+        self.finish_resident_mandate_attachment(task_id)
     }
 }

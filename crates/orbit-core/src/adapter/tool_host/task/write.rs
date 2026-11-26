@@ -20,7 +20,6 @@ use orbit_types::task::{
     ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
     unknown_task_show_field_message,
 };
-use orbit_types::workflow::RESIDENT_MANDATE_ARTIFACT;
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
@@ -198,7 +197,7 @@ pub(super) fn add(
         caller.agent,
         caller.model,
     )?;
-    screened_write_response(runtime, written, response_fields.as_ref())
+    screened_write_response(runtime, &written, response_fields.as_ref())
 }
 
 /// A status a task may be created in.
@@ -249,7 +248,7 @@ pub(super) fn update(
                     caller.agent,
                     caller.model,
                 )?;
-                return screened_write_response(runtime, task.into(), response_fields.as_ref());
+                return screened_write_response(runtime, &task.into(), response_fields.as_ref());
             }
             update_tool_task(runtime, caller, input, operator)
         });
@@ -384,7 +383,7 @@ fn update_without_repilot(
                     )?
                 }
             };
-            return screened_write_response(runtime, written, response_fields.as_ref());
+            return screened_write_response(runtime, &written, response_fields.as_ref());
         }
     }
     let note = optional_string(input, "note")?;
@@ -392,7 +391,7 @@ fn update_without_repilot(
     params.trusted_artifact_origin = origin;
     let written =
         runtime.update_task_screened_for_tool(&id, params, &screen, agent, model, note)?;
-    screened_write_response(runtime, written, response_fields.as_ref())
+    screened_write_response(runtime, &written, response_fields.as_ref())
 }
 
 /// `orbit task update`: the operator command's write. `approve` takes the
@@ -423,7 +422,7 @@ fn cli_update(
             agent,
             model,
         )?;
-        return screened_write_response(runtime, written, response_fields.as_ref());
+        return screened_write_response(runtime, &written, response_fields.as_ref());
     }
     let status = optional_string(input, "status")?
         .map(|value| parse_task_status("status", &value))
@@ -436,7 +435,6 @@ fn cli_update(
     }
     let mut params = task_update_params_from_input(input, status)?;
     params.upsert_artifacts = parse_artifacts(options)?;
-    sync_resident_mandate_crew(runtime, &id, &mut params)?;
     params.discard_candidate =
         optional_bool_alias(options, &["discard_candidate"])?.unwrap_or(false);
     let authority = if force {
@@ -458,7 +456,7 @@ fn cli_update(
         model,
         note,
     )?;
-    screened_write_response(runtime, written, response_fields.as_ref())
+    screened_write_response(runtime, &written, response_fields.as_ref())
 }
 
 fn reject_fields_for_approve(input: &Value) -> Result<(), OrbitError> {
@@ -494,12 +492,11 @@ pub(super) fn artifact_put(
 ) -> Result<TaskWriteOutput, OrbitError> {
     let origin = runtime.artifact_origin(caller.session_context);
     let id = required_string(input, &["id"], "id")?;
-    let mut params = TaskUpdateParams {
+    let params = TaskUpdateParams {
         trusted_artifact_origin: origin,
         upsert_artifacts: parse_artifacts(input)?,
         ..TaskUpdateParams::default()
     };
-    sync_resident_mandate_crew(runtime, &id, &mut params)?;
     // Preserve the authenticated native operator decision, using the same
     // screened lifecycle write as `task update --artifact`. A transport or
     // worker call keeps the owner-aware tool path even on a human host.
@@ -515,11 +512,7 @@ pub(super) fn artifact_put(
         false,
         caller.reservation_owner,
     );
-    let attaches_mandate = params
-        .upsert_artifacts
-        .iter()
-        .any(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT);
-    let mut written = if native_operator {
+    let written = if native_operator {
         runtime.update_task_screened(
             &id,
             params,
@@ -538,72 +531,11 @@ pub(super) fn artifact_put(
             None,
         )?
     };
-    if attaches_mandate && let Some(task) = runtime.activate_resident_assignment(&written.task.id) {
-        written.task = task;
-    }
-    let cycle_routine_disabled = if attaches_mandate {
-        runtime.resident_cycle_routine_disabled()
-    } else {
-        None
-    };
-    if let Some(routine_name) = &cycle_routine_disabled {
-        written.warnings.push(format!(
-            "Mandate {} stored, but {}. Enable the routine to let it act.",
-            written.task.id,
-            crate::application::resident::resident_cycle_routine_disabled_reason(routine_name)
-        ));
-    }
-    let mut output = screened_write_response(runtime, written, None)?;
-    if attaches_mandate && let Some(object) = output.response.as_object_mut() {
-        object.insert(
-            "cycle_routine_disabled".to_string(),
-            Value::Bool(cycle_routine_disabled.is_some()),
-        );
-        object.insert(
-            "cycle_routine_name".to_string(),
-            cycle_routine_disabled
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        );
-        if let Some(routine_name) = &cycle_routine_disabled {
-            object.insert(
-                "warning".to_string(),
-                Value::String(format!(
-                    "Mandate stored, but {}. Enable the routine to let it act.",
-                    crate::application::resident::resident_cycle_routine_disabled_reason(
-                        routine_name,
-                    )
-                )),
-            );
-        }
+    let mut output = screened_write_response(runtime, &written, None)?;
+    if let Some(attachment) = &written.resident_mandate_attachment {
+        attachment.insert_artifact_put_fields(&mut output.response);
     }
     Ok(output)
-}
-
-// Keep the assignment's crew in the same screened write as a valid mandate.
-fn sync_resident_mandate_crew(
-    runtime: &OrbitRuntime,
-    id: &str,
-    params: &mut TaskUpdateParams,
-) -> Result<(), OrbitError> {
-    let Some(mandate) = params
-        .upsert_artifacts
-        .iter()
-        .find(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT)
-        .and_then(|artifact| runtime.check_resident_mandate(&artifact.content).ok())
-    else {
-        return Ok(());
-    };
-    if runtime
-        .get_task(id)?
-        .tags
-        .iter()
-        .any(|tag| tag == "resident")
-    {
-        params.crew = Some(Some(mandate.crew));
-    }
-    Ok(())
 }
 
 /// The write response in the tool host's compact/projected profile:
@@ -611,13 +543,13 @@ fn sync_resident_mandate_crew(
 /// `warnings` and `context_files_unverified` selectors.
 fn screened_write_response(
     runtime: &OrbitRuntime,
-    written: ScreenedTaskWrite,
+    written: &ScreenedTaskWrite,
     fields: Option<&TaskFieldProjection>,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let persisted_id = written.task.id.clone();
     let response = screened_task_write_response_json(
         runtime,
-        &written,
+        written,
         &TaskWriteResponsePolicy::from_fields(fields),
     )?;
     Ok(TaskWriteOutput {

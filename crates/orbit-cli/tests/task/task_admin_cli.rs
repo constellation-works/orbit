@@ -1,11 +1,76 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs;
 
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
+
+#[test]
+fn task_update_with_resident_mandate_activates_and_warns() {
+    let fixture = Fixture::new();
+    let config = fixture.root.join("config.toml");
+    let mut settings = fs::read_to_string(&config).unwrap();
+    settings.push_str("\n[crews.mandate-fixture]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\n");
+    fs::write(config, settings).unwrap();
+    let routine = fixture.repo.join(".orbit/routines/resident_cycle.yaml");
+    fs::create_dir_all(routine.parent().unwrap()).unwrap();
+    fs::write(
+        routine,
+        "schemaVersion: 1\nname: artifact-cycle\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:resident_cycle_pipeline\n",
+    )
+    .unwrap();
+    let mandate = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Keep the release branch green",
+        "exit_criteria": ["All release checks pass"],
+        "workspaces": ["audit-qa"],
+        "crew": "mandate-fixture",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    let attachment = format!("resident/mandate.json={mandate}");
+
+    for status in ["proposed", "backlog"] {
+        let task = fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            "Release resident",
+            "--status",
+            status,
+            "--complexity",
+            "low",
+            "--tag",
+            "resident",
+            "--crew",
+            "sol",
+            "--json",
+        ]);
+        let id = task["id"].as_str().unwrap();
+        assert_eq!(task["status"], status, "{task}");
+        assert_eq!(task["crew"], "sol", "{task}");
+        let updated = fixture.json(&["task", "update", id, "--artifact", &attachment, "--json"]);
+        assert_eq!(updated["crew"], "mandate-fixture", "{updated}");
+        assert_eq!(updated["status"], "in-progress", "{updated}");
+        let resident = fixture.json(&["resident", "show", id, "--json"]);
+        assert_eq!(resident["status"], "in_progress", "{resident}");
+        assert_eq!(resident["cycle_routine_disabled"], true, "{resident}");
+        let routine_name = resident["cycle_routine_name"].as_str().unwrap();
+        let warnings = updated["warnings"].as_array().unwrap();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning
+                    .as_str()
+                    .is_some_and(|text| text.contains(&format!("`{routine_name}` is disabled")))
+            }),
+            "{updated}"
+        );
+        assert!(updated.get("cycle_routine_disabled").is_none(), "{updated}");
+        assert!(updated.get("cycle_routine_name").is_none(), "{updated}");
+        assert!(updated.get("warning").is_none(), "{updated}");
+    }
+}
 
 fn task_updates_and_approval_redact_prose_before_persistence() {
     let fixture = Fixture::new();

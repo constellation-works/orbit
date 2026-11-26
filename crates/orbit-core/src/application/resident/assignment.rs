@@ -3,7 +3,7 @@
 //! run-owned status change).
 //!
 //! - **Active.** A valid mandate puts its assignment in `in-progress`: when the
-//!   dashboard creates it, when `orbit task artifact put` attaches it, and at
+//!   dashboard creates it, when a screened task write attaches it, and at
 //!   the latest when a cycle starts. `backlog` would offer it to drains, and
 //!   `proposed` to task-pilot; neither says what the mandate is doing.
 //! - **Handed off.** A `handoff` checkpoint is the agent's durable request.
@@ -21,7 +21,10 @@ use orbit_types::workflow::{ResidentCheckpoint, ResidentComment};
 
 use super::{ResidentMandateState, resident_mandate_ended};
 use crate::OrbitRuntime;
-use crate::application::task::{TaskUpdateParams, task_status_transition_required_field};
+use crate::application::task::{
+    DisabledCycleRoutine, ResidentMandateAttachment, TaskUpdateParams,
+    task_status_transition_required_field,
+};
 
 /// The outcome a checkpoint names to hand the mandate to its human.
 const RESIDENT_HANDOFF_OUTCOME: &str = "handoff";
@@ -54,11 +57,26 @@ fn unsettled_resident_handoff(
 }
 
 impl OrbitRuntime {
+    /// Apply the effects of a stored mandate and report its workspace's
+    /// cycle-routine status. Attachment remains successful when activation
+    /// cannot run or the routine is disabled.
+    pub(super) fn finish_resident_mandate_attachment(
+        &self,
+        task_id: &str,
+    ) -> (Option<Task>, ResidentMandateAttachment) {
+        let activated = self.activate_resident_assignment(task_id);
+        let disabled_routine = self.resident_cycle_routine_disabled().map(|name| {
+            let reason = super::resident_cycle_routine_disabled_reason(&name);
+            DisabledCycleRoutine { name, reason }
+        });
+        (activated, ResidentMandateAttachment { disabled_routine })
+    }
+
     /// Move a `proposed` or `backlog` assignment of an active mandate to
     /// `in-progress`, returning the moved task. Anything else changes nothing.
     /// Never fails its caller: the mandate still works from its old status and
     /// the next cycle retries, so a refusal is only logged.
-    pub(crate) fn activate_resident_assignment(&self, task_id: &str) -> Option<Task> {
+    pub(super) fn activate_resident_assignment(&self, task_id: &str) -> Option<Task> {
         let activate = || -> Result<Option<Task>, OrbitError> {
             let task = self.get_task(task_id)?;
             if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
