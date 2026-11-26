@@ -2,7 +2,7 @@
   "schema_version": 1,
   "counts": {
     "application_port_methods": 20,
-    "driver_writer_outside_transaction_files": 6,
+    "driver_writer_outside_transaction_files": 1,
     "env_global_accessor_calls": 55,
     "env_process_env_method_calls": 511,
     "from_kernel_ref_uses": 21,
@@ -13,7 +13,7 @@
     "orbit_runtime_ref_param_fns": 1372,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
-    "store_backend_traits": 5,
+    "store_backend_traits": 4,
     "worker_or_owner_reads": 219
   }
 }

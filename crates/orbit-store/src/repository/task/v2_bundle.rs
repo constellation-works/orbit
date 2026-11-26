@@ -27,8 +27,8 @@ use crate::driver::file::task_bundle::{
     recover_pending_write, write_bundle_at,
 };
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
-use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
+use crate::repository::task_index::{TaskBundleBinding, TaskRegistryStore};
 
 /// Steps a boundary section's hold report names for bundle reads
 /// ([`hold_step`]): opening, reading and decoding the bundle's files. A wait

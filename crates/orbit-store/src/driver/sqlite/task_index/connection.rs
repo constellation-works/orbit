@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 
+use orbit_common::fs::io::sqlite_synchronous;
 use orbit_common::storage::sqlite::{
-    is_readonly_or_access_sqlite_error, pragma, sqlite_error, sqlite_store_error,
+    apply_default_pragmas, is_readonly_or_access_sqlite_error, pragma, sqlite_error,
+    sqlite_store_error,
 };
 use orbit_common::{OrbitError, StorageLayer};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
-use super::change_stamps::TaskChangeStamps;
-use super::index::TaskIndexSnapshots;
-use super::schema::{assert_readable_schema, migrate_writable};
+use super::schema::open::{assert_readable_schema, migrate_writable};
 use crate::driver::sqlite::host::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
@@ -26,30 +26,33 @@ fn workspaces_dir_of(path: &Path) -> PathBuf {
     normalize_path(&registry_dir).join("workspaces")
 }
 
-/// Task registry handle: one writer connection behind a mutex plus a
+/// Task index database handle: one writer connection behind a mutex plus a
 /// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
 /// readers on their own connections never queue behind the writer, so a
 /// long `replace_task_index` transaction no longer stalls every list/show
 /// that shares the registry file (orbit-web, the MCP server).
+///
+/// This is the only place `tasks/index.sqlite` is opened. Its SQL and row
+/// mapping live in `crate::repository::task_index`, which reaches the file
+/// through [`Self::read`] and [`Self::write`].
 #[derive(Clone)]
-pub struct TaskRegistryStore {
-    pub(super) index_snapshots: Arc<TaskIndexSnapshots>,
-    pub(super) change_stamps: Arc<TaskChangeStamps>,
+pub(crate) struct TaskIndexDb {
+    path: PathBuf,
     /// The single writer connection. Every mutating statement and every
     /// transaction serializes here; reads go through [`Self::read`].
-    pub(super) conn: Arc<Mutex<Connection>>,
+    conn: Arc<Mutex<Connection>>,
     /// Read pool for writable registries. `None` when the registry was
     /// opened read-only, where reads fall back to the writer connection
     /// (see [`crate::driver::sqlite::host::read_pool`]).
     readers: Option<Arc<ReadPool>>,
-    pub(super) workspaces_dir: PathBuf,
+    workspaces_dir: PathBuf,
     /// Opened read-only before the registry adopted its ledger, so tables
     /// the registry baseline creates may be missing.
-    pub(super) pre_ledger: bool,
+    pre_ledger: bool,
 }
 
-impl TaskRegistryStore {
-    pub fn open(path: &Path) -> Result<Self, OrbitError> {
+impl TaskIndexDb {
+    pub(crate) fn open(path: &Path) -> Result<Self, OrbitError> {
         let opened = orbit_common::storage::sqlite::open_private(path)?;
         let workspaces_dir = workspaces_dir_of(path);
         let conn = opened.connection;
@@ -110,8 +113,7 @@ impl TaskRegistryStore {
         }
 
         Ok(Self {
-            index_snapshots: Arc::new(TaskIndexSnapshots::new(path)),
-            change_stamps: Arc::new(TaskChangeStamps::new(path)),
+            path: path.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             workspaces_dir,
@@ -129,14 +131,13 @@ impl TaskRegistryStore {
 
     /// Open an existing registry without creating files, applying schema, or
     /// taking a writer connection. Used by a differing-generation read-only join.
-    pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
+    pub(crate) fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let workspaces_dir = workspaces_dir_of(path);
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(sqlite_store_error)?;
         let readable = assert_readable_schema(&conn, path)?;
         Ok(Self {
-            index_snapshots: Arc::new(TaskIndexSnapshots::new(path)),
-            change_stamps: Arc::new(TaskChangeStamps::new(path)),
+            path: path.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
             workspaces_dir,
@@ -148,7 +149,7 @@ impl TaskRegistryStore {
     /// registries, or the writer mutex for read-only opens. Never takes the
     /// writer mutex on the pooled path, so reads complete while a write
     /// transaction is open.
-    pub(super) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
+    pub(crate) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
         match &self.readers {
             Some(pool) => {
                 let (generation, connection) = pool.checkout()?;
@@ -167,5 +168,106 @@ impl TaskRegistryStore {
     /// and enumerate on-disk bundles for a workspace.
     pub(crate) fn workspaces_dir(&self) -> &Path {
         &self.workspaces_dir
+    }
+
+    /// Opened read-only before the registry adopted its ledger, so tables
+    /// the registry baseline creates may be missing.
+    pub(crate) fn pre_ledger(&self) -> bool {
+        self.pre_ledger
+    }
+
+    /// Open a dedicated read-only connection for a caller that compares
+    /// `PRAGMA data_version` across reads: SQLite versions are comparable
+    /// only on the same connection, so a pooled reader cannot serve it.
+    pub(crate) fn open_reader(&self) -> Result<Connection, OrbitError> {
+        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(sqlite_store_error)?;
+        apply_default_pragmas(&connection)?;
+        Ok(connection)
+    }
+
+    /// Run `write` in one `BEGIN IMMEDIATE` transaction on the writer
+    /// connection, committing when it returns `Ok` and rolling back otherwise.
+    pub(crate) fn write<T>(
+        &self,
+        write: impl FnOnce(&Transaction<'_>) -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_store_error)?;
+        let value = write(&tx)?;
+        tx.commit().map_err(sqlite_store_error)?;
+        Ok(value)
+    }
+
+    /// The named second write path: no-wait, non-durable writes for derived
+    /// caches, which a reader must never queue behind. `Ok(false)` without
+    /// calling `write` when the writer is busy in this process. The writer's
+    /// settings are restored before its mutex is released, including on
+    /// failure.
+    pub(crate) fn cache_write(
+        &self,
+        write: impl FnOnce(&mut Connection) -> Result<bool, OrbitError>,
+    ) -> Result<bool, OrbitError> {
+        let mut conn = match self.conn.try_lock() {
+            Ok(conn) => conn,
+            Err(TryLockError::WouldBlock) => return Ok(false),
+            Err(TryLockError::Poisoned(e)) => {
+                return Err(OrbitError::Store(format!("mutex poisoned: {e}")));
+            }
+        };
+        let settings = CacheWriteSettings::apply(&conn)?;
+        let recorded = write(&mut conn);
+        let restored = settings.restore(&conn);
+        let recorded = recorded?;
+        restored?;
+        Ok(recorded)
+    }
+}
+
+/// The writer connection's busy timeout and sync level while it records
+/// stamps: no wait for the write lock, and in WAL mode no fsync at commit.
+/// Both are per-connection, so [`Self::restore`] puts them back before the
+/// writer mutex is released: the busy timeout as it was, and the durable
+/// level [`TaskIndexDb::open`] gives the writer.
+struct CacheWriteSettings {
+    busy_timeout_ms: i64,
+}
+
+impl CacheWriteSettings {
+    fn apply(conn: &Connection) -> Result<Self, OrbitError> {
+        let settings = Self {
+            busy_timeout_ms: pragma::get::<i64>(conn, "busy_timeout").map_err(|e| {
+                sqlite_error(StorageLayer::Store, &e, format!("read busy_timeout: {e}"))
+            })?,
+        };
+        let applied = pragma::set(conn, "busy_timeout", &0)
+            .and_then(|()| pragma::set(conn, "synchronous", &sqlite_synchronous("NORMAL")))
+            .map_err(|e| {
+                sqlite_error(
+                    StorageLayer::Store,
+                    &e,
+                    format!("relax envelope stamp write: {e}"),
+                )
+            });
+        if let Err(error) = applied {
+            let _ = settings.restore(conn);
+            return Err(error);
+        }
+        Ok(settings)
+    }
+
+    fn restore(&self, conn: &Connection) -> Result<(), OrbitError> {
+        pragma::set(conn, "synchronous", &sqlite_synchronous("FULL"))
+            .and_then(|()| pragma::set(conn, "busy_timeout", &self.busy_timeout_ms))
+            .map_err(|e| {
+                sqlite_error(
+                    StorageLayer::Store,
+                    &e,
+                    format!("restore registry writer settings: {e}"),
+                )
+            })
     }
 }

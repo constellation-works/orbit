@@ -15,7 +15,7 @@ use crate::fs::path_safety::normalize_path;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::workspace::{git_remotes_equivalent, validate_source_repository_fingerprint};
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::params;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -67,97 +67,90 @@ impl TaskRegistryStore {
             }
         }
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-
-        if let Some(existing) = workspace_by_orbit_dir(&tx, &orbit_dir)? {
-            if let Some(requested) = &requested_partition_id
-                && requested != &existing.partition_id
-            {
-                return Err(OrbitError::InvalidInput(format!(
-                    "orbit dir '{}' is already bound to workspace '{}', not '{}'",
-                    orbit_dir.display(),
-                    existing.partition_id,
-                    requested
-                )));
+        self.db.write(|tx| {
+            if let Some(existing) = workspace_by_orbit_dir(tx, &orbit_dir)? {
+                if let Some(requested) = &requested_partition_id
+                    && requested != &existing.partition_id
+                {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "orbit dir '{}' is already bound to workspace '{}', not '{}'",
+                        orbit_dir.display(),
+                        existing.partition_id,
+                        requested
+                    )));
+                }
+                return Ok(existing);
             }
-            tx.commit().map_err(sqlite_store_error)?;
-            return Ok(existing);
-        }
 
-        let partition_id = match requested_partition_id {
-            Some(id) => id,
-            // A checkout is identified by its repo root and workspace path, not
-            // by the orbit dir the caller happens to be running with. Reusing
-            // the id already bound to those paths keeps a repeat bind from
-            // minting a second logical workspace for the same checkout.
-            None => match workspace_checkout_by_paths(&tx, &repo_root, &workspace_path)? {
-                Some(existing) => existing.partition_id,
-                None => next_partition_id_candidate(&tx, &slug, &workspace_path)?,
-            },
-        };
-        let now = now_string();
-        if let Some(existing) = workspace_checkout_by_id(&tx, &partition_id)? {
-            // The logical workspace already has a checkout, and it is bound to
-            // a different orbit dir (a matching one returned above). When the
-            // checkout paths are unchanged this is the same checkout whose
-            // orbit dir moved — the shape short-lived CLI invocations produce
-            // when they generate an ephemeral orbit dir per call — so move the
-            // binding instead of failing (ORB-10507). A checkout at genuinely
-            // different paths still conflicts: a real id clash, not a rebind.
-            if normalize_path(&existing.repo_root) != repo_root
-                || normalize_path(&existing.workspace_path) != workspace_path
-            {
-                return Err(OrbitError::Store(format!(
-                    "workspace id '{partition_id}' already has a local checkout at '{}'",
-                    existing.orbit_dir.display()
-                )));
-            }
-            tx.execute(
-                "UPDATE workspace_checkout_bindings
+            let partition_id = match requested_partition_id {
+                Some(id) => id,
+                // A checkout is identified by its repo root and workspace path, not
+                // by the orbit dir the caller happens to be running with. Reusing
+                // the id already bound to those paths keeps a repeat bind from
+                // minting a second logical workspace for the same checkout.
+                None => match workspace_checkout_by_paths(tx, &repo_root, &workspace_path)? {
+                    Some(existing) => existing.partition_id,
+                    None => next_partition_id_candidate(tx, &slug, &workspace_path)?,
+                },
+            };
+            let now = now_string();
+            if let Some(existing) = workspace_checkout_by_id(tx, &partition_id)? {
+                // The logical workspace already has a checkout, and it is bound to
+                // a different orbit dir (a matching one returned above). When the
+                // checkout paths are unchanged this is the same checkout whose
+                // orbit dir moved — the shape short-lived CLI invocations produce
+                // when they generate an ephemeral orbit dir per call — so move the
+                // binding instead of failing (ORB-10507). A checkout at genuinely
+                // different paths still conflicts: a real id clash, not a rebind.
+                if normalize_path(&existing.repo_root) != repo_root
+                    || normalize_path(&existing.workspace_path) != workspace_path
+                {
+                    return Err(OrbitError::Store(format!(
+                        "workspace id '{partition_id}' already has a local checkout at '{}'",
+                        existing.orbit_dir.display()
+                    )));
+                }
+                tx.execute(
+                    "UPDATE workspace_checkout_bindings
                  SET orbit_dir = ?2, updated_at = ?3
                  WHERE workspace_id = ?1",
-                params![partition_id, path_to_string(&orbit_dir), now],
-            )
-            .map_err(sqlite_store_error)?;
-            let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
-                OrbitError::Store("failed to read rebound workspace checkout binding".into())
-            })?;
-            tx.commit().map_err(sqlite_store_error)?;
-            return Ok(binding);
-        }
+                    params![partition_id, path_to_string(&orbit_dir), now],
+                )
+                .map_err(sqlite_store_error)?;
+                let binding = workspace_checkout_by_id(tx, &partition_id)?.ok_or_else(|| {
+                    OrbitError::Store("failed to read rebound workspace checkout binding".into())
+                })?;
+                return Ok(binding);
+            }
 
-        if workspace_by_id(&tx, &partition_id)?.is_none() {
-            tx.execute(
-                "INSERT INTO workspace_bindings (
+            if workspace_by_id(tx, &partition_id)?.is_none() {
+                tx.execute(
+                    "INSERT INTO workspace_bindings (
                     workspace_id, slug, repo_fingerprint, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![partition_id, slug, params.repo_fingerprint, now],
-            )
-            .map_err(sqlite_store_error)?;
-        }
-        tx.execute(
-            "INSERT INTO workspace_checkout_bindings (
+                    params![partition_id, slug, params.repo_fingerprint, now],
+                )
+                .map_err(sqlite_store_error)?;
+            }
+            tx.execute(
+                "INSERT INTO workspace_checkout_bindings (
                 workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![
-                partition_id,
-                path_to_string(&repo_root),
-                path_to_string(&workspace_path),
-                path_to_string(&orbit_dir),
-                now,
-            ],
-        )
-        .map_err(sqlite_store_error)?;
+                params![
+                    partition_id,
+                    path_to_string(&repo_root),
+                    path_to_string(&workspace_path),
+                    path_to_string(&orbit_dir),
+                    now,
+                ],
+            )
+            .map_err(sqlite_store_error)?;
 
-        let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
-            OrbitError::Store("failed to read inserted workspace checkout binding".into())
-        })?;
-        tx.commit().map_err(sqlite_store_error)?;
-        Ok(binding)
+            let binding = workspace_checkout_by_id(tx, &partition_id)?.ok_or_else(|| {
+                OrbitError::Store("failed to read inserted workspace checkout binding".into())
+            })?;
+            Ok(binding)
+        })
     }
 
     /// Move `orbit_dir` onto `params.partition_id`, replacing any checkout
@@ -181,68 +174,64 @@ impl TaskRegistryStore {
                 OrbitError::InvalidInput("rebind_checkout requires an explicit workspace id".into())
             })?)?;
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let now = now_string();
+        self.db.write(|tx| {
+            let now = now_string();
 
-        if workspace_by_id(&tx, &partition_id)?.is_none() {
-            tx.execute(
-                "INSERT INTO workspace_bindings (
+            if workspace_by_id(tx, &partition_id)?.is_none() {
+                tx.execute(
+                    "INSERT INTO workspace_bindings (
                     workspace_id, slug, repo_fingerprint, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![partition_id, slug, params.repo_fingerprint, now],
-            )
-            .map_err(sqlite_store_error)?;
-        }
+                    params![partition_id, slug, params.repo_fingerprint, now],
+                )
+                .map_err(sqlite_store_error)?;
+            }
 
-        if let Some(existing) = workspace_by_orbit_dir(&tx, &orbit_dir)?
-            && existing.partition_id != partition_id
-        {
-            tx.execute(
-                "DELETE FROM workspace_checkout_bindings WHERE orbit_dir = ?1",
-                [path_to_string(&orbit_dir)],
-            )
-            .map_err(sqlite_store_error)?;
-        }
+            if let Some(existing) = workspace_by_orbit_dir(tx, &orbit_dir)?
+                && existing.partition_id != partition_id
+            {
+                tx.execute(
+                    "DELETE FROM workspace_checkout_bindings WHERE orbit_dir = ?1",
+                    [path_to_string(&orbit_dir)],
+                )
+                .map_err(sqlite_store_error)?;
+            }
 
-        if workspace_checkout_by_id(&tx, &partition_id)?.is_some() {
-            tx.execute(
-                "UPDATE workspace_checkout_bindings
+            if workspace_checkout_by_id(tx, &partition_id)?.is_some() {
+                tx.execute(
+                    "UPDATE workspace_checkout_bindings
                  SET repo_root = ?2, workspace_path = ?3, orbit_dir = ?4, updated_at = ?5
                  WHERE workspace_id = ?1",
-                params![
-                    partition_id,
-                    path_to_string(&repo_root),
-                    path_to_string(&workspace_path),
-                    path_to_string(&orbit_dir),
-                    now,
-                ],
-            )
-            .map_err(sqlite_store_error)?;
-        } else {
-            tx.execute(
-                "INSERT INTO workspace_checkout_bindings (
+                    params![
+                        partition_id,
+                        path_to_string(&repo_root),
+                        path_to_string(&workspace_path),
+                        path_to_string(&orbit_dir),
+                        now,
+                    ],
+                )
+                .map_err(sqlite_store_error)?;
+            } else {
+                tx.execute(
+                    "INSERT INTO workspace_checkout_bindings (
                     workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                params![
-                    partition_id,
-                    path_to_string(&repo_root),
-                    path_to_string(&workspace_path),
-                    path_to_string(&orbit_dir),
-                    now,
-                ],
-            )
-            .map_err(sqlite_store_error)?;
-        }
+                    params![
+                        partition_id,
+                        path_to_string(&repo_root),
+                        path_to_string(&workspace_path),
+                        path_to_string(&orbit_dir),
+                        now,
+                    ],
+                )
+                .map_err(sqlite_store_error)?;
+            }
 
-        let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
-            OrbitError::Store("failed to read rebound workspace checkout binding".into())
-        })?;
-        tx.commit().map_err(sqlite_store_error)?;
-        Ok(binding)
+            let binding = workspace_checkout_by_id(tx, &partition_id)?.ok_or_else(|| {
+                OrbitError::Store("failed to read rebound workspace checkout binding".into())
+            })?;
+            Ok(binding)
+        })
     }
 
     /// Register a logical workspace in the coordination registry without
@@ -253,34 +242,29 @@ impl TaskRegistryStore {
     ) -> Result<WorkspaceBinding, OrbitError> {
         let partition_id = validate_partition_id(&params.partition_id)?;
         let slug = sanitize_slug(&params.slug);
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        if let Some(existing) = workspace_by_id(&tx, &partition_id)? {
-            if existing.slug != slug || existing.repo_fingerprint != params.repo_fingerprint {
-                return Err(OrbitError::InvalidInput(format!(
-                    "logical workspace '{partition_id}' is already registered with different metadata"
-                )));
+        self.db.write(|tx| {
+            if let Some(existing) = workspace_by_id(tx, &partition_id)? {
+                if existing.slug != slug || existing.repo_fingerprint != params.repo_fingerprint {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "logical workspace '{partition_id}' is already registered with different metadata"
+                    )));
+                }
+                            return Ok(existing);
             }
-            tx.commit().map_err(sqlite_store_error)?;
-            return Ok(existing);
-        }
 
-        let now = now_string();
-        tx.execute(
-            "INSERT INTO workspace_bindings(
-                workspace_id, slug, repo_fingerprint, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![partition_id, slug, params.repo_fingerprint, now],
-        )
-        .map_err(sqlite_store_error)?;
-        let binding = workspace_by_id(&tx, &partition_id)?.ok_or_else(|| {
-            OrbitError::Store("failed to read inserted logical workspace binding".into())
+            let now = now_string();
+            tx.execute(
+                "INSERT INTO workspace_bindings(
+                    workspace_id, slug, repo_fingerprint, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![partition_id, slug, params.repo_fingerprint, now],
+            )
+            .map_err(sqlite_store_error)?;
+            let binding = workspace_by_id(tx, &partition_id)?.ok_or_else(|| {
+                OrbitError::Store("failed to read inserted logical workspace binding".into())
         })?;
-        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
+        })
     }
 
     /// Record the portable source-repository identity when an existing
@@ -328,37 +312,33 @@ impl TaskRegistryStore {
                 "workspace repository fingerprint must be non-empty and trimmed".to_string(),
             ));
         }
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-        let existing = workspace_by_id(&tx, &partition_id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, partition_id.clone()))?;
-        match existing.repo_fingerprint.as_deref() {
-            Some(current)
-                if current == repo_fingerprint
-                    || git_remotes_equivalent(current, repo_fingerprint).unwrap_or(false) => {}
-            Some(_) if !rebind => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "workspace '{partition_id}' is registered with a different source-repository fingerprint; inspect `orbit workspace source-remote show --json` and use `orbit workspace source-remote rebind --remote <URL>` on the declared owner machine for a repository transfer"
-                )));
+        self.db.write(|tx| {
+            let existing = workspace_by_id(tx, &partition_id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, partition_id.clone()))?;
+            match existing.repo_fingerprint.as_deref() {
+                Some(current)
+                    if current == repo_fingerprint
+                        || git_remotes_equivalent(current, repo_fingerprint).unwrap_or(false) => {}
+                Some(_) if !rebind => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "workspace '{partition_id}' is registered with a different source-repository fingerprint; inspect `orbit workspace source-remote show --json` and use `orbit workspace source-remote rebind --remote <URL>` on the declared owner machine for a repository transfer"
+                    )));
+                }
+                _ => {
+                    tx.execute(
+                        "UPDATE workspace_bindings
+                         SET repo_fingerprint = ?2, updated_at = ?3
+                         WHERE workspace_id = ?1",
+                        params![partition_id, repo_fingerprint, now_string()],
+                    )
+                    .map_err(sqlite_store_error)?;
+                }
             }
-            _ => {
-                tx.execute(
-                    "UPDATE workspace_bindings
-                     SET repo_fingerprint = ?2, updated_at = ?3
-                     WHERE workspace_id = ?1",
-                    params![partition_id, repo_fingerprint, now_string()],
-                )
-                .map_err(sqlite_store_error)?;
-            }
-        }
-        let binding = workspace_by_id(&tx, &partition_id)?.ok_or_else(|| {
-            OrbitError::Store("failed to read fingerprinted workspace binding".to_string())
+            let binding = workspace_by_id(tx, &partition_id)?.ok_or_else(|| {
+                OrbitError::Store("failed to read fingerprinted workspace binding".to_string())
         })?;
-        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
+        })
     }
 
     pub fn find_rebind_candidates(
@@ -423,38 +403,33 @@ impl TaskRegistryStore {
     /// silently skip.
     pub fn unbind_workspace(&self, partition_id: &str) -> Result<bool, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
-
-        for statement in [
-            // Relations are retired from both ends, like `unregister_task_bundle`:
-            // an edge another workspace points at these tasks would otherwise
-            // outlive them.
-            "DELETE FROM task_bundle_relations
+        self.db.write(|tx| {
+            for statement in [
+                // Relations are retired from both ends, like `unregister_task_bundle`:
+                // an edge another workspace points at these tasks would otherwise
+                // outlive them.
+                "DELETE FROM task_bundle_relations
              WHERE workspace_id = ?1
                 OR target_task_id IN (
                     SELECT task_id FROM task_bundle_bindings WHERE workspace_id = ?1
                 )",
-            "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
-            "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
-            "DELETE FROM task_bundle_bindings WHERE workspace_id = ?1",
-            "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
-        ] {
-            tx.execute(statement, [&partition_id])
+                "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
+                "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
+                "DELETE FROM task_bundle_bindings WHERE workspace_id = ?1",
+                "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
+            ] {
+                tx.execute(statement, [&partition_id])
+                    .map_err(sqlite_store_error)?;
+            }
+            let deleted = tx
+                .execute(
+                    "DELETE FROM workspace_bindings WHERE workspace_id = ?1",
+                    [&partition_id],
+                )
                 .map_err(sqlite_store_error)?;
-        }
-        let deleted = tx
-            .execute(
-                "DELETE FROM workspace_bindings WHERE workspace_id = ?1",
-                [&partition_id],
-            )
-            .map_err(sqlite_store_error)?;
 
-        tx.commit().map_err(sqlite_store_error)?;
-        Ok(deleted > 0)
+            Ok(deleted > 0)
+        })
     }
 
     /// Look up a logical workspace by id. Public wrapper over the internal query

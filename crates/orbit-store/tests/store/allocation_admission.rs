@@ -488,7 +488,7 @@ impl Coordinated {
     fn reopen(&self) -> Self {
         Self::open(self.root())
     }
-    fn task_store(&self) -> &Arc<dyn orbit_store::contracts::TaskStoreBackend> {
+    fn task_store(&self) -> &Arc<orbit_store::TaskV2Store> {
         &self.backends.task.task
     }
     fn artifact_store(&self) -> &Arc<dyn orbit_store::contracts::TaskArtifactStoreBackend> {

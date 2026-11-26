@@ -18,9 +18,7 @@ use tracing_subscriber::{Layer, Registry};
 
 use super::super::{Section, TaskCommitBoundary};
 use crate::Store;
-use crate::driver::sqlite::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
-};
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 const PARTITION: &str = "orbit-test-123456";
 const LOCK_TARGET: &str = "orbit.common.fs.file_lock";

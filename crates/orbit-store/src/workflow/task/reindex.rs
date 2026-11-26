@@ -13,8 +13,8 @@ use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id, task_id_prefix};
 use crate::driver::file::task_bundle::{
     bundle_lock_target, is_unpublished_stub, reap_unpublished_stub, recover_pending_bundle_at,
 };
-use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
+use crate::repository::task_index::{TaskRegistryStore, parse_orb_task_number};
 
 /// Result of [`reindex_workspace`].
 #[derive(Debug, Clone)]

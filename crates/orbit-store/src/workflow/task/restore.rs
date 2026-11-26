@@ -11,7 +11,7 @@ use orbit_types::task::task_id_prefix;
 use crate::driver::file::task_bundle::{
     read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
-use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
+use crate::repository::task_index::{TaskRegistryStore, parse_orb_task_number};
 
 use super::git::remotes_match;
 use super::inspect::{ValidatedPublicationBundle, load_validated_publication};

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::TaskStoreBackend;
+use orbit_store::TaskV2Store;
 use orbit_store::contracts::TaskListFilter;
 use orbit_types::task::{Task, TaskEnvelopeV2};
 use serde::{Deserialize, Serialize};
@@ -102,7 +102,7 @@ pub(crate) fn owner_metadata_page(
 }
 
 fn build_metadata_page(
-    store: &dyn TaskStoreBackend,
+    store: &TaskV2Store,
     workspace: &str,
     request: &MetadataRequest,
 ) -> Result<MetadataPage, OrbitError> {

@@ -358,7 +358,8 @@ impl TaskRegistryStore {
             let conn = self.read()?;
             return Ok(Arc::new(read_task_change_stamps(&conn, &partition_id)?));
         }
-        self.change_stamps.change_stamps_for(&partition_id)
+        self.change_stamps
+            .change_stamps_for(&self.db, &partition_id)
     }
 }
 

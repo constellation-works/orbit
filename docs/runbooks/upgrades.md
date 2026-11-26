@@ -997,8 +997,8 @@ Both files are Orbit-owned state: read them for diagnosis, never edit them.
 The host task registry, `~/.orbit/tasks/index.sqlite` (or the configured global
 root), is a separate SQLite file with a ledger of its own, run by the same engine
 as the store schema: its own `schema_meta` ledger rows and `migration.compat`
-record, and an append-only registry (`ledger.rs`) in
-`crates/orbit-store/src/driver/sqlite/task_registry/`. A writable open
+record, and an append-only registry (`schema/mod.rs`) in
+`crates/orbit-store/src/driver/sqlite/task_index/`. A writable open
 applies pending registry migrations; a newer registry is decided from its record
 exactly like the store — additive-newer stays writable, read-compatible-newer opens
 read-only (the writer connection is held `query_only`), and breaking-newer is

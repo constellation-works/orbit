@@ -5,22 +5,23 @@ use orbit_common::StorageLayer;
 use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
-use super::allocator::HIGH_WATER_UNKNOWN_AUTHORITY;
 use super::baseline::is_adoptable;
-use super::ledger::{
-    MIGRATIONS, PRE_LEDGER_COMPATIBLE, REGISTRY_DATABASE, SUPPORTED_REGISTRY_VERSION,
-};
-use super::util::now_string;
+use super::{MIGRATIONS, PRE_LEDGER_COMPATIBLE, REGISTRY_DATABASE, SUPPORTED_REGISTRY_VERSION};
 use crate::contracts::ForwardCompatibleOpen;
 use crate::driver::sqlite::host::ledger::{
     current_schema_version, evaluate_newer_database, run_database_migrations,
 };
 
+/// The `allocator_state.authority` row that marks an allocator seeded over
+/// existing partitions: the highest id already issued is unknown, so
+/// allocation is refused until an operator seeds the high-water mark.
+pub(crate) const HIGH_WATER_UNKNOWN_AUTHORITY: &str = "high_water_unknown";
+
 /// How a registry opened for observation may be read.
-pub(super) struct ReadableRegistry {
+pub(in crate::driver::sqlite::task_index) struct ReadableRegistry {
     /// The registry has no ledger yet: it is a pre-ledger v5 registry, so
     /// tables its baseline would create may be missing.
-    pub(super) pre_ledger: bool,
+    pub(in crate::driver::sqlite::task_index) pre_ledger: bool,
 }
 
 /// Bring a writable registry onto this binary's ledger, adopting a
@@ -29,7 +30,7 @@ pub(super) struct ReadableRegistry {
 /// `Ok(Some(..))` is a newer registry this binary may open: the caller must
 /// hold it read-only unless it is [`ForwardCompatibleOpen::writable`].
 /// `workspaces_dir` is consulted only when the allocator still needs seeding.
-pub(super) fn migrate_writable(
+pub(in crate::driver::sqlite::task_index) fn migrate_writable(
     conn: &Connection,
     path: &Path,
     workspaces_dir: &Path,
@@ -51,7 +52,7 @@ pub(super) fn migrate_writable(
 /// owes beats an opaque SQLite write error raised from a transaction that
 /// could only fail. A newer registry is decided from its compatibility
 /// record; any open it allows is a read.
-pub(super) fn assert_readable_schema(
+pub(in crate::driver::sqlite::task_index) fn assert_readable_schema(
     conn: &Connection,
     path: &Path,
 ) -> Result<ReadableRegistry, OrbitError> {
@@ -147,7 +148,7 @@ fn allocator_seeded(conn: &Connection) -> Result<bool, OrbitError> {
 fn seed_allocator(conn: &Connection, prior_partitions: bool) -> Result<(), OrbitError> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(sqlite_store_error)?;
-    let now = now_string();
+    let now = chrono::Utc::now().to_rfc3339();
     let seeded = tx
         .execute(
             "INSERT OR IGNORE INTO allocator_state(authority, next_number, task_prefix, updated_at)

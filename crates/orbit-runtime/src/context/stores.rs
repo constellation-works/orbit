@@ -3,9 +3,10 @@ use crate::stored::job_runs::JobRuns;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
+use orbit_store::TaskV2Store;
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend, TaskStoreBackend,
+    TaskReservationStoreBackend,
 };
 use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
@@ -22,7 +23,7 @@ pub(crate) struct OrbitHostStore {
 
 #[derive(Clone)]
 pub struct OrbitStores {
-    pub(crate) task: Arc<dyn TaskStoreBackend>,
+    pub(crate) task: Arc<TaskV2Store>,
     pub(crate) task_document: Arc<dyn TaskDocumentStoreBackend>,
     pub(crate) task_history: Arc<dyn TaskHistoryStoreBackend>,
     pub(crate) task_artifact: Arc<dyn TaskArtifactStoreBackend>,
@@ -37,7 +38,7 @@ pub struct OrbitStores {
 impl OrbitStores {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        task: Arc<dyn TaskStoreBackend>,
+        task: Arc<TaskV2Store>,
         task_document: Arc<dyn TaskDocumentStoreBackend>,
         task_history: Arc<dyn TaskHistoryStoreBackend>,
         task_artifact: Arc<dyn TaskArtifactStoreBackend>,
@@ -62,7 +63,7 @@ impl OrbitStores {
         }
     }
 
-    pub fn tasks(&self) -> &dyn TaskStoreBackend {
+    pub fn tasks(&self) -> &TaskV2Store {
         self.task.as_ref()
     }
 

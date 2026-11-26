@@ -9,7 +9,7 @@ use crate::contracts::{
     EnvelopeStampRecord, TaskCompletionByComplexity, TaskDefectFiling, TaskTerminalTransition,
 };
 use crate::driver::file::task_bundle::bundle_lock_target;
-use crate::driver::sqlite::task_registry::{TaskIndexProofRow, TaskIndexSnapshot};
+use crate::repository::task_index::{TaskIndexProofRow, TaskIndexSnapshot};
 use orbit_common::StorageLayer;
 use orbit_common::fs::io::{FileLockProbe, hold_step, probe_file_lock};
 
@@ -81,7 +81,9 @@ impl TaskV2Store {
     /// from the index only when it covers every registration. Bundle scans
     /// supply their own freshness and validation, so no envelope probe is
     /// needed here. An incomplete index keeps the normal repair fallback.
-    pub(crate) fn registered_task_bundle_ids(&self) -> Result<Option<Vec<String>>, OrbitError> {
+    pub(crate) fn registered_task_bundle_ids_bare(
+        &self,
+    ) -> Result<Option<Vec<String>>, OrbitError> {
         self.ensure_recovered()?;
         let snapshot = self.registry.task_index_snapshot(&self.workspace_id)?;
         let Some(rows) = &snapshot.rows else {
@@ -99,13 +101,13 @@ impl TaskV2Store {
         ))
     }
 
-    pub(crate) fn task_status_index(
+    pub(crate) fn task_status_index_bare(
         &self,
     ) -> Result<std::collections::BTreeMap<String, TaskStatus>, OrbitError> {
         self.registry.global_task_status_index()
     }
 
-    pub(crate) fn task_status_index_for(
+    pub(crate) fn task_status_index_for_bare(
         &self,
         workspace_id: &str,
         targets: &BTreeSet<String>,
@@ -113,7 +115,7 @@ impl TaskV2Store {
         self.registry.task_status_index_for(workspace_id, targets)
     }
 
-    pub(crate) fn task_ids_with_tag(
+    pub(crate) fn task_ids_with_tag_bare(
         &self,
         tag: &str,
         task_ids: &BTreeSet<String>,
@@ -121,25 +123,27 @@ impl TaskV2Store {
         self.registry.task_ids_with_tag(tag, task_ids)
     }
 
-    pub(crate) fn task_change_stamps(
+    pub fn task_change_stamps(
         &self,
     ) -> Result<Arc<Vec<crate::contracts::TaskChangeStamp>>, OrbitError> {
         self.registry.task_change_stamps(&self.workspace_id)
     }
 
-    pub(crate) fn task_completion_by_complexity(
+    pub(crate) fn task_completion_by_complexity_bare(
         &self,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
         self.ensure_complexity_indexed()?;
         self.registry.completion_by_complexity(&self.workspace_id)
     }
 
-    pub(crate) fn task_complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
+    pub(crate) fn task_complexity_by_id_bare(
+        &self,
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
         self.ensure_complexity_indexed()?;
         self.registry.complexity_by_task_id(&self.workspace_id)
     }
 
-    pub(crate) fn task_terminal_transitions(
+    pub(crate) fn task_terminal_transitions_bare(
         &self,
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<TaskTerminalTransition>, OrbitError> {
@@ -148,7 +152,7 @@ impl TaskV2Store {
             .terminal_transitions(&self.workspace_id, since)
     }
 
-    pub(crate) fn task_defect_filings(
+    pub(crate) fn task_defect_filings_bare(
         &self,
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<TaskDefectFiling>, OrbitError> {
@@ -804,7 +808,7 @@ impl TaskV2Store {
     /// to the exclusive lock its writes take, so a write and a concurrent read
     /// cannot disagree about what coordinates them. Concurrent readers of one
     /// task are admitted together.
-    pub(crate) fn with_task_read_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
+    pub fn with_task_read_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {

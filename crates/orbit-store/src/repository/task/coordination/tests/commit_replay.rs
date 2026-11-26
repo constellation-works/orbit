@@ -31,7 +31,7 @@ pub(super) fn leases(owner: &Owner) -> Vec<std::path::PathBuf> {
 fn appended(owner: &Owner, task_id: &str, before: usize) -> Vec<String> {
     owner
         .tasks
-        .get_task_row(task_id, false)
+        .get_task_row_bare(task_id, false)
         .expect("read")
         .expect("task")
         .history
@@ -44,7 +44,7 @@ fn appended(owner: &Owner, task_id: &str, before: usize) -> Vec<String> {
 fn history_len(owner: &Owner, task_id: &str) -> usize {
     owner
         .tasks
-        .get_task_row(task_id, false)
+        .get_task_row_bare(task_id, false)
         .expect("read")
         .expect("task")
         .history
@@ -99,7 +99,7 @@ fn a_bind_interrupted_after_its_decision_converges_to_the_committed_state() {
         );
         let row = owner
             .tasks
-            .get_task_row(&task_id, false)
+            .get_task_row_bare(&task_id, false)
             .expect("read")
             .expect("task");
         assert_eq!(row.task.job_run_id.as_deref(), Some("leaf-crash"));
@@ -230,7 +230,7 @@ fn journal_retention_keeps_an_interrupted_decision_for_its_replay() {
     );
     let row = owner
         .tasks
-        .get_task_row(&task_id, false)
+        .get_task_row_bare(&task_id, false)
         .expect("read")
         .expect("task");
     assert_eq!(row.task.job_run_id.as_deref(), Some("leaf-crash"));

@@ -6,12 +6,11 @@
 //! it. This never caches filesystem freshness; every scan still probes every
 //! registered envelope and reports strict read failures as before.
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::{apply_default_pragmas, sqlite_store_error};
-use rusqlite::{Connection, OpenFlags};
+use orbit_common::storage::sqlite::sqlite_store_error;
+use rusqlite::Connection;
 
 use super::super::store::TaskRegistryStore;
 use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskBundleBinding};
@@ -72,8 +71,8 @@ struct SnapshotReader {
 }
 
 /// One retained partition snapshot per registry handle, shared by its clones.
-pub(in crate::driver::sqlite::task_registry) struct TaskIndexSnapshots {
-    path: PathBuf,
+#[derive(Default)]
+pub(in crate::repository::task_index) struct TaskIndexSnapshots {
     reader: Mutex<Option<SnapshotReader>>,
     /// Cache for read-only handles, keyed by `PRAGMA data_version` on the
     /// handle's own connection so immutable mounts open no second connection.
@@ -81,14 +80,6 @@ pub(in crate::driver::sqlite::task_registry) struct TaskIndexSnapshots {
 }
 
 impl TaskIndexSnapshots {
-    pub(in crate::driver::sqlite::task_registry) fn new(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            reader: Mutex::new(None),
-            read_only: Mutex::new(None),
-        }
-    }
-
     pub(super) fn snapshot_for_read_only(
         &self,
         registry: &TaskRegistryStore,
@@ -125,10 +116,7 @@ impl TaskIndexSnapshots {
         let mut reader = orbit_common::fs::lock_wait::mutex(&self.reader)
             .map_err(|error| OrbitError::Store(format!("task snapshot mutex poisoned: {error}")))?;
         if reader.is_none() {
-            let connection =
-                Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .map_err(sqlite_store_error)?;
-            apply_default_pragmas(&connection)?;
+            let connection = registry.db.open_reader()?;
             *reader = Some(SnapshotReader {
                 connection,
                 cached: None,

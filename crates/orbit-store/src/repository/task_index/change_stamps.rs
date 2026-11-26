@@ -6,14 +6,14 @@
 //! before the row load, so a commit during the load leaves the cache labelled
 //! with the old version and the next read refreshes it.
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::{apply_default_pragmas, sqlite_store_error};
-use rusqlite::{Connection, OpenFlags};
+use orbit_common::storage::sqlite::sqlite_store_error;
+use rusqlite::Connection;
 
 use crate::contracts::TaskChangeStamp;
+use crate::driver::sqlite::task_index::TaskIndexDb;
 
 /// The index read a change watcher compares between scans.
 const TASK_CHANGE_STAMP_SQL: &str =
@@ -25,34 +25,25 @@ struct StampReader {
 }
 
 /// One retained partition stamp list per registry handle, shared by its clones.
+#[derive(Default)]
 pub(super) struct TaskChangeStamps {
-    path: PathBuf,
     reader: Mutex<Option<StampReader>>,
 }
 
 impl TaskChangeStamps {
-    pub(super) fn new(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            reader: Mutex::new(None),
-        }
-    }
-
     /// Stamps for `partition_id`, or the snapshot from the last read when the
     /// registry has not committed since. The version is sampled before the
     /// row load.
     pub(super) fn change_stamps_for(
         &self,
+        db: &TaskIndexDb,
         partition_id: &str,
     ) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
         let mut reader = orbit_common::fs::lock_wait::mutex(&self.reader).map_err(|error| {
             OrbitError::Store(format!("task change stamp mutex poisoned: {error}"))
         })?;
         if reader.is_none() {
-            let connection =
-                Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .map_err(sqlite_store_error)?;
-            apply_default_pragmas(&connection)?;
+            let connection = db.open_reader()?;
             *reader = Some(StampReader {
                 connection,
                 cached: None,

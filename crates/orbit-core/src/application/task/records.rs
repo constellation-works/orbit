@@ -2,10 +2,10 @@
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_search::{LexicalIndex, TaskSidecarSearchText};
+use orbit_store::TaskV2Store;
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
     TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskRow,
-    TaskStoreBackend,
 };
 use orbit_types::task::Task;
 
@@ -34,7 +34,7 @@ impl TaskRecords for OrbitStores {
 ///
 /// Read-only calls use the typed backends exposed by [`OrbitStores`] directly.
 pub(crate) struct TaskRecordService<'a> {
-    store: &'a dyn TaskStoreBackend,
+    store: &'a TaskV2Store,
     document: &'a dyn TaskDocumentStoreBackend,
     history: &'a dyn TaskHistoryStoreBackend,
     artifact: &'a dyn TaskArtifactStoreBackend,

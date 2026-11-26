@@ -10,7 +10,7 @@ use crate::fs::path_safety::normalize_path;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::validate_orb_task_id;
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
 fn upsert_task_binding(
@@ -55,7 +55,7 @@ impl TaskRegistryStore {
     /// state here.
     pub fn workspace_partition_dir(&self, partition_id: &str) -> Result<PathBuf, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        Ok(self.workspaces_dir.join(partition_id))
+        Ok(self.db.workspaces_dir().join(partition_id))
     }
 
     pub fn register_task_bundle(
@@ -67,23 +67,18 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let canonical_path = self.validated_binding_path(&partition_id, task_id, canonical_path)?;
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
+        self.db.write(|tx| {
+            if workspace_by_id(tx, &partition_id)?.is_none() {
+                return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
+            }
 
-        if workspace_by_id(&tx, &partition_id)?.is_none() {
-            return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
-        }
+            upsert_task_binding(tx, task_id, &partition_id, &canonical_path, &now_string())?;
 
-        upsert_task_binding(&tx, task_id, &partition_id, &canonical_path, &now_string())?;
-
-        let binding = task_bundle_by_id(&tx, task_id)?.ok_or_else(|| {
-            OrbitError::Store("failed to read inserted task bundle binding".into())
-        })?;
-        tx.commit().map_err(sqlite_store_error)?;
-        Ok(binding)
+            let binding = task_bundle_by_id(tx, task_id)?.ok_or_else(|| {
+                OrbitError::Store("failed to read inserted task bundle binding".into())
+            })?;
+            Ok(binding)
+        })
     }
 
     /// Register every `(task_id, canonical_path)` binding in one transaction.
@@ -111,21 +106,17 @@ impl TaskRegistryStore {
             ));
         }
 
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
+        self.db.write(|tx| {
+            if workspace_by_id(tx, &partition_id)?.is_none() {
+                return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
+            }
 
-        if workspace_by_id(&tx, &partition_id)?.is_none() {
-            return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
-        }
-
-        let now = now_string();
-        for (task_id, canonical_path) in &rows {
-            upsert_task_binding(&tx, task_id, &partition_id, canonical_path, &now)?;
-        }
-        tx.commit().map_err(sqlite_store_error)
+            let now = now_string();
+            for (task_id, canonical_path) in &rows {
+                upsert_task_binding(tx, task_id, &partition_id, canonical_path, &now)?;
+            }
+            Ok(())
+        })
     }
 
     /// A binding may only ever name the path this registry derives for its id,
@@ -157,41 +148,36 @@ impl TaskRegistryStore {
     ) -> Result<bool, OrbitError> {
         validate_orb_task_id(task_id)?;
         let partition_id = validate_partition_id(partition_id)?;
-        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_store_error)?;
+        self.db.write(|tx| {
+            let Some(binding) = task_bundle_by_id(tx, task_id)? else {
+                return Ok(false);
+            };
+            if binding.partition_id != partition_id {
+                return Ok(false);
+            }
 
-        let Some(binding) = task_bundle_by_id(&tx, task_id)? else {
-            return Ok(false);
-        };
-        if binding.partition_id != partition_id {
-            return Ok(false);
-        }
-
-        tx.execute(
-            "DELETE FROM task_bundle_relations
+            tx.execute(
+                "DELETE FROM task_bundle_relations
              WHERE source_task_id = ?1 OR target_task_id = ?1",
-            [task_id],
-        )
-        .map_err(sqlite_store_error)?;
-        tx.execute("DELETE FROM task_bundle_tags WHERE task_id = ?1", [task_id])
-            .map_err(sqlite_store_error)?;
-        tx.execute(
-            "DELETE FROM task_bundle_index WHERE task_id = ?1",
-            [task_id],
-        )
-        .map_err(sqlite_store_error)?;
-        let deleted = tx
-            .execute(
-                "DELETE FROM task_bundle_bindings
-                 WHERE task_id = ?1 AND workspace_id = ?2",
-                params![task_id, partition_id],
+                [task_id],
             )
             .map_err(sqlite_store_error)?;
-        tx.commit().map_err(sqlite_store_error)?;
-        Ok(deleted > 0)
+            tx.execute("DELETE FROM task_bundle_tags WHERE task_id = ?1", [task_id])
+                .map_err(sqlite_store_error)?;
+            tx.execute(
+                "DELETE FROM task_bundle_index WHERE task_id = ?1",
+                [task_id],
+            )
+            .map_err(sqlite_store_error)?;
+            let deleted = tx
+                .execute(
+                    "DELETE FROM task_bundle_bindings
+                 WHERE task_id = ?1 AND workspace_id = ?2",
+                    params![task_id, partition_id],
+                )
+                .map_err(sqlite_store_error)?;
+            Ok(deleted > 0)
+        })
     }
 
     pub fn tasks_for_workspace(

@@ -7,8 +7,8 @@
 
 use orbit_common::OrbitError;
 
-use crate::driver::sqlite::task_registry::{DanglingRelationTarget, TaskRegistryStore};
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
+use crate::repository::task_index::{DanglingRelationTarget, TaskRegistryStore};
 
 /// Every canonical relation edge in `workspace_id` (or in every bound
 /// workspace when `None`) whose locally known task target has no registered

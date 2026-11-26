@@ -33,8 +33,8 @@ use orbit_types::workspace::{
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
-use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::fs::yaml::write_yaml_durable_with;
+use crate::repository::task_index::TaskRegistryStore;
 
 use super::git::{
     GitRunner, field_mismatch, path_str, remote_has_password, remotes_match, short_branch,

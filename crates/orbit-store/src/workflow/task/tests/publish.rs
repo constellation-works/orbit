@@ -22,7 +22,7 @@ use super::super::{
     ScannerFailureBehavior, publish_task_snapshot,
 };
 use super::{bundle_store, make_bundle, open_registry, seed};
-use crate::driver::sqlite::task_registry::{BindWorkspaceParams, TaskRegistryStore};
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore};
 
 const WORKSPACE_ID: &str = "ws_pub_pending";
 const PUBLICATION_ID: &str = "pub_pending";

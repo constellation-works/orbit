@@ -4,7 +4,7 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::TaskStoreBackend;
+use orbit_store::TaskV2Store;
 use orbit_types::task::{
     HostOs, Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
     task_dependencies_ready_with_index,
@@ -112,14 +112,14 @@ pub(crate) struct TaskEligibility {
 /// One index-validated envelope read per task instead of a bundle read, for
 /// callers that read status, attribution, tags, relations, context files or
 /// timestamps of the whole workspace.
-pub(crate) fn list_task_metadata_in(store: &dyn TaskStoreBackend) -> Result<Vec<Task>, OrbitError> {
+pub(crate) fn list_task_metadata_in(store: &TaskV2Store) -> Result<Vec<Task>, OrbitError> {
     list_task_metadata_matching(store, &TaskListFilter::default())
 }
 
 /// [`list_task_metadata_in`] narrowed by `filter`: one freshness pass, and
 /// only the envelopes the filter selects are read.
 pub(crate) fn list_task_metadata_matching(
-    store: &dyn TaskStoreBackend,
+    store: &TaskV2Store,
     filter: &TaskListFilter,
 ) -> Result<Vec<Task>, OrbitError> {
     Ok(store
@@ -162,7 +162,7 @@ fn with_task_residual<T>(
     query: &TaskListQuery,
     os_readout: Option<&super::TaskOsReadout>,
     select: impl FnOnce(
-        &dyn TaskStoreBackend,
+        &TaskV2Store,
         orbit_store::contracts::TaskResidualFilter<'_>,
         TaskListHydration,
     ) -> Result<T, OrbitError>,

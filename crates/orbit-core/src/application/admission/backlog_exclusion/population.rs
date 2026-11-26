@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::TaskStoreBackend;
+use orbit_store::TaskV2Store;
 use orbit_types::task::{Task, TaskStatus, has_epic_tag, validate_orb_task_id};
 
 use super::BacklogSnapshot;
@@ -34,7 +34,7 @@ use crate::application::task::{TaskListFilter, metadata_task};
 /// (`include_ancestors`) read envelopes by id and settle a pending commit
 /// first in either mode.
 pub(super) fn admission_population(
-    store: &dyn TaskStoreBackend,
+    store: &TaskV2Store,
     observed: bool,
 ) -> Result<BTreeMap<String, Task>, OrbitError> {
     let open = TaskListFilter {
@@ -113,7 +113,7 @@ impl BacklogSnapshot {
 
 /// Load the missing ancestors of every task in `lookup`, one level per read.
 fn include_ancestors(
-    store: &dyn TaskStoreBackend,
+    store: &TaskV2Store,
     lookup: &mut BTreeMap<String, Task>,
 ) -> Result<(), OrbitError> {
     let mut requested = BTreeSet::new();
@@ -140,7 +140,7 @@ fn include_ancestors(
 /// coordinated or the observational store read (see
 /// [`admission_population`]).
 fn candidates(
-    store: &dyn TaskStoreBackend,
+    store: &TaskV2Store,
     filter: &TaskListFilter,
     observed: bool,
 ) -> Result<orbit_store::contracts::TaskCandidates, OrbitError> {

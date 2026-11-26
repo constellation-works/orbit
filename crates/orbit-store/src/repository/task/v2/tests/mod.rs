@@ -4,9 +4,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::contracts::TaskCreateParams;
-use crate::driver::sqlite::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
-};
+use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 pub(super) fn store(temp: &TempDir) -> TaskV2Store {
     let registry =
