@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: The implemented forward-compatibility contract — how migrations declare additive, read-compatible or breaking, where the record lives, and when an older binary keeps writing, is held read-only, or is refused.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-common/src/storage/compatibility.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
+paths: ["crates/orbit-common/src/storage/compatibility.rs", "crates/orbit-store/src/migrate/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-cmd/src/migrate.rs"]
 related_features: [state-compatibility, orbit-core]
 related_artifacts: [ORB-10003, ORB-10012, ORB-12434, ORB-13631]
 ---
