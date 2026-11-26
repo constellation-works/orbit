@@ -5,6 +5,7 @@ use orbit_types::task::{ArtifactPresentation, Task, TaskArtifact, artifact_prese
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
+pub(crate) use crate::app::tool_fields::serialize_error;
 use crate::application::task::task_fields_response_json_projected_hydrated;
 use crate::application::task::{
     TaskLintReport, TaskRow, task_fields_response_json_projected, task_record_json,
@@ -58,8 +59,6 @@ pub(crate) fn task_fields_to_json_from_row(
         None,
     )
 }
-
-pub(crate) use crate::app::tool_fields::serialize_error;
 
 /// Project one stored artifact into the read payload returned by
 /// `orbit.task.artifact.get`.

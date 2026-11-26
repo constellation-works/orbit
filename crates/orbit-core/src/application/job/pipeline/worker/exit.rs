@@ -27,6 +27,170 @@
 //!   supervisor reads that line from the log before it records the exit
 //!   [ORB-18166]. With no such line the exit says the sender is unknown.
 
+#[cfg(target_os = "linux")]
+mod sender_capture {
+    use std::sync::Once;
+
+    use super::SIGNAL_SENDER_MARKER;
+
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
+    static INSTALL: Once = Once::new();
+
+    pub(super) fn install() {
+        INSTALL.call_once(|| {
+            for signal in SIGNALS {
+                // SAFETY: `sigaction` only reads and replaces this process's
+                // disposition of `signal`. An ignored signal, or one another
+                // handler owns, is left as it is.
+                unsafe {
+                    let mut current: libc::sigaction = std::mem::zeroed();
+                    if libc::sigaction(signal, std::ptr::null(), &mut current) != 0
+                        || current.sa_sigaction != libc::SIG_DFL
+                    {
+                        continue;
+                    }
+                    let mut action: libc::sigaction = std::mem::zeroed();
+                    action.sa_sigaction = record_sender_and_terminate as *const () as usize;
+                    action.sa_flags = libc::SA_SIGINFO;
+                    libc::sigfillset(&mut action.sa_mask);
+                    if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
+                        tracing::warn!(
+                            signal,
+                            error = %std::io::Error::last_os_error(),
+                            "pipeline worker cannot capture its terminating signal's sender",
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    /// Async-signal-safe: only `getpid`, `open`, `read`, `close`, `write`,
+    /// `sigaction` and `raise`, with no allocation or lock.
+    extern "C" fn record_sender_and_terminate(
+        signal: libc::c_int,
+        info: *mut libc::siginfo_t,
+        _context: *mut libc::c_void,
+    ) {
+        // SAFETY: the kernel passes a valid `siginfo_t` to an `SA_SIGINFO`
+        // handler; `si_pid`/`si_uid` are meaningful for the user-sent codes
+        // checked first.
+        unsafe {
+            let own_pid = libc::getpid();
+            if let Some(info) = info.as_ref()
+                && matches!(
+                    info.si_code,
+                    libc::SI_USER | libc::SI_QUEUE | libc::SI_TKILL
+                )
+                && info.si_pid() > 0
+                && info.si_pid() != own_pid
+            {
+                write_sender(signal, own_pid, info.si_pid(), info.si_uid());
+            }
+            // A freshly zeroed action, so `SIG_DFL` keeps no `SA_SIGINFO`.
+            let mut default: libc::sigaction = std::mem::zeroed();
+            default.sa_sigaction = libc::SIG_DFL;
+            libc::sigemptyset(&mut default.sa_mask);
+            libc::sigaction(signal, &default, std::ptr::null_mut());
+            // Blocked until this handler returns, then delivered with the
+            // default action, which terminates the process.
+            libc::raise(signal);
+        }
+    }
+
+    /// One fixed-format line, built on the stack.
+    fn write_sender(
+        signal: libc::c_int,
+        worker_pid: libc::pid_t,
+        sender_pid: libc::pid_t,
+        sender_uid: libc::uid_t,
+    ) {
+        let mut line = Line::default();
+        line.push(b"\n");
+        line.push(SIGNAL_SENDER_MARKER.as_bytes());
+        line.push(b" signal=");
+        line.push_number(signal as u64);
+        line.push(b" worker_pid=");
+        line.push_number(worker_pid as u64);
+        line.push(b" sender_pid=");
+        line.push_number(sender_pid as u64);
+        line.push(b" sender_uid=");
+        line.push_number(u64::from(sender_uid));
+        line.push(b" sender_comm=");
+        let mut path = Line::default();
+        path.push(b"/proc/");
+        path.push_number(sender_pid as u64);
+        path.push(b"/comm\0");
+        let mut comm = [0u8; 64];
+        // SAFETY: `path` is NUL-terminated and `comm` outlives the read.
+        let read = unsafe {
+            let fd = libc::open(
+                path.bytes().as_ptr().cast(),
+                libc::O_RDONLY | libc::O_CLOEXEC,
+            );
+            if fd < 0 {
+                0
+            } else {
+                let read = libc::read(fd, comm.as_mut_ptr().cast(), comm.len());
+                libc::close(fd);
+                read.max(0) as usize
+            }
+        };
+        for byte in comm[..read].iter_mut() {
+            if !(0x20..0x7f).contains(byte) {
+                *byte = b' ';
+            }
+        }
+        line.push(&comm[..read]);
+        line.push(b"\n");
+        // SAFETY: fd 2 is the worker log; a failed write is ignored.
+        unsafe {
+            libc::write(2, line.bytes().as_ptr().cast(), line.bytes().len());
+        }
+    }
+
+    struct Line {
+        bytes: [u8; 192],
+        len: usize,
+    }
+
+    impl Default for Line {
+        fn default() -> Self {
+            Self {
+                bytes: [0; 192],
+                len: 0,
+            }
+        }
+    }
+
+    impl Line {
+        fn push(&mut self, bytes: &[u8]) {
+            let room = self.bytes.len() - self.len;
+            let take = bytes.len().min(room);
+            self.bytes[self.len..self.len + take].copy_from_slice(&bytes[..take]);
+            self.len += take;
+        }
+
+        fn push_number(&mut self, mut value: u64) {
+            let mut digits = [0u8; 20];
+            let mut start = digits.len();
+            loop {
+                start -= 1;
+                digits[start] = b'0' + (value % 10) as u8;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            self.push(&digits[start..]);
+        }
+
+        fn bytes(&self) -> &[u8] {
+            &self.bytes[..self.len]
+        }
+    }
+}
+
 use crate::application::job::run::audit_record::SupervisedRuns;
 use std::process::ExitStatus;
 use std::thread;
@@ -191,170 +355,6 @@ const SIGNAL_SENDER_MARKER: &str = "orbit pipeline worker terminating signal:";
 pub(crate) fn capture_terminating_signal_senders() {
     #[cfg(target_os = "linux")]
     sender_capture::install();
-}
-
-#[cfg(target_os = "linux")]
-mod sender_capture {
-    use std::sync::Once;
-
-    use super::SIGNAL_SENDER_MARKER;
-
-    const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
-    static INSTALL: Once = Once::new();
-
-    pub(super) fn install() {
-        INSTALL.call_once(|| {
-            for signal in SIGNALS {
-                // SAFETY: `sigaction` only reads and replaces this process's
-                // disposition of `signal`. An ignored signal, or one another
-                // handler owns, is left as it is.
-                unsafe {
-                    let mut current: libc::sigaction = std::mem::zeroed();
-                    if libc::sigaction(signal, std::ptr::null(), &mut current) != 0
-                        || current.sa_sigaction != libc::SIG_DFL
-                    {
-                        continue;
-                    }
-                    let mut action: libc::sigaction = std::mem::zeroed();
-                    action.sa_sigaction = record_sender_and_terminate as *const () as usize;
-                    action.sa_flags = libc::SA_SIGINFO;
-                    libc::sigfillset(&mut action.sa_mask);
-                    if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
-                        tracing::warn!(
-                            signal,
-                            error = %std::io::Error::last_os_error(),
-                            "pipeline worker cannot capture its terminating signal's sender",
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    /// Async-signal-safe: only `getpid`, `open`, `read`, `close`, `write`,
-    /// `sigaction` and `raise`, with no allocation or lock.
-    extern "C" fn record_sender_and_terminate(
-        signal: libc::c_int,
-        info: *mut libc::siginfo_t,
-        _context: *mut libc::c_void,
-    ) {
-        // SAFETY: the kernel passes a valid `siginfo_t` to an `SA_SIGINFO`
-        // handler; `si_pid`/`si_uid` are meaningful for the user-sent codes
-        // checked first.
-        unsafe {
-            let own_pid = libc::getpid();
-            if let Some(info) = info.as_ref()
-                && matches!(
-                    info.si_code,
-                    libc::SI_USER | libc::SI_QUEUE | libc::SI_TKILL
-                )
-                && info.si_pid() > 0
-                && info.si_pid() != own_pid
-            {
-                write_sender(signal, own_pid, info.si_pid(), info.si_uid());
-            }
-            // A freshly zeroed action, so `SIG_DFL` keeps no `SA_SIGINFO`.
-            let mut default: libc::sigaction = std::mem::zeroed();
-            default.sa_sigaction = libc::SIG_DFL;
-            libc::sigemptyset(&mut default.sa_mask);
-            libc::sigaction(signal, &default, std::ptr::null_mut());
-            // Blocked until this handler returns, then delivered with the
-            // default action, which terminates the process.
-            libc::raise(signal);
-        }
-    }
-
-    /// One fixed-format line, built on the stack.
-    fn write_sender(
-        signal: libc::c_int,
-        worker_pid: libc::pid_t,
-        sender_pid: libc::pid_t,
-        sender_uid: libc::uid_t,
-    ) {
-        let mut line = Line::default();
-        line.push(b"\n");
-        line.push(SIGNAL_SENDER_MARKER.as_bytes());
-        line.push(b" signal=");
-        line.push_number(signal as u64);
-        line.push(b" worker_pid=");
-        line.push_number(worker_pid as u64);
-        line.push(b" sender_pid=");
-        line.push_number(sender_pid as u64);
-        line.push(b" sender_uid=");
-        line.push_number(u64::from(sender_uid));
-        line.push(b" sender_comm=");
-        let mut path = Line::default();
-        path.push(b"/proc/");
-        path.push_number(sender_pid as u64);
-        path.push(b"/comm\0");
-        let mut comm = [0u8; 64];
-        // SAFETY: `path` is NUL-terminated and `comm` outlives the read.
-        let read = unsafe {
-            let fd = libc::open(
-                path.bytes().as_ptr().cast(),
-                libc::O_RDONLY | libc::O_CLOEXEC,
-            );
-            if fd < 0 {
-                0
-            } else {
-                let read = libc::read(fd, comm.as_mut_ptr().cast(), comm.len());
-                libc::close(fd);
-                read.max(0) as usize
-            }
-        };
-        for byte in comm[..read].iter_mut() {
-            if !(0x20..0x7f).contains(byte) {
-                *byte = b' ';
-            }
-        }
-        line.push(&comm[..read]);
-        line.push(b"\n");
-        // SAFETY: fd 2 is the worker log; a failed write is ignored.
-        unsafe {
-            libc::write(2, line.bytes().as_ptr().cast(), line.bytes().len());
-        }
-    }
-
-    struct Line {
-        bytes: [u8; 192],
-        len: usize,
-    }
-
-    impl Default for Line {
-        fn default() -> Self {
-            Self {
-                bytes: [0; 192],
-                len: 0,
-            }
-        }
-    }
-
-    impl Line {
-        fn push(&mut self, bytes: &[u8]) {
-            let room = self.bytes.len() - self.len;
-            let take = bytes.len().min(room);
-            self.bytes[self.len..self.len + take].copy_from_slice(&bytes[..take]);
-            self.len += take;
-        }
-
-        fn push_number(&mut self, mut value: u64) {
-            let mut digits = [0u8; 20];
-            let mut start = digits.len();
-            loop {
-                start -= 1;
-                digits[start] = b'0' + (value % 10) as u8;
-                value /= 10;
-                if value == 0 {
-                    break;
-                }
-            }
-            self.push(&digits[start..]);
-        }
-
-        fn bytes(&self) -> &[u8] {
-            &self.bytes[..self.len]
-        }
-    }
 }
 
 /// The conventional name of a terminating signal.

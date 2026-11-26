@@ -22,6 +22,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_ROUTINE_TRIGGER, GovernedOperation,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
+pub(super) use orbit_core::app::dashboard_authorize as authorized_caller;
 use orbit_core::application::routines::{
     ClockHealth, ClockStatus, FireField, RoutineEditRefusal, RoutineField, RoutineStatus,
     RoutineStatusReport, set_clock_cadence, set_clock_enabled, toggle_listed_routine,
@@ -663,8 +664,6 @@ pub(super) fn explicit_workspace(
             )
         })
 }
-
-pub(super) use orbit_core::app::dashboard_authorize as authorized_caller;
 
 /// Project the same authorization decision enforced by the mutation endpoint.
 pub(super) fn action_capability(
