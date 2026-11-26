@@ -9,7 +9,6 @@ use orbit_automation::routines::sweep::{TICK_DEADLINE, run_sweep_core};
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
 use orbit_store::Store;
-use orbit_types::workspace::Workspace;
 
 use super::super::RoutineMachineIdentity;
 use super::super::loader::{
@@ -21,7 +20,6 @@ use super::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     workspaces,
 };
-use crate::OrbitRuntime;
 use crate::application::auto_tasks::SchedulerOptions;
 use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
 use crate::application::automation::SourceCache;
@@ -532,78 +530,62 @@ fn run_work_admission(
             });
             continue;
         }
-        auto_task_reports.extend(auto_task_rows(
-            workspace,
+        let rows = match run_auto_task_scheduler_with_cache(
             runtime,
             now_utc,
-            dry_run,
+            SchedulerOptions { dry_run },
             &dispatch.source_cache,
-        ));
+        ) {
+            Ok(outcome) => {
+                let mut rows: Vec<AutoTaskSweepReport> = outcome
+                    .reports
+                    .into_iter()
+                    .map(|report| AutoTaskSweepReport {
+                        name: report.name,
+                        source: workspace.name.clone(),
+                        action: if report.action == "fired" {
+                            "minted"
+                        } else {
+                            report.action
+                        },
+                        reason: report.reason,
+                        slot: report.slot,
+                        task_id: report.task_id,
+                    })
+                    .collect();
+                rows.extend(outcome.errors.into_iter().map(|error| {
+                    AutoTaskSweepReport {
+                        name: error
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.file_stem())
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("auto-task")
+                            .to_string(),
+                        source: workspace.name.clone(),
+                        action: "error",
+                        reason: Some(error.message),
+                        slot: None,
+                        task_id: None,
+                    }
+                }));
+                rows
+            }
+            Err(error) => vec![AutoTaskSweepReport {
+                name: "auto-tasks".to_string(),
+                source: workspace.name.clone(),
+                action: "error",
+                reason: Some(error.to_string()),
+                slot: None,
+                task_id: None,
+            }],
+        };
+        auto_task_reports.extend(rows);
     }
     Ok(WorkAdmissionReport {
         reports,
         auto_task_reports,
     })
-}
-
-/// Run one workspace's auto-task scheduler and turn its outcome into rows.
-fn auto_task_rows(
-    workspace: &Workspace,
-    runtime: &OrbitRuntime,
-    now_utc: chrono::DateTime<Utc>,
-    dry_run: bool,
-    source_cache: &SourceCache,
-) -> Vec<AutoTaskSweepReport> {
-    match run_auto_task_scheduler_with_cache(
-        runtime,
-        now_utc,
-        SchedulerOptions { dry_run },
-        source_cache,
-    ) {
-        Ok(outcome) => {
-            let mut rows: Vec<AutoTaskSweepReport> = outcome
-                .reports
-                .into_iter()
-                .map(|report| AutoTaskSweepReport {
-                    name: report.name,
-                    source: workspace.name.clone(),
-                    action: if report.action == "fired" {
-                        "minted"
-                    } else {
-                        report.action
-                    },
-                    reason: report.reason,
-                    slot: report.slot,
-                    task_id: report.task_id,
-                })
-                .collect();
-            rows.extend(outcome.errors.into_iter().map(|error| {
-                AutoTaskSweepReport {
-                    name: error
-                        .path
-                        .as_ref()
-                        .and_then(|path| path.file_stem())
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("auto-task")
-                        .to_string(),
-                    source: workspace.name.clone(),
-                    action: "error",
-                    reason: Some(error.message),
-                    slot: None,
-                    task_id: None,
-                }
-            }));
-            rows
-        }
-        Err(error) => vec![AutoTaskSweepReport {
-            name: "auto-tasks".to_string(),
-            source: workspace.name.clone(),
-            action: "error",
-            reason: Some(error.to_string()),
-            slot: None,
-            task_id: None,
-        }],
-    }
 }
 
 /// Maintenance that follows scheduling: run resumption and wake, blocked
