@@ -32,6 +32,13 @@ pub(in crate::api) struct ExperimentReadoutQuery {
     metric: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(in crate::api) struct ConcludeBody {
+    #[serde(default)]
+    arm: Option<String>,
+    reason: String,
+}
+
 pub(in crate::api) async fn diagnostics_experiments(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -74,13 +81,6 @@ pub(in crate::api) async fn diagnostics_experiment(
         Ok(body) => Json(body).into_response(),
         Err(response) => *response,
     }
-}
-
-#[derive(Deserialize)]
-pub(in crate::api) struct ConcludeBody {
-    #[serde(default)]
-    arm: Option<String>,
-    reason: String,
 }
 
 /// `POST /diagnostics/experiments/{id}/conclude` — operator-only conclusion.

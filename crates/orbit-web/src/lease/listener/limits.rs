@@ -92,18 +92,6 @@ impl Default for LeaseListenerLimits {
     }
 }
 
-pub(crate) fn retain_response_allowance<G: Send + 'static>(
-    response: Response,
-    guard: G,
-) -> Response {
-    response.map(|body| {
-        Body::new(AllowanceBody {
-            body,
-            guard: Some(guard),
-        })
-    })
-}
-
 struct AllowanceBody<G> {
     body: Body,
     guard: Option<G>,
@@ -134,4 +122,16 @@ impl<G: Send + 'static> hyper::body::Body for AllowanceBody<G> {
     fn size_hint(&self) -> hyper::body::SizeHint {
         self.body.size_hint()
     }
+}
+
+pub(crate) fn retain_response_allowance<G: Send + 'static>(
+    response: Response,
+    guard: G,
+) -> Response {
+    response.map(|body| {
+        Body::new(AllowanceBody {
+            body,
+            guard: Some(guard),
+        })
+    })
 }

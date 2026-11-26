@@ -14,6 +14,15 @@ use orbit_core::application::task::{DashboardPageReads, TaskListQuery};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// The workspace that owns a task, with the row read from it.
+struct TaskOwner {
+    id: String,
+    name: String,
+    root: String,
+    ws: Ws,
+    read: Box<RowRead>,
+}
+
 /// `GET /api/tasks` — the request workspace's tasks, filtered server-side.
 ///
 /// ## Query parameters
@@ -383,15 +392,6 @@ pub(in crate::api) async fn get_task(
         Err(response) => return *response,
     };
     task_detail_response(&state, ws, read, None, include_candidate).await
-}
-
-/// The workspace that owns a task, with the row read from it.
-struct TaskOwner {
-    id: String,
-    name: String,
-    root: String,
-    ws: Ws,
-    read: Box<RowRead>,
 }
 
 fn has_query_value(query: Option<&str>, name: &str, expected: &str) -> bool {

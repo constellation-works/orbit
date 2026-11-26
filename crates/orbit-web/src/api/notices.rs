@@ -64,6 +64,11 @@ pub(super) struct NoticeCloseBody {
     reason: Option<String>,
 }
 
+struct ResolvedNoticeRuntimes {
+    runtimes: Vec<Arc<OrbitRuntime>>,
+    degraded: Vec<String>,
+}
+
 fn ended_at(notice: &Notice) -> Option<DateTime<Utc>> {
     match notice.status {
         EffectiveStatus::Closed => notice.closed.as_ref().map(|closed| closed.at),
@@ -109,11 +114,6 @@ fn notice_json(notice: &Notice) -> Value {
         object.insert("ended_at".into(), json!(ended_at(notice)));
     }
     value
-}
-
-struct ResolvedNoticeRuntimes {
-    runtimes: Vec<Arc<OrbitRuntime>>,
-    degraded: Vec<String>,
 }
 
 fn resolve_runtimes(

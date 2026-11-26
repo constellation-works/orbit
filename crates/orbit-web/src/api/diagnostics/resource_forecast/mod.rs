@@ -20,6 +20,32 @@ use serde::Serialize;
 
 use crate::state::Ws;
 
+#[derive(Serialize)]
+struct ResourceForecastBody<'a> {
+    workspace_id: &'a str,
+    /// `machine.auto_concurrency.mode` on this host; a drain started with an
+    /// explicit mode keeps it (drain readiness names that drain's own).
+    configured_mode: &'a str,
+    host: Option<HostCapacity>,
+    admit_cpu_percent: u8,
+    admit_memory_percent: u8,
+    min_profile_deliveries: u32,
+    horizon_cap_minutes: u32,
+    accuracy: AccuracyBody<'a>,
+}
+
+/// `ForecastAccuracy` without its per-pair rows.
+#[derive(Serialize)]
+struct AccuracyBody<'a> {
+    since: DateTime<Utc>,
+    report_at: DateTime<Utc>,
+    selection: &'a AccuracySelection,
+    forecasts: u64,
+    offsets: &'a [OffsetAccuracy],
+    drains: &'a [DrainShadowDecisions],
+    limiters: &'a [DrainLimiters],
+}
+
 pub(in crate::api) async fn diagnostics_resource_forecast(Ws(runtime): Ws) -> Response {
     match super::super::blocking("resource forecast", move || {
         let workspace_id = runtime.workspace_id()?;
@@ -52,30 +78,4 @@ pub(in crate::api) async fn diagnostics_resource_forecast(Ws(runtime): Ws) -> Re
         Ok(value) => Json(value).into_response(),
         Err(response) => *response,
     }
-}
-
-#[derive(Serialize)]
-struct ResourceForecastBody<'a> {
-    workspace_id: &'a str,
-    /// `machine.auto_concurrency.mode` on this host; a drain started with an
-    /// explicit mode keeps it (drain readiness names that drain's own).
-    configured_mode: &'a str,
-    host: Option<HostCapacity>,
-    admit_cpu_percent: u8,
-    admit_memory_percent: u8,
-    min_profile_deliveries: u32,
-    horizon_cap_minutes: u32,
-    accuracy: AccuracyBody<'a>,
-}
-
-/// `ForecastAccuracy` without its per-pair rows.
-#[derive(Serialize)]
-struct AccuracyBody<'a> {
-    since: DateTime<Utc>,
-    report_at: DateTime<Utc>,
-    selection: &'a AccuracySelection,
-    forecasts: u64,
-    offsets: &'a [OffsetAccuracy],
-    drains: &'a [DrainShadowDecisions],
-    limiters: &'a [DrainLimiters],
 }

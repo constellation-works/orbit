@@ -446,13 +446,6 @@ impl<V> Slot<V> {
     }
 }
 
-fn churn_stamp(churn: &impl Hash) -> u64 {
-    use std::hash::Hasher;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    churn.hash(&mut hasher);
-    hasher.finish()
-}
-
 impl<V> Cached<V> {
     fn is_fresh(&self) -> bool {
         self.computed_at.elapsed() < self.ttl
@@ -462,4 +455,11 @@ impl<V> Cached<V> {
     fn is_servable(&self) -> bool {
         self.computed_at.elapsed() < self.ttl + self.stale_for
     }
+}
+
+fn churn_stamp(churn: &impl Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    churn.hash(&mut hasher);
+    hasher.finish()
 }

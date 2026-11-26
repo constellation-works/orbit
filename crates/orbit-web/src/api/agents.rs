@@ -59,6 +59,45 @@ pub(super) struct AgentScorecardQuery {
     until: Option<String>,
 }
 
+/// Query string for the model ranking.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct AgentRankQuery {
+    /// A time window: `1h`, `24h`, `7d`, `30d` (default), `90d` or `all`.
+    #[serde(default)]
+    window: Option<String>,
+    /// The end before the settle lag: an RFC 3339 instant or a duration ago
+    /// such as `7d`. Omitted, now.
+    #[serde(default)]
+    until: Option<String>,
+    /// How long before `until` the ranked window ends (default `14d`).
+    #[serde(default)]
+    settle_lag: Option<String>,
+    /// Which implementer tasks count by derived execution: `managed`
+    /// (default), `all` or `interactive`.
+    #[serde(default)]
+    execution: Option<String>,
+    /// `true` ranks the window ending at `until`, provisional.
+    #[serde(default)]
+    live: bool,
+}
+
+/// Query string for `/api/agents/ci-failures`.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct CiFailureSelection {
+    /// `all` or a duration such as `14d` (default `30d`).
+    #[serde(default)]
+    window: Option<String>,
+    /// Exclusive window end: an RFC 3339 instant or a duration ago.
+    #[serde(default)]
+    until: Option<String>,
+    /// Only this task's failures.
+    #[serde(default)]
+    task: Option<String>,
+    /// `code`, `flaky`, `infrastructure` or `unknown`.
+    #[serde(default)]
+    class: Option<String>,
+}
+
 pub(super) async fn agent_scorecard(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -192,28 +231,6 @@ pub(super) async fn agent_attribution(
     }
 }
 
-/// Query string for the model ranking.
-#[derive(Debug, Default, Deserialize)]
-pub(super) struct AgentRankQuery {
-    /// A time window: `1h`, `24h`, `7d`, `30d` (default), `90d` or `all`.
-    #[serde(default)]
-    window: Option<String>,
-    /// The end before the settle lag: an RFC 3339 instant or a duration ago
-    /// such as `7d`. Omitted, now.
-    #[serde(default)]
-    until: Option<String>,
-    /// How long before `until` the ranked window ends (default `14d`).
-    #[serde(default)]
-    settle_lag: Option<String>,
-    /// Which implementer tasks count by derived execution: `managed`
-    /// (default), `all` or `interactive`.
-    #[serde(default)]
-    execution: Option<String>,
-    /// `true` ranks the window ending at `until`, provisional.
-    #[serde(default)]
-    live: bool,
-}
-
 /// The implementer model ranking, sliced from the same cached scan with
 /// the workspace's current season of noise scales.
 pub(super) async fn agent_rank(
@@ -248,23 +265,6 @@ pub(super) async fn agent_rank(
             .into_response(),
         Err(error) => error_response(error),
     }
-}
-
-/// Query string for `/api/agents/ci-failures`.
-#[derive(Debug, Default, Deserialize)]
-pub(super) struct CiFailureSelection {
-    /// `all` or a duration such as `14d` (default `30d`).
-    #[serde(default)]
-    window: Option<String>,
-    /// Exclusive window end: an RFC 3339 instant or a duration ago.
-    #[serde(default)]
-    until: Option<String>,
-    /// Only this task's failures.
-    #[serde(default)]
-    task: Option<String>,
-    /// `code`, `flaky`, `infrastructure` or `unknown`.
-    #[serde(default)]
-    class: Option<String>,
 }
 
 /// The recorded required-check failures the selection names, newest first:

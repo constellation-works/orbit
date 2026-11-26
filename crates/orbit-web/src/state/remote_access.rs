@@ -331,98 +331,11 @@ impl Drop for StreamGuard {
     }
 }
 
-/// The connections table key: the device's tailnet IP, or `unknown` when
-/// Serve's `X-Forwarded-For` is absent or unreadable.
-fn device_key(device: Option<IpAddr>) -> String {
-    device.map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
-}
-
 #[derive(Debug, Default)]
 struct Activity {
     next_generation: u64,
     devices: HashMap<String, Device>,
     refusals: HashMap<(RefusalReason, Option<String>), Refusals>,
-}
-
-#[derive(Debug)]
-struct Device {
-    generation: u64,
-    login: String,
-    open_streams: u32,
-    /// (second since epoch, requests) over [`REQUEST_WINDOW`].
-    requests: VecDeque<(i64, u64)>,
-    last_seen: DateTime<Utc>,
-}
-
-#[derive(Debug)]
-struct Refusals {
-    /// (minute since epoch, refusals) over [`REFUSAL_WINDOW`].
-    counts: VecDeque<(i64, u64)>,
-    last_at: DateTime<Utc>,
-}
-
-/// A rolling window counted in fixed-width buckets of unix time.
-#[derive(Debug, Clone, Copy)]
-struct Window {
-    /// Seconds one bucket covers.
-    bucket_secs: i64,
-    /// Seconds the window reaches back from now.
-    span_secs: i64,
-}
-
-impl Window {
-    /// The bucket holding the unix time `at`.
-    fn slot(self, at: i64) -> i64 {
-        at.div_euclid(self.bucket_secs)
-    }
-
-    /// Whether any part of bucket `slot` is still inside the window ending at
-    /// `now`. A bucket is dropped only once all of it is older than the
-    /// window, so a count never drops early.
-    fn is_live(self, slot: i64, now: i64) -> bool {
-        slot.saturating_add(1).saturating_mul(self.bucket_secs) > now.saturating_sub(self.span_secs)
-    }
-}
-
-/// Add one to the newest bucket and drop buckets that left the window.
-fn bump(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
-    let slot = window.slot(now);
-    match buckets.back_mut() {
-        Some((last, count)) if *last == slot => *count += 1,
-        _ => buckets.push_back((slot, 1)),
-    }
-    prune(buckets, window, now);
-}
-
-fn prune(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
-    while buckets
-        .front()
-        .is_some_and(|(at, _)| !window.is_live(*at, now))
-    {
-        buckets.pop_front();
-    }
-}
-
-fn merge_buckets(
-    target: &mut VecDeque<(i64, u64)>,
-    extra: &VecDeque<(i64, u64)>,
-    window: Window,
-    now: i64,
-) {
-    let merged = target
-        .iter()
-        .chain(extra.iter())
-        .filter(|(at, _)| window.is_live(*at, now))
-        .fold(BTreeMap::new(), |mut acc, (at, count)| {
-            *acc.entry(*at).or_insert(0) += *count;
-            acc
-        });
-    target.clear();
-    target.extend(merged);
-}
-
-fn total(buckets: &VecDeque<(i64, u64)>) -> u64 {
-    buckets.iter().map(|(_, count)| count).sum()
 }
 
 impl Activity {
@@ -550,11 +463,28 @@ impl Activity {
     }
 }
 
+#[derive(Debug)]
+struct Device {
+    generation: u64,
+    login: String,
+    open_streams: u32,
+    /// (second since epoch, requests) over [`REQUEST_WINDOW`].
+    requests: VecDeque<(i64, u64)>,
+    last_seen: DateTime<Utc>,
+}
+
 /// Devices and refusals as the endpoint reports them.
 #[derive(Debug, Serialize)]
 pub(crate) struct ActivitySnapshot {
     pub(crate) devices: Vec<DeviceSnapshot>,
     pub(crate) refusals: Vec<RefusalSnapshot>,
+}
+
+#[derive(Debug)]
+struct Refusals {
+    /// (minute since epoch, refusals) over [`REFUSAL_WINDOW`].
+    counts: VecDeque<(i64, u64)>,
+    last_at: DateTime<Utc>,
 }
 
 impl ActivitySnapshot {
@@ -567,6 +497,15 @@ impl ActivitySnapshot {
     }
 }
 
+/// A rolling window counted in fixed-width buckets of unix time.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    /// Seconds one bucket covers.
+    bucket_secs: i64,
+    /// Seconds the window reaches back from now.
+    span_secs: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct DeviceSnapshot {
     /// The tailnet IP Serve forwarded for, or null when it sent none.
@@ -577,6 +516,20 @@ pub(crate) struct DeviceSnapshot {
     pub(crate) last_seen: DateTime<Utc>,
 }
 
+impl Window {
+    /// The bucket holding the unix time `at`.
+    fn slot(self, at: i64) -> i64 {
+        at.div_euclid(self.bucket_secs)
+    }
+
+    /// Whether any part of bucket `slot` is still inside the window ending at
+    /// `now`. A bucket is dropped only once all of it is older than the
+    /// window, so a count never drops early.
+    fn is_live(self, slot: i64, now: i64) -> bool {
+        slot.saturating_add(1).saturating_mul(self.bucket_secs) > now.saturating_sub(self.span_secs)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct RefusalSnapshot {
     pub(crate) reason: RefusalReason,
@@ -584,4 +537,51 @@ pub(crate) struct RefusalSnapshot {
     pub(crate) login: Option<String>,
     pub(crate) count_24h: u64,
     pub(crate) last_at: DateTime<Utc>,
+}
+
+/// The connections table key: the device's tailnet IP, or `unknown` when
+/// Serve's `X-Forwarded-For` is absent or unreadable.
+fn device_key(device: Option<IpAddr>) -> String {
+    device.map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
+}
+
+/// Add one to the newest bucket and drop buckets that left the window.
+fn bump(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
+    let slot = window.slot(now);
+    match buckets.back_mut() {
+        Some((last, count)) if *last == slot => *count += 1,
+        _ => buckets.push_back((slot, 1)),
+    }
+    prune(buckets, window, now);
+}
+
+fn prune(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
+    while buckets
+        .front()
+        .is_some_and(|(at, _)| !window.is_live(*at, now))
+    {
+        buckets.pop_front();
+    }
+}
+
+fn merge_buckets(
+    target: &mut VecDeque<(i64, u64)>,
+    extra: &VecDeque<(i64, u64)>,
+    window: Window,
+    now: i64,
+) {
+    let merged = target
+        .iter()
+        .chain(extra.iter())
+        .filter(|(at, _)| window.is_live(*at, now))
+        .fold(BTreeMap::new(), |mut acc, (at, count)| {
+            *acc.entry(*at).or_insert(0) += *count;
+            acc
+        });
+    target.clear();
+    target.extend(merged);
+}
+
+fn total(buckets: &VecDeque<(i64, u64)>) -> u64 {
+    buckets.iter().map(|(_, count)| count).sum()
 }

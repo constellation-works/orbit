@@ -74,6 +74,19 @@ const CI_FAILURE_SWEEP_TAG: &str = "ci-failure-sweep";
 /// The step recovery activity that resolves rebase conflicts.
 const CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 
+const FAMILIES: [Family; 7] = [
+    Family::StepRecovery,
+    Family::FinalRecovery,
+    Family::AutoFix,
+    Family::MergeConflict,
+    Family::FailedCi,
+    Family::Cost,
+    Family::Tokens,
+];
+
+/// The crew filter's name for a task without a recorded crew.
+const UNKNOWN_CREW: &str = "unknown";
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Family {
     StepRecovery,
@@ -84,16 +97,6 @@ enum Family {
     Cost,
     Tokens,
 }
-
-const FAMILIES: [Family; 7] = [
-    Family::StepRecovery,
-    Family::FinalRecovery,
-    Family::AutoFix,
-    Family::MergeConflict,
-    Family::FailedCi,
-    Family::Cost,
-    Family::Tokens,
-];
 
 impl Family {
     fn key(self) -> &'static str {
@@ -194,8 +197,90 @@ impl Filters {
     }
 }
 
-/// The crew filter's name for a task without a recorded crew.
-const UNKNOWN_CREW: &str = "unknown";
+/// One counted occurrence: when, how much, which tasks it belongs to, and
+/// the breakdown key it adds to.
+struct Occurrence {
+    family: Family,
+    at: DateTime<Utc>,
+    value: f64,
+    task_ids: Vec<String>,
+    part: &'static str,
+}
+
+struct Series {
+    points: Vec<Cell>,
+    total: Cell,
+    previous: Cell,
+}
+
+/// The head and blocker an out-of-run auto-fix start names.
+#[derive(Deserialize)]
+struct OutOfRunStart {
+    pr_number: String,
+    head_sha: String,
+    blocker: PrAutoFixBlocker,
+}
+
+/// One point (or a window total) of one family.
+#[derive(Clone, Default)]
+struct Cell {
+    count: f64,
+    parts: BTreeMap<&'static str, f64>,
+    /// Invocations summed into `count` (cost and tokens only).
+    covered: u64,
+    /// Invocations left out of `count`: no valid cost, or an uncovered model.
+    excluded: u64,
+}
+
+/// Done tasks per bucket, in the window and in the previous one.
+struct Denominator {
+    points: Vec<u64>,
+    total: u64,
+    previous: u64,
+}
+
+impl Cell {
+    fn add(&mut self, value: f64, part: &'static str) {
+        self.count += value;
+        *self.parts.entry(part).or_default() += value;
+    }
+
+    fn to_json(&self, family: Family, denominator: u64) -> Value {
+        // A cost or token total that leaves invocations out is a partial sum:
+        // dividing it by every done task would read missing telemetry as zero
+        // spend, so no rate is reported until the cell is fully covered.
+        let withheld = family.reads_invocations() && self.excluded > 0;
+        let rate = (denominator > 0 && !withheld).then(|| self.count / denominator as f64);
+        let parts: Map<String, Value> = self
+            .parts
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), amount(family, *value)))
+            .collect();
+        let mut cell = json!({
+            "count": amount(family, self.count),
+            "denominator": denominator,
+            "rate": rate,
+            "sparse": denominator < MIN_DONE,
+            "breakdown": parts,
+        });
+        if family.reads_invocations() {
+            cell["covered_invocations"] = json!(self.covered);
+            cell["excluded_invocations"] = json!(self.excluded);
+            cell["rate_withheld"] = json!(withheld);
+        }
+        cell
+    }
+}
+
+impl Denominator {
+    fn new(buckets: usize) -> Self {
+        Self {
+            points: vec![0; buckets],
+            total: 0,
+            previous: 0,
+        }
+    }
+}
 
 fn parse_filters(q: &DeliveryFrictionQuery) -> Result<Filters, String> {
     let requested = comma_list(q.families.as_deref());
@@ -289,89 +374,12 @@ pub(in crate::api) async fn diagnostics_delivery_friction(
     }
 }
 
-/// One counted occurrence: when, how much, which tasks it belongs to, and
-/// the breakdown key it adds to.
-struct Occurrence {
-    family: Family,
-    at: DateTime<Utc>,
-    value: f64,
-    task_ids: Vec<String>,
-    part: &'static str,
-}
-
-/// One point (or a window total) of one family.
-#[derive(Clone, Default)]
-struct Cell {
-    count: f64,
-    parts: BTreeMap<&'static str, f64>,
-    /// Invocations summed into `count` (cost and tokens only).
-    covered: u64,
-    /// Invocations left out of `count`: no valid cost, or an uncovered model.
-    excluded: u64,
-}
-
-impl Cell {
-    fn add(&mut self, value: f64, part: &'static str) {
-        self.count += value;
-        *self.parts.entry(part).or_default() += value;
-    }
-
-    fn to_json(&self, family: Family, denominator: u64) -> Value {
-        // A cost or token total that leaves invocations out is a partial sum:
-        // dividing it by every done task would read missing telemetry as zero
-        // spend, so no rate is reported until the cell is fully covered.
-        let withheld = family.reads_invocations() && self.excluded > 0;
-        let rate = (denominator > 0 && !withheld).then(|| self.count / denominator as f64);
-        let parts: Map<String, Value> = self
-            .parts
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), amount(family, *value)))
-            .collect();
-        let mut cell = json!({
-            "count": amount(family, self.count),
-            "denominator": denominator,
-            "rate": rate,
-            "sparse": denominator < MIN_DONE,
-            "breakdown": parts,
-        });
-        if family.reads_invocations() {
-            cell["covered_invocations"] = json!(self.covered);
-            cell["excluded_invocations"] = json!(self.excluded);
-            cell["rate_withheld"] = json!(withheld);
-        }
-        cell
-    }
-}
-
 /// USD to four decimals; events and tokens are whole.
 fn amount(family: Family, value: f64) -> Value {
     if family == Family::Cost {
         json!((value * 10_000.0).round() / 10_000.0)
     } else {
         json!(value.round() as u64)
-    }
-}
-
-struct Series {
-    points: Vec<Cell>,
-    total: Cell,
-    previous: Cell,
-}
-
-/// Done tasks per bucket, in the window and in the previous one.
-struct Denominator {
-    points: Vec<u64>,
-    total: u64,
-    previous: u64,
-}
-
-impl Denominator {
-    fn new(buckets: usize) -> Self {
-        Self {
-            points: vec![0; buckets],
-            total: 0,
-            previous: 0,
-        }
     }
 }
 
@@ -713,14 +721,6 @@ fn audit_occurrences(
         }
     }
     Ok(occurrences)
-}
-
-/// The head and blocker an out-of-run auto-fix start names.
-#[derive(Deserialize)]
-struct OutOfRunStart {
-    pr_number: String,
-    head_sha: String,
-    blocker: PrAutoFixBlocker,
 }
 
 /// The auto-fix and failed-CI families from task history and sweep filings.

@@ -117,6 +117,28 @@ pub(super) struct RecoverClaimRequest {
     request_id: String,
 }
 
+/// Retry a stopped or uncertain handoff, with a durable compare-and-reserve key.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RetryHandoffRequest {
+    expected_candidate_commit: String,
+    expected_base_commit: String,
+    expected_latest_attempt: u32,
+    expected_latest_state: orbit_types::workflow::handoff::LandingAttemptState,
+    reason: String,
+    request_key: String,
+}
+
+/// One owner mutation as the shared body consumes it: the governed operation
+/// that authorizes it, the audit name and target it is recorded under, and the
+/// arguments it is audited with.
+struct OwnerMutation {
+    operation: &'static GovernedOperation,
+    audit_name: &'static str,
+    target: String,
+    arguments: Value,
+}
+
 /// `GET /api/distributed/claims` — read-only owner inspection.
 ///
 /// Creates nothing: no receipt, no reservation, no claim, no task transition.
@@ -208,18 +230,6 @@ pub(super) async fn approve_handoff_action(
         },
     )
     .await
-}
-
-/// Retry a stopped or uncertain handoff, with a durable compare-and-reserve key.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct RetryHandoffRequest {
-    expected_candidate_commit: String,
-    expected_base_commit: String,
-    expected_latest_attempt: u32,
-    expected_latest_state: orbit_types::workflow::handoff::LandingAttemptState,
-    reason: String,
-    request_key: String,
 }
 
 /// `POST /api/distributed/handoffs/:id/retry` — normal owner landing only.
@@ -412,16 +422,6 @@ pub(super) async fn recover_claim_action(
         },
     )
     .await
-}
-
-/// One owner mutation as the shared body consumes it: the governed operation
-/// that authorizes it, the audit name and target it is recorded under, and the
-/// arguments it is audited with.
-struct OwnerMutation {
-    operation: &'static GovernedOperation,
-    audit_name: &'static str,
-    target: String,
-    arguments: Value,
 }
 
 /// The shared body of owner mutations: authorize, require an explicit

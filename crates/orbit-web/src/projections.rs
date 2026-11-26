@@ -31,174 +31,20 @@ use serde_json::{Map, Value, json};
 use crate::runtime_memo::{TASK_RISKINESS_STALE_LIMIT, TASK_RISKINESS_TTL};
 use crate::state::DashboardState;
 
-pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
-    let actor = event.actor();
-    let mut value = audit_event_base_json(event);
-    // ORB-10888: the canonical actor beside the raw label. `role` stays
-    // byte-for-byte what was recorded; these are derived.
-    value["actor"] = json!(actor.id);
-    value["actor_kind"] = json!(actor.kind.to_string());
-    value["actor_vendor"] = json!(actor.vendor);
-    value["actor_family"] = json!(actor.family);
-    value["actor_model"] = json!(actor.model);
-    value
-}
-
-/// The shared base task projection with the dashboard's one change to it:
-/// `links` fills the page of a `github-pr` ref recorded without one, so the
-/// dashboard can link every delivered pull request.
-pub(crate) fn task_to_json(
-    task: &Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-    links: &PullRequestLinks,
-) -> Map<String, Value> {
-    let mut object = task_base_json(task, status_by_id);
-    link_pull_requests(&mut object, task, links);
-    object
-}
-
-/// Stamp `human_crew` (`{name, description}`) on a task object whose `crew`
-/// names a human crew, and leave it off otherwise. The owning workspace's
-/// registry classifies the task here, so a client never has to guess from a
-/// crew name: the aggregate view mixes workspaces that configure the same
-/// name as an agent crew in one and a human crew in another, and carries no
-/// crew registry of its own.
-pub(crate) fn stamp_human_crew(object: &mut Map<String, Value>, human: Option<&HumanCrew>) {
-    object.remove("human_crew");
-    if let Some(human) = human {
-        object.insert(
-            "human_crew".to_string(),
-            json!({ "name": human.name, "description": human.description }),
-        );
-    }
-}
-
-/// [`stamp_human_crew`] for a task object built outside the list projection,
-/// classified by `runtime`'s registry from the object's own `crew` value.
-pub(crate) fn stamp_human_crew_from_runtime(
-    runtime: &OrbitRuntime,
-    object: &mut Map<String, Value>,
-) {
-    let human = runtime.human_crew(object.get("crew").and_then(Value::as_str));
-    stamp_human_crew(object, human.as_ref());
-}
-
-/// The riskiness model cached for `runtime`. The first read for a runtime
-/// waits for one scan; later reads are served from the cache, stale while one
-/// background refresh replaces it. A failed scan is logged and leaves the
-/// estimate unavailable rather than failing the task read.
-pub(crate) async fn cached_riskiness_model(
-    state: &DashboardState,
-    runtime: &Arc<OrbitRuntime>,
-) -> Option<Arc<TaskRiskinessModel>> {
-    let scan_runtime = Arc::clone(runtime);
-    match state
-        .riskiness_memo()
-        .get_or_refresh(
-            runtime,
-            (),
-            TASK_RISKINESS_TTL,
-            TASK_RISKINESS_STALE_LIMIT,
-            move || scan_runtime.task_riskiness_model(),
-        )
-        .await
-    {
-        Ok(served) => Some(served.body),
-        Err(error) => {
-            tracing::warn!(%error, "task riskiness model unavailable");
-            None
-        }
-    }
-}
-
-/// A task's `riskiness` object: the model's estimate, or `unavailable` with
-/// a null probability when no model could be built.
-pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Task) -> Value {
-    let unavailable = || {
-        json!({
-            "estimator_version": TASK_RISKINESS_ESTIMATOR_VERSION,
-            "state": "unavailable",
-            "probability": null,
-        })
-    };
-    let Some(model) = model else {
-        return unavailable();
-    };
-    serde_json::to_value(model.estimate(task)).unwrap_or_else(|error| {
-        tracing::warn!(task_id = %task.id, %error, "riskiness estimate not serialisable");
-        unavailable()
-    })
-}
-
-/// `GET /api/tasks/:id`: the show record plus the dashboard extras — linked
-/// pull requests, the lifecycle transitions with their evidence requirements,
-/// run navigability and `readiness.preparing` — and, for a proposed task
-/// held by pilot warnings or a blocked task, `escalation_triage`: whether
-/// the details panel's Triage action may submit now, and why not. A blocked
-/// task, or a task whose latest delivery run is held, also carries
-/// `why_stuck`. A task with a linked run carries `job_run_worktree`: the
-/// run's recorded branch and worktree path on its execution machine. A task
-/// that was piloted, reviewed or recovered carries `handled_by`: those hands
-/// in time order, each derived from a durable record. Every task carries
-/// `riskiness`, as its list row does, and an active triage/recovery binding
-/// carries `active_triage` on both surfaces. A task assigned to a human crew
-/// carries `human_crew` (`{name, description}`) on both surfaces and on every
-/// dashboard write response.
-///
-/// `page` lends the workspace-wide reads a list page already made when the
-/// list bundles this detail ([`TaskListProjection::detail_page_reads`]), so
-/// the bundled request does not scan them twice; `GET /api/tasks/:id` passes
-/// the default.
-pub(crate) fn task_detail_json(
-    runtime: &OrbitRuntime,
-    row: &TaskRow,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-    riskiness: Option<&TaskRiskinessModel>,
-    page: &DashboardPageReads<'_>,
-    include_candidate: bool,
-) -> Result<Value, OrbitError> {
-    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id, page)?;
-    if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "riskiness".to_string(),
-            task_riskiness_json(riskiness, &row.task),
-        );
-        stamp_human_crew_from_runtime(runtime, object);
-        if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
-            object.insert("escalation_triage".to_string(), triage);
-        }
-        // Detail-only: the stage reads the run and its audit trail, which
-        // list rows never pay for.
-        if let Some(stage) = runtime.job_run_stage(row)? {
-            object.insert("job_run_stage".to_string(), stage);
-        }
-        if let Some(worktree) = runtime.job_run_worktree(row)? {
-            object.insert("job_run_worktree".to_string(), worktree);
-        }
-        // Detail-only: the piloted, reviewed and recovered hands read pilot
-        // runs, the review ledger and recovery invocations.
-        let hands = runtime.task_handled_by(row);
-        if !hands.is_empty() {
-            object.insert("handled_by".to_string(), Value::Array(hands));
-        }
-        if include_candidate {
-            match runtime.task_has_discardable_candidate(&row.task) {
-                Ok(published) => {
-                    object.insert("published_candidate".to_string(), Value::Bool(published));
-                }
-                Err(error) => {
-                    tracing::warn!(%error, task_id = %row.task.id, "task candidate evidence unreadable");
-                }
-            }
-        }
-        crate::why_stuck::attach_why_stuck(runtime, row, object)?;
-    }
-    Ok(value)
-}
-
 /// Marker the list rows carry so a client can tell a summary from the full
 /// projection without probing for absent keys.
 pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
+
+/// The prose a summary row leaves to the detail endpoint. Everything else in
+/// [`task_to_json`] is a scalar or a short list a list consumer filters on
+/// (bridge's `orbit_task_list` reads `dependencies`, `resolved_dependencies`,
+/// `context_files`, `parent_id` and `job_run_id` off the list rows).
+const TASK_SUMMARY_OMITTED_BODIES: [&str; 4] = [
+    "description",
+    "plan",
+    "execution_summary",
+    "acceptance_criteria",
+];
 
 /// One request's worth of list-row rendering state.
 ///
@@ -377,16 +223,170 @@ impl TaskListProjection {
     }
 }
 
-/// The prose a summary row leaves to the detail endpoint. Everything else in
-/// [`task_to_json`] is a scalar or a short list a list consumer filters on
-/// (bridge's `orbit_task_list` reads `dependencies`, `resolved_dependencies`,
-/// `context_files`, `parent_id` and `job_run_id` off the list rows).
-const TASK_SUMMARY_OMITTED_BODIES: [&str; 4] = [
-    "description",
-    "plan",
-    "execution_summary",
-    "acceptance_criteria",
-];
+pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
+    let actor = event.actor();
+    let mut value = audit_event_base_json(event);
+    // ORB-10888: the canonical actor beside the raw label. `role` stays
+    // byte-for-byte what was recorded; these are derived.
+    value["actor"] = json!(actor.id);
+    value["actor_kind"] = json!(actor.kind.to_string());
+    value["actor_vendor"] = json!(actor.vendor);
+    value["actor_family"] = json!(actor.family);
+    value["actor_model"] = json!(actor.model);
+    value
+}
+
+/// The shared base task projection with the dashboard's one change to it:
+/// `links` fills the page of a `github-pr` ref recorded without one, so the
+/// dashboard can link every delivered pull request.
+pub(crate) fn task_to_json(
+    task: &Task,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+    links: &PullRequestLinks,
+) -> Map<String, Value> {
+    let mut object = task_base_json(task, status_by_id);
+    link_pull_requests(&mut object, task, links);
+    object
+}
+
+/// Stamp `human_crew` (`{name, description}`) on a task object whose `crew`
+/// names a human crew, and leave it off otherwise. The owning workspace's
+/// registry classifies the task here, so a client never has to guess from a
+/// crew name: the aggregate view mixes workspaces that configure the same
+/// name as an agent crew in one and a human crew in another, and carries no
+/// crew registry of its own.
+pub(crate) fn stamp_human_crew(object: &mut Map<String, Value>, human: Option<&HumanCrew>) {
+    object.remove("human_crew");
+    if let Some(human) = human {
+        object.insert(
+            "human_crew".to_string(),
+            json!({ "name": human.name, "description": human.description }),
+        );
+    }
+}
+
+/// [`stamp_human_crew`] for a task object built outside the list projection,
+/// classified by `runtime`'s registry from the object's own `crew` value.
+pub(crate) fn stamp_human_crew_from_runtime(
+    runtime: &OrbitRuntime,
+    object: &mut Map<String, Value>,
+) {
+    let human = runtime.human_crew(object.get("crew").and_then(Value::as_str));
+    stamp_human_crew(object, human.as_ref());
+}
+
+/// The riskiness model cached for `runtime`. The first read for a runtime
+/// waits for one scan; later reads are served from the cache, stale while one
+/// background refresh replaces it. A failed scan is logged and leaves the
+/// estimate unavailable rather than failing the task read.
+pub(crate) async fn cached_riskiness_model(
+    state: &DashboardState,
+    runtime: &Arc<OrbitRuntime>,
+) -> Option<Arc<TaskRiskinessModel>> {
+    let scan_runtime = Arc::clone(runtime);
+    match state
+        .riskiness_memo()
+        .get_or_refresh(
+            runtime,
+            (),
+            TASK_RISKINESS_TTL,
+            TASK_RISKINESS_STALE_LIMIT,
+            move || scan_runtime.task_riskiness_model(),
+        )
+        .await
+    {
+        Ok(served) => Some(served.body),
+        Err(error) => {
+            tracing::warn!(%error, "task riskiness model unavailable");
+            None
+        }
+    }
+}
+
+/// A task's `riskiness` object: the model's estimate, or `unavailable` with
+/// a null probability when no model could be built.
+pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Task) -> Value {
+    let unavailable = || {
+        json!({
+            "estimator_version": TASK_RISKINESS_ESTIMATOR_VERSION,
+            "state": "unavailable",
+            "probability": null,
+        })
+    };
+    let Some(model) = model else {
+        return unavailable();
+    };
+    serde_json::to_value(model.estimate(task)).unwrap_or_else(|error| {
+        tracing::warn!(task_id = %task.id, %error, "riskiness estimate not serialisable");
+        unavailable()
+    })
+}
+
+/// `GET /api/tasks/:id`: the show record plus the dashboard extras — linked
+/// pull requests, the lifecycle transitions with their evidence requirements,
+/// run navigability and `readiness.preparing` — and, for a proposed task
+/// held by pilot warnings or a blocked task, `escalation_triage`: whether
+/// the details panel's Triage action may submit now, and why not. A blocked
+/// task, or a task whose latest delivery run is held, also carries
+/// `why_stuck`. A task with a linked run carries `job_run_worktree`: the
+/// run's recorded branch and worktree path on its execution machine. A task
+/// that was piloted, reviewed or recovered carries `handled_by`: those hands
+/// in time order, each derived from a durable record. Every task carries
+/// `riskiness`, as its list row does, and an active triage/recovery binding
+/// carries `active_triage` on both surfaces. A task assigned to a human crew
+/// carries `human_crew` (`{name, description}`) on both surfaces and on every
+/// dashboard write response.
+///
+/// `page` lends the workspace-wide reads a list page already made when the
+/// list bundles this detail ([`TaskListProjection::detail_page_reads`]), so
+/// the bundled request does not scan them twice; `GET /api/tasks/:id` passes
+/// the default.
+pub(crate) fn task_detail_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+    riskiness: Option<&TaskRiskinessModel>,
+    page: &DashboardPageReads<'_>,
+    include_candidate: bool,
+) -> Result<Value, OrbitError> {
+    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id, page)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "riskiness".to_string(),
+            task_riskiness_json(riskiness, &row.task),
+        );
+        stamp_human_crew_from_runtime(runtime, object);
+        if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
+            object.insert("escalation_triage".to_string(), triage);
+        }
+        // Detail-only: the stage reads the run and its audit trail, which
+        // list rows never pay for.
+        if let Some(stage) = runtime.job_run_stage(row)? {
+            object.insert("job_run_stage".to_string(), stage);
+        }
+        if let Some(worktree) = runtime.job_run_worktree(row)? {
+            object.insert("job_run_worktree".to_string(), worktree);
+        }
+        // Detail-only: the piloted, reviewed and recovered hands read pilot
+        // runs, the review ledger and recovery invocations.
+        let hands = runtime.task_handled_by(row);
+        if !hands.is_empty() {
+            object.insert("handled_by".to_string(), Value::Array(hands));
+        }
+        if include_candidate {
+            match runtime.task_has_discardable_candidate(&row.task) {
+                Ok(published) => {
+                    object.insert("published_candidate".to_string(), Value::Bool(published));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, task_id = %row.task.id, "task candidate evidence unreadable");
+                }
+            }
+        }
+        crate::why_stuck::attach_why_stuck(runtime, row, object)?;
+    }
+    Ok(value)
+}
 
 /// Registry-only crew resolution for summary rows: the task's explicit crew
 /// when the registry still configures it, otherwise the configured default,

@@ -44,6 +44,54 @@ const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
 /// the truncated start hour. [`build_sparkline`] never emits more than this.
 const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
+/// Response header carrying the `?before=` value that resumes the listing
+/// just past this page. Absent once the window is exhausted. A bare array body
+/// cannot say whether a short page is the end or a capped scan, so the server
+/// states it.
+pub(super) const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
+
+struct AuditSummaryBundle {
+    total: i64,
+    sql_denied: i64,
+    v2_denials: i64,
+    failed_events: u64,
+    failure_incidents: u64,
+    failure_incidents_truncated: bool,
+    failure_incidents_by_class: BTreeMap<String, u64>,
+    failed_events_by_class: BTreeMap<String, u64>,
+    affected_runs_by_class: BTreeMap<String, u64>,
+    failure_categories: Value,
+    affected_run_count: u64,
+    job_run_lifecycle_failures: u64,
+    job_run_lifecycle_incidents: u64,
+    lifecycle_diagnostic_events: u64,
+    lifecycle_diagnostic_incidents: u64,
+    lifecycle_diagnostic_affected_run_count: u64,
+    failed_runs: i64,
+    active_long_runs: i64,
+    buckets: Vec<(String, i64)>,
+    failures_by_tool: Vec<Value>,
+    duration_by_tool: Vec<Value>,
+    failure_rate_by_tool: Vec<Value>,
+    /// Raw `status=failure` over callable tool calls (`run` + `run-mcp`).
+    /// Distinct from `failure_rate_by_tool`, which is unexpected-only with a
+    /// successful + unexpected-failed denominator and a sample-size floor.
+    tool_call_failure_rate: Value,
+    tool_call_failures_by_tool: Vec<Value>,
+    /// Same callable population as `tool_call_failures_by_tool`, split by the
+    /// server-derived session model (with a role-derived fallback).
+    tool_call_failures_by_model: Vec<Value>,
+    /// Canonical per-actor split [ORB-10888]. One agent appears once
+    /// regardless of the granularity its label was recorded at, and `kind`
+    /// says whether a row is a real agent at all.
+    actor_split: Vec<Value>,
+    /// Tool calls split by how each row's identity was established
+    /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
+    /// cannot render a self-reported count as an authenticated one; the
+    /// buckets are disjoint, so summing them is the combined denominator.
+    attribution_split: Vec<Value>,
+}
+
 pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
     let exact_ids = match q.ids.as_deref() {
         Some(raw) => match AuditListingExactIds::parse_comma_separated(raw) {
@@ -151,12 +199,6 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     }
 }
 
-/// Response header carrying the `?before=` value that resumes the listing
-/// just past this page. Absent once the window is exhausted. A bare array body
-/// cannot say whether a short page is the end or a capped scan, so the server
-/// states it.
-pub(super) const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
-
 pub(super) async fn audit_summary(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -202,48 +244,6 @@ pub(super) async fn audit_summary(
         obj.insert("denial_threshold".to_string(), json!(denial_threshold));
     }
     (served.age_header(), Json(body)).into_response()
-}
-
-struct AuditSummaryBundle {
-    total: i64,
-    sql_denied: i64,
-    v2_denials: i64,
-    failed_events: u64,
-    failure_incidents: u64,
-    failure_incidents_truncated: bool,
-    failure_incidents_by_class: BTreeMap<String, u64>,
-    failed_events_by_class: BTreeMap<String, u64>,
-    affected_runs_by_class: BTreeMap<String, u64>,
-    failure_categories: Value,
-    affected_run_count: u64,
-    job_run_lifecycle_failures: u64,
-    job_run_lifecycle_incidents: u64,
-    lifecycle_diagnostic_events: u64,
-    lifecycle_diagnostic_incidents: u64,
-    lifecycle_diagnostic_affected_run_count: u64,
-    failed_runs: i64,
-    active_long_runs: i64,
-    buckets: Vec<(String, i64)>,
-    failures_by_tool: Vec<Value>,
-    duration_by_tool: Vec<Value>,
-    failure_rate_by_tool: Vec<Value>,
-    /// Raw `status=failure` over callable tool calls (`run` + `run-mcp`).
-    /// Distinct from `failure_rate_by_tool`, which is unexpected-only with a
-    /// successful + unexpected-failed denominator and a sample-size floor.
-    tool_call_failure_rate: Value,
-    tool_call_failures_by_tool: Vec<Value>,
-    /// Same callable population as `tool_call_failures_by_tool`, split by the
-    /// server-derived session model (with a role-derived fallback).
-    tool_call_failures_by_model: Vec<Value>,
-    /// Canonical per-actor split [ORB-10888]. One agent appears once
-    /// regardless of the granularity its label was recorded at, and `kind`
-    /// says whether a row is a real agent at all.
-    actor_split: Vec<Value>,
-    /// Tool calls split by how each row's identity was established
-    /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
-    /// cannot render a self-reported count as an authenticated one; the
-    /// buckets are disjoint, so summing them is the combined denominator.
-    attribution_split: Vec<Value>,
 }
 
 /// Stable JSON fields for a computed bundle. `denial_threshold` is request

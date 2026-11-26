@@ -12,35 +12,6 @@ use super::super::{
 };
 use crate::state::Ws;
 
-pub(in crate::api) async fn list_diagnostics_metrics(
-    Ws(runtime): Ws,
-    Query(q): Query<DiagnosticsQuery>,
-) -> Response {
-    let range = match DiagnosticsRange::from_query(&q, true) {
-        Ok(range) => range,
-        Err(error) => return map_runtime_error(error),
-    };
-    let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    match super::super::blocking("diagnostics metrics", move || {
-        if limit == 0 {
-            return Ok(json!([]));
-        }
-        // Limit within this workspace before projecting invocation rows.
-        let records = runtime.workspace_invocation_records(InvocationQuery {
-            since: range.since,
-            until: Some(range.until),
-            limit,
-            ..InvocationQuery::default()
-        })?;
-        Ok(Value::Array(diagnostics_metrics_values(records)))
-    })
-    .await
-    {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
-    }
-}
-
 /// Time window selected by `month` or `since` for diagnostics queries.
 pub(super) struct DiagnosticsRange {
     pub(super) key: String,
@@ -92,6 +63,35 @@ impl DiagnosticsRange {
 
     pub(super) fn contains(&self, ts: DateTime<Utc>) -> bool {
         self.since.is_none_or(|since| ts >= since) && ts <= self.until
+    }
+}
+
+pub(in crate::api) async fn list_diagnostics_metrics(
+    Ws(runtime): Ws,
+    Query(q): Query<DiagnosticsQuery>,
+) -> Response {
+    let range = match DiagnosticsRange::from_query(&q, true) {
+        Ok(range) => range,
+        Err(error) => return map_runtime_error(error),
+    };
+    let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
+    match super::super::blocking("diagnostics metrics", move || {
+        if limit == 0 {
+            return Ok(json!([]));
+        }
+        // Limit within this workspace before projecting invocation rows.
+        let records = runtime.workspace_invocation_records(InvocationQuery {
+            since: range.since,
+            until: Some(range.until),
+            limit,
+            ..InvocationQuery::default()
+        })?;
+        Ok(Value::Array(diagnostics_metrics_values(records)))
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 

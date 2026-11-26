@@ -28,6 +28,44 @@ use crate::log_format::{
 const LOG_DEFAULT_LIMIT: usize = 50;
 const LOG_MAX_LIMIT: usize = 500;
 
+const LOG_STREAM_CHANNEL_DEPTH: usize = 64;
+
+/// Maximum number of concurrent `/api/log/stream` clients. Each accepted
+/// stream pins one native polling thread, so this cap bounds thread/FD/CPU
+/// usage even if the dashboard is bound beyond loopback.
+const LOG_STREAM_MAX_CONCURRENT: usize = 8;
+
+/// Set once shutdown begins: a shutdown signal (see
+/// [`crate::shutdown::shutdown_signal`]) or a lifecycle boundary, both acted on
+/// by `run_server`. Then every open (and future) `/api/log/stream` polling
+/// thread closes on its next tick instead of running until the client
+/// disconnects. An open stream that outlives the client is exactly the
+/// ownership gap that let a live restart hang past `orbit-web.service`'s
+/// `TimeoutStopUSec` until systemd's SIGKILL (ORB-11246): the stream is this
+/// handler's resource, so it must close itself, not wait to be told by a client
+/// that may not respond in time.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Most matching events one [`read_appended_log_events`] call renders.
+const LOG_STREAM_BATCH_EVENTS: usize = 256;
+
+/// Poll interval while log data is flowing; also the floor after a reset.
+const LOG_STREAM_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
+
+/// Most bytes one [`read_appended_log_events`] call scans, so a filter that
+/// matches nothing still yields to the disconnect/shutdown check regularly.
+const LOG_STREAM_BATCH_BYTES: u64 = 1 << 20;
+
+/// Ceiling of the idle backoff. An idle stream polls this often, so a new
+/// line reaches the client at most this late and a disconnect or shutdown is
+/// noticed within it.
+const LOG_STREAM_IDLE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(1);
+
+/// Longest record the stream reassembles. A longer one — or an unterminated
+/// run of bytes that never gets its newline — is dropped through its next
+/// newline, so partial-line storage never exceeds this.
+pub(super) const LOG_STREAM_MAX_RECORD_BYTES: usize = crate::log_format::MAX_LOG_RECORD_BYTES;
+
 /// Snapshot body for `GET /api/log`. `cursor` binds complete-record offsets
 /// to each scanned file's generation, so `/api/log/stream?cursor=` resumes
 /// without skipping a replacement file. Numeric offsets remain for older clients.
@@ -38,14 +76,6 @@ struct LogSnapshot {
     agent_offset: u64,
     cursor: String,
 }
-
-const LOG_STREAM_CHANNEL_DEPTH: usize = 64;
-/// Poll interval while log data is flowing; also the floor after a reset.
-const LOG_STREAM_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
-/// Ceiling of the idle backoff. An idle stream polls this often, so a new
-/// line reaches the client at most this late and a disconnect or shutdown is
-/// noticed within it.
-const LOG_STREAM_IDLE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(1);
 
 /// Idle backoff for the stream's polling thread: fast while the log advances,
 /// doubling toward [`LOG_STREAM_IDLE_POLL_INTERVAL`] while nothing new is
@@ -72,11 +102,6 @@ impl PollBackoff {
         self.delay
     }
 }
-/// Maximum number of concurrent `/api/log/stream` clients. Each accepted
-/// stream pins one native polling thread, so this cap bounds thread/FD/CPU
-/// usage even if the dashboard is bound beyond loopback.
-const LOG_STREAM_MAX_CONCURRENT: usize = 8;
-
 /// Connection gate for log SSE streams.
 ///
 /// Wraps a `tokio::sync::Semaphore` so the handler can `try_acquire` a permit
@@ -99,21 +124,118 @@ impl LogStreamGate {
     }
 }
 
+/// A byte position and, for rotation-safe clients, the file it belongs to.
+#[derive(Clone, Debug)]
+struct FeedCursor {
+    offset: u64,
+    generation: Option<String>,
+}
+
+struct ReceiverSseStream {
+    rx: mpsc::Receiver<String>,
+}
+
+impl FeedCursor {
+    fn legacy(offset: u64) -> Self {
+        Self {
+            offset,
+            generation: None,
+        }
+    }
+
+    fn at_end(path: &std::path::Path) -> Self {
+        // Capture identity and extent together, including before the first poll.
+        std::fs::metadata(path)
+            .ok()
+            .and_then(|metadata| {
+                Some(Self {
+                    offset: metadata.len(),
+                    generation: Some(log_file_generation(&metadata).ok()?),
+                })
+            })
+            .unwrap_or(Self {
+                offset: 0,
+                generation: Some("missing".into()),
+            })
+    }
+
+    fn encode(&self) -> String {
+        match &self.generation {
+            Some(generation) => format!("{}@{generation}", self.offset),
+            None => self.offset.to_string(),
+        }
+    }
+}
+
+impl Stream for ReceiverSseStream {
+    type Item = Result<String, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx).map(|item| item.map(Ok))
+    }
+}
+
+/// Bytes of the record being read, carried across polls until its newline.
+#[derive(Debug, Default)]
+pub(super) struct LogLineBuffer {
+    pub(super) partial: Vec<u8>,
+    /// Set once the current record exceeded [`LOG_STREAM_MAX_RECORD_BYTES`];
+    /// its remaining bytes are skipped up to and including the next newline.
+    pub(super) discarding: bool,
+    /// Cursor after the last complete record. Companion-feed event IDs must
+    /// not advance past an unfinished record that a reconnect cannot rebuild.
+    complete_offset: u64,
+    identity: Option<String>,
+}
+
+impl LogLineBuffer {
+    fn clear(&mut self) {
+        self.partial.clear();
+        self.discarding = false;
+        self.complete_offset = 0;
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        if self.discarding {
+            return;
+        }
+        if self.partial.len() + bytes.len() > LOG_STREAM_MAX_RECORD_BYTES {
+            // Release the allocation, not just the length.
+            self.partial = Vec::new();
+            self.discarding = true;
+            return;
+        }
+        self.partial.extend_from_slice(bytes);
+    }
+
+    /// End the current record at its newline; `None` when it was discarded.
+    fn finish(&mut self) -> Option<String> {
+        if std::mem::take(&mut self.discarding) {
+            tracing::warn!(
+                limit = LOG_STREAM_MAX_RECORD_BYTES,
+                "log stream skipped an oversized record"
+            );
+            return None;
+        }
+        let line = String::from_utf8_lossy(&self.partial).into_owned();
+        self.partial.clear();
+        Some(line)
+    }
+}
+
+/// One bounded read of the log: the rendered matches, and whether unread
+/// bytes remain past `offset` so the caller should read again without waiting.
+#[derive(Debug)]
+pub(super) struct AppendedLogBatch {
+    pub(super) events: Vec<(RenderedLogEvent, u64)>,
+    pub(super) more: bool,
+    pub(super) cursor: u64,
+}
+
 fn global_log_stream_gate() -> &'static LogStreamGate {
     static GATE: OnceLock<LogStreamGate> = OnceLock::new();
     GATE.get_or_init(|| LogStreamGate::new(LOG_STREAM_MAX_CONCURRENT))
 }
-
-/// Set once shutdown begins: a shutdown signal (see
-/// [`crate::shutdown::shutdown_signal`]) or a lifecycle boundary, both acted on
-/// by `run_server`. Then every open (and future) `/api/log/stream` polling
-/// thread closes on its next tick instead of running until the client
-/// disconnects. An open stream that outlives the client is exactly the
-/// ownership gap that let a live restart hang past `orbit-web.service`'s
-/// `TimeoutStopUSec` until systemd's SIGKILL (ORB-11246): the stream is this
-/// handler's resource, so it must close itself, not wait to be told by a client
-/// that may not respond in time.
-static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Tell every open (and future) log-stream polling thread to close now.
 pub(super) fn request_shutdown() {
@@ -270,50 +392,11 @@ fn read_log_snapshot_from_path(
         .map(|event| render_log_event_for_web(event, home))
         .collect();
     Ok(LogSnapshot {
-        cursor,
         events,
         offset: tail.cursor,
         agent_offset,
+        cursor,
     })
-}
-
-/// A byte position and, for rotation-safe clients, the file it belongs to.
-#[derive(Clone, Debug)]
-struct FeedCursor {
-    offset: u64,
-    generation: Option<String>,
-}
-
-impl FeedCursor {
-    fn legacy(offset: u64) -> Self {
-        Self {
-            offset,
-            generation: None,
-        }
-    }
-
-    fn at_end(path: &std::path::Path) -> Self {
-        // Capture identity and extent together, including before the first poll.
-        std::fs::metadata(path)
-            .ok()
-            .and_then(|metadata| {
-                Some(Self {
-                    offset: metadata.len(),
-                    generation: Some(log_file_generation(&metadata).ok()?),
-                })
-            })
-            .unwrap_or(Self {
-                offset: 0,
-                generation: Some("missing".into()),
-            })
-    }
-
-    fn encode(&self) -> String {
-        match &self.generation {
-            Some(generation) => format!("{}@{generation}", self.offset),
-            None => self.offset.to_string(),
-        }
-    }
 }
 
 /// IDs are opaque to consumers. Accept legacy byte-only IDs deliberately,
@@ -496,73 +579,6 @@ fn spawn_log_sse_frames(
     rx
 }
 
-/// Most matching events one [`read_appended_log_events`] call renders.
-const LOG_STREAM_BATCH_EVENTS: usize = 256;
-/// Most bytes one [`read_appended_log_events`] call scans, so a filter that
-/// matches nothing still yields to the disconnect/shutdown check regularly.
-const LOG_STREAM_BATCH_BYTES: u64 = 1 << 20;
-/// Longest record the stream reassembles. A longer one — or an unterminated
-/// run of bytes that never gets its newline — is dropped through its next
-/// newline, so partial-line storage never exceeds this.
-pub(super) const LOG_STREAM_MAX_RECORD_BYTES: usize = crate::log_format::MAX_LOG_RECORD_BYTES;
-
-/// Bytes of the record being read, carried across polls until its newline.
-#[derive(Debug, Default)]
-pub(super) struct LogLineBuffer {
-    pub(super) partial: Vec<u8>,
-    /// Set once the current record exceeded [`LOG_STREAM_MAX_RECORD_BYTES`];
-    /// its remaining bytes are skipped up to and including the next newline.
-    pub(super) discarding: bool,
-    /// Cursor after the last complete record. Companion-feed event IDs must
-    /// not advance past an unfinished record that a reconnect cannot rebuild.
-    complete_offset: u64,
-    identity: Option<String>,
-}
-
-impl LogLineBuffer {
-    fn clear(&mut self) {
-        self.partial.clear();
-        self.discarding = false;
-        self.complete_offset = 0;
-    }
-
-    fn push(&mut self, bytes: &[u8]) {
-        if self.discarding {
-            return;
-        }
-        if self.partial.len() + bytes.len() > LOG_STREAM_MAX_RECORD_BYTES {
-            // Release the allocation, not just the length.
-            self.partial = Vec::new();
-            self.discarding = true;
-            return;
-        }
-        self.partial.extend_from_slice(bytes);
-    }
-
-    /// End the current record at its newline; `None` when it was discarded.
-    fn finish(&mut self) -> Option<String> {
-        if std::mem::take(&mut self.discarding) {
-            tracing::warn!(
-                limit = LOG_STREAM_MAX_RECORD_BYTES,
-                "log stream skipped an oversized record"
-            );
-            return None;
-        }
-        let line = String::from_utf8_lossy(&self.partial).into_owned();
-        self.partial.clear();
-        Some(line)
-    }
-}
-
-/// One bounded read of the log: the rendered matches, and whether unread
-/// bytes remain past `offset` so the caller should read again without waiting.
-#[derive(Debug)]
-pub(super) struct AppendedLogBatch {
-    pub(super) events: Vec<(RenderedLogEvent, u64)>,
-    pub(super) more: bool,
-    pub(super) cursor: u64,
-}
-
 /// Read complete lines appended since `offset`, keeping a trailing partial
 /// line in `lines` until its newline arrives.
 ///
@@ -643,16 +659,4 @@ fn format_feed_sse_frame(
 ) -> Result<String, serde_json::Error> {
     let cursor = format_stream_cursor(operational, agent);
     serde_json::to_string(event).map(|json| format!("id: {cursor}\ndata: {json}\n\n"))
-}
-
-struct ReceiverSseStream {
-    rx: mpsc::Receiver<String>,
-}
-
-impl Stream for ReceiverSseStream {
-    type Item = Result<String, Infallible>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx.poll_recv(cx).map(|item| item.map(Ok))
-    }
 }

@@ -27,6 +27,80 @@ enum AdmittedHost {
     Trusted { name: String, login: String },
 }
 
+/// One request through either gate after Host admission: records what a
+/// trusted-host request did on [`RemoteAccess`] (Fleet › Remote access).
+/// Loopback requests, and a request the router dispatches to itself
+/// ([`AlreadyRecorded`]), are never recorded.
+struct Gate<'a> {
+    host: AdmittedHost,
+    access: &'a Arc<RemoteAccess>,
+    record: bool,
+}
+
+/// A trusted-path refusal worth recording: its reason and, for an unlisted
+/// login, the login attempted. `None` for a refusal off that path.
+type Refusal = Option<(RefusalReason, Option<String>)>;
+
+impl<'a> Gate<'a> {
+    /// Admit the Host, or record a trusted-path refusal and return `None`
+    /// (the caller answers 403).
+    fn open(request: &Request<Body>, access: &'a Arc<RemoteAccess>) -> Option<Self> {
+        let record = request.extensions().get::<AlreadyRecorded>().is_none();
+        match admitted_host(request.headers(), access.trusted_hosts()) {
+            Ok(host) => {
+                let record = record && matches!(host, AdmittedHost::Trusted { .. });
+                Some(Self {
+                    host,
+                    access,
+                    record,
+                })
+            }
+            Err(refusal) => {
+                if let Some((reason, login)) = refusal
+                    && record
+                {
+                    access.record_refused(reason, login.as_deref());
+                }
+                None
+            }
+        }
+    }
+
+    fn refuse(&self, reason: RefusalReason) -> Response {
+        if self.record {
+            self.access.record_refused(reason, None);
+        }
+        forbidden_cross_origin()
+    }
+
+    /// Run the request; count it, and hold an open event stream's count
+    /// until its body ends.
+    async fn admit(self, request: Request<Body>, next: Next) -> Response {
+        let AdmittedHost::Trusted { login, .. } = &self.host else {
+            return next.run(request).await;
+        };
+        if !self.record {
+            return next.run(request).await;
+        }
+        let device = forwarded_for(request.headers());
+        self.access.record_admitted(device, login);
+        let response = next.run(request).await;
+        let stream = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        if !stream {
+            return response;
+        }
+        if let Some(guard) = self.access.open_stream(device, login) {
+            crate::lease::listener::retain_response_allowance(response, guard)
+        } else {
+            response
+        }
+    }
+}
+
 /// Browser CSRF and DNS-rebinding mitigation on the loopback path, and the
 /// identity check on the trusted-host path.
 ///
@@ -130,73 +204,6 @@ fn fetch_site_allowed(headers: &HeaderMap) -> bool {
     })
 }
 
-/// One request through either gate after Host admission: records what a
-/// trusted-host request did on [`RemoteAccess`] (Fleet › Remote access).
-/// Loopback requests, and a request the router dispatches to itself
-/// ([`AlreadyRecorded`]), are never recorded.
-struct Gate<'a> {
-    host: AdmittedHost,
-    access: &'a Arc<RemoteAccess>,
-    record: bool,
-}
-
-impl<'a> Gate<'a> {
-    /// Admit the Host, or record a trusted-path refusal and return `None`
-    /// (the caller answers 403).
-    fn open(request: &Request<Body>, access: &'a Arc<RemoteAccess>) -> Option<Self> {
-        let record = request.extensions().get::<AlreadyRecorded>().is_none();
-        match admitted_host(request.headers(), access.trusted_hosts()) {
-            Ok(host) => Some(Self {
-                record: record && matches!(host, AdmittedHost::Trusted { .. }),
-                host,
-                access,
-            }),
-            Err(refusal) => {
-                if let Some((reason, login)) = refusal
-                    && record
-                {
-                    access.record_refused(reason, login.as_deref());
-                }
-                None
-            }
-        }
-    }
-
-    fn refuse(&self, reason: RefusalReason) -> Response {
-        if self.record {
-            self.access.record_refused(reason, None);
-        }
-        forbidden_cross_origin()
-    }
-
-    /// Run the request; count it, and hold an open event stream's count
-    /// until its body ends.
-    async fn admit(self, request: Request<Body>, next: Next) -> Response {
-        let AdmittedHost::Trusted { login, .. } = &self.host else {
-            return next.run(request).await;
-        };
-        if !self.record {
-            return next.run(request).await;
-        }
-        let device = forwarded_for(request.headers());
-        self.access.record_admitted(device, login);
-        let response = next.run(request).await;
-        let stream = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("text/event-stream"));
-        if !stream {
-            return response;
-        }
-        if let Some(guard) = self.access.open_stream(device, login) {
-            crate::lease::listener::retain_response_allowance(response, guard)
-        } else {
-            response
-        }
-    }
-}
-
 /// The tailnet IP Serve forwarded for: the last `X-Forwarded-For` entry,
 /// which Serve appends. Anything unparsable counts as an unknown device.
 fn forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
@@ -220,10 +227,6 @@ fn forbidden_cross_origin() -> Response {
     )
         .into_response()
 }
-
-/// A trusted-path refusal worth recording: its reason and, for an unlisted
-/// login, the login attempted. `None` for a refusal off that path.
-type Refusal = Option<(RefusalReason, Option<String>)>;
 
 /// Gate 1 for the request's `Host`: exactly one header, naming an approved
 /// loopback authority, or a trusted host on its default HTTPS port with

@@ -12,6 +12,29 @@ use super::super::{OptionalJson, bad_request, blocking, map_runtime_error, valid
 use super::locate::{RunLookupFailure, requested_workspace, with_run};
 use orbit_core::app::run::{Command, DashboardReplay, exec};
 
+#[derive(serde::Deserialize, Default)]
+pub(in crate::api) struct CancelRunBody {
+    #[serde(default)]
+    reason: Option<String>,
+    /// Stop a drain's in-flight leaves instead of waiting for them.
+    #[serde(default)]
+    force: bool,
+    /// Keep a cancelled task leaf blocked instead of returning it to backlog.
+    #[serde(default)]
+    block: bool,
+    /// Cancel only while the run is still queued; one that has started is
+    /// refused with 409 and left running.
+    #[serde(default)]
+    queued_only: bool,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(in crate::api) struct ReplayBody {
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
 /// `GET /api/runs/:id`. The run is looked up in the requested workspace and
 /// then under every workspace id this host's store records it, so a link
 /// naming the wrong workspace, or a run recorded under a workspace since
@@ -41,22 +64,6 @@ pub(in crate::api) async fn get_run(
         Ok(Err(RunLookupFailure::Error(error))) => map_runtime_error(*error),
         Err(response) => *response,
     }
-}
-
-#[derive(serde::Deserialize, Default)]
-pub(in crate::api) struct CancelRunBody {
-    #[serde(default)]
-    reason: Option<String>,
-    /// Stop a drain's in-flight leaves instead of waiting for them.
-    #[serde(default)]
-    force: bool,
-    /// Keep a cancelled task leaf blocked instead of returning it to backlog.
-    #[serde(default)]
-    block: bool,
-    /// Cancel only while the run is still queued; one that has started is
-    /// refused with 409 and left running.
-    #[serde(default)]
-    queued_only: bool,
 }
 
 /// `POST /api/runs/:id/cancel`. Acts on the registered runtime that holds the
@@ -105,13 +112,6 @@ pub(in crate::api) async fn cancel_run_action(
         Ok(Err(failure)) => failure.into_response(),
         Err(response) => *response,
     }
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub(in crate::api) struct ReplayBody {
-    #[serde(default)]
-    claim_token: Option<String>,
 }
 
 /// `POST /api/runs/:id/replay`. The replay is submitted to the registered

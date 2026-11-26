@@ -56,6 +56,13 @@ impl Default for DenialDiagnostics {
     }
 }
 
+#[derive(Debug, Default)]
+struct CauseAggregate {
+    count: i64,
+    latest: Option<DateTime<Utc>>,
+    targets: BTreeMap<String, i64>,
+}
+
 /// Reads SQLite v2 audit rows and returns FsCallDenied / ToolDenied rows
 /// matching the supplied filters.
 pub(super) fn scan_v2_loop_denials(
@@ -124,15 +131,16 @@ pub(super) fn scan_v2_loop_denials(
             {
                 continue;
             }
+            let diagnostics = v2_denial_diagnostics(kind, &profile, &target);
             rows.push(DenialRow {
                 kind,
-                diagnostics: v2_denial_diagnostics(kind, &profile, &target),
                 profile,
                 target,
                 job_run_id: Some(event.run_id).filter(|value| !value.is_empty()),
                 execution_id: None,
                 agent: event.agent_identity,
                 timestamp: Some(event.ts),
+                diagnostics,
             });
         }
     }
@@ -614,13 +622,6 @@ fn rows_to_value(rows: &[(String, i64)], key_label: &str) -> Value {
             .map(|(name, count)| json!({ key_label: name, "count": count }))
             .collect(),
     )
-}
-
-#[derive(Debug, Default)]
-struct CauseAggregate {
-    count: i64,
-    latest: Option<DateTime<Utc>>,
-    targets: BTreeMap<String, i64>,
 }
 
 fn top_causes_to_value(rows: &[&DenialRow]) -> Value {

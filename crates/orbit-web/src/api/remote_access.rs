@@ -29,6 +29,16 @@ const TAILSCALE_OUTPUT_LIMIT: usize = 256 * 1024;
 /// New `tailscale whois` lookups per request; the rest wait for a later poll.
 const WHOIS_PER_REQUEST: usize = 8;
 
+/// One Serve web handler: `https://<name>:<port><path>` proxied to `proxy`.
+struct Handler {
+    name: String,
+    port: u16,
+    path: String,
+    proxy: String,
+    funnel: bool,
+    to_dashboard: bool,
+}
+
 pub(super) async fn remote_access(State(state): State<DashboardState>) -> Response {
     match blocking("remote access", move || Ok(remote_access_json(&state))).await {
         Ok(body) => Json(body).into_response(),
@@ -187,16 +197,6 @@ fn device_name(access: &RemoteAccess, env: &Env, ip: IpAddr, budget: &mut usize)
         .map(ToOwned::to_owned)
 }
 
-/// One Serve web handler: `https://<name>:<port><path>` proxied to `proxy`.
-struct Handler {
-    name: String,
-    port: u16,
-    path: String,
-    proxy: String,
-    funnel: bool,
-    to_dashboard: bool,
-}
-
 /// Every web handler in a `tailscale serve status --json` config, including
 /// foreground sessions.
 fn handlers(config: &Value, dashboard: Option<SocketAddr>, out: &mut Vec<Handler>) {
@@ -209,13 +209,14 @@ fn handlers(config: &Value, dashboard: Option<SocketAddr>, out: &mut Vec<Handler
             let funnel = config["AllowFunnel"][host_port].as_bool() == Some(true);
             for (path, handler) in site["Handlers"].as_object().into_iter().flatten() {
                 let proxy = handler["Proxy"].as_str().unwrap_or_default().to_string();
+                let to_dashboard = dashboard.is_some_and(|dashboard| proxies_to(&proxy, dashboard));
                 out.push(Handler {
                     name: name.to_ascii_lowercase(),
                     port,
                     path: path.clone(),
-                    to_dashboard: dashboard.is_some_and(|dashboard| proxies_to(&proxy, dashboard)),
                     proxy,
                     funnel,
+                    to_dashboard,
                 });
             }
         }

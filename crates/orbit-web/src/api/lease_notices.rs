@@ -38,15 +38,16 @@ const EMPTY_PAGE_WAIT: Duration = Duration::from_secs(1);
 /// bounded by its own limits instead.
 const DASHBOARD_STREAMS: usize = 8;
 
-pub(super) fn request_shutdown() {
-    SHUTTING_DOWN.store(true, Ordering::Relaxed);
-}
-
 #[derive(Default, Deserialize)]
 pub(super) struct LeaseNoticeQuery {
     after: Option<u64>,
     lease_id: Option<String>,
     limit: Option<u32>,
+}
+
+struct LeaseNoticeFrames {
+    first: Option<Value>,
+    pages: LeaseNoticePages,
 }
 
 impl LeaseNoticeQuery {
@@ -60,6 +61,24 @@ impl LeaseNoticeQuery {
         }
         input
     }
+}
+
+impl Stream for LeaseNoticeFrames {
+    type Item = Result<String, Infallible>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(page) = self.first.take() {
+            return Poll::Ready(Some(Ok(notice_page_frames(&page))));
+        }
+        // An error mid-stream ends it; the client resumes from its last id.
+        self.pages.poll_recv(cx).map(|page| match page {
+            Some(Ok(page)) => Some(Ok(notice_page_frames(&page))),
+            Some(Err(_)) | None => None,
+        })
+    }
+}
+
+pub(super) fn request_shutdown() {
+    SHUTTING_DOWN.store(true, Ordering::Relaxed);
 }
 
 pub(super) async fn get_lease_notices(
@@ -240,23 +259,4 @@ fn notice_page_frames(page: &Value) -> String {
         .iter()
         .map(|notice| format!("id: {}\ndata: {notice}\n\n", notice["seq"]))
         .collect()
-}
-
-struct LeaseNoticeFrames {
-    first: Option<Value>,
-    pages: LeaseNoticePages,
-}
-
-impl Stream for LeaseNoticeFrames {
-    type Item = Result<String, Infallible>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Some(page) = self.first.take() {
-            return Poll::Ready(Some(Ok(notice_page_frames(&page))));
-        }
-        // An error mid-stream ends it; the client resumes from its last id.
-        self.pages.poll_recv(cx).map(|page| match page {
-            Some(Ok(page)) => Some(Ok(notice_page_frames(&page))),
-            Some(Err(_)) | None => None,
-        })
-    }
 }
