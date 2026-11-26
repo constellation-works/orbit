@@ -413,7 +413,7 @@ impl OrbitRuntime {
     /// unreviewed one waits. A claimed worker completes nothing itself; its
     /// owner's completion is the one held.
     pub(crate) fn ensure_mutation_proposals_applied(&self, task: &Task) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Ok(());
         }
         let unapplied = self.unapplied_mutation_proposals(&task.id)?;

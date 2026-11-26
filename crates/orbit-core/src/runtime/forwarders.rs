@@ -59,8 +59,11 @@ impl OrbitRuntime {
         self.kernel.review_baseline_commands()
     }
 
+    /// The claim this process is bound to, for the engine's `RuntimeHost`
+    /// until the engine-host phase narrows that trait. Code in this crate asks
+    /// the role, the task access or the run's claim owner.
     pub fn worker_invocation(&self) -> Option<&WorkerInvocation> {
-        self.kernel.worker_invocation()
+        self.kernel.run().claim_owner().map(|owner| owner.binding())
     }
 }
 

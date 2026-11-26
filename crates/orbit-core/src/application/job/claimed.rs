@@ -75,7 +75,7 @@ impl OrbitRuntime {
     /// configuration and warns, since that copy may have drifted from the
     /// owner's. Every other run applies this host's configuration.
     pub(crate) fn host_validation_gates(&self) -> HostValidationGates {
-        if self.worker_invocation().is_none() {
+        if !self.role().is_worker() {
             return HostValidationGates::local(self.local_validation_gates());
         }
         let owner = self.current_claimed_leaf().map(|leaf| leaf.owner_gates());
@@ -143,7 +143,7 @@ impl OrbitRuntime {
         run_id: &str,
         admission: LocalPullAdmission,
     ) -> Result<ClaimedLeaf, OrbitError> {
-        let binding = self.worker_invocation().cloned().ok_or_else(|| {
+        let binding = self.claim_binding().ok_or_else(|| {
             refused(
                 "claimed leaves require the internal handoff execution adapter; generic pipeline \
                  execution is unavailable without a trusted worker binding",
@@ -199,9 +199,16 @@ impl OrbitRuntime {
         })
     }
 
+    /// The claim this process is bound to, when it is a claimed worker.
+    fn claim_binding(&self) -> Option<WorkerInvocation> {
+        self.run()
+            .claim_owner()
+            .map(|owner| owner.binding().clone())
+    }
+
     /// The claimed leaf this process is executing, resolved from its binding.
     pub(crate) fn current_claimed_leaf(&self) -> Result<ClaimedLeaf, OrbitError> {
-        let binding = self.worker_invocation().cloned().ok_or_else(|| {
+        let binding = self.claim_binding().ok_or_else(|| {
             refused("claimed execution requires a trusted worker binding; none resolved")
         })?;
         let run_id = binding.bound_run_id.clone();
@@ -223,10 +230,7 @@ impl OrbitRuntime {
     /// Each refusal leads with a reason token: `not_claimed_leaf`,
     /// `claim_unbound` or `claim_not_live`.
     pub(crate) fn live_claimed_leaf(&self, run_id: &str) -> Result<ClaimedLeaf, OrbitError> {
-        if self
-            .worker_invocation()
-            .is_none_or(|binding| binding.bound_run_id != run_id)
-        {
+        if self.role().claimed_run() != Some(run_id) {
             return Err(refused(
                 "not_claimed_leaf: the run is not the claimed leaf bound to this task",
             ));

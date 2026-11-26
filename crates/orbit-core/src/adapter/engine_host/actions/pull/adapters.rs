@@ -320,8 +320,9 @@ impl PullLauncher for LeafPullLauncher<'_> {
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {
         let bound = self.bound_runtime(admission)?;
         let run_id = bound
-            .worker_invocation()
-            .map(|binding| binding.bound_run_id.clone())
+            .role()
+            .claimed_run()
+            .map(str::to_owned)
             .ok_or_else(|| refused("bound runtime lost its worker invocation"))?;
         bound.spawn_claimed_leaf_worker(&run_id)
     }

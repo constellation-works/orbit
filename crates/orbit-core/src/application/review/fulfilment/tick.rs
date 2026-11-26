@@ -47,7 +47,7 @@ impl OrbitRuntime {
 
     /// Why this process is not the owner that fulfils its tasks' evidence.
     pub(super) fn fulfilment_owner_refusal(&self) -> Option<(FulfilmentRefusal, String)> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Some((
                 FulfilmentRefusal::NotOwner,
                 "a claimed worker never fulfils evidence; its owner does".to_string(),

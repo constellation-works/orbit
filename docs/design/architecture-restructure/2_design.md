@@ -304,7 +304,7 @@ Where today's 32 modules go. This mapping is by module name; the task that does 
 - **Direction inside the crate.** `base` names none of the others, `stored` names only `base`, `host` only those two, and `run` any of them. `scripts/check-dependency-direction.sh` gets the four as one more declared chain. A crate for each layer would make the same rule a crate edge, which is the stronger gate (STD-02 §R6). It is not proposed: Daniel's direction keeps the runtime in one crate, and the script already holds the same kind of chain inside `orbit-core`.
 - **How it gets there.** `RuntimeKernel` stays while the work is in flight, as a struct that holds the four layers, so the 1,075 places that take `&OrbitRuntime` keep compiling. First the fields are carved into the four structs and the files moved, with no caller changed. Then the role checks are folded into `Role` and the task access. Then, as each subject becomes an app (§3), its flows take the lowest layer they need. When nothing takes the whole kernel, it and the wrapper are deleted, and layers start being built on demand.
 
-**Status.** The four layer structs exist [ORB-28387], laid out as `base/`, `stored/`, `host/` and `run/` under `orbit-runtime/src` [ORB-28388], [ORB-28389]. The role is resolved once in `Base` [ORB-28390] and a worker's task reads are chosen when `Stored` is built [ORB-28391]. Not yet done: the coordination writes and remaining worker-role checks [ORB-28392], [ORB-28393] and the nine top-level modules still outside the layers (sorting them is in review [ORB-28394]). `ApplicationPort`, its static, the kernel's `application` field and `from_kernel_ref` are deleted [ORB-28395]: each of the 20 methods' callers moved up into `orbit-core`, was handed the value, or read the kernel's own task access. The wrapper and on-demand layers wait for [ORB-28455].
+**Status.** The four layer structs exist [ORB-28387], laid out as `base/`, `stored/`, `host/` and `run/` under `orbit-runtime/src` [ORB-28388], [ORB-28389]. The role is resolved once in `Base` [ORB-28390] and a worker's task reads are chosen when `Stored` is built [ORB-28391]. The remaining worker-role checks are folded [ORB-28393]: outside the runtime a caller asks `Role` for a fact, the task access whether the owner holds its task records, or `Run::claim_owner()` to send its owner a tool call (`run/transport.rs`, [4_decisions.md](4_decisions.md#a-workers-routed-tool-calls-get-their-own-path-in-run)). The engine's 18 reads through `RuntimeHost::worker_invocation`, and the one implementation that serves them, wait for the engine-host phase. Not yet done: the coordination writes [ORB-28392] and the nine top-level modules still outside the layers (sorting them is in review [ORB-28394]). `ApplicationPort`, its static, the kernel's `application` field and `from_kernel_ref` are deleted [ORB-28395]: each of the 20 methods' callers moved up into `orbit-core`, was handed the value, or read the kernel's own task access. The wrapper and on-demand layers wait for [ORB-28455].
 
 ## 5. Calls between apps
 
@@ -412,7 +412,7 @@ Each rule gets the strongest mechanism available (STD-02 §R6).
 | Only stores that own a database use SQLite | `rusqlite` in four manifests | crate edge |
 | A flow reaches its layer and the ones below, nothing above | a layer struct holds only the layers below it; there is no `Deref` between them | visibility |
 | The runtime's layers follow one order | `base`, `stored`, `host`, `run` as a declared chain | `check-dependency-direction.sh` |
-| The process's role is asked once | the worker invocation and the coordination owner are private to `base/role.rs` and `stored/task_access.rs` | visibility |
+| The process's role is asked once | the worker invocation and the coordination owner are private to `orbit-runtime`: `base/role.rs`, `stored/task_access.rs` and `run/transport.rs`, which hands a worker's binding to the code that sends its owner a call | visibility |
 | The store is opened once | `Store::open` disallowed outside composition | `clippy.toml` |
 | The environment is read once | `std::env` readers disallowed outside `Env::capture` | `clippy.toml` |
 | No function returns the environment from a static | `composition_env`, `captured_env` and `CAPTURED_ENV` do not exist | architecture ratchet (`env_global_accessor_calls`, `env_process_env_method_calls`) |
@@ -430,7 +430,7 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 | 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing | done |
 | 1 | Environment | ORB-28365 to ORB-28371 | ORB-28365 to ORB-28370 wait for the ratchet check (ORB-28362); ORB-28367 to ORB-28370 also wait for ORB-28365 and ORB-28366; ORB-28371 waits for ORB-28367 to ORB-28370 | done |
 | 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except ORB-28373 (no dependencies) and ORB-28384 (waits for ORB-28373 only) | done |
-| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 | ORB-28387 to ORB-28391 and ORB-28395 done; ORB-28394 in review; ORB-28392 and ORB-28393 backlog |
+| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 | ORB-28387 to ORB-28391, ORB-28393 and ORB-28395 done; ORB-28394 in review; ORB-28392 backlog |
 | 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check, the app table and ORB-28365 (ORB-28416 waits for it) | ORB-28396 to ORB-28399 done; ORB-28400 in progress; the rest backlog |
 | 5 | Inside core | ORB-28418 to ORB-28454 | phases 2, 3 and 4 complete | proposed |
 | 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except ORB-28408 (no dependencies) | proposed |
@@ -464,7 +464,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - **Two idioms for a long time.** There are about 1,000 methods to move. Until the last subject is converted, a reader meets both `runtime.add_task(…)` and `app::task::add(rt, …)`. The ratchets make the direction visible; they do not shorten it.
 - **A layer bounds mechanisms, not records.** A flow that holds `&Stored` cannot start a process or reach the forge, but it can read every record. A narrow handle for each app would bound that too; it was not chosen (decision 3), and it can be added later for one app.
 - **Nothing stops a flow from taking a higher layer than it needs.** `rt: &Run` on a read compiles. The lowest layer is a review rule, and the count of flows at each layer is reported so a drift shows.
-- **Folding the role checks is not a move.** About 194 places ask the role today. Replacing them with one choice made when `Stored` is built changes code paths that drains depend on, and whether a worker's writes fit the same task access as its reads is not examined (`route_worker_tool` routes whole tool calls, at 9 places).
+- **Folding the role checks was not a move.** About 194 places asked the role. Replacing them with one choice made when `Stored` is built changed code paths that drains depend on. A worker's writes did not fit the task access its reads use, so routed tool calls keep their own path in `Run` and each site that writes keeps a worker branch ([4_decisions.md](4_decisions.md#a-workers-routed-tool-calls-get-their-own-path-in-run)). The engine's reads through `RuntimeHost` are not folded yet.
 - **The four layers are read from field names and a name-based call graph.** Until the role checks are folded, calls do not sort into the four: 615 functions reach a worker or drain field and the stores but no host mechanism. The design expects them to fall to `Stored` afterwards; that is not measured. The file mapping in §4 is by module name.
 - **Pure decisions are not enforced.** The shape load, decide, effect, commit is asked of each flow, and a conversion that is only a move will not produce it. Reaching STD-02 §R41 is later work per subject.
 - **The chokepoint's structure is designed from one reading (§3).** Not checked: every exhaustive match on `OrbitError` that a new variant touches; which dashboard routes write a denied row today when admission fails before a workspace is opened; whether deriving a `Core` for each request costs more than the runtime clone the dashboard already makes in `WsCore::over`.
@@ -497,8 +497,8 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28389] — laid out its host and run layers.
 - [ORB-28390] — resolved the process role once in `Base`.
 - [ORB-28391] — chose a worker's task reads when `Stored` is built.
-- [ORB-28392] — will choose coordination writes from the role.
-- [ORB-28393] — will fold the remaining worker-role checks.
+- [ORB-28392] — chose coordination writes from the role.
+- [ORB-28393] — folded the remaining worker-role checks and gave routed tool calls their own path in `Run`.
 - [ORB-28394] — is sorting the runtime modules named for a subject.
 - [ORB-28395] — emptied and deleted the kernel's `ApplicationPort`.
 - [ORB-28396] — added `Core`, `exec` and the friction app.

@@ -168,7 +168,7 @@ pub(crate) trait PipelineRunHost: Send + Sync {
 
 impl PipelineRunHost for OrbitRuntime {
     fn worker_bound(&self) -> bool {
-        self.worker_invocation().is_some()
+        self.role().is_worker()
     }
     fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
         crate::runtime::RuntimeKernel::register_worker_process(self, pid)

@@ -92,7 +92,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
-        crate::runtime::RuntimeKernel::worker_invocation(self).cloned()
+        OrbitRuntime::worker_invocation(self).cloned()
     }
     fn record_direct_landing_intent(
         &self,

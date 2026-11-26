@@ -59,7 +59,7 @@ pub(super) fn persist_final_recovery_evidence(
             "the run has no undecided final recovery for this task",
         ));
     }
-    if runtime.worker_invocation().is_some() {
+    if runtime.role().is_worker() {
         let leaf = runtime.claimed_leaf_in_final_recovery(run_id)?;
         if leaf.claim.task_id != task_id {
             return Err(refused("the task is not the claimed task"));
@@ -120,11 +120,11 @@ pub(super) fn persist_final_recovery_evidence(
         admit_agent_artifact(&mut artifact)?;
         artifacts.push(artifact);
     }
-    if runtime.worker_invocation().is_some() {
+    if let Some(owner) = runtime.run().claim_owner() {
         // Only the trusted host path can carry a worker update. It sends bytes,
         // never executor-local paths; the owner's claim fence rechecks task ID.
         if !artifacts.is_empty() {
-            runtime.route_worker_tool(
+            owner.call(
                 "orbit.task.artifact.put",
                 json!({
                     "id": task_id, "artifacts": artifacts,
@@ -132,7 +132,7 @@ pub(super) fn persist_final_recovery_evidence(
                 Default::default(),
             )?;
         }
-        runtime.route_worker_host_tool(
+        owner.host_call(
             "orbit.task.update",
             json!({
                 "id": task_id,

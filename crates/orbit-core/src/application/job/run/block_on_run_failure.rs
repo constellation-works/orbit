@@ -128,10 +128,7 @@ impl OrbitRuntime {
         // "Settlement"). A generic blocked update from the worker carries no
         // such evidence and is refused (`failure settlement requires
         // evidence`).
-        if self
-            .worker_invocation()
-            .is_some_and(|binding| binding.bound_run_id == run_id)
-        {
+        if self.role().claimed_run() == Some(run_id) {
             tracing::debug!(
                 run_id,
                 state = %state,

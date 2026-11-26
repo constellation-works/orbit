@@ -125,7 +125,7 @@ impl OrbitRuntime {
         request: &LeafHydrationRequest,
         observer: &dyn FollowerRunObserver,
     ) -> Result<LeafHydrationReport, OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Err(OrbitError::CapabilityRefused(
                 "hydrating settlement evidence reads a follower's run records and is an \
                  operator action, not a claimed worker's"

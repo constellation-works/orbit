@@ -531,7 +531,7 @@ pub(super) fn record_known_red(
 ) -> Result<(), OrbitError> {
     // The accepted certificate carries these decisions to the owner, which
     // records them atomically with the handoff. A leaf owns no task history.
-    if runtime.worker_invocation().is_some() {
+    if runtime.stored().task().held_by_owner() {
         return Ok(());
     }
     for known in known_red

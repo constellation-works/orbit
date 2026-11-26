@@ -43,7 +43,7 @@ impl OrbitRuntime {
         run_id: &str,
         task_ids: &[String],
     ) -> Result<Option<String>, OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Ok(None);
         }
         let Some(run) = self.get_job_run_backend(run_id)? else {

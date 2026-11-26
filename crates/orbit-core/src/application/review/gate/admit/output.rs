@@ -61,7 +61,7 @@ fn refuse_unreviewed_mutation_proposals(
     input: &Value,
     reason: &str,
 ) -> Result<(), DispatchError> {
-    if runtime.worker_invocation().is_some() {
+    if runtime.role().is_worker() {
         return Ok(());
     }
     let task_ids = input

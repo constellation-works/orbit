@@ -299,7 +299,7 @@ impl OrbitRuntime {
         let writes = self.capture_task_crew_selection(input, &task, random)?;
         // A claimed leaf's task lives in its owner's store: the owner writes
         // its crew back when the leaf settles.
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(Some(writes.without_crew_write()));
         }
         Ok(Some(writes))

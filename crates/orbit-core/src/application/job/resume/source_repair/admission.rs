@@ -245,7 +245,7 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn validate_source_repair_admission(&self, run_id: &str) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Err(refuse(
                 "claimed executions cannot apply operator source repair",
             ));
@@ -361,7 +361,7 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         if orbit_common::governance::authorization::agent_context_declared(
             &orbit_common::Env::capture(),
-        ) || self.worker_invocation().is_some()
+        ) || self.role().is_worker()
         {
             return Err(OrbitError::CapabilityDenied(
                 "source repair requires an operator on the owning host".into(),

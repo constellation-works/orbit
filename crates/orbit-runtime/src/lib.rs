@@ -35,7 +35,7 @@
 //! authority, reservations and locks, friction), `host` (PR forge, host
 //! signals, resource probes and forecasts, admission policy, application
 //! consent, plugins, command/tool/script/Git-sandbox execution, embedded
-//! assets, the activity catalog) and `run` (worker coordination, engine
+//! assets, the activity catalog) and `run` (worker coordination, the owner transport, engine
 //! helpers, step-recovery decisions, run inputs, upgrade handover, cost, the
 //! tasks coupled to a run).
 
@@ -108,7 +108,7 @@ pub use orbit_runtime::{
     AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
 };
 pub use run::Run;
-pub use run::worker_coordination::{
+pub use run::transport::{
     check_worker_host_input, check_worker_search_scope, is_coordination_tool,
 };
 pub use stored::Stored;

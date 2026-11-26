@@ -7,6 +7,7 @@ mod identity;
 pub mod recovery_decision;
 pub mod run_input;
 pub mod task_coupling;
+pub mod transport;
 pub mod upgrade_handover;
 pub(crate) mod worker_coordination;
 

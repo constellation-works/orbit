@@ -67,7 +67,7 @@ impl OrbitRuntime {
         let Some(task_id) = singular_task_id_from_input(input) else {
             return Ok(Vec::new());
         };
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return self.claimed_experiment_overlays(task_id, role, model);
         }
         // A run's admitted capture remains authoritative after lifecycle or

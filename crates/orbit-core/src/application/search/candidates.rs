@@ -85,7 +85,7 @@ impl OrbitRuntime {
         limit: usize,
         accepts: &dyn Fn(&orbit_types::task::Task) -> bool,
     ) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             // The owner answers whole listings only.
             let tasks = if tags.is_empty() {
                 self.list_tasks()?
@@ -339,7 +339,7 @@ impl OrbitRuntime {
         &self,
         statuses: &[TaskStatus],
     ) -> Result<Option<Vec<String>>, OrbitError> {
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return Ok(None);
         }
         Ok(self
@@ -359,7 +359,7 @@ impl OrbitRuntime {
     /// concurrent writer holds, or one that cannot be read, drops the hit as
     /// an unreadable task always has. A worker reads through its owner.
     fn lexical_hit_task(&self, id: &str) -> Option<orbit_types::task::Task> {
-        if self.worker_invocation().is_some() {
+        if self.stored().task().held_by_owner() {
             return self.get_task(id).ok();
         }
         self.get_listed_task_row(id)

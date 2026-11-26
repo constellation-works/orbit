@@ -244,9 +244,10 @@ impl ToolRunArgs {
         // bridge or replace the worker runtime with owner state.
         let claimed_owner_call =
             orbit_types::tool::is_claimed_owner_tool(tool_operation_name(&self.name, &input))
-                && runtime.worker_invocation().is_some_and(|binding| {
-                    binding.execution.machine_id != binding.owner_machine_id
-                });
+                && runtime
+                    .run()
+                    .claim_owner()
+                    .is_some_and(|owner| owner.is_remote());
         // The resident broker must verify coverage before the caller opens
         // another workspace. Keep the named selector in the call's input.
         let bound = if claimed_owner_call

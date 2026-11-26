@@ -11,12 +11,11 @@ pub(super) fn admit_task_for_workflow(
     task_id: &str,
     workflow: &str,
 ) -> Result<Task, OrbitError> {
-    if let Some(binding) = runtime.worker_invocation() {
-        if task_id != binding.task_id {
+    if let Some(claimed) = runtime.role().claimed_task() {
+        if task_id != claimed {
             return Err(OrbitError::PolicyDenied(format!(
-                "worker task binding mismatch: this leaf is bound to '{}', {workflow} \
-                 requested '{task_id}'",
-                binding.task_id
+                "worker task binding mismatch: this leaf is bound to '{claimed}', {workflow} \
+                 requested '{task_id}'"
             )));
         }
         let task: Task = runtime.get_task(task_id)?;
@@ -37,7 +36,7 @@ pub(super) fn update_task_from_activity(
     task_id: &str,
     update: TaskActivityUpdate,
 ) -> Result<Task, OrbitError> {
-    if runtime.worker_invocation().is_some() {
+    if let Some(owner) = runtime.run().claim_owner() {
         if update.status == TaskStatus::Done {
             let task = runtime.get_task(task_id)?;
             crate::application::task::ensure_post_deploy_criteria_met(runtime, &task)?;
@@ -48,7 +47,7 @@ pub(super) fn update_task_from_activity(
                 update.calling_run_id.as_deref(),
             )?;
         }
-        runtime.route_worker_host_tool("orbit.task.update", serde_json::json!({
+        owner.host_call("orbit.task.update", serde_json::json!({
             "id": task_id,
             "_worker_update": orbit_store::contract::ClaimWorkerUpdate {
                 status: Some(update.status), expected_status: Some(update.expected_status),
@@ -137,7 +136,7 @@ pub(super) fn widen_task_context_files(
 ) -> Result<Vec<String>, OrbitError> {
     // A claimed leaf cannot write the owner's task; the owner widens the
     // declaration when it accepts the handoff.
-    if runtime.worker_invocation().is_some() {
+    if runtime.stored().task().held_by_owner() {
         return Ok(Vec::new());
     }
     runtime.widen_context_files_for_paths(task_id, run_id, step, activity, paths)

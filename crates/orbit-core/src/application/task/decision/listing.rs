@@ -210,7 +210,7 @@ impl OrbitRuntime {
         };
         // Proofs are per partition and cover the whole bundle, including
         // terminal tasks. Only clean, closed projections can skip a read.
-        let use_cache = task_id.is_none() && self.worker_invocation().is_none();
+        let use_cache = task_id.is_none() && !self.stored().task().held_by_owner();
         let stamps = if use_cache {
             self.task_bundle_stamps(&ids)
         } else {
@@ -298,7 +298,7 @@ impl OrbitRuntime {
     /// without a second envelope-index freshness pass. Other backends fall
     /// back to metadata, as do workers whose reads must route through the owner.
     fn decision_scan_task_ids(&self) -> Result<Vec<String>, OrbitError> {
-        if self.worker_invocation().is_none() {
+        if !self.stored().task().held_by_owner() {
             if !self.stored().task().reads_visible() {
                 return Ok(Vec::new());
             }
@@ -319,7 +319,7 @@ impl OrbitRuntime {
         &self,
         request_id: &str,
     ) -> Result<Option<DecisionRequest>, OrbitError> {
-        if self.worker_invocation().is_none() && self.stored().task().reads_visible() {
+        if !self.stored().task().held_by_owner() && self.stored().task().reads_visible() {
             let owner = self
                 .stores()
                 .tasks()

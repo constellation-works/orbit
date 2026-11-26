@@ -36,7 +36,7 @@ use crate::application::task::TaskJobPort;
 impl OrbitRuntime {
     /// Why the backstop does not run on this runtime, if it does not.
     pub fn blocked_task_recovery_disabled_reason(&self) -> Option<String> {
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return Some("a claimed worker never recovers tasks; its owner does".to_string());
         }
         if let Some(owner) = self.role().replica_owner() {

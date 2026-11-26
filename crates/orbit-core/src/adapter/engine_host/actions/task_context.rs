@@ -222,8 +222,8 @@ pub(crate) fn notices_for_agent_input(
 fn read_open_notices_for_brief(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<Notice>, orbit_common::OrbitError> {
-    if runtime.worker_invocation().is_some() {
-        let value = runtime.route_worker_host_tool(
+    if let Some(owner) = runtime.run().claim_owner() {
+        let value = owner.host_call(
             "orbit.notice.list",
             serde_json::json!({ "status": "open", "limit": 200 }),
         )?;

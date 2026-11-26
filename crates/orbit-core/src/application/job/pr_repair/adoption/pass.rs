@@ -63,7 +63,7 @@ impl OrbitRuntime {
                     // and request metadata for at most those ids. A worker
                     // reads through its owner, which has no local index, so
                     // it keeps the keyed owner read.
-                    if self.worker_invocation().is_none() {
+                    if !self.stored().task().held_by_owner() {
                         let open_filter = TaskListFilter {
                             statuses: Some(vec![
                                 TaskStatus::Review,

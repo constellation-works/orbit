@@ -195,7 +195,7 @@ impl OrbitRuntime {
         mut repairs: Option<&mut RepairIndex>,
     ) -> Result<BaselineHoldRefresh, OrbitError> {
         let mut refresh = BaselineHoldRefresh::default();
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             refresh.skipped =
                 Some("a claimed worker never checks baseline holds; its owner does".to_string());
             return Ok(refresh);

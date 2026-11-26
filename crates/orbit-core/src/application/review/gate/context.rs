@@ -226,7 +226,7 @@ fn claimed_leaf_claim(
     run_id: &str,
     task_ids: &[String],
 ) -> Result<Option<String>, OrbitError> {
-    if runtime.worker_invocation().is_none() {
+    if !runtime.role().is_worker() {
         return Ok(None);
     }
     let leaf = runtime.current_claimed_leaf()?;

@@ -2,8 +2,8 @@
 title: Architecture Restructure — Vision
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-25
-last_validated: 2026-11-25
+updated_date: 2026-11-26
+last_validated: 2026-11-26
 status: Accepted
 feature: architecture-restructure
 doc_role: vision
@@ -70,7 +70,7 @@ related_artifacts: [ORB-28318, ORB-27886, ORB-15932]
 16. How many `RuntimeHost` environment methods are plain getters?
 17. Does any operation need the store without a workspace, or a workspace without the store? That decides whether the workspace binding sits in `Base` or `Stored`.
 18. Which of the runtime modules named for a subject (`task/`, `application_consent/`, `friction.rs`, `cost.rs`) are mechanisms, and which are use cases that move up to an app?
-19. Do a worker's writes fit the same task access as its reads, or do routed tool calls need their own path in `Run`?
+19. Do a worker's writes fit the same task access as its reads, or do routed tool calls need their own path in `Run`? Answered: their own path ([4_decisions.md](4_decisions.md#a-workers-routed-tool-calls-get-their-own-path-in-run)) [ORB-28393].
 
 ## 2. Prior Work
 
@@ -113,5 +113,6 @@ Nothing in the target is new: it is the template's shape and STD-02's rules. Wha
 - [ORB-28318] — carried this proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations deferred until a restructure.
 - [ORB-15932] — set the noun-by-noun order.
+- [ORB-28393] — answered question 19.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

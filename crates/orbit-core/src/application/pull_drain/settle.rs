@@ -163,10 +163,7 @@ impl OrbitRuntime {
                 return;
             }
         }
-        if self
-            .worker_invocation()
-            .is_some_and(|binding| binding.bound_run_id == run_id)
-        {
+        if self.role().claimed_run() == Some(run_id) {
             self.deliver_claimed_leaf_settlement(run_id);
         }
     }
@@ -180,10 +177,7 @@ impl OrbitRuntime {
     /// the owner refused is not the worker's to wait on: the owner answered,
     /// and its backoff belongs to the drain and the clock sweep.
     pub(crate) fn retry_own_claimed_leaf_settlement(&self, run_id: &str) {
-        if self
-            .worker_invocation()
-            .is_none_or(|binding| binding.bound_run_id != run_id)
-        {
+        if self.role().claimed_run() != Some(run_id) {
             return;
         }
         for delay in LEAF_SETTLEMENT_RETRY_DELAYS {

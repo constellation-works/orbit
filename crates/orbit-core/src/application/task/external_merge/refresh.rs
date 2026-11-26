@@ -292,7 +292,7 @@ impl OrbitRuntime {
         request: &DeliveryRefreshRequest,
     ) -> Result<PullRequestRefreshOutcome, OrbitError> {
         let refused = |reason: String| Ok(PullRequestRefreshOutcome::Refused { reason });
-        if self.worker_invocation().is_some() {
+        if self.role().is_worker() {
             return refused(
                 "a claimed worker cannot refresh a delivery pull request; the owning host does"
                     .to_string(),

@@ -13,7 +13,7 @@ use serde_json::Value;
 
 pub(crate) fn attach(runtime: OrbitRuntime) -> OrbitRuntime {
     let runtime = attach_drain_owner(runtime);
-    if runtime.worker_invocation().is_none() {
+    if !runtime.role().is_worker() {
         return runtime;
     }
     let transport = Arc::new(WorkerOwner {
