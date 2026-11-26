@@ -19,6 +19,13 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// How long supervision trusts an extendable deadline's last answer.
 const DEADLINE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
+#[cfg(all(test, unix))]
+thread_local! {
+    static FAILURE: std::cell::Cell<Option<SupervisionFailure>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
 type StdinResultReceiver = Receiver<std::io::Result<()>>;
 type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
 type OutputWorker = Option<JoinHandle<std::io::Result<Vec<u8>>>>;
@@ -119,50 +126,6 @@ impl Drop for SupervisedChild {
         // can re-raise a pending signal and terminate the supervisor itself.
         self.mark_reaped();
     }
-}
-
-// Per-thread fault injection leaves concurrent supervisors unaffected and
-// exercises the same entry points callers use, without exhausting host FDs.
-#[cfg(all(test, unix))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SupervisionFailure {
-    SignalInstall,
-    Wait,
-}
-
-#[cfg(all(test, unix))]
-thread_local! {
-    static FAILURE: std::cell::Cell<Option<SupervisionFailure>> = const {
-        std::cell::Cell::new(None)
-    };
-}
-
-#[cfg(all(test, unix))]
-pub(super) fn with_supervision_failure<T>(failure: SupervisionFailure, f: impl FnOnce() -> T) -> T {
-    struct Restore(Option<SupervisionFailure>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            FAILURE.set(self.0);
-        }
-    }
-    let _restore = Restore(FAILURE.replace(Some(failure)));
-    let result = f();
-    assert!(
-        FAILURE.get().is_none(),
-        "supervisor did not reach {failure:?}"
-    );
-    result
-}
-
-#[cfg(all(test, unix))]
-fn inject_supervision_failure(point: SupervisionFailure) -> Result<(), OrbitError> {
-    if FAILURE.get() == Some(point) {
-        FAILURE.set(None);
-        return Err(OrbitError::Execution(format!(
-            "injected supervision failure: {point:?}"
-        )));
-    }
-    Ok(())
 }
 
 impl SupervisedChild {
@@ -616,6 +579,43 @@ impl<'a> Deadline<'a> {
         self.cached = Some((deadline, now));
         deadline
     }
+}
+
+// Per-thread fault injection leaves concurrent supervisors unaffected and
+// exercises the same entry points callers use, without exhausting host FDs.
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SupervisionFailure {
+    SignalInstall,
+    Wait,
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn with_supervision_failure<T>(failure: SupervisionFailure, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<SupervisionFailure>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FAILURE.set(self.0);
+        }
+    }
+    let _restore = Restore(FAILURE.replace(Some(failure)));
+    let result = f();
+    assert!(
+        FAILURE.get().is_none(),
+        "supervisor did not reach {failure:?}"
+    );
+    result
+}
+
+#[cfg(all(test, unix))]
+fn inject_supervision_failure(point: SupervisionFailure) -> Result<(), OrbitError> {
+    if FAILURE.get() == Some(point) {
+        FAILURE.set(None);
+        return Err(OrbitError::Execution(format!(
+            "injected supervision failure: {point:?}"
+        )));
+    }
+    Ok(())
 }
 
 fn streams_finished(stdout: &OutputWorker, stderr: &OutputWorker) -> bool {

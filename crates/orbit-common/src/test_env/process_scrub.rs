@@ -6,25 +6,6 @@ use super::INHERITED_AUTHORITY_ENV;
 /// the variables its parent set on purpose.
 pub use crate::env_vars::ORBIT_TEST_ENV_SCRUBBED as SCRUBBED_MARKER_ENV;
 
-/// Remove every [`INHERITED_AUTHORITY_ENV`] variable from this process, once.
-///
-/// Called by [`isolate_test_process!`](crate::isolate_test_process) before
-/// `main`, while the process is single-threaded. A child that a scrubbed test
-/// re-executes inherits [`SCRUBBED_MARKER_ENV`] and is left alone, so a
-/// variable the parent exported for the child on purpose reaches its body.
-pub fn scrub_inherited_authority() {
-    if crate::Env::capture().get(SCRUBBED_MARKER_ENV).is_some() {
-        return;
-    }
-    // SAFETY: runs from a pre-`main` initializer, before any thread exists.
-    unsafe {
-        for name in INHERITED_AUTHORITY_ENV {
-            crate::env::remove_process_var(name);
-        }
-        crate::env::set_process_var(SCRUBBED_MARKER_ENV, "1");
-    }
-}
-
 /// Run [`scrub_inherited_authority`] before `main` in the current test binary.
 ///
 /// A test process launched from a managed run inherits its `ORBIT_*`
@@ -51,4 +32,23 @@ macro_rules! isolate_test_process {
             static SCRUB_AT_LOAD: extern "C" fn() = scrub;
         };
     };
+}
+
+/// Remove every [`INHERITED_AUTHORITY_ENV`] variable from this process, once.
+///
+/// Called by [`isolate_test_process!`](crate::isolate_test_process) before
+/// `main`, while the process is single-threaded. A child that a scrubbed test
+/// re-executes inherits [`SCRUBBED_MARKER_ENV`] and is left alone, so a
+/// variable the parent exported for the child on purpose reaches its body.
+pub fn scrub_inherited_authority() {
+    if crate::Env::capture().get(SCRUBBED_MARKER_ENV).is_some() {
+        return;
+    }
+    // SAFETY: runs from a pre-`main` initializer, before any thread exists.
+    unsafe {
+        for name in INHERITED_AUTHORITY_ENV {
+            crate::env::remove_process_var(name);
+        }
+        crate::env::set_process_var(SCRUBBED_MARKER_ENV, "1");
+    }
 }

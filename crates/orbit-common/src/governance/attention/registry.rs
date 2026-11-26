@@ -10,17 +10,6 @@ use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 /// The MCP client name the federated aggregator initializes its hops with.
 /// A destination honours `candidate_read` only from a session that names it.
 pub const ATTENTION_AGGREGATOR_CLIENT: &str = "orbit-federated-mux";
-operation_registry! {
-    noun: ATTENTION;
-    /// Attention operations.
-    pub enum AttentionVerb;
-    /// Shared attention operation registry.
-    pub const ATTENTION_OPERATIONS;
-    {
-        /// Derive current operator waits.
-        Query => QUERY,
-    }
-}
 /// Attention's root CLI and tool declaration.
 pub const ATTENTION: NounSpec<AttentionVerb> = NounSpec {
     cli_name: "attention",
@@ -180,3 +169,15 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: ATTENTION;
+    /// Attention operations.
+    pub enum AttentionVerb;
+    /// Shared attention operation registry.
+    pub const ATTENTION_OPERATIONS;
+    {
+        /// Derive current operator waits.
+        Query => QUERY,
+    }
+}

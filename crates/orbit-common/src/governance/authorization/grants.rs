@@ -5,6 +5,31 @@ use orbit_types::tool::{McpCapability, tool_policy_operations};
 
 use super::catalog;
 
+const GRANTABLE_MUTATION: ToolGrantClassification = ToolGrantClassification {
+    grantability: ToolGrantability::Grantable,
+    effect: GrantedToolEffect::Mutating,
+};
+const OPERATOR_MUTATION: ToolGrantClassification = ToolGrantClassification {
+    grantability: ToolGrantability::AlwaysOperatorOnly,
+    effect: GrantedToolEffect::Mutating,
+};
+
+// One reviewed list covering agent_implement's shipped deny set. None of
+// these operations is read/repeat-safe: auto-task add/update write scheduler
+// definitions, mint creates tasks, command execution has arbitrary effects,
+// and pipeline/workflow submission or resumption creates managed work.
+const AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS: &[(&str, ToolGrantClassification)] = &[
+    ("orbit.auto_task.add", GRANTABLE_MUTATION),
+    ("orbit.auto_task.mint", GRANTABLE_MUTATION),
+    ("orbit.auto_task.update", GRANTABLE_MUTATION),
+    ("orbit.command.exec", OPERATOR_MUTATION),
+    ("orbit.pipeline.invoke", OPERATOR_MUTATION),
+    ("orbit.workflow.land", OPERATOR_MUTATION),
+    ("orbit.workflow.refresh", OPERATOR_MUTATION),
+    ("orbit.workflow.run.resume", OPERATOR_MUTATION),
+    ("orbit.workflow.ship", OPERATOR_MUTATION),
+];
+
 /// Whether a task grant can make a denied tool available to an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolGrantability {
@@ -31,31 +56,6 @@ pub struct ToolGrantClassification {
     /// Whether the granted operation is safe to repeat directly.
     pub effect: GrantedToolEffect,
 }
-
-const GRANTABLE_MUTATION: ToolGrantClassification = ToolGrantClassification {
-    grantability: ToolGrantability::Grantable,
-    effect: GrantedToolEffect::Mutating,
-};
-const OPERATOR_MUTATION: ToolGrantClassification = ToolGrantClassification {
-    grantability: ToolGrantability::AlwaysOperatorOnly,
-    effect: GrantedToolEffect::Mutating,
-};
-
-// One reviewed list covering agent_implement's shipped deny set. None of
-// these operations is read/repeat-safe: auto-task add/update write scheduler
-// definitions, mint creates tasks, command execution has arbitrary effects,
-// and pipeline/workflow submission or resumption creates managed work.
-const AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS: &[(&str, ToolGrantClassification)] = &[
-    ("orbit.auto_task.add", GRANTABLE_MUTATION),
-    ("orbit.auto_task.mint", GRANTABLE_MUTATION),
-    ("orbit.auto_task.update", GRANTABLE_MUTATION),
-    ("orbit.command.exec", OPERATOR_MUTATION),
-    ("orbit.pipeline.invoke", OPERATOR_MUTATION),
-    ("orbit.workflow.land", OPERATOR_MUTATION),
-    ("orbit.workflow.refresh", OPERATOR_MUTATION),
-    ("orbit.workflow.run.resume", OPERATOR_MUTATION),
-    ("orbit.workflow.ship", OPERATOR_MUTATION),
-];
 
 /// Classify a tool grant, defaulting unclassified operations to mutating.
 ///

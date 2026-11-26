@@ -8,21 +8,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: AUTOMATION;
-    /// The automation verbs.
-    pub enum AutomationVerb;
-    /// Automation operations in declaration order.
-    pub const AUTOMATION_OPERATIONS;
-    {
-        /// One condition definition's matches, closest misses and clause tree,
-        /// or one job's auto-task steps.
-        Explain => EXPLAIN,
-        /// Clear a stalled condition, audited.
-        ClearStall => CLEAR_STALL,
-    }
-}
-
 /// The automation noun's shared declaration.
 pub const AUTOMATION: NounSpec<AutomationVerb> = NounSpec {
     cli_name: "automation",
@@ -114,3 +99,18 @@ const CLEAR_STALL: OperationSpec<AutomationVerb> = OperationSpec {
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: AUTOMATION;
+    /// The automation verbs.
+    pub enum AutomationVerb;
+    /// Automation operations in declaration order.
+    pub const AUTOMATION_OPERATIONS;
+    {
+        /// One condition definition's matches, closest misses and clause tree,
+        /// or one job's auto-task steps.
+        Explain => EXPLAIN,
+        /// Clear a stalled condition, audited.
+        ClearStall => CLEAR_STALL,
+    }
+}

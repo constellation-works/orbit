@@ -39,8 +39,8 @@ impl GenerationGuard {
         GenerationUpdate {
             bound,
             root: validated_generation_root(root)?,
-            admission,
             generation,
+            admission,
         }
         .pin(digest, None)
     }

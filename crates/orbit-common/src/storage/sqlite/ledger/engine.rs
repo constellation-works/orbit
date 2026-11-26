@@ -10,6 +10,36 @@ use crate::storage::compatibility::ForwardCompatibleOpen;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 
+/// Foreign-key enforcement turned off on one connection until dropped.
+struct ForeignKeysOff<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> ForeignKeysOff<'a> {
+    fn new(conn: &'a Connection) -> Result<Self, OrbitError> {
+        pragma::set(conn, "foreign_keys", &"OFF").map_err(|error| {
+            sqlite_error(
+                StorageLayer::Migration,
+                &error,
+                format!("failed to turn off foreign keys for a migration: {error}"),
+            )
+        })?;
+        Ok(Self { conn })
+    }
+}
+
+impl Drop for ForeignKeysOff<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = pragma::set(self.conn, "foreign_keys", &"ON") {
+            tracing::warn!(
+                target: "orbit.store.sqlite",
+                error = %error,
+                "could not turn foreign keys back on after a migration",
+            );
+        }
+    }
+}
+
 /// Apply a database's ordered registry through its own transactional ledger.
 /// `path`, when known, names the file in a contention error.
 ///
@@ -217,36 +247,6 @@ fn migration_begin_error(
             migration.version, migration.name
         ),
     )
-}
-
-/// Foreign-key enforcement turned off on one connection until dropped.
-struct ForeignKeysOff<'a> {
-    conn: &'a Connection,
-}
-
-impl<'a> ForeignKeysOff<'a> {
-    fn new(conn: &'a Connection) -> Result<Self, OrbitError> {
-        pragma::set(conn, "foreign_keys", &"OFF").map_err(|error| {
-            sqlite_error(
-                StorageLayer::Migration,
-                &error,
-                format!("failed to turn off foreign keys for a migration: {error}"),
-            )
-        })?;
-        Ok(Self { conn })
-    }
-}
-
-impl Drop for ForeignKeysOff<'_> {
-    fn drop(&mut self) {
-        if let Err(error) = pragma::set(self.conn, "foreign_keys", &"ON") {
-            tracing::warn!(
-                target: "orbit.store.sqlite",
-                error = %error,
-                "could not turn foreign keys back on after a migration",
-            );
-        }
-    }
 }
 
 fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {

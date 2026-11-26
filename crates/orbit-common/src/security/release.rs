@@ -28,23 +28,6 @@ pub const RELEASE_CHECKSUMS_FILENAME: &str = "orbit-checksums.txt";
 /// Name of the detached signature over [`RELEASE_CHECKSUMS_FILENAME`].
 pub const RELEASE_CHECKSUMS_SIGNATURE_FILENAME: &str = "orbit-checksums.txt.sig";
 
-/// One release signing key the installers trust.
-///
-/// `id` is a stable label with a generation counter, not a date: it survives
-/// rotation so a key that has been the successor for a year is still readable
-/// by ID. `not_after` and `revoked_at` are `YYYY-MM-DD`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TrustedReleaseKey {
-    /// Stable key label, e.g. `orbit-release-key-3`.
-    pub id: &'static str,
-    /// Last day this key may verify a release, inclusive.
-    pub not_after: &'static str,
-    /// Set once a key is withdrawn; a matching signature then fails closed.
-    pub revoked_at: Option<&'static str>,
-    /// PKCS#8 SubjectPublicKeyInfo PEM block.
-    pub public_key_pem: &'static str,
-}
-
 /// The current release signing key. Keep this block byte-identical to
 /// `npm/release-signing.pub`; `scripts/check-installer-pubkey.sh` fails the
 /// build if any consumer drifts.
@@ -71,6 +54,23 @@ pub const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[TrustedReleaseKey {
     revoked_at: None,
     public_key_pem: ORBIT_RELEASE_KEY_3_PEM,
 }];
+
+/// One release signing key the installers trust.
+///
+/// `id` is a stable label with a generation counter, not a date: it survives
+/// rotation so a key that has been the successor for a year is still readable
+/// by ID. `not_after` and `revoked_at` are `YYYY-MM-DD`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedReleaseKey {
+    /// Stable key label, e.g. `orbit-release-key-3`.
+    pub id: &'static str,
+    /// Last day this key may verify a release, inclusive.
+    pub not_after: &'static str,
+    /// Set once a key is withdrawn; a matching signature then fails closed.
+    pub revoked_at: Option<&'static str>,
+    /// PKCS#8 SubjectPublicKeyInfo PEM block.
+    pub public_key_pem: &'static str,
+}
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {

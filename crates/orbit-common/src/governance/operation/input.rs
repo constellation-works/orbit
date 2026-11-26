@@ -8,15 +8,6 @@ use crate::protocol::tool_input::{
 #[cfg(doc)]
 use super::OperationSpec;
 
-/// An integer parameter's value: a JSON number or a numeric string.
-pub(super) fn non_negative_integer(value: &Value) -> Option<u64> {
-    match value {
-        Value::Number(number) => number.as_u64(),
-        Value::String(raw) => raw.trim().parse().ok(),
-        _ => None,
-    }
-}
-
 /// A call's input after [`OperationSpec::parse_input`]: a JSON object keyed by
 /// canonical parameter names, whose present values match their declared types.
 ///
@@ -89,5 +80,14 @@ impl OperationInput {
                 "`{name}` must be a boolean"
             ))),
         }
+    }
+}
+
+/// An integer parameter's value: a JSON number or a numeric string.
+pub(super) fn non_negative_integer(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(raw) => raw.trim().parse().ok(),
+        _ => None,
     }
 }

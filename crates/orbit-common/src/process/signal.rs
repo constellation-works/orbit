@@ -8,44 +8,6 @@ use super::identity::{
     ProbeOutcome, is_stable_token, probe_process_start_identity, stable_tokens_match,
 };
 
-/// Open a pidfd for `pid`. The OS error is captured before anything can
-/// overwrite `errno`; callers map `ESRCH` (gone) and `ENOSYS` (pre-5.3 kernel).
-#[cfg(target_os = "linux")]
-pub(crate) fn pidfd_open(pid: libc::pid_t) -> io::Result<std::os::fd::OwnedFd> {
-    use std::os::fd::FromRawFd;
-    // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor.
-    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-    if let Ok(fd) = i32::try_from(raw)
-        && fd >= 0
-    {
-        // SAFETY: the kernel just returned this descriptor to this call alone.
-        return Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) });
-    }
-    Err(io::Error::last_os_error())
-}
-
-/// Send `signal` (0 probes permission and existence) through a pidfd, with no
-/// siginfo and no flags. The OS error is returned unmapped.
-#[cfg(target_os = "linux")]
-pub fn pidfd_send_signal(fd: std::os::fd::BorrowedFd<'_>, signal: libc::c_int) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: a valid borrowed pidfd, a signal number, no siginfo, no flags.
-    let rc = unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            fd.as_raw_fd(),
-            signal,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        )
-    };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
 /// A process identity retained across signals and waits. Linux uses a pidfd;
 /// macOS uses libproc's unique process id and audited, pid-version-bound signals.
 #[cfg(unix)]
@@ -232,6 +194,74 @@ impl BoundProcess {
     }
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+impl BoundProcess {
+    /// Test-only PID substitution to simulate numeric PID reuse without
+    /// exhausting host PIDs. Exists only in test builds for the sibling
+    /// `process::tests::signal` harness; production keeps `pid` private.
+    pub(super) fn set_pid_for_test(&mut self, pid: u32) {
+        self.pid = pid;
+    }
+}
+
+// XNU's libproc ABI (PROC_PIDT_BSDINFOWITHUNIQID). The BSD and unique identity
+// are returned in one kernel snapshot. See apple-oss-distributions/xnu,
+// bsd/sys/proc_info_private.h and bsd/kern/proc_info.c.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct DarwinUniqueInfo {
+    uuid: [u8; 16],
+    unique_id: u64,
+    parent_unique_id: u64,
+    id_version: i32,
+    original_parent_version: i32,
+    reserved: [u64; 2],
+}
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct DarwinInfo {
+    bsd: libc::proc_bsdinfo,
+    unique: DarwinUniqueInfo,
+}
+
+/// Open a pidfd for `pid`. The OS error is captured before anything can
+/// overwrite `errno`; callers map `ESRCH` (gone) and `ENOSYS` (pre-5.3 kernel).
+#[cfg(target_os = "linux")]
+pub(crate) fn pidfd_open(pid: libc::pid_t) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor.
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if let Ok(fd) = i32::try_from(raw)
+        && fd >= 0
+    {
+        // SAFETY: the kernel just returned this descriptor to this call alone.
+        return Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) });
+    }
+    Err(io::Error::last_os_error())
+}
+
+/// Send `signal` (0 probes permission and existence) through a pidfd, with no
+/// siginfo and no flags. The OS error is returned unmapped.
+#[cfg(target_os = "linux")]
+pub fn pidfd_send_signal(fd: std::os::fd::BorrowedFd<'_>, signal: libc::c_int) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: a valid borrowed pidfd, a signal number, no siginfo, no flags.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Snapshot numeric group members for subsequent identity binding. This list
 /// never authorizes signalling: bind every member and recheck the leader before
 /// use. Callers must report incomplete teardown if unbound members remain.
@@ -274,26 +304,6 @@ pub fn process_group_members(pgid: libc::pid_t) -> io::Result<Vec<u32>> {
     }
 }
 
-// XNU's libproc ABI (PROC_PIDT_BSDINFOWITHUNIQID). The BSD and unique identity
-// are returned in one kernel snapshot. See apple-oss-distributions/xnu,
-// bsd/sys/proc_info_private.h and bsd/kern/proc_info.c.
-#[cfg(target_os = "macos")]
-#[repr(C)]
-struct DarwinUniqueInfo {
-    uuid: [u8; 16],
-    unique_id: u64,
-    parent_unique_id: u64,
-    id_version: i32,
-    original_parent_version: i32,
-    reserved: [u64; 2],
-}
-#[cfg(target_os = "macos")]
-#[repr(C)]
-struct DarwinInfo {
-    bsd: libc::proc_bsdinfo,
-    unique: DarwinUniqueInfo,
-}
-
 #[cfg(target_os = "macos")]
 fn darwin_info(pid: u32) -> io::Result<Option<DarwinInfo>> {
     let mut info = std::mem::MaybeUninit::<DarwinInfo>::uninit();
@@ -308,15 +318,5 @@ fn darwin_info(pid: u32) -> io::Result<Option<DarwinInfo>> {
         Ok(None)
     } else {
         Err(error)
-    }
-}
-
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-impl BoundProcess {
-    /// Test-only PID substitution to simulate numeric PID reuse without
-    /// exhausting host PIDs. Exists only in test builds for the sibling
-    /// `process::tests::signal` harness; production keeps `pid` private.
-    pub(super) fn set_pid_for_test(&mut self, pid: u32) {
-        self.pid = pid;
     }
 }

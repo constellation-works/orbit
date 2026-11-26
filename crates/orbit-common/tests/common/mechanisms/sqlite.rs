@@ -26,6 +26,74 @@ mod read_only_observation {
     const WRITER_DATABASE_ENV: &str = "ORBIT_TEST_OBSERVATION_DATABASE";
     const WRITER_CONTROL_ENV: &str = "ORBIT_TEST_OBSERVATION_CONTROL";
 
+    /// A writer holding the database open in another process.
+    ///
+    /// It has to be another process: SQLite shares one wal-index mapping per
+    /// file within a process, so an in-process writer would let an observing
+    /// connection ride on the writer's writable mapping — exactly what a
+    /// separate read-only mount cannot do.
+    ///
+    /// The child opens the database read-write and then waits, so the fixture
+    /// can make the files read-only for this process while the child keeps
+    /// committing through the descriptors it already holds. That is the shape
+    /// of the reported failure: a reader behind a read-only view of a database
+    /// a writer still reaches from writable storage.
+    struct ExternalWriter {
+        child: Child,
+        control: PathBuf,
+        commits: usize,
+    }
+
+    impl ExternalWriter {
+        /// Re-runs this test binary as the writer. The filter below names
+        /// [`external_writer_process`] by its module path; renaming that test
+        /// without updating it fails the entry-point guard before spawning.
+        /// The ready sentinel then proves the writer actually started.
+        fn start(database: &Path, control: PathBuf) -> Self {
+            orbit_common::test_env::assert_child_test_exists(
+                "sqlite::read_only_observation::external_writer_process",
+            );
+            fs::create_dir_all(&control).expect("create writer control directory");
+            let child = Command::new(std::env::current_exe().expect("test binary path"))
+                .args([
+                    "--exact",
+                    "sqlite::read_only_observation::external_writer_process",
+                    "--ignored",
+                ])
+                .env(WRITER_DATABASE_ENV, database)
+                .env(WRITER_CONTROL_ENV, &control)
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("spawn the writer process");
+
+            let writer = Self {
+                child,
+                control,
+                commits: 0,
+            };
+            wait_for(&writer.control.join("ready"), "ready");
+            writer
+        }
+
+        /// Commit one row and wait for the writer to confirm it.
+        fn commit(&mut self, value: &str) {
+            self.commits += 1;
+            let request = self.control.join(format!("commit-{}", self.commits));
+            let confirmation = self.control.join(format!("committed-{}", self.commits));
+            publish_bytes(&request, value.as_bytes());
+            wait_for(&confirmation, "commit");
+            let outcome = fs::read_to_string(&confirmation).expect("read commit outcome");
+            assert_eq!(outcome, "ok", "the writer process failed to commit");
+        }
+    }
+
+    impl Drop for ExternalWriter {
+        fn drop(&mut self) {
+            let _ = fs::write(self.control.join("stop"), b"");
+            let _ = self.child.wait();
+        }
+    }
+
     fn sqlite_file(path: &Path, suffix: &str) -> PathBuf {
         PathBuf::from(format!("{}{suffix}", path.display()))
     }
@@ -109,74 +177,6 @@ mod read_only_observation {
         });
         fs::rename(&staging, path)
             .unwrap_or_else(|error| panic!("publish {}: {error}", path.display()));
-    }
-
-    /// A writer holding the database open in another process.
-    ///
-    /// It has to be another process: SQLite shares one wal-index mapping per
-    /// file within a process, so an in-process writer would let an observing
-    /// connection ride on the writer's writable mapping — exactly what a
-    /// separate read-only mount cannot do.
-    ///
-    /// The child opens the database read-write and then waits, so the fixture
-    /// can make the files read-only for this process while the child keeps
-    /// committing through the descriptors it already holds. That is the shape
-    /// of the reported failure: a reader behind a read-only view of a database
-    /// a writer still reaches from writable storage.
-    struct ExternalWriter {
-        child: Child,
-        control: PathBuf,
-        commits: usize,
-    }
-
-    impl ExternalWriter {
-        /// Re-runs this test binary as the writer. The filter below names
-        /// [`external_writer_process`] by its module path; renaming that test
-        /// without updating it fails the entry-point guard before spawning.
-        /// The ready sentinel then proves the writer actually started.
-        fn start(database: &Path, control: PathBuf) -> Self {
-            orbit_common::test_env::assert_child_test_exists(
-                "sqlite::read_only_observation::external_writer_process",
-            );
-            fs::create_dir_all(&control).expect("create writer control directory");
-            let child = Command::new(std::env::current_exe().expect("test binary path"))
-                .args([
-                    "--exact",
-                    "sqlite::read_only_observation::external_writer_process",
-                    "--ignored",
-                ])
-                .env(WRITER_DATABASE_ENV, database)
-                .env(WRITER_CONTROL_ENV, &control)
-                .stdout(Stdio::null())
-                .spawn()
-                .expect("spawn the writer process");
-
-            let writer = Self {
-                child,
-                control,
-                commits: 0,
-            };
-            wait_for(&writer.control.join("ready"), "ready");
-            writer
-        }
-
-        /// Commit one row and wait for the writer to confirm it.
-        fn commit(&mut self, value: &str) {
-            self.commits += 1;
-            let request = self.control.join(format!("commit-{}", self.commits));
-            let confirmation = self.control.join(format!("committed-{}", self.commits));
-            publish_bytes(&request, value.as_bytes());
-            wait_for(&confirmation, "commit");
-            let outcome = fs::read_to_string(&confirmation).expect("read commit outcome");
-            assert_eq!(outcome, "ok", "the writer process failed to commit");
-        }
-    }
-
-    impl Drop for ExternalWriter {
-        fn drop(&mut self) {
-            let _ = fs::write(self.control.join("stop"), b"");
-            let _ = self.child.wait();
-        }
     }
 
     /// The child half of [`ExternalWriter`]; never part of an ordinary run.

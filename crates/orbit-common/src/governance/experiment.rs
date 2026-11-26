@@ -12,44 +12,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: EXPERIMENT;
-    /// The experiment verbs.
-    pub enum ExperimentVerb;
-    /// Experiment operations in declaration order.
-    pub const EXPERIMENT_OPERATIONS;
-    {
-        /// Define a new draft experiment.
-        Create => CREATE,
-        /// Edit a draft experiment's definition.
-        Update => UPDATE,
-        /// Copy an experiment's definition into a new draft.
-        Clone => CLONE,
-        /// Start a draft experiment.
-        Start => START,
-        /// Pause a running experiment.
-        Pause => PAUSE,
-        /// Resume a paused experiment.
-        Resume => RESUME,
-        /// Change arm weights or retire arms, opening a new segment.
-        Reweight => REWEIGHT,
-        /// Force a task with no arm assignment, or an explicit_crew exclusion for the experiment, into an active arm.
-        Assign => ASSIGN,
-        /// Conclude an experiment with the chosen arm, or none.
-        Conclude => CONCLUDE,
-        /// Abandon an experiment without a conclusion.
-        Abandon => ABANDON,
-        /// Delete a finished experiment that never applied a treatment.
-        Delete => DELETE,
-        /// One experiment with its arms and event log.
-        Show => SHOW,
-        /// The workspace's experiments.
-        List => LIST,
-        /// An experiment's per-arm outcomes, intervals, health checks and verdict.
-        Readout => READOUT,
-    }
-}
-
 /// The experiment noun's shared declaration.
 pub const EXPERIMENT: NounSpec<ExperimentVerb> = NounSpec {
     cli_name: "experiment",
@@ -509,3 +471,41 @@ const READOUT: OperationSpec<ExperimentVerb> = OperationSpec {
         "an experiment id is workspace-local and carries no host prefix",
     ),
 };
+
+operation_registry! {
+    noun: EXPERIMENT;
+    /// The experiment verbs.
+    pub enum ExperimentVerb;
+    /// Experiment operations in declaration order.
+    pub const EXPERIMENT_OPERATIONS;
+    {
+        /// Define a new draft experiment.
+        Create => CREATE,
+        /// Edit a draft experiment's definition.
+        Update => UPDATE,
+        /// Copy an experiment's definition into a new draft.
+        Clone => CLONE,
+        /// Start a draft experiment.
+        Start => START,
+        /// Pause a running experiment.
+        Pause => PAUSE,
+        /// Resume a paused experiment.
+        Resume => RESUME,
+        /// Change arm weights or retire arms, opening a new segment.
+        Reweight => REWEIGHT,
+        /// Force a task with no arm assignment, or an explicit_crew exclusion for the experiment, into an active arm.
+        Assign => ASSIGN,
+        /// Conclude an experiment with the chosen arm, or none.
+        Conclude => CONCLUDE,
+        /// Abandon an experiment without a conclusion.
+        Abandon => ABANDON,
+        /// Delete a finished experiment that never applied a treatment.
+        Delete => DELETE,
+        /// One experiment with its arms and event log.
+        Show => SHOW,
+        /// The workspace's experiments.
+        List => LIST,
+        /// An experiment's per-arm outcomes, intervals, health checks and verdict.
+        Readout => READOUT,
+    }
+}

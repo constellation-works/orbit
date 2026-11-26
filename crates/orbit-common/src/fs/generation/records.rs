@@ -42,6 +42,16 @@ impl Drop for Record {
     }
 }
 
+/// The v2 record beside `.generation.lock`: which identities the live
+/// participants were admitted with. Valid only while `record_digest` equals
+/// the digest in `.generation.lock`.
+#[derive(Serialize, Deserialize)]
+struct CompatRecord {
+    contract: String,
+    record_digest: String,
+    envelope: Envelope,
+}
+
 pub(super) fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     let root = validated_generation_root(root)?;
     let path = validated_generation_record_path(&root, name)?;
@@ -112,16 +122,6 @@ pub(super) fn read_generation(file: &mut File) -> Result<String, OrbitError> {
             "invalid generation record",
         )),
     }
-}
-
-/// The v2 record beside `.generation.lock`: which identities the live
-/// participants were admitted with. Valid only while `record_digest` equals
-/// the digest in `.generation.lock`.
-#[derive(Serialize, Deserialize)]
-struct CompatRecord {
-    contract: String,
-    record_digest: String,
-    envelope: Envelope,
 }
 
 pub(super) fn read_compat(root: &Path, recorded: &str) -> Option<Envelope> {

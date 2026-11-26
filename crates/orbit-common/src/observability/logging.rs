@@ -84,12 +84,15 @@ static FILE_GUARD: OnceLock<Mutex<Option<Vec<WorkerGuard>>>> = OnceLock::new();
 // retaining relay targets and their existing RUST_LOG filters.
 const AGENT_OUTPUT_FIELD: &str = "agent_output";
 
-/// Companion relay feed for the canonical operational log. Custom file paths
-/// with other filenames remain single-file readers.
-pub fn agent_jsonl_log_path(operational: &Path) -> Option<PathBuf> {
-    (operational.file_name()? == "orbit.jsonl")
-        .then(|| operational.with_file_name("orbit-agent.jsonl"))
-}
+/// Lines each background JSONL writer may hold before it drops or blocks.
+///
+/// The queue is preallocated slot by slot when the layer is built, so the
+/// `tracing_appender` default of 128 000 lines costs milliseconds of
+/// initialization in every process, including one-shot commands that log
+/// nothing. The operational feed drops new lines past this bound. The agent
+/// feed blocks the emitter instead, so a full queue slows the relay and keeps
+/// every line.
+pub const JSONL_QUEUE_LINES: usize = 4_096;
 
 /// Field formatter that redacts string-valued and `Debug`-formatted tracing
 /// event fields before they are written to stderr or the JSONL tracing feed.
@@ -122,12 +125,6 @@ impl Default for RedactingFields {
     fn default() -> Self {
         Self::text()
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RedactingFieldFormat {
-    Text,
-    Json,
 }
 
 impl<'writer> FormatFields<'writer> for RedactingFields {
@@ -180,6 +177,12 @@ impl<'writer> FormatFields<'writer> for RedactingFields {
             }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RedactingFieldFormat {
+    Text,
+    Json,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -281,18 +284,6 @@ where
     }
 }
 
-/// Format an error and its causes, outermost first.
-pub fn format_error_chain(value: &dyn std::error::Error) -> String {
-    let mut formatted = value.to_string();
-    let mut source = value.source();
-    while let Some(error) = source {
-        formatted.push_str(": ");
-        formatted.push_str(&error.to_string());
-        source = error.source();
-    }
-    formatted
-}
-
 impl<V> VisitOutput<std_fmt::Result> for RedactingVisitor<V>
 where
     V: VisitOutput<std_fmt::Result>,
@@ -368,6 +359,133 @@ impl VisitOutput<std_fmt::Result> for JsonFieldVisitor<'_> {
         let fields = serde_json::to_string(&self.values).map_err(|_| std_fmt::Error)?;
         self.writer.write_str(&fields)
     }
+}
+
+struct SplitJsonlWriter {
+    operational: NonBlocking,
+    agent: NonBlocking,
+}
+
+impl<'a> MakeWriter<'a> for SplitJsonlWriter {
+    type Writer = NonBlocking;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.operational.clone()
+    }
+
+    fn make_writer_for(&'a self, metadata: &tracing::Metadata<'_>) -> Self::Writer {
+        if metadata.fields().field(AGENT_OUTPUT_FIELD).is_some() {
+            self.agent.clone()
+        } else {
+            self.operational.clone()
+        }
+    }
+}
+
+/// Opens the JSONL file on first write. Construction is disk-free so
+/// subscriber init does not create the log directory or open the active file.
+enum JsonlFile {
+    Closed,
+    Open(File),
+    Failed,
+}
+
+struct LazyJsonlWriter {
+    path: PathBuf,
+    file: JsonlFile,
+    bytes_since_check: usize,
+    /// Taken on the first write. Only the agent feed arms it, and only when
+    /// [`crate::env_vars::ORBIT_TEST_AGENT_JSONL_GATE`] names a FIFO in a debug build.
+    write_gate: Option<PathBuf>,
+}
+
+impl LazyJsonlWriter {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            file: JsonlFile::Closed,
+            bytes_since_check: 0,
+            write_gate: None,
+        }
+    }
+
+    fn agent(path: PathBuf, write_gate: Option<PathBuf>) -> Self {
+        Self {
+            write_gate,
+            ..Self::new(path)
+        }
+    }
+
+    fn file(&mut self) -> io::Result<&mut File> {
+        match self.file {
+            JsonlFile::Open(_) => {}
+            JsonlFile::Failed => {
+                return Err(io::Error::other("JSONL tracing log unavailable"));
+            }
+            JsonlFile::Closed => match open_jsonl_file(&self.path) {
+                Ok(file) => self.file = JsonlFile::Open(file),
+                Err(err) => {
+                    let warning = err.to_string();
+                    self.file = JsonlFile::Failed;
+                    emit_log_init_warning(&warning);
+                    return Err(err);
+                }
+            },
+        }
+        match &mut self.file {
+            JsonlFile::Open(file) => Ok(file),
+            JsonlFile::Failed | JsonlFile::Closed => {
+                Err(io::Error::other("JSONL tracing log unavailable"))
+            }
+        }
+    }
+}
+
+impl Write for LazyJsonlWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // A regression holds this FIFO's write end closed until the agent
+        // queue is full. The worker blocks here, on its first line, before
+        // any byte reaches the log. A missing path does not stall the feed.
+        if let Some(gate) = self.write_gate.take() {
+            let _ = std::fs::File::open(gate);
+        }
+        // Reopen periodically so long-lived producers enforce size budgets
+        // and stop appending to an inode another process has rotated away.
+        // Never split a formatted record across two files.
+        if self.bytes_since_check >= 1024 * 1024 {
+            self.file = JsonlFile::Closed;
+            self.bytes_since_check = 0;
+        }
+        let written = self.file()?.write(buf)?;
+        self.bytes_since_check = self.bytes_since_check.saturating_add(written);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match &mut self.file {
+            JsonlFile::Open(file) => file.flush(),
+            JsonlFile::Closed | JsonlFile::Failed => Ok(()),
+        }
+    }
+}
+
+/// Companion relay feed for the canonical operational log. Custom file paths
+/// with other filenames remain single-file readers.
+pub fn agent_jsonl_log_path(operational: &Path) -> Option<PathBuf> {
+    (operational.file_name()? == "orbit.jsonl")
+        .then(|| operational.with_file_name("orbit-agent.jsonl"))
+}
+
+/// Format an error and its causes, outermost first.
+pub fn format_error_chain(value: &dyn std::error::Error) -> String {
+    let mut formatted = value.to_string();
+    let mut source = value.source();
+    while let Some(error) = source {
+        formatted.push_str(": ");
+        formatted.push_str(&error.to_string());
+        source = error.source();
+    }
+    formatted
 }
 
 fn json_field_name(field: &Field) -> &str {
@@ -683,37 +801,6 @@ fn log_paths_equivalent(left: &Path, right: &Path) -> bool {
     }
 }
 
-/// Lines each background JSONL writer may hold before it drops or blocks.
-///
-/// The queue is preallocated slot by slot when the layer is built, so the
-/// `tracing_appender` default of 128 000 lines costs milliseconds of
-/// initialization in every process, including one-shot commands that log
-/// nothing. The operational feed drops new lines past this bound. The agent
-/// feed blocks the emitter instead, so a full queue slows the relay and keeps
-/// every line.
-pub const JSONL_QUEUE_LINES: usize = 4_096;
-
-struct SplitJsonlWriter {
-    operational: NonBlocking,
-    agent: NonBlocking,
-}
-
-impl<'a> MakeWriter<'a> for SplitJsonlWriter {
-    type Writer = NonBlocking;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.operational.clone()
-    }
-
-    fn make_writer_for(&'a self, metadata: &tracing::Metadata<'_>) -> Self::Writer {
-        if metadata.fields().field(AGENT_OUTPUT_FIELD).is_some() {
-            self.agent.clone()
-        } else {
-            self.operational.clone()
-        }
-    }
-}
-
 fn split_jsonl_layer_at_path<S>(
     path: &Path,
     write_gate: Option<PathBuf>,
@@ -746,65 +833,6 @@ where
     (layer, vec![operational_guard, agent_guard])
 }
 
-/// Opens the JSONL file on first write. Construction is disk-free so
-/// subscriber init does not create the log directory or open the active file.
-enum JsonlFile {
-    Closed,
-    Open(File),
-    Failed,
-}
-
-struct LazyJsonlWriter {
-    path: PathBuf,
-    file: JsonlFile,
-    bytes_since_check: usize,
-    /// Taken on the first write. Only the agent feed arms it, and only when
-    /// [`crate::env_vars::ORBIT_TEST_AGENT_JSONL_GATE`] names a FIFO in a debug build.
-    write_gate: Option<PathBuf>,
-}
-
-impl LazyJsonlWriter {
-    fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            file: JsonlFile::Closed,
-            bytes_since_check: 0,
-            write_gate: None,
-        }
-    }
-
-    fn agent(path: PathBuf, write_gate: Option<PathBuf>) -> Self {
-        Self {
-            write_gate,
-            ..Self::new(path)
-        }
-    }
-
-    fn file(&mut self) -> io::Result<&mut File> {
-        match self.file {
-            JsonlFile::Open(_) => {}
-            JsonlFile::Failed => {
-                return Err(io::Error::other("JSONL tracing log unavailable"));
-            }
-            JsonlFile::Closed => match open_jsonl_file(&self.path) {
-                Ok(file) => self.file = JsonlFile::Open(file),
-                Err(err) => {
-                    let warning = err.to_string();
-                    self.file = JsonlFile::Failed;
-                    emit_log_init_warning(&warning);
-                    return Err(err);
-                }
-            },
-        }
-        match &mut self.file {
-            JsonlFile::Open(file) => Ok(file),
-            JsonlFile::Failed | JsonlFile::Closed => {
-                Err(io::Error::other("JSONL tracing log unavailable"))
-            }
-        }
-    }
-}
-
 /// Debug builds can stall the agent writer's first disk write on a fixture
 /// FIFO until the queue fills.
 fn agent_write_gate(_env: &crate::Env) -> Option<PathBuf> {
@@ -817,34 +845,6 @@ fn agent_write_gate(_env: &crate::Env) -> Option<PathBuf> {
     #[cfg(not(debug_assertions))]
     {
         None
-    }
-}
-
-impl Write for LazyJsonlWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // A regression holds this FIFO's write end closed until the agent
-        // queue is full. The worker blocks here, on its first line, before
-        // any byte reaches the log. A missing path does not stall the feed.
-        if let Some(gate) = self.write_gate.take() {
-            let _ = std::fs::File::open(gate);
-        }
-        // Reopen periodically so long-lived producers enforce size budgets
-        // and stop appending to an inode another process has rotated away.
-        // Never split a formatted record across two files.
-        if self.bytes_since_check >= 1024 * 1024 {
-            self.file = JsonlFile::Closed;
-            self.bytes_since_check = 0;
-        }
-        let written = self.file()?.write(buf)?;
-        self.bytes_since_check = self.bytes_since_check.saturating_add(written);
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match &mut self.file {
-            JsonlFile::Open(file) => file.flush(),
-            JsonlFile::Closed | JsonlFile::Failed => Ok(()),
-        }
     }
 }
 

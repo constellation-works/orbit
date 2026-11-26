@@ -46,6 +46,11 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::OrbitError;
 
+/// Cap on symlink traversals while resolving a not-yet-existing tail. Mirrors
+/// the kernel's `ELOOP` limit; a cycle of dangling links fails closed here
+/// instead of looping.
+const MAX_SYMLINK_FOLLOWS: usize = 40;
+
 /// The path as the kernel resolves it, for a path that need not exist.
 ///
 /// Components are resolved left to right. Every component that exists is
@@ -121,11 +126,6 @@ pub fn lexical_normalize(path: &Path) -> PathBuf {
     }
     out
 }
-
-/// Cap on symlink traversals while resolving a not-yet-existing tail. Mirrors
-/// the kernel's `ELOOP` limit; a cycle of dangling links fails closed here
-/// instead of looping.
-const MAX_SYMLINK_FOLLOWS: usize = 40;
 
 /// Resolve symlinks in `path`, tolerating a not-yet-existing tail (writes /
 /// creates): canonicalize the nearest existing ancestor and rejoin the missing

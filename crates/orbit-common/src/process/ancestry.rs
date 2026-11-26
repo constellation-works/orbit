@@ -13,12 +13,28 @@ pub(super) mod darwin_tree {
 
     use super::{ProcessStartKey, ProcessTreeProcess};
 
+    /// launchd, which adopts a process whose parent exits.
+    const LAUNCHD_PID: u32 = 1;
+
     #[derive(Debug)]
     pub(in crate::process) enum ReadError {
         /// The process is gone. A descendant may be skipped; the root may not.
         Gone,
         /// The kernel refused or truncated the read. The snapshot is unusable.
         Unreadable,
+    }
+
+    /// How a queued pid came to be walked, which decides how its read
+    /// failures and its parent are checked.
+    #[derive(Clone, Copy)]
+    enum Listed {
+        /// The walk's root, which must be readable.
+        Root,
+        /// An orphan in an owned session, which must still be launchd's.
+        Orphan,
+        /// A member's child, with the start identity and observed parent
+        /// PID of that member, so reparenting invalidates ownership.
+        By(ProcessStartKey, u32),
     }
 
     pub(super) fn snapshot(root: u32) -> Option<Vec<ProcessTreeProcess>> {
@@ -37,22 +53,6 @@ pub(super) mod darwin_tree {
             read_start,
             session_of,
         )
-    }
-
-    /// launchd, which adopts a process whose parent exits.
-    const LAUNCHD_PID: u32 = 1;
-
-    /// How a queued pid came to be walked, which decides how its read
-    /// failures and its parent are checked.
-    #[derive(Clone, Copy)]
-    enum Listed {
-        /// The walk's root, which must be readable.
-        Root,
-        /// An orphan in an owned session, which must still be launchd's.
-        Orphan,
-        /// A member's child, with the start identity and observed parent
-        /// PID of that member, so reparenting invalidates ownership.
-        By(ProcessStartKey, u32),
     }
 
     // Kernel reads are injected so exit and reuse between them can be tested
@@ -390,78 +390,6 @@ pub struct ProcessStartKey {
     pub starttime: u64,
 }
 
-/// The start key for `pid`, when the kernel still describes that process.
-pub fn process_start_key(pid: u32) -> Option<ProcessStartKey> {
-    inspect_process(pid).map(|(starttime, _ppid)| ProcessStartKey { pid, starttime })
-}
-
-/// The start key and parent pid of `pid`, read together so a caller walking
-/// ancestry can check each parent against the child it came from.
-pub fn process_start_and_parent(pid: u32) -> Option<(ProcessStartKey, u32)> {
-    inspect_process(pid).map(|(starttime, ppid)| (ProcessStartKey { pid, starttime }, ppid))
-}
-
-/// This process's process-group id (`getpgrp`). Orbit spawns plugin backends
-/// with `process_group(0)`, so the child's PGID equals its PID and every
-/// descendant — including `orbit tool run` started from a `$()` subshell —
-/// inherits that group. The syscall does not consult `/proc`.
-#[cfg(unix)]
-pub fn current_process_group() -> Option<u32> {
-    // Safety: `getpgrp` is a pure query of the calling process.
-    let pgid = unsafe { libc::getpgrp() };
-    u32::try_from(pgid).ok().filter(|pgid| *pgid > 1)
-}
-
-/// Process group lookup is unavailable on this platform and returns `None`.
-#[cfg(not(unix))]
-pub fn current_process_group() -> Option<u32> {
-    None
-}
-
-/// This process's parent pid (`getppid`). Same Landlock constraint as
-/// [`current_process_group`]: a syscall, not a `/proc` read.
-#[cfg(unix)]
-pub fn current_parent_pid() -> Option<u32> {
-    // Safety: `getppid` is a pure query of the calling process.
-    let ppid = unsafe { libc::getppid() };
-    u32::try_from(ppid).ok().filter(|ppid| *ppid > 0)
-}
-
-/// Parent PID lookup is unavailable on this platform and returns `None`.
-#[cfg(not(unix))]
-pub fn current_parent_pid() -> Option<u32> {
-    None
-}
-
-fn inspect_process(pid: u32) -> Option<(u64, u32)> {
-    #[cfg(target_os = "linux")]
-    {
-        linux_start_and_parent(pid)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        darwin_start_and_parent(pid)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = pid;
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_start_and_parent(pid: u32) -> Option<(u64, u32)> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let parsed = super::identity::parse_linux_process_stat(&stat)?;
-    Some((parsed.start_ticks, parsed.parent_pid))
-}
-
-#[cfg(target_os = "macos")]
-fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
-    let info = super::identity::darwin_bsd_info(pid, true).ok()??;
-    Some((super::identity::darwin_start_time(&info), info.ppid))
-}
-
 /// One live process in a worker's tree, named so a reused pid is not the
 /// process sampled last time.
 ///
@@ -541,17 +469,6 @@ pub struct TreeCpuAccount {
     tracked: HashMap<ProcessStartKey, Tracked>,
     baseline: bool,
     cumulative_ns: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Tracked {
-    parent: Option<ProcessStartKey>,
-    total_ns: u64,
-    reaped_ns: u64,
-    /// Last observed totals of descendants that exited under this process
-    /// and that its reaped total has not absorbed yet. Whatever its next
-    /// sighting does not settle is dropped.
-    owed_ns: u64,
 }
 
 impl TreeCpuAccount {
@@ -683,17 +600,15 @@ impl TreeCpuAccount {
     }
 }
 
-/// The live process tree rooted at `root`, including `root`.
-///
-/// `None` when the tree cannot be read: the root itself is unreadable, a
-/// descendant listing is denied or truncated, or a process that is still
-/// listed cannot be measured. A descendant that exits, is replaced, or is
-/// reparented during the walk is omitted. That is a snapshot, not an error.
-/// Callers that sum CPU across snapshots must tolerate processes appearing
-/// and disappearing.
-#[cfg(target_os = "macos")]
-pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
-    darwin_tree::snapshot(root)
+#[derive(Debug, Clone, Copy)]
+struct Tracked {
+    parent: Option<ProcessStartKey>,
+    total_ns: u64,
+    reaped_ns: u64,
+    /// Last observed totals of descendants that exited under this process
+    /// and that its reaped total has not absorbed yet. Whatever its next
+    /// sighting does not settle is dropped.
+    owed_ns: u64,
 }
 
 /// A process tree plus the orphans it left behind, across snapshots.
@@ -742,6 +657,91 @@ impl SessionTree {
     pub fn snapshot(&mut self) -> Option<Vec<ProcessTreeProcess>> {
         darwin_tree::session_snapshot(self.root, &mut self.sessions)
     }
+}
+
+/// The start key for `pid`, when the kernel still describes that process.
+pub fn process_start_key(pid: u32) -> Option<ProcessStartKey> {
+    inspect_process(pid).map(|(starttime, _ppid)| ProcessStartKey { pid, starttime })
+}
+
+/// The start key and parent pid of `pid`, read together so a caller walking
+/// ancestry can check each parent against the child it came from.
+pub fn process_start_and_parent(pid: u32) -> Option<(ProcessStartKey, u32)> {
+    inspect_process(pid).map(|(starttime, ppid)| (ProcessStartKey { pid, starttime }, ppid))
+}
+
+/// This process's process-group id (`getpgrp`). Orbit spawns plugin backends
+/// with `process_group(0)`, so the child's PGID equals its PID and every
+/// descendant — including `orbit tool run` started from a `$()` subshell —
+/// inherits that group. The syscall does not consult `/proc`.
+#[cfg(unix)]
+pub fn current_process_group() -> Option<u32> {
+    // Safety: `getpgrp` is a pure query of the calling process.
+    let pgid = unsafe { libc::getpgrp() };
+    u32::try_from(pgid).ok().filter(|pgid| *pgid > 1)
+}
+
+/// Process group lookup is unavailable on this platform and returns `None`.
+#[cfg(not(unix))]
+pub fn current_process_group() -> Option<u32> {
+    None
+}
+
+/// This process's parent pid (`getppid`). Same Landlock constraint as
+/// [`current_process_group`]: a syscall, not a `/proc` read.
+#[cfg(unix)]
+pub fn current_parent_pid() -> Option<u32> {
+    // Safety: `getppid` is a pure query of the calling process.
+    let ppid = unsafe { libc::getppid() };
+    u32::try_from(ppid).ok().filter(|ppid| *ppid > 0)
+}
+
+/// Parent PID lookup is unavailable on this platform and returns `None`.
+#[cfg(not(unix))]
+pub fn current_parent_pid() -> Option<u32> {
+    None
+}
+
+fn inspect_process(pid: u32) -> Option<(u64, u32)> {
+    #[cfg(target_os = "linux")]
+    {
+        linux_start_and_parent(pid)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        darwin_start_and_parent(pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_start_and_parent(pid: u32) -> Option<(u64, u32)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let parsed = super::identity::parse_linux_process_stat(&stat)?;
+    Some((parsed.start_ticks, parsed.parent_pid))
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
+    let info = super::identity::darwin_bsd_info(pid, true).ok()??;
+    Some((super::identity::darwin_start_time(&info), info.ppid))
+}
+
+/// The live process tree rooted at `root`, including `root`.
+///
+/// `None` when the tree cannot be read: the root itself is unreadable, a
+/// descendant listing is denied or truncated, or a process that is still
+/// listed cannot be measured. A descendant that exits, is replaced, or is
+/// reparented during the walk is omitted. That is a snapshot, not an error.
+/// Callers that sum CPU across snapshots must tolerate processes appearing
+/// and disappearing.
+#[cfg(target_os = "macos")]
+pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
+    darwin_tree::snapshot(root)
 }
 
 /// The kernel command name for this exact process, without command-line

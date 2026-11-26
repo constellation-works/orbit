@@ -37,6 +37,42 @@ impl Drop for HeldLockPath {
     }
 }
 
+/// An exclusive advisory lock held for as long as the guard
+/// [`hold_exclusive_file_lock_options`] returns, rather than for one closure.
+///
+/// For a holder that must release an enclosing lock and keep this one: the
+/// closure helpers can only release locks in the reverse order they took them.
+/// The guard is keyed and re-entrant exactly like
+/// [`with_exclusive_file_lock_options`], so while it lives nested lock calls
+/// on the same target on this thread run under it. The re-entrancy record is
+/// per thread, so the guard is not `Send`.
+#[must_use = "the advisory lock is released as soon as the guard is dropped"]
+pub struct HeldFileLock {
+    // Declared before `held`, so the lock is released before this thread
+    // stops recording it as held, as the closure helpers do.
+    lock: Option<crate::fs::file_lock::FileLockGuard>,
+    held: Option<HeldLockPath>,
+    not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl HeldFileLock {
+    /// Whether this thread already held the lock when the guard was taken,
+    /// so dropping the guard releases nothing.
+    pub fn is_reentry(&self) -> bool {
+        self.held.is_none()
+    }
+}
+
+impl std::fmt::Debug for HeldFileLock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HeldFileLock")
+            .field("lock", &self.lock)
+            .field("reentry", &self.is_reentry())
+            .finish()
+    }
+}
+
 /// Registers `path` as held by this thread, or returns `None` when this thread
 /// already holds it (the caller then runs `op` under the outer lock).
 fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
@@ -163,42 +199,6 @@ where
         return Ok(None);
     };
     op().map(Some)
-}
-
-/// An exclusive advisory lock held for as long as the guard
-/// [`hold_exclusive_file_lock_options`] returns, rather than for one closure.
-///
-/// For a holder that must release an enclosing lock and keep this one: the
-/// closure helpers can only release locks in the reverse order they took them.
-/// The guard is keyed and re-entrant exactly like
-/// [`with_exclusive_file_lock_options`], so while it lives nested lock calls
-/// on the same target on this thread run under it. The re-entrancy record is
-/// per thread, so the guard is not `Send`.
-#[must_use = "the advisory lock is released as soon as the guard is dropped"]
-pub struct HeldFileLock {
-    // Declared before `held`, so the lock is released before this thread
-    // stops recording it as held, as the closure helpers do.
-    lock: Option<crate::fs::file_lock::FileLockGuard>,
-    held: Option<HeldLockPath>,
-    not_send: std::marker::PhantomData<*const ()>,
-}
-
-impl HeldFileLock {
-    /// Whether this thread already held the lock when the guard was taken,
-    /// so dropping the guard releases nothing.
-    pub fn is_reentry(&self) -> bool {
-        self.held.is_none()
-    }
-}
-
-impl std::fmt::Debug for HeldFileLock {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("HeldFileLock")
-            .field("lock", &self.lock)
-            .field("reentry", &self.is_reentry())
-            .finish()
-    }
 }
 
 /// Take the exclusive lock [`with_exclusive_file_lock_options`] takes for

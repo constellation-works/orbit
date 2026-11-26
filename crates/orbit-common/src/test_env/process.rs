@@ -1,6 +1,38 @@
 use super::FIXTURE_STEP_DEADLINE;
 use crate::env_vars;
 
+/// A `ps` run from a test: its output, or why the sandbox refused to start it.
+#[derive(Debug)]
+pub enum PsRun {
+    /// `ps` started; its status and output are the caller's to assert.
+    Ran(std::process::Output),
+    /// An agent executor's sandbox refused to exec the setuid `ps`. The test
+    /// has nothing to compare: it reports this reason through
+    /// [`report_ps_denied`] and returns.
+    Denied(String),
+}
+
+/// A live process that is no part of this one: not this process, its parent,
+/// or its process group. Killed and reaped on drop.
+#[cfg(unix)]
+pub struct UnrelatedProcess(std::process::Child);
+
+#[cfg(unix)]
+impl UnrelatedProcess {
+    /// The process id to bind or present as "some other process".
+    pub fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnrelatedProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// The host's load averages against its CPU count, for a fixture deadline's
 /// failure message: an overrun on a saturated host then names the pressure
 /// instead of reading as a defect in the code under test.
@@ -105,17 +137,6 @@ pub fn start_identity_probe_blocker() -> Option<String> {
     crate::process::identity::self_start_identity_probe_blocker()
 }
 
-/// A `ps` run from a test: its output, or why the sandbox refused to start it.
-#[derive(Debug)]
-pub enum PsRun {
-    /// `ps` started; its status and output are the caller's to assert.
-    Ran(std::process::Output),
-    /// An agent executor's sandbox refused to exec the setuid `ps`. The test
-    /// has nothing to compare: it reports this reason through
-    /// [`report_ps_denied`] and returns.
-    Denied(String),
-}
-
 /// Run `ps -o lstart= -p <pid>` under the UTC / C locale that persisted owner
 /// tokens were captured in.
 ///
@@ -193,27 +214,6 @@ pub(crate) fn classify_ps(spawned: std::io::Result<std::process::Output>) -> PsR
             PsRun::Denied(format!("the sandbox denied running `ps`: {error}"))
         }
         Err(error) => panic!("run ps: {error}"),
-    }
-}
-
-/// A live process that is no part of this one: not this process, its parent,
-/// or its process group. Killed and reaped on drop.
-#[cfg(unix)]
-pub struct UnrelatedProcess(std::process::Child);
-
-#[cfg(unix)]
-impl UnrelatedProcess {
-    /// The process id to bind or present as "some other process".
-    pub fn pid(&self) -> u32 {
-        self.0.id()
-    }
-}
-
-#[cfg(unix)]
-impl Drop for UnrelatedProcess {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
     }
 }
 

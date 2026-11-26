@@ -35,84 +35,6 @@ const PENDING_DIR: &str = "pending";
 const QUARANTINE_DIR: &str = "sweep";
 const SWEEP_LOCK: &str = "sweep.lock";
 
-/// The pending-publication root of an audit root, where
-/// [`super::blob_store::BlobStore::with_pending_root`] records markers.
-pub fn pending_root(audit_root: &Path) -> PathBuf {
-    audit_root.join(PENDING_DIR)
-}
-
-/// A lowercase SHA-256 digest, the only name a stored blob or marker has.
-pub fn is_blob_hash(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// Call `f` with every blob hash token in `text`: a maximal run of hex digits
-/// exactly 64 long. Writers clearing markers and the sweep marking references
-/// share this tokenizer, so they never disagree on what names a blob.
-///
-/// The sweep runs this over every remaining audit payload, run step and run
-/// state, gigabytes of mostly prose, so it skips instead of visiting each
-/// character: a 64-digit run must cover the last byte of any 64-byte window
-/// it starts in, so a window whose last byte is not a hex digit is passed
-/// over whole. Hex digits are ASCII and never occur inside a multi-byte UTF-8
-/// sequence, so working on bytes splits exactly where `char`s would.
-pub fn for_each_blob_hash(text: &str, mut f: impl FnMut(&str)) {
-    const LEN: usize = 64;
-    let bytes = text.as_bytes();
-    // Invariant: `start` is 0 or follows a byte that is not a hex digit, so a
-    // run beginning at `start` is maximal on its left.
-    let mut start = 0;
-    while start + LEN <= bytes.len() {
-        let last = start + LEN - 1;
-        if !bytes[last].is_ascii_hexdigit() {
-            start = last + 1;
-            continue;
-        }
-        // Walk back from `last` to the beginning of its run.
-        let mut run_start = last;
-        while run_start > start && bytes[run_start - 1].is_ascii_hexdigit() {
-            run_start -= 1;
-        }
-        if run_start > start {
-            start = run_start;
-            continue;
-        }
-        // `start..=last` are all hex digits; find where the run ends.
-        let mut end = last + 1;
-        while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
-            end += 1;
-        }
-        if end - start == LEN {
-            // Every byte is ASCII, so the slice is on char boundaries.
-            if let Some(token) = text.get(start..end).filter(|token| is_blob_hash(token)) {
-                f(token);
-            }
-        }
-        start = end + 1;
-    }
-}
-
-pub(super) fn mark_pending(pending_root: &Path, hash: &str) -> io::Result<()> {
-    // The marker's own mtime is its age; a rewrite replaces the file, so a
-    // refreshed marker is always fresh.
-    atomic_write_private_bytes(&pending_root.join(hash), b"")
-}
-
-pub(super) fn clear_pending(pending_root: &Path, published: &str) {
-    for_each_blob_hash(published, |hash| {
-        match fs::remove_file(pending_root.join(hash)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(%hash, %error, "could not retire an audit blob pending marker");
-            }
-        }
-    });
-}
-
 /// One stored blob or pending marker.
 #[derive(Debug, Clone)]
 pub struct SweepEntry {
@@ -141,11 +63,6 @@ pub enum SweepOutcome {
 /// own quarantine directory and lock beside them.
 pub struct AuditBlobRoot {
     audit_root: PathBuf,
-}
-
-/// Held for one sweep; a second sweep of the same root is refused.
-pub struct SweepLock {
-    _guard: FileLockGuard,
 }
 
 impl AuditBlobRoot {
@@ -281,6 +198,89 @@ impl AuditBlobRoot {
     fn blob_path(&self, hash: &str) -> PathBuf {
         self.blobs_dir().join(&hash[..2]).join(hash)
     }
+}
+
+/// Held for one sweep; a second sweep of the same root is refused.
+pub struct SweepLock {
+    _guard: FileLockGuard,
+}
+
+/// The pending-publication root of an audit root, where
+/// [`super::blob_store::BlobStore::with_pending_root`] records markers.
+pub fn pending_root(audit_root: &Path) -> PathBuf {
+    audit_root.join(PENDING_DIR)
+}
+
+/// A lowercase SHA-256 digest, the only name a stored blob or marker has.
+pub fn is_blob_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Call `f` with every blob hash token in `text`: a maximal run of hex digits
+/// exactly 64 long. Writers clearing markers and the sweep marking references
+/// share this tokenizer, so they never disagree on what names a blob.
+///
+/// The sweep runs this over every remaining audit payload, run step and run
+/// state, gigabytes of mostly prose, so it skips instead of visiting each
+/// character: a 64-digit run must cover the last byte of any 64-byte window
+/// it starts in, so a window whose last byte is not a hex digit is passed
+/// over whole. Hex digits are ASCII and never occur inside a multi-byte UTF-8
+/// sequence, so working on bytes splits exactly where `char`s would.
+pub fn for_each_blob_hash(text: &str, mut f: impl FnMut(&str)) {
+    const LEN: usize = 64;
+    let bytes = text.as_bytes();
+    // Invariant: `start` is 0 or follows a byte that is not a hex digit, so a
+    // run beginning at `start` is maximal on its left.
+    let mut start = 0;
+    while start + LEN <= bytes.len() {
+        let last = start + LEN - 1;
+        if !bytes[last].is_ascii_hexdigit() {
+            start = last + 1;
+            continue;
+        }
+        // Walk back from `last` to the beginning of its run.
+        let mut run_start = last;
+        while run_start > start && bytes[run_start - 1].is_ascii_hexdigit() {
+            run_start -= 1;
+        }
+        if run_start > start {
+            start = run_start;
+            continue;
+        }
+        // `start..=last` are all hex digits; find where the run ends.
+        let mut end = last + 1;
+        while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
+            end += 1;
+        }
+        if end - start == LEN {
+            // Every byte is ASCII, so the slice is on char boundaries.
+            if let Some(token) = text.get(start..end).filter(|token| is_blob_hash(token)) {
+                f(token);
+            }
+        }
+        start = end + 1;
+    }
+}
+
+pub(super) fn mark_pending(pending_root: &Path, hash: &str) -> io::Result<()> {
+    // The marker's own mtime is its age; a rewrite replaces the file, so a
+    // refreshed marker is always fresh.
+    atomic_write_private_bytes(&pending_root.join(hash), b"")
+}
+
+pub(super) fn clear_pending(pending_root: &Path, published: &str) {
+    for_each_blob_hash(published, |hash| {
+        match fs::remove_file(pending_root.join(hash)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(%hash, %error, "could not retire an audit blob pending marker");
+            }
+        }
+    });
 }
 
 fn read_dir_if_exists(path: &Path) -> io::Result<Vec<io::Result<fs::DirEntry>>> {

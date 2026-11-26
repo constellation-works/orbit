@@ -28,6 +28,58 @@ mod sqlite;
 #[path = "mechanisms/storage.rs"]
 mod storage;
 
+// This binary owns its allocator so allocation volume can detect repeated
+// carry copies and quadratic redaction scans deterministically, without timing
+// limits or synthetic load.
+mod counting_allocator {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(super) static ALLOCATED: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    struct CountingAllocator;
+
+    // SAFETY: Every allocation operation delegates unchanged to System. The
+    // thread-local counter is allocation-free and does not inspect pointers.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            count_allocation(layout.size());
+            // SAFETY: The caller supplies the layout required by System.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            count_allocation(layout.size());
+            // SAFETY: The caller supplies the layout required by System.
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: The pointer and layout are forwarded to their allocator.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            count_allocation(new_size);
+            // SAFETY: The original pointer, layout and new size are unchanged.
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    fn count_allocation(size: usize) {
+        let _ = ALLOCATED.try_with(|count| {
+            if let Some(total) = count.get() {
+                count.set(Some(total.saturating_add(size)));
+            }
+        });
+    }
+}
+
 /// ORB-15240: nextest interrupting a test parent must not leave the fixture
 /// child group it spawned running. The parent is SIGKILLed mid-run, which
 /// gives it no chance to run its own cleanup.
@@ -471,6 +523,7 @@ mod durability_syncs {
 
 use chrono::DateTime;
 use chrono::Utc;
+use counting_allocator::ALLOCATED;
 use fs2::FileExt;
 use orbit_common::ClaimRefusalKind;
 use orbit_common::OrbitError;
@@ -555,9 +608,6 @@ use orbit_types::task::TaskEventRowV2;
 use orbit_types::telemetry::TokenUsage;
 use serde_json::Value;
 use serde_json::json;
-use std::alloc::GlobalAlloc;
-use std::alloc::Layout;
-use std::alloc::System;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs as std_fs;

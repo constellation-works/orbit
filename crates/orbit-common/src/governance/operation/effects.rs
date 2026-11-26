@@ -1,5 +1,11 @@
 use crate::OrbitError;
 
+/// The legacy top-level `agent` field. Attribution comes from the session.
+pub const RETIRED_AGENT_FIELD: RetiredField = RetiredField::no_longer_accepts(
+    "agent",
+    "attribution comes from the session, not an `agent` input",
+);
+
 /// Whether an operation reads or writes durable state.
 ///
 /// One declaration that every surface derives its runtime wiring from: the
@@ -79,12 +85,6 @@ impl RetiredField {
         })
     }
 }
-
-/// The legacy top-level `agent` field. Attribution comes from the session.
-pub const RETIRED_AGENT_FIELD: RetiredField = RetiredField::no_longer_accepts(
-    "agent",
-    "attribution comes from the session, not an `agent` input",
-);
 
 /// What an operation does with an input field it does not declare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -20,6 +20,22 @@ use wait_timeout::ChildExt;
 /// reports the child still running.
 const HOOKED_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+thread_local! {
+    static SEAM: RefCell<Option<Rc<SupervisorSeam>>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static CLOCK: RefCell<Option<FixtureClock>> = const { RefCell::new(None) };
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static FAILURE: std::cell::RefCell<Option<FailureInjection>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
 /// A `try_wait`-style poll that replaces the supervisor's blocking wait.
 pub type WaitHook = Box<dyn Fn(&mut Child) -> io::Result<Option<ExitStatus>>>;
 
@@ -34,8 +50,63 @@ pub struct SupervisorSeam {
     pub no_wakeup_pair: bool,
 }
 
-thread_local! {
-    static SEAM: RefCell<Option<Rc<SupervisorSeam>>> = const { RefCell::new(None) };
+#[cfg(feature = "test-support")]
+type FixtureClock = Rc<dyn Fn() -> std::time::Instant>;
+
+// Per-thread fault injection exercises the public bounded-run boundary without
+// exhausting host descriptors or corrupting a process-wide wait disposition.
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SupervisionFailure {
+    PreparePipes,
+    PipeSetup,
+    PipeRead,
+    Wait,
+}
+
+#[cfg(all(test, unix))]
+type FailureInjection = (SupervisionFailure, Box<dyn FnOnce(u32) + Send>);
+
+/// A fault transferred from the calling thread to exactly one output worker.
+#[cfg(all(test, unix))]
+pub(super) struct OutputFailure {
+    point: SupervisionFailure,
+    pid: u32,
+    on_failure: Option<Box<dyn FnOnce(u32) + Send>>,
+}
+
+#[cfg(all(test, unix))]
+impl OutputFailure {
+    pub(super) fn take(pid: u32) -> Option<Self> {
+        FAILURE.with(|failure| {
+            let mut failure = failure.borrow_mut();
+            if !failure.as_ref().is_some_and(|(point, _)| {
+                matches!(
+                    point,
+                    SupervisionFailure::PipeSetup | SupervisionFailure::PipeRead
+                )
+            }) {
+                return None;
+            }
+            failure.take().map(|(point, on_failure)| Self {
+                point,
+                pid,
+                on_failure: Some(on_failure),
+            })
+        })
+    }
+
+    pub(super) fn inject(&mut self, point: SupervisionFailure) -> io::Result<()> {
+        if self.point == point
+            && let Some(on_failure) = self.on_failure.take()
+        {
+            on_failure(self.pid);
+            return Err(io::Error::other(format!(
+                "injected output worker failure: {point:?}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Apply `seam` to every supervision this thread runs during `operation`.
@@ -49,14 +120,6 @@ pub fn with_supervisor_seam<T>(seam: SupervisorSeam, operation: impl FnOnce() ->
     }
     let _restore = Restore(SEAM.with(|slot| slot.replace(Some(Rc::new(seam)))));
     operation()
-}
-
-#[cfg(feature = "test-support")]
-type FixtureClock = Rc<dyn Fn() -> std::time::Instant>;
-
-#[cfg(feature = "test-support")]
-thread_local! {
-    static CLOCK: RefCell<Option<FixtureClock>> = const { RefCell::new(None) };
 }
 
 /// Use a fixture clock for fixed supervision deadlines on this thread.
@@ -107,27 +170,6 @@ pub(super) fn wait_timeout(child: &mut Child, slice: Duration) -> io::Result<Opt
     result
 }
 
-// Per-thread fault injection exercises the public bounded-run boundary without
-// exhausting host descriptors or corrupting a process-wide wait disposition.
-#[cfg(all(test, unix))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SupervisionFailure {
-    PreparePipes,
-    PipeSetup,
-    PipeRead,
-    Wait,
-}
-
-#[cfg(all(test, unix))]
-type FailureInjection = (SupervisionFailure, Box<dyn FnOnce(u32) + Send>);
-
-#[cfg(all(test, unix))]
-thread_local! {
-    static FAILURE: std::cell::RefCell<Option<FailureInjection>> = const {
-        std::cell::RefCell::new(None)
-    };
-}
-
 #[cfg(all(test, unix))]
 pub(crate) fn with_supervision_failure<T>(
     point: SupervisionFailure,
@@ -147,48 +189,6 @@ pub(crate) fn with_supervision_failure<T>(
         "did not reach {point:?}"
     );
     result
-}
-
-/// A fault transferred from the calling thread to exactly one output worker.
-#[cfg(all(test, unix))]
-pub(super) struct OutputFailure {
-    point: SupervisionFailure,
-    pid: u32,
-    on_failure: Option<Box<dyn FnOnce(u32) + Send>>,
-}
-
-#[cfg(all(test, unix))]
-impl OutputFailure {
-    pub(super) fn take(pid: u32) -> Option<Self> {
-        FAILURE.with(|failure| {
-            let mut failure = failure.borrow_mut();
-            if !failure.as_ref().is_some_and(|(point, _)| {
-                matches!(
-                    point,
-                    SupervisionFailure::PipeSetup | SupervisionFailure::PipeRead
-                )
-            }) {
-                return None;
-            }
-            failure.take().map(|(point, on_failure)| Self {
-                point,
-                pid,
-                on_failure: Some(on_failure),
-            })
-        })
-    }
-
-    pub(super) fn inject(&mut self, point: SupervisionFailure) -> io::Result<()> {
-        if self.point == point
-            && let Some(on_failure) = self.on_failure.take()
-        {
-            on_failure(self.pid);
-            return Err(io::Error::other(format!(
-                "injected output worker failure: {point:?}"
-            )));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(all(test, unix))]

@@ -16,32 +16,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: RESIDENT;
-    /// The resident mandate verbs.
-    pub enum ResidentVerb;
-    /// Resident operations in surface order.
-    pub const RESIDENT_OPERATIONS;
-    {
-        /// Widen or narrow a mandate's authority.
-        Grant => GRANT,
-        /// Relay a human's direction or answer to a resident, verbatim.
-        Relay => RELAY,
-        /// Pause, resume, stop, wake, take over or release a resident.
-        Control => CONTROL,
-        /// Append the live cycle's structured checkpoint.
-        Checkpoint => CHECKPOINT,
-        /// One mandate with its authority, grant history and state.
-        Show => SHOW,
-        /// Every mandate in the workspace.
-        List => LIST,
-        /// The four widening measures, per mandate and across mandates.
-        Metrics => METRICS,
-        /// The manager's resident state, escalations, vetoes and costly pains.
-        Digest => DIGEST,
-    }
-}
-
 /// The resident noun's shared declaration.
 pub const RESIDENT: NounSpec<ResidentVerb> = NounSpec {
     cli_name: "resident",
@@ -387,3 +361,29 @@ const CONTROL: OperationSpec<ResidentVerb> = OperationSpec {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: RESIDENT;
+    /// The resident mandate verbs.
+    pub enum ResidentVerb;
+    /// Resident operations in surface order.
+    pub const RESIDENT_OPERATIONS;
+    {
+        /// Widen or narrow a mandate's authority.
+        Grant => GRANT,
+        /// Relay a human's direction or answer to a resident, verbatim.
+        Relay => RELAY,
+        /// Pause, resume, stop, wake, take over or release a resident.
+        Control => CONTROL,
+        /// Append the live cycle's structured checkpoint.
+        Checkpoint => CHECKPOINT,
+        /// One mandate with its authority, grant history and state.
+        Show => SHOW,
+        /// Every mandate in the workspace.
+        List => LIST,
+        /// The four widening measures, per mandate and across mandates.
+        Metrics => METRICS,
+        /// The manager's resident state, escalations, vetoes and costly pains.
+        Digest => DIGEST,
+    }
+}

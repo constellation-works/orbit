@@ -46,6 +46,151 @@ const PID_NAMESPACE_FIELD: &str = "pidns=";
 /// unreadable `/proc/self/ns/pid`). Reads back as "namespace unknown".
 const UNKNOWN_PID_NAMESPACE: &str = "-";
 
+/// A `ps -o lstart=` for one pid answers in milliseconds; a `ps` that does not
+/// is unreadable identity, which callers already treat as unavailable.
+#[cfg(all(unix, not(target_os = "linux")))]
+const PS_TIMEOUT: Duration = Duration::from_secs(5);
+/// One `lstart` line is under 40 bytes.
+#[cfg(all(unix, not(target_os = "linux")))]
+const PS_OUTPUT_LIMIT: usize = 4096;
+
+/// Where the observer stands relative to the PID namespace a token was
+/// written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidNamespaceScope {
+    /// Observer and writer share a PID namespace: PIDs mean the same thing on
+    /// both sides, so liveness probes are authoritative.
+    Same,
+    /// Observer is in a different PID namespace than the writer, or on a host
+    /// without PID namespaces reading a token that records one. The recorded
+    /// PID names a different process here, or none at all; no probe run from
+    /// this side can say anything about the recorded process.
+    Foreign,
+    /// One side did not record a namespace (v1/legacy token, no token, or a
+    /// Linux host that cannot report one). Probes are treated as
+    /// authoritative, as they were before [ORB-10594].
+    Unknown,
+}
+
+/// Outcome of a single process-start identity probe.
+///
+/// Readers must distinguish a *probe failure* (`Unavailable`) from a
+/// *process-not-found* result (`NoProcess`): the former indicates we cannot
+/// tell whether the PID is alive (unreadable kernel data, spawn error, etc.)
+/// and must not be enough to terminalize a still-running worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// The probe succeeded and produced a non-empty versioned token.
+    Token(String),
+    /// The process record was absent (`ps` exited non-zero or returned an
+    /// empty token on hosts using that fallback).
+    NoProcess,
+    /// Kernel data could not be read or parsed, or the fallback command
+    /// failed to spawn. Identity cannot be probed; defer to other liveness
+    /// signals.
+    Unavailable,
+}
+
+/// Liveness of a PID recorded earlier in a run, judged against the identity
+/// token captured when the PID was recorded [ORB-10496].
+///
+/// The distinction that matters to an operator is `Alive` vs `Exited`: a
+/// long-running agent subprocess and a dead one otherwise look identical from
+/// outside the process tree. `Unknown` means the host cannot answer (non-Unix),
+/// and must never be read as "dead".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessLiveness {
+    /// The PID exists and is not a zombie. A recorded identity token either
+    /// matches or could not be checked. This conservative observation is not
+    /// proof of identity and must not authorize signalling the process.
+    Alive,
+    /// The PID is gone, is an unreaped zombie, or is now held by a different
+    /// process (recorded identity token no longer matches).
+    Exited,
+    /// Liveness cannot be probed on this platform.
+    Unknown,
+}
+
+impl ProcessLiveness {
+    /// Stable wire token for JSON/table surfaces.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProcessLiveness::Alive => "alive",
+            ProcessLiveness::Exited => "exited",
+            ProcessLiveness::Unknown => "unknown",
+        }
+    }
+}
+
+/// Kernel-level activity state for a PID or process group.
+///
+/// `Unknown` is deliberately distinct from `Exited`: callers which make a
+/// safety decision must preserve the possibility that work is still running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelLiveness {
+    /// The kernel evidence confirms the target is still present.
+    Alive,
+    /// The kernel evidence confirms the target is gone.
+    Exited,
+    /// The probe could not establish presence or exit. Preserve the possibility that the target is
+    /// alive.
+    Unknown,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SignalPresence {
+    Present,
+    Missing,
+    Unknown,
+}
+
+/// The `/proc/<pid>/stat` fields a process-tree walk needs.
+///
+/// Single owner for `/proc/<pid>/stat` field offsets: every Linux caller
+/// parses through [`parse_linux_process_stat`] so a miscounted field cannot
+/// be wrong in one copy only.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinuxProcessStat {
+    /// Run state: `R`, `S`, `D`, `T` (stopped by a signal), `t` (stopped
+    /// under a tracer), `Z`, ...
+    pub state: char,
+    /// Parent process ID from Linux stat field 4.
+    pub parent_pid: u32,
+    /// Process group ID from Linux stat field 5.
+    pub process_group: libc::pid_t,
+    /// Start time in clock ticks after boot. With the pid it names one
+    /// process: a reused pid starts later.
+    pub start_ticks: u64,
+    /// Own user CPU time in clock ticks (`utime`, field 14).
+    pub utime_ticks: u64,
+    /// Own system CPU time in clock ticks (`stime`, field 15).
+    pub stime_ticks: u64,
+    /// Waited-for children's user CPU time in clock ticks (`cutime`, field 16).
+    pub cutime_ticks: u64,
+    /// Waited-for children's system CPU time in clock ticks (`cstime`, field 17).
+    pub cstime_ticks: u64,
+}
+
+/// Fields returned by the macOS BSD process information query.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy)]
+pub struct DarwinBsdInfo {
+    /// Whether the process is a zombie.
+    pub is_zombie: bool,
+    /// Parent process ID.
+    pub ppid: u32,
+    /// Process group ID.
+    pub pgid: u32,
+    /// Effective user ID.
+    pub uid: u32,
+    /// Start time in seconds.
+    pub start_tvsec: u64,
+    /// Start time's microsecond component.
+    pub start_tvusec: u64,
+}
+
 /// True for a token written by either versioned strategy.
 pub fn is_stable_token(token: &str) -> bool {
     token.starts_with(STABLE_TOKEN_PREFIX) || token.starts_with(STABLE_TOKEN_PREFIX_V1)
@@ -97,24 +242,6 @@ pub fn stable_tokens_match(persisted: &str, probed: &str) -> bool {
     }
 }
 
-/// Where the observer stands relative to the PID namespace a token was
-/// written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PidNamespaceScope {
-    /// Observer and writer share a PID namespace: PIDs mean the same thing on
-    /// both sides, so liveness probes are authoritative.
-    Same,
-    /// Observer is in a different PID namespace than the writer, or on a host
-    /// without PID namespaces reading a token that records one. The recorded
-    /// PID names a different process here, or none at all; no probe run from
-    /// this side can say anything about the recorded process.
-    Foreign,
-    /// One side did not record a namespace (v1/legacy token, no token, or a
-    /// Linux host that cannot report one). Probes are treated as
-    /// authoritative, as they were before [ORB-10594].
-    Unknown,
-}
-
 /// The observer's own PID namespace, as the inode number Linux reports for
 /// `/proc/self/ns/pid` (`pid:[4026531836]` → `4026531836`).
 ///
@@ -163,33 +290,6 @@ pub fn pid_namespace_scope(persisted: Option<&str>) -> PidNamespaceScope {
         _ => PidNamespaceScope::Unknown,
     }
 }
-
-/// Outcome of a single process-start identity probe.
-///
-/// Readers must distinguish a *probe failure* (`Unavailable`) from a
-/// *process-not-found* result (`NoProcess`): the former indicates we cannot
-/// tell whether the PID is alive (unreadable kernel data, spawn error, etc.)
-/// and must not be enough to terminalize a still-running worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProbeOutcome {
-    /// The probe succeeded and produced a non-empty versioned token.
-    Token(String),
-    /// The process record was absent (`ps` exited non-zero or returned an
-    /// empty token on hosts using that fallback).
-    NoProcess,
-    /// Kernel data could not be read or parsed, or the fallback command
-    /// failed to spawn. Identity cannot be probed; defer to other liveness
-    /// signals.
-    Unavailable,
-}
-
-/// A `ps -o lstart=` for one pid answers in milliseconds; a `ps` that does not
-/// is unreadable identity, which callers already treat as unavailable.
-#[cfg(all(unix, not(target_os = "linux")))]
-const PS_TIMEOUT: Duration = Duration::from_secs(5);
-/// One `lstart` line is under 40 bytes.
-#[cfg(all(unix, not(target_os = "linux")))]
-const PS_OUTPUT_LIMIT: usize = 4096;
 
 #[cfg(all(unix, not(target_os = "linux")))]
 fn lstart_raw(pid: u32) -> Result<Option<String>, io::Error> {
@@ -340,37 +440,6 @@ pub fn process_start_identity_token(pid: u32) -> Option<String> {
     }
 }
 
-/// Liveness of a PID recorded earlier in a run, judged against the identity
-/// token captured when the PID was recorded [ORB-10496].
-///
-/// The distinction that matters to an operator is `Alive` vs `Exited`: a
-/// long-running agent subprocess and a dead one otherwise look identical from
-/// outside the process tree. `Unknown` means the host cannot answer (non-Unix),
-/// and must never be read as "dead".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcessLiveness {
-    /// The PID exists and is not a zombie. A recorded identity token either
-    /// matches or could not be checked. This conservative observation is not
-    /// proof of identity and must not authorize signalling the process.
-    Alive,
-    /// The PID is gone, is an unreaped zombie, or is now held by a different
-    /// process (recorded identity token no longer matches).
-    Exited,
-    /// Liveness cannot be probed on this platform.
-    Unknown,
-}
-
-impl ProcessLiveness {
-    /// Stable wire token for JSON/table surfaces.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProcessLiveness::Alive => "alive",
-            ProcessLiveness::Exited => "exited",
-            ProcessLiveness::Unknown => "unknown",
-        }
-    }
-}
-
 /// Probe whether a recorded PID is still the live process it was recorded as.
 ///
 /// `pid_start_time` is the token captured alongside the PID (see
@@ -415,29 +484,6 @@ pub fn probe_process_liveness(pid: u32, pid_start_time: Option<&str>) -> Process
 #[cfg(not(unix))]
 pub fn probe_process_liveness(_pid: u32, _pid_start_time: Option<&str>) -> ProcessLiveness {
     ProcessLiveness::Unknown
-}
-
-/// Kernel-level activity state for a PID or process group.
-///
-/// `Unknown` is deliberately distinct from `Exited`: callers which make a
-/// safety decision must preserve the possibility that work is still running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KernelLiveness {
-    /// The kernel evidence confirms the target is still present.
-    Alive,
-    /// The kernel evidence confirms the target is gone.
-    Exited,
-    /// The probe could not establish presence or exit. Preserve the possibility that the target is
-    /// alive.
-    Unknown,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SignalPresence {
-    Present,
-    Missing,
-    Unknown,
 }
 
 #[cfg(unix)]
@@ -490,34 +536,6 @@ pub fn linux_process_state(pid: u32) -> Option<(char, libc::pid_t)> {
     linux_process_stat(pid).map(|stat| (stat.state, stat.process_group))
 }
 
-/// The `/proc/<pid>/stat` fields a process-tree walk needs.
-///
-/// Single owner for `/proc/<pid>/stat` field offsets: every Linux caller
-/// parses through [`parse_linux_process_stat`] so a miscounted field cannot
-/// be wrong in one copy only.
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinuxProcessStat {
-    /// Run state: `R`, `S`, `D`, `T` (stopped by a signal), `t` (stopped
-    /// under a tracer), `Z`, ...
-    pub state: char,
-    /// Parent process ID from Linux stat field 4.
-    pub parent_pid: u32,
-    /// Process group ID from Linux stat field 5.
-    pub process_group: libc::pid_t,
-    /// Start time in clock ticks after boot. With the pid it names one
-    /// process: a reused pid starts later.
-    pub start_ticks: u64,
-    /// Own user CPU time in clock ticks (`utime`, field 14).
-    pub utime_ticks: u64,
-    /// Own system CPU time in clock ticks (`stime`, field 15).
-    pub stime_ticks: u64,
-    /// Waited-for children's user CPU time in clock ticks (`cutime`, field 16).
-    pub cutime_ticks: u64,
-    /// Waited-for children's system CPU time in clock ticks (`cstime`, field 17).
-    pub cstime_ticks: u64,
-}
-
 /// Parse `/proc/<pid>/stat`. `None` when the process is gone or its record
 /// is unreadable.
 #[cfg(target_os = "linux")]
@@ -545,11 +563,11 @@ pub fn parse_linux_process_stat(stat: &str) -> Option<LinuxProcessStat> {
         state: fields.first()?.chars().next()?,
         parent_pid: fields.get(1)?.parse().ok()?,
         process_group: fields.get(2)?.parse().ok()?,
+        start_ticks: fields.get(19)?.parse().ok()?,
         utime_ticks: fields.get(11)?.parse().ok()?,
         stime_ticks: fields.get(12)?.parse().ok()?,
         cutime_ticks: fields.get(13)?.parse().ok()?,
         cstime_ticks: fields.get(14)?.parse().ok()?,
-        start_ticks: fields.get(19)?.parse().ok()?,
     })
 }
 
@@ -577,24 +595,6 @@ pub fn probe_process_stopped(pid: u32, pid_start_time: Option<&str>) -> bool {
         let _ = (pid, pid_start_time);
         false
     }
-}
-
-/// Fields returned by the macOS BSD process information query.
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone, Copy)]
-pub struct DarwinBsdInfo {
-    /// Whether the process is a zombie.
-    pub is_zombie: bool,
-    /// Parent process ID.
-    pub ppid: u32,
-    /// Process group ID.
-    pub pgid: u32,
-    /// Effective user ID.
-    pub uid: u32,
-    /// Start time in seconds.
-    pub start_tvsec: u64,
-    /// Start time's microsecond component.
-    pub start_tvusec: u64,
 }
 
 /// Query BSD process information, optionally including zombie records.

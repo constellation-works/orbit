@@ -2,12 +2,11 @@
 //  killed with its process group and reported as a timeout naming the argv
 //  and the workspace, never as Git's answer.
 
-/// Set in the re-executed child to the directory holding the stub `git`.
-const STUB_DIR_VAR: &str = "ORBIT_TEST_HUNG_GIT_DIR";
-
 #[cfg(unix)]
 #[test]
 fn hung_git_times_out_and_leaves_no_child() {
+    /// Set in the re-executed child to the directory holding the stub `git`.
+    const STUB_DIR_VAR: &str = "ORBIT_TEST_HUNG_GIT_DIR";
     const TEST: &str = "hung_git_times_out_and_leaves_no_child";
     if let Some(stub_dir) = std::env::var_os(STUB_DIR_VAR) {
         hung_git_child(Path::new(&stub_dir));

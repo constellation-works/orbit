@@ -153,6 +153,16 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
 /// `_NAME` / `_DEADLINE_UNIX_MS` / `_FS_PROFILE`).
 const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_"];
 
+/// The variables either of which authenticates the `claude` CLI. A crew that
+/// sets one through `[crews.<name>] env` has the other removed from its
+/// agents, so exactly the credential the crew chose is present.
+pub const CLAUDE_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+/// The providers `execution.env.login_auth` may name: those whose CLI keeps
+/// its own login (`claude login`, `codex login`), so an unset token variable
+/// does not stop its agents authenticating.
+pub const LOGIN_AUTH_PROVIDERS: [&str; 2] = ["claude", "codex"];
+
 fn is_orbit_envelope_name(name: &str) -> bool {
     ORBIT_ENVELOPE_VARS.contains(&name)
         || ORBIT_ENVELOPE_PREFIXES
@@ -240,16 +250,6 @@ pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Ve
     }
     unset
 }
-
-/// The variables either of which authenticates the `claude` CLI. A crew that
-/// sets one through `[crews.<name>] env` has the other removed from its
-/// agents, so exactly the credential the crew chose is present.
-pub const CLAUDE_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
-
-/// The providers `execution.env.login_auth` may name: those whose CLI keeps
-/// its own login (`claude login`, `codex login`), so an unset token variable
-/// does not stop its agents authenticating.
-pub const LOGIN_AUTH_PROVIDERS: [&str; 2] = ["claude", "codex"];
 
 /// The environment variables that authenticate `provider` instead of its
 /// saved login; empty for a provider outside [`LOGIN_AUTH_PROVIDERS`]. Names

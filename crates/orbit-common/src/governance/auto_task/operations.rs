@@ -22,56 +22,17 @@ use crate::governance::task::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: AUTO_TASK;
-    /// Every verb the auto-task noun supports.
-    ///
-    /// The join between the spec table here and the handler table in
-    /// `orbit-core`: a new variant fails to compile in every exhaustive
-    /// surface table until the verb is wired.
-    pub enum AutoTaskVerb;
-    /// The auto-task operations, in `orbit auto-task --help` order. Within a
-    /// spec, parameter order is the order both `--help` and the MCP tool schema
-    /// list parameters.
-    pub const AUTO_TASK_OPERATIONS;
-    {
-        /// Create a definition.
-        Add => ADD,
-        /// List definitions.
-        List => LIST,
-        /// Show one definition.
-        Show => SHOW,
-        /// Update a definition.
-        Update => UPDATE,
-        /// Enable or disable a definition.
-        Toggle => TOGGLE,
-        /// Delete a definition.
-        Delete => DELETE,
-        /// Reinstate a deleted shipped default.
-        Restore => RESTORE,
-        /// Mint a task from a definition now.
-        Mint => MINT,
-        /// Recover a stalled delivery consumer.
-        Recover => RECOVER,
-        /// Reset a delivery consumer.
-        Reset => RESET,
-    }
-}
-
 /// The auto-task noun.
 pub const AUTO_TASK: NounSpec<AutoTaskVerb> = NounSpec {
     cli_name: "auto-task",
     tool_prefix: "orbit.auto_task",
+    tool_only_registration: crate::governance::operation::ToolOnlyRegistration::Inactive,
     cli_about: "Define and manage recurring auto-task templates",
     audit_target_type: "auto_task",
     audit_target_param: "name",
-    tool_only_registration: crate::governance::operation::ToolOnlyRegistration::Inactive,
     cli_groups: &[],
     operations: AUTO_TASK_OPERATIONS,
 };
-
-/// An auto-task operation specification.
-pub type AutoTaskOperation = OperationSpec<AutoTaskVerb>;
 
 /// `DedupePolicy` as the CLI offers it. The wire spelling is snake_case
 /// (`skip_if_open`); the CLI surface table normalizes before the call.
@@ -114,12 +75,12 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
     tool_description: "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     cli_about: "Create a new auto-task definition",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: None,
         after_help: Some(
             "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.",
         ),
         flag_order: &[],
+        constraints: &[],
     },
     effect: Effect::Write,
     params: &[&[
@@ -356,12 +317,12 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
     tool_description: "Update an existing auto-task definition (present fields only), including enabling or disabling it.",
     cli_about: "Update an existing definition (present fields only)",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: None,
         after_help: Some(
             "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.",
         ),
         flag_order: &[],
+        constraints: &[],
     },
     effect: Effect::Write,
     params: &[&[
@@ -745,3 +706,42 @@ const NAME_PARAM: ParamSpec = required(both(
     CliArgKind::Positional,
     "Definition name",
 ));
+
+operation_registry! {
+    noun: AUTO_TASK;
+    /// Every verb the auto-task noun supports.
+    ///
+    /// The join between the spec table here and the handler table in
+    /// `orbit-core`: a new variant fails to compile in every exhaustive
+    /// surface table until the verb is wired.
+    pub enum AutoTaskVerb;
+    /// The auto-task operations, in `orbit auto-task --help` order. Within a
+    /// spec, parameter order is the order both `--help` and the MCP tool schema
+    /// list parameters.
+    pub const AUTO_TASK_OPERATIONS;
+    {
+        /// Create a definition.
+        Add => ADD,
+        /// List definitions.
+        List => LIST,
+        /// Show one definition.
+        Show => SHOW,
+        /// Update a definition.
+        Update => UPDATE,
+        /// Enable or disable a definition.
+        Toggle => TOGGLE,
+        /// Delete a definition.
+        Delete => DELETE,
+        /// Reinstate a deleted shipped default.
+        Restore => RESTORE,
+        /// Mint a task from a definition now.
+        Mint => MINT,
+        /// Recover a stalled delivery consumer.
+        Recover => RECOVER,
+        /// Reset a delivery consumer.
+        Reset => RESET,
+    }
+}
+
+/// An auto-task operation specification.
+pub type AutoTaskOperation = OperationSpec<AutoTaskVerb>;

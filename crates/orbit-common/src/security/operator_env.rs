@@ -19,6 +19,36 @@ pub const CLOCK_ENV_FILE_NAME: &str = "clock.env";
 /// Upper bound on the file size read; a credential file is a few lines.
 const MAX_ENV_FILE_BYTES: u64 = 64 * 1024;
 
+/// Why a crew's `file:` credential source supplies no value. Describes the
+/// file's state only, never its contents; the caller names the crew and path.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SecretFileError {
+    /// Nothing exists at the path.
+    #[error("the file does not exist")]
+    Missing,
+    /// The path is a symlink, which could redirect the read elsewhere.
+    #[error("refusing a symlink; point the config at the real file")]
+    Symlink,
+    /// The path exists but is not a regular file.
+    #[error("it is not a regular file")]
+    NotRegular,
+    /// Group or others can read the file.
+    #[error("refusing mode {mode:03o}: it lets other users read it; run `chmod 600`")]
+    Shared {
+        /// The permission bits found.
+        mode: u32,
+    },
+    /// Another user owns the file.
+    #[error("refusing it: it is not owned by the user running this process")]
+    ForeignOwner,
+    /// The file holds nothing but whitespace.
+    #[error("the file is empty")]
+    Empty,
+    /// The file could not be opened or read.
+    #[error("it cannot be read: {0}")]
+    Unreadable(String),
+}
+
 /// The clock environment file for a global Orbit root.
 pub fn clock_env_file_path(global_root: &Path) -> PathBuf {
     global_root.join(CLOCK_ENV_FILE_NAME)
@@ -57,36 +87,6 @@ pub fn read_env_file(
         .read_to_string(&mut text)
         .map_err(|error| OrbitError::Io(format!("cannot read {}: {error}", path.display())))?;
     Ok(Some(parse_env_text(&text, pass)))
-}
-
-/// Why a crew's `file:` credential source supplies no value. Describes the
-/// file's state only, never its contents; the caller names the crew and path.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum SecretFileError {
-    /// Nothing exists at the path.
-    #[error("the file does not exist")]
-    Missing,
-    /// The path is a symlink, which could redirect the read elsewhere.
-    #[error("refusing a symlink; point the config at the real file")]
-    Symlink,
-    /// The path exists but is not a regular file.
-    #[error("it is not a regular file")]
-    NotRegular,
-    /// Group or others can read the file.
-    #[error("refusing mode {mode:03o}: it lets other users read it; run `chmod 600`")]
-    Shared {
-        /// The permission bits found.
-        mode: u32,
-    },
-    /// Another user owns the file.
-    #[error("refusing it: it is not owned by the user running this process")]
-    ForeignOwner,
-    /// The file holds nothing but whitespace.
-    #[error("the file is empty")]
-    Empty,
-    /// The file could not be opened or read.
-    #[error("it cannot be read: {0}")]
-    Unreadable(String),
 }
 
 /// Read one credential from an owner-only file: the contents, with trailing

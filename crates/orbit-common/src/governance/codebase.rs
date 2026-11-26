@@ -6,22 +6,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: CODEBASE;
-    /// The codebase analytics verbs.
-    pub enum CodebaseVerb;
-    /// Codebase operations in declaration order.
-    pub const CODEBASE_OPERATIONS;
-    {
-        /// Every ranking and the paths several share.
-        Analytics => ANALYTICS,
-        /// One path's standing in every ranking, with the tasks behind it.
-        Show => SHOW,
-        /// Files most often changed alongside a repository path.
-        Related => RELATED,
-    }
-}
-
 /// The codebase noun's shared declaration.
 pub const CODEBASE: NounSpec<CodebaseVerb> = NounSpec {
     cli_name: "codebase",
@@ -190,11 +174,6 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
-const fn path_param(mut param: ParamSpec) -> ParamSpec {
-    param.redact = Redaction::Path;
-    param
-}
-
 const RELATED_SELECTION: &[ParamSpec] = &[
     defaulted(
         both(
@@ -250,3 +229,24 @@ const RELATED_PATH: &[ParamSpec] = &[path_param(required(both(
     CliArgKind::Positional,
     "A repository-relative file path",
 )))];
+
+operation_registry! {
+    noun: CODEBASE;
+    /// The codebase analytics verbs.
+    pub enum CodebaseVerb;
+    /// Codebase operations in declaration order.
+    pub const CODEBASE_OPERATIONS;
+    {
+        /// Every ranking and the paths several share.
+        Analytics => ANALYTICS,
+        /// One path's standing in every ranking, with the tasks behind it.
+        Show => SHOW,
+        /// Files most often changed alongside a repository path.
+        Related => RELATED,
+    }
+}
+
+const fn path_param(mut param: ParamSpec) -> ParamSpec {
+    param.redact = Redaction::Path;
+    param
+}

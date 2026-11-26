@@ -2,65 +2,6 @@ use std::collections::BTreeSet;
 
 use orbit_types::tool::McpCapability;
 
-/// Which entry surface reaches a governed operation.
-///
-/// Tool operations are keyed by canonical tool name and enforced at the tool
-/// chokepoint; command operations are keyed by `"<command> <subcommand>"` and
-/// enforced at the CLI dispatch chokepoint. The split exists because Orbit has
-/// destructive operations that are not tools (`workspace teardown` deletes a
-/// data root directly), not because there are two authorization models.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OperationSurface {
-    /// A registry-backed tool, reached through `OrbitRuntime::run_tool*`.
-    Tool,
-    /// A CLI command that performs its destruction without a tool.
-    CliCommand,
-    /// A typed state-changing dashboard action.
-    Dashboard,
-}
-
-/// One operation whose performance requires a capability.
-///
-/// An operation absent from [`GOVERNED_OPERATIONS`](super::GOVERNED_OPERATIONS) has no operation-specific
-/// capability check. Governance is opt-in per operation on purpose: the
-/// registry is meant to name the operations whose accidental invocation
-/// actually destroys something, not to become a second copy of the tool
-/// registry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GovernedOperation {
-    /// Canonical tool name, or `"<command> <subcommand>"` for a CLI command.
-    pub id: &'static str,
-    /// Which chokepoint enforces this operation.
-    pub surface: OperationSurface,
-    /// Capabilities that may perform it. A caller holding **any** of these is
-    /// authorized.
-    pub allowed: &'static [McpCapability],
-    /// Why this operation is governed. Surfaced in the denial message, so it
-    /// is written for the person who just got refused.
-    pub rationale: &'static str,
-}
-
-impl GovernedOperation {
-    /// Whether any of `grants` satisfies this operation.
-    pub(in crate::governance::authorization) fn satisfied_by(
-        &self,
-        grants: &BTreeSet<McpCapability>,
-    ) -> bool {
-        self.allowed
-            .iter()
-            .any(|capability| grants.contains(capability))
-    }
-
-    /// The required capabilities, rendered for a human.
-    pub(in crate::governance::authorization) fn allowed_label(&self) -> String {
-        self.allowed
-            .iter()
-            .map(McpCapability::to_string)
-            .collect::<Vec<_>>()
-            .join(" or ")
-    }
-}
-
 /// The governed operation an `orbit.task.add` or `orbit.task.update` whose
 /// input carries `granted_tools` additionally requires. It names no tool; the
 /// tool chokepoint checks it beside the write's own row.
@@ -455,6 +396,65 @@ pub const DESKTOP_TASK_COMPLETE: GovernedOperation = GovernedOperation {
     allowed: &[McpCapability::Operator],
     rationale: "desktop acceptance may complete reviewed work only through an existing operator-authorized session; opening the UI grants no authority",
 };
+
+/// Which entry surface reaches a governed operation.
+///
+/// Tool operations are keyed by canonical tool name and enforced at the tool
+/// chokepoint; command operations are keyed by `"<command> <subcommand>"` and
+/// enforced at the CLI dispatch chokepoint. The split exists because Orbit has
+/// destructive operations that are not tools (`workspace teardown` deletes a
+/// data root directly), not because there are two authorization models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OperationSurface {
+    /// A registry-backed tool, reached through `OrbitRuntime::run_tool*`.
+    Tool,
+    /// A CLI command that performs its destruction without a tool.
+    CliCommand,
+    /// A typed state-changing dashboard action.
+    Dashboard,
+}
+
+/// One operation whose performance requires a capability.
+///
+/// An operation absent from [`GOVERNED_OPERATIONS`](super::GOVERNED_OPERATIONS) has no operation-specific
+/// capability check. Governance is opt-in per operation on purpose: the
+/// registry is meant to name the operations whose accidental invocation
+/// actually destroys something, not to become a second copy of the tool
+/// registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernedOperation {
+    /// Canonical tool name, or `"<command> <subcommand>"` for a CLI command.
+    pub id: &'static str,
+    /// Which chokepoint enforces this operation.
+    pub surface: OperationSurface,
+    /// Capabilities that may perform it. A caller holding **any** of these is
+    /// authorized.
+    pub allowed: &'static [McpCapability],
+    /// Why this operation is governed. Surfaced in the denial message, so it
+    /// is written for the person who just got refused.
+    pub rationale: &'static str,
+}
+
+impl GovernedOperation {
+    /// Whether any of `grants` satisfies this operation.
+    pub(in crate::governance::authorization) fn satisfied_by(
+        &self,
+        grants: &BTreeSet<McpCapability>,
+    ) -> bool {
+        self.allowed
+            .iter()
+            .any(|capability| grants.contains(capability))
+    }
+
+    /// The required capabilities, rendered for a human.
+    pub(in crate::governance::authorization) fn allowed_label(&self) -> String {
+        self.allowed
+            .iter()
+            .map(McpCapability::to_string)
+            .collect::<Vec<_>>()
+            .join(" or ")
+    }
+}
 
 /// The generic row a plugin tool of this execution kind is authorized by.
 ///

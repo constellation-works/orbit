@@ -2,13 +2,6 @@
 //  Git run a caller-named program is refused before any process starts, and
 //  the plumbing Orbit drives still runs.
 
-const IDENTITY: [&str; 4] = [
-    "-c",
-    "user.name=fixture",
-    "-c",
-    "user.email=fixture@orbit.invalid",
-];
-
 fn git_ok(repo: &Path, args: &[&str]) -> String {
     let output = run_git(&orbit_common::Env::capture(), repo, args).expect("admitted argv");
     assert!(output.success, "git {args:?}: {}", output.stderr);
@@ -16,6 +9,12 @@ fn git_ok(repo: &Path, args: &[&str]) -> String {
 }
 
 fn repository() -> TempDir {
+    const IDENTITY: [&str; 4] = [
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@orbit.invalid",
+    ];
     let repo = TempDir::new().expect("tempdir");
     git_ok(repo.path(), &["init", "-q", "--template=", "-b", "main"]);
     let commit = [

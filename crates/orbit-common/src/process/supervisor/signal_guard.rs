@@ -90,6 +90,12 @@ impl Drop for SignalHandlerGuard {
     }
 }
 
+enum PreviousDisposition {
+    Default,
+    Ignore,
+    Custom,
+}
+
 pub(super) fn signal_message(signal: i32) -> String {
     format!("{}{}", super::INTERRUPTED_SIGNAL_NOTE, signal_name(signal))
 }
@@ -158,12 +164,6 @@ fn release_handlers() {
         // to this process so the original handler or default action runs.
         let _ = unsafe { libc::raise(signal) };
     }
-}
-
-enum PreviousDisposition {
-    Default,
-    Ignore,
-    Custom,
 }
 
 fn previous_disposition(action: &libc::sigaction) -> PreviousDisposition {

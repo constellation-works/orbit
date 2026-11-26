@@ -18,6 +18,12 @@ const MIN_RECORDED_LOCK_WAIT: Duration = Duration::from_millis(1);
 /// The step a hold report names for time no step on this thread claimed.
 const UNATTRIBUTED_HOLD_STEP: &str = "unattributed";
 
+thread_local! {
+    /// Steps timed on this thread while it holds a lock that reports long
+    /// holds; see [`hold_step`].
+    static HOLD_STEPS: RefCell<HoldSteps> = RefCell::new(HoldSteps::default());
+}
+
 /// What a holder needs to say on release that it held the lock too long.
 #[derive(Debug)]
 pub(super) struct HoldReport {
@@ -128,27 +134,6 @@ impl Drop for LockReportScope {
     }
 }
 
-fn emit_released_hold_reports() {
-    let reports = HOLD_STEPS.with(|steps| {
-        let mut steps = steps.borrow_mut();
-        if steps.scopes == 0 && steps.open_holds == 0 {
-            std::mem::take(&mut steps.reports)
-        } else {
-            Vec::new()
-        }
-    });
-    // Leave the thread-local borrow before entering arbitrary subscriber code.
-    for report in reports {
-        report.emit();
-    }
-}
-
-thread_local! {
-    /// Steps timed on this thread while it holds a lock that reports long
-    /// holds; see [`hold_step`].
-    static HOLD_STEPS: RefCell<HoldSteps> = RefCell::new(HoldSteps::default());
-}
-
 #[derive(Default)]
 struct HoldSteps {
     scopes: usize,
@@ -232,6 +217,21 @@ impl HoldSteps {
             slowest_time,
             steps,
         }
+    }
+}
+
+fn emit_released_hold_reports() {
+    let reports = HOLD_STEPS.with(|steps| {
+        let mut steps = steps.borrow_mut();
+        if steps.scopes == 0 && steps.open_holds == 0 {
+            std::mem::take(&mut steps.reports)
+        } else {
+            Vec::new()
+        }
+    });
+    // Leave the thread-local borrow before entering arbitrary subscriber code.
+    for report in reports {
+        report.emit();
     }
 }
 

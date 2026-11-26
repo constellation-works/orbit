@@ -167,17 +167,6 @@ const MIN_SAMPLE_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(target_os = "linux")]
 const COMMAND_LIMIT_BYTES: usize = 256;
 
-/// The threshold supervisors use: [`STOPPED_DESCENDANT_THRESHOLD_ENV`] when it
-/// holds a positive number of milliseconds, otherwise the default.
-pub fn stopped_descendant_threshold(env: &crate::Env) -> Duration {
-    env.orbit_stopped_descendant_threshold_ms()
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|millis| *millis > 0)
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_STOPPED_DESCENDANT_THRESHOLD)
-}
-
 /// A descendant the watch found stopped past the threshold, and what ending
 /// it did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,13 +216,6 @@ pub struct StoppedDescendantWatch {
     /// and start ticks so a reused pid starts over.
     #[cfg(target_os = "linux")]
     stopped: std::collections::HashMap<(u32, u64), Sighting>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy)]
-struct Sighting {
-    since: Instant,
-    rereads: u32,
 }
 
 impl StoppedDescendantWatch {
@@ -314,4 +296,22 @@ impl StoppedDescendantWatch {
             })
             .collect()
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct Sighting {
+    since: Instant,
+    rereads: u32,
+}
+
+/// The threshold supervisors use: [`STOPPED_DESCENDANT_THRESHOLD_ENV`] when it
+/// holds a positive number of milliseconds, otherwise the default.
+pub fn stopped_descendant_threshold(env: &crate::Env) -> Duration {
+    env.orbit_stopped_descendant_threshold_ms()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_STOPPED_DESCENDANT_THRESHOLD)
 }

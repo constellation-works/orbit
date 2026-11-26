@@ -16,24 +16,6 @@ use crate::{NoticeRefusalCode, OrbitError};
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 use serde_json::{Value, json};
 
-operation_registry! {
-    noun: NOTICE;
-    /// The fleet-notice verbs.
-    pub enum NoticeVerb;
-    /// Notice operations in surface order.
-    pub const NOTICE_OPERATIONS;
-    {
-        /// Post a notice, or update or corroborate the open one holding its key.
-        Post => POST,
-        /// Close a notice.
-        Close => CLOSE,
-        /// List notices by effective state.
-        List => LIST,
-        /// Show one notice in any state.
-        Show => SHOW,
-    }
-}
-
 /// The fleet-notice noun's shared declaration.
 pub const NOTICE: NounSpec<NoticeVerb> = NounSpec {
     cli_name: "notice",
@@ -310,33 +292,6 @@ pub const NOTICE_LIST_DEFAULT_LIMIT: usize = 50;
 /// The largest `limit` a notice list call accepts; the smallest is 1.
 pub const NOTICE_LIST_MAX_LIMIT: usize = 200;
 
-/// The explicit `limit` of a parsed `orbit.notice.list` call, `None` when the
-/// call gives none. A limit outside 1..=[`NOTICE_LIST_MAX_LIMIT`] is refused
-/// as a notice `invalid_field` refusal, on every route.
-pub fn notice_list_limit(input: &OperationInput) -> Result<Option<usize>, OrbitError> {
-    let Some(limit) = input.optional_count("limit")? else {
-        return Ok(None);
-    };
-    if !(1..=NOTICE_LIST_MAX_LIMIT).contains(&limit) {
-        return Err(OrbitError::notice_refused(
-            NoticeRefusalCode::InvalidField,
-            format!("`limit` must be between 1 and {NOTICE_LIST_MAX_LIMIT}"),
-        ));
-    }
-    Ok(Some(limit))
-}
-
-/// The explicit `limit` of a raw `orbit.notice.list` call, parsed and
-/// refused exactly as [`notice_list_limit`] does after the list operation
-/// parses its input. Only `limit` is read: the call's other fields are left
-/// to the read that receives them.
-pub fn notice_list_limit_in_call(call: &Value) -> Result<Option<usize>, OrbitError> {
-    match call.get("limit") {
-        None => Ok(None),
-        Some(limit) => notice_list_limit(&LIST.parse_input(json!({ "limit": limit }))?),
-    }
-}
-
 const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::List,
     cli_path: &["list"],
@@ -378,3 +333,48 @@ const SHOW: OperationSpec<NoticeVerb> = OperationSpec {
         "a notice id is workspace-local and carries no host prefix",
     ),
 };
+
+operation_registry! {
+    noun: NOTICE;
+    /// The fleet-notice verbs.
+    pub enum NoticeVerb;
+    /// Notice operations in surface order.
+    pub const NOTICE_OPERATIONS;
+    {
+        /// Post a notice, or update or corroborate the open one holding its key.
+        Post => POST,
+        /// Close a notice.
+        Close => CLOSE,
+        /// List notices by effective state.
+        List => LIST,
+        /// Show one notice in any state.
+        Show => SHOW,
+    }
+}
+
+/// The explicit `limit` of a parsed `orbit.notice.list` call, `None` when the
+/// call gives none. A limit outside 1..=[`NOTICE_LIST_MAX_LIMIT`] is refused
+/// as a notice `invalid_field` refusal, on every route.
+pub fn notice_list_limit(input: &OperationInput) -> Result<Option<usize>, OrbitError> {
+    let Some(limit) = input.optional_count("limit")? else {
+        return Ok(None);
+    };
+    if !(1..=NOTICE_LIST_MAX_LIMIT).contains(&limit) {
+        return Err(OrbitError::notice_refused(
+            NoticeRefusalCode::InvalidField,
+            format!("`limit` must be between 1 and {NOTICE_LIST_MAX_LIMIT}"),
+        ));
+    }
+    Ok(Some(limit))
+}
+
+/// The explicit `limit` of a raw `orbit.notice.list` call, parsed and
+/// refused exactly as [`notice_list_limit`] does after the list operation
+/// parses its input. Only `limit` is read: the call's other fields are left
+/// to the read that receives them.
+pub fn notice_list_limit_in_call(call: &Value) -> Result<Option<usize>, OrbitError> {
+    match call.get("limit") {
+        None => Ok(None),
+        Some(limit) => notice_list_limit(&LIST.parse_input(json!({ "limit": limit }))?),
+    }
+}

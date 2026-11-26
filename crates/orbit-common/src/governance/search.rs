@@ -6,18 +6,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: SEARCH;
-    /// The shared search verbs.
-    pub enum SearchVerb;
-    /// Search operations in declaration order.
-    pub const SEARCH_OPERATIONS;
-    {
-        /// Lexical task and friction query (including tool-only friction listings).
-        Query => QUERY,
-    }
-}
-
 const ABOUT: &str = "Search tasks and frictions";
 
 /// Search's shared declaration; its CLI binds the query at the noun root.
@@ -185,6 +173,18 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: SEARCH;
+    /// The shared search verbs.
+    pub enum SearchVerb;
+    /// Search operations in declaration order.
+    pub const SEARCH_OPERATIONS;
+    {
+        /// Lexical task and friction query (including tool-only friction listings).
+        Query => QUERY,
+    }
+}
 
 const fn flag(long: &'static str) -> CliArgKind {
     CliArgKind::flag(long)

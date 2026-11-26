@@ -2,25 +2,6 @@ use orbit_types::tool::McpCapability;
 
 use super::{GOVERNED_OPERATIONS, GovernedOperation, TASK_GRANT_TOOLS_OPERATION_ID, governed_tool};
 
-/// One row of the closed built-in application-consent ceiling. A consent may
-/// narrow a row, never exceed it; a built-in without a row is refused. Every
-/// admitted call still passes the ordinary domain lifecycle checks, and no
-/// row grants a capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ApplicationOperationCeiling {
-    /// Canonical built-in tool name.
-    pub tool: &'static str,
-    /// Keys an exact (`input`, schema v1) operation may carry, entry or
-    /// callback. Empty means the exact form is refused.
-    pub exact_fields: &'static [&'static str],
-    /// Whether a constrained (`fields`) entry operation may name this tool.
-    pub constrained_entry: bool,
-    /// Whether a constrained completion callback may name this tool.
-    pub constrained_callback: bool,
-    /// Fields a constrained operation may list.
-    pub constrained_fields: &'static [&'static str],
-}
-
 /// The closed built-in application-consent ceiling table. A consent may
 /// narrow a row and may not exceed it. `orbit.auto_task.add` and
 /// `orbit.auto_task.update` are callback-only: the exact form is refused,
@@ -162,6 +143,25 @@ pub const INPUT_DEPENDENT_OPERATION_FLOORS: &[(&str, &str, &str)] = &[
     ("orbit.task.update", "repilot", "orbit.task.repilot"),
     ("orbit.auto_task.list", "view", "orbit.workflow.run.show"),
 ];
+
+/// One row of the closed built-in application-consent ceiling. A consent may
+/// narrow a row, never exceed it; a built-in without a row is refused. Every
+/// admitted call still passes the ordinary domain lifecycle checks, and no
+/// row grants a capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplicationOperationCeiling {
+    /// Canonical built-in tool name.
+    pub tool: &'static str,
+    /// Keys an exact (`input`, schema v1) operation may carry, entry or
+    /// callback. Empty means the exact form is refused.
+    pub exact_fields: &'static [&'static str],
+    /// Whether a constrained (`fields`) entry operation may name this tool.
+    pub constrained_entry: bool,
+    /// Whether a constrained completion callback may name this tool.
+    pub constrained_callback: bool,
+    /// Fields a constrained operation may list.
+    pub constrained_fields: &'static [&'static str],
+}
 
 /// The ceiling row for a built-in tool, or `None` when application consent
 /// can never name it.

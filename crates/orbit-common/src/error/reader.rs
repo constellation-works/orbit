@@ -38,6 +38,15 @@ pub struct SourceRepairReaderText {
     pub detail: String,
 }
 
+impl OrbitError {
+    /// The one-line source-repair refusal for this error, when it is one.
+    ///
+    /// Other errors return `None`. The error's display text is unchanged.
+    pub fn source_repair_reader_text(&self) -> Option<SourceRepairReaderText> {
+        source_repair_reader_text(&self.to_string())
+    }
+}
+
 /// The one-line form of `stored` when it is a source-repair refusal.
 ///
 /// `stored` is the text a surface already shows (`Display`, or an HTTP
@@ -71,15 +80,6 @@ pub fn source_repair_reader_text(stored: &str) -> Option<SourceRepairReaderText>
         line,
         detail: original.to_string(),
     })
-}
-
-impl OrbitError {
-    /// The one-line source-repair refusal for this error, when it is one.
-    ///
-    /// Other errors return `None`. The error's display text is unchanged.
-    pub fn source_repair_reader_text(&self) -> Option<SourceRepairReaderText> {
-        source_repair_reader_text(&self.to_string())
-    }
 }
 
 fn wrapper_end(after: &str) -> usize {
