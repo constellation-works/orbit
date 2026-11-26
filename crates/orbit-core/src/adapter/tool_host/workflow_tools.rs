@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 
 use crate::application::job::{
     ActivityInvocationEvidence, JobRunListParams, JobRunProjectionEvidence,
-    JobRunProjectionProfile, ShipModeResolutionProfile, ShipSubmissionProfile, project_job_run,
-    pull_drain_detail, run_display_steps, run_execution_progress_to_json,
-    trim_full_show_agent_invocation_answer,
+    JobRunProjectionProfile, ResumeSubmissionProfile, ResumeSubmissionReceipt,
+    ShipModeResolutionProfile, ShipSubmissionProfile, project_job_run, pull_drain_detail,
+    run_display_steps, run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
 use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunRecoveryAttempts,
@@ -297,14 +297,7 @@ fn resume(
     let actor = actor(runtime, agent.as_deref(), model.as_deref());
     let claim_token = optional_string(&input, "claim_token")?;
     let invoke = runtime.submit_resume_run(&id, Some(&actor), claim_token.as_deref())?;
-    Ok(json!({
-        "workflow": "resume",
-        "job_id": invoke.job_name,
-        "run_id": invoke.run_id,
-        "retry_source_run_id": id,
-        "state": if invoke.queued { "queued" } else { "submitted" },
-        "submitted_at": invoke.submitted_at,
-    }))
+    Ok(ResumeSubmissionReceipt::new(&invoke, &id, ResumeSubmissionProfile::Envelope).to_json())
 }
 
 fn optional_string(input: &Value, field: &str) -> Result<Option<String>, OrbitError> {

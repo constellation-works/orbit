@@ -1,5 +1,6 @@
 use orbit_core::application::job::{
-    JobRunProjectionEvidence, JobRunProjectionProfile, project_job_run,
+    JobRunProjectionEvidence, JobRunProjectionProfile, ResumeSubmissionProfile,
+    ResumeSubmissionReceipt, project_job_run,
 };
 use orbit_core::{JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry};
 use orbit_types::workflow::PipelineState;
@@ -53,7 +54,7 @@ fn wait_for_submission(
 }
 
 fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
-    let state = submission_state(invoke);
+    let state = invoke.submission_state();
     let doc = json!({
         "job_id": invoke.job_name,
         "run_id": invoke.run_id,
@@ -63,6 +64,17 @@ fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
         "waited": false,
     });
     Ok(Payload::detail(doc, submission_lines(invoke, state).join("\n")).into())
+}
+
+fn render_resume_submission(
+    invoke: &PipelineInvokeResult,
+    receipt: &ResumeSubmissionReceipt,
+) -> CommandOut {
+    Ok(Payload::detail(
+        receipt.to_json(),
+        submission_lines(invoke, receipt.state()).join("\n"),
+    )
+    .into())
 }
 
 /// Render a completed `--wait`, then fail the command for a non-success
@@ -90,10 +102,6 @@ fn render_wait(
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())
-}
-
-fn submission_state(invoke: &PipelineInvokeResult) -> &'static str {
-    if invoke.queued { "queued" } else { "submitted" }
 }
 
 fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Vec<String> {
@@ -203,7 +211,9 @@ impl Execute for JobResumeArgs {
         if let Some(timeout_seconds) = timeout_seconds {
             wait_for_submission(runtime, &invoke, timeout_seconds)
         } else {
-            render_submission(&invoke)
+            let receipt =
+                ResumeSubmissionReceipt::new(&invoke, &self.run_id, ResumeSubmissionProfile::Cli);
+            render_resume_submission(&invoke, &receipt)
         }
     }
 }

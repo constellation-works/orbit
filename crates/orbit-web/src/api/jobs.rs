@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use orbit_core::application::job::{
     JOB_FAILURE_STREAK_WARN, JobFailureStreak, JobRunListParams, JobRunOrder,
+    ResumeSubmissionProfile, ResumeSubmissionReceipt,
 };
 use orbit_core::{JobRunState, OrbitRuntime};
 use serde::Deserialize;
@@ -400,14 +401,14 @@ pub(super) async fn resume_job_run_action(
     })
     .await
     {
-        Ok(Ok(invoke)) => Json(json!({
-            "workflow": "resume",
-            "job_id": invoke.job_name,
-            "run_id": invoke.run_id,
-            "retry_source_run_id": retry_source_run_id,
-            "state": if invoke.queued { "queued" } else { "submitted" },
-            "submitted_at": invoke.submitted_at,
-        }))
+        Ok(Ok(invoke)) => Json(
+            ResumeSubmissionReceipt::new(
+                &invoke,
+                &retry_source_run_id,
+                ResumeSubmissionProfile::Envelope,
+            )
+            .to_json(),
+        )
         .into_response(),
         Ok(Err(response)) => response,
         Err(response) => *response,

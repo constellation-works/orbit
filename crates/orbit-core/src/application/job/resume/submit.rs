@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use serde_json::{Value, json};
 
 use super::ResumePlan;
 use crate::OrbitRuntime;
@@ -88,6 +89,80 @@ impl OrbitRuntime {
             None => self.submit_persisted_pipeline_run(PipelineSubmission {
                 resume: Some(plan),
                 ..PipelineSubmission::catalog(&job_id, input, actor)
+            }),
+        }
+    }
+}
+
+/// Surface compatibility profile for a resume submission receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeSubmissionProfile {
+    /// The native CLI's detached one-shot dispatch fields, shared with
+    /// `orbit run job`.
+    Cli,
+    /// The `orbit.workflow` resume tool and `POST /job-runs/:id/resume` HTTP
+    /// receipt.
+    Envelope,
+}
+
+/// One accepted resume submission, projected consistently across surfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeSubmissionReceipt {
+    job_id: String,
+    run_id: String,
+    state: &'static str,
+    queued: bool,
+    submitted_at: String,
+    source_run_id: String,
+    profile: ResumeSubmissionProfile,
+}
+
+impl ResumeSubmissionReceipt {
+    /// Capture the receipt of the run [`OrbitRuntime::submit_resume_run`]
+    /// accepted as a resume of `source_run_id`.
+    #[must_use]
+    pub fn new(
+        invoke: &PipelineInvokeResult,
+        source_run_id: &str,
+        profile: ResumeSubmissionProfile,
+    ) -> Self {
+        Self {
+            job_id: invoke.job_name.clone(),
+            run_id: invoke.run_id.clone(),
+            state: invoke.submission_state(),
+            queued: invoke.queued,
+            submitted_at: invoke.submitted_at.clone(),
+            source_run_id: source_run_id.to_string(),
+            profile,
+        }
+    }
+
+    /// The submission state: `queued` while waiting for a concurrency slot,
+    /// otherwise `submitted`.
+    #[must_use]
+    pub const fn state(&self) -> &'static str {
+        self.state
+    }
+
+    /// Project the receipt for its surface profile.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        match self.profile {
+            ResumeSubmissionProfile::Cli => json!({
+                "job_id": self.job_id,
+                "run_id": self.run_id,
+                "state": self.state,
+                "queued": self.queued,
+                "submitted_at": self.submitted_at,
+                "waited": false,
+            }),
+            ResumeSubmissionProfile::Envelope => json!({
+                "workflow": "resume",
+                "job_id": self.job_id,
+                "run_id": self.run_id,
+                "retry_source_run_id": self.source_run_id,
+                "state": self.state,
+                "submitted_at": self.submitted_at,
             }),
         }
     }

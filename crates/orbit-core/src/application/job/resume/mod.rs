@@ -54,3 +54,4 @@ pub(super) use binding::task_ids_from_input;
 pub(crate) use completion_repair::OUT_OF_RUN_AUTO_FIX_KEY;
 pub(crate) use plan::ResumePlan;
 pub(crate) use source_repair::PublishedResume;
+pub use submit::{ResumeSubmissionProfile, ResumeSubmissionReceipt};
