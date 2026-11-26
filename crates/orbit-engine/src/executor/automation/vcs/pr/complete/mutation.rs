@@ -26,12 +26,13 @@ use super::super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge
 /// carries [`PrivateVcsFailureClass::CompletionObservationUnavailable`] beside
 /// its unchanged message.
 ///
-/// [ORB-19430] The same transport failure past the budget, or after repair
-/// provenance that rules out the authenticated retry, holds the run as
-/// [`DeliveryRefusal::ForgeObservationUnavailable`]: nothing was mutated, so
-/// the held run can read again once the forge answers. A mutation in this
-/// invocation or recorded write-ahead completion mutation provenance keeps the
-/// failure, as does every other failure class.
+/// [ORB-19430] The same transport failure past the budget, or after repair or
+/// completion-rebase provenance that rules out the authenticated retry, holds
+/// the run as [`DeliveryRefusal::ForgeObservationUnavailable`]: no merge was
+/// requested on the forge, so the held run can read again once the forge
+/// answers. A merge or auto-merge mutation in this invocation or recorded
+/// write-ahead merge-mutation provenance keeps the failure, as does every other
+/// failure class.
 pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -68,10 +69,10 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
 }
 
 /// [ORB-21766] A transient required-checks read failure routed through
-/// [`observation_failure`] that it deliberately kept — because a completion
-/// mutation happened in this invocation or is recorded in durable history —
-/// still holds auto-fix as inconclusive check evidence. The required-checks
-/// read is read-only: holding does not claim nothing changed on the forge
+/// [`observation_failure`] that it deliberately kept — because this invocation
+/// requested a merge or auto-merge, or recorded mutation history stays
+/// fail-closed — still holds auto-fix as inconclusive check evidence. The required-checks
+/// read is read-only: this hold does not claim that no merge or auto-merge request was sent
 /// (unlike [`DeliveryRefusal::ForgeObservationUnavailable`]), and the next
 /// auto-fix pass re-reads the PR status, reconciling any earlier mutation
 /// from the forge. Every outcome `observation_failure` already decided
@@ -102,9 +103,9 @@ pub(super) fn checked_required_check_observation_failure<H: RuntimeHost + ?Sized
 /// failure's original text.
 pub(crate) fn forge_observation_hold_message(cause: &str) -> String {
     format!(
-        "{}: completion could not read the forge before any completion mutation ({cause}); \
-         nothing changed on the forge, the task stays in review and resuming the held run \
-         reads it again",
+        "{}: completion could not read the forge before sending a merge or auto-merge request ({cause}); \
+         no merge or auto-merge request was sent; the task stays in review and resuming the held run \
+         reads the forge again",
         DeliveryRefusal::ForgeObservationUnavailable.error_code()
     )
 }
@@ -114,12 +115,30 @@ enum CompletionHistory {
     /// No repair or completion mutation provenance: the host may authenticate
     /// the unchanged publication and retry.
     ReadOnly,
-    /// Repair, reservation or source-repair provenance, but no completion
-    /// mutation: no authenticated retry, though the forge is unchanged by
-    /// completion itself.
+    /// Repair, reservation, completion rebase or source-repair provenance,
+    /// but no merge or auto-merge mutation: no authenticated retry, though no
+    /// merge was requested on the forge.
     Repaired,
-    /// A merge, auto-merge or rebase whose outcome must be reconciled.
+    /// A merge or auto-merge mutation whose outcome must be reconciled.
     Mutated,
+}
+
+/// Whether a `pr_completion_mutation_started` entry records a merge or
+/// auto-merge (or lacks a parseable `"rebase"` operation so reconciliation
+/// stays fail-closed).
+fn is_merge_completion_mutation(entry: &orbit_types::task::TaskHistoryEntry) -> bool {
+    if entry.event != PR_COMPLETION_MUTATION_STARTED_EVENT {
+        return false;
+    }
+    !matches!(
+        entry
+            .note
+            .as_deref()
+            .and_then(|note| serde_json::from_str::<Value>(note).ok())
+            .as_ref()
+            .and_then(|value| value.get("operation").and_then(Value::as_str)),
+        Some("rebase")
+    )
 }
 
 /// Read reservations after pre-observation repair adoption/publication as well
@@ -134,10 +153,7 @@ fn completion_history<H: RuntimeHost + ?Sized>(
     let mut answer = CompletionHistory::ReadOnly;
     for task in context.tasks {
         let history = host.get_task_history(&task.id)?;
-        if history
-            .iter()
-            .any(|entry| entry.event == PR_COMPLETION_MUTATION_STARTED_EVENT)
-        {
+        if history.iter().any(is_merge_completion_mutation) {
             return Ok(CompletionHistory::Mutated);
         }
         if pr_completion_has_mutation_provenance(&history) {

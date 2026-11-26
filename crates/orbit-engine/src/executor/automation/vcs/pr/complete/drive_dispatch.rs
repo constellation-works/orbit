@@ -515,8 +515,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let workspace_path = self.workspace_path;
         let pr_number = self.pr_number;
         let observation_budget = self.observation_budget;
-        let mutated = self.mutated;
-        let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
+        let merge_mutated = self.merge_mutated();
+        let observed =
+            |error| observation_failure(host, input, merge_mutated, observation_budget, error);
         // [ORB-23445] Evaluate the actual candidate before any merge
         // request: it may be an adopted/published repair or refreshed
         // head the pre-drive check never saw.
@@ -686,8 +687,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let workspace_path = self.workspace_path;
         let pr_number = self.pr_number;
         let observation_budget = self.observation_budget;
-        let mutated = self.mutated;
-        let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
+        let merge_mutated = self.merge_mutated();
+        let observed =
+            |error| observation_failure(host, input, merge_mutated, observation_budget, error);
         // Auto-merge cannot retain a head condition. A reviewed head
         // or a published candidate waits for the synchronous mutation
         // once checks settle, including on queue-only branches where
