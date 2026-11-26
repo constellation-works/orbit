@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::OrbitRuntime;
 use crate::paths::find_linked_worktree_root;
 
-pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;
+pub(crate) use crate::runtime::base::path::declared_context::canonicalize_context_files_for_read;
 
 pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&str>) -> PathBuf {
     workspace_path

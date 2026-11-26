@@ -175,7 +175,7 @@ impl OrbitRuntime {
         targets: &[&'a str],
         landing: Option<&LandingResolution>,
     ) -> Vec<(&'a str, ResolvesSideEffectOutcome)> {
-        let frictions = match crate::runtime::friction::store_for(self) {
+        let frictions = match crate::runtime::stored::friction::store_for(self) {
             Ok(store) => store,
             // Without a store there is no per-relation verdict to give, so
             // report the failure once against each target.

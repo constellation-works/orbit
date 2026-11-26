@@ -90,7 +90,9 @@ pub(in crate::application) use terminal_dates::latest_status_entry_at;
 /// The shared non-pruning footprint calculation. Task reads, projections,
 /// reservations, status-derived locks, and the admission work that freezes a
 /// claim's footprint all resolve declarations through it.
-pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
+pub use crate::runtime::base::path::declared_context::{
+    DeclaredContextFiles, declared_context_files,
+};
 pub use artifact_export::TaskArtifactRead;
 pub(in crate::application) use automation_port::{SourceGit, TaskAutomationPort};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
@@ -201,6 +203,7 @@ pub(crate) use sweep_filing_port::{
     CiSweepFilingEvidence, CiSweepFilingSource, PromotionDecision,
 };
 pub use transient_infra::TransientInfraBlockedTask;
+pub use transitions::InfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;
 pub use write_response::{

@@ -4,9 +4,12 @@
 mod accessors;
 pub mod audit;
 mod authorization;
+pub mod friction;
 pub mod job_runs;
+pub mod locks;
 mod persistence;
 pub mod recovery_authority;
+mod reservation_history;
 pub mod stores;
 pub mod task_access;
 pub mod workspace;

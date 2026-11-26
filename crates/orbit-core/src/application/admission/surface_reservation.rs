@@ -31,7 +31,7 @@ use super::backlog_exclusion::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
 };
 use crate::application::job::PublishedResume;
-use crate::runtime::task::locks::{
+use crate::runtime::stored::locks::{
     UnlockedContextPaths, lock_context_files_for_task, lock_holder_index, task_lock_overlaps,
 };
 

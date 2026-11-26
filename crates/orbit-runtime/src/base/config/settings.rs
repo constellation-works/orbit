@@ -91,7 +91,7 @@ pub struct OrbitRuntimeSettings {
     tag_label_requirements: orbit_types::task::TagLabelRequirements,
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
-    unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
+    unlocked_context_paths: crate::base::config::unlocked::UnlockedContextPaths,
     /// `workflow.lock_modes`: the paths where a footprint overlap is shared
     /// rather than blocking.
     footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
@@ -125,7 +125,7 @@ pub struct OrbitRuntimeSettings {
     decision_channel_enabled: bool,
     /// The fixed lease policy (path leases disabled) [ORB-22808]: whether
     /// path leases are accepted and the per-class guards a request is held to.
-    lease_policy: crate::task::locks::LeasePolicy,
+    lease_policy: crate::base::config::lease_policy::LeasePolicy,
     /// `experiments.*`: the workspace's experiment policy.
     experiments: orbit_config::ExperimentSettings,
     /// Admitted `machine.labels`: the capability labels this host carries,
@@ -166,7 +166,7 @@ impl OrbitRuntimeSettings {
         tag_instructions: orbit_config::TagInstructionSettings,
         review_skip_tags: orbit_config::ReviewSkipSettings,
         tag_label_requirements: orbit_types::task::TagLabelRequirements,
-        unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
+        unlocked_context_paths: crate::base::config::unlocked::UnlockedContextPaths,
         footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
@@ -181,7 +181,7 @@ impl OrbitRuntimeSettings {
         task_types: Vec<orbit_config::TaskTypeDefinition>,
         regression_layers: Vec<orbit_config::RegressionLayerDefinition>,
         decision_channel_enabled: bool,
-        lease_policy: crate::task::locks::LeasePolicy,
+        lease_policy: crate::base::config::lease_policy::LeasePolicy,
         experiments: orbit_config::ExperimentSettings,
         machine_labels: Vec<String>,
     ) -> Self {
@@ -257,7 +257,7 @@ impl OrbitRuntimeSettings {
         self.decision_channel_enabled
     }
 
-    pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
+    pub(crate) fn lease_policy(&self) -> &crate::base::config::lease_policy::LeasePolicy {
         &self.lease_policy
     }
 
@@ -285,7 +285,7 @@ impl OrbitRuntimeSettings {
         &self.review_skip_tags
     }
 
-    pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {
+    pub fn unlocked_context_paths(&self) -> &crate::base::config::unlocked::UnlockedContextPaths {
         &self.unlocked_context_paths
     }
 

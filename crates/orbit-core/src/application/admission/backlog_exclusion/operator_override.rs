@@ -37,7 +37,7 @@ use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 use orbit_store::contract::{TaskLockConflict, TaskLockHolder};
 
-use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
+use crate::runtime::stored::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
 /// The history event recording which readiness gates and lock conflicts an
 /// operator's ship overrode.

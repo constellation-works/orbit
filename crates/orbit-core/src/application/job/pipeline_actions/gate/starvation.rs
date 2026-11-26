@@ -22,7 +22,7 @@ use crate::application::job::JobAdmissionPort;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
-use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
+use crate::runtime::stored::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
 use super::reservation::{context_conflict_check, dependency_admission_for_input};
 

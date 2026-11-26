@@ -19,7 +19,7 @@ use super::TaskRecordUpdateParams;
 use super::paths::{context_files_restored_history_entry, context_workspace_root};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
-use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
+use crate::runtime::base::path::declared_context::{DeclaredContextFiles, declared_context_files};
 
 /// What a history-backed restoration would add to one task, or did add.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -335,7 +335,7 @@ pub(super) fn report_bundle_drift(
         hosted = display(&hold.hosted_version),
         host = display(&hold.host),
     );
-    let frictions = crate::runtime::friction::store_for(runtime)?;
+    let frictions = crate::runtime::stored::friction::store_for(runtime)?;
     let known = frictions.tags()?;
     let tags = FRICTION_TAGS
         .iter()

@@ -19,5 +19,5 @@ pub(super) fn stats(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     } else {
         runtime.observe_task_metadata()?
     };
-    crate::runtime::friction::store_for(runtime)?.stats(&tasks)
+    crate::runtime::stored::friction::store_for(runtime)?.stats(&tasks)
 }

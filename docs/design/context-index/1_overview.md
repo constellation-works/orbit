@@ -67,7 +67,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Posting weights and how each enters the score | [2_design.md §5.4](./2_design.md#54-option-posting-weight) | — |
 | Window and its routine | [2_design.md §6](./2_design.md#6-window-and-routine) | [routines design](../routines/2_design.md), the `plugin.tool_call` action |
 | Query surface and the check against HEAD | [2_design.md §7](./2_design.md#7-query-surface) | orbit-graph `recommend` and its path lineage |
-| Where the output is used | [2_design.md §8](./2_design.md#8-where-the-output-is-used) | [task pilot](../task-pilot/1_scope.md), [pilot scorecard](../agent-scorecards/2_design.md), [locks/index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs) |
+| Where the output is used | [2_design.md §8](./2_design.md#8-where-the-output-is-used) | [task pilot](../task-pilot/1_scope.md), [pilot scorecard](../agent-scorecards/2_design.md), [locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs) |
 | Core and plugin split; orbit-graph as the home | [2_design.md §1](./2_design.md#1-placement-a-plugin-with-three-generic-core-seams) | [plugins scope](../plugins/1_scope.md); Daniel's decision, [§14.1](./2_design.md#141-decided-by-daniel-2026-11-14) |
 | The eight recommendations | [2_design.md §9](./2_design.md#9-positions-on-the-eight-recommendations) | — |
 | Offline evaluation, with the option comparison | [2_design.md §10](./2_design.md#10-offline-evaluation) | orbit-graph `recommend` and `evaluate`, [pilots.rs](../../../crates/orbit-core/src/application/agents/roles/pilots.rs), the audit task-scope blob |

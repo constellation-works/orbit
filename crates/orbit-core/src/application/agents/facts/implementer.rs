@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
+use orbit_runtime::run::cost::IMPLEMENT_INVOCATION_IDS;
 use serde_json::Value;
 
 use super::invocations::AgentInvocationFacts;

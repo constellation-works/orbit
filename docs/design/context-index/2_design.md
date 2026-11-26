@@ -362,7 +362,7 @@ A task about an area with no history gets an empty answer and a reason. The tool
 
 ## 8. Where the output is used
 
-The answer to "pre-fill at filing, a hint to the implementer, or both" is: **first a hint to the pilot; pre-fill and an implementer hint only behind their own evidence.** The reason is what `context_files` does. A selector takes a lock for as long as the task is in progress or in review, and a `symbol:` selector locks its whole file ([locks/index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs)). Selectors are also the size that risk and effort read, and part of what the review gate digests. A wrong prediction written straight to the task therefore blocks other work, and the path-leases measurements already found 31% of examined lock denials unnecessary ([path-leases design](../path-leases/2_design.md)).
+The answer to "pre-fill at filing, a hint to the implementer, or both" is: **first a hint to the pilot; pre-fill and an implementer hint only behind their own evidence.** The reason is what `context_files` does. A selector takes a lock for as long as the task is in progress or in review, and a `symbol:` selector locks its whole file ([locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs)). Selectors are also the size that risk and effort read, and part of what the review gate digests. A wrong prediction written straight to the task therefore blocks other work, and the path-leases measurements already found 31% of examined lock denials unnecessary ([path-leases design](../path-leases/2_design.md)).
 
 ### 8.1 Stage 1: candidates for the task pilot
 

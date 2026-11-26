@@ -117,7 +117,7 @@ fn file(
     );
     let _ = writeln!(body, "dedupe-key: {key}");
 
-    let frictions = crate::runtime::friction::store_for(runtime)?;
+    let frictions = crate::runtime::stored::friction::store_for(runtime)?;
     let accepted = frictions.tags()?;
     let tags = [FRICTION_TAG, FALLBACK_TAG]
         .into_iter()

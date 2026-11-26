@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::runtime::friction::WorkspaceFrictions as FrictionStore;
+use crate::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contract::FrictionAddParams;

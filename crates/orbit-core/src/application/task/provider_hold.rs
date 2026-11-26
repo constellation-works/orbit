@@ -1,7 +1,7 @@
 //! Admission under a provider failure hold [ORB-14266].
 //!
 //! Run finalization holds a task whose run its provider failed
-//! (`runtime::task::provider_hold`). While the hold stands, the task's crew is
+//! (`runtime::run::task_coupling::provider_hold`). While the hold stands, the task's crew is
 //! drawn from the crews it does not exclude: its own crew or pool first, then
 //! the other enabled members of its purpose pool, then its complexity pool,
 //! then the workspace default. When the hold excludes every one, the local
@@ -31,7 +31,9 @@ use orbit_types::workflow::{ProviderCrewOutage, ProviderFailureClass, ProviderFa
 use crate::OrbitRuntime;
 use crate::application::contracts::CrewCandidate;
 use crate::application::task::{CrewPools, TaskJobPort};
-use crate::runtime::task::provider_hold::{same_provider, standing_provider_hold_from_history};
+use crate::runtime::run::task_coupling::provider_hold::{
+    same_provider, standing_provider_hold_from_history,
+};
 
 /// The held draw, its standing hold, and the reason represented in its source.
 type HeldCandidates = (

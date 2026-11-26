@@ -11,7 +11,7 @@
     "orbit_runtime_naming_files.orbit-web": 39,
     "orbit_runtime_ref_param_fns": 1297,
     "runtime_host_required_methods": 153,
-    "runtime_top_level_modules_outside_layers": 9,
+    "runtime_top_level_modules_outside_layers": 3,
     "worker_or_owner_reads": 183
   }
 }

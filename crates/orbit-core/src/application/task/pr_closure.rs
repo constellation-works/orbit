@@ -64,7 +64,7 @@ use orbit_types::workflow::handoff::HandoffDelivery;
 
 use crate::OrbitRuntime;
 use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
-use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
+use crate::runtime::run::task_coupling::FINAL_RECOVERY_REQUEUED_EVENT;
 use crate::runtime::task_pr_forge::TaskPrForge;
 
 impl OrbitRuntime {

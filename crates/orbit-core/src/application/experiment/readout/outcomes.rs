@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
+use orbit_runtime::run::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::V2AuditEventFilter;
 use orbit_store::contract::{ExperimentAssignment, InvocationQuery, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus, complexity_bucket};
@@ -325,7 +325,7 @@ impl OrbitRuntime {
                 .iter()
                 .find(|verdict| **verdict != ReviewVerdict::Incomplete);
             let task_tokens = tokens.get(id);
-            let covered = |spend: Option<&orbit_runtime::cost::TaskTokenSpend>| {
+            let covered = |spend: Option<&orbit_runtime::run::cost::TaskTokenSpend>| {
                 spend
                     .filter(|spend| spend.invocation_count > 0)
                     .filter(|spend| spend.uncovered_invocation_count == 0)

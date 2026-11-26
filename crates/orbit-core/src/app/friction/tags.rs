@@ -6,5 +6,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 
 pub(super) fn tags(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
-    Ok(json!(crate::runtime::friction::store_for(runtime)?.tags()?))
+    Ok(json!(
+        crate::runtime::stored::friction::store_for(runtime)?.tags()?
+    ))
 }

@@ -250,7 +250,7 @@ pub(super) fn follower_footprint_conflicts(
     task: &Task,
     holders: &crate::application::admission::auto_admission::AdmissionHolders,
 ) -> Vec<crate::application::admission::auto_admission::AdmissionConflict> {
-    let mut conflicts = crate::runtime::task::locks::lock_context_files_for_task(
+    let mut conflicts = crate::runtime::stored::locks::lock_context_files_for_task(
         task,
         &runtime.paths().repo_root,
         runtime.unlocked_context_paths(),

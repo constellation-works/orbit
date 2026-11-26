@@ -17,8 +17,7 @@ use super::params::TaskUpdateParams;
 use super::update::admit_task_artifact;
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
-use crate::runtime::InfraBlockedTask;
-use crate::runtime::friction::WorkspaceFrictions;
+use crate::runtime::stored::friction::WorkspaceFrictions;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::is_valid_friction_id;
@@ -28,3 +27,4 @@ use orbit_types::task::{
 
 pub(crate) use approve::DeferredApprovalEffects;
 pub(crate) use requeue::INFRA_BLOCK_CLEARED_EVENT;
+pub use requeue::InfraBlockedTask;

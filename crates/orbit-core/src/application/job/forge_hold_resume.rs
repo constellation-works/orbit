@@ -25,7 +25,7 @@ use orbit_types::workflow::{
 
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
-use crate::runtime::task::resumed_task_run_id;
+use crate::runtime::run::task_coupling::resumed_task_run_id;
 
 use super::resume::task_ids_from_input;
 

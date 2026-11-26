@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use super::super::audit::record_lease_audit_event;
 use super::operation::show;
-use super::policy::{lower_priority, parse_priority, priority_rank};
 use crate::RuntimeKernel;
+use crate::base::config::lease_policy::{lower_priority, parse_priority, priority_rank};
 
 /// Active (granted or queued) leases one lease-token principal may have in a
 /// workspace. Counted from the owner's lease rows by principal, so a new

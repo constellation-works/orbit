@@ -53,6 +53,7 @@ use serde_json::{Map, Value};
 use super::exec::{self, App, MutationAudit, Operation};
 use crate::Core;
 use crate::application::resident::ResidentActionTicket;
+use crate::application::task::InfraBlockedTask;
 use crate::application::task::{
     DecisionChannelInfo, ExternalMergeSettlement, PostDeployOperatorRecord, ProposedTaskInput,
     ScreenedTaskWrite, TaskAddParams, TaskListFilter, TaskListQuery, TaskPage, TaskRow,
@@ -64,7 +65,6 @@ use crate::application::task_bundle::migration::{
 use crate::application::task_bundle::publication::{
     AttachmentPolicy, PublicationInspection, PublicationPublishOutcome, PublicationRestoreOutcome,
 };
-use crate::runtime::InfraBlockedTask;
 
 /// One task command.
 pub enum Command<'a> {

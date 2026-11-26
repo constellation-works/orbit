@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use orbit_common::test_env::{self, FixtureProgress};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
+use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitError, OrbitRuntime};
 use orbit_store::contract::FrictionAddParams;
 use serde_json::json;

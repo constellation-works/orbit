@@ -4,7 +4,7 @@
 use chrono::{TimeZone, Utc};
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
-use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
+use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contract::FrictionAddParams;
 use orbit_types::desktop::{DesktopTaskOperation, DesktopTaskRequest};

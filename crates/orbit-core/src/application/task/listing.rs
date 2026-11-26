@@ -11,12 +11,12 @@ use orbit_types::task::{
 };
 
 use crate::OrbitRuntime;
+use crate::runtime::stored::locks::{
+    TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
+};
 use crate::runtime::stored::task_access::ListedRow;
 pub(crate) use crate::runtime::stored::task_access::{
     list_task_metadata_in, list_task_metadata_matching, metadata_task,
-};
-use crate::runtime::task::locks::{
-    TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
 
 pub use orbit_store::contract::{

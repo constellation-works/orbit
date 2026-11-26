@@ -11,10 +11,10 @@
 //! aggregation still reads historical `double_read_rate` values from persisted
 //! job runs.
 
+pub use orbit_runtime::run::cost;
 pub mod reliability;
 mod summary;
 
-pub use orbit_runtime::cost;
 pub use summary::{
     DoubleReadSummary, KnowledgeStatsSummary, RatioSummary, TokenInputSummary, aggregate,
 };

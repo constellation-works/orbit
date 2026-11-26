@@ -19,7 +19,7 @@ use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::TaskRecords;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
-use crate::runtime::task::resumed_task_run_id;
+use crate::runtime::run::task_coupling::resumed_task_run_id;
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
 /// A lineage this deep is pathological; the bound keeps a corrupted cycle from
