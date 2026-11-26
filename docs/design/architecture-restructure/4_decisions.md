@@ -349,12 +349,67 @@ Routed tool calls do not go through the task access. `Run::claim_owner()` return
 - Cost: each site that writes keeps a branch, the owner call for a worker and the local use case otherwise. One write access behind one type would remove the branch, and needs the callback this design deletes.
 - Cost: `held_by_owner()` and `is_worker()` are true in the same processes, so which of the two a site asks is a judgement made per site.
 >
+
+## Shared source-style checker gates new findings
+
+**Recorded:** 2026-11-26 · [ORB-28985]
+**Code anchors:** `scripts/check-source-style.py`, `scripts/check-source-style-diff.py`, `rustfmt.toml`
+
+### Context
+
+[STD-12@4](../../standards/STD-12-source-style/STD-12.md#rust-profile) names what the stable formatter cannot check: blank lines, line width, `use` groups, `rustfmt::skip` reasons, impl adjacency, member order and `super::super`. The shared checker in `constellation-works/rust-cli-template` checks those rules, but it reads every tracked Rust file and has no diff mode. Orbit already has findings for every one of them, so a whole-repository failure would block every change.
+
+### Decision
+
+- The checker is carried unchanged from `constellation-works/rust-cli-template` at `7539c089`: `scripts/check-source-style.py` (sha256 `edf6a6e8…`, 34,783 bytes) and `rustfmt.toml` (sha256 `a72f2301…`), which also sits at `desktop/rustfmt.toml`. The wrapper pins those digests and fails when either changes.
+- `scripts/check-source-style-diff.py` runs the checker's `names` (R1) and `style` (R12, R13, R16, R19, R21, R22, R26) modes on this checkout and on the merge base of HEAD and `origin/agent-main`, or of `CI_TEST_BASE`. It fails on each finding this checkout adds. A finding's identity is its file (followed across a rename), its rule, its message and its line text. The merge base's findings with the same identity are recorded debt.
+- The checker's rules are per file and per path, and a run over this repository lexes all 4,985 Rust files. So the wrapper runs the checker on a snapshot that keeps every path and `Cargo.toml` but carries text only for the files that differ from the merge base and for untouched files whose text contains `@generated`. Recorded debt in other untouched files cancels out, and the run takes about two seconds.
+- A file whose leading comment says `@generated` is exempt, as STD-12 allows. The checker enforces it, and the wrapper inherits it on both sides. An empty placeholder would drop that exemption: the base would report `R1` for a generated-only directory, and the head's `R1` for its first handwritten source would cancel against that base finding as recorded debt. The wrapper carries generated text so that case stays a new finding.
+- The Rust format gate is `cargo fmt --all -- --check` at the root and `cargo fmt --check` in `desktop/`. Both read the same stable profile, `edition = "2024"` and `max_width = 100`, the rustfmt default that STD-12 R11 fixes.
+- `scripts/test-check-source-style-diff.py` seeds R1, R12, R22 and R26 violations in scratch repositories and expects the gate to fail, then expects the corrected fixtures to pass. It also covers a change inside recorded debt, a rename, a new file in a recorded directory, `@generated`, a pin mismatch and an unresolved base.
+- `ci-guardrails.sh` runs the gate beside the Clippy source-order checker. `desktop.yml` also runs when `rustfmt.toml` changes.
+
+### Scoped deviation: recorded debt
+
+This change adds the gates for `STD-12@4 §R1, §R12, §R13, §R16, §R21, §R22 and §R26` and fixes none of the debt they find. At the merge base `d06374ced`, the checker reports these breaches across the 4,985 tracked Rust files:
+
+| Rule | Breaches |
+| --- | ---: |
+| R1 | 1,809 |
+| R12 | 8,181 |
+| R13 | 3,706 |
+| R16 | 251 |
+| R21 | 605 |
+| R22 | 1,886 |
+| R26 | 2,585 |
+
+No R19 breach exists. A change that adds one of these findings fails the gate, including on a recorded line that it rewrites. A finding leaves the inventory when its file is changed for another reason and the finding is fixed there.
+
+### Remaining gates
+
+| STD-12 rule | Gate now | Outstanding |
+| --- | --- | --- |
+| R1 | the wrapper's `names` mode | 1,809 plural names |
+| R2, R14 | Clippy `min_ident_chars`, desktop only | the root does not enable it, and `allowed-idents-below-min-chars` stays empty |
+| R3, R11 | `cargo fmt --check` in both workspaces | none |
+| R4, R12 | the wrapper | 8,181 breaches |
+| R5, R13 | the wrapper | 3,706 breaches |
+| R15 | none | `clippy::wildcard_imports` and `clippy::enum_glob_use` are enabled in neither workspace |
+| R16 | the wrapper | 251 breaches |
+| R18 | `missing_docs` at warn in both workspaces | presence only, and 142 files in 15 crates carry `allow(missing_docs)`; the content is review |
+| R19 | the wrapper | none |
+| R20, R23 | Clippy `arbitrary_source_item_ordering` and `inconsistent_struct_constructor`, plus the baseline in `check-rust-source-order.py` ([ORB-28969]) | coverage gaps tracked by [ORB-29039] |
+| R21, R22 | the wrapper | 605 and 1,886 breaches |
+| R26 | the wrapper | 2,585 breaches |
+| R6–R10, R17, R24, R25 | review only | none |
+
 ## Task References
 
 - [ORB-28318] — carried the proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations this restructure answers.
 - [ORB-28969] — adopted the STD-12 declaration and literal order gate with a shrinking root baseline.
 - [ORB-29039] — added the written module-order guard and review rules for remaining lint gaps.
+- [ORB-28985] — adopted the shared source-style checker as a differential gate and recorded its debt and remaining gates.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
 - [ORB-28391] — chose a worker's task reads when `Stored` is built.
 - [ORB-28392] — chose coordination writes from the role.
