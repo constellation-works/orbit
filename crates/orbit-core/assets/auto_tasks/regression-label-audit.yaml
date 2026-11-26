@@ -255,8 +255,7 @@ template:
 
     Then run `sample` with the sample_size and period_days definition
     fields above and, as `--family`, a comma list naming your own model
-    family (`claude`; `gpt,codex,openai`; `gemini`; `grok` and so on), the
-    same family test `recovery-fault-audit` applies to `fault_judged_by`.
+    family (`claude`; `gpt,codex,openai`; `gemini`; `grok` and so on).
     Your family is the family of the model this run dispatched. Add
     `--prior .orbit/tmp/regression-label-audit-prior.json` when you saved
     it. The helper lists each status (proposed, backlog, in-progress,
