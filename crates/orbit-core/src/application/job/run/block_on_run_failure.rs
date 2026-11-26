@@ -90,72 +90,6 @@ const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
 /// retries the footprint once the holders release it.
 const FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT: &str = "footprint_unavailable_requeued";
 
-/// Terminal run states that strand a coupled task and therefore trigger task
-/// cleanup. `Interrupted` is included [ORB-12969]: the run is
-/// resumable from its step checkpoints, but nothing resumes it on its own, so
-/// its task must not keep looking like live work. Resume re-admits the blocked
-/// task, so blocking it does not get in the way of the resume.
-///
-/// `Held` is included for a run held on a failure it did not cause
-/// [ORB-15202] (see [`HeldFailure`]): its tasks get the disposition the
-/// failure always had. A run held for review evidence, the forge, or a typed
-/// delivery refusal leaves the refusing action's task state alone.
-pub(super) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
-    matches!(
-        state,
-        JobRunState::Failed
-            | JobRunState::Timeout
-            | JobRunState::Cancelled
-            | JobRunState::Interrupted
-            | JobRunState::Held
-    )
-}
-
-/// Task statuses that should NOT be touched when their run terminalizes as a
-/// failure: `Done`/`Archived`/`Rejected` are terminal or human decisions,
-/// `Review` was already shipped (don't clobber it), and `Blocked` is already
-/// where we want it (keeps the transition idempotent).
-///
-/// [ORB-11305] `Proposed` and `Someday` join them. Both are withdrawals — the
-/// way a human takes work back out of the backlog — and a withdrawal is
-/// routinely what *causes* the run to be cancelled. Cleanup that ran after it
-/// would replace the human's decision with `blocked`, so the withdrawal would
-/// have to be re-applied by hand once the run finished unwinding. Only a task
-/// that is still `in-progress` (or already `backlog`) under the failed run is
-/// this transition's business.
-fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
-    !matches!(
-        status,
-        TaskStatus::Done
-            | TaskStatus::Review
-            | TaskStatus::Blocked
-            | TaskStatus::Rejected
-            | TaskStatus::Archived
-            | TaskStatus::Proposed
-            | TaskStatus::Someday
-    )
-}
-
-/// Extract `(error_code, error_message)` for the failure note from the run's
-/// most recent errored step. The pipeline records a single job-level
-/// diagnostic step whose message already names the failing step, so surfacing
-/// it verbatim keeps the note actionable.
-fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<String>) {
-    run.steps
-        .iter()
-        .rev()
-        .find(|step| step.error_code.is_some() || step.error_message.is_some())
-        .map(|step| {
-            (
-                step.error_code.clone(),
-                step.error_message
-                    .as_deref()
-                    .map(orbit_common::security::redaction::redact_all),
-            )
-        })
-        .unwrap_or((None, None))
-}
-
 impl OrbitRuntime {
     /// Best-effort variant used from run terminalization: a status-write
     /// failure is logged and swallowed so the run still reaches its terminal
@@ -495,4 +429,70 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+}
+
+/// Terminal run states that strand a coupled task and therefore trigger task
+/// cleanup. `Interrupted` is included [ORB-12969]: the run is
+/// resumable from its step checkpoints, but nothing resumes it on its own, so
+/// its task must not keep looking like live work. Resume re-admits the blocked
+/// task, so blocking it does not get in the way of the resume.
+///
+/// `Held` is included for a run held on a failure it did not cause
+/// [ORB-15202] (see [`HeldFailure`]): its tasks get the disposition the
+/// failure always had. A run held for review evidence, the forge, or a typed
+/// delivery refusal leaves the refusing action's task state alone.
+pub(super) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
+    matches!(
+        state,
+        JobRunState::Failed
+            | JobRunState::Timeout
+            | JobRunState::Cancelled
+            | JobRunState::Interrupted
+            | JobRunState::Held
+    )
+}
+
+/// Task statuses that should NOT be touched when their run terminalizes as a
+/// failure: `Done`/`Archived`/`Rejected` are terminal or human decisions,
+/// `Review` was already shipped (don't clobber it), and `Blocked` is already
+/// where we want it (keeps the transition idempotent).
+///
+/// [ORB-11305] `Proposed` and `Someday` join them. Both are withdrawals — the
+/// way a human takes work back out of the backlog — and a withdrawal is
+/// routinely what *causes* the run to be cancelled. Cleanup that ran after it
+/// would replace the human's decision with `blocked`, so the withdrawal would
+/// have to be re-applied by hand once the run finished unwinding. Only a task
+/// that is still `in-progress` (or already `backlog`) under the failed run is
+/// this transition's business.
+fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
+    !matches!(
+        status,
+        TaskStatus::Done
+            | TaskStatus::Review
+            | TaskStatus::Blocked
+            | TaskStatus::Rejected
+            | TaskStatus::Archived
+            | TaskStatus::Proposed
+            | TaskStatus::Someday
+    )
+}
+
+/// Extract `(error_code, error_message)` for the failure note from the run's
+/// most recent errored step. The pipeline records a single job-level
+/// diagnostic step whose message already names the failing step, so surfacing
+/// it verbatim keeps the note actionable.
+fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<String>) {
+    run.steps
+        .iter()
+        .rev()
+        .find(|step| step.error_code.is_some() || step.error_message.is_some())
+        .map(|step| {
+            (
+                step.error_code.clone(),
+                step.error_message
+                    .as_deref()
+                    .map(orbit_common::security::redaction::redact_all),
+            )
+        })
+        .unwrap_or((None, None))
 }

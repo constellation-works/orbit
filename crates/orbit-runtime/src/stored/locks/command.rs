@@ -25,6 +25,27 @@ use super::index::{
 use super::prepared::PreparedGrant;
 use crate::RuntimeKernel;
 
+/// Whether a task-scope reservation that resolves to zero files is a mistake
+/// to refuse, or a legitimate no-op to admit.
+///
+/// An operator claiming a task's surface before starting work almost
+/// certainly wants a real claim: a task with nothing declared should be told
+/// so, not handed a reservation ID that holds nothing ([`Self::Refuse`]). The
+/// legacy v2 dispatch admission gate uses a compatibility no-op instead: a
+/// task that has not declared any context yet has nothing to serialize
+/// against, so admitting it trivially is correct there ([`Self::Admit`]).
+/// Distributed pull admission likewise admits empty footprints, preserving
+/// claim identity without holding a context lock.
+///
+/// Neither value reaches an inherited-only `epic` root: that refusal is decided
+/// ahead of this policy, because the surface such a root is missing is one its
+/// descendants used to supply rather than one nobody in the family ever had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyTaskSurfacePolicy {
+    Refuse,
+    Admit,
+}
+
 /// The in-process reservation answer. JSON is produced only for a tool or
 /// persisted step output; ordinary grants omit the deferred-footprint keys.
 pub enum ReservationOutcome {
@@ -240,27 +261,6 @@ pub fn prepare_reserve<'a>(
         EmptyTaskSurfacePolicy::Refuse,
     )?
     .map(ReservationOutcome::into_tool_output))
-}
-
-/// Whether a task-scope reservation that resolves to zero files is a mistake
-/// to refuse, or a legitimate no-op to admit.
-///
-/// An operator claiming a task's surface before starting work almost
-/// certainly wants a real claim: a task with nothing declared should be told
-/// so, not handed a reservation ID that holds nothing ([`Self::Refuse`]). The
-/// legacy v2 dispatch admission gate uses a compatibility no-op instead: a
-/// task that has not declared any context yet has nothing to serialize
-/// against, so admitting it trivially is correct there ([`Self::Admit`]).
-/// Distributed pull admission likewise admits empty footprints, preserving
-/// claim identity without holding a context lock.
-///
-/// Neither value reaches an inherited-only `epic` root: that refusal is decided
-/// ahead of this policy, because the surface such a root is missing is one its
-/// descendants used to supply rather than one nobody in the family ever had.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmptyTaskSurfacePolicy {
-    Refuse,
-    Admit,
 }
 
 /// Prepare a task-lock reservation using an index loaded by the calling

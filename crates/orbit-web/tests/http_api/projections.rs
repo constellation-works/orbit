@@ -63,6 +63,17 @@ macro_rules! check {
     };
 }
 
+struct InvocationFixture<'a> {
+    run: &'a str,
+    activity: &'a str,
+    agent: &'a str,
+    model: &'a str,
+    tool: &'a str,
+    input: u64,
+    output: u64,
+    bytes: u64,
+}
+
 fn get_ok(server: &Server, path: &str) -> Value {
     json_ok(server.get(path))
 }
@@ -1730,17 +1741,6 @@ fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::O
     orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
     RegisteredRuntimeFactory::open_registered_checkout(&fixture.global, &workspace, &checkout)
         .unwrap()
-}
-
-struct InvocationFixture<'a> {
-    run: &'a str,
-    activity: &'a str,
-    agent: &'a str,
-    model: &'a str,
-    tool: &'a str,
-    input: u64,
-    output: u64,
-    bytes: u64,
 }
 
 fn seed_scope(runtime: &orbit_core::OrbitRuntime, invocation: InvocationFixture<'_>) {

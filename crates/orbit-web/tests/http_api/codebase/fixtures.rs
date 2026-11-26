@@ -22,6 +22,16 @@ use super::super::support::{Fixture, Server, json_ok};
 
 use super::WS;
 
+pub(in super::super) struct TaskEventFixture<'a> {
+    pub(in super::super) task_id: &'a str,
+    pub(in super::super) at: DateTime<Utc>,
+    pub(in super::super) by: &'a str,
+    pub(in super::super) event: &'a str,
+    pub(in super::super) note: Option<String>,
+    pub(in super::super) to_status: Option<TaskStatus>,
+    pub(in super::super) decision: Option<TaskDecision>,
+}
+
 pub(in super::super) fn add(
     fixture: &Fixture,
     title: &str,
@@ -202,16 +212,6 @@ pub(in super::super) fn append_row(fixture: &Fixture, event: TaskEventFixture<'_
     };
     let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
-}
-
-pub(in super::super) struct TaskEventFixture<'a> {
-    pub(in super::super) task_id: &'a str,
-    pub(in super::super) at: DateTime<Utc>,
-    pub(in super::super) by: &'a str,
-    pub(in super::super) event: &'a str,
-    pub(in super::super) note: Option<String>,
-    pub(in super::super) to_status: Option<TaskStatus>,
-    pub(in super::super) decision: Option<TaskDecision>,
 }
 
 /// Log a transition away from and back to backlog, so the bundle's last

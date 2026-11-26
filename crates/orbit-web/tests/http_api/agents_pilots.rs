@@ -21,6 +21,17 @@ use super::support::{Fixture, isolated, json_ok};
 
 const WS: &str = "workspace=ws_http_fixture";
 
+/// A done, assessed task: `complexity`, a pilot receipt from `run` naming
+/// `after`, an implementation run priced at `cost`, and `files` landed.
+struct CalibrationFixture<'a> {
+    title: &'a str,
+    complexity: TaskComplexity,
+    run: &'a str,
+    files: &'a [&'a str],
+    cost: Option<f64>,
+    now: DateTime<Utc>,
+}
+
 fn row<'a>(card: &'a Value, crew: &str, model: &str) -> &'a Value {
     card["rows"]
         .as_array()
@@ -674,17 +685,6 @@ fn pilots_grade_each_crew_against_landed_diffs() {
             assert_eq!(http["rows"], card["rows"]);
         },
     );
-}
-
-/// A done, assessed task: `complexity`, a pilot receipt from `run` naming
-/// `after`, an implementation run priced at `cost`, and `files` landed.
-struct CalibrationFixture<'a> {
-    title: &'a str,
-    complexity: TaskComplexity,
-    run: &'a str,
-    files: &'a [&'a str],
-    cost: Option<f64>,
-    now: DateTime<Utc>,
 }
 
 fn calibrated(fixture: &Fixture, repo: &std::path::Path, sample: CalibrationFixture<'_>) -> String {

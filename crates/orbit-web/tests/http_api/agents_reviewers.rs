@@ -26,6 +26,17 @@ use serde_json::{Value, json};
 use super::agents::{Owned, WS, add, append, as_f64, bundle_dir, implementation_run, regression};
 use super::support::{Fixture, isolated, json_ok};
 
+/// A review gate settlement comment, shaped as the gate writes it.
+struct ReviewSettlement<'a> {
+    task_id: &'a str,
+    attempt: &'a str,
+    at: DateTime<Utc>,
+    verdict: &'a str,
+    reviewer: &'a str,
+    findings: &'a [&'a str],
+    reviewed: &'a str,
+}
+
 /// Run git in the fixture repository and return its trimmed stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
     let output = crate::git_test_support::command()
@@ -80,17 +91,6 @@ fn comment_at(fixture: &Fixture, task_id: &str, at: DateTime<Utc>, message: &str
         .open(path)
         .unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
-}
-
-/// A review gate settlement comment, shaped as the gate writes it.
-struct ReviewSettlement<'a> {
-    task_id: &'a str,
-    attempt: &'a str,
-    at: DateTime<Utc>,
-    verdict: &'a str,
-    reviewer: &'a str,
-    findings: &'a [&'a str],
-    reviewed: &'a str,
 }
 
 fn settle(fixture: &Fixture, settlement: ReviewSettlement<'_>) {
