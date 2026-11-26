@@ -107,6 +107,15 @@ pub struct PipelineInvokeResult {
     pub queue_position: Option<usize>,
 }
 
+impl PipelineInvokeResult {
+    /// The submission state surfaces report: `queued` while the run waits for
+    /// a concurrency slot, otherwise `submitted`.
+    #[must_use]
+    pub const fn submission_state(&self) -> &'static str {
+        if self.queued { "queued" } else { "submitted" }
+    }
+}
+
 /// [ORB-12038] A run's own `<run_id>.worker.log`, read for inspection when no
 /// audited CLI-invocation blob exists to explain a terminal outcome. See
 /// [`OrbitRuntime::read_pipeline_worker_log`].

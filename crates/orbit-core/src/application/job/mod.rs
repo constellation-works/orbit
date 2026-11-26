@@ -89,6 +89,7 @@ pub use pipeline::{
 };
 pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;
+pub use resume::{ResumeSubmissionProfile, ResumeSubmissionReceipt};
 pub use review_hold::{ReviewHold, ReviewHoldKind};
 pub(in crate::application) use review_hook::ReviewAdmissionHook;
 pub(crate) use run::CodebaseDeliveryScan;
