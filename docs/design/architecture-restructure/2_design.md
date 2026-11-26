@@ -304,7 +304,7 @@ Where today's 32 modules go. This mapping is by module name; the task that does 
 - **Direction inside the crate.** `base` names none of the others, `stored` names only `base`, `host` only those two, and `run` any of them. `scripts/check-dependency-direction.sh` gets the four as one more declared chain. A crate for each layer would make the same rule a crate edge, which is the stronger gate (STD-02 §R6). It is not proposed: Daniel's direction keeps the runtime in one crate, and the script already holds the same kind of chain inside `orbit-core`.
 - **How it gets there.** `RuntimeKernel` stays while the work is in flight, as a struct that holds the four layers, so the 1,075 places that take `&OrbitRuntime` keep compiling. First the fields are carved into the four structs and the files moved, with no caller changed. Then the role checks are folded into `Role` and the task access. Then, as each subject becomes an app (§3), its flows take the lowest layer they need. When nothing takes the whole kernel, it and the wrapper are deleted, and layers start being built on demand.
 
-**Status.** The four layer structs exist [ORB-28387], laid out as `base/`, `stored/`, `host/` and `run/` under `orbit-runtime/src` [ORB-28388], [ORB-28389]. The role is resolved once in `Base` [ORB-28390] and a worker's task reads are chosen when `Stored` is built [ORB-28391]. Not yet done: the coordination writes and remaining worker-role checks [ORB-28392], [ORB-28393], the nine top-level modules still outside the layers (sorting them is in review [ORB-28394]), and emptying `ApplicationPort` [ORB-28395]. The wrapper, `from_kernel_ref` and on-demand layers wait for [ORB-28455].
+**Status.** The four layer structs exist [ORB-28387], laid out as `base/`, `stored/`, `host/` and `run/` under `orbit-runtime/src` [ORB-28388], [ORB-28389]. The role is resolved once in `Base` [ORB-28390] and a worker's task reads are chosen when `Stored` is built [ORB-28391]. Not yet done: the coordination writes and remaining worker-role checks [ORB-28392], [ORB-28393] and the nine top-level modules still outside the layers (sorting them is in review [ORB-28394]). `ApplicationPort`, its static, the kernel's `application` field and `from_kernel_ref` are deleted [ORB-28395]: each of the 20 methods' callers moved up into `orbit-core`, was handed the value, or read the kernel's own task access. The wrapper and on-demand layers wait for [ORB-28455].
 
 ## 5. Calls between apps
 
@@ -430,7 +430,7 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 | 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing | done |
 | 1 | Environment | ORB-28365 to ORB-28371 | ORB-28365 to ORB-28370 wait for the ratchet check (ORB-28362); ORB-28367 to ORB-28370 also wait for ORB-28365 and ORB-28366; ORB-28371 waits for ORB-28367 to ORB-28370 | done |
 | 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except ORB-28373 (no dependencies) and ORB-28384 (waits for ORB-28373 only) | done |
-| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 | ORB-28387 to ORB-28391 done; ORB-28394 in review; ORB-28392, ORB-28393 and ORB-28395 backlog |
+| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 | ORB-28387 to ORB-28391 and ORB-28395 done; ORB-28394 in review; ORB-28392 and ORB-28393 backlog |
 | 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check, the app table and ORB-28365 (ORB-28416 waits for it) | ORB-28396 to ORB-28399 done; ORB-28400 in progress; the rest backlog |
 | 5 | Inside core | ORB-28418 to ORB-28454 | phases 2, 3 and 4 complete | proposed |
 | 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except ORB-28408 (no dependencies) | proposed |
@@ -500,7 +500,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28392] — will choose coordination writes from the role.
 - [ORB-28393] — will fold the remaining worker-role checks.
 - [ORB-28394] — is sorting the runtime modules named for a subject.
-- [ORB-28395] — will empty the kernel's `ApplicationPort`.
+- [ORB-28395] — emptied and deleted the kernel's `ApplicationPort`.
 - [ORB-28396] — added `Core`, `exec` and the friction app.
 - [ORB-28398] — routed run and job commands through `app::run`, and the `command.exec` tool operation with them.
 - [ORB-28399] — routed plugin commands through `app::plugin`, the last of the four apps built.

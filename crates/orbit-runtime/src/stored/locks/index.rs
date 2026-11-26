@@ -158,7 +158,9 @@ impl TaskLockIndex {
         requested_task_ids: &[String],
     ) -> Result<Self, OrbitError> {
         let envelopes = runtime
-            .task_candidates(&Default::default(), usize::MAX)?
+            .stored()
+            .task()
+            .candidates(&Default::default(), usize::MAX)?
             .items;
         Ok(Self::from_envelopes(
             envelopes,

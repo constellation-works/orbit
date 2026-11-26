@@ -27,9 +27,9 @@ impl Command<'static, Value> {
         Ok(Self::new(Operation::command("lease", name), move |core| {
             let rt = core.runtime();
             match action {
-                LeaseWrite::Request => lease::request(rt, input, None, None),
+                LeaseWrite::Request => rt.request_lease(input, None, None),
                 LeaseWrite::Renew => lease::renew(rt, input),
-                LeaseWrite::Expand => lease::expand(rt, input, None, None),
+                LeaseWrite::Expand => rt.expand_lease(input, None, None),
                 LeaseWrite::Release => lease::release(rt, input, None, None),
             }
         }))

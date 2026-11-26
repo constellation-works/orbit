@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 pub use crate::base::RuntimeConfigLoader;
 pub use crate::host::admission::AdmissionCrewSettings;
 
-use crate::application_port::ApplicationPort;
 use crate::base::Base;
 use crate::host::Host;
 use crate::run::Run;
@@ -22,12 +21,9 @@ type OrphanReconcileHook = Arc<Mutex<Option<OrphanReconcileCallback>>>;
 
 /// The whole runtime of one process: the four layers, reached through
 /// [`Self::run`], [`Self::host`], [`Self::stored`] and [`Self::base`], plus
-/// the application callback and the test seams that are not yet layered.
+/// the test seams that are not yet layered.
 #[derive(Clone)]
 pub struct RuntimeKernel {
-    /// The application operations this kernel calls back into, supplied by
-    /// the composition root that builds it.
-    pub(crate) application: &'static dyn ApplicationPort,
     /// The top layer, which holds the three below it.
     run: Run,
     /// One-shot hook run at the start of the next orphaned-leaf reconciliation.

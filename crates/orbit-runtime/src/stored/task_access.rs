@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contract::{TaskLifecycleStamp, TaskListFilter, TaskRow};
+use orbit_store::contract::{TaskCandidates, TaskLifecycleStamp, TaskListFilter, TaskRow};
 use orbit_store::{
     RegisteredTaskResolution, TaskCompletionByComplexity, TaskDefectFiling, TaskTerminalTransition,
 };
@@ -341,6 +341,32 @@ impl<'a> TaskAccess<'a> {
         }
     }
 
+    /// Lowercase hex SHA-256 of a task artifact's stored bytes (the bytes
+    /// `orbit.task.artifact.get` returns); `None` when the task has no
+    /// artifact at `path`.
+    pub fn artifact_sha256(&self, id: &str, path: &str) -> Result<Option<String>, OrbitError> {
+        Ok(self
+            .artifact(id, path)?
+            .map(|artifact| orbit_common::security::release::sha256_hex(&artifact.content)))
+    }
+
+    /// One exact artifact through the same task and path authority, and the
+    /// same inline size bound, as the public artifact tool. A missing artifact
+    /// stays distinguishable from a refused one.
+    pub fn artifact_inline(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        let task = self.get(id)?;
+        let artifact = self.artifact(&task.id, path)?;
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(&task.id)?;
+        }
+        Ok(artifact)
+    }
+
     /// Local: the history store's `get_task_comments`. Owner: the `comments`
     /// projection.
     pub fn comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {
@@ -617,6 +643,19 @@ impl<'a> TaskAccess<'a> {
                 has_external_ref_system,
             ),
         }
+    }
+
+    /// The admission candidates the local store ranks for `filter`, or none
+    /// where this checkout exposes no coordination listing.
+    pub fn candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<TaskCandidates, OrbitError> {
+        if !self.reads_visible() {
+            return Ok(TaskCandidates::default());
+        }
+        self.stored.stores.tasks().task_candidates(filter, limit)
     }
 
     /// Which machine's bindings the task list of run `run_id` keeps. Local:

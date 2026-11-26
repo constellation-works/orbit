@@ -272,14 +272,14 @@ fn codebase_cli_marks_the_absent_partner_in_a_path_show() {
                 ..Default::default()
             })
             .unwrap();
-        let reservation = orbit_core::runtime::stored::locks::reserve(
-            &runtime,
-            json!({"task_ids": [task.id.to_string()], "ttl_seconds": 600}),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let reservation = runtime
+            .reserve_task_locks(
+                json!({"task_ids": [task.id.to_string()], "ttl_seconds": 600}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
         assert_eq!(reservation["reserved"], true, "{reservation}");
     }
     fs::remove_file(fixture.repo.join("src/gone.rs")).unwrap();
@@ -565,14 +565,14 @@ fn run_coupling_pairs_analytics(
                 })
                 .unwrap();
             let id = task.id.to_string();
-            let reservation = orbit_core::runtime::stored::locks::reserve(
-                &runtime,
-                json!({"task_ids": [id], "ttl_seconds": 600}),
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            let reservation = runtime
+                .reserve_task_locks(
+                    json!({"task_ids": [id], "ttl_seconds": 600}),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
             assert_eq!(reservation["reserved"], true, "{reservation}");
             // History keeps released rows, so release at once: later pairs
             // may share a file without tripping the live lock.

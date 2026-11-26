@@ -34,5 +34,5 @@ pub use admission::{LeaseTokenGrant, record_lease_intake_audit};
 pub use lifetime::sweep_lease_lifetimes;
 pub use operation::{check, list, notices, release, renew, renew_with_token, show};
 pub use orbit_store::contract::{LeasePrincipalClass, LeasePriority};
-pub use queue::{expand, expand_with_token};
-pub use request::{request, request_with_token};
+pub use queue::{prepare_expand, prepare_expand_with_token};
+pub use request::{prepare_request, prepare_request_with_token};

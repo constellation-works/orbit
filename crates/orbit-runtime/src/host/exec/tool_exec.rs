@@ -27,40 +27,71 @@ pub enum CapabilityEnforcement {
     McpSessionOnly,
 }
 
+/// What [`RuntimeKernel::admit_registered_tool`] decided about a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisteredToolAdmission {
+    /// An application call its consent admitted. Nothing further is
+    /// authorized.
+    Admitted,
+    /// The capability chokepoint still applies
+    /// ([`RuntimeKernel::authorize_admitted_tool`]).
+    Capability {
+        /// The run of a resident cycle reading drain status. Whether its
+        /// mandate covers this workspace is a resident use case, so the
+        /// caller answers it and passes the answer on.
+        resident_drain_status_run: Option<String>,
+    },
+}
+
 impl RuntimeKernel {
-    /// Admission shared by dispatch and dry-run, including input-dependent
-    /// capability floors. This never invokes a tool implementation.
-    pub fn authorize_registered_tool(
+    /// The first half of the admission dispatch and dry-run share: the tool
+    /// is enabled and active, and application consent has its say. This
+    /// never invokes a tool implementation.
+    pub fn admit_registered_tool(
         &self,
         name: &str,
         input: &Value,
         tool_context: &ToolContext,
         capability_enforcement: CapabilityEnforcement,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<RegisteredToolAdmission, OrbitError> {
         self.check_tool_enabled(name)?;
         check_tool_active(self.tool_registry(), name)?;
         let mut session = tool_context.session_context.clone();
         if self.admit_application_call(name, input, &mut session, capability_enforcement)? {
-            return Ok(());
+            return Ok(RegisteredToolAdmission::Admitted);
         }
-
-        // ORB-10453: the capability chokepoint. Every tool caller in the
-        // workspace reaches the registry through this function, so this is the
-        // only place a governed tool operation is authorized — a per-command
-        // guard would be reopened by the next entry point that skips it.
-        //
-        // A live resident cycle may read drain readiness (`orbit.workflow.auto`
-        // action `status`) in its covered workspaces without operator
-        // capability; controls and every other caller stay held to the row.
-        let resident_drain_status =
-            if crate::base::policy::is_resident_drain_status_call(name, input)
-                && let Some(run_id) = resident_cycle_run_id(tool_context)
-            {
-                self.application
-                    .resident_cycle_drain_status_allowed(self, &run_id, input)?
+        let resident_drain_status_run =
+            if crate::base::policy::is_resident_drain_status_call(name, input) {
+                resident_cycle_run_id(tool_context)
             } else {
-                false
+                None
             };
+        Ok(RegisteredToolAdmission::Capability {
+            resident_drain_status_run,
+        })
+    }
+
+    /// The second half: the capability row and the input-dependent
+    /// capability floors, for a call [`Self::admit_registered_tool`] left to
+    /// the capability chokepoint.
+    ///
+    /// ORB-10453: the capability chokepoint. Every tool caller in the
+    /// workspace reaches the registry through this function, so this is the
+    /// only place a governed tool operation is authorized — a per-command
+    /// guard would be reopened by the next entry point that skips it.
+    ///
+    /// A live resident cycle may read drain readiness (`orbit.workflow.auto`
+    /// action `status`) in its covered workspaces without operator
+    /// capability; controls and every other caller stay held to the row.
+    /// `resident_drain_status` is that answer for this call.
+    pub fn authorize_admitted_tool(
+        &self,
+        name: &str,
+        input: &Value,
+        tool_context: &ToolContext,
+        capability_enforcement: CapabilityEnforcement,
+        resident_drain_status: bool,
+    ) -> Result<(), OrbitError> {
         if !resident_drain_status {
             self.authorize_tool_operation(
                 name,

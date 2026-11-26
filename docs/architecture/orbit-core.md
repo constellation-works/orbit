@@ -60,7 +60,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `adapter`: Protocol adapters translating tool-host, command, and engine-host requests into Core operations; imports `app`, `application`, `runtime`, and lower workspace crates (never `bootstrap` or `composition`).
 - `application`: Directional domain operations exposed on `OrbitRuntime` over one workspace and host; imports `runtime` and lower workspace crates (never `adapter`, `bootstrap`, or `composition`).
 - `bootstrap`: Workspace initialization, managed asset seeding, and forward-only startup migrations; imports `application`, `runtime`, and lower workspace crates (never `composition`).
-- `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, `CoreApplicationPort`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
+- `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
 - `metrics`: Reliability and run metrics computed from persisted job-run data; imports `application`, `runtime`, `orbit-common`, `orbit-runtime`, `orbit-store`, and `orbit-types`.
 - `runtime`: Re-export of `orbit-runtime` and the public `OrbitRuntime` wrapper over `RuntimeKernel`; imports lower workspace crates only (never `application`, `adapter`, `bootstrap`, or `composition`).
 

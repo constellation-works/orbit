@@ -104,7 +104,7 @@ impl RuntimeKernel {
         if task.status != TaskStatus::Backlog {
             return Ok(None);
         }
-        let history = self.get_task_history(&task.id)?;
+        let history = self.stored().task().history(&task.id)?;
         Ok(standing_provider_hold_from_history(task, &history, now))
     }
 
@@ -150,7 +150,7 @@ impl RuntimeKernel {
     /// earlier run keeps its crews excluded, so successive failures narrow the draw.
     ///
     /// A usage limit's hold lasts until the reset the provider reported,
-    /// clamped to between [`MIN_LIMIT_HOLD`] and [`MAX_LIMIT_HOLD`] from
+    /// clamped to between `MIN_LIMIT_HOLD` and `MAX_LIMIT_HOLD` from
     /// `now`. One that reported none backs off from 30 minutes, doubling for
     /// each limit hold on the same provider in the last day, up to 6 hours.
     ///
@@ -158,7 +158,7 @@ impl RuntimeKernel {
     /// this failure excluded are recorded as this host's outages until the
     /// failure's own backoff ends; an outage that cannot be recorded is
     /// logged, and the hold still stands.
-    pub(crate) fn provider_failure_hold(
+    pub fn provider_failure_hold(
         &self,
         task: &Task,
         run: &JobRun,
@@ -324,7 +324,7 @@ impl RuntimeKernel {
             excluded.push(crew.clone());
         }
 
-        let history = self.get_task_history(&task.id)?;
+        let history = self.stored().task().history(&task.id)?;
         let recent = history
             .iter()
             .filter(|entry| {
@@ -414,7 +414,7 @@ fn limit_crews<'a>(
 }
 
 /// Move a task whose run its provider failed to `backlog` under `hold`.
-pub(crate) fn provider_failure_hold_update(
+pub fn provider_failure_hold_update(
     job_id: &str,
     hold: &ProviderFailureHold,
 ) -> TaskAutomationUpdate {
@@ -472,6 +472,6 @@ fn latest_hold(history: &[TaskHistoryEntry]) -> Option<ProviderFailureHold> {
 }
 
 /// Whether `history`'s latest status decision is the hold `run_id` placed.
-pub(crate) fn held_by_run(history: &[TaskHistoryEntry], run_id: &str) -> bool {
+pub fn held_by_run(history: &[TaskHistoryEntry], run_id: &str) -> bool {
     latest_status_hold(history).is_some_and(|hold| hold.run_id == run_id)
 }

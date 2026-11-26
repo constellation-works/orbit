@@ -1,4 +1,11 @@
-//! [ORB-10597] Terminal-outcome conflict recording.
+//! A run's terminal write and the cleanup it owes, and [ORB-10597]
+//! terminal-outcome conflict recording.
+//!
+//! `finalize_job_run_with_reservation_cleanup` writes the terminal state once,
+//! releases the run's task reservations, couples its tasks out
+//! (`block_on_run_failure`), records a claimed leaf's settlement and releases
+//! the review attempts the run still holds. The rest of this header is about
+//! the one case that write cannot settle on its own.
 //!
 //! A run's terminal state is written once and never overwritten: `finalize_run`
 //! returns early when the run is already terminal. That guard is correct — see
@@ -45,12 +52,13 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contract::JobRunStepParams;
+use orbit_store::contract::{JobRunFinalization, JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::json;
 
 use crate::OrbitRuntime;
+use crate::application::job::{JobPullSettlementPort, ReviewAdmissionHook};
 
 /// `error_code` stamped on the diagnostic step recording a conflicting terminal
 /// outcome. Also the step's dedupe key: the conflict is recorded once per run,
@@ -59,6 +67,132 @@ pub(crate) const TERMINAL_OUTCOME_CONFLICT_CODE: &str = "terminal_outcome_confli
 
 /// Audit tool name the same conflict is filed under.
 const TERMINAL_OUTCOME_CONFLICT_AUDIT: &str = "pipeline.run.terminal_conflict";
+
+impl OrbitRuntime {
+    pub fn finalize_job_run_with_reservation_cleanup(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+        release_reason: TaskReservationReleaseReason,
+    ) -> Result<bool, OrbitError> {
+        self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+            release_reason,
+            None,
+        )
+    }
+
+    /// [`Self::finalize_job_run_with_reservation_cleanup`] for a caller that
+    /// records its `(error_code, message)` diagnostic step only after the
+    /// terminal write — orphan reconciliation, which must not leave a step on
+    /// a run a live worker completed first. The diagnostic goes straight into
+    /// the coupled tasks' block note instead of being read back from steps.
+    pub fn finalize_job_run_with_reservation_cleanup_and_diagnostic(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) -> Result<bool, OrbitError> {
+        let outcome = self.stores().jobs().finalize_job_run_with_outcome(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+        )?;
+        // [ORB-10597] The store keeps the first terminal state and drops this
+        // one. An identical re-finalization is an ordinary idempotent replay; a
+        // *different* terminal outcome is a real contradiction — most sharply,
+        // a run condemned to `interrupted` while it was still working and then
+        // reporting the success it actually reached. That must not vanish, so
+        // it is recorded on the run instead of discarded. See
+        // this module's header for why the recorded state still wins.
+        // A cancellation request that loses to a worker's terminal outcome is
+        // reported to the caller as `already_terminal`; it did not produce a
+        // second durable outcome. The inverse remains a real contradiction: a
+        // worker reporting success/failure after `cancelled` is still recorded.
+        if let JobRunFinalization::AlreadyTerminal(prior) = outcome
+            && prior != state
+            && state != JobRunState::Cancelled
+        {
+            self.record_terminal_outcome_conflict(run_id, prior, state, finished_at);
+        }
+        if state.is_terminal() {
+            self.cleanup_after_terminal_write(
+                run_id,
+                state,
+                outcome,
+                finished_at,
+                release_reason,
+                diagnostic,
+            );
+        }
+        Ok(outcome != JobRunFinalization::Missing)
+    }
+
+    /// The cleanup a run's terminal write owes, for a caller whose own atomic
+    /// store decision just terminalized the run into `state`, such as a
+    /// pending-only cancel: the same release, coupled-task and settlement
+    /// steps [`Self::finalize_job_run_with_reservation_cleanup`] runs after a
+    /// `Finalized` outcome.
+    pub fn cleanup_after_job_run_finalized(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) {
+        self.cleanup_after_terminal_write(
+            run_id,
+            state,
+            JobRunFinalization::Finalized,
+            finished_at,
+            release_reason,
+            diagnostic,
+        );
+    }
+
+    fn cleanup_after_terminal_write(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        outcome: JobRunFinalization,
+        finished_at: DateTime<Utc>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) {
+        self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
+        // Coupling-out: clean up the run's coupled tasks only on the first
+        // terminalization into a failure, cancellation, or interrupted state. Gating on
+        // the atomic `Finalized` outcome keeps this idempotent — a replayed
+        // terminalization is a no-op and never clobbers a task a human
+        // already moved on. Cancellation selects backlog versus blocked.
+        // Cleanup is best-effort so a status-write failure never blocks
+        // the run from terminalizing or its reservations/file locks from being released.
+        if outcome == JobRunFinalization::Finalized
+            && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
+        {
+            self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
+        }
+        // [ORB-13663] A claimed leaf's settlement is recorded as it
+        // terminalizes, whichever process terminalizes it, and its own
+        // worker delivers it — no longer only the drain that admitted it.
+        // Not gated on `Finalized`: recording and delivery are idempotent,
+        // and a replay retries a delivery an earlier attempt lost.
+        JobPullSettlementPort::settle_terminalized_leaf(self, run_id, diagnostic);
+        // [ORB-13890] A run never ends holding a review attempt open.
+        // Idempotent, so not gated on `Finalized` either.
+        ReviewAdmissionHook::release_run_review_attempts(self, run_id, finished_at);
+    }
+}
 
 impl OrbitRuntime {
     /// Record that `reported` arrived for a run already terminal in `recorded`.

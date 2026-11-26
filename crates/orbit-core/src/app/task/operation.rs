@@ -59,8 +59,7 @@ pub(super) fn dispatch(
             &input,
         )),
         TaskVerb::LocksList => read(crate::runtime::stored::locks::list(runtime)),
-        TaskVerb::LocksReserve => read(crate::runtime::stored::locks::reserve(
-            runtime,
+        TaskVerb::LocksReserve => read(runtime.reserve_task_locks(
             input.into_value(),
             caller.agent,
             caller.model,

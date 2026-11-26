@@ -8,6 +8,7 @@
 //! implementing it on [`OrbitRuntime`](crate::OrbitRuntime), and composing
 //! the runtime binds it.
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{JobRun, ReviewAdmission, ReviewLayer};
 use serde_json::Value;
@@ -45,6 +46,11 @@ pub(in crate::application) trait ReviewAdmissionHook {
         &self,
         run_id: &str,
     ) -> Result<Option<ReviewAdmission>, OrbitError>;
+
+    /// Run terminalization's review step: release every review attempt run
+    /// `run_id` still holds. Best effort, so finalization never fails on
+    /// review evidence.
+    fn release_run_review_attempts(&self, run_id: &str, finished_at: DateTime<Utc>);
 
     /// Why an automatically resumed delivery run cannot keep its captured
     /// review admission, or `None` when it can.

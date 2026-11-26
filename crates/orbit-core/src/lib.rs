@@ -15,9 +15,9 @@
 //! translation lives in [`adapter`]. The runtime kernel is the `orbit-runtime`
 //! crate, which owns mechanisms and cannot import application or adapter
 //! modules; [`runtime`] re-exports it and defines [`OrbitRuntime`], which owns
-//! the kernel. The kernel reaches application methods only through
-//! [`runtime::ApplicationPort`]; [`composition`] implements that port with
-//! `CoreApplicationPort`.
+//! the kernel. The kernel never calls an application method: a mechanism
+//! that needs a use case's answer takes it as an argument, and a flow that
+//! needs both lives here.
 //!
 //! A converted surface holds a [`Core`] instead of the runtime and calls an
 //! app in [`app`]: one `exec(&core, command)` per subject, each run through

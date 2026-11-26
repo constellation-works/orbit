@@ -148,9 +148,7 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             assert_eq!(refused["queued"], false);
             assert_eq!(
                 refused,
-                lease::request(
-                    &runtime,
-                    json!({"principal": "bob", "selectors": ["file:held.txt"], "mode": "hard", "wait": false}),
+                runtime.request_lease(json!({"principal": "bob", "selectors": ["file:held.txt"], "mode": "hard", "wait": false}),
                     None,
                     None
                 )

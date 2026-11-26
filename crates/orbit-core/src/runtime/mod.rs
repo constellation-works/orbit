@@ -5,8 +5,8 @@
 //! kernel crate's items. [`OrbitRuntime`] owns a [`RuntimeKernel`] and
 //! dereferences to it, so kernel methods are called on it directly, while
 //! application and adapter methods stay inherent on this crate's type. The
-//! kernel reaches those methods only through [`ApplicationPort`], which
-//! composition implements.
+//! kernel never calls them: a mechanism that needs a use case's answer takes
+//! it as an argument, or the flow that needs both lives in this crate.
 
 mod builders;
 mod forwarders;
@@ -51,8 +51,6 @@ pub(crate) fn process_env() -> Env {
 /// The fully initialized Orbit runtime: the [`RuntimeKernel`] plus the
 /// application and adapter operations defined on it in this crate.
 #[derive(Clone)]
-// Transparent, so a kernel reference can be viewed as the runtime that owns it.
-#[repr(transparent)]
 pub struct OrbitRuntime {
     kernel: RuntimeKernel,
 }
@@ -72,7 +70,12 @@ impl DerefMut for OrbitRuntime {
 }
 
 impl OrbitRuntime {
-    pub(crate) fn from_kernel(kernel: RuntimeKernel) -> Self {
+    /// The runtime that owns `kernel`, for a kernel a kernel interface
+    /// handed over: the one
+    /// [`WorkspaceCatalog::open`](workspace::catalog::WorkspaceCatalog::open)
+    /// returned, or a clone of the one a
+    /// [`WorkspaceCatalog`](workspace::catalog::WorkspaceCatalog) hook was lent.
+    pub fn from_kernel(kernel: RuntimeKernel) -> Self {
         Self { kernel }
     }
 
@@ -81,15 +84,5 @@ impl OrbitRuntime {
     /// that returns one.
     pub fn into_kernel(self) -> RuntimeKernel {
         self.kernel
-    }
-
-    /// View a kernel a kernel interface lent back, such as the runtime a
-    /// [`WorkspaceCatalog`](workspace::catalog::WorkspaceCatalog) hook receives,
-    /// as the runtime that owns it.
-    pub fn from_kernel_ref(kernel: &RuntimeKernel) -> &Self {
-        // SAFETY: `OrbitRuntime` is `repr(transparent)` over its only field,
-        // a `RuntimeKernel`, so both types share one layout and the cast
-        // keeps the reference's lifetime and validity.
-        unsafe { &*(kernel as *const RuntimeKernel).cast::<Self>() }
     }
 }

@@ -41,4 +41,14 @@ pub(crate) trait ToolInvocationPort {
         tool_context: ToolContext,
         enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError>;
+
+    /// The admission a dispatch of `name` would pass, without running the
+    /// tool: enabled, active, application consent and the capability floors.
+    fn authorize_tool(
+        &self,
+        name: &str,
+        input: &Value,
+        tool_context: &ToolContext,
+        enforcement: CapabilityEnforcement,
+    ) -> Result<(), OrbitError>;
 }

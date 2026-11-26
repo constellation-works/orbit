@@ -269,10 +269,7 @@ impl OrbitRuntime {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
-        if !self.stored().task().reads_visible() {
-            return Ok(TaskCandidates::default());
-        }
-        self.stores().tasks().task_candidates(filter, limit)
+        self.stored().task().candidates(filter, limit)
     }
 
     /// [`Self::task_candidates`] as an informational snapshot: no

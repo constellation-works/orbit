@@ -352,7 +352,11 @@ impl RuntimeKernel {
         let Some(artifact) = &evidence.artifact else {
             return Ok(());
         };
-        match self.task_artifact_sha256(&evidence.task, &artifact.path) {
+        match self
+            .stored()
+            .task()
+            .artifact_sha256(&evidence.task, &artifact.path)
+        {
             Ok(Some(actual)) if actual == artifact.sha256 => Ok(()),
             _ => Err(OrbitError::CapabilityDenied(
                 "bound artifact changed since the application entry was admitted".into(),

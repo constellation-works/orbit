@@ -13,7 +13,6 @@ use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
-use super::application_port::APPLICATION_PORT;
 use crate::application::workspace_product_profile::ProductProfile;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init;
@@ -262,7 +261,6 @@ impl OrbitRuntime {
             layout_report,
             HostLifetime::ShortLived,
             config_loader,
-            &APPLICATION_PORT,
             store,
         )
         .map(Self::from_kernel)
@@ -284,7 +282,6 @@ impl OrbitRuntime {
             &runtime_config,
             temp_dir,
             runtime_config_loader(env, &data_root, &workspace_root),
-            &APPLICATION_PORT,
             store,
         )
         .map(Self::from_kernel)
@@ -376,7 +373,6 @@ fn build_runtime(
             layout_report,
             host_lifetime,
             config_loader,
-            &APPLICATION_PORT,
             super::open_store_read_only(&runtime_config.persistence.audit_db)?,
         )?
     } else {
@@ -388,7 +384,6 @@ fn build_runtime(
             host_lifetime,
             read_only,
             config_loader,
-            &APPLICATION_PORT,
             if read_only { None } else { task_prefix },
             super::open_store(&runtime_config.persistence.audit_db)?,
         )?

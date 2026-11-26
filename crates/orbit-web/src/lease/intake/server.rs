@@ -643,14 +643,14 @@ fn run_operation(
         max_response_bytes: max_frame_bytes as usize,
     };
     let result = match operation {
-        LeaseIntakeOperation::Request => lease::request_with_token(runtime, input, &grant),
+        LeaseIntakeOperation::Request => runtime.request_lease_with_token(input, &grant),
         LeaseIntakeOperation::Renew => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;
             lease::renew_with_token(runtime, input, &grant)
         }
         LeaseIntakeOperation::Expand => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;
-            lease::expand_with_token(runtime, input, &grant)
+            runtime.expand_lease_with_token(input, &grant)
         }
         LeaseIntakeOperation::Release => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;

@@ -1,16 +1,28 @@
 //! Stale-run reconciliation, terminal timing repair, and audit helpers.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
 use orbit_store::Store;
-use orbit_store::contract::TaskReservationReleaseReason;
+use orbit_store::contract::{
+    ReleasedTaskReservation, TaskReservationOwnedConflictsParams, TaskReservationReleaseReason,
+};
+use orbit_tools::ReservationOwnerContext;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
+use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
 use crate::runtime::audit::run::RunTrailBody;
+use crate::runtime::run::task_coupling::StaleTaskReservation;
+use crate::runtime::stored::locks::lease::{self, LeaseTokenGrant};
+use crate::runtime::stored::locks::{
+    PreparedGrant, STALE_OWNER_RECONCILE_LIMIT, emit_expired_reservation_events, prepare_reserve,
+    workspace_orbit_dir, workspace_task_reservation_id,
+};
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -124,6 +136,165 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|run| pending_run_stale_reason(run).is_some())
             .collect())
+    }
+
+    /// The runs the two orphan probes consider conclusively orphaned.
+    fn orphaned_job_run_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
+        let mut orphaned_run_ids = self
+            .list_orphaned_running_job_runs()?
+            .into_iter()
+            .map(|orphan| orphan.run_id)
+            .collect::<BTreeSet<_>>();
+        orphaned_run_ids.extend(
+            self.list_orphaned_pending_job_runs()?
+                .into_iter()
+                .map(|orphan| orphan.run_id),
+        );
+        Ok(orphaned_run_ids)
+    }
+
+    /// Read-only stale-reservation classification used by `orbit doctor`:
+    /// the kernel's classifier, given the runs the orphan probes report.
+    pub fn list_stale_task_reservations(&self) -> Result<Vec<StaleTaskReservation>, OrbitError> {
+        let reservations = self.inspect_active_reservations()?;
+        let orphaned_run_ids = self.orphaned_job_run_ids()?;
+        self.list_stale_task_reservations_among(reservations, orphaned_run_ids)
+    }
+
+    /// Release reservations that are still conclusively stale when re-read
+    /// immediately before their individual mutation. Replays are no-ops.
+    pub fn release_stale_task_reservations(&self) -> Result<usize, OrbitError> {
+        let candidate_ids = self
+            .list_stale_task_reservations()?
+            .into_iter()
+            .map(|candidate| candidate.reservation_id)
+            .collect::<Vec<_>>();
+        if candidate_ids.is_empty() {
+            return Ok(0);
+        }
+        let orphaned_run_ids = self.orphaned_job_run_ids()?;
+        self.release_task_reservations_still_stale(candidate_ids, orphaned_run_ids)
+    }
+
+    /// Before a lock grant judges `requested_files`: release the reservations
+    /// on them whose owner run is absent, terminal, or found stale and
+    /// reconciled here.
+    pub fn reconcile_stale_owned_reservations_for_files(
+        &self,
+        requested_files: &[String],
+        limit: usize,
+    ) -> Result<Vec<ReleasedTaskReservation>, OrbitError> {
+        let candidates = self
+            .stores()
+            .task_reservations()
+            .list_owned_task_reservation_conflicts(TaskReservationOwnedConflictsParams {
+                workspace_orbit_dir: workspace_orbit_dir(self),
+                workspace_id: workspace_task_reservation_id(self)?,
+                requested_files: requested_files.to_vec(),
+                limit,
+            })?;
+        emit_expired_reservation_events(self, &candidates.expired_reservations)?;
+
+        let mut released = Vec::new();
+        let mut inspected_owner_run_ids = BTreeSet::new();
+        for reservation in candidates.reservations {
+            let Some(owner_run_id) = reservation.owner_run_id.as_deref() else {
+                continue;
+            };
+            if !inspected_owner_run_ids.insert(owner_run_id.to_string()) {
+                continue;
+            }
+
+            match self.stores().jobs().get_job_run(owner_run_id)? {
+                Some(run) if run.state.is_terminal() => {
+                    released.extend(self.release_task_reservations_for_owner_run_id(
+                        owner_run_id,
+                        TaskReservationReleaseReason::StaleRunReconciled,
+                    )?);
+                }
+                Some(run) => {
+                    if self.reconcile_stale_job_run(&run)? {
+                        released.extend(self.release_task_reservations_for_owner_run_id(
+                            owner_run_id,
+                            TaskReservationReleaseReason::StaleRunReconciled,
+                        )?);
+                    }
+                }
+                None => {
+                    released.extend(self.release_task_reservations_for_owner_run_id(
+                        owner_run_id,
+                        TaskReservationReleaseReason::StaleRunReconciled,
+                    )?);
+                }
+            }
+        }
+        Ok(released)
+    }
+
+    /// Grant a lock request the kernel prepared, after releasing the stale
+    /// owners on the surface it is about to judge.
+    pub fn grant_after_stale_owner_reconcile<T>(
+        &self,
+        prepared: PreparedGrant<'_, T>,
+    ) -> Result<T, OrbitError> {
+        if let Some(files) = prepared.stale_owner_surface() {
+            self.reconcile_stale_owned_reservations_for_files(files, STALE_OWNER_RECONCILE_LIMIT)?;
+        }
+        prepared.grant()
+    }
+
+    /// Reserve task locks for the caller.
+    pub fn reserve_task_locks(
+        &self,
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+        reservation_owner: Option<ReservationOwnerContext>,
+    ) -> Result<Value, OrbitError> {
+        let prepared = prepare_reserve(self, input, agent, model, reservation_owner)?;
+        self.grant_after_stale_owner_reconcile(prepared)
+    }
+
+    /// Request a lease for the caller.
+    pub fn request_lease(
+        &self,
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Value, OrbitError> {
+        let prepared = lease::prepare_request(self, input, agent, model)?;
+        self.grant_after_stale_owner_reconcile(prepared)
+    }
+
+    /// Request a lease under a lease token's grant.
+    pub fn request_lease_with_token(
+        &self,
+        input: Value,
+        grant: &LeaseTokenGrant,
+    ) -> Result<Value, OrbitError> {
+        let prepared = lease::prepare_request_with_token(self, input, grant)?;
+        self.grant_after_stale_owner_reconcile(prepared)
+    }
+
+    /// Expand a lease the caller holds.
+    pub fn expand_lease(
+        &self,
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Value, OrbitError> {
+        let prepared = lease::prepare_expand(self, input, agent, model)?;
+        self.grant_after_stale_owner_reconcile(prepared)
+    }
+
+    /// Expand a lease under a lease token's grant.
+    pub fn expand_lease_with_token(
+        &self,
+        input: Value,
+        grant: &LeaseTokenGrant,
+    ) -> Result<Value, OrbitError> {
+        let prepared = lease::prepare_expand_with_token(self, input, grant)?;
+        self.grant_after_stale_owner_reconcile(prepared)
     }
 
     /// [ORB-20158] Whether `run` is live and parked on an auto-task step: its

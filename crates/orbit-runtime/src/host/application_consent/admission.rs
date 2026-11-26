@@ -1,8 +1,8 @@
 //! Admission-time evaluation of constrained application operations
 //! (application-approvals design §5.1) and the optional per-scope rate limit.
 //!
-//! Every check reads current state through the kernel's `ApplicationPort`
-//! forwarders. A refusal names the scope, the field and the constraint kind
+//! Every check reads current state through the kernel's own task access
+//! (`Stored::task`). A refusal names the scope, the field and the constraint kind
 //! that failed, never a value the call sent.
 
 use std::collections::BTreeMap;
@@ -222,7 +222,13 @@ impl FieldCheck<'_> {
             return Ok(false);
         }
         // A failed read would echo the task id, so it is a refusal.
-        let Ok(Some(bytes)) = self.kernel.task_artifact_bytes(task, &artifact.path) else {
+        let Ok(Some(bytes)) = self
+            .kernel
+            .stored()
+            .task()
+            .artifact_inline(task, &artifact.path)
+            .map(|found| found.map(|found| found.content))
+        else {
             return Ok(false);
         };
         if orbit_common::security::release::sha256_hex(&bytes) != bound.sha256 {
@@ -274,7 +280,7 @@ impl FieldCheck<'_> {
     ) -> Result<bool, OrbitError> {
         // A failed read (unknown id, another host's prefix) is a refusal; its
         // message would echo the id, so it is not surfaced.
-        let Ok(task) = self.kernel.get_task(id) else {
+        let Ok(task) = self.kernel.stored().task().get(id) else {
             return Ok(false);
         };
         if task.id != id {
@@ -295,7 +301,12 @@ impl FieldCheck<'_> {
             let Some(claimed) = self.input.get(&digest.field).and_then(Value::as_str) else {
                 return Ok(false);
             };
-            let Ok(Some(actual)) = self.kernel.task_artifact_sha256(&task.id, &digest.path) else {
+            let Ok(Some(actual)) = self
+                .kernel
+                .stored()
+                .task()
+                .artifact_sha256(&task.id, &digest.path)
+            else {
                 return Ok(false);
             };
             if actual != claimed {
@@ -332,7 +343,7 @@ impl FieldCheck<'_> {
         let Some(id) = self.input.get("id").and_then(Value::as_str) else {
             return Ok(false);
         };
-        let Ok(task) = self.kernel.get_task(id) else {
+        let Ok(task) = self.kernel.stored().task().get(id) else {
             return Ok(false);
         };
         if task.id != id {

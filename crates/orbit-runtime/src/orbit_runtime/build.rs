@@ -7,7 +7,6 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::ShipMode;
 
 use super::{HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel};
-use crate::application_port::ApplicationPort;
 use crate::base::Base;
 use crate::base::binding::WorkspaceRuntimeBinding;
 use crate::builder;
@@ -75,7 +74,6 @@ impl RuntimeKernel {
         host_lifetime: HostLifetime,
         read_only: bool,
         config_loader: RuntimeConfigLoader,
-        application: &'static dyn ApplicationPort,
         task_prefix: Option<&str>,
         store: orbit_store::Store,
     ) -> Result<Self, OrbitError> {
@@ -98,11 +96,9 @@ impl RuntimeKernel {
             &roots.global_root,
             layout_report,
             config_loader,
-            application,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn build_from_resolved_config_write_free(
         roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
@@ -110,7 +106,6 @@ impl RuntimeKernel {
         layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
         config_loader: RuntimeConfigLoader,
-        application: &'static dyn ApplicationPort,
         store: orbit_store::Store,
     ) -> Result<Self, OrbitError> {
         let mut runtime = Self::finish_from_context(
@@ -127,7 +122,6 @@ impl RuntimeKernel {
             &roots.global_root,
             layout_report,
             config_loader,
-            application,
         )?;
         runtime.stored_mut().write_free = true;
         Ok(runtime)
@@ -148,7 +142,6 @@ impl RuntimeKernel {
         global_root: &Path,
         layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
         config_loader: RuntimeConfigLoader,
-        application: &'static dyn ApplicationPort,
     ) -> Result<Self, OrbitError> {
         let host_resources = Arc::new(
             HostResourceMonitor::new(
@@ -162,7 +155,6 @@ impl RuntimeKernel {
         let worker_invocation = worker_coordination::restore_process_binding(env, global_root)?;
         let task_pr_forge = default_task_pr_forge(env);
         Ok(Self::from_layers(
-            application,
             context,
             config_loader,
             binding.map(Arc::new),
@@ -179,7 +171,6 @@ impl RuntimeKernel {
     /// Sort one open's parts into the four layers, bottom up.
     #[allow(clippy::too_many_arguments)]
     fn from_layers(
-        application: &'static dyn ApplicationPort,
         context: OrbitContext,
         config_loader: RuntimeConfigLoader,
         binding: Option<Arc<WorkspaceRuntimeBinding>>,
@@ -210,7 +201,6 @@ impl RuntimeKernel {
             browser_kit_home,
         );
         Self {
-            application,
             run: Run::new(host),
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
             #[cfg(any(test, feature = "test-support"))]
@@ -226,7 +216,6 @@ impl RuntimeKernel {
         runtime_config: &orbit_config::ResolvedConfig,
         temp_dir: builder::TempDir,
         config_loader: RuntimeConfigLoader,
-        application: &'static dyn ApplicationPort,
         store: orbit_store::Store,
     ) -> Result<Self, OrbitError> {
         // Use a distinct checkout root so the normal workspace builder creates
@@ -264,7 +253,6 @@ impl RuntimeKernel {
             .sampled_in_background(),
         );
         Ok(Self::from_layers(
-            application,
             context,
             config_loader,
             Some(Arc::new(binding)),

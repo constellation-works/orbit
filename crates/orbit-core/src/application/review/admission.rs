@@ -593,6 +593,14 @@ impl ReviewAdmissionHook for OrbitRuntime {
         run_review_admission(self, run_id)
     }
 
+    fn release_run_review_attempts(
+        &self,
+        run_id: &str,
+        finished_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        self.best_effort_release_run_review_attempts(run_id, finished_at);
+    }
+
     fn upgrade_resume_review_mismatch(
         &self,
         run: &orbit_types::workflow::JobRun,
