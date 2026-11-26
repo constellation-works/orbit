@@ -315,13 +315,7 @@ pub(in crate::api) async fn update_task_action(
         );
     }
     let status_note = body.note.as_deref().and_then(non_empty_string);
-    if status_note.is_some() && body.status.is_none() {
-        return bad_request(
-            "`note` records a status-transition note, so it requires `status`; \
-             send the target status or use `comment` instead"
-                .to_string(),
-        );
-    }
+
     let model = body.model.as_deref().and_then(non_empty_string);
     let allow_missing_context = body.allow_missing_context;
     let authority = if body.force {

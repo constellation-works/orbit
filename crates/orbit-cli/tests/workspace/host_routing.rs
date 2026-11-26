@@ -1709,6 +1709,69 @@ fn routed_tool_run_carries_the_declared_model_to_the_owner() {
     assert_ne!(task.created_by.as_deref(), Some("claude"), "{added}");
 }
 
+fn routed_status_notes_use_owner_validation() {
+    let routed = Routed::new();
+    let id = &routed.remote_task;
+    let token = format!("ghp_{}", "a".repeat(36));
+    let note = format!("GITHUB_TOKEN={token}");
+    routed.json(&[
+        "task",
+        "update",
+        id,
+        "--host",
+        "bravo",
+        "--workspace",
+        "bravo-ws",
+        "--status",
+        "blocked",
+        "--note",
+        &note,
+        "--json",
+    ]);
+    let history = routed.remote_runtime.get_task_history(id).unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|event| event.note.as_deref() == Some("GITHUB_TOKEN=[REDACTED_SECRET]"))
+    );
+    for args in [
+        vec![
+            "task",
+            "update",
+            id,
+            "--host",
+            "bravo",
+            "--workspace",
+            "bravo-ws",
+            "--note",
+            "orphan",
+            "--json",
+        ],
+        vec![
+            "task",
+            "update",
+            id,
+            "--host",
+            "bravo",
+            "--workspace",
+            "bravo-ws",
+            "--status",
+            "blocked",
+            "--note",
+            "orphan",
+            "--json",
+        ],
+    ] {
+        let (_, message) = routed.refused(&args);
+        assert!(
+            message.contains(
+                "`note` requires a status change; use `comment` for free-form discussion"
+            ),
+            "{message}"
+        );
+    }
+}
+
 #[test]
 fn host_routing_contracts_0() {
     if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_0") {
@@ -1758,6 +1821,10 @@ fn host_routing_contracts_1() {
         (
             "local_task_commands_refuse_remote_selection_without_delivering_or_mutating",
             local_task_commands_refuse_remote_selection_without_delivering_or_mutating as fn(),
+        ),
+        (
+            "routed_status_notes_use_owner_validation",
+            routed_status_notes_use_owner_validation as fn(),
         ),
         (
             "routed_task_update_refusals_offer_a_command_that_works",

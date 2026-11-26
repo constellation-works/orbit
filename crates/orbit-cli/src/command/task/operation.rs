@@ -263,11 +263,6 @@ pub(crate) fn remote_update_input(
     if !refusals.is_empty() {
         return Err(OrbitError::InvalidInput(refusals.join("; ")));
     }
-    if input.contains_key("note") {
-        return Err(OrbitError::InvalidInput(
-            "`note` is recorded on an approval; pass it with `approve`".to_string(),
-        ));
-    }
     let mut remote = input
         .iter()
         .filter(|(field, _)| !matches!(field.as_str(), "host" | "model"))
