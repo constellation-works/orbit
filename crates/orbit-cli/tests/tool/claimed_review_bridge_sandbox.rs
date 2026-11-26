@@ -104,6 +104,26 @@ if lock:
 os.execv(sys.argv[1], sys.argv[1:])
 "#;
 
+/// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
+/// that surfaces `database is locked` once the busy timeout expires. The
+/// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
+/// stand-in keeps the store locked for the whole wait; the test kills it after.
+#[cfg(target_os = "linux")]
+const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
+import os, sqlite3, sys, time
+db = os.environ["ORBIT_FIXTURE_DB"]
+ready = os.environ["ORBIT_FIXTURE_READY"]
+connection = sqlite3.connect(db, isolation_level=None, timeout=0)
+connection.execute("BEGIN EXCLUSIVE")
+connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
+connection.execute("INSERT INTO held VALUES (1)")
+with open(ready, "w") as handle:
+    handle.write(str(os.getpid()))
+sys.stdin.buffer.read(1)
+time.sleep(600)
+connection.execute("COMMIT")
+"#;
+
 /// One Orbit machine: its own home, global root and registered checkout.
 struct Node {
     home: PathBuf,
@@ -259,26 +279,6 @@ fn sandbox_unavailable() -> Option<String> {
     let probe = orbit_exec::probe_bwrap();
     (!probe.available).then_some(probe.detail)
 }
-
-/// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
-/// that surfaces `database is locked` once the busy timeout expires. The
-/// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
-/// stand-in keeps the store locked for the whole wait; the test kills it after.
-#[cfg(target_os = "linux")]
-const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
-import os, sqlite3, sys, time
-db = os.environ["ORBIT_FIXTURE_DB"]
-ready = os.environ["ORBIT_FIXTURE_READY"]
-connection = sqlite3.connect(db, isolation_level=None, timeout=0)
-connection.execute("BEGIN EXCLUSIVE")
-connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
-connection.execute("INSERT INTO held VALUES (1)")
-with open(ready, "w") as handle:
-    handle.write(str(os.getpid()))
-sys.stdin.buffer.read(1)
-time.sleep(600)
-connection.execute("COMMIT")
-"#;
 
 /// An `ssh` stand-in for the follower: it needs the caller's
 /// `~/.ssh/known_hosts`, as the real client does to verify the owner, then
