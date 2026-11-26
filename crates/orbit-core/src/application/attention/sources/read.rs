@@ -37,7 +37,7 @@ impl SharedOpenTasks {
 /// observational attention read must degrade rather than reach them while
 /// a commit awaits an ordinary operational read.
 pub(in super::super) fn pending_commit_message(runtime: &OrbitRuntime) -> Option<String> {
-    if !runtime.coordination_task_reads_visible() {
+    if !runtime.stored().task().reads_visible() {
         return None;
     }
     match runtime.inspect_live_execution_claims() {
@@ -135,7 +135,7 @@ pub(in super::super) fn read_attention_sources(
     // store is not authoritative, so it degrades like the task kinds.
     if filter.selected(K::NoticeOpen) {
         let started = Instant::now();
-        if runtime.coordination_task_reads_visible() {
+        if runtime.stored().task().reads_visible() {
             match notice_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
                 Err(error) => result.degraded.push(item::workspace_degraded(
@@ -160,7 +160,7 @@ pub(in super::super) fn read_attention_sources(
     // resident_stalled reads the owner's task records, like the task kinds.
     if filter.selected(K::ResidentStalled) {
         let started = Instant::now();
-        let read = if runtime.coordination_task_reads_visible() {
+        let read = if runtime.stored().task().reads_visible() {
             resident_stalled_items(runtime, workspace, host, now, open_tasks)
                 .map_err(|error| error.to_string())
         } else {
@@ -169,7 +169,7 @@ pub(in super::super) fn read_attention_sources(
         match read {
             Ok(items) => result.items.extend(items),
             // The aggregator's candidate read asks the owner; a replica stays silent.
-            Err(_) if filter.candidate_read && !runtime.coordination_task_reads_visible() => {}
+            Err(_) if filter.candidate_read && !runtime.stored().task().reads_visible() => {}
             Err(message) => result.degraded.push(item::workspace_degraded(
                 workspace,
                 K::ResidentStalled.as_str(),
@@ -185,7 +185,7 @@ pub(in super::super) fn read_attention_sources(
     // friction store is not authoritative, so it degrades like the task kinds.
     if filter.selected(K::FrictionUntriaged) {
         let started = Instant::now();
-        if runtime.coordination_task_reads_visible() {
+        if runtime.stored().task().reads_visible() {
             match friction_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
                 Err(error) => result.degraded.push(item::workspace_degraded(
@@ -252,7 +252,7 @@ pub(in super::super) fn read_attention_sources(
     if task_kinds.is_empty() {
         return Ok(result);
     }
-    if !runtime.coordination_task_reads_visible() {
+    if !runtime.stored().task().reads_visible() {
         // A replica is not authoritative for task, decision or review
         // records. On the aggregator's candidate read the owner reports them,
         // so the replica stays silent; a direct read says where to look.

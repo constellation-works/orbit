@@ -187,7 +187,7 @@ impl OrbitRuntime {
     /// Workspace and task conditions are the owner checkout's (§4).
     fn condition_ownership(&self) -> ExplainOwnership {
         let ownership = super::super::ownership::resolve(self, None);
-        let replica = self.coordination_write_owner().is_some();
+        let replica = self.role().is_replica();
         ExplainOwnership {
             verdict: if replica {
                 "replica_checkout"

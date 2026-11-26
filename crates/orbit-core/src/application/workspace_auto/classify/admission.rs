@@ -124,7 +124,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // A delivery PR an operator merged outside Orbit settles its task once
     // stale runs are reconciled. The settlement starts nothing, so a forge or
     // store failure only logs and admission goes on.
-    if runtime.coordination_task_write_refusal().is_none()
+    if runtime.stored().task().writer().is_ok()
         && let Err(error) = runtime.settle_externally_merged_tasks()
     {
         tracing::warn!(

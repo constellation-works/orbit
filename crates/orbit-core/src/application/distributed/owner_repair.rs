@@ -90,7 +90,7 @@ impl OrbitRuntime {
         drain: &OwnerRepairDrain<'_>,
     ) -> Result<OwnerRepairPass, OrbitError> {
         // A replica's checkout serves no claims.
-        if self.coordination_write_owner().is_some() {
+        if self.role().is_replica() {
             return Ok(OwnerRepairPass::default());
         }
         let Some(location) = self.automation_execution_location().cloned() else {

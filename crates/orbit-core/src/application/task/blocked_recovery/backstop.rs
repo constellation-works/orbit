@@ -39,7 +39,7 @@ impl OrbitRuntime {
         if self.worker_invocation().is_some() {
             return Some("a claimed worker never recovers tasks; its owner does".to_string());
         }
-        if let Some(owner) = self.coordination_write_owner() {
+        if let Some(owner) = self.role().replica_owner() {
             return Some(format!(
                 "this replica checkout does not own its task records; machine '{owner}' recovers them"
             ));
@@ -115,7 +115,7 @@ impl OrbitRuntime {
         // The recheck needs no agent and no crew, so it runs even where the
         // backstop itself stands down for an empty pool. It stands down
         // itself off the coordination owner and in a claimed worker.
-        if self.worker_invocation().is_none() && self.coordination_write_owner().is_none() {
+        if self.stored().task().writer().is_ok() {
             match self.recheck_blocked_tasks() {
                 Ok(settled) => tick.rechecked = settled,
                 Err(error) => tracing::warn!(

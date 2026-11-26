@@ -383,7 +383,7 @@ impl OrbitRuntime {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<String>, OrbitError> {
-        if self.coordination_write_owner().is_some() {
+        if self.role().is_replica() {
             return Ok(Vec::new());
         }
         self.ensure_coordination_task_write_permitted()?;

@@ -17,7 +17,7 @@ impl OrbitRuntime {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<String>, OrbitError> {
-        if self.is_write_free() || self.coordination_write_owner().is_some() {
+        if self.is_write_free() || self.role().is_replica() {
             return Ok(Vec::new());
         }
         let mut woken = Vec::new();

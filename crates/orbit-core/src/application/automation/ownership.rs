@@ -76,7 +76,7 @@ pub(crate) fn resolve(runtime: &OrbitRuntime, explicit: Option<&str>) -> Deliver
 fn registered_owner(runtime: &OrbitRuntime) -> (Option<String>, OwnerAuthority) {
     match (
         runtime.workspace_owner_machine_id(),
-        runtime.coordination_write_owner(),
+        runtime.role().replica_owner(),
     ) {
         (Some(workspace_owner), Some(replica_owner)) if workspace_owner != replica_owner => {
             (None, OwnerAuthority::Conflicting)

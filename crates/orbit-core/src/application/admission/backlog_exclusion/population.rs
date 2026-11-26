@@ -102,7 +102,7 @@ impl BacklogSnapshot {
             .filter(|id| !self.task_lookup.contains_key(*id) && validate_orb_task_id(id).is_ok())
             .cloned()
             .collect::<BTreeSet<_>>();
-        if missing.is_empty() || !runtime.coordination_task_reads_visible() {
+        if missing.is_empty() || !runtime.stored().task().reads_visible() {
             return Ok(());
         }
         let envelopes = runtime.stores().tasks().task_envelopes_for_ids(&missing)?;

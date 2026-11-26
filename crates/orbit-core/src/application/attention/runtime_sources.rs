@@ -625,7 +625,7 @@ pub(super) fn read_runtime_attention(
         }));
         return;
     }
-    let owner = runtime.coordination_task_reads_visible();
+    let owner = runtime.stored().task().reads_visible();
     let started = Instant::now();
     let sources = (|| {
         let tasks = if owner {

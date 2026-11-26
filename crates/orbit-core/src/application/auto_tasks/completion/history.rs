@@ -80,7 +80,7 @@ pub(in crate::application::auto_tasks) fn accepted_history(
     runtime: &OrbitRuntime,
     name: &str,
 ) -> AutoTaskAcceptedHistory {
-    if let Some(owner) = runtime.coordination_write_owner() {
+    if let Some(owner) = runtime.role().replica_owner() {
         return AutoTaskAcceptedHistory::Unreadable(format!(
             "accepted results live with the owner {owner}, not this replica"
         ));

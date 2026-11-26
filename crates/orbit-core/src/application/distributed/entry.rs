@@ -149,7 +149,7 @@ impl crate::OrbitRuntime {
             resource_throttle: None,
             refusal: None,
         };
-        if let Some(owner_machine_id) = self.coordination_write_owner() {
+        if let Some(owner_machine_id) = self.role().replica_owner() {
             decision.refusal = Some(DrainEntryRefusal::Replica {
                 owner_machine_id: owner_machine_id.to_string(),
             });

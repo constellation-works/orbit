@@ -409,7 +409,7 @@ interruption on coupled tasks. `show` reads one friction record and `tags` reads
 the workspace's tag taxonomy file, neither of which reconciliation touches.
 `stats` also reads task metadata, but counts only `done` and `archived` tasks by
 implementer, and an interruption never moves a task into either status. Its
-task read applies the same replica gate (`coordination_task_reads_visible`)
+task read applies the same replica visibility rule in task access
 under both runtimes, because the read-only open still binds the checkout's
 replica owner.
 

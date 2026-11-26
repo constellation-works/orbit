@@ -124,7 +124,7 @@ impl OrbitRuntime {
     /// Return the number of canonical task bundles that are present on disk
     /// but absent from the generated registry index.
     pub fn unindexed_task_bundle_count(&self) -> Result<usize, OrbitError> {
-        if !self.coordination_task_reads_visible() {
+        if !self.stored().task().reads_visible() {
             return Ok(0);
         }
         // An unselected explicit data root has no workspace config. Match

@@ -299,7 +299,7 @@ impl OrbitRuntime {
     /// back to metadata, as do workers whose reads must route through the owner.
     fn decision_scan_task_ids(&self) -> Result<Vec<String>, OrbitError> {
         if self.worker_invocation().is_none() {
-            if !self.coordination_task_reads_visible() {
+            if !self.stored().task().reads_visible() {
                 return Ok(Vec::new());
             }
             if let Some(ids) = self.stores().tasks().registered_task_bundle_ids()? {
@@ -319,7 +319,7 @@ impl OrbitRuntime {
         &self,
         request_id: &str,
     ) -> Result<Option<DecisionRequest>, OrbitError> {
-        if self.worker_invocation().is_none() && self.coordination_task_reads_visible() {
+        if self.worker_invocation().is_none() && self.stored().task().reads_visible() {
             let owner = self
                 .stores()
                 .tasks()

@@ -400,11 +400,8 @@ impl crate::OrbitRuntime {
         mutation_id: &str,
         mutation: &orbit_store::contract::ClaimMutation,
     ) -> Result<orbit_store::contract::ClaimMutationOutcome, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let outcome =
-            self.stores()
-                .tasks()
-                .mutate_execution_claim_outcome(context, mutation_id, mutation)?;
+        let tasks = self.stored().task().writer()?;
+        let outcome = tasks.mutate_execution_claim_outcome(context, mutation_id, mutation)?;
         // A committed claim mutation writes searchable text (evidence
         // summary, comments, artifact paths, plan, external refs, and any
         // deferred branch observation it lands in the same commit) outside
@@ -418,7 +415,7 @@ impl crate::OrbitRuntime {
         // mutation — the next reindex repairs it, as for ordinary writes.
         if outcome.committed
             && let Some(task_id) = context.map(|invocation| invocation.task_id())
-            && let Ok(Some(task)) = self.stores().tasks().get_task(task_id)
+            && let Ok(Some(task)) = tasks.get_task(task_id)
         {
             self.stores().task_records().index_task(&task);
         }
@@ -497,11 +494,8 @@ impl crate::OrbitRuntime {
         &self,
         observation: &orbit_store::contract::DeferredBranchObservation,
     ) -> Result<orbit_store::contract::BranchObservationOutcome, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let outcome = self
-            .stores()
-            .tasks()
-            .record_deferred_branch_observation(observation)?;
+        let tasks = self.stored().task().writer()?;
+        let outcome = tasks.record_deferred_branch_observation(observation)?;
         // A retained receipt lands an artifact (and maybe a comment)
         // outside `update_task`, and both are indexed search fields now:
         // refresh the owner's chunks or its recorded sidecar coverage
@@ -513,7 +507,7 @@ impl crate::OrbitRuntime {
         if matches!(
             outcome,
             orbit_store::contract::BranchObservationOutcome::Retained
-        ) && let Ok(Some(task)) = self.stores().tasks().get_task(&observation.task_id)
+        ) && let Ok(Some(task)) = tasks.get_task(&observation.task_id)
         {
             self.stores().task_records().index_task(&task);
         }

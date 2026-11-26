@@ -130,7 +130,7 @@ fn owner_metadata_page(runtime: &RuntimeKernel, input: &Value) -> Result<Value, 
     {
         return Err(invalid_metadata("unsupported page request or limits"));
     }
-    if !runtime.coordination_task_reads_visible() {
+    if !runtime.stored().task().reads_visible() {
         return Err(invalid_metadata("workspace task reads are unavailable"));
     }
     let store = runtime.stores().tasks();

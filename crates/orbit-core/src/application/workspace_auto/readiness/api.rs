@@ -135,7 +135,9 @@ impl OrbitRuntime {
         // A replica's own reads hide task statuses, and that says nothing
         // about the other workspaces this fact would serve.
         let status_index = self
-            .coordination_task_reads_visible()
+            .stored()
+            .task()
+            .reads_visible()
             .then(|| self.task_status_index().ok())
             .flatten();
         FleetReadinessFacts { status_index }

@@ -46,7 +46,7 @@ pub(super) fn prepare_pass_rows(
                 rows.insert(id.clone(), row);
             }
         }
-    } else if runtime.coordination_task_reads_visible() {
+    } else if runtime.stored().task().reads_visible() {
         for ids in order.chunks(OBSERVED_ROW_BATCH_SIZE) {
             // The listed reads re-enter this shared section without taking
             // the host and partition locks again for each task.

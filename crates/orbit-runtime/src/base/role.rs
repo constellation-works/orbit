@@ -93,6 +93,11 @@ impl Role {
         }
     }
 
+    /// Whether this process serves a replica checkout.
+    pub fn is_replica(&self) -> bool {
+        matches!(self, Self::Replica { .. })
+    }
+
     /// The owning machine id when this process runs against a replica checkout.
     pub fn replica_owner(&self) -> Option<&str> {
         match self {
@@ -101,24 +106,54 @@ impl Role {
         }
     }
 
-    /// Whether local coordination task reads are visible for this role.
-    pub fn task_reads_visible(&self) -> bool {
-        !matches!(self, Self::Replica { .. })
+    /// Bind the worker's owner route, or select this checkout's local access.
+    pub(crate) fn coordination<W>(
+        &self,
+        bind_worker: impl FnOnce(&Arc<WorkerInvocation>) -> W,
+    ) -> CoordinationAccess<W> {
+        match self {
+            Self::Operator | Self::DrainOwner => CoordinationAccess::Local,
+            Self::Worker(invocation) => CoordinationAccess::Claimed(bind_worker(invocation)),
+            Self::Replica { owner_machine_id } => {
+                CoordinationAccess::Replica(owner_machine_id.clone())
+            }
+        }
     }
 
-    /// Why coordination writes are unavailable for this role, if they are.
-    ///
-    /// Claimed workers are refused because their writes must use the owner
-    /// route. Replica checkouts name the owner in their capability refusal.
+    /// Whether coordination task projections are visible for this role.
+    pub fn task_reads_visible(&self) -> bool {
+        !self.is_replica()
+    }
+
+    /// Why a local coordination write is unavailable for this role, if it is.
     pub fn task_write_refusal(&self) -> Option<OrbitError> {
+        self.coordination(|_| ()).ensure_write().err()
+    }
+}
+
+/// Access to task coordination state. A claimed worker carries its bound owner
+/// route. A replica carries the id used in its write refusal.
+#[derive(Clone)]
+pub(crate) enum CoordinationAccess<W> {
+    Local,
+    Claimed(W),
+    Replica(Arc<str>),
+}
+
+impl<W> CoordinationAccess<W> {
+    pub(crate) fn reads_visible(&self) -> bool {
+        !matches!(self, Self::Replica(_))
+    }
+
+    pub(crate) fn ensure_write(&self) -> Result<(), OrbitError> {
         match self {
-            Self::Worker(_) => Some(OrbitError::PolicyDenied(
+            Self::Local => Ok(()),
+            Self::Claimed(_) => Err(OrbitError::PolicyDenied(
                 "claimed coordination writes require the owner route".into(),
             )),
-            Self::Replica { owner_machine_id } => Some(OrbitError::CapabilityRefused(format!(
+            Self::Replica(owner_machine_id) => Err(OrbitError::CapabilityRefused(format!(
                 "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
             ))),
-            Self::Operator | Self::DrainOwner => None,
         }
     }
 }
@@ -143,33 +178,6 @@ impl RuntimeKernel {
 
     pub fn worker_invocation(&self) -> Option<&WorkerInvocation> {
         self.base().role().invocation()
-    }
-
-    /// Why coordination writes are unavailable from this runtime, if they are.
-    ///
-    /// Replica checkouts name the owner in their capability refusal. Claimed
-    /// workers are refused because their writes must use the owner route.
-    pub fn coordination_task_write_refusal(&self) -> Option<OrbitError> {
-        self.base().role().task_write_refusal()
-    }
-
-    /// Refuse control-plane work in a replica checkout or claimed worker.
-    ///
-    /// The refusal is a catalog-role capability outcome, not a malformed call:
-    /// federated routing has to tell "this destination will not run that class"
-    /// apart from "that request was invalid", so replica checkouts report
-    /// `CapabilityRefused` [ORB-11012].
-    pub fn ensure_coordination_task_write_permitted(&self) -> Result<(), OrbitError> {
-        self.base().role().task_write_refusal().map_or(Ok(()), Err)
-    }
-
-    pub fn coordination_task_reads_visible(&self) -> bool {
-        self.base().role().task_reads_visible()
-    }
-
-    /// The remote owner declared for a replica checkout, if this is one.
-    pub fn coordination_write_owner(&self) -> Option<&str> {
-        self.base().role().replica_owner()
     }
 
     /// The owner machine id when this runtime is a replica checkout, so a

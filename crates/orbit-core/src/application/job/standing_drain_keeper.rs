@@ -168,10 +168,7 @@ impl OrbitRuntime {
         }
         // A follower's store is not the workspace's; it neither submits nor
         // records a keeper decision.
-        if self.is_write_free()
-            || self.coordination_write_owner().is_some()
-            || self.replica_owner_machine().is_some()
-        {
+        if self.is_write_free() || self.role().is_replica() {
             return Ok(Some(KeeperDecision::Skipped {
                 reason: "not_owner",
             }));

@@ -80,8 +80,7 @@ pub(crate) fn toggle_checkout_routine(
 pub(crate) fn checkout_edit_report(
     runtime: &OrbitRuntime,
 ) -> Result<RoutineStatusReport, OrbitError> {
-    let replica =
-        runtime.worker_invocation().is_none() && runtime.coordination_write_owner().is_some();
+    let replica = runtime.role().is_replica();
     if !replica {
         runtime.ensure_coordination_task_write_permitted()?;
     }

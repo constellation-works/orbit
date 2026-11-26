@@ -28,7 +28,7 @@ pub(super) fn drain_keeper_items(
 ) -> Result<Vec<AttentionItem>, OrbitError> {
     let (want_paused, want_breaker) = kinds;
     let settings = runtime.current_standing_drain();
-    if !settings.enabled || runtime.coordination_write_owner().is_some() {
+    if !settings.enabled || runtime.role().is_replica() {
         return Ok(Vec::new());
     }
     let Some(intent) = runtime.workspace_drain_intent()? else {

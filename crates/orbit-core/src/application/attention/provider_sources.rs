@@ -304,7 +304,7 @@ pub(super) fn read_ci_attention(
     let started = Instant::now();
     // ci_red is derived only on the home owner: a replica must not read the
     // provider, and its local CI state is not authoritative.
-    if !runtime.coordination_task_reads_visible() {
+    if !runtime.stored().task().reads_visible() {
         if !filter.candidate_read {
             candidates.degraded.push(workspace_degraded(
                 workspace,

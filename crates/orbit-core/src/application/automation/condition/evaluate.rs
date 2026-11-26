@@ -24,7 +24,7 @@ fn cadence_seconds(runtime: &OrbitRuntime) -> u64 {
 /// Why this checkout may not fire a workspace or task condition: a replica,
 /// a workspace owned by another host, or an unresolved owner (§4).
 pub(crate) fn condition_refusal(runtime: &OrbitRuntime) -> Option<&'static str> {
-    if runtime.coordination_write_owner().is_some() {
+    if runtime.role().is_replica() {
         return Some("replica_checkout");
     }
     super::super::ownership::resolve(runtime, None).refusal()

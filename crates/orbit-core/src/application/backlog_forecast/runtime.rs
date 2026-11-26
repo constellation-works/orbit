@@ -60,7 +60,7 @@ impl OrbitRuntime {
         &self,
         now: DateTime<Utc>,
     ) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() || self.coordination_write_owner().is_some() {
+        if self.stored().task().writer().is_err() {
             return Ok(());
         }
         if self.backlog_forecasts(1)?.first().is_some_and(|latest| {

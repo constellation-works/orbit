@@ -53,7 +53,7 @@ impl OrbitRuntime {
                 "a claimed worker never fulfils evidence; its owner does".to_string(),
             ));
         }
-        if let Some(owner) = self.coordination_write_owner() {
+        if let Some(owner) = self.role().replica_owner() {
             return Some((
                 FulfilmentRefusal::NotOwner,
                 format!(
