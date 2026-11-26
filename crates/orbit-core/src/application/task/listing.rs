@@ -6,11 +6,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskV2Store;
 use orbit_types::task::{
-    HostOs, Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
+    HostOs, Task, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
     task_dependencies_ready_with_index,
 };
 
 use crate::OrbitRuntime;
+use crate::runtime::stored::task_access::ListedRow;
+pub(crate) use crate::runtime::stored::task_access::{
+    list_task_metadata_in, list_task_metadata_matching, metadata_task,
+};
 use crate::runtime::task::locks::{
     TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
@@ -103,42 +107,6 @@ pub(crate) struct TaskEligibility {
     pub(crate) total: usize,
     /// Every conflicting candidate; not limited.
     pub(crate) conflicting: Vec<TaskEligibilityConflict>,
-}
-
-/// Every task `store` lists, newest first, without body documents:
-/// `description`, `acceptance_criteria`, `plan` and `execution_summary` are
-/// empty and every envelope field is populated as a full read populates it.
-///
-/// One index-validated envelope read per task instead of a bundle read, for
-/// callers that read status, attribution, tags, relations, context files or
-/// timestamps of the whole workspace.
-pub(crate) fn list_task_metadata_in(store: &TaskV2Store) -> Result<Vec<Task>, OrbitError> {
-    list_task_metadata_matching(store, &TaskListFilter::default())
-}
-
-/// [`list_task_metadata_in`] narrowed by `filter`: one freshness pass, and
-/// only the envelopes the filter selects are read.
-pub(crate) fn list_task_metadata_matching(
-    store: &TaskV2Store,
-    filter: &TaskListFilter,
-) -> Result<Vec<Task>, OrbitError> {
-    Ok(store
-        .task_candidates(filter, usize::MAX)?
-        .items
-        .into_iter()
-        .map(metadata_task)
-        .collect())
-}
-
-/// The envelope of one task as a body-less [`Task`].
-pub(crate) fn metadata_task(envelope: TaskEnvelopeV2) -> Task {
-    Task::from_envelope_parts(
-        envelope,
-        String::new(),
-        Vec::new(),
-        String::new(),
-        String::new(),
-    )
 }
 
 /// Readiness and path matching retain their existing application policy. Both
@@ -445,6 +413,15 @@ impl OrbitRuntime {
             return Ok(None);
         }
         self.stores().tasks().get_task_row(id, true)
+    }
+
+    /// [`Self::get_listed_task_row`] through this process's task access: a
+    /// claimed worker asks its owner, which may not serve the projection.
+    pub(crate) fn listed_task_row(&self, id: &str) -> Result<ListedRow, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(ListedRow::Absent);
+        }
+        self.stored().task().listed_row(id)
     }
 
     /// Split candidate tasks by lock conflict with in-flight work.

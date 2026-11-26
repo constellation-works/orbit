@@ -137,7 +137,7 @@ impl RuntimeKernel {
             self.base().workspace_binding.as_deref(),
             owner_machine_id,
         );
-        self.base_mut().role = role;
+        self.stored_mut().set_role(role);
         self
     }
 

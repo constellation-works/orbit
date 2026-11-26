@@ -3,6 +3,7 @@ use super::listing::projection_fields;
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::json::{serialize_task_show, task_fields_to_json_from_row};
 use crate::application::task::TaskRow;
+use crate::runtime::stored::task_access::ListedRow;
 use orbit_common::governance::operation::OperationInput;
 use orbit_common::{NotFoundKind, OrbitError, RemoteToolCode};
 use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
@@ -54,54 +55,27 @@ pub(super) fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Val
     }
 }
 
-/// One show's task row.
+/// One show's task row, through this process's task access.
 ///
-/// The owner reads `get_task_row` once. A missing id returns that error with
-/// no second read. Any other bundle failure falls back to one lightweight
-/// row, and only when that row reports an unavailable pilot assessment.
-/// A worker keeps the owner projections: the happy path assembles the row
-/// from them, and a corrupt bundle asks the owner for `listed_task`.
+/// The row is read once. A missing id returns that error with no second
+/// read. Any other failure to read the task falls back to one lightweight
+/// listed row, and only when that row reports an unavailable pilot
+/// assessment. A worker's rows are the owner's projections: the task access
+/// assembles the row from them, and a corrupt bundle asks the owner for
+/// `listed_task`.
 fn show_task_row(runtime: &OrbitRuntime, id: &str) -> Result<TaskRow, OrbitError> {
-    if runtime.worker_invocation().is_some() {
-        return worker_show_task_row(runtime, id);
-    }
-    match runtime.get_task_row(id) {
-        Ok(row) => Ok(row),
-        Err(error) if is_show_not_found(&error) => Err(error),
-        Err(error) => match runtime.get_listed_task_row(id)? {
-            Some(row) if pilot_assessment_unavailable(runtime, &row) => Ok(row),
-            _ => Err(error),
-        },
-    }
-}
-
-fn worker_show_task_row(runtime: &OrbitRuntime, id: &str) -> Result<TaskRow, OrbitError> {
-    match runtime.get_task(id) {
-        Ok(task) => Ok(TaskRow {
-            task,
-            comments: runtime.get_task_comments(id)?,
-            history: runtime.get_task_history(id)?,
-            artifacts: runtime.get_task_artifact_manifest(id)?,
-        }),
-        Err(error) if is_show_not_found(&error) => Err(error),
-        Err(error) => match runtime.read_owner::<Value>(id, "listed_task") {
-            Ok(Value::Null) => Err(error),
-            Ok(value) => {
-                let row = serde_json::from_value(value).map_err(|decode| {
-                    OrbitError::Store(format!("worker listed task row: {decode}"))
-                })?;
-                if pilot_assessment_unavailable(runtime, &row) {
-                    Ok(row)
-                } else {
-                    Err(error)
-                }
-            }
-            Err(projected) if unknown_worker_read_projection(&projected) => {
+    runtime.stored().task().row_or(id, |error| {
+        if is_show_not_found(&error) {
+            return Err(error);
+        }
+        match runtime.listed_task_row(id)? {
+            ListedRow::Row(row) if pilot_assessment_unavailable(runtime, &row) => Ok(*row),
+            ListedRow::Unserved(projected) if unknown_worker_read_projection(&projected) => {
                 legacy_listed_show_row(runtime, id, error)
             }
-            Err(_) => Err(error),
-        },
-    }
+            ListedRow::Row(_) | ListedRow::Absent | ListedRow::Unserved(_) => Err(error),
+        }
+    })
 }
 
 /// Owners that predate the `listed_task` projection still serve the readout

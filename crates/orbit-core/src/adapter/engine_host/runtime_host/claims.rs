@@ -19,7 +19,7 @@ pub(super) fn admit_task_for_workflow(
                 binding.task_id
             )));
         }
-        let task: Task = runtime.read_owner(task_id, "task")?;
+        let task: Task = runtime.get_task(task_id)?;
         if task.status != TaskStatus::InProgress {
             return Err(OrbitError::PolicyDenied(format!(
                 "claimed task '{task_id}' is '{}' on the owner; only an admitted \

@@ -63,7 +63,7 @@ pub struct Base {
     pub(crate) workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
     /// What kind of process this runtime serves, resolved once at open from the
     /// workspace binding and the worker invocation.
-    pub(crate) role: role::Role,
+    role: role::Role,
     /// The workspace was named by an explicit selector rather than discovered
     /// from the caller's working directory. Supplied by the composition layer
     /// that resolved the selector; never inferred by the runtime.
@@ -119,6 +119,12 @@ impl Base {
     /// The process's role, resolved once when this base was built.
     pub fn role(&self) -> &role::Role {
         &self.role
+    }
+
+    /// Replace the role a kernel builder re-resolved. Reached only through
+    /// the stores layer, which chooses its task route again for the new role.
+    pub(crate) fn set_role(&mut self, role: role::Role) {
+        self.role = role;
     }
 
     /// Returns the shared .orbit/ data directory.

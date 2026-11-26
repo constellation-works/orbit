@@ -2354,9 +2354,9 @@ done
 # among the four layers; `host` names only `base` and `stored` and never `run`.
 # Missing layer directories fail closed.
 runtime_src="$repo_root/crates/orbit-runtime/src"
-runtime_run_names='run|Run|engine|recovery_decision|run_input|upgrade_handover|worker_coordination|pipeline_poll_wait_override|with_owner_read_retry_wait|with_pipeline_poll_wait|check_worker_host_input|check_worker_search_scope|is_coordination_tool'
+runtime_run_names='run|Run|engine|recovery_decision|run_input|upgrade_handover|worker_coordination|pipeline_poll_wait_override|with_pipeline_poll_wait|check_worker_host_input|check_worker_search_scope|is_coordination_tool'
 runtime_host_names='host|Host|assets|command_exec|git_sandbox|scripts|tool_exec|task_pr_forge|plugin|host_resource|host_signal|AdmissionCrewSettings|with_host_load_sampling_wait'
-runtime_stored_names='stored|Stored|JobRuns|audit|workspace|recovery_authority|context'
+runtime_stored_names='stored|Stored|JobRuns|audit|workspace|recovery_authority|context|with_owner_read_retry_wait'
 if ! super_chains_into "$runtime_src" base \
   "${runtime_stored_names}|${runtime_host_names}|${runtime_run_names}" crate-root; then
   echo "orbit-runtime base must not name stored, host or run"
