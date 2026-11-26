@@ -104,6 +104,8 @@ pub(crate) struct Operation {
     job_run_id: Option<String>,
     native_operator_refusal: Option<&'static str>,
     audit_role: Option<&'static str>,
+    /// The arguments a command-line invocation row records, as JSON text.
+    arguments_json: Option<String>,
     /// Whether a command-line caller is held to the command's governance row.
     command_row: bool,
     /// Whether a command-line caller writes an invocation audit row.
@@ -129,6 +131,7 @@ impl Operation {
             job_run_id: None,
             native_operator_refusal: None,
             audit_role: None,
+            arguments_json: None,
             command_row: true,
             invocation_audit: true,
         }
@@ -146,9 +149,18 @@ impl Operation {
             job_run_id: None,
             native_operator_refusal: None,
             audit_role: None,
+            arguments_json: None,
             command_row: true,
             invocation_audit: true,
         }
+    }
+
+    /// A read model only the dashboard asks for: no governance row decides
+    /// it and no invocation row records it.
+    pub(crate) fn dashboard_read(command: &'static str, subcommand: &'static str) -> Self {
+        Self::command(command, subcommand)
+            .without_command_row()
+            .without_invocation_audit()
     }
 
     pub(crate) fn require_native_operator(mut self, refusal: &'static str) -> Self {
@@ -176,6 +188,12 @@ impl Operation {
     /// Preserve the command's explicit audit attribution.
     pub(crate) fn audit_role(mut self, role: &'static str) -> Self {
         self.audit_role = Some(role);
+        self
+    }
+
+    /// Record `arguments` on the command-line invocation row.
+    pub(crate) fn arguments(mut self, arguments: &Value) -> Self {
+        self.arguments_json = Some(arguments.to_string());
         self
     }
 
@@ -392,7 +410,7 @@ impl AuditGuard {
             working_directory: std::env::current_dir()
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
-            arguments_json: None,
+            arguments_json: self.operation.arguments_json.clone(),
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: self.error_message.clone(),
@@ -450,6 +468,65 @@ pub(super) struct DashboardOperation<'a> {
     pub(super) arguments: Value,
     pub(super) operator_session: bool,
     pub(super) host: Option<String>,
+    /// The workspace the row names, where it is not the bound workspace's id.
+    pub(super) workspace: Option<String>,
+    /// The machine the browser acted from; empty when the request names none.
+    pub(super) machine_name: String,
+    /// The operation name the row records, where one governed operation
+    /// covers several recorded ones.
+    pub(super) recorded_as: Option<&'static str>,
+}
+
+impl DashboardOperation<'_> {
+    /// Record the row under `name` instead of the governed operation's id.
+    pub(super) fn recorded_as(mut self, name: &'static str) -> Self {
+        self.recorded_as = Some(name);
+        self
+    }
+}
+
+/// The authenticated dashboard session a command arrived on, and what its
+/// audit row says about where the request came from.
+pub struct DashboardCaller {
+    /// Whether the session holds operator capability.
+    pub operator_session: bool,
+    /// The serving host's name.
+    pub host: Option<String>,
+    /// The workspace selector the request addressed. Without one the row
+    /// names the bound workspace's own id.
+    pub workspace: Option<String>,
+    /// The machine the browser acted from; empty when the request names none.
+    pub machine_name: String,
+}
+
+impl DashboardCaller {
+    /// This caller's governed `operation` on `target`.
+    pub(super) fn operation<'a>(
+        self,
+        operation: &'static GovernedOperation,
+        target: &'a str,
+        arguments: Value,
+    ) -> DashboardOperation<'a> {
+        DashboardOperation {
+            operation,
+            target,
+            arguments,
+            operator_session: self.operator_session,
+            host: self.host,
+            workspace: self.workspace,
+            machine_name: self.machine_name,
+            recorded_as: None,
+        }
+    }
+}
+
+/// What a dashboard operation's one audit row records once it has run.
+pub(super) struct DashboardRow {
+    /// Why the row is a failure; a success without one.
+    pub(super) failure: Option<String>,
+    /// The target, where the outcome names another than the request did.
+    pub(super) target: Option<String>,
+    pub(super) arguments: Value,
 }
 
 /// Run one command of app `A`: authorize it, audit it, run it.
@@ -649,33 +726,50 @@ pub(super) fn run_dashboard_with_arguments<T>(
     failure: impl FnOnce(&T) -> Option<String>,
     applied_arguments: impl FnOnce(&T, Value) -> Value,
 ) -> Result<Result<T, AuthorizationDenial>, Error> {
+    run_dashboard_recorded(core, operation, run, |result, arguments| {
+        let (failure, arguments) = match result {
+            Ok(value) => match failure(value) {
+                Some(message) => (Some(message), arguments),
+                None => (None, applied_arguments(value, arguments)),
+            },
+            Err(error) => (Some(error.to_string()), arguments),
+        };
+        Some(DashboardRow {
+            failure,
+            target: None,
+            arguments,
+        })
+    })
+}
+
+/// Run a dashboard operation and record the audit row `row` builds from its
+/// outcome and the requested arguments. A refusal is always recorded; an
+/// admitted operation whose outcome `row` answers with `None` records nothing.
+pub(super) fn run_dashboard_recorded<T>(
+    core: &Core,
+    operation: DashboardOperation<'_>,
+    run: impl FnOnce() -> Result<T, Error>,
+    row: impl FnOnce(&Result<T, Error>, Value) -> Option<DashboardRow>,
+) -> Result<Result<T, AuthorizationDenial>, Error> {
     let started = Instant::now();
     let runtime = core.runtime();
-    let workspace = runtime
-        .workspace_id()
-        .unwrap_or_else(|_| runtime.shared_root().display().to_string());
-    let (result, status, provenance, capabilities, error_message, recorded_arguments) =
+    let (result, status, provenance, capabilities, recorded) =
         match dashboard_authorize(operation.operation, operation.operator_session) {
             Ok(caller) => {
                 let result = run();
-                let (message, arguments) = match &result {
-                    Ok(value) => match failure(value) {
-                        Some(message) => (Some(message), operation.arguments),
-                        None => (None, applied_arguments(value, operation.arguments)),
-                    },
-                    Err(error) => (Some(error.to_string()), operation.arguments),
+                let Some(recorded) = row(&result, operation.arguments) else {
+                    return result.map(Ok);
                 };
                 (
                     result.map(Ok),
-                    if message.is_some() {
+                    if recorded.failure.is_some() {
                         AuditEventStatus::Failure
                     } else {
                         AuditEventStatus::Success
                     },
                     caller.provenance(),
                     caller.grants().clone(),
-                    message,
-                    arguments,
+                    recorded,
                 )
             }
             Err(denial) => {
@@ -686,18 +780,30 @@ pub(super) fn run_dashboard_with_arguments<T>(
                     AuditEventStatus::Denied,
                     provenance,
                     Default::default(),
-                    Some(message),
-                    operation.arguments,
+                    DashboardRow {
+                        failure: Some(message),
+                        target: None,
+                        arguments: operation.arguments,
+                    },
                 )
             }
         };
+    let workspace = operation.workspace.unwrap_or_else(|| {
+        runtime
+            .workspace_id()
+            .unwrap_or_else(|_| runtime.shared_root().display().to_string())
+    });
+    let target = recorded
+        .target
+        .unwrap_or_else(|| operation.target.to_string());
+    let recorded_as = operation.recorded_as.unwrap_or(operation.operation.id);
     let row = AuditEventInsertParams {
         execution_id: audit_execution_id("dashboard-operations"),
         command: "dashboard.operations".to_string(),
         subcommand: Some(provenance.to_string()),
         tool_name: None,
-        target_type: Some(operation.operation.id.to_string()),
-        target_id: Some(operation.target.to_string()),
+        target_type: Some(recorded_as.to_string()),
+        target_id: Some(target),
         role: "operator".to_string(),
         status,
         exit_code: i32::from(status != AuditEventStatus::Success),
@@ -706,18 +812,18 @@ pub(super) fn run_dashboard_with_arguments<T>(
             .workspace_runtime_binding()
             .map(|binding| binding.repo_root.display().to_string())
             .unwrap_or_else(|| runtime.shared_root().display().to_string()),
-        arguments_json: serde_json::to_string(&recorded_arguments).ok(),
+        arguments_json: serde_json::to_string(&recorded.arguments).ok(),
         stdout_truncated: None,
         stderr_truncated: None,
-        error_message,
+        error_message: recorded.failure,
         host: operation.host,
         pid: std::process::id(),
         session_id: None,
         workspace_id: Some(workspace),
         caller_machine_id: None,
-        caller_machine_name: Some(String::new()),
+        caller_machine_name: Some(operation.machine_name.clone()),
         process_machine_id: None,
-        process_machine_name: Some(String::new()),
+        process_machine_name: Some(operation.machine_name),
         transport: None,
         effective_capabilities: capabilities,
         origin_session_id: None,
@@ -729,7 +835,7 @@ pub(super) fn run_dashboard_with_arguments<T>(
         step_index: None,
     };
     if let Err(error) = runtime.record_audit_event(&row) {
-        tracing::error!(operation = operation.operation.id, target = operation.target, %error,
+        tracing::error!(operation = recorded_as, target = operation.target, %error,
             "failed to persist dashboard operation audit");
     }
     result

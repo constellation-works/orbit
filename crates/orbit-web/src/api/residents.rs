@@ -4,10 +4,11 @@
 //! checkpoint comment time sits (see the paragraph after the routes below).
 //! Each list card carries that same show payload; `orbit resident list` rows
 //! do not.
-//! Writes go through the `orbit.resident.*` tools, so the view changes
-//! exactly what `orbit resident list|show|relay|control` do. The list read
-//! uses the batched core card read instead of per-row tool calls. Two writes go to
-//! core use cases instead. Creation needs a file for
+//! Every read and write is one command of the resident app
+//! (`orbit_core::app::resident`). Its channel writes go through the
+//! `orbit.resident.*` tools, so the view changes exactly what `orbit resident
+//! list|show|relay|control` do. The list read uses the batched core card read
+//! instead of per-row tool calls. Two writes go to core use cases instead. Creation needs a file for
 //! `orbit.task.artifact` action `put`; its use case judges the draft with the same
 //! rule every mandate read applies before it writes the tagged assignment
 //! and its `resident/mandate.json`. The grant form goes to the dashboard
@@ -38,35 +39,30 @@
 //! top-level field. With no checkpoint, `latest_checkpoint` is null and has
 //! no `at`.
 //!
-//! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]) and
-//! leaves a `dashboard.operations` audit row beside the history entry core
-//! writes. Turning the cycle routine on or off is the audited
+//! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]),
+//! which the resident app decides, and leaves a `dashboard.operations` audit
+//! row beside the history entry core writes. Turning the cycle routine on or off is the audited
 //! `POST /api/routines/toggle`.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::Utc;
 use orbit_cmd::registry_routines::routine_statuses_for_workspace;
 use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_ROUTINE_TOGGLE};
-use orbit_core::application::resident::{
-    ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
-    ResidentMandateCreateParams,
+use orbit_core::app::resident::{
+    Command, CycleRoutineScope, DashboardWrite, DashboardWritten, Outcome,
+    ResidentDashboardGrantParams, exec,
 };
-use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_types::task::TaskComplexity;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
-use serde::{Deserialize, Serialize};
+use orbit_core::{Core, OrbitError};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::routines::{
-    OperationAudit, action_capability, authorization_denied, authorized_caller, status_json,
-};
+use super::blocking;
+use super::routines::{action_capability, authorization_denied, dashboard_caller, status_json};
 use super::tasks::human_comment_author;
-use super::{blocking, workspace_label};
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, WsCore};
 
 /// The job every workspace's seeded resident cycle routine targets.
 const RESIDENT_CYCLE_TARGET: &str = "job:resident_cycle_pipeline";
@@ -141,20 +137,6 @@ pub(super) struct ResidentRelayBody {
     reverses: Option<String>,
 }
 
-/// The session the dashboard calls resident tools with. It carries the
-/// operator capability only when this server holds an operator session,
-/// and never the hosting process's terminal or environment.
-fn dashboard_session(operator: bool) -> ToolSessionContext {
-    let mut session = ToolSessionContext::default();
-    session.effective_capabilities.insert(McpCapability::Agent);
-    if operator {
-        session
-            .effective_capabilities
-            .insert(McpCapability::Operator);
-    }
-    session
-}
-
 fn non_blank(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -168,24 +150,18 @@ fn non_blank(value: Option<&str>) -> Option<String> {
 /// whose definitions declare a colliding routine name): a full host-wide read
 /// loads every registered workspace's definitions, configuration and store
 /// rows, which this one row never needs.
-fn resident_cycle_routine(state: &DashboardState, runtime: &OrbitRuntime) -> Value {
-    // The selector is the logical catalog ID the dashboard addressed. The
-    // runtime's `workspace_id()` is the persisted partition ID, which an
-    // ordinary checkout may name differently.
-    let Some(workspace_id) = runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone())
-        .or_else(|| runtime.workspace_id().ok())
+fn resident_cycle_routine(state: &DashboardState, scope: Option<&CycleRoutineScope>) -> Value {
+    let Some(scope) = scope else {
+        return Value::Null;
+    };
+    let Ok(report) = routine_statuses_for_workspace(state.global_root(), &scope.workspace_id)
     else {
         return Value::Null;
     };
-    let Ok(report) = routine_statuses_for_workspace(state.global_root(), &workspace_id) else {
-        return Value::Null;
-    };
     // The routine's source is the registered workspace whose `.orbit`
-    // directory it was loaded from: this runtime's.
+    // directory it was loaded from: this workspace's.
     let canonical = |path: &std::path::Path| std::fs::canonicalize(path).ok();
-    let orbit_dir = canonical(&runtime.paths().orbit_dir);
+    let orbit_dir = canonical(&scope.orbit_dir);
     report
         .statuses
         .iter()
@@ -219,18 +195,23 @@ fn expose_latest_checkpoint_at(shown: &mut Value) {
 /// `GET /api/residents`.
 pub(super) async fn list_residents(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Query(query): Query<ResidentListQuery>,
 ) -> Response {
     let operator = state.operator_session();
     let include_ended = query.all;
     match blocking("resident list", move || {
-        let mut mandates = runtime.list_resident_mandate_cards(include_ended)?;
+        let cards = match exec(&core, Command::Cards { include_ended })? {
+            Outcome::Cards(cards) => *cards,
+            Outcome::Value(_) | Outcome::Dashboard(_) => {
+                return Err(unexpected_outcome("resident list"));
+            }
+        };
+        let mut mandates = cards.mandates;
         for mandate in &mut mandates {
             expose_latest_checkpoint_at(mandate);
         }
-        let crews = serde_json::to_value(runtime.configured_crew_registry_projection())
-            .unwrap_or(Value::Null);
+        let crews = cards.crews;
         let crew_names: Vec<Value> = crews["crews"]
             .as_array()
             .into_iter()
@@ -238,12 +219,12 @@ pub(super) async fn list_residents(
             .filter_map(|crew| crew.get("name").cloned())
             .collect();
         Ok(json!({
-            "workspace": runtime.workspace_label(),
+            "workspace": cards.workspace,
             "count": mandates.len(),
             "mandates": mandates,
             "crews": crew_names,
             "default_crew": crews["default_crew"],
-            "routine": resident_cycle_routine(&state, &runtime),
+            "routine": resident_cycle_routine(&state, cards.cycle_routine.as_ref()),
             "capabilities": {
                 "resident_write": action_capability(&DASHBOARD_RESIDENT_WRITE, operator),
                 "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE, operator),
@@ -260,18 +241,20 @@ pub(super) async fn list_residents(
 /// `GET /api/residents/<id>`.
 pub(super) async fn show_resident(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
 ) -> Response {
     let operator = state.operator_session();
     match blocking("resident show", move || {
-        let mut shown = runtime.run_tool_with_session(
-            "orbit.resident.show",
-            json!({"task_id": id}),
-            dashboard_session(operator),
-        )?;
+        let mut shown = exec(
+            &core,
+            Command::Card {
+                task_id: id,
+                operator,
+            },
+        )?
+        .into_value();
         expose_latest_checkpoint_at(&mut shown);
-        runtime.attach_resident_card_fields(&mut shown);
         Ok(shown)
     })
     .await
@@ -281,57 +264,47 @@ pub(super) async fn show_resident(
     }
 }
 
-/// Authorize one resident write, audit it, run it and audit the outcome.
-/// `partial_failure` names a successful write's outcome the audit row
-/// records as a failure.
-async fn resident_write<T: Serialize + Send + 'static>(
+/// Send one resident write to the resident app, which authorizes it, runs
+/// it and audits the outcome, and render what it answered.
+async fn resident_write(
     state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
-    operation: &'static str,
-    target: &str,
-    arguments: Value,
-    write: impl FnOnce(Arc<OrbitRuntime>) -> Result<T, OrbitError> + Send + 'static,
-    partial_failure: fn(&T) -> Option<String>,
+    core: Arc<Core>,
+    label: &'static str,
+    write: DashboardWrite,
 ) -> Response {
-    let started = Instant::now();
-    let workspace = workspace_label(&runtime).await;
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        operation,
-        target,
-        arguments,
-    );
-    let caller = match authorized_caller(&DASHBOARD_RESIDENT_WRITE, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, started).await;
-            return authorization_denied(denial);
+    let caller = dashboard_caller(state, None, "");
+    match blocking(label, move || {
+        exec(&core, Command::Dashboard(caller, write))
+    })
+    .await
+    {
+        Ok(Outcome::Dashboard(Ok(DashboardWritten::Value(value)))) => Json(value).into_response(),
+        Ok(Outcome::Dashboard(Ok(DashboardWritten::Granted(grant)))) => {
+            Json(*grant).into_response()
         }
-    };
-    let writer = Arc::clone(&runtime);
-    let result = blocking(operation, move || write(writer)).await;
-    let failure: Option<String> = match &result {
-        Err(_) => Some("refused".to_string()),
-        Ok(value) => partial_failure(value),
-    };
-    audit.settled(&caller, failure.as_deref(), started).await;
-    match result {
-        Ok(value) => Json(value).into_response(),
+        Ok(Outcome::Dashboard(Err(denial))) => authorization_denied(denial),
+        Ok(Outcome::Value(_) | Outcome::Cards(_)) => super::server_error(unexpected_outcome(label)),
         Err(response) => *response,
     }
 }
 
-/// A write whose every success audits as a success.
-fn no_partial_failure(_: &Value) -> Option<String> {
-    None
+/// An app answered one command with another command's outcome.
+fn unexpected_outcome(label: &str) -> OrbitError {
+    OrbitError::Execution(format!("{label} answered with another command's outcome"))
+}
+
+/// The fields of a resident tool call.
+fn tool_fields(input: Value) -> Map<String, Value> {
+    match input {
+        Value::Object(fields) => fields,
+        _ => Map::new(),
+    }
 }
 
 /// `POST /api/residents` — create a mandate's assignment and artifact.
 pub(super) async fn create_resident(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Json(body): Json<ResidentCreateBody>,
 ) -> Response {
     let mandate = body.mandate.unwrap_or(Value::Null);
@@ -350,50 +323,33 @@ pub(super) async fn create_resident(
         };
         format!("[resident]: {}{suffix}", shortened.trim_end())
     });
-    let arguments = json!({"title": title, "mandate": mandate});
-    let complexity = body.complexity;
-    let description = body.description.unwrap_or_default();
     resident_write(
         &state,
-        runtime,
+        core,
         "resident.create",
-        "new",
-        arguments,
-        move |runtime| {
-            if !mandate.is_object() {
-                return Err(OrbitError::InvalidInput(
-                    "mandate must be a resident.mandate/v1 object".to_string(),
-                ));
-            }
-            let complexity = non_blank(complexity.as_deref())
-                .unwrap_or_else(|| "medium".to_string())
-                .parse::<TaskComplexity>()
-                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-            runtime.create_resident_mandate(ResidentMandateCreateParams {
-                title,
-                description,
-                complexity,
-                mandate,
-            })
+        DashboardWrite::Create {
+            title,
+            description: body.description.unwrap_or_default(),
+            complexity: body.complexity,
+            mandate,
         },
-        no_partial_failure,
     )
     .await
 }
 
 /// `POST /api/residents/<id>/grant` — narrow, widen as an answered
-/// request, or both, through
-/// [`OrbitRuntime::grant_resident_authority_as_dashboard_operator`]. The
-/// handler parses the form, authorizes and audits it and renders the core
-/// result; a partial outcome audits as a failure naming which step applied.
+/// request, or both, through the resident app's dashboard grant. The
+/// handler parses the form and renders the core result; the app authorizes
+/// and audits it, and a partial outcome audits as a failure naming which
+/// step applied.
 pub(super) async fn grant_resident(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     Json(body): Json<ResidentGrantBody>,
 ) -> Response {
     let params = ResidentDashboardGrantParams {
-        task_id: id.clone(),
+        task_id: id,
         add: body.add,
         workspaces: body.workspaces,
         remove: body.remove,
@@ -402,63 +358,18 @@ pub(super) async fn grant_resident(
         quote: body.quote,
         answered_by: human_comment_author(None),
     };
-    let mut arguments = Map::new();
-    arguments.insert("task_id".into(), json!(id));
-    for (key, list) in [
-        ("add", &params.add),
-        ("workspaces", &params.workspaces),
-        ("remove", &params.remove),
-        ("drop_workspaces", &params.drop_workspaces),
-    ] {
-        if !list.is_empty() {
-            arguments.insert(key.into(), json!(list));
-        }
-    }
-    for (key, value) in [("deadline", &params.deadline), ("quote", &params.quote)] {
-        if let Some(value) = non_blank(value.as_deref()) {
-            arguments.insert(key.into(), json!(value));
-        }
-    }
-    let operation = if params.widens() {
+    let label = if params.widens() {
         "resident.grant"
     } else {
         "resident.narrow"
     };
-    resident_write(
-        &state,
-        runtime,
-        operation,
-        &id,
-        Value::Object(arguments),
-        move |runtime| runtime.grant_resident_authority_as_dashboard_operator(params),
-        grant_partial_failure,
-    )
-    .await
-}
-
-/// The audit failure of a grant whose widening outcome stands while its
-/// narrowing was refused.
-fn grant_partial_failure(grant: &ResidentDashboardGrant) -> Option<String> {
-    let error = grant.narrowing_error.as_deref().unwrap_or_default();
-    match grant.outcome {
-        ResidentDashboardGrantOutcome::GrantedNarrowingRefused => {
-            Some(format!("Widening applied; narrowing refused: {error}"))
-        }
-        ResidentDashboardGrantOutcome::UnchangedNarrowingRefused => {
-            Some(format!("No widening applied; narrowing refused: {error}"))
-        }
-        ResidentDashboardGrantOutcome::Granted
-        | ResidentDashboardGrantOutcome::Unchanged
-        | ResidentDashboardGrantOutcome::Narrowed
-        | ResidentDashboardGrantOutcome::GrantedAndNarrowed
-        | ResidentDashboardGrantOutcome::UnchangedAndNarrowed => None,
-    }
+    resident_write(&state, core, label, DashboardWrite::Grant(params)).await
 }
 
 /// `POST /api/residents/<id>/control`.
 pub(super) async fn control_resident(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     Json(body): Json<ResidentControlBody>,
 ) -> Response {
@@ -473,17 +384,11 @@ pub(super) async fn control_resident(
     if let Some(session) = non_blank(body.by_session.as_deref()) {
         input["by_session"] = json!(session);
     }
-    let target = id.clone();
     resident_write(
         &state,
-        runtime,
+        core,
         "resident.control",
-        &target,
-        input.clone(),
-        move |runtime| {
-            runtime.run_tool_with_session("orbit.resident.control", input, dashboard_session(true))
-        },
-        no_partial_failure,
+        DashboardWrite::Control(tool_fields(input)),
     )
     .await
 }
@@ -491,7 +396,7 @@ pub(super) async fn control_resident(
 /// `POST /api/residents/<id>/relay` — the operator's own words, said here.
 pub(super) async fn relay_resident(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(id): Path<String>,
     Json(body): Json<ResidentRelayBody>,
 ) -> Response {
@@ -507,17 +412,11 @@ pub(super) async fn relay_resident(
     if let Some(reverses) = non_blank(body.reverses.as_deref()) {
         input["reverses"] = json!(reverses);
     }
-    let target = id.clone();
     resident_write(
         &state,
-        runtime,
+        core,
         "resident.relay",
-        &target,
-        input.clone(),
-        move |runtime| {
-            runtime.run_tool_with_session("orbit.resident.relay", input, dashboard_session(true))
-        },
-        no_partial_failure,
+        DashboardWrite::Relay(tool_fields(input)),
     )
     .await
 }

@@ -10,11 +10,12 @@
 
 use clap::Args;
 use orbit_common::governance::automation::AutomationVerb;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::automation::{self, Command, Input};
 use serde_json::Value;
 
 use super::operation_args::Invocation;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::common::payload::Block;
 use crate::output::common::table::{Column, Table};
 
@@ -25,10 +26,11 @@ pub struct AutomationCommand {
     pub command: Invocation<AutomationVerb>,
 }
 
-impl Execute for AutomationCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AutomationCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, input } = self.command;
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value =
+            automation::exec(core, Command::Operation(spec.verb, Input::new(input)))?.into_value();
         let blocks = match spec.verb {
             AutomationVerb::Explain if value["definition"]["kind"] == "job" => {
                 job_explain_blocks(&value)

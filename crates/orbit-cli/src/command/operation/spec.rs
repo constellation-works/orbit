@@ -561,7 +561,7 @@ pub(super) fn dispatch_routine(command: Commands, context: DispatchContext<'_>) 
         Commands::Routine(command) => command.execute_without_runtime(
             context.root_override,
             context.workspace_selector,
-            context.runtime,
+            context.core,
             context.env,
             context.resolved,
         ),

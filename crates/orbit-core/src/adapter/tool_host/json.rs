@@ -12,7 +12,7 @@ use crate::application::task::{
     task_reference_status_index, task_show_json,
 };
 
-pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
+pub(crate) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
     let status_by_id = task_reference_status_index(runtime, task)?;
     let row = runtime.task_row_with_sidecars(task.clone())?;
     task_record_json(runtime, &row, &status_by_id).map(Value::Object)

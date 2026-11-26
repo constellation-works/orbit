@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::app::task::{ToolCall, ToolCaller};
+use crate::app::tool_call;
 use crate::application::agents::AgentDetailSurface;
 use crate::application::resident::{ResidentActionTicket, ResidentCallAdmission};
 use crate::application::task::{
@@ -179,9 +180,12 @@ fn execute_admitted(
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
     let mut response = match action {
-        OrbitBuiltinAction::AutoTask(verb) => {
-            super::auto_task_tools::dispatch(runtime, verb, input)
-        }
+        OrbitBuiltinAction::AutoTask(verb) => super::auto_task_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            tool_call::Caller::default(),
+        ),
         OrbitBuiltinAction::DesktopAutomation => {
             super::desktop::automation::control(runtime, input, submission_trigger(session_context))
         }
@@ -259,9 +263,12 @@ fn execute_admitted(
             })
         }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
-        OrbitBuiltinAction::Automation(verb) => {
-            super::automation_tools::dispatch(runtime, verb, input)
-        }
+        OrbitBuiltinAction::Automation(verb) => super::automation_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            tool_call::Caller::default(),
+        ),
         OrbitBuiltinAction::Decision(verb) => {
             let provenance = session_write_provenance(session_context);
             let surface = provenance.surface.unwrap_or(TaskWriteSurface::Mcp);
@@ -326,11 +333,14 @@ fn execute_admitted(
             result
         }
         OrbitBuiltinAction::Experiment(verb) => super::experiment_tools::dispatch(
-            runtime,
+            &crate::Core::within_tool_entry(runtime.clone()),
             verb,
             input,
-            agent.as_deref(),
-            model.as_deref(),
+            tool_call::Caller {
+                agent,
+                model,
+                ..tool_call::Caller::default()
+            },
         ),
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(
             &crate::Core::within_tool_entry(runtime.clone()),
@@ -499,17 +509,22 @@ fn execute_admitted(
             input,
             model.as_deref(),
         ),
-        OrbitBuiltinAction::Evolution(verb) => {
-            super::evolution_tools::dispatch(runtime, verb, input)
-        }
-        OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
-            runtime,
-            session_context,
-            task_scope.run_id.as_deref(),
+        OrbitBuiltinAction::Evolution(verb) => super::evolution_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
             verb,
             input,
-            agent.as_deref(),
-            model.as_deref(),
+            tool_call::Caller::default(),
+        ),
+        OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            tool_call::Caller {
+                session: session_context.clone(),
+                run_id: task_scope.run_id.clone(),
+                agent,
+                model,
+            },
         ),
         OrbitBuiltinAction::WorkspaceClaim(verb) => super::workspace_claim_tools::dispatch(
             &crate::Core::within_tool_entry(runtime.clone()),

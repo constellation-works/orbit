@@ -1,32 +1,29 @@
-//! The `orbit.automation.*` tools: the read-only condition and job explain, and
-//! the operator's audited clear-stall.
-use crate::OrbitRuntime;
-use orbit_common::{
-    OrbitError,
-    governance::{automation::AutomationVerb, operation::OperationVerb},
-};
+//! The automation tool handler.
+//!
+//! Automation verbs are declared once as data in
+//! `orbit_common::governance::automation::operations`. The handler half of the
+//! table is the automation app (`crate::app::automation`), joined to the spec half
+//! by [`AutomationVerb`]: this entry turns the tool call into the app's command and
+//! calls its one `exec`.
+
+use orbit_common::OrbitError;
+use orbit_common::governance::automation::AutomationVerb;
 use serde_json::Value;
 
+use crate::Core;
+use crate::app::automation::{self, Command, Input, Outcome};
+use crate::app::tool_call::Caller;
+
+/// Run one automation verb the generic tool entry admitted.
 pub(super) fn dispatch(
-    runtime: &OrbitRuntime,
+    core: &Core,
     verb: AutomationVerb,
     input: Value,
+    caller: Caller,
 ) -> Result<Value, OrbitError> {
-    let input = verb.spec().parse_input(input)?;
-    match verb {
-        AutomationVerb::Explain => {
-            let definition = input.required_string("definition")?;
-            let subject = input.optional_string("subject")?;
-            let report = runtime.explain_automation(&definition, subject.as_deref())?;
-            serde_json::to_value(report)
-                .map_err(|error| OrbitError::Execution(format!("automation explain: {error}")))
-        }
-        AutomationVerb::ClearStall => {
-            let definition = input.required_string("definition")?;
-            let reason = input.required_string("reason")?;
-            let cleared = runtime.clear_condition_stall(&definition, &reason)?;
-            serde_json::to_value(cleared)
-                .map_err(|error| OrbitError::Execution(format!("automation clear-stall: {error}")))
-        }
-    }
+    automation::exec(
+        core,
+        Command::Operation(verb, Input::from_tool_entry(input, caller)),
+    )
+    .map(Outcome::into_value)
 }

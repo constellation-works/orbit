@@ -153,6 +153,9 @@ pub(super) fn exec(core: &Core, write: DashboardConfigWrite) -> Result<Outcome, 
             arguments,
             operator_session,
             host,
+            workspace: None,
+            machine_name: String::new(),
+            recorded_as: None,
         },
         move || {
             let result = match kind {

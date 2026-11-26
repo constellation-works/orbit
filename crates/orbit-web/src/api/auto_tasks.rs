@@ -1,8 +1,6 @@
 //! Auto-task inspection and definition controls for the dashboard.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -12,21 +10,21 @@ use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
-use orbit_core::application::auto_tasks::projection::AutoTaskListingProfile;
-use orbit_core::application::auto_tasks::{
-    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskToggleError,
-    AutoTaskToggleOutcome, AutoTaskToggleProfile,
+use orbit_core::app::DashboardCaller;
+use orbit_core::app::auto_task::{
+    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteProfile, AutoTaskDeleteRefusal,
+    AutoTaskToggleError, AutoTaskToggleOutcome, Command, DashboardWrite, DashboardWritten, Listing,
+    Outcome, exec, project_auto_task_delete_receipt,
 };
-use orbit_core::{OrbitError, OrbitRuntime, Task};
-use orbit_types::workflow::auto_task_tag;
+use orbit_core::{Core, OrbitError};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::map_runtime_error;
 use super::routines::{
-    OperationAudit, OperationsQuery, action_capability, authorization_denied, authorized_caller,
+    OperationsQuery, action_capability, authorization_denied, authorized_caller, dashboard_caller,
     explicit_workspace, host_cron_zone, named_entity_not_found, selection_conflict,
+    unexpected_outcome,
 };
 use super::{bad_request, blocking};
 use crate::state::DashboardState;
@@ -89,18 +87,33 @@ pub(super) async fn list_auto_tasks(
         let state = state.clone();
         let workspace = workspace.clone();
         move || {
-            Ok(match resolve_workspace(&state, &workspace) {
-                Ok((workspace_name, runtime)) => list_json(
-                    &runtime,
-                    &workspace,
-                    &workspace_name,
-                    generated_at,
-                    state.operator_session(),
+            let (workspace_name, core) = match resolve_workspace(&state, &workspace) {
+                Ok(resolved) => resolved,
+                Err(reason) => {
+                    return Ok(read_only_envelope(generated_at, Some(&workspace), &reason));
+                }
+            };
+            let listing = match exec(
+                &core,
+                Command::Listing {
                     include_inactive_plugins,
-                    state.env(),
-                )?,
-                Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
-            })
+                },
+            )? {
+                Outcome::Listing(listing) => listing,
+                Outcome::Value(_) | Outcome::Dashboard(_) => {
+                    return Err(OrbitError::Execution(
+                        "auto-task list answered with another command's outcome".to_string(),
+                    ));
+                }
+            };
+            Ok(list_json(
+                *listing,
+                &workspace,
+                &workspace_name,
+                generated_at,
+                state.operator_session(),
+                state.env(),
+            ))
         }
     })
     .await
@@ -121,53 +134,29 @@ pub(super) async fn create_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
-        Ok(runtime) => runtime,
+    let core = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(core) => core,
         Err(response) => return *response,
     };
-    let fields = Value::Object(body.fields);
-    let target = fields
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_owned();
-    let fields_blake3 = blake3::hash(fields.to_string().as_bytes())
-        .to_hex()
-        .to_string();
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        DASHBOARD_AUTO_TASK_CREATE.id,
-        target,
-        json!({"enabled": body.enabled, "fields_blake3": fields_blake3}),
-    );
-    let started = Instant::now();
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_CREATE, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, started).await;
-            return authorization_denied(denial);
-        }
-    };
-    let outcome = match blocking("auto-task create", {
-        let runtime = runtime.clone();
-        move || Ok(runtime.auto_task_create_from_fields(fields, body.enabled))
-    })
-    .await
-    {
-        Ok(outcome) => outcome,
+    let written = auto_task_write(
+        "auto-task create",
+        core,
+        dashboard_caller(&state, Some(&workspace), ""),
+        DashboardWrite::Create {
+            fields: Value::Object(body.fields),
+            enabled: body.enabled,
+        },
+    )
+    .await;
+    let outcome = match written {
+        Ok(DashboardWritten::Created(outcome)) => outcome,
+        Ok(_) => return unexpected_outcome("auto-task create"),
         Err(response) => return *response,
     };
     match outcome {
-        Ok(definition) => {
-            audit.succeeded(&caller, started).await;
-            (StatusCode::CREATED, Json(definition)).into_response()
-        }
+        Ok(definition) => (StatusCode::CREATED, Json(definition)).into_response(),
         Err(error) => {
             let message = error.to_string();
-            audit.failed(&caller, &message, started).await;
             match error {
                 OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => {
                     bad_request(message)
@@ -190,8 +179,9 @@ pub(super) async fn create_auto_task(
 
 /// `POST /api/auto-tasks/toggle` — set one definition's versioned `enabled` flag.
 ///
-/// The observed profile of the shared toggle command decides; this handler
-/// binds the operator, audits an attempted write and renders the outcome.
+/// The auto-task app binds the operator, decides with the observed profile
+/// of the shared toggle command and audits an attempted write; this handler
+/// renders the outcome.
 pub(super) async fn toggle_auto_task(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
@@ -201,38 +191,24 @@ pub(super) async fn toggle_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
-        Ok(runtime) => runtime,
+    let core = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(core) => core,
         Err(response) => return *response,
     };
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        "auto_task.toggle",
-        body.name.as_str(),
-        json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-    );
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
-        }
-    };
-    let started = Instant::now();
-    let outcome = match blocking("auto-task toggle", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        let profile = AutoTaskToggleProfile::Observed {
+    let written = auto_task_write(
+        "auto-task toggle",
+        core,
+        dashboard_caller(&state, Some(&workspace), ""),
+        DashboardWrite::Toggle {
+            name: body.name.clone(),
             expected_enabled: body.expected_enabled,
-        };
-        let enabled = body.enabled;
-        move || Ok(runtime.auto_task_toggle_command(&name, enabled, profile))
-    })
-    .await
-    {
-        Ok(outcome) => outcome,
+            enabled: body.enabled,
+        },
+    )
+    .await;
+    let outcome = match written {
+        Ok(DashboardWritten::Toggled(outcome)) => outcome,
+        Ok(_) => return unexpected_outcome("auto-task toggle"),
         Err(response) => return *response,
     };
     let updated = match outcome {
@@ -264,13 +240,8 @@ pub(super) async fn toggle_auto_task(
             );
         }
         Err(AutoTaskToggleError::Read(error)) => return map_runtime_error(error),
-        Err(AutoTaskToggleError::Write(error)) => {
-            let error_message = error.to_string();
-            audit.failed(&caller, &error_message, started).await;
-            return auto_task_control_error(error);
-        }
+        Err(AutoTaskToggleError::Write(error)) => return auto_task_control_error(error),
     };
-    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": updated.name,
         "enabled": updated.enabled,
@@ -290,8 +261,8 @@ pub(super) async fn mint_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
-        Ok(runtime) => runtime,
+    let core = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(core) => core,
         Err(response) => return *response,
     };
     if !body.acknowledge_unconditional {
@@ -304,47 +275,21 @@ pub(super) async fn mint_auto_task(
         )
             .into_response();
     }
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        "auto_task.mint",
-        body.name.as_str(),
-        json!({"acknowledge_unconditional": body.acknowledge_unconditional}),
-    );
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
-        }
-    };
-    let started = Instant::now();
-    let minted = match blocking("auto-task mint", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        move || Ok(runtime.auto_task_mint(&name))
-    })
-    .await
-    {
-        Ok(Ok(task)) => task,
-        Ok(Err(error)) => {
-            let error_message = error.to_string();
-            audit
-                .with_arguments(json!({"acknowledge_unconditional": true}))
-                .failed(&caller, &error_message, started)
-                .await;
-            return auto_task_control_error(error);
-        }
+    let written = auto_task_write(
+        "auto-task mint",
+        core,
+        dashboard_caller(&state, Some(&workspace), ""),
+        DashboardWrite::Mint {
+            name: body.name.clone(),
+        },
+    )
+    .await;
+    let minted = match written {
+        Ok(DashboardWritten::Minted(Ok(task))) => task,
+        Ok(DashboardWritten::Minted(Err(error))) => return auto_task_control_error(error),
+        Ok(_) => return unexpected_outcome("auto-task mint"),
         Err(response) => return *response,
     };
-    audit
-        .with_arguments(json!({
-            "acknowledge_unconditional": true,
-            "task_id": minted.id.to_string(),
-        }))
-        .succeeded(&caller, started)
-        .await;
     Json(json!({
         "name": body.name,
         "task_id": minted.id.to_string(),
@@ -369,58 +314,50 @@ pub(super) async fn delete_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
-        Ok(runtime) => runtime,
+    let core = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(core) => core,
         Err(response) => return *response,
     };
-    let reason = trimmed_delete_reason(body.reason.as_deref());
-    let arguments = json!({"reason": reason, "force": body.force});
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        "auto_task.delete",
-        body.name.as_str(),
-        arguments.clone(),
-    );
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_DELETE, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
-        }
-    };
-    let started = Instant::now();
-    let report = match blocking("auto-task delete", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        let reason = reason.clone();
-        let force = body.force;
-        move || {
-            Ok(runtime.auto_task_delete_command(AutoTaskDeleteParams {
-                name,
-                reason,
-                force,
-            }))
-        }
-    })
-    .await
-    {
-        Ok(Ok(report)) => report,
-        Ok(Err(error)) => {
-            let error_message = error.to_string();
-            audit.failed(&caller, &error_message, started).await;
-            return delete_refusal(&body.name, error);
-        }
+    let written = auto_task_write(
+        "auto-task delete",
+        core,
+        dashboard_caller(&state, Some(&workspace), ""),
+        DashboardWrite::Delete(AutoTaskDeleteParams {
+            name: body.name.clone(),
+            reason: trimmed_delete_reason(body.reason.as_deref()),
+            force: body.force,
+        }),
+    )
+    .await;
+    let report = match written {
+        Ok(DashboardWritten::Deleted(Ok(report))) => report,
+        Ok(DashboardWritten::Deleted(Err(error))) => return delete_refusal(&body.name, error),
+        Ok(_) => return unexpected_outcome("auto-task delete"),
         Err(response) => return *response,
     };
-    audit
-        .with_target(report.name.clone())
-        .succeeded(&caller, started)
-        .await;
-    match delete::project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Http) {
+    match project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Http) {
         Ok(receipt) => Json(receipt).into_response(),
         Err(error) => map_runtime_error(error),
+    }
+}
+
+/// Run one governed auto-task write on the blocking pool and return what the
+/// admitted write did, or the response that already answers the request.
+pub(super) async fn auto_task_write(
+    label: &'static str,
+    core: Arc<Core>,
+    caller: DashboardCaller,
+    write: DashboardWrite,
+) -> Result<DashboardWritten, Box<Response>> {
+    match blocking(label, move || {
+        exec(&core, Command::Dashboard(caller, write))
+    })
+    .await?
+    {
+        Outcome::Dashboard(written) => {
+            (*written).map_err(|denial| Box::new(authorization_denied(denial)))
+        }
+        Outcome::Value(_) | Outcome::Listing(_) => Err(Box::new(unexpected_outcome(label))),
     }
 }
 
@@ -474,7 +411,7 @@ pub(super) fn auto_task_control_error(error: orbit_core::OrbitError) -> Response
 pub(super) async fn resolve_workspace_blocking(
     state: &DashboardState,
     workspace: &str,
-) -> Result<Arc<OrbitRuntime>, Box<Response>> {
+) -> Result<Arc<Core>, Box<Response>> {
     let state = state.clone();
     let workspace = workspace.to_string();
     match blocking("resolve workspace", {
@@ -483,16 +420,18 @@ pub(super) async fn resolve_workspace_blocking(
     })
     .await
     {
-        Ok(Ok((_, runtime))) => Ok(runtime),
+        Ok(Ok((_, core))) => Ok(core),
         Ok(Err(reason)) => Err(Box::new(selection_conflict("workspace_mismatch", reason))),
         Err(response) => Err(response),
     }
 }
 
+/// The workspace's name and its app entry, when `workspace` selects one
+/// concrete active workspace.
 pub(super) fn resolve_workspace(
     state: &DashboardState,
     workspace: &str,
-) -> Result<(String, Arc<OrbitRuntime>), String> {
+) -> Result<(String, Arc<Core>), String> {
     let pinned = state.pin();
     let entry = pinned.entries().iter().find(|entry| entry.id == workspace);
     match entry {
@@ -502,8 +441,8 @@ pub(super) fn resolve_workspace(
         Some(entry) if !entry.active => Err(format!(
             "workspace '{workspace}' is inactive; select an active workspace"
         )),
-        Some(entry) => match pinned.runtime_for(workspace) {
-            Ok(runtime) => Ok((entry.name.clone(), runtime)),
+        Some(entry) => match pinned.core_for(workspace) {
+            Ok(core) => Ok((entry.name.clone(), core)),
             Err(_) => Err(format!(
                 "workspace '{workspace}' is not a concrete active selection"
             )),
@@ -535,62 +474,17 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
 /// `inactive_plugin_count` counts the definitions whose seeding plugin is off
 /// in this workspace whether or not they are listed, so the panel can offer
 /// to show them; they never enter the listed counts or next-mint summary.
+/// The auto-task app reads the listing; this renders it beside what the
+/// session may do.
 fn list_json(
-    runtime: &OrbitRuntime,
+    listing: Listing,
     workspace: &str,
     workspace_name: &str,
     generated_at: DateTime<Utc>,
     operator_session: bool,
-    include_inactive_plugins: bool,
     env: &orbit_common::Env,
-) -> Result<Value, orbit_core::OrbitError> {
-    let now = Utc::now();
-    let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
-    // One freshness pass for the request, with no task-body hydration, that
-    // reads only the tasks carrying a listed definition's tag: the rest of
-    // the workspace never leaves the index [ORB-21824]. The metadata listing
-    // is newest first, exactly as the per-tag listing was.
-    let tags = listing
-        .rows
-        .iter()
-        .map(|row| (auto_task_tag(&row.listed.definition.name), Vec::new()))
-        .collect::<BTreeMap<_, Vec<&Task>>>();
-    let tasks = if tags.is_empty() {
-        Ok(Vec::new())
-    } else {
-        runtime.list_task_metadata_with_any_tag(&tags.keys().cloned().collect())
-    };
-    let mut instances = tags;
-    for task in tasks.as_ref().map_or(&[][..], Vec::as_slice) {
-        for tag in &task.tags {
-            if let Some(group) = instances.get_mut(tag) {
-                group.push(task);
-            }
-        }
-    }
-    let definitions = listing
-        .rows
-        .iter()
-        .map(|row| {
-            runtime.project_auto_task_listing_row(
-                row,
-                AutoTaskListingProfile::Http {
-                    minted: tasks.as_ref().map(|_| {
-                        instances
-                            .get(&auto_task_tag(&row.listed.definition.name))
-                            .map_or(&[][..], Vec::as_slice)
-                    }),
-                    now,
-                },
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let role_refusal = runtime
-        .stored()
-        .task()
-        .writer()
-        .err()
-        .map(|error| error.to_string());
+) -> Value {
+    let role_refusal = listing.role_refusal;
     let create_capability = role_refusal.as_deref().map_or_else(
         || action_capability(&DASHBOARD_AUTO_TASK_CREATE, operator_session),
         |reason| json!({"authorized": false, "reason": reason}),
@@ -615,7 +509,7 @@ fn list_json(
         .is_ok()
         && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
         && role_refusal.is_none();
-    Ok(json!({
+    json!({
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "workspace_name": workspace_name,
@@ -630,12 +524,12 @@ fn list_json(
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "cron_zone": host_cron_zone(env),
-        "definitions": definitions,
+        "definitions": listing.definitions,
         "inactive_plugin_count": listing.inactive_plugin_count,
         "cursor_state_error": listing.cursor_state_error,
         "load_errors": listing.load_errors.iter().map(|error| json!({
             "path": error.path.as_ref().map(|path| path.display().to_string()),
             "message": error.message,
         })).collect::<Vec<_>>(),
-    }))
+    })
 }

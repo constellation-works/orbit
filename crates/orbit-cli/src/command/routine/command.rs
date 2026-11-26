@@ -3,17 +3,18 @@
 //! Every subcommand operates on the global registry and host-local scheduler
 //! state, so the parent command dispatches without a workspace runtime (see
 //! `main.rs`), like `orbit sweep` itself. The exceptions are `enable` and
-//! `disable`: they are governed operator-only operations, so they open a
-//! runtime for the authorization and audit chokepoint, and change only a
-//! routine of that runtime's workspace so the audit row names the workspace
-//! whose definition changed.
+//! `disable`: they are governed operator-only operations that run through
+//! the routine app's `exec`, so they open a workspace for its authorization
+//! and audit, and change only a routine of that workspace so the audit row
+//! names the workspace whose definition changed.
 
 use std::ffi::OsStr;
 use std::path::Path;
 
 use clap::{Args, Subcommand};
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 
 use super::breaker::RoutineBreakerArgs;
 use super::init::RoutineInitArgs;
@@ -53,20 +54,20 @@ pub struct RoutineCommand {
 
 impl RoutineCommand {
     /// Resolve the selected global root once for every routine subcommand;
-    /// none may bootstrap a workspace from the caller's cwd. `runtime` is the
-    /// workspace runtime the governed `enable`/`disable` verbs were opened
-    /// with; they refuse a routine that belongs to another workspace.
+    /// none may bootstrap a workspace from the caller's cwd. `core` is the
+    /// workspace the governed `enable`/`disable` verbs were opened with; they
+    /// refuse a routine that belongs to another workspace.
     pub fn execute_without_runtime(
         self,
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-        runtime: Option<&OrbitRuntime>,
+        core: Option<&Core>,
         env: &Env,
         resolved: &Resolved,
     ) -> CommandOut {
         let global_root = selected_global_root(root_override, env, resolved)?;
         self.command
-            .execute_without_runtime(&global_root, workspace_selector, runtime)
+            .execute_without_runtime(&global_root, workspace_selector, core)
     }
 }
 
@@ -81,7 +82,7 @@ fn selected_global_root(
         .is_some_and(|root| !root.trim().is_empty());
     if root_override.is_some() || has_env_override {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)
+        return RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, root_override)
             .map(|roots| roots.global_root);
     }
     resolved.global_orbit_dir().map(Path::to_path_buf)
@@ -112,13 +113,13 @@ impl RoutineSubcommand {
         self,
         global_root: &Path,
         workspace_selector: Option<&str>,
-        runtime: Option<&OrbitRuntime>,
+        core: Option<&Core>,
     ) -> CommandOut {
         match self {
             Self::List(args) => args.execute_without_runtime(global_root, workspace_selector),
             Self::Show(args) => args.execute_without_runtime(global_root),
-            Self::Enable(args) => args.execute_without_runtime(global_root, runtime),
-            Self::Disable(args) => args.execute_without_runtime(global_root, runtime),
+            Self::Enable(args) => args.execute_without_runtime(global_root, core),
+            Self::Disable(args) => args.execute_without_runtime(global_root, core),
             Self::Pause(args) => args.execute_without_runtime(global_root),
             Self::Resume(args) => args.execute_without_runtime(global_root),
             Self::Breaker(args) => args.execute_without_runtime(global_root),
