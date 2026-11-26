@@ -11,12 +11,12 @@ use crate::admission_test_support::{
 };
 
 use orbit_automation::review::REBASED_CLEAN_ASSURANCE;
-use orbit_store::TaskCommitBoundary;
 use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
     AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ExecutionLocation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_store::{AdmissionContext, TaskCommitBoundary};
 use orbit_types::task::{
     LightDeliveryDecision, LightDeliveryJudgement, SKIP_REVIEW_TAG, SKIP_VALIDATION_TAG,
     TaskEnvelopeV2,
@@ -1328,12 +1328,14 @@ fn light_base_update(tag: LightTag, outside: bool) {
             }),
             &request,
             &AdmissionOrdering::default(),
-            "test",
-            &repo,
-            &repo.join(".orbit"),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &|_, _, _| Ok(None),
+            AdmissionContext {
+                owner_version: "test",
+                repo_root: &repo,
+                orbit_dir: &repo.join(".orbit"),
+                admission_holds: &BTreeMap::new(),
+                held: &BTreeMap::new(),
+                validation_hold: &|_, _, _| Ok(None),
+            },
         )
         .expect("admit")
     else {

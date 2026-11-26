@@ -20,6 +20,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::super::TaskCommitBoundary;
+use super::super::admission::AdmissionContext;
 use super::super::apply::slow_apply;
 use super::super::boundary::section_probe::{SECTIONS, SectionCost};
 use crate::Store;
@@ -162,12 +163,14 @@ impl Owner {
                 }),
                 &request,
                 &AdmissionOrdering::default(),
-                "test",
-                &self.repo,
-                &self.orbit_dir,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &|_, _, _| Ok(None),
+                AdmissionContext {
+                    owner_version: "test",
+                    repo_root: &self.repo,
+                    orbit_dir: &self.orbit_dir,
+                    admission_holds: &BTreeMap::new(),
+                    held: &BTreeMap::new(),
+                    validation_hold: &|_, _, _| Ok(None),
+                },
             )
             .expect("admit");
         let AdmissionLookup::Found { receipt, .. } = lookup else {

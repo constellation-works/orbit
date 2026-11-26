@@ -9,19 +9,12 @@ use orbit_types::workflow::handoff::LandingRetryRequest;
 use orbit_types::workflow::{PrBaseUpdateReservation, handoff};
 
 use super::super::super::TaskCommitBoundary;
-use super::super::super::landing::LandingStop;
+use super::super::super::landing::{
+    ExternalMerge, LandingCompletion, LandingRetryAttach, LandingStop, LandingStopRequest,
+};
 use super::super::{encode, invalid};
 use super::decide::ClaimDecision;
 use crate::contract::*;
-
-/// What an operator reports of a pull request merged outside Orbit.
-pub(super) struct ExternalMerge<'a> {
-    pub(super) pull_request: u64,
-    pub(super) base_branch: &'a str,
-    pub(super) merge_commit: &'a str,
-    pub(super) note: &'a str,
-    pub(super) verified_candidate_head: Option<&'a str>,
-}
 
 /// A landing history event an operator asks the claim to record.
 pub(super) struct LandingHistoryRecord<'a> {
@@ -130,9 +123,11 @@ impl TaskCommitBoundary {
         self.attach_landing_retry(
             auth,
             state,
-            handoff_id,
-            request_key,
-            job_run_id,
+            LandingRetryAttach {
+                handoff_id,
+                request_key,
+                run_id: job_run_id,
+            },
             params,
             handoff_effects,
         )?;
@@ -292,9 +287,11 @@ impl TaskCommitBoundary {
         self.complete_landing_attempt(
             auth,
             state,
-            handoff_id,
-            proof,
-            &crate::boundary::v2::task_history_from_events(bundle.events.clone()),
+            LandingCompletion {
+                handoff_id,
+                evidence: proof,
+                history: &crate::boundary::v2::task_history_from_events(bundle.events.clone()),
+            },
             params,
             handoff_effects,
         )?;
@@ -325,10 +322,7 @@ impl TaskCommitBoundary {
             auth,
             state,
             handoff_id,
-            merge.pull_request,
-            merge.base_branch,
-            merge.merge_commit,
-            merge.verified_candidate_head,
+            &merge,
             &crate::boundary::v2::task_history_from_events(bundle.events.clone()),
         )?;
         if self.handoff_authority_revoked(handoff_id)? {
@@ -364,10 +358,12 @@ impl TaskCommitBoundary {
         let stop = self.stop_landing_attempt(
             auth,
             &decision.state,
-            handoff_id,
-            reason,
-            repairable,
-            requeue,
+            LandingStopRequest {
+                handoff_id,
+                reason,
+                repairable,
+                requeue,
+            },
             &mut decision.params,
             &mut decision.handoff_effects,
         )?;

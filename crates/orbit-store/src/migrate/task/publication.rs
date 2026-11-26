@@ -432,7 +432,6 @@ fn validate_manifest_uniqueness(
 /// it is recovered under the exclusive lock between attempts, never nested
 /// inside the shared one. Returns the canonicalized manifest entries whose
 /// bytes, for `include`, now live under `target`.
-#[allow(clippy::too_many_arguments)]
 fn capture_task_projection(
     task_id: &str,
     source: &Path,

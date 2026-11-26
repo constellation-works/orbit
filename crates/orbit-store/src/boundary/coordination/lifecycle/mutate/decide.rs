@@ -8,9 +8,10 @@ use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::TaskHandoff;
 
 use super::super::super::TaskCommitBoundary;
+use super::super::super::landing::ExternalMerge;
 use super::super::codec::{HANDOFF_SETTLEMENT, LEAF_RUN_EVIDENCE};
 use super::super::{decode_state, invalid, row};
-use super::landing::{ExternalMerge, LandingHistoryRecord};
+use super::landing::LandingHistoryRecord;
 use crate::boundary::v2_bundle::TaskBundleV2;
 use crate::contract::*;
 

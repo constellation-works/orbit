@@ -561,12 +561,14 @@ impl Coordinated {
             &AdmissionIdentity::trusted_remote(location),
             request,
             ordering,
-            "test",
-            self.orbit_dir.parent().unwrap(),
-            &self.orbit_dir,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &|_, _, _| Ok(None),
+            AdmissionContext {
+                owner_version: "test",
+                repo_root: self.orbit_dir.parent().unwrap(),
+                orbit_dir: &self.orbit_dir,
+                admission_holds: &BTreeMap::new(),
+                held: &BTreeMap::new(),
+                validation_hold: &|_, _, _| Ok(None),
+            },
         )
     }
     fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {

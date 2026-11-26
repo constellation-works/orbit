@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::TaskCommitBoundary;
 use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionTaskGuidance,
     ExecutorCapability, JobRunQuery,
 };
+use orbit_store::{AdmissionContext, TaskCommitBoundary};
 use orbit_types::task::{NO_DRAIN_TAG, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{
     CLAIMED_MODE_DENIED_TOOLS, is_claimed_leaf_reachable_tool, is_claimed_owner_tool,
@@ -265,54 +265,58 @@ impl OrbitRuntime {
                 honor_owner_local_perf_lane: self.requester_honors_owner_local_perf_lane(identity),
                 owner_local_carriers,
             },
-            owner_binary_version(),
-            &self.paths().repo_root,
-            &self.data_root(),
-            &admission_holds,
-            &self.baseline_held_tasks(&backlog, &history_by_task),
-            &|task, comments, history| {
-                if let Some(hold) = no_drain_pull_hold(task) {
-                    return Ok(Some(hold));
-                }
-                // Re-read under the section: the crew may have been changed
-                // to a human crew since the backlog read.
-                if let Some(hold) = human_crew_pull_hold(self, task) {
-                    return Ok(Some(hold));
-                }
-                // Re-read under the section: a `not_before` set after the
-                // backlog read above still holds the candidate.
-                if let Some(hold) =
-                    crate::application::task::schedule_hold_in(task, chrono::Utc::now(), &|| {
-                        Ok(history.to_vec())
-                    })?
-                {
-                    return Ok(Some(hold.detail()));
-                }
-                // Re-read under the section: the step may have expired or
-                // its definition held since the backlog read.
-                if let Some(hold) =
-                    crate::application::auto_tasks::job_step::step_bound_admission_hold(
-                        self,
-                        task,
-                        &|| Ok(history.to_vec()),
-                    )
-                {
-                    return Ok(Some(hold));
-                }
-                if identity.is_remote()
-                    && let Some(why) = claimed_tool_hold(self, task)
-                {
-                    return Ok(Some(why));
-                }
-                match self.pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))? {
-                    Some(PilotAdmissionHold::StaleAssessment(detail)) => Ok(Some(detail)),
-                    Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
-                    Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
-                    Some(PilotAdmissionHold::NativeOs(hold)) => {
-                        Ok(hold.wait_on(task, request.os, machine_id))
+            AdmissionContext {
+                owner_version: owner_binary_version(),
+                repo_root: &self.paths().repo_root,
+                orbit_dir: &self.data_root(),
+                admission_holds: &admission_holds,
+                held: &self.baseline_held_tasks(&backlog, &history_by_task),
+                validation_hold: &|task, comments, history| {
+                    if let Some(hold) = no_drain_pull_hold(task) {
+                        return Ok(Some(hold));
                     }
-                    _ => Ok(None),
-                }
+                    // Re-read under the section: the crew may have been changed
+                    // to a human crew since the backlog read.
+                    if let Some(hold) = human_crew_pull_hold(self, task) {
+                        return Ok(Some(hold));
+                    }
+                    // Re-read under the section: a `not_before` set after the
+                    // backlog read above still holds the candidate.
+                    if let Some(hold) = crate::application::task::schedule_hold_in(
+                        task,
+                        chrono::Utc::now(),
+                        &|| Ok(history.to_vec()),
+                    )? {
+                        return Ok(Some(hold.detail()));
+                    }
+                    // Re-read under the section: the step may have expired or
+                    // its definition held since the backlog read.
+                    if let Some(hold) =
+                        crate::application::auto_tasks::job_step::step_bound_admission_hold(
+                            self,
+                            task,
+                            &|| Ok(history.to_vec()),
+                        )
+                    {
+                        return Ok(Some(hold));
+                    }
+                    if identity.is_remote()
+                        && let Some(why) = claimed_tool_hold(self, task)
+                    {
+                        return Ok(Some(why));
+                    }
+                    match self.pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))? {
+                        Some(PilotAdmissionHold::StaleAssessment(detail)) => Ok(Some(detail)),
+                        Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
+                        Some(PilotAdmissionHold::OperatorValidation(hold)) => {
+                            Ok(Some(hold.detail()))
+                        }
+                        Some(PilotAdmissionHold::NativeOs(hold)) => {
+                            Ok(hold.wait_on(task, request.os, machine_id))
+                        }
+                        _ => Ok(None),
+                    }
+                },
             },
             &|task| self.fresh_claim_crew_task(task, request),
             &|task| {

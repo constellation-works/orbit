@@ -2,20 +2,32 @@
 //! decides each candidate.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
 
 use super::super::TaskCommitBoundary;
 use super::super::lifecycle::fresh_offer_history;
+use super::super::repair::RepairAdmission;
 use super::super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use super::{
-    ADMISSION_RESERVATION_TTL_SECONDS, AdmissionGuidanceCapture, CLAIM_KIND, RECEIPT_KIND,
-    StoredReceipt, ValidationHold, admission_refusal, decode, digest, encode, receipt_key, row,
+    ADMISSION_RESERVATION_TTL_SECONDS, AdmissionContext, AdmissionGuidanceCapture, CLAIM_KIND,
+    RECEIPT_KIND, StoredReceipt, admission_refusal, decode, digest, encode, receipt_key, row,
 };
 use crate::boundary::v2::{task_comment_from_row, task_from_bundle, task_history_from_events};
 use crate::contract::*;
+
+/// One admission decision's inputs, shared by the partition-scoped and the
+/// host-wide section.
+#[derive(Clone, Copy)]
+struct LockedAdmission<'a> {
+    context: AdmissionContext<'a>,
+    snapshot: &'a AdmissionSnapshot,
+    ordering: &'a AdmissionOrdering,
+    census: Option<&'a ExecutorCensusEntry>,
+    effective_task: &'a dyn Fn(&Task) -> Result<Task, OrbitError>,
+    guidance_capture: &'a AdmissionGuidanceCapture<'a>,
+}
 
 impl TaskCommitBoundary {
     /// One internal owner admission. Identity and resolved ship authority are
@@ -37,28 +49,12 @@ impl TaskCommitBoundary {
     /// partition-scoped section stops at that read, before anything is
     /// written, and the decision is taken again host-wide.
     ///
-    /// `admission_holds` maps each task held by a live owner-local delivery,
-    /// a successful pilot preparation or a current pilot finding to its
-    /// trusted diagnostic. It is deferred even while it is still `backlog`: a
-    /// local drain's gate waiting for context locks has neither moved the task
-    /// nor reserved its footprint yet, so status and reservations alone would
-    /// hand it out a second time [ORB-13918].
-    ///
-    /// `validation_hold` re-checks assessment-scoped holds inside the section
-    /// for each candidate about to be committed, given the comments and
-    /// history of the bundle read there; it must not read the task store
-    /// itself. A pilot apply that lands after the caller computed
-    /// `admission_holds` therefore cannot leave a newly held task claimed from
-    /// an older snapshot.
+    /// The holds and the owner's workspace come in `context`
+    /// ([`AdmissionContext`]).
     ///
     /// A footprint the owner's local drain admitted inside this same section
     /// is protected as soon as that section ends, before its gate reserves
     /// it, so a grant can never take it in between [ORB-15514].
-    ///
-    /// `held` maps each `backlog` task the owner is withholding for a red
-    /// base to why [ORB-14258]. Its last delivery failed a required command
-    /// the base fails the same way; it is deferred until the held command
-    /// passes on a new base tip, as it would be on the owner's own drain.
     ///
     /// `ordering` supplies expiring frozen-batch tasks and the validation
     /// gates every receipt captures [ORB-15622]. With `repairs_only` it
@@ -69,29 +65,19 @@ impl TaskCommitBoundary {
     /// can run. A remote requester's census row is upserted in the same
     /// commit as its receipt; the admitted receipt records the task's
     /// affinity class and the census it was ordered against.
-    #[allow(clippy::too_many_arguments)]
     pub fn admit_task(
         &self,
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
         ordering: &AdmissionOrdering,
-        owner_version: &str,
-        repo_root: &Path,
-        orbit_dir: &Path,
-        admission_holds: &BTreeMap<String, String>,
-        held: &BTreeMap<String, String>,
-        validation_hold: &ValidationHold<'_>,
+        context: AdmissionContext<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
-        self.admit_task_with_guidance(
+        self.admit_task_with_crew_guidance(
             identity,
             request,
             ordering,
-            owner_version,
-            repo_root,
-            orbit_dir,
-            admission_holds,
-            held,
-            validation_hold,
+            context,
+            &|task| Ok(task.clone()),
             &|task| {
                 Ok(AdmissionTaskGuidance {
                     experiments: orbit_types::workflow::CapturedExperiments {
@@ -104,65 +90,21 @@ impl TaskCommitBoundary {
         )
     }
 
-    /// Admission with guidance and the task's stored crew identity.
-    /// Existing callers retain their policy; owners that resolve a fresh
-    /// crew use [`Self::admit_task_with_crew_guidance`].
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "public signature kept for existing callers; the crew-aware admit_task_with_crew_guidance adds the effective_task policy callback"
-    )]
-    pub fn admit_task_with_guidance(
-        &self,
-        identity: &AdmissionIdentity,
-        request: &AdmissionRequest,
-        ordering: &AdmissionOrdering,
-        owner_version: &str,
-        repo_root: &Path,
-        orbit_dir: &Path,
-        admission_holds: &BTreeMap<String, String>,
-        held: &BTreeMap<String, String>,
-        validation_hold: &ValidationHold<'_>,
-        guidance_capture: &AdmissionGuidanceCapture<'_>,
-    ) -> Result<AdmissionLookup, OrbitError> {
-        self.admit_task_with_crew_guidance(
-            identity,
-            request,
-            ordering,
-            owner_version,
-            repo_root,
-            orbit_dir,
-            admission_holds,
-            held,
-            validation_hold,
-            &|task| Ok(task.clone()),
-            guidance_capture,
-        )
-    }
-
     /// Admission with the owner's task-guidance callback, before the
     /// receipt is written. The callbacks must not acquire task admission locks.
     /// `effective_task` supplies the owner's fresh crew policy for screening
     /// and the captured summary, without changing the stored task. It runs
     /// again on the locked candidate; repair receipts retain their contract.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "admission borrows identity, ordering, holds and guidance together so the receipt records one snapshot"
-    )]
     pub fn admit_task_with_crew_guidance(
         &self,
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
         ordering: &AdmissionOrdering,
-        owner_version: &str,
-        repo_root: &Path,
-        orbit_dir: &Path,
-        admission_holds: &BTreeMap<String, String>,
-        held: &BTreeMap<String, String>,
-        validation_hold: &ValidationHold<'_>,
+        context: AdmissionContext<'_>,
         effective_task: &dyn Fn(&Task) -> Result<Task, OrbitError>,
         guidance_capture: &AdmissionGuidanceCapture<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
-        validate_request(identity, request, owner_version)?;
+        validate_request(identity, request, context.owner_version)?;
         let mut snapshot = self.admission_snapshot(ordering)?;
         if ordering.repairs_only {
             snapshot.backlog.clear();
@@ -175,23 +117,15 @@ impl TaskCommitBoundary {
             run_id: request.run_context.run_id.clone(),
             seen_at: chrono::Utc::now(),
         });
-        let admit = |reach| {
-            self.admit_locked(
-                identity,
-                request,
-                repo_root,
-                orbit_dir,
-                &snapshot,
-                admission_holds,
-                held,
-                validation_hold,
-                effective_task,
-                guidance_capture,
-                ordering,
-                census.as_ref(),
-                reach,
-            )
+        let section = LockedAdmission {
+            context,
+            snapshot: &snapshot,
+            ordering,
+            census: census.as_ref(),
+            effective_task,
+            guidance_capture,
         };
+        let admit = |reach| self.admit_locked(identity, request, section, reach);
         if let Some(lookup) = self.with_admission(|| admit(DependencyReach::Partition))? {
             return Ok(lookup);
         }
@@ -199,23 +133,29 @@ impl TaskCommitBoundary {
             .ok_or_else(|| OrbitError::Store("a host-wide admission refused a dependency".into()))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn admit_locked(
         &self,
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
-        repo_root: &Path,
-        orbit_dir: &Path,
-        snapshot: &AdmissionSnapshot,
-        admission_holds: &BTreeMap<String, String>,
-        held: &BTreeMap<String, String>,
-        validation_hold: &ValidationHold<'_>,
-        effective_task: &dyn Fn(&Task) -> Result<Task, OrbitError>,
-        guidance_capture: &AdmissionGuidanceCapture<'_>,
-        ordering: &AdmissionOrdering,
-        census: Option<&ExecutorCensusEntry>,
+        section: LockedAdmission<'_>,
         reach: DependencyReach,
     ) -> Result<Option<AdmissionLookup>, OrbitError> {
+        let LockedAdmission {
+            context:
+                AdmissionContext {
+                    repo_root,
+                    orbit_dir,
+                    admission_holds,
+                    held,
+                    validation_hold,
+                    ..
+                },
+            snapshot,
+            ordering,
+            census,
+            effective_task,
+            guidance_capture,
+        } = section;
         let executor_host_os = &ordering.executor_host_os;
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
@@ -292,12 +232,14 @@ impl TaskCommitBoundary {
         // it is offered before any backlog candidate [ORB-14261].
         let Some(repaired) = self.admit_repair_locked(
             &screen,
-            &key,
-            orbit_dir,
             &in_flight.tasks,
             &mut receipt,
-            guidance_capture,
-            reach,
+            RepairAdmission {
+                receipt_key: &key,
+                orbit_dir,
+                guidance_capture,
+                reach,
+            },
         )?
         else {
             return Ok(None);

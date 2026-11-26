@@ -18,13 +18,13 @@ use orbit_core::runtime::task_pr_forge::{
 };
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::TaskCommitBoundary;
 use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRunContext,
     AdmissionShipContract, ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun,
     ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_store::{AdmissionContext, TaskCommitBoundary};
 use orbit_types::task::ExternalRef;
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
@@ -550,12 +550,14 @@ impl Fixture {
                 &identity,
                 &request,
                 &AdmissionOrdering::default(),
-                "test",
-                &repo,
-                &repo.join(".orbit"),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &|_, _, _| Ok(None),
+                AdmissionContext {
+                    owner_version: "test",
+                    repo_root: &repo,
+                    orbit_dir: &repo.join(".orbit"),
+                    admission_holds: &BTreeMap::new(),
+                    held: &BTreeMap::new(),
+                    validation_hold: &|_, _, _| Ok(None),
+                },
             )
             .unwrap()
         else {

@@ -20,7 +20,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 pub use refusal::admission_refusal;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// The in-section re-check of assessment-scoped holds a caller gives
@@ -32,6 +32,43 @@ pub type ValidationHold<'a> =
 /// Owner callback invoked only for the selected task, before claim persistence.
 pub type AdmissionGuidanceCapture<'a> =
     dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
+
+/// What an owner supplies to [`TaskCommitBoundary::admit_task`] besides the
+/// request and its ordering: the owner's version and workspace, and the holds
+/// that defer a task.
+///
+/// `admission_holds` maps each task held by a live owner-local delivery, a
+/// successful pilot preparation or a current pilot finding to its trusted
+/// diagnostic. It is deferred even while it is still `backlog`: a local
+/// drain's gate waiting for context locks has neither moved the task nor
+/// reserved its footprint yet, so status and reservations alone would hand it
+/// out a second time [ORB-13918].
+///
+/// `held` maps each `backlog` task the owner is withholding for a red base to
+/// why [ORB-14258]. Its last delivery failed a required command the base
+/// fails the same way; it is deferred until the held command passes on a new
+/// base tip, as it would be on the owner's own drain.
+///
+/// `validation_hold` re-checks assessment-scoped holds inside the section for
+/// each candidate about to be committed, given the comments and history of
+/// the bundle read there; it must not read the task store itself. A pilot
+/// apply that lands after the caller computed `admission_holds` therefore
+/// cannot leave a newly held task claimed from an older snapshot.
+#[derive(Clone, Copy)]
+pub struct AdmissionContext<'a> {
+    /// The only caller version the owner admits.
+    pub owner_version: &'a str,
+    /// The owner's repository root.
+    pub repo_root: &'a Path,
+    /// The owner's `.orbit` directory.
+    pub orbit_dir: &'a Path,
+    /// Tasks deferred by a live owner-local delivery or a pilot finding.
+    pub admission_holds: &'a BTreeMap<String, String>,
+    /// `backlog` tasks withheld for a red base.
+    pub held: &'a BTreeMap<String, String>,
+    /// The in-section re-check of assessment-scoped holds.
+    pub validation_hold: &'a ValidationHold<'a>,
+}
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";

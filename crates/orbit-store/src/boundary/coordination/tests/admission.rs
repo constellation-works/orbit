@@ -25,7 +25,7 @@ use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskS
 use tempfile::TempDir;
 
 use super::super::TaskCommitBoundary;
-use super::super::admission::ValidationHold;
+use super::super::admission::{AdmissionContext, ValidationHold};
 use super::super::boundary::section_probe::{SECTIONS, SectionCost};
 use super::super::selection::after_selection;
 use crate::Store;
@@ -188,12 +188,14 @@ impl Owner {
                 }),
                 &request(request_id),
                 &AdmissionOrdering::default(),
-                "test",
-                &self.repo,
-                &self.orbit_dir,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                hold,
+                AdmissionContext {
+                    owner_version: "test",
+                    repo_root: &self.repo,
+                    orbit_dir: &self.orbit_dir,
+                    admission_holds: &BTreeMap::new(),
+                    held: &BTreeMap::new(),
+                    validation_hold: hold,
+                },
             )
             .expect("admit");
         let AdmissionLookup::Found { receipt, .. } = lookup else {

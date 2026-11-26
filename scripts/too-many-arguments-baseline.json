@@ -8,7 +8,7 @@
     "orbit-exec": 2,
     "orbit-runtime": 6,
     "orbit-search": 1,
-    "orbit-store": 12,
+    "orbit-store": 0,
     "orbit-web": 0
   },
   "schema_version": 1

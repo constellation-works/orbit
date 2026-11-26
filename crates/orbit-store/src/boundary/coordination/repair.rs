@@ -80,6 +80,14 @@ struct RepairCandidate<'a> {
     repair: ClaimRepair,
 }
 
+/// Where one admission section stands when it offers a pending repair.
+pub(super) struct RepairAdmission<'a> {
+    pub(super) receipt_key: &'a str,
+    pub(super) orbit_dir: &'a Path,
+    pub(super) guidance_capture: &'a super::admission::AdmissionGuidanceCapture<'a>,
+    pub(super) reach: DependencyReach,
+}
+
 impl TaskCommitBoundary {
     /// Admit the first pending repair this pull may take, as a new claim.
     ///
@@ -89,20 +97,19 @@ impl TaskCommitBoundary {
     /// Pending repairs this executor may not take, or cannot run, are reported
     /// on `receipt` and left for one that can. Caller holds the admission
     /// boundary.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mirrors the admission section state passed by admit_locked plus DependencyReach"
-    )]
     pub(super) fn admit_repair_locked(
         &self,
         screen: &Screen<'_>,
-        receipt_key: &str,
-        orbit_dir: &Path,
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
-        guidance_capture: &super::admission::AdmissionGuidanceCapture<'_>,
-        reach: DependencyReach,
+        admission: RepairAdmission<'_>,
     ) -> Result<Option<bool>, OrbitError> {
+        let RepairAdmission {
+            receipt_key,
+            orbit_dir,
+            guidance_capture,
+            reach,
+        } = admission;
         let candidates = self.repair_candidates(screen, tasks, receipt)?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {

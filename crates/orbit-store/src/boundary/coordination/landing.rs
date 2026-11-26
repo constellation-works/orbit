@@ -25,6 +25,39 @@ const ATTEMPT: &str = "distributed-landing-attempt-v1";
 const HISTORY: &str = "distributed-landing-attempt-history-v1";
 const RETRY: &str = "distributed-landing-retry-v1";
 
+/// What an operator reports of a pull request merged outside Orbit.
+#[derive(Clone, Copy)]
+pub(super) struct ExternalMerge<'a> {
+    pub(super) pull_request: u64,
+    pub(super) base_branch: &'a str,
+    pub(super) merge_commit: &'a str,
+    pub(super) note: &'a str,
+    pub(super) verified_candidate_head: Option<&'a str>,
+}
+
+/// The reserved retry a landing job attaches to, and the job run that took it.
+pub(super) struct LandingRetryAttach<'a> {
+    pub(super) handoff_id: &'a str,
+    pub(super) request_key: &'a str,
+    pub(super) run_id: &'a str,
+}
+
+/// An authorized landing's completion: the verified merge evidence and the
+/// task history it is judged against.
+pub(super) struct LandingCompletion<'a> {
+    pub(super) handoff_id: &'a str,
+    pub(super) evidence: &'a str,
+    pub(super) history: &'a [TaskHistoryEntry],
+}
+
+/// Why a landing stopped, and what becomes of its claim.
+pub(super) struct LandingStopRequest<'a> {
+    pub(super) handoff_id: &'a str,
+    pub(super) reason: &'a str,
+    pub(super) repairable: bool,
+    pub(super) requeue: bool,
+}
+
 impl TaskCommitBoundary {
     /// The immutable operator receipt for this handoff and request key.
     pub fn landing_retry_receipt(
@@ -86,17 +119,19 @@ impl TaskCommitBoundary {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn attach_landing_retry(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
-        handoff_id: &str,
-        request_key: &str,
-        run_id: &str,
+        retry: LandingRetryAttach<'_>,
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
+        let LandingRetryAttach {
+            handoff_id,
+            request_key,
+            run_id,
+        } = retry;
         let receipt: LandingRetryReceipt = decode(
             &self
                 .coordination_row(RETRY, &retry_id(handoff_id, request_key))?
@@ -418,17 +453,19 @@ impl TaskCommitBoundary {
     /// recorded in task history alongside the transition it permitted.
     /// Persisted unresolved criteria, including a prior handoff's obligations,
     /// leave the task in `review` until an operator records them met.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn complete_landing_attempt(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
-        handoff_id: &str,
-        evidence: &str,
-        history: &[TaskHistoryEntry],
+        completion: LandingCompletion<'_>,
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
+        let LandingCompletion {
+            handoff_id,
+            evidence,
+            history,
+        } = completion;
         if evidence.trim().is_empty() {
             return Err(invalid("verified merge evidence required"));
         }
@@ -463,18 +500,21 @@ impl TaskCommitBoundary {
     /// carries it and no merge intent is unresolved; and the task owes no
     /// criterion after deploy. An unrevoked handoff is refused: approval or
     /// the owner landing job completes it.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn check_external_merge_settlement(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
         handoff_id: &str,
-        pull_request: u64,
-        base_branch: &str,
-        merge_commit: &str,
-        verified_candidate_head: Option<&str>,
+        merge: &ExternalMerge<'_>,
         history: &[TaskHistoryEntry],
     ) -> Result<(), OrbitError> {
+        let ExternalMerge {
+            pull_request,
+            base_branch,
+            merge_commit,
+            verified_candidate_head,
+            ..
+        } = *merge;
         if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
             return Err(invalid(
                 "current operator handoff settlement context required",
@@ -570,18 +610,20 @@ impl TaskCommitBoundary {
     /// next run, owner or follower, which repairs that candidate. Past
     /// [`LANDING_REPAIR_BUDGET`] such returns the task blocks instead, with
     /// every counted stop's reason, and the candidate is still kept.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn stop_landing_attempt(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
-        handoff_id: &str,
-        reason: &str,
-        repairable: bool,
-        requeue: bool,
+        stop: LandingStopRequest<'_>,
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<LandingStop, OrbitError> {
+        let LandingStopRequest {
+            handoff_id,
+            reason,
+            repairable,
+            requeue,
+        } = stop;
         if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
             return Err(invalid("current operator landing context required"));
         }

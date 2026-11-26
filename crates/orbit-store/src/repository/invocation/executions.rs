@@ -68,18 +68,30 @@ pub(super) fn insert_agent_execution(
     Ok(conn.last_insert_rowid())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The dispatch slot and launch time of one backfilled agent execution.
+pub(crate) struct BackfilledLaunch<'a> {
+    pub(crate) workspace: &'a str,
+    pub(crate) run_id: &'a str,
+    pub(crate) activity_id: &'a str,
+    pub(crate) provider: &'a str,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) started_at: DateTime<Utc>,
+}
+
 pub(super) fn insert_agent_execution_with_backfill(
     conn: &Connection,
-    workspace: &str,
-    run_id: &str,
-    activity_id: &str,
-    provider: &str,
-    model: Option<&str>,
-    started_at: DateTime<Utc>,
+    launch: &BackfilledLaunch<'_>,
     identity: &AgentExecutionIdentity,
     backfill: &AgentExecutionBackfill,
 ) -> Result<i64, OrbitError> {
+    let BackfilledLaunch {
+        workspace,
+        run_id,
+        activity_id,
+        provider,
+        model,
+        started_at,
+    } = *launch;
     let json = serde_json::to_string(&StoredAgentExecutionIdentity {
         identity: identity.clone(),
         backfill: Some(backfill.clone()),

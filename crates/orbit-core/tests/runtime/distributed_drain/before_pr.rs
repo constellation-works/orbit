@@ -15,13 +15,13 @@ use crate::admission_test_support::{
     admission_request, admission_review_contract, admission_ship_contract,
 };
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
-use orbit_store::TaskCommitBoundary;
 use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
     AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
     ExecutionLocation, HandoffReviewObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_store::{AdmissionContext, TaskCommitBoundary};
 use orbit_types::identity::lower_hex;
 use orbit_types::task::TaskArtifact;
 use orbit_types::workflow::AutoTaskDefinition;
@@ -226,12 +226,14 @@ impl ReviewedHandoff {
                 }),
                 &request,
                 &AdmissionOrdering::default(),
-                "test",
-                &repo,
-                &repo.join(".orbit"),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &|_, _, _| Ok(None),
+                AdmissionContext {
+                    owner_version: "test",
+                    repo_root: &repo,
+                    orbit_dir: &repo.join(".orbit"),
+                    admission_holds: &BTreeMap::new(),
+                    held: &BTreeMap::new(),
+                    validation_hold: &|_, _, _| Ok(None),
+                },
             )
             .expect("admit")
         else {

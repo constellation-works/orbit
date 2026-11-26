@@ -80,7 +80,7 @@ pub mod test_support {
 }
 
 pub use boundary::TaskV2Store;
-pub use boundary::{TaskCommitBoundary, TaskCoordination, admission_refusal};
+pub use boundary::{AdmissionContext, TaskCommitBoundary, TaskCoordination, admission_refusal};
 use chrono::{DateTime, Utc};
 pub use contract::incident::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
