@@ -10,7 +10,7 @@ use orbit_types::record::{FrictionRecord, FrictionStatus};
 use orbit_types::task::{TaskRelation, TaskRelationType, TaskStatus};
 use serde_json::json;
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::resolves::FAIL_HISTORY_READ;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 

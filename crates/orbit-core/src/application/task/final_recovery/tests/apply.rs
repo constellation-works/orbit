@@ -14,7 +14,7 @@ use orbit_types::task::{ExternalRef, Task, TaskRelation, TaskRelationType, TaskS
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::tests::{enter_isolated_child, test_runtime};
+use crate::application::task::tests::task::{enter_isolated_child, test_runtime};
 use crate::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
     TaskAddParams, TaskUpdateParams,

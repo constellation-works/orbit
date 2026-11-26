@@ -4,8 +4,8 @@ use super::super::socket::{BROKER_DIR, RunSocketDir};
 
 #[test]
 fn a_symlinked_broker_directory_is_refused() {
-    let root = super::short_tempdir();
-    let elsewhere = super::short_tempdir();
+    let root = super::broker::short_tempdir();
+    let elsewhere = super::broker::short_tempdir();
     fs::create_dir(root.path().join("state")).expect("state");
     std::os::unix::fs::symlink(elsewhere.path(), root.path().join(BROKER_DIR))
         .expect("plant symlink");
@@ -22,8 +22,8 @@ fn a_symlinked_broker_directory_is_refused() {
 
 #[test]
 fn a_symlinked_state_directory_is_refused() {
-    let root = super::short_tempdir();
-    let elsewhere = super::short_tempdir();
+    let root = super::broker::short_tempdir();
+    let elsewhere = super::broker::short_tempdir();
     std::os::unix::fs::symlink(elsewhere.path(), root.path().join("state")).expect("plant symlink");
 
     let error = RunSocketDir::create(root.path()).expect_err("symlinked state");

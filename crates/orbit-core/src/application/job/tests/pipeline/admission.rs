@@ -19,7 +19,7 @@ fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {
 #[cfg(unix)]
 #[test]
 fn definition_snapshot_refuses_external_internal_and_dangling_symlinks() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &definition_snapshot_refuses_external_internal_and_dangling_symlinks,
     )) {
         return;
@@ -58,7 +58,7 @@ fn definition_snapshot_refuses_external_internal_and_dangling_symlinks() {
 #[cfg(unix)]
 #[test]
 fn audit_failure_preserves_admitted_runs_and_submission_errors() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &audit_failure_preserves_admitted_runs_and_submission_errors,
     )) {
         return;
@@ -69,7 +69,7 @@ fn audit_failure_preserves_admitted_runs_and_submission_errors() {
     use serde_json::json;
 
     use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
-    use crate::application::job::tests::SubmissionAuditFault;
+    use crate::application::job::tests::job::SubmissionAuditFault;
 
     for entry in ["catalog", "direct", "automation", "child", "resume"] {
         for enabled in [true, false] {
@@ -194,7 +194,7 @@ fn audit_failure_preserves_admitted_runs_and_submission_errors() {
 #[cfg(unix)]
 #[test]
 fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &trigger_recording_preserves_a_competing_checkpoint_and_drain_controls,
     )) {
         return;
@@ -304,7 +304,7 @@ fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
 #[cfg(unix)]
 #[test]
 fn repeated_automation_admission_preserves_pending_running_and_terminal_state() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &repeated_automation_admission_preserves_pending_running_and_terminal_state,
     )) {
         return;
@@ -417,7 +417,7 @@ fn repeated_automation_admission_preserves_pending_running_and_terminal_state() 
 #[cfg(unix)]
 #[test]
 fn failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic,
     )) {
         return;
@@ -523,7 +523,7 @@ fn failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic() {
 /// as its admitted run left it.
 #[test]
 fn a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew,
     )) {
         return;

@@ -5,7 +5,7 @@ mod reject;
 
 use orbit_types::task::TaskStatus;
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 pub(super) fn add_task(runtime: &crate::OrbitRuntime, title: &str) -> orbit_types::task::Task {

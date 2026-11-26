@@ -10,10 +10,10 @@ use orbit_types::workflow::JobRunState;
 
 use super::super::admissions_stop::DrainAdmissionsStopRequest;
 use super::super::state_write::set_run_state_write_hook;
-use super::{
+use super::run::{
     assert_worker_checkpoint_preserved, running_run_without_state, test_runtime, worker_checkpoint,
 };
-use crate::application::tests::run_isolated_test;
+use crate::application::tests::application::run_isolated_test;
 
 fn request() -> DrainAdmissionsStopRequest<'static> {
     DrainAdmissionsStopRequest {

@@ -1,6 +1,7 @@
 //! Security invariant: injected mount tables exercise alias identity checks
 //! without privileged host mounts; the public compiler reads /proc mountinfo.
-use super::*;
+
+use super::linux_sandbox::*;
 
 fn entry(device: &str, root: &Path, mount_point: &Path) -> MountEntry {
     MountEntry {

@@ -1,6 +1,6 @@
 //! Regression checks for the retired provider lanes (ORB-18096).
 
-use super::{roots, write_config};
+use super::lib::{roots, write_config};
 
 use crate::ResolvedConfig;
 use tempfile::tempdir;

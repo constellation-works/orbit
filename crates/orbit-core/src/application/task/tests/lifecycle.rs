@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 
 use super::super::lifecycle::task_status_transition_allowed;
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 

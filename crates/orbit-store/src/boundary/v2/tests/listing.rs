@@ -1,7 +1,7 @@
 //! Compact (`EnvelopeOnly`) listing pages: no bundle reads, and the same
 //! envelope-derived fields a hydrated page carries.
 
-use super::*;
+use super::v2::*;
 use crate::boundary::v2_bundle::LISTING_BUNDLE_READS;
 use crate::contract::{TaskListFilter, TaskListHydration};
 

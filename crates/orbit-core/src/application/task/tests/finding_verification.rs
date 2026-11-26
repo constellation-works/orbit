@@ -4,7 +4,7 @@
 use chrono::Utc;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, TaskType};
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::finding_verification::{
     FINDING_VERIFICATION_ACTOR, FINDING_VERIFICATION_SCHEMA_VERSION,

@@ -6,7 +6,7 @@ use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_p
 use orbit_types::task::{TASK_DESCRIPTION_FILE_NAME, TaskStatus};
 use serde_json::json;
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::batch_prepare::{BatchSpec, Qualification, prepare_batch};
 use orbit_store::contract::TaskListFilter;

@@ -9,7 +9,7 @@ use orbit_store::maintenance::task_registry::{
 };
 use tempfile::tempdir;
 
-use super::{assert_isolated_child, enter_isolated_child};
+use super::task::{assert_isolated_child, enter_isolated_child};
 use crate::OrbitRuntime;
 
 /// Run one selector through the operator-surface guard and return the

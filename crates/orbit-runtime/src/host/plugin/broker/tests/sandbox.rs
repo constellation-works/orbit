@@ -30,7 +30,7 @@ use tempfile::TempDir;
 
 use super::super::PluginBroker;
 use super::super::protocol::{MAX_REQUEST_BYTES, read_frame, write_frame};
-use super::EchoDispatch;
+use super::broker::EchoDispatch;
 
 const CLIENT_TEST: &str = "host::plugin::broker::tests::sandbox::broker_client";
 const CLIENT_ENV: &str = "ORBIT_BROKER_TEST_CLIENT";

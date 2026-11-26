@@ -2,7 +2,7 @@
 
 //! Step backoff arithmetic for `step.rs`.
 
-use super::*;
+use super::job_executor::*;
 
 #[test]
 fn compute_backoff_ms_respects_initial_max_and_zero_attempt_boundary() {

@@ -165,7 +165,7 @@ fn seed_registered_workspace(base: &std::path::Path, id: &str) -> std::path::Pat
     let orbit_dir = repo_root.join(".orbit");
     std::fs::create_dir_all(orbit_dir.join("local")).expect("create workspace directories");
     std::fs::create_dir_all(repo_root.join("src")).expect("create source directory");
-    super::enable_leases(&orbit_dir);
+    super::lease::enable_leases(&orbit_dir);
     std::fs::write(
         orbit_dir.join("config.yaml"),
         format!("schema_version: 1\nworkspace_id: {id}\n"),
@@ -1293,7 +1293,7 @@ fn token_renews_and_releases_only_its_own_principals_leases() {
     std::fs::create_dir_all(repo_root.join("src")).unwrap();
     std::fs::create_dir_all(&workspace_root).unwrap();
     std::fs::write(repo_root.join("src/x.rs"), "pub fn x() {}\n").unwrap();
-    super::enable_leases(&workspace_root);
+    super::lease::enable_leases(&workspace_root);
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
     let state = DashboardState::single(runtime);

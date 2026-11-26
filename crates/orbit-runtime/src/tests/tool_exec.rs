@@ -95,7 +95,7 @@ mod checkout_root {
 
     #[test]
     fn linked_worktree_checkout_resolves_without_spawning_git() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &linked_worktree_checkout_resolves_without_spawning_git,
         )) {
             return;
@@ -143,7 +143,7 @@ mod checkout_root {
 
     #[test]
     fn source_inspection_checkout_second_call_spawns_no_git() {
-        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
             &source_inspection_checkout_second_call_spawns_no_git,
         )) {
             return;

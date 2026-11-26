@@ -5,7 +5,7 @@ use std::process::Command;
 use chrono::Utc;
 use orbit_types::workflow::PipelineState;
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 
 fn git(repo: &std::path::Path, args: &[&str]) {
     let status = Command::new("git")

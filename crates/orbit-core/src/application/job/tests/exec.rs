@@ -22,7 +22,7 @@ enum SummaryFault {
 
 #[test]
 fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &held_and_unsuccessful_runs_finalize_despite_summary_store_faults,
     )) {
         return;
@@ -226,7 +226,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
 /// which no crate-root fixture can stand up.
 #[test]
 fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &a_claimed_leaf_provider_limit_holds_and_records_a_deferral,
     )) {
         return;
@@ -325,7 +325,7 @@ fn code_only_hold_is_audited_held_and_finalizes_held() {
 
     use super::super::exec::audit_terminal_outcome;
 
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &code_only_hold_is_audited_held_and_finalizes_held,
     )) {
         return;
@@ -412,7 +412,7 @@ fn detached_worker_persists_unrecognized_audit_step_outcomes_as_failed() {
     use orbit_engine::V2AuditWriter;
     use orbit_types::workflow::activity_job::V2AuditEventKind;
 
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &detached_worker_persists_unrecognized_audit_step_outcomes_as_failed,
     )) {
         return;

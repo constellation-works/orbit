@@ -5,9 +5,9 @@ use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState, R
 use serde_json::json;
 
 use super::super::state_write::set_run_state_write_hook;
-use super::test_runtime;
+use super::run::test_runtime;
 use crate::OrbitRuntime;
-use crate::application::tests::run_isolated_test;
+use crate::application::tests::application::run_isolated_test;
 
 fn detached_child(id: &str) -> ChildDispatch {
     ChildDispatch::submitted(

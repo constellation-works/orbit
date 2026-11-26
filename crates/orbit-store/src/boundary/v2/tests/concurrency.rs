@@ -5,7 +5,7 @@ use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use super::*;
+use super::v2::*;
 
 fn create_tasks(store: &TaskV2Store, count: usize) -> Vec<String> {
     (0..count)

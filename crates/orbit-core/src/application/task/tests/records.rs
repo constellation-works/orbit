@@ -3,7 +3,7 @@
 
 use orbit_types::task::{TaskArtifact, TaskStatus};
 
-use super::{enter_isolated_child, test_runtime};
+use super::task::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::params::TaskRecordUpdateParams;
 use crate::application::task::records::TaskRecords;

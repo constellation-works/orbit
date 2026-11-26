@@ -197,7 +197,7 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     std::fs::write(repo_root.join("src/x.rs"), "pub fn x() {}\n").unwrap();
     std::fs::write(repo_root.join("src/y.rs"), "pub fn y() {}\n").unwrap();
     std::fs::write(repo_root.join("src/z.rs"), "pub fn z() {}\n").unwrap();
-    super::enable_leases(&workspace_root);
+    super::lease::enable_leases(&workspace_root);
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
 
@@ -604,7 +604,7 @@ fn listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces
     for name in ["x", "y"] {
         std::fs::write(repo_root.join(format!("src/{name}.rs")), "pub fn f() {}\n").unwrap();
     }
-    super::enable_leases(&workspace_root);
+    super::lease::enable_leases(&workspace_root);
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
 

@@ -14,7 +14,7 @@ use crate::update::tests::fixture::{Fixture, request, tar_gz_named};
 // evidence and distinguish the rejected candidate from the previous executable.
 #[test]
 fn installed_verification_failures_preserve_both_causes_when_restore_fails() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
         &installed_verification_failures_preserve_both_causes_when_restore_fails,
     )) {
         return;
@@ -151,7 +151,7 @@ fn read_request_head(stream: &mut impl Read) -> Vec<u8> {
 
 #[test]
 fn http_rejects_declared_and_streamed_oversized_bodies() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
         &http_rejects_declared_and_streamed_oversized_bodies,
     )) {
         return;
@@ -197,7 +197,7 @@ fn http_rejects_declared_and_streamed_oversized_bodies() {
 
 #[test]
 fn release_requests_never_leave_https() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
         &release_requests_never_leave_https,
     )) {
         return;

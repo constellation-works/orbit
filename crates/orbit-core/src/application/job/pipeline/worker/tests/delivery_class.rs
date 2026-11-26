@@ -94,7 +94,7 @@ fn admitted(
 /// that delivery's later runs; a new delivery sees the new tags.
 #[test]
 fn class_is_captured_once_per_delivery_and_survives_tag_edits() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &class_is_captured_once_per_delivery_and_survives_tag_edits,
     )) {
         return;
@@ -216,7 +216,7 @@ fn class_is_captured_once_per_delivery_and_survives_tag_edits() {
 #[cfg(target_os = "linux")]
 #[test]
 fn worker_without_a_scope_records_nothing_and_logs_nothing() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &worker_without_a_scope_records_nothing_and_logs_nothing,
     )) {
         return;

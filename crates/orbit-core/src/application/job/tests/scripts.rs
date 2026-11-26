@@ -123,7 +123,7 @@ fn attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes() {
 
     use crate::application::task::TaskAddParams;
 
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes,
     )) {
         return;

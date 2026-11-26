@@ -1,24 +1,18 @@
-#![allow(
+#[allow(
     clippy::expect_used,
     clippy::unwrap_used,
     reason = "listener and intake fixtures panic when a socket, token or permission setup fails"
 )]
-
 #[cfg(unix)]
 mod intake;
+
+#[cfg(unix)]
+mod lease;
+
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "listener and intake fixtures panic when a socket, token or permission setup fails"
+)]
 #[cfg(unix)]
 mod listener;
-
-/// Open the workspace at `orbit_dir` with path leases enabled, which no
-/// configuration can do [ORB-22808].
-#[cfg(unix)]
-fn enable_leases(orbit_dir: &std::path::Path) {
-    use orbit_core::runtime::stored::locks::lease::{LeasePolicy, install_test_lease_policy};
-    install_test_lease_policy(
-        orbit_dir,
-        LeasePolicy {
-            enabled: true,
-            ..LeasePolicy::FIXED
-        },
-    );
-}

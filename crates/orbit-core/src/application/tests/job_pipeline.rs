@@ -31,7 +31,7 @@ impl Drop for WorkerLogHook {
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &configure_pipeline_worker_stdio_rejects_symlinked_log_directory,
     )) {
         return;
@@ -67,7 +67,7 @@ fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority,
     )) {
         return;
@@ -108,7 +108,7 @@ fn configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority()
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects,
     )) {
         return;
@@ -156,7 +156,7 @@ fn configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects() 
 
 #[test]
 fn configure_pipeline_worker_stdio_rejects_traversal_in_log_directory() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::tests::application::run_isolated_test(std::any::type_name_of_val(
         &configure_pipeline_worker_stdio_rejects_traversal_in_log_directory,
     )) {
         return;

@@ -1,12 +1,12 @@
 #[cfg(target_os = "linux")]
-use super::*;
+use super::linux_sandbox::*;
 
 #[cfg(target_os = "linux")]
 #[test]
 fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
     use std::process::{Command, Stdio};
 
-    use super::{
+    use super::linux_sandbox::{
         LinuxBwrapCommand, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
         inherit_mount_sources,
     };
@@ -101,7 +101,7 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
 fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
     use std::os::unix::fs::symlink;
 
-    use super::{
+    use super::linux_sandbox::{
         LinuxBwrapCommand, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
     };
 
@@ -145,7 +145,7 @@ fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
 fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
     use std::os::unix::fs::symlink;
 
-    use super::{
+    use super::linux_sandbox::{
         LinuxBwrapCommand, LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority,
     };
 

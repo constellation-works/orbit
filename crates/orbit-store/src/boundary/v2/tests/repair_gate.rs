@@ -11,7 +11,7 @@ use orbit_types::task::{TASK_EVENTS_FILE_NAME, TaskRelation, TaskRelationType};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-use super::*;
+use super::v2::*;
 use crate::boundary::v2::repair_gate::RepairGate;
 use crate::boundary::v2_bundle::LISTING_BUNDLE_READS;
 use crate::contract::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
