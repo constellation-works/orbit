@@ -375,8 +375,10 @@ any other size). Each tick it reads every `resident`-tagged task in `proposed`, 
   them do not wake it again. Size (STD-08 R1): about 300 bytes of fixed items plus about 40 bytes
   per open task the resident acted on and per open notice, on each grant and settled entry, so a
   resident tending 20 open tasks adds about 1.1 KB to the assignment's history per cycle, 26 KB over
-  24 cycles. Only the due check reads it (a person sees it as a history note); neither the
-  brief nor the agent sees it;
+  24 cycles. The due check decodes both maps into a resident wake observation with typed task
+  keys and classes. It compares legacy suffix bytes exactly, including suffixes from older
+  records. The grant in the cycle brief, the settlement history, and the digest use the
+  original sorted string-map format;
 - the **reasons**: `first_cycle`; `digest_changed` when, against the baseline of the last
   checkpoint's cycle, an item present in both changed, a new item needs attention (a task the
   resident acted on that is `blocked` or in `review`, a notice opening, any other new key), or an
