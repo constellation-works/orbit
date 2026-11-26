@@ -29,7 +29,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, GitCommandOutput, run_git, run_git_within};
+use orbit_common::fs::git::{
+    GIT_CHECKOUT_TIMEOUT, GIT_LOCAL_TIMEOUT, GitCommandOutput, run_git, run_git_bytes_within,
+    run_git_within,
+};
 use orbit_common::security::token;
 
 use crate::OrbitRuntime;
@@ -375,52 +378,103 @@ fn registered_worktree_state(
     repo_root: &Path,
     path: &Path,
 ) -> Result<RegisteredWorktree, OrbitError> {
-    let output = run_git(
+    // `-z` makes Git emit each field NUL-terminated and unquoted, so a path
+    // or lock reason holding a newline arrives whole instead of splitting a
+    // record.
+    let output = run_git_bytes_within(
         &orbit_common::Env::capture(),
         repo_root,
-        &["worktree", "list", "--porcelain"],
-    )
-    .map_err(|error| OrbitError::Execution(error.to_string()))?;
-    if !output.success {
+        &["worktree", "list", "--porcelain", "-z"],
+        GIT_LOCAL_TIMEOUT,
+    )?;
+    if !output.status.success() {
         return Err(preserved(
             &path_text(path),
             &format!(
                 "could not list registered worktrees: {}",
-                git_failure_detail(&output)
+                git_stderr_detail(&output.stderr, output.status.code())
             ),
         ));
     }
-    porcelain_state(&output.stdout, path)
+    let records = decode_worktree_porcelain(&output.stdout)
+        .map_err(|reason| preserved(&path_text(path), &reason))?;
+    select_registered_worktree(&records, path)
 }
 
-fn porcelain_state(porcelain: &str, path: &Path) -> Result<RegisteredWorktree, OrbitError> {
-    // Porcelain records are blank-line separated: a `worktree <path>` line
-    // opens a record and its attribute lines (including `locked`) follow.
-    let mut records: Vec<(&Path, bool)> = Vec::new();
-    let mut current: Option<(&Path, bool)> = None;
-    for line in porcelain.lines() {
-        if let Some(recorded) = line.strip_prefix("worktree ") {
-            if let Some(record) = current.take() {
-                records.push(record);
+/// One entry of `git worktree list --porcelain -z`: the exact registered
+/// path and whether Git marks it locked (with or without a reason).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GitWorktreePorcelainRecord {
+    path: PathBuf,
+    locked: bool,
+}
+
+/// Decode Git's NUL-delimited worktree listing once, at the boundary.
+///
+/// Every field ends in NUL and an empty field ends a record. A `worktree`
+/// field opens a record; `locked` or `locked <reason>` marks it locked and
+/// the reason may hold spaces and newlines. Other attributes are ignored. A
+/// listing that cannot be read exactly (an attribute before any record, an
+/// empty path, a path that is not representable, a missing terminator) is an
+/// error: it is never read as an absent registration.
+fn decode_worktree_porcelain(bytes: &[u8]) -> Result<Vec<GitWorktreePorcelainRecord>, String> {
+    let mut records = Vec::new();
+    let mut current: Option<GitWorktreePorcelainRecord> = None;
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let Some(end) = rest.iter().position(|byte| *byte == 0) else {
+            return Err("git's worktree list ended inside a field".to_string());
+        };
+        let field = &rest[..end];
+        rest = &rest[end + 1..];
+        if field.is_empty() {
+            records.extend(current.take());
+        } else if let Some(recorded) = field.strip_prefix(b"worktree ") {
+            records.extend(current.take());
+            if recorded.is_empty() {
+                return Err("git's worktree list has an entry with no path".to_string());
             }
-            if !recorded.is_empty() {
-                current = Some((Path::new(recorded), false));
+            current = Some(GitWorktreePorcelainRecord {
+                path: worktree_path_from_bytes(recorded)?,
+                locked: false,
+            });
+        } else if let Some(record) = &mut current {
+            if field == b"locked" || field.starts_with(b"locked ") {
+                record.locked = true;
             }
-        } else if (line == "locked" || line.starts_with("locked "))
-            && let Some((_, locked)) = &mut current
-        {
-            *locked = true;
+        } else {
+            return Err("git's worktree list has an attribute outside any entry".to_string());
         }
     }
-    if let Some(record) = current.take() {
-        records.push(record);
-    }
+    records.extend(current.take());
+    Ok(records)
+}
+
+#[cfg(unix)]
+fn worktree_path_from_bytes(bytes: &[u8]) -> Result<PathBuf, String> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec())))
+}
+
+#[cfg(not(unix))]
+fn worktree_path_from_bytes(bytes: &[u8]) -> Result<PathBuf, String> {
+    std::str::from_utf8(bytes)
+        .map(PathBuf::from)
+        .map_err(|error| format!("git listed a worktree path that is not Unicode: {error}"))
+}
+
+fn select_registered_worktree(
+    records: &[GitWorktreePorcelainRecord],
+    path: &Path,
+) -> Result<RegisteredWorktree, OrbitError> {
     // Fast path: Git lists the canonical absolute path, so raw equality
     // normally settles this without resolving every registered worktree
     // on the host (there may be many) through the filesystem.
-    for (recorded_path, locked) in &records {
-        if *recorded_path == path {
-            return Ok(RegisteredWorktree::Registered { locked: *locked });
+    for record in records {
+        if record.path == path {
+            return Ok(RegisteredWorktree::Registered {
+                locked: record.locked,
+            });
         }
     }
     let canonical = std::fs::canonicalize(path).map_err(|error| {
@@ -429,11 +483,13 @@ fn porcelain_state(porcelain: &str, path: &Path) -> Result<RegisteredWorktree, O
             &format!("could not resolve it to compare with git's worktree list: {error}"),
         )
     })?;
-    for (recorded_path, locked) in &records {
-        if *recorded_path == canonical
-            || std::fs::canonicalize(recorded_path).ok().as_ref() == Some(&canonical)
+    for record in records {
+        if record.path == canonical
+            || std::fs::canonicalize(&record.path).ok().as_ref() == Some(&canonical)
         {
-            return Ok(RegisteredWorktree::Registered { locked: *locked });
+            return Ok(RegisteredWorktree::Registered {
+                locked: record.locked,
+            });
         }
     }
     Ok(RegisteredWorktree::NotRegistered)
@@ -553,11 +609,16 @@ fn clear_worktree_contents(path: &Path) -> std::io::Result<()> {
 }
 
 fn git_failure_detail(output: &GitCommandOutput) -> String {
-    let detail = output.stderr.trim();
+    git_stderr_detail(output.stderr.as_bytes(), output.code)
+}
+
+fn git_stderr_detail(stderr: &[u8], code: Option<i32>) -> String {
+    let detail = String::from_utf8_lossy(stderr);
+    let detail = detail.trim();
     if !detail.is_empty() {
         return detail.to_string();
     }
-    match output.code {
+    match code {
         Some(code) => format!("git exited {code} with no stderr"),
         None => "git was terminated by a signal".to_string(),
     }
