@@ -419,8 +419,7 @@ re-init does not overwrite a workspace-authored definition of the same name.
   not constants in code. It samples that many links whose filing task was
   created in the window, skipping links a previous audit judged and links
   whose `created_by` or `created_by_model` names the auditor's own model
-  family — the same family test the demoted `recovery-fault-audit` applied to
-  `fault_judged_by`. The evidence packet is the filing and culprit tasks'
+  family. The evidence packet is the filing and culprit tasks'
   title, description, acceptance criteria and context files. It contains
   neither the filer's labels nor any model, provider or crew name of the
   filer or of the culprit's implementer or reviewer. The labels ride in the
