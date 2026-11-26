@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::init::WorkspaceInitArgs;
 use super::list::WorkspaceListArgs;
@@ -48,8 +48,8 @@ pub enum WorkspaceSubcommand {
     Teardown(WorkspaceTeardownArgs),
 }
 
-impl Execute for WorkspaceCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for WorkspaceCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self.command {
             WorkspaceSubcommand::Init(_) => {
                 // Init is handled without runtime in main.rs
@@ -61,14 +61,14 @@ impl Execute for WorkspaceCommand {
             WorkspaceSubcommand::Rebind(_) => Err(orbit_core::OrbitError::Execution(
                 "workspace rebind requires runtime-free dispatch".into(),
             )),
-            WorkspaceSubcommand::List(args) => args.execute(runtime),
-            WorkspaceSubcommand::Show(args) => args.execute(runtime),
-            WorkspaceSubcommand::SourceRemote(command) => command.execute(runtime),
-            WorkspaceSubcommand::ShipMode(args) => args.execute(runtime),
-            WorkspaceSubcommand::Role(args) => args.execute(runtime),
-            WorkspaceSubcommand::Publication(command) => command.execute(runtime),
-            WorkspaceSubcommand::Remove(args) => args.execute(runtime),
-            WorkspaceSubcommand::Teardown(args) => args.execute(runtime),
+            WorkspaceSubcommand::List(args) => args.execute(core),
+            WorkspaceSubcommand::Show(args) => args.execute(core),
+            WorkspaceSubcommand::SourceRemote(command) => command.execute(core),
+            WorkspaceSubcommand::ShipMode(args) => args.execute(core),
+            WorkspaceSubcommand::Role(args) => args.execute(core),
+            WorkspaceSubcommand::Publication(command) => command.execute(core),
+            WorkspaceSubcommand::Remove(args) => args.execute(core),
+            WorkspaceSubcommand::Teardown(args) => args.execute(core),
         }
     }
 }

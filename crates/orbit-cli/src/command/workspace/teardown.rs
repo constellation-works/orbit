@@ -1,9 +1,10 @@
 use clap::Args;
 use orbit_cmd::workspace_removal::{self, WorkspaceTeardownOptions};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::workspace::{Command, exec};
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct WorkspaceTeardownArgs {
@@ -16,17 +17,30 @@ pub struct WorkspaceTeardownArgs {
     pub confirm: bool,
 }
 
-impl Execute for WorkspaceTeardownArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
-        let result = workspace_removal::teardown_workspace(
-            &runtime.global_root(),
-            &self.workspace,
-            &cwd,
-            WorkspaceTeardownOptions {
-                confirm: self.confirm,
+impl ExecuteCore for WorkspaceTeardownArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let mut torn_down = None;
+        exec(
+            core,
+            Command::Teardown {
+                confirmed: self.confirm,
+                teardown: &mut |global_root| {
+                    let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
+                    torn_down = Some(workspace_removal::teardown_workspace(
+                        global_root,
+                        &self.workspace,
+                        &cwd,
+                        WorkspaceTeardownOptions {
+                            confirm: self.confirm,
+                        },
+                    )?);
+                    Ok(())
+                },
             },
         )?;
+        let Some(result) = torn_down else {
+            unreachable!("workspace teardown ran no teardown");
+        };
         let mut text = format!("teardown plan:\n{}\nteardown complete:", result.plan);
         for item in &result.removed {
             text.push_str(&format!("\n  - {item}"));

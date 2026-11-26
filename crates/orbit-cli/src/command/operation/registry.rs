@@ -43,40 +43,40 @@ impl Commands {
                 use super::super::workspace::WorkspacePublicationSubcommand;
                 use super::super::workspace::WorkspaceSourceRemoteSubcommand;
                 use super::super::workspace::WorkspaceSubcommand;
-                let (subcommand, runtime_need, governed) = match &command.command {
-                    WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden, false),
-                    WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden, false),
-                    WorkspaceSubcommand::Rebind(_) => ("rebind", RuntimeNeed::Forbidden, false),
-                    WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::HostReadOnly, false),
-                    WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::HostReadOnly, false),
+                // `app::workspace::exec` authorizes the governed `remove` and confirmed
+                // `teardown`, so no governed operation is declared here.
+                let (subcommand, runtime_need) = match &command.command {
+                    WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden),
+                    WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden),
+                    WorkspaceSubcommand::Rebind(_) => ("rebind", RuntimeNeed::Forbidden),
+                    WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::HostReadOnly),
+                    WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::HostReadOnly),
                     WorkspaceSubcommand::SourceRemote(command) => match &command.command {
                         WorkspaceSourceRemoteSubcommand::Show(_) => {
-                            ("source-remote-show", RuntimeNeed::Required, false)
+                            ("source-remote-show", RuntimeNeed::Required)
                         }
                         WorkspaceSourceRemoteSubcommand::Rebind(_) => {
-                            ("source-remote-rebind", RuntimeNeed::Required, false)
+                            ("source-remote-rebind", RuntimeNeed::Required)
                         }
                     },
-                    WorkspaceSubcommand::ShipMode(_) => ("ship-mode", RuntimeNeed::Required, false),
-                    WorkspaceSubcommand::Role(_) => ("role", RuntimeNeed::Required, false),
+                    WorkspaceSubcommand::ShipMode(_) => ("ship-mode", RuntimeNeed::Required),
+                    WorkspaceSubcommand::Role(_) => ("role", RuntimeNeed::Required),
                     WorkspaceSubcommand::Publication(command) => match &command.command {
                         WorkspacePublicationSubcommand::Bind(_) => {
-                            ("publication-bind", RuntimeNeed::Required, false)
+                            ("publication-bind", RuntimeNeed::Required)
                         }
                         WorkspacePublicationSubcommand::Show(_) => {
-                            ("publication-show", RuntimeNeed::Required, false)
+                            ("publication-show", RuntimeNeed::Required)
                         }
                         WorkspacePublicationSubcommand::Rebind(_) => {
-                            ("publication-rebind", RuntimeNeed::Required, true)
+                            ("publication-rebind", RuntimeNeed::Required)
                         }
-                        WorkspacePublicationSubcommand::Remove(args) => {
-                            ("publication-remove", RuntimeNeed::Required, args.confirm)
+                        WorkspacePublicationSubcommand::Remove(_) => {
+                            ("publication-remove", RuntimeNeed::Required)
                         }
                     },
-                    WorkspaceSubcommand::Remove(_) => ("remove", RuntimeNeed::Required, true),
-                    WorkspaceSubcommand::Teardown(args) => {
-                        ("teardown", RuntimeNeed::Required, args.confirm)
-                    }
+                    WorkspaceSubcommand::Remove(_) => ("remove", RuntimeNeed::Required),
+                    WorkspaceSubcommand::Teardown(_) => ("teardown", RuntimeNeed::Required),
                 };
                 CommandOperation::new(
                     runtime_need,
@@ -89,7 +89,6 @@ impl Commands {
                     None,
                     dispatch_workspace,
                 )
-                .governed_when(governed, "workspace", subcommand)
             }
             Commands::Config(command) => {
                 use super::super::config::ConfigSubcommand;

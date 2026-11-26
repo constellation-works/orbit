@@ -1,14 +1,10 @@
-use std::path::Path;
-
 use clap::{Args, Subcommand};
-use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::{load_machine_identity, workspace_registry};
-use orbit_types::workspace::{
-    Workspace, WorkspaceRegistry, git_remote_identity, redact_git_remote,
-};
+use orbit_core::Core;
+use orbit_core::app::workspace::{Command, Outcome, exec};
+use orbit_types::workspace::{Workspace, git_remote_identity, redact_git_remote};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 #[command(
@@ -28,11 +24,11 @@ pub enum WorkspaceSourceRemoteSubcommand {
     Rebind(WorkspaceSourceRemoteRebindArgs),
 }
 
-impl Execute for WorkspaceSourceRemoteCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for WorkspaceSourceRemoteCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         match self.command {
-            WorkspaceSourceRemoteSubcommand::Show(args) => args.execute(runtime),
-            WorkspaceSourceRemoteSubcommand::Rebind(args) => args.execute(runtime),
+            WorkspaceSourceRemoteSubcommand::Show(args) => args.execute(core),
+            WorkspaceSourceRemoteSubcommand::Rebind(args) => args.execute(core),
         }
     }
 }
@@ -40,20 +36,15 @@ impl Execute for WorkspaceSourceRemoteCommand {
 #[derive(Args)]
 pub struct WorkspaceSourceRemoteShowArgs {}
 
-impl Execute for WorkspaceSourceRemoteShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let workspace_id = selected_workspace_id(runtime)?;
-        let registry = workspace_registry::load_registry_from(
-            &workspace_registry::registry_path_for(&runtime.global_root()),
-        )?;
-        let workspace = workspace_registry::find_workspace_by_id(&registry, &workspace_id)
-            .ok_or_else(|| {
-                OrbitError::WorkspaceError(format!("unknown workspace '{workspace_id}'"))
-            })?;
+impl ExecuteCore for WorkspaceSourceRemoteShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::SourceRemote(workspace) = exec(core, Command::SourceRemoteShow)? else {
+            unreachable!("workspace source-remote show returned an unrelated outcome");
+        };
 
         Ok(Payload::detail(
-            source_remote_json(workspace),
-            format_source_remote(workspace),
+            source_remote_json(&workspace),
+            format_source_remote(&workspace),
         )
         .into())
     }
@@ -69,27 +60,18 @@ pub struct WorkspaceSourceRemoteRebindArgs {
     dry_run: bool,
 }
 
-impl Execute for WorkspaceSourceRemoteRebindArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let workspace_id = selected_workspace_id(runtime)?;
-        let global_root = runtime.global_root();
-        let local_machine_id = load_machine_identity(&global_root)?.id;
-        let task_workspace_id = runtime
-            .workspace_runtime_binding()
-            .map(|binding| binding.task_partition_id.clone())
-            .map_or_else(|| runtime.workspace_id(), Ok)?;
-        let registry_path = workspace_registry::registry_path_for(&global_root);
-        let outcome = rebind_at_registry_path(
-            &registry_path,
-            &workspace_id,
-            &self.remote,
-            &local_machine_id,
-            self.dry_run,
-            workspace_registry::save_registry_to,
-            |source_remote| {
-                runtime.rebind_task_publication_source(&task_workspace_id, source_remote)
+impl ExecuteCore for WorkspaceSourceRemoteRebindArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::SourceRemoteRebound(outcome) = exec(
+            core,
+            Command::SourceRemoteRebind {
+                remote: self.remote,
+                dry_run: self.dry_run,
             },
-        )?;
+        )?
+        else {
+            unreachable!("workspace source-remote rebind returned an unrelated outcome");
+        };
 
         let action = if !outcome.changed {
             "unchanged"
@@ -126,48 +108,6 @@ impl Execute for WorkspaceSourceRemoteRebindArgs {
         )
         .into())
     }
-}
-
-fn rebind_at_registry_path(
-    registry_path: &Path,
-    workspace_id: &str,
-    remote: &str,
-    local_machine_id: &str,
-    dry_run: bool,
-    save: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
-    pair: impl FnOnce(&str) -> Result<(), OrbitError>,
-) -> Result<workspace_registry::WorkspaceSourceRemoteRebind, OrbitError> {
-    workspace_registry::with_registry_lock(registry_path, || {
-        let mut registry = workspace_registry::load_registry_from(registry_path)?;
-        let outcome = workspace_registry::rebind_workspace_source_remote(
-            &mut registry,
-            workspace_id,
-            remote,
-            Some(local_machine_id),
-            dry_run,
-        )?;
-        if outcome.changed && !outcome.dry_run {
-            save(&registry, registry_path)?;
-        }
-        // Save the authoritative registration first. An interrupted/failed
-        // pairing write is recovered by repeating the same audited command,
-        // even when the source registration itself is already unchanged.
-        if !outcome.dry_run {
-            pair(&outcome.new_remote).map_err(|error| {
-                OrbitError::WorkspaceError(format!(
-                    "source remote is registered but its task-registry pairing could not be reconciled: {error}; repeat `orbit workspace source-remote rebind --remote <URL>` with the registered source URL"
-                ))
-            })?;
-        }
-        Ok(outcome)
-    })
-}
-
-fn selected_workspace_id(runtime: &OrbitRuntime) -> Result<String, OrbitError> {
-    runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone())
-        .map_or_else(|| runtime.workspace_id(), Ok)
 }
 
 fn source_remote_json(workspace: &Workspace) -> Value {

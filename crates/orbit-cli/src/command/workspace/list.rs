@@ -1,10 +1,10 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
-use orbit_registry::workspace_registry;
+use orbit_core::Core;
+use orbit_core::app::workspace::{Command, Outcome, exec};
 use orbit_types::workspace::WorkspaceRegistry;
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::common::table::{Column, Table};
 
 #[derive(Args)]
@@ -14,14 +14,11 @@ pub struct WorkspaceListArgs {
     pub all: bool,
 }
 
-impl Execute for WorkspaceListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let global_root = runtime.global_root();
-        let registry_path = workspace_registry::registry_path_for(&global_root);
-        let registry = workspace_registry::load_validated_registry_from(
-            &registry_path,
-            workspace_registry::WorkspaceValidationMode::Persist,
-        )?;
+impl ExecuteCore for WorkspaceListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Listed(registry) = exec(core, Command::List)? else {
+            unreachable!("workspace list returned an unrelated outcome");
+        };
         let records = workspace_list_records(&registry, self.all);
         let table = workspace_list_table(&registry, self.all);
         Ok(Payload::list(records, table).into())

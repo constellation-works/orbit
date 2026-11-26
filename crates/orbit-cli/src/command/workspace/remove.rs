@@ -1,9 +1,10 @@
 use clap::Args;
 use orbit_cmd::workspace_removal;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::workspace::{Command, exec};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 pub struct WorkspaceRemoveArgs {
@@ -12,9 +13,22 @@ pub struct WorkspaceRemoveArgs {
     pub workspace: String,
 }
 
-impl Execute for WorkspaceRemoveArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = workspace_removal::remove_workspace(&runtime.global_root(), &self.workspace)?;
+impl ExecuteCore for WorkspaceRemoveArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let mut removed = None;
+        exec(
+            core,
+            Command::Remove(&mut |global_root| {
+                removed = Some(workspace_removal::remove_workspace(
+                    global_root,
+                    &self.workspace,
+                )?);
+                Ok(())
+            }),
+        )?;
+        let Some(result) = removed else {
+            unreachable!("workspace remove ran no removal");
+        };
         let mut text = format!("workspace '{}' removed from registry", result.workspace);
         let leftover = result.left_task_store;
         if let Some(partition) = leftover.as_ref() {

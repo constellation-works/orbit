@@ -1,27 +1,31 @@
-//! Handler table for the workspace-claim operation registry.
+//! Handler table for the workspace-claim operation registry: the tool call
+//! becomes the workspace app's command and calls its one `exec`.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
 
-use crate::OrbitRuntime;
+use crate::Core;
+use crate::app::workspace::{Command, Outcome, exec};
 
 pub(super) fn dispatch(
-    runtime: &OrbitRuntime,
+    core: &Core,
     verb: WorkspaceClaimVerb,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    let input = verb.spec().parse_input(input)?.into_value();
-    match verb {
-        WorkspaceClaimVerb::Acquire => {
-            crate::runtime::workspace::claim::acquire(runtime, input, agent, model)
-        }
-        WorkspaceClaimVerb::Release => {
-            crate::runtime::workspace::claim::release(runtime, input, agent, model)
-        }
-        WorkspaceClaimVerb::Show => crate::runtime::workspace::claim::show(runtime),
-    }
+    let Outcome::Answer(answer) = exec(
+        core,
+        Command::Claim {
+            verb,
+            input,
+            agent,
+            model,
+        },
+    )?
+    else {
+        unreachable!("workspace claim returned an unrelated outcome");
+    };
+    Ok(answer)
 }
