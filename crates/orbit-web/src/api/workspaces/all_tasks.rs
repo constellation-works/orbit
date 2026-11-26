@@ -1,21 +1,42 @@
 //! `GET /api/tasks/all`: tasks merged across every registered workspace.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::Core;
-use orbit_core::app::workspace::{CandidateSection, Command, Outcome, TaskRows, exec};
-use orbit_core::application::task::{TaskCandidateKeys, TaskListFilter};
+use orbit_core::app::workspace::{
+    self, AggregateTaskPage, AggregateTaskPages, AggregateTaskRequest, AggregateTaskRow,
+    AggregateTaskSection, AggregateWorkspace, AggregateWorkspaceSource, Command, Outcome,
+    UnavailableWorkspace,
+};
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
-use super::super::pagination::TaskPageQuery;
-use super::super::{bad_request, blocking, server_error};
 use super::fan_out::fan_out;
 use super::list::{abbreviate_home, entry_is_owned};
+use crate::api::pagination::TaskPageQuery;
+use crate::api::{bad_request, blocking, server_error};
 use crate::projections::{TaskListProjection, cached_riskiness_model};
 use crate::state::{DashboardState, Pinned, Ws, WsCore, WsEntry};
+
+/// One workspace an aggregate page opened: its app entry, and the runtime its
+/// row projections still read.
+struct Source {
+    core: Arc<Core>,
+    ws: Ws,
+}
+
+/// Shared rendering state for one `/api/tasks/all` response.
+struct RenderContext<'a> {
+    state: &'a DashboardState,
+    scope: &'a str,
+    entries: &'a [&'a WsEntry],
+    opened: &'a [Result<Source, String>],
+    home: Option<PathBuf>,
+}
 
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
 ///
@@ -59,24 +80,13 @@ pub(in crate::api) async fn list_all_tasks(
             .map_err(orbit_core::OrbitError::InvalidInput)?;
         let entries = aggregate_task_entries(&pinned, &query);
         let resume_index = aggregate_resume_index(&entries, &query)?;
-        if query.groups_by_status() {
-            return Ok(all_task_sections_json(
-                &state,
-                &pinned,
-                &query,
-                &scope,
-                &entries,
-                resume_index,
-            ));
-        }
-        let selections = select_workspace_task_pages(&pinned, &entries, &[&query], resume_index);
-        Ok(all_tasks_json(
+        Ok(aggregate_tasks_json(
             &state,
+            &pinned,
             &query,
             &scope,
             &entries,
             resume_index,
-            selections.into_iter().next().unwrap_or_default(),
         ))
     })
     .await
@@ -85,6 +95,56 @@ pub(in crate::api) async fn list_all_tasks(
         Ok(Err(error)) => server_error(error),
         Err(response) => *response,
     }
+}
+
+fn aggregate_tasks_json(
+    state: &DashboardState,
+    pinned: &Pinned,
+    query: &TaskPageQuery,
+    scope: &str,
+    entries: &[&WsEntry],
+    resume_index: usize,
+) -> Result<Value, orbit_core::OrbitError> {
+    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
+    if query.groups_by_status() {
+        let section_queries = query.status_section_queries();
+        if section_queries.is_empty() {
+            return Ok(json!({
+                "group": "status",
+                "sections": [],
+                "total": 0,
+                "limit": query.limit(),
+                "unavailable": [],
+            }));
+        }
+        let opened = open_workspaces(pinned, entries);
+        let sections = section_queries
+            .iter()
+            .map(|(_, section_query)| section_spec(section_query))
+            .collect();
+        let pages = fetch_aggregate_pages(entries, &opened, sections, resume_index)?;
+        let context = RenderContext {
+            state,
+            scope,
+            entries,
+            opened: &opened,
+            home,
+        };
+        return render_grouped_pages(&context, query, section_queries, pages);
+    }
+    let opened = open_workspaces(pinned, entries);
+    let pages = fetch_aggregate_pages(entries, &opened, vec![section_spec(query)], resume_index)?;
+    let page = pages.sections.into_iter().next().ok_or_else(|| {
+        orbit_core::OrbitError::Execution("aggregate task list answered no page".to_string())
+    })?;
+    let context = RenderContext {
+        state,
+        scope,
+        entries,
+        opened: &opened,
+        home,
+    };
+    render_task_page(&context, query, page)
 }
 
 /// The workspaces `/api/tasks/all` reads, in `/api/workspaces` order.
@@ -134,26 +194,113 @@ fn aggregate_task_scope(pinned: &Pinned) -> String {
     format!("aggregate:{}", workspace_ids.join(","))
 }
 
-/// The `group=status` answer for `/api/tasks/all`: one aggregate page per
-/// status, with the sources any section could not read named once.
-fn all_task_sections_json(
-    state: &DashboardState,
-    pinned: &Pinned,
-    query: &TaskPageQuery,
-    scope: &str,
+fn open_workspaces(pinned: &Pinned, entries: &[&WsEntry]) -> Vec<Result<Source, String>> {
+    fan_out(entries.len(), |index| {
+        let entry = entries[index];
+        if !entry.active {
+            return Err("workspace is unavailable".to_string());
+        }
+        let runtime = pinned.runtime_for(&entry.id).map_err(|_| {
+            tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
+            "failed to open workspace".to_string()
+        })?;
+        Ok(Source {
+            core: WsCore::over(&runtime).0,
+            ws: Ws(runtime),
+        })
+    })
+}
+
+fn section_spec(query: &TaskPageQuery) -> AggregateTaskSection {
+    AggregateTaskSection {
+        filter: query.filter(),
+        limit: query.limit(),
+        pilot_warnings: query.pilot_warnings(),
+    }
+}
+
+/// Run the one aggregate workspace app operation for this request, or return
+/// empty pages naming every unavailable workspace when no workspace opened.
+fn fetch_aggregate_pages(
     entries: &[&WsEntry],
+    opened: &[Result<Source, String>],
+    sections: Vec<AggregateTaskSection>,
     resume_index: usize,
+) -> Result<AggregateTaskPages, orbit_core::OrbitError> {
+    let Some((bound_index, bound_core)) = opened.iter().enumerate().find_map(|(index, slot)| {
+        slot.as_ref()
+            .ok()
+            .map(|source| (index, source.core.as_ref()))
+    }) else {
+        return Ok(unavailable_pages(opened, sections.len()));
+    };
+    let workspaces = entries
+        .iter()
+        .zip(opened)
+        .enumerate()
+        .map(|(index, (entry, slot))| AggregateWorkspace {
+            id: entry.id.as_str(),
+            source: match slot {
+                Ok(_) if index == bound_index => AggregateWorkspaceSource::Bound,
+                Ok(source) => AggregateWorkspaceSource::Peer(source.core.as_ref()),
+                Err(error) => AggregateWorkspaceSource::Unavailable(error.clone()),
+            },
+        })
+        .collect();
+    workspace::exec(
+        bound_core,
+        Command::AggregateTasks(AggregateTaskRequest {
+            workspaces,
+            sections,
+            resume_index,
+        }),
+    )
+    .and_then(Outcome::into_aggregate_tasks)
+}
+
+fn unavailable_pages(
+    opened: &[Result<Source, String>],
+    section_count: usize,
+) -> AggregateTaskPages {
+    let unavailable: Vec<UnavailableWorkspace> = opened
+        .iter()
+        .enumerate()
+        .filter_map(|(workspace_index, slot)| {
+            slot.as_ref().err().map(|error| UnavailableWorkspace {
+                workspace_index,
+                error: error.clone(),
+            })
+        })
+        .collect();
+    let sections = (0..section_count)
+        .map(|_| AggregateTaskPage {
+            rows: Vec::new(),
+            total: 0,
+            candidate_count: 0,
+            next_cursor: None,
+            delivery_attention: BTreeMap::new(),
+            run_branches: BTreeMap::new(),
+            dependency_statuses: BTreeMap::new(),
+            unavailable: unavailable.clone(),
+        })
+        .collect();
+    AggregateTaskPages { sections }
+}
+
+/// Render the `group=status` answer for `/api/tasks/all`: one aggregate page
+/// per status, with the sources any section could not read named once.
+fn render_grouped_pages(
+    context: &RenderContext<'_>,
+    query: &TaskPageQuery,
+    section_queries: Vec<(TaskStatus, TaskPageQuery)>,
+    pages: AggregateTaskPages,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let section_queries = query.status_section_queries();
-    let queries: Vec<_> = section_queries.iter().map(|(_, query)| query).collect();
-    let selections = select_workspace_task_pages(pinned, entries, &queries, resume_index);
-    let mut sections = Vec::new();
+    let mut sections = Vec::with_capacity(section_queries.len());
     let mut total = 0_u64;
     let mut unavailable = Vec::new();
     let mut unavailable_ids = HashSet::new();
-    for ((status, section_query), pages) in section_queries.into_iter().zip(selections) {
-        let mut section =
-            all_tasks_json(state, &section_query, scope, entries, resume_index, pages)?;
+    for ((status, section_query), page) in section_queries.into_iter().zip(pages.sections) {
+        let mut section = render_task_page(context, &section_query, page)?;
         if let Value::Object(map) = &mut section {
             if let Some(Value::Array(sources)) = map.remove("unavailable") {
                 for source in sources {
@@ -180,281 +327,43 @@ fn all_task_sections_json(
     }))
 }
 
-type WorkspaceSelection = Result<(Arc<Source>, TaskCandidateKeys), String>;
-
-/// One workspace an aggregate page reads: its app entry, and the runtime its
-/// row projections still read.
-struct Source {
-    core: Arc<Core>,
-    ws: Ws,
-}
-
-/// Visit each workspace once, then transpose the results into section order.
-/// Within each section the workspace order and its individual errors remain
-/// independent of the order in which the workers finish.
-fn select_workspace_task_pages(
-    pinned: &Pinned,
-    entries: &[&WsEntry],
-    queries: &[&TaskPageQuery],
-    resume_index: usize,
-) -> Vec<Vec<WorkspaceSelection>> {
-    let Some(first) = queries.first() else {
-        return Vec::new();
-    };
-    let batch_indexed = queries.len() > 1 && !first.pilot_warnings();
-    let selections = fan_out(entries.len(), |index| {
-        let entry = entries[index];
-        if !entry.active {
-            return Err("workspace is unavailable".to_string());
-        }
-        let runtime = pinned.runtime_for(&entry.id).map_err(|_| {
-            tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
-            "failed to open workspace".to_string()
-        })?;
-        let source = Arc::new(Source {
-            core: WsCore::over(&runtime).0,
-            ws: Ws(runtime),
-        });
-        let sections = queries
-            .iter()
-            .map(|query| {
-                let (filter, limit) = workspace_task_filter(query, index, resume_index);
-                CandidateSection {
-                    filter,
-                    limit,
-                    pilot_warnings: !batch_indexed && query.pilot_warnings(),
-                }
-            })
-            .collect();
-        let pages = match exec(
-            &source.core,
-            Command::TaskCandidates {
-                sections,
-                batch: batch_indexed,
-            },
-        ) {
-            Ok(Outcome::TaskCandidates(pages)) => pages,
-            Ok(_) => unreachable!("fleet task selection returned an unrelated outcome"),
-            Err(error) => {
-                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
-                return Err(error.to_string());
-            }
-        };
-        Ok(pages
-            .into_iter()
-            .map(|page| {
-                page.map(|page| (Arc::clone(&source), page))
-                    .map_err(|error| {
-                        tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
-                        error.to_string()
-                    })
-            })
-            .collect::<Vec<_>>())
-    });
-    let mut by_section: Vec<_> = queries
-        .iter()
-        .map(|_| Vec::with_capacity(entries.len()))
-        .collect();
-    for selection in selections {
-        match selection {
-            Ok(pages) => {
-                for (section, page) in by_section.iter_mut().zip(pages) {
-                    section.push(page);
-                }
-            }
-            Err(error) => {
-                for section in &mut by_section {
-                    section.push(Err(error.clone()));
-                }
-            }
-        }
-    }
-    by_section
-}
-
-fn workspace_task_filter(
+fn render_task_page(
+    context: &RenderContext<'_>,
     query: &TaskPageQuery,
-    index: usize,
-    resume_index: usize,
-) -> (TaskListFilter, usize) {
-    match index.cmp(&resume_index) {
-        // Only the total is read from a spent workspace.
-        std::cmp::Ordering::Less => (query.filter_scanning_before(None), 1),
-        std::cmp::Ordering::Equal => (query.filter(), query.limit()),
-        std::cmp::Ordering::Greater => (query.filter_scanning_before(None), query.limit()),
-    }
-}
-
-fn all_tasks_json(
-    state: &DashboardState,
-    query: &TaskPageQuery,
-    scope: &str,
-    entries: &[&WsEntry],
-    resume_index: usize,
-    selections: Vec<WorkspaceSelection>,
+    page: AggregateTaskPage,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
-    let mut candidates = Vec::new();
-    let mut total = 0;
-    let mut remaining = 0;
-    let mut unavailable = Vec::new();
-    let mut unavailable_ids = HashSet::new();
-    for (index, (entry, selection)) in entries.iter().zip(selections).enumerate() {
-        let (source, page) = match selection {
-            Ok(selection) => selection,
-            Err(error) => {
-                record_unavailable(&mut unavailable, &mut unavailable_ids, entry, &error);
-                continue;
-            }
-        };
-        total += page.total_without_cursor;
-        if index < resume_index {
-            continue;
-        }
-        remaining += page.total;
-        let mut items = page.items;
-        items.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        for task in items {
-            candidates.push((task, Arc::clone(&source), *entry));
-        }
-    }
-    candidates.truncate(query.limit());
     let offset = query.offset();
-    let next_offset = offset.saturating_add(candidates.len());
-    let next_cursor = if remaining > candidates.len() {
-        candidates
-            .last()
-            .map(|(task, _, entry)| {
-                query.next_workspace_cursor(
-                    scope,
-                    &entry.id,
-                    task.created_at,
-                    task.id.clone(),
-                    next_offset,
-                )
+    let next_offset = offset.saturating_add(page.candidate_count);
+    let next_cursor = page
+        .next_cursor
+        .as_ref()
+        .map(|anchor| {
+            query.next_workspace_cursor(
+                context.scope,
+                &context.entries[anchor.workspace_index].id,
+                anchor.created_at,
+                anchor.task_id.clone(),
+                next_offset,
+            )
+        })
+        .transpose()
+        .map_err(|error| {
+            orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+        })?;
+    let total = page.total;
+    let unavailable: Vec<Value> = page
+        .unavailable
+        .iter()
+        .map(|item| {
+            let entry = context.entries[item.workspace_index];
+            json!({
+                "workspace_id": entry.id,
+                "workspace_name": entry.name,
+                "error": item.error,
             })
-            .transpose()
-            .map_err(|error| {
-                orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
-            })?
-    } else {
-        None
-    };
-    // One read per workspace, in page order: its candidates' rows and one
-    // batched delivery-run read for those that read.
-    let mut groups: Vec<(Arc<Source>, &WsEntry, Vec<String>)> = Vec::new();
-    for (task, source, entry) in candidates {
-        match groups.last_mut() {
-            Some((_, last, ids)) if last.id == entry.id => ids.push(task.id),
-            _ => groups.push((source, entry, vec![task.id])),
-        }
-    }
-    let mut rows = Vec::new();
-    // In page order, so the first failed delivery-run read is the one
-    // reported.
-    let mut attention_by_workspace = Vec::new();
-    let mut run_branches_by_workspace: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for (source, entry, ids) in groups {
-        let Outcome::TaskRows(read) = exec(&source.core, Command::TaskRows(ids.clone()))? else {
-            unreachable!("fleet task rows returned an unrelated outcome");
-        };
-        let TaskRows {
-            rows: read_rows,
-            delivery_attention,
-            run_branches,
-        } = *read;
-        let mut read_any = false;
-        for (id, row) in ids.iter().zip(read_rows) {
-            // Same contract as the per-workspace scan above: one unreadable
-            // row is logged and skipped rather than failing the whole fleet
-            // list.
-            match row {
-                Ok(Some(row)) => {
-                    read_any = true;
-                    rows.push((row, Arc::clone(&source), entry));
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        workspace = %entry.id,
-                        task = %id,
-                        %error,
-                        "fleet task list skipped an unreadable task row"
-                    );
-                    // The dropped row would look like a new review task when
-                    // it returns, unless this read says the workspace was
-                    // incomplete.
-                    record_unavailable(
-                        &mut unavailable,
-                        &mut unavailable_ids,
-                        entry,
-                        &error.to_string(),
-                    );
-                }
-            }
-        }
-        if read_any {
-            attention_by_workspace.push((entry.id.clone(), delivery_attention));
-            run_branches_by_workspace.insert(entry.id.clone(), run_branches);
-        }
-    }
-    // All runtimes in a dashboard share one coordination registry. Read its
-    // global dependency projection once, after hydrating the page.
-    let statuses = match rows.first() {
-        Some((_, source, _)) => {
-            let tasks = rows.iter().map(|(row, _, _)| row.task.clone()).collect();
-            match exec(&source.core, Command::DependencyStatuses(tasks))? {
-                Outcome::DependencyStatuses(statuses) => statuses,
-                _ => unreachable!("dependency statuses returned an unrelated outcome"),
-            }
-        }
-        None => BTreeMap::new(),
-    };
-    let attention_by_workspace = attention_by_workspace
-        .into_iter()
-        .map(|(id, attention)| attention.map(|attention| (id, attention)))
-        .collect::<Result<BTreeMap<String, BTreeMap<String, Value>>, _>>()?;
-    let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
-    let mut values = Vec::with_capacity(rows.len());
-    for (row, source, entry) in rows {
-        // The row projections still read the workspace's runtime.
-        let runtime = &source.ws.0;
-        let projection = projections.entry(entry.id.as_str()).or_insert_with(|| {
-            TaskListProjection::new(runtime)
-                .with_delivery_attention(
-                    attention_by_workspace
-                        .get(&entry.id)
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-                .with_run_branches(
-                    run_branches_by_workspace
-                        .get(&entry.id)
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-                .with_riskiness(
-                    // On the blocking pool: wait for this workspace's model
-                    // as the per-workspace list does.
-                    tokio::runtime::Handle::current()
-                        .block_on(cached_riskiness_model(state, runtime)),
-                )
-        });
-        let mut value = projection.row_to_json(runtime, &row, &statuses)?;
-        if let Value::Object(map) = &mut value {
-            map.insert("workspace_id".to_string(), json!(entry.id));
-            map.insert("workspace_name".to_string(), json!(entry.name));
-            map.insert(
-                "workspace_root".to_string(),
-                json!(abbreviate_home(&entry.repo_root, home.as_deref())),
-            );
-        }
-        values.push(value);
-    }
+        })
+        .collect();
+    let values = project_rows(context, page)?;
     Ok(json!({
         "items": values,
         "total": total,
@@ -466,19 +375,56 @@ fn all_tasks_json(
     }))
 }
 
-/// One source `/api/tasks/all` could not read. The first recording wins so a
-/// workspace with several unreadable rows is named once.
-fn record_unavailable(
-    unavailable: &mut Vec<Value>,
-    recorded: &mut HashSet<String>,
-    entry: &WsEntry,
-    error: &str,
-) {
-    if recorded.insert(entry.id.clone()) {
-        unavailable.push(json!({
-            "workspace_id": entry.id,
-            "workspace_name": entry.name,
-            "error": error,
-        }));
+fn project_rows(
+    context: &RenderContext<'_>,
+    page: AggregateTaskPage,
+) -> Result<Vec<Value>, orbit_core::OrbitError> {
+    let mut projections: BTreeMap<usize, TaskListProjection> = BTreeMap::new();
+    let mut values = Vec::with_capacity(page.rows.len());
+    for AggregateTaskRow {
+        workspace_index,
+        row,
+    } in page.rows
+    {
+        let entry = context.entries[workspace_index];
+        let source = context.opened[workspace_index].as_ref().map_err(|error| {
+            orbit_core::OrbitError::Execution(format!(
+                "missing opened workspace for hydrated row: {error}"
+            ))
+        })?;
+        // The row projections still read the workspace's runtime.
+        let runtime = &source.ws.0;
+        let projection = projections.entry(workspace_index).or_insert_with(|| {
+            TaskListProjection::new(runtime)
+                .with_delivery_attention(
+                    page.delivery_attention
+                        .get(&workspace_index)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+                .with_run_branches(
+                    page.run_branches
+                        .get(&workspace_index)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+                .with_riskiness(
+                    // On the blocking pool: wait for this workspace's model
+                    // as the per-workspace list does.
+                    tokio::runtime::Handle::current()
+                        .block_on(cached_riskiness_model(context.state, runtime)),
+                )
+        });
+        let mut value = projection.row_to_json(runtime, &row, &page.dependency_statuses)?;
+        if let Value::Object(map) = &mut value {
+            map.insert("workspace_id".to_string(), json!(entry.id));
+            map.insert("workspace_name".to_string(), json!(entry.name));
+            map.insert(
+                "workspace_root".to_string(),
+                json!(abbreviate_home(&entry.repo_root, context.home.as_deref())),
+            );
+        }
+        values.push(value);
     }
+    Ok(values)
 }
