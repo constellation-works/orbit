@@ -5,7 +5,7 @@ use chrono::{TimeDelta, TimeZone, Utc};
 use orbit_common::{process, test_env};
 use orbit_core::runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::contracts::{JobRunStepParams, RetentionSelection, RetentionWorkspaceScope};
+use orbit_store::contract::{JobRunStepParams, RetentionSelection, RetentionWorkspaceScope};
 use orbit_types::workflow::{JobRunState, JobTargetType, PipelineState};
 use serde_json::json;
 

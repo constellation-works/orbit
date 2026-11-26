@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_store::Store;
-use orbit_store::contracts::{DrainIntentRecord, JobRunQuery};
+use orbit_store::contract::{DrainIntentRecord, JobRunQuery};
 use orbit_types::task::ExecutionLocation;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 

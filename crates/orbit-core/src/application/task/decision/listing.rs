@@ -1,7 +1,7 @@
 //! Decision request reads and surface projections.
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::TaskDecisionSnapshot;
+use orbit_store::contract::TaskDecisionSnapshot;
 use orbit_types::task::{
     DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
 };

@@ -12,9 +12,9 @@ use orbit_common::{NotFoundKind, OrbitError};
 #[cfg(unix)]
 use orbit_store::Store;
 #[cfg(unix)]
-use orbit_store::contracts::AuditEventFilter;
-use orbit_store::contracts::TaskReservationReleaseReason;
-use orbit_store::contracts::V2AuditEventInsertParams;
+use orbit_store::contract::AuditEventFilter;
+use orbit_store::contract::TaskReservationReleaseReason;
+use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::activity_job::{

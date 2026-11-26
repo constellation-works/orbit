@@ -18,7 +18,7 @@ use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
 use orbit_core::runtime::host_resource::profile::ProfileLookup;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionForecastRecord, AdmissionReservation, HostResourceMinute, RunResourceMinute,
 };
 use orbit_types::workflow::{DrainPassOutcome, JobRun, PullAdmissionFit};
@@ -109,7 +109,7 @@ fn finished_delivery_of(
                     resumed: false,
                     delivery_admitted_at: Some(admitted),
                     cpu_cores: cores,
-                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                    cpu_accounting: Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.into()),
                     memory_bytes: bytes,
                     samples: 12,
                     crew_model: None,
@@ -931,7 +931,7 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                             delivery_admitted_at: Some(delivery_admitted_at),
                             cpu_cores,
                             cpu_accounting: Some(
-                                orbit_store::contracts::CPU_ACCOUNTING_LINUX.into(),
+                                orbit_store::contract::CPU_ACCOUNTING_LINUX.into(),
                             ),
                             memory_bytes,
                             samples: 12,

@@ -1,7 +1,7 @@
 //! Follower claims hold their frozen surface before a local run is created.
 
 use super::*;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };
 

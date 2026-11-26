@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, AdmissionRunContext, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
 };
 use serde_json::{Value, json};
@@ -254,7 +254,7 @@ pub(crate) fn pull_refill(
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                         caller_fingerprint: Some(
-                            orbit_store::contracts::distributed_drain_protocol_fingerprint()
+                            orbit_store::contract::distributed_drain_protocol_fingerprint()
                                 .to_string(),
                         ),
                         caller_before_pr,
@@ -287,7 +287,7 @@ pub(crate) fn pull_refill(
                 // Capacity is exchanged before CreateLeaf by the peer's
                 // reconciliation hooks; this hook records accuracy only.
                 let requested =
-                    |receipt: Option<&orbit_store::contracts::AdmissionReceipt>,
+                    |receipt: Option<&orbit_store::contract::AdmissionReceipt>,
                      _requested_at: chrono::DateTime<chrono::Utc>| {
                         if let Some((_, sent, returned)) = forecasts.borrow_mut().last_mut() {
                             *sent = true;

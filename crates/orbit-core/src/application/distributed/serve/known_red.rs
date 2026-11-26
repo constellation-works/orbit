@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::{BaseSyncMode, KnownRedUnconfirmed};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation, ExecutionClaim,
     HandoffObservation, KnownRedObservation, KnownRedOsAcceptance,
 };

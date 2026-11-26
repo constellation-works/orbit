@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AuditRetentionTable, JournalRetentionCandidates, ResourceHistoryKeep, ResourceMinutesTable,
     RetentionIdSource, RetentionSelection, RetentionWorkspaceScope, StoreSpace,
 };

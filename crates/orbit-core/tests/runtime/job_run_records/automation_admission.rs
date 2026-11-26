@@ -37,7 +37,7 @@ fn concurrent_action_key_admission_initializes_one_run_and_resolves_without_writ
     ) {
         return;
     }
-    use orbit_store::contracts::KeyedJobRunAdmission;
+    use orbit_store::contract::KeyedJobRunAdmission;
     use serde_json::json;
     use std::sync::{Arc, Barrier};
 

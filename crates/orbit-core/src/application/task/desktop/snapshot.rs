@@ -163,7 +163,7 @@ impl OrbitRuntime {
         limit: usize,
         session: &ToolSessionContext,
     ) -> Result<DesktopTaskSnapshot, OrbitError> {
-        let orbit_store::contracts::DesktopTaskRead {
+        let orbit_store::contract::DesktopTaskRead {
             mut task,
             revision,
             comments,

@@ -1,4 +1,4 @@
-//! Consumer-facing record shapes, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only.
+//! Record shapes and query parameters; no backend traits and no persistence drivers; imports `orbit-common` and `orbit-types` only.
 
 mod admission_load;
 mod audit;

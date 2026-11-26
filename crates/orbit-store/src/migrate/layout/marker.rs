@@ -7,7 +7,7 @@ use orbit_common::{OrbitError, StorageLayer};
 use serde::{Deserialize, Serialize};
 
 use super::registry::LayoutMigration;
-use crate::contracts::{CompatibilityRecord, CompatibilityRefusal};
+use crate::contract::{CompatibilityRecord, CompatibilityRefusal};
 
 /// Marker file recording the workspace's current layout version, relative to
 /// the workspace `.orbit` directory. Lives under `state/` (gitignored

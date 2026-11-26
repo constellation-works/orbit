@@ -25,7 +25,7 @@ pub(in super::super) fn after_manifest() {
 
 #[test]
 fn packing_failure_preserves_destination_and_cleans_staging_file() {
-    const TEST: &str = "workflow::task::tests::archive::packing_failure_preserves_destination_and_cleans_staging_file";
+    const TEST: &str = "migrate::task::tests::archive::packing_failure_preserves_destination_and_cleans_staging_file";
     const MARKER: &str = "ORBIT_TEST_ARCHIVE_FAILURE_CHILD";
     if std::env::var(MARKER).as_deref() != Ok(TEST) {
         let home = TempDir::new().unwrap();

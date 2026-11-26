@@ -13,7 +13,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::contracts::ApplicationConsentRecord;
+use crate::contract::ApplicationConsentRecord;
 use crate::store::{Snapshot, Tx};
 
 /// Concrete application-consent repository scoped to a [`Snapshot`] (read-only)

@@ -5,12 +5,12 @@
 //! before followers reported them.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{LocalPullPhase, PROVIDER_DEFAULT_REPORTED_EFFORT};
-use orbit_store::workflow::dispatch_effort;
+use orbit_store::contract::{LocalPullPhase, PROVIDER_DEFAULT_REPORTED_EFFORT};
+use orbit_store::migrate::dispatch_effort;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-pub use orbit_store::workflow::dispatch_effort::DispatchEffortBackfill;
+pub use orbit_store::migrate::dispatch_effort::DispatchEffortBackfill;
 
 use crate::OrbitRuntime;
 

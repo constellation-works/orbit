@@ -6,7 +6,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::{ExecutorCapability, ExecutorCensusEntry};
+use crate::contract::{ExecutorCapability, ExecutorCensusEntry};
 use crate::driver::sqlite::codec::stamp;
 
 /// Insert or replace `entry` as its machine's row in `workspace`, unless the

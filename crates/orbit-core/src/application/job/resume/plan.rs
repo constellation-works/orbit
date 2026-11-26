@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;

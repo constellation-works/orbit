@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_store::contracts::FrictionLandingOutcome;
+use orbit_store::contract::FrictionLandingOutcome;
 use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::{
     RESOLVES_TARGET_NOTE_PREFIX, ResolvesSideEffectRecord, ResolvesSideEffectState, Task,

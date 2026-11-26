@@ -9,7 +9,7 @@ use orbit_automation::{
     AutomationError, DeferredReason,
     members::incidents::{IncidentFacts, incident_key},
 };
-use orbit_store::contracts::TaskCandidates;
+use orbit_store::contract::TaskCandidates;
 use orbit_types::{
     task::{Task, TaskEnvelopeV2, TaskStatus},
     workflow::{JobRun, JobRunState, PipelineState},
@@ -472,7 +472,7 @@ fn child_dispatch_token(
 
 fn blocked_candidates(runtime: &OrbitRuntime) -> Result<TaskCandidates, AutomationError> {
     let candidates = runtime.task_candidates(
-        &orbit_store::contracts::TaskListFilter {
+        &orbit_store::contract::TaskListFilter {
             statuses: Some(vec![TaskStatus::Blocked]),
             ..Default::default()
         },

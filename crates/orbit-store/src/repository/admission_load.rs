@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
-use crate::contracts::{
+use crate::contract::{
     AdmissionReservation, AdmissionRun, AdmissionRunMinute, HostResourceMinute,
     NewAdmissionReservation,
 };

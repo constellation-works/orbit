@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use orbit_store::compose::{WorkspaceTaskBackends, workspace_observational_backends};
-use orbit_store::contracts::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
+use orbit_store::contract::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
 use serde_json::Value;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
@@ -675,7 +675,7 @@ fn observation_fences_a_committed_decision_whose_lease_was_lost() {
     owner
         .backends
         .commit_boundary
-        .commit_task_transition(&orbit_store::contracts::TaskCoordinationCommitParams {
+        .commit_task_transition(&orbit_store::contract::TaskCoordinationCommitParams {
             task_id: task_id.clone(),
             actor: "test".into(),
             append_history: vec![orbit_types::task::TaskHistoryEntry {
@@ -879,7 +879,7 @@ fn batched_pages_fall_back_per_page_when_the_index_is_incomplete() {
             )
         })
         .to_vec();
-    let answer = |pages: Vec<orbit_store::contracts::TaskPage>| {
+    let answer = |pages: Vec<orbit_store::contract::TaskPage>| {
         pages
             .into_iter()
             .map(|page| {

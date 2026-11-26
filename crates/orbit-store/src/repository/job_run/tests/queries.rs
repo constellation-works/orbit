@@ -1,7 +1,7 @@
 // Admitted unit test: SQL generation through SQLite's planner. Uses the same
 // builder as the store's list method; no copied query oracle.
 use super::super::list_sql::job_run_list_sql;
-use crate::contracts::{JobRunOrder, JobRunQuery};
+use crate::contract::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
 use orbit_types::workflow::JobRunState;
 use rusqlite::types::Value;

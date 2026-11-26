@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimInspection, ClaimInvocation, ClaimMutation, ExecutionClaimPhase, HandoffObservation,
 };
 use orbit_types::task::TaskStatus;

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 
 use super::drains::DRAIN_JOB_NAME;
 use crate::OrbitRuntime;

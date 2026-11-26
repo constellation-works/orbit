@@ -12,13 +12,13 @@ const MAX_HISTORY_READ_THREADS: usize = 4;
 impl TaskV2Store {
     pub fn task_decision_snapshots(
         &self,
-    ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
+    ) -> Result<BTreeMap<String, crate::contract::TaskDecisionSnapshot>, OrbitError> {
         self.registry.task_decision_snapshots(&self.workspace_id)
     }
 
     pub fn record_task_decision_snapshots(
         &self,
-        records: &[crate::contracts::TaskDecisionSnapshot],
+        records: &[crate::contract::TaskDecisionSnapshot],
     ) -> Result<bool, OrbitError> {
         self.registry
             .record_task_decision_snapshots(&self.workspace_id, records)
@@ -73,7 +73,7 @@ impl TaskV2Store {
     pub(crate) fn read_task_histories(
         &self,
         ids: &[String],
-    ) -> Vec<crate::contracts::TaskHistoryReadOutcome> {
+    ) -> Vec<crate::contract::TaskHistoryReadOutcome> {
         if ids.is_empty() {
             return Vec::new();
         }
@@ -123,7 +123,7 @@ impl TaskV2Store {
     fn read_settled_events_slice(
         &self,
         ids: &[String],
-    ) -> Vec<Option<crate::contracts::TaskHistoryReadOutcome>> {
+    ) -> Vec<Option<crate::contract::TaskHistoryReadOutcome>> {
         ids.iter()
             .map(|id| {
                 if let Err(err) = orbit_types::task::validate_orb_task_id(id) {

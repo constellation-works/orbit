@@ -14,7 +14,7 @@ use tracing_subscriber::{Layer, Registry};
 use super::*;
 use crate::boundary::v2::repair_gate::RepairGate;
 use crate::boundary::v2_bundle::LISTING_BUNDLE_READS;
-use crate::contracts::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
+use crate::contract::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
 
 const WORKSPACE: &str = "orbit-test-123456";
 const RETIRED_WORKSPACE: &str = "orbit-test-654321";

@@ -248,7 +248,7 @@ impl OrbitRuntime {
         };
         // A crash can precede checkpointing. Host step-start audit rows are
         // therefore evidence of a possible write even when no output exists.
-        let rows = self.list_v2_audit_events(orbit_store::contracts::V2AuditEventFilter {
+        let rows = self.list_v2_audit_events(orbit_store::contract::V2AuditEventFilter {
             workspace_id: self.workspace_id()?,
             run_id: Some(id.into()),
             source: Some("v2_envelope".into()),

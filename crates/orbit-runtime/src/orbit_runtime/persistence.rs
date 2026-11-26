@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AuditEventInsertParams, AuditInvocationFields, V2AuditEventFilter, V2AuditEventRow,
 };
 use orbit_store::{Store, workspace_id_for_orbit_dir};
@@ -116,7 +116,7 @@ impl RuntimeKernel {
     }
 
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
-        Ok(self.stored().stores().host.sqlite.clone())
+        Ok(self.stored().stores().host.clone())
     }
 
     /// Persist native CLI and tool-dispatch telemetry without widening a
@@ -136,7 +136,6 @@ impl RuntimeKernel {
             self.stored()
                 .stores()
                 .host
-                .sqlite
                 .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
         }
     }
@@ -172,23 +171,16 @@ impl RuntimeKernel {
         if filter.workspace_id.trim().is_empty() {
             filter.workspace_id = self.workspace_id()?;
         }
-        self.stored()
-            .stores()
-            .host
-            .sqlite
-            .read()?
-            .v2_audit()
-            .list(&filter)
+        self.stored().stores().host.read()?.v2_audit().list(&filter)
     }
 
     pub fn insert_v2_audit_event(
         &self,
-        params: &orbit_store::contracts::V2AuditEventInsertParams,
+        params: &orbit_store::contract::V2AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
         self.stored()
             .stores()
             .host
-            .sqlite
             .write(|tx| tx.v2_audit().insert(params))
     }
 }

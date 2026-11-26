@@ -10,7 +10,7 @@ use super::hydrate::{
     hydrate_invocation_records, load_invocation_task_ids, map_invocation_accounting_fact,
     map_invocation_record,
 };
-use crate::contracts::{
+use crate::contract::{
     InvocationAccountingFact, InvocationAccountingQuery, InvocationQuery, InvocationRecord,
     ProviderLedgerEntry,
 };

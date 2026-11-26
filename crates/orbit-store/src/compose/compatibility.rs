@@ -21,7 +21,7 @@ pub fn compiled_compatibility() -> CompatibilityIdentity {
     CompatibilityIdentity {
         store_schema: schema::schema_compatibility(),
         task_registry: task_index::registry_compatibility(),
-        workspace_layout: crate::workflow::layout::layout_compatibility(),
+        workspace_layout: crate::migrate::layout::layout_compatibility(),
         features,
         feature_floors,
     }

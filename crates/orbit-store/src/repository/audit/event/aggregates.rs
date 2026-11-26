@@ -7,7 +7,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ANONYMOUS_ACTOR_LABEL, AuditAttribution};
 use rusqlite::{Connection, params};
 
-use crate::contracts::{
+use crate::contract::{
     AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate, AuditToolAggregate,
     AuditToolModelAggregate,
 };

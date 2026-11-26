@@ -33,7 +33,7 @@ use super::super::scope::ScopeUsage;
 pub(in crate::application::job::pipeline::worker) struct TreeSampler {
     cpu: TreeCpuAccount,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) latest: Vec<orbit_store::contracts::WorkerProcessResources>,
+    pub(super) latest: Vec<orbit_store::contract::WorkerProcessResources>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     previous: std::collections::HashMap<ProcessStartKey, u64>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -92,7 +92,7 @@ impl TreeSampler {
                         process.cpu_time_ns.saturating_sub(*before) as f64 / 1e9 / wall
                     })
                 });
-                orbit_store::contracts::WorkerProcessResources {
+                orbit_store::contract::WorkerProcessResources {
                     pid: process.key.pid,
                     starttime: process.key.starttime,
                     command: orbit_common::process::ancestry::process_command_name(process.key)

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use orbit_common::process::ancestry::{ProcessStartKey, ProcessTreeProcess};
 use orbit_store::Store;
-use orbit_store::contracts::RunResourceMinute;
+use orbit_store::contract::RunResourceMinute;
 use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
@@ -487,7 +487,7 @@ fn macos_worker_records_a_spawned_child_tree() {
     let charged_usec = rows[0].cpu_cores * 5_000_000.0;
     assert_eq!(
         rows[0].cpu_accounting.as_deref(),
-        Some(orbit_store::contracts::CPU_ACCOUNTING_MACOS),
+        Some(orbit_store::contract::CPU_ACCOUNTING_MACOS),
         "native worker minutes carry reaped-descendant Mach accounting provenance"
     );
     let newcomer_usec = newcomer_cpu_ns as f64 / 1_000.0;

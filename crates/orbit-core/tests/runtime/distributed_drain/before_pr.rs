@@ -16,7 +16,7 @@ use crate::admission_test_support::{
 };
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
     AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
     ExecutionLocation, HandoffReviewObservation,

@@ -3,7 +3,7 @@
 //! before leases read back as exclusive task reservations.
 
 use super::*;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     LeaseInsertParams, LeaseListResult, LeaseMode, LeasePrincipalClass, LeasePriority, LeaseRecord,
     LeaseReleaseParams, LeaseRenewParams, TaskLockConflict, TaskLockHolder,
     TaskReservationCheckParams, TaskReservationKind, TaskReservationReleaseReason,
@@ -186,7 +186,7 @@ fn lease_store_renews_releases_and_expires_and_lists_only_active_leases() {
     // Lease rows are not task reservations: a task-reservation release by id
     // leaves the lease alone.
     let task_release = reservations
-        .release_task_reservation(orbit_store::contracts::TaskReservationReleaseParams {
+        .release_task_reservation(orbit_store::contract::TaskReservationReleaseParams {
             workspace_orbit_dir: orbit_dir.clone(),
             workspace_id: Some(PARTITION_ID.into()),
             reservation_id: hard.lease_id.clone(),

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_types::record::{FrictionFrontmatter, FrictionRecord};
 
-use crate::contracts::StoredFrictionRecord;
+use crate::contract::StoredFrictionRecord;
 use crate::driver::file::friction_store::{LegacyFrictionDir, friction_record_paths};
 use crate::fs::yaml::parse_yaml_with;
 

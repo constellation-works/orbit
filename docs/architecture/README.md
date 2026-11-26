@@ -55,10 +55,10 @@ pass in `orbit-core`'s `crates/orbit-core/src/application/routines/`.
 
 ## The store, and federation between owner and follower hosts
 
-- **Store.** `orbit-store` is the persistence crate: consumer-visible traits in
-  `crates/orbit-store/src/contracts/`, private SQLite/file drivers in
-  `crates/orbit-store/src/driver/`, invariants in `repository`, explicit
-  import/export/repair in `workflow`, construction in `compose`. Two roots:
+- **Store.** `orbit-store` is the persistence crate: record shapes and query parameters in
+  `crates/orbit-store/src/contract/`, private SQLite/file drivers in
+  `crates/orbit-store/src/driver/`, concrete repositories in `repository`, explicit
+  import/export/repair/upgrade in `migrate`, construction in `compose`. Two roots:
   global `~/.orbit/` and workspace `.orbit/` (see Scoping rules in
   `ARCHITECTURE.md`). `orbit-search` maintains its own SQLite FTS5 index
   (`LexicalIndex`); `orbit-registry` persists machine identity and the

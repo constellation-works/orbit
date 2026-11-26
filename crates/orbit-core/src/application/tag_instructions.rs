@@ -9,7 +9,7 @@
 
 use orbit_common::OrbitError;
 use orbit_config::TagInstructionSetting;
-use orbit_store::contracts::AdmissionShipContract;
+use orbit_store::contract::AdmissionShipContract;
 use orbit_types::workflow::{
     CapturedTagInstructions, ExperimentActivityOverlay, MAX_TAG_INSTRUCTION_PROMPT_BYTES,
     TAG_INSTRUCTIONS_SCHEMA_VERSION, TagInstruction, TagInstructionError, TagInstructionRefusal,

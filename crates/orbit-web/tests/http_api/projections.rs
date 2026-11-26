@@ -7,13 +7,13 @@ use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
 use orbit_core::InvocationInsertParams;
-use orbit_core::V2AuditEventInsertParams;
 use orbit_core::application::auto_tasks::cursor_state_path;
 use orbit_core::application::routines::pause_routine;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
     TaskUpdateParams,
 };
+use orbit_core::test_support::V2AuditEventInsertParams;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskDecision,

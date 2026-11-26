@@ -1,5 +1,5 @@
 use super::tool_support::{create_context_task, test_runtime, unmanaged_tool_env_guard};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     LeaseInsertParams, LeaseMode, LeasePrincipalClass, LeasePriority, LeaseReleaseParams,
 };
 use orbit_store::{TaskLockConflict, TaskLockHolder, TaskReservationReleaseReason};

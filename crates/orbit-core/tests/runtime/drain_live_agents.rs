@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
-use orbit_store::contracts::V2AuditEventInsertParams;
+use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use serde_json::{Value, json};
 use std::process::{Child, Command, ExitStatus, Stdio};

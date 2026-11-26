@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::boundary::v2_bundle::LISTING_BUNDLE_READS;
-use crate::contracts::{TaskListFilter, TaskListHydration};
+use crate::contract::{TaskListFilter, TaskListHydration};
 
 fn bundle_reads<T>(op: impl FnOnce() -> T) -> (T, u64) {
     let before = LISTING_BUNDLE_READS.with(std::cell::Cell::get);

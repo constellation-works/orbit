@@ -364,7 +364,7 @@ fn requeue_names_the_held_completion_resume() {
     f.runtime
         .complete_job_run_step(
             &newer.run_id,
-            &orbit_store::contracts::JobRunStepParams {
+            &orbit_store::contract::JobRunStepParams {
                 step_index: 9,
                 // Match the finalizer's appended Job diagnostic, rather than
                 // the completion activity's audit row.

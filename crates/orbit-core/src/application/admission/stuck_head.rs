@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{GapFitHead, GapFitHeadMiss, GapFitHeadStall};
 

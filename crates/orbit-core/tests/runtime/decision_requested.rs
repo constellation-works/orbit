@@ -220,7 +220,7 @@ fn decision_routine() -> RoutineDefinition {
 /// worker is spawned). Returns the run id.
 fn fire(fx: &Fixture, task: &str, now: chrono::DateTime<Utc>) -> String {
     use orbit_automation::delivery::digest;
-    use orbit_store::contracts::KeyedJobRunAdmission;
+    use orbit_store::contract::KeyedJobRunAdmission;
     use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
     let runtime = fx.automation_runtime();
     let routine = decision_routine();

@@ -1,5 +1,5 @@
 use orbit_engine::{DispatchError, DispatchInvocationTrace};
-use orbit_store::contracts::InvocationInsertParams;
+use orbit_store::contract::InvocationInsertParams;
 use orbit_types::workflow::Provider;
 use serde_json::Value;
 
@@ -65,8 +65,8 @@ pub(super) fn resolved_agent_model_pair(
 
 pub(super) fn invocation_records(
     runtime: &OrbitRuntime,
-    query: orbit_store::contracts::InvocationQuery,
-) -> Result<Vec<orbit_store::contracts::InvocationRecord>, orbit_common::OrbitError> {
+    query: orbit_store::contract::InvocationQuery,
+) -> Result<Vec<orbit_store::contract::InvocationRecord>, orbit_common::OrbitError> {
     crate::runtime::RuntimeKernel::invocation_records(runtime, query)
 }
 

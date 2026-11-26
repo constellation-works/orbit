@@ -31,7 +31,7 @@ use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::JobRuns;
-use orbit_store::contracts::KeyedJobRunAdmission;
+use orbit_store::contract::KeyedJobRunAdmission;
 use orbit_types::task::{TaskArtifact, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
@@ -376,7 +376,7 @@ impl Fixture {
             .task_history()
             .update_task_history(
                 mandate,
-                orbit_store::contracts::TaskHistoryUpdateParams {
+                orbit_store::contract::TaskHistoryUpdateParams {
                     actor: "system".into(),
                     append_history: vec![TaskHistoryEntry {
                         at: Utc::now(),
@@ -510,7 +510,7 @@ impl Fixture {
             .history
             .update_task_history(
                 id,
-                orbit_store::contracts::TaskHistoryUpdateParams {
+                orbit_store::contract::TaskHistoryUpdateParams {
                     actor: "system".into(),
                     append_history: vec![orbit_types::task::TaskHistoryEntry {
                         at: Utc::now(),

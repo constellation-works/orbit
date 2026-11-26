@@ -6,7 +6,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::{OverlapScope, overlaps};
-use orbit_store::contracts::{LeaseMode, LeaseRecord, TaskReservationKind};
+use orbit_store::contract::{LeaseMode, LeaseRecord, TaskReservationKind};
 use serde::Serialize;
 
 use super::super::command::{workspace_orbit_dir, workspace_task_reservation_id};

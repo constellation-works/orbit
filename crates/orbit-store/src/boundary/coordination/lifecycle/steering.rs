@@ -7,7 +7,7 @@ use orbit_types::workflow::SteeringWatermark;
 
 use super::super::TaskCommitBoundary;
 use super::decode_state;
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     /// The steering records a claimed leaf's promotion gate and prompts read

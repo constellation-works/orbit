@@ -2,13 +2,13 @@
 //! phases keep the store's existing unscoped-write behavior.
 
 use super::*;
-use orbit_store::contracts::TaskDocumentUpdateParams;
+use orbit_store::contract::TaskDocumentUpdateParams;
 
 fn append_unscoped_history(owner: &Coordinated, task_id: &str) -> Result<(), OrbitError> {
     owner
         .backends
         .commit_boundary
-        .commit_task_transition(&orbit_store::contracts::TaskCoordinationCommitParams {
+        .commit_task_transition(&orbit_store::contract::TaskCoordinationCommitParams {
             task_id: task_id.into(),
             actor: "test".into(),
             append_history: vec![orbit_types::task::TaskHistoryEntry {

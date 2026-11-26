@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
-use crate::contracts::{
+use crate::contract::{
     V2AuditEventFilter, V2AuditEventRow, V2AuditEventTailPage, V2AuditKindForwardPayloads,
     V2AuditKindForwardQuery,
 };

@@ -34,7 +34,7 @@ use orbit_core::application::routines::{
 };
 use orbit_core::runtime::JobRuns;
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
     LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };

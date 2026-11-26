@@ -8,7 +8,7 @@
 //! exited.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 

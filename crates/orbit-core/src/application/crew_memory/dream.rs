@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::CrewMemoryEventRow;
+use orbit_store::contract::CrewMemoryEventRow;
 use orbit_types::task::{
     ExternalRef, Task, TaskArtifact, TaskComplexity, TaskOrigin, TaskPriority, TaskStatus, TaskType,
 };

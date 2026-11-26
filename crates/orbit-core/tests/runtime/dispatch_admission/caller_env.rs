@@ -10,7 +10,7 @@ use orbit_core::application::plugin::{
 };
 use orbit_core::application::workspace_preset::WorkspacePreset;
 use orbit_store::Store;
-use orbit_store::contracts::{AuditEventFilter, AuditEventInsertParams, AuditInvocationFields};
+use orbit_store::contract::{AuditEventFilter, AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::json;

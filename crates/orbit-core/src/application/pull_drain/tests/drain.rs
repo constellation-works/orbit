@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_runtime::JobRuns;
-use orbit_store::contracts::*;
+use orbit_store::contract::*;
 use orbit_types::workflow::{
     PipelineState, ReviewBudget, ReviewConsumption, ReviewLedger, ReviewResetDecision,
 };
@@ -376,7 +376,7 @@ fn request(jobs: &JobRuns) -> (PullDestination, AdmissionRequest) {
             labels: Vec::new(),
             request_id: "template".into(),
             caller_version: "1".into(),
-            caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            caller_schema: orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: false,

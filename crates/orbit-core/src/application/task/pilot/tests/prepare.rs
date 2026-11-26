@@ -206,7 +206,7 @@ fn explicit_admission_between_selection_and_hydration_settles_superseded() {
 #[test]
 fn unliftable_required_tool_is_a_blocking_pilot_finding() {
     let workspace = workspace(None);
-    let params: orbit_store::contracts::TaskCreateParams = serde_json::from_value(json!({
+    let params: orbit_store::contract::TaskCreateParams = serde_json::from_value(json!({
         "actor": "test",
         "title": "Stored disallowed requirement",
         "description": "Filed before the requirement was refused.",

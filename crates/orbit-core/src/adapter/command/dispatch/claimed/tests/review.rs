@@ -19,7 +19,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::process::ancestry::process_start_key;
 use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
-use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
 use orbit_tools::OwnerCoordinator;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;

@@ -8,7 +8,7 @@ use chrono::Utc;
 use orbit_common::{process, test_env};
 use orbit_core::runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, PullDestination,
 };
 use orbit_types::workflow::{JobRunState, PipelineState};
@@ -91,7 +91,7 @@ impl PullFixture {
             .unwrap()
             .is_some()
     }
-    fn occupancy(&self) -> orbit_store::contracts::DrainLeafOccupancy {
+    fn occupancy(&self) -> orbit_store::contract::DrainLeafOccupancy {
         self.jobs.drain_leaf_occupancy().unwrap()
     }
     fn mark_retrying(&self, run_id: &str) {
@@ -187,7 +187,7 @@ fn admission_request(
         labels: Vec::new(),
         request_id: request_id.into(),
         caller_version: caller_version.into(),
-        caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_schema: orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,

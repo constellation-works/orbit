@@ -2,7 +2,7 @@
 type: runbook
 summary: Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace.
 tags: [operations, upgrades, migrations, recovery]
-paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-common/src/storage/compatibility.rs"]
+paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/migrate/layout/**", "crates/orbit-store/src/driver/sqlite/host/**", "crates/orbit-common/src/storage/compatibility.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410, ORB-24411]
 last_validated: 2026-11-14
@@ -979,7 +979,7 @@ ledgers. The `orbit migrate` inspection path avoids opening the runtime so it
 can report pending entries before `--confirm` applies them.
 
 - **Workspace layout:** `.orbit/state/layout.version` plus an ordered migration registry in
-  `crates/orbit-store/src/workflow/layout/`. A missing marker means a pre-versioning workspace and is adopted
+  `crates/orbit-store/src/migrate/layout/`. A missing marker means a pre-versioning workspace and is adopted
   as v1. Upgraders serialize on `state/layout.lock`.
 - **Store schema:** the `schema_meta` ledger table inside `orbit.db`, backed by
   `crates/orbit-store/src/driver/sqlite/host/schema/` and the shared engine in

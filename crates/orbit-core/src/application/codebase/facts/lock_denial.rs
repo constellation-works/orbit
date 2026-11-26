@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use orbit_store::contracts::TaskLockDenialRecord;
+use orbit_store::contract::TaskLockDenialRecord;
 use serde_json::Value;
 
 use super::scan::LockDenial;

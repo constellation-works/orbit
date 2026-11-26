@@ -51,7 +51,7 @@ SCAN_DIRECTORIES = (
     "crates/orbit-core/src/bootstrap",
     "crates/orbit-runtime/src",
     "crates/orbit-automation/src",
-    "crates/orbit-store/src/contracts",
+    "crates/orbit-store/src/contract",
     "crates/orbit-store/src/driver/file",
     "crates/orbit-store/src/driver/sqlite",
     "crates/orbit-store/src/fs",

@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower.
 tags: [owner-failover, distributed-drain, task-publication, failover, multi-host]
-paths: ["crates/orbit-store/src/repository/task_index/**", "crates/orbit-store/src/workflow/task/**", "crates/orbit-cmd/src/registry/**"]
+paths: ["crates/orbit-store/src/repository/task_index/**", "crates/orbit-store/src/migrate/task/**", "crates/orbit-cmd/src/registry/**"]
 related_features: [distributed-drain, task-publication, host-registry, state-compatibility, federated-mcp]
 related_artifacts: [ORB-20620, ORB-12488, ORB-11068, ORB-11077]
 ---
@@ -101,8 +101,8 @@ All rows are proposed. The files named are the ones that would change. None of t
 |---------|------|------|
 | Change log in the task commit boundary | [crates/orbit-store/src/repository/task_index/](../../../crates/orbit-store/src/repository/task_index/) | [ORB-20620] |
 | Epoch ID ranges on the allocator | [crates/orbit-store/src/repository/task_index/allocator.rs](../../../crates/orbit-store/src/repository/task_index/allocator.rs) | [ORB-20620] |
-| Fence commits and on-change publication | [crates/orbit-store/src/workflow/task/publish.rs](../../../crates/orbit-store/src/workflow/task/publish.rs) | [ORB-20620] |
-| Mirror, takeover and rejoin import | [crates/orbit-store/src/workflow/task/restore.rs](../../../crates/orbit-store/src/workflow/task/restore.rs) | [ORB-20620] |
+| Fence commits and on-change publication | [crates/orbit-store/src/migrate/task/publish.rs](../../../crates/orbit-store/src/migrate/task/publish.rs) | [ORB-20620] |
+| Mirror, takeover and rejoin import | [crates/orbit-store/src/migrate/task/restore.rs](../../../crates/orbit-store/src/migrate/task/restore.rs) | [ORB-20620] |
 | Owner/replica role flip | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-20620] |
 | Data-loss windows and ID sizing | [2_design.md §5–§6](./2_design.md#5-taking-over-ownership) | [ORB-20620] |
 | Open questions for Daniel | [2_design.md §10.1](./2_design.md#101-open-questions-for-daniel) | [ORB-20620] |

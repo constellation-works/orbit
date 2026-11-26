@@ -151,7 +151,7 @@ wf_test!(
             [(
                 "claim-in-flight".into(),
                 in_flight_task.id.clone(),
-                orbit_store::contracts::ExecutionClaimPhase::Running,
+                orbit_store::contract::ExecutionClaimPhase::Running,
             )],
         );
         let server = fixture.server(false);
@@ -166,7 +166,7 @@ wf_test!(
             [(
                 "claim-held-alone".into(),
                 held_task.id.clone(),
-                orbit_store::contracts::ExecutionClaimPhase::Running,
+                orbit_store::contract::ExecutionClaimPhase::Running,
             )],
         );
         let refused = server.send(
@@ -560,7 +560,7 @@ fn run_state(fixture: &Fixture, run_id: &str) -> JobRunState {
 wf_test!(
     queued_only_cancel_refuses_a_window_that_started_after_the_card_rendered,
     {
-        use orbit_store::contracts::AuditEventFilter;
+        use orbit_store::contract::AuditEventFilter;
         use orbit_types::workflow::JobRunStartOutcome;
         let fixture = Fixture::new();
         let server = fixture.server(true);
@@ -727,7 +727,7 @@ wf_test!(
             .runtime
             .sqlite_store()
             .unwrap()
-            .acquire_workspace_claim(&orbit_store::contracts::WorkspaceClaimAcquireParams {
+            .acquire_workspace_claim(&orbit_store::contract::WorkspaceClaimAcquireParams {
                 workspace_orbit_dir: fixture
                     .runtime
                     .paths()
@@ -1030,7 +1030,7 @@ fn hold_for_red_base(fixture: &Fixture, task: &str, hold: &BaselineRedHold) {
     .history
     .update_task_history(
         task,
-        orbit_store::contracts::TaskHistoryUpdateParams {
+        orbit_store::contract::TaskHistoryUpdateParams {
             actor: "system".into(),
             status: Some(Backlog),
             status_event: Some(BASELINE_RED_HOLD_EVENT.into()),

@@ -1,7 +1,7 @@
 //! Pull-drain run-detail values shared by job projections and distributed reads.
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AdmissionCrewPressure;
+use orbit_store::contract::AdmissionCrewPressure;
 use orbit_types::workflow::{ClaimFailureClass, CrewExclusion, PullAuthExclusion};
 use serde::Serialize;
 

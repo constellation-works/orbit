@@ -387,7 +387,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     let snapshot = owner
         .run_tool("orbit.task.show", json!({"id": leaf.task}))
         .unwrap();
-    let host_update = json!(orbit_store::contracts::ClaimWorkerUpdate {
+    let host_update = json!(orbit_store::contract::ClaimWorkerUpdate {
         expected_status: Some(orbit_types::task::TaskStatus::InProgress),
         status_note: Some("agent-controlled note".into()),
         evidence: ClaimEvidence {
@@ -398,7 +398,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     });
     // A forged delivery would mark operator steering consumed and clear the
     // promotion gate without any prompt carrying it.
-    let forged_delivery = json!(orbit_store::contracts::ClaimSteeringRecord::Delivery {
+    let forged_delivery = json!(orbit_store::contract::ClaimSteeringRecord::Delivery {
         step_id: "implement_one".into(),
         through: None,
         delivered: Vec::new(),
@@ -725,7 +725,7 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
 /// settlement's comment is searchable on the same terms.
 fn claim_evidence_is_searchable_without_reindex() {
     use orbit_core::{GlobalSearchKind, GlobalSearchParams};
-    use orbit_store::contracts::ClaimWorkerUpdate;
+    use orbit_store::contract::ClaimWorkerUpdate;
 
     let pair = Pair::new(1);
     let owner = pair.wire.owner.clone();

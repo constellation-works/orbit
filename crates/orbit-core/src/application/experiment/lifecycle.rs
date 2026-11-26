@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::token;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ExperimentArmRow, ExperimentEventRow, ExperimentRecord, ExperimentRow, ExperimentWrite,
     ExperimentWriteOutcome,
 };

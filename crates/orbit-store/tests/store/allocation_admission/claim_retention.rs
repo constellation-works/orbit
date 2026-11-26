@@ -1,7 +1,7 @@
 //! Retention of settled claims' mutation receipts [ORB-15705].
 
 use orbit_common::ClaimRefusalKind;
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 
 use super::*;
 
@@ -159,7 +159,7 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
 
     let mut automatic = params;
     automatic.body = "dedupe-key: report-once\nPrivate automation evidence".into();
-    let created = orbit_store::workflow::friction::add_or_reuse(
+    let created = orbit_store::migrate::friction::add_or_reuse(
         &store,
         PARTITION_ID,
         &files_root,
@@ -168,7 +168,7 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
     )
     .unwrap();
     assert_eq!(
-        orbit_store::workflow::friction::add_or_reuse(
+        orbit_store::migrate::friction::add_or_reuse(
             &store,
             PARTITION_ID,
             &files_root,
@@ -194,7 +194,7 @@ fn friction_projection_follows_commit_and_silences_replays_and_rollbacks() {
         created_at: Utc::now(),
     };
     assert!(
-        orbit_store::workflow::friction::add(&store, PARTITION_ID, &files_root, failed)
+        orbit_store::migrate::friction::add(&store, PARTITION_ID, &files_root, failed)
             .unwrap_err()
             .to_string()
             .contains("fixture refuses friction insert")

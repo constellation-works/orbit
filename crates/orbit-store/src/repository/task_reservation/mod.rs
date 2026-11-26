@@ -19,7 +19,7 @@ use rows::{expire_reservations_in_scope, reservation_scope_clause, unique_row_id
 use orbit_common::OrbitError;
 
 use crate::boundary::TaskCommitBoundary;
-use crate::contracts::{
+use crate::contract::{
     LeaseExpandParams, LeaseExpandResult, LeaseInsertParams, LeaseInsertResult, LeaseListResult,
     LeaseMode, LeaseQueueGrantParams, LeaseQueueGrantResult, LeaseRecord, LeaseReleaseParams,
     LeaseReleaseResult, LeaseRenewParams, LeaseRenewResult, TaskReservationCheckParams,
@@ -60,7 +60,7 @@ impl TaskReservationRepository {
         &self,
         workspace_orbit_dir: &str,
         workspace_id: Option<&str>,
-    ) -> Result<Vec<crate::contracts::TaskReservationRecord>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskReservationRecord>, OrbitError> {
         self.store
             .list_task_reservation_history(workspace_orbit_dir, workspace_id)
     }

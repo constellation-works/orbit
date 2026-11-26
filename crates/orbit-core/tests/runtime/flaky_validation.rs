@@ -3,7 +3,7 @@
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::FrictionListFilter;
+use orbit_store::contract::FrictionListFilter;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
 use serde_json::json;

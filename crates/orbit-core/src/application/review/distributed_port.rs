@@ -9,7 +9,7 @@
 //! through [`JobDrainPort`](crate::application::job::JobDrainPort), which
 //! already carries both.
 
-use orbit_store::contracts::AdmissionShipContract;
+use orbit_store::contract::AdmissionShipContract;
 
 /// The owner reads review code calls, implemented by `distributed`.
 pub(in crate::application) trait ReviewDistributedPort {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_runtime::JobRuns;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimedReviewCarry, LocalPullAdmission,
     PullDestination,
 };

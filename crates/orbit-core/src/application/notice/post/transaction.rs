@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{NoticeEventRow, NoticeRow};
+use orbit_store::contract::{NoticeEventRow, NoticeRow};
 use orbit_types::record::{
     AuthorClass, EffectiveStatus, Notice, NoticeReports, NoticeScope, NoticeWorkspace, PostOutcome,
 };

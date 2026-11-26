@@ -4,7 +4,7 @@ use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
 use orbit_store::compose::prepare_workspace_frictions;
-use orbit_store::contracts::{FrictionRehomeOutcome, FrictionRehomeParams, FrictionUpdateParams};
+use orbit_store::contract::{FrictionRehomeOutcome, FrictionRehomeParams, FrictionUpdateParams};
 use orbit_types::record::FrictionStatus;
 use std::path::PathBuf;
 

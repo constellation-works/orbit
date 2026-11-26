@@ -104,7 +104,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Store;
 use crate::boundary::v2_bundle::TaskBundleStoreV2;
-use crate::contracts::{ClaimInspection, ClaimInvocation, OwnerWaveAdmission, OwnerWaveCandidate};
+use crate::contract::{ClaimInspection, ClaimInvocation, OwnerWaveAdmission, OwnerWaveCandidate};
 use crate::repository::task_index::TaskRegistryStore;
 
 /// Lock target for one task-store partition. The advisory lock is its

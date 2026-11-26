@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_runtime::{ApplicationPort, RuntimeKernel};
-use orbit_store::contracts::{TaskCandidates, TaskListFilter};
+use orbit_store::contract::{TaskCandidates, TaskListFilter};
 use orbit_types::task::{
     CrewSource, ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority,
     TaskStatus,

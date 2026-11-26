@@ -1,6 +1,6 @@
 //! Owner readiness must distinguish its local OS refusal from a follower's lock wait.
 use super::*;
-use orbit_store::contracts::{AdmissionCrewCapability, ExecutorCapability};
+use orbit_store::contract::{AdmissionCrewCapability, ExecutorCapability};
 
 fn mixed_host_lock_readiness() {
     let (_root, owner) = runtime_on(HostOs::Linux, POOL);

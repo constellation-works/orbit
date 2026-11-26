@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_engine::PullRequestStatus;
-use orbit_store::contracts::{ClaimInvocation, HandoffObservation};
+use orbit_store::contract::{ClaimInvocation, HandoffObservation};
 use serde_json::json;
 
 use super::{MergedPullRequest, RevokedHandoff};

@@ -6,7 +6,7 @@ use chrono::{Duration, SecondsFormat, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRunContext, ClaimInspection, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
     ExecutionLocation, JobRunStepParams, LocalPullAdmission, LocalPullPhase, PullDestination,
 };
@@ -179,7 +179,7 @@ fn friction_attention_does_not_recover_a_pending_task_commit() {
         .unwrap();
     let workspace_id = runtime.workspace_id().unwrap();
 
-    use orbit_store::contracts::FrictionAddParams;
+    use orbit_store::contract::FrictionAddParams;
     let store = orbit_core::runtime::friction::store_for(&runtime).unwrap();
     let open = store
         .add(FrictionAddParams {

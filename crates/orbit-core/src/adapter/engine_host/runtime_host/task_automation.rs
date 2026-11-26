@@ -201,13 +201,13 @@ pub(super) fn apply_task_automation_update(
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        let worker_update = orbit_store::contracts::ClaimWorkerUpdate {
+        let worker_update = orbit_store::contract::ClaimWorkerUpdate {
             status: update.status,
             plan: update.plan,
             context_files: update.context_files,
             external_refs: update.external_refs,
             status_note: update.status_note,
-            evidence: orbit_store::contracts::ClaimEvidence {
+            evidence: orbit_store::contract::ClaimEvidence {
                 summary: update.execution_summary,
                 comment,
                 ..Default::default()
@@ -226,7 +226,7 @@ pub(super) fn apply_task_automation_update(
                 }),
                 Default::default(),
             )?;
-            if worker_update == orbit_store::contracts::ClaimWorkerUpdate::default() {
+            if worker_update == orbit_store::contract::ClaimWorkerUpdate::default() {
                 return Ok(());
             }
         }

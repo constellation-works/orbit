@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::contracts::{RoutineFireRecord, RoutineFireState};
+use orbit_store::contract::{RoutineFireRecord, RoutineFireState};
 
 use super::super::loader::LoadedRoutine;
 use super::report::duration_from_minutes;

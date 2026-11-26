@@ -1,6 +1,6 @@
 use super::super::super::super::ledger::run_store_migrations;
 use super::super::super::*;
-use crate::contracts::MigrationCompatibility;
+use crate::contract::MigrationCompatibility;
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::ledger::Migration;
 use orbit_common::storage::sqlite::sqlite_store_error;

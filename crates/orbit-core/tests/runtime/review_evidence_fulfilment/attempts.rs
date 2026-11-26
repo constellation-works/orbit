@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState, ReviewEvidenceHold};
 use serde_json::{Value, json};
 

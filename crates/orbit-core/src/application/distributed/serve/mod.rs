@@ -10,7 +10,7 @@
 //! - **Access** is SSH login plus the `agent` or `operator` capability the
 //!   governed-operation rows require [ORB-12564]. There is no callers file.
 //! - **Attempt ownership** is the claim journal's own fence. Every mutation
-//!   here reaches it as a [`orbit_store::contracts::ClaimInvocation`] whose machine comes from the
+//!   here reaches it as a [`orbit_store::contract::ClaimInvocation`] whose machine comes from the
 //!   session, never tool input. For SSH MCP that machine is the caller-chosen
 //!   remote label; for local sessions it is the accepting machine's identity.
 //!   The journal compares it with the admitted execution machine, bound run

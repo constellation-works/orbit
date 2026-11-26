@@ -382,7 +382,7 @@ fn delivery_recovery_refuses_missing_right_scope_and_irreversible_decisions() {
         .task_history()
         .update_task_history(
             &task,
-            orbit_store::contracts::TaskHistoryUpdateParams {
+            orbit_store::contract::TaskHistoryUpdateParams {
                 actor: "system".into(),
                 append_history: vec![request.history_entry("system")],
                 ..Default::default()

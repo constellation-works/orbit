@@ -1,8 +1,7 @@
 //! Shared behavioral fixture for the real dashboard and CLI audit surfaces.
 
-use orbit_core::{
-    AuditEventInsertParams, AuditEventStatus, OrbitRuntime, V2AuditEventInsertParams,
-};
+use orbit_core::test_support::V2AuditEventInsertParams;
+use orbit_core::{AuditEventInsertParams, AuditEventStatus, OrbitRuntime};
 use serde_json::json;
 
 pub const SQL_POLICY_COUNT: i64 = 7;

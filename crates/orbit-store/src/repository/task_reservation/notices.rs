@@ -8,7 +8,7 @@ use rusqlite::{TransactionBehavior, params};
 use serde_json::{Value, json};
 
 use super::rows::{LEASE_ROWS, parse_string_list, reservation_scope_clause};
-use crate::contracts::TaskReservationScope;
+use crate::contract::TaskReservationScope;
 use crate::{Store, StoreTx};
 
 pub(super) fn append_lease_notice(

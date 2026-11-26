@@ -31,7 +31,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::store::{Snapshot, Tx};
 
-use crate::contracts::{
+use crate::contract::{
     ActivityInvocationCount, BoundedFacts, InvocationRunCoverage, JobRunOutcomeFact,
 };
 

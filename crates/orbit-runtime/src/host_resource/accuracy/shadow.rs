@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_store::contracts::AdmissionForecastRecord;
+use orbit_store::contract::AdmissionForecastRecord;
 
 use super::DrainShadowDecisions;
 

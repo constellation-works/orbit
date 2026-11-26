@@ -5,7 +5,7 @@ use orbit_types::workflow::handoff::*;
 
 use super::super::lifecycle::{decode, invalid, row};
 use super::{AUTHORIZATION, HANDOFF, REVOCATION, START, TaskCommitBoundary};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     pub(super) fn add_handoff_authorization(

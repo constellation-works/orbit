@@ -486,7 +486,7 @@ fn explicit_status_is_refused_before_assessment() {
         .read()
         .unwrap()
         .v2_audit()
-        .list(&orbit_store::contracts::V2AuditEventFilter {
+        .list(&orbit_store::contract::V2AuditEventFilter {
             workspace_id: workspace.runtime.workspace_id().unwrap(),
             limit: Some(1000),
             ..Default::default()

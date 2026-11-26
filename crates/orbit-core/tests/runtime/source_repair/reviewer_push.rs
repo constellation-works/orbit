@@ -82,7 +82,7 @@ fn held_reviewer_push_fixture() -> (Fixture, PathBuf, String) {
         f.runtime
             .complete_job_run_step(
                 &run.run_id,
-                &orbit_store::contracts::JobRunStepParams {
+                &orbit_store::contract::JobRunStepParams {
                     step_index: 40,
                     target_type: orbit_types::workflow::JobTargetType::Activity,
                     target_id: SETTLE.into(),
@@ -308,7 +308,7 @@ fn a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit() {
         f.runtime
             .complete_job_run_step(
                 &run.run_id,
-                &orbit_store::contracts::JobRunStepParams {
+                &orbit_store::contract::JobRunStepParams {
                     step_index: 40,
                     target_type: orbit_types::workflow::JobTargetType::Activity,
                     target_id: SETTLE.into(),

@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery.
 tags: [task-publication, task-artifacts, backup, git, multi-host]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-registry/**"]
+paths: ["crates/orbit-store/src/migrate/task/**", "crates/orbit-registry/**"]
 related_features: [task-publication, task-artifacts, remote-access, federated-mcp, host-registry]
 related_artifacts: [ORB-11068, ORB-11072, ORB-11073, ORB-11074, ORB-11075, ORB-11076, ORB-11077]
 ---
@@ -114,9 +114,9 @@ encrypted secret store.
 | Canonical task-bundle format | [Task Artifacts](../task-artifacts/2_design.md) | — |
 | Current live cross-machine access | [Remote Access](../remote-access/1_overview.md) | — |
 | Current host-qualified MCP routing | [Federated MCP](../federated-mcp/1_overview.md) | — |
-| Same-authority publication recovery | [`orbit-store` restore workflow](../../../crates/orbit-store/src/workflow/task/restore.rs) | [ORB-11076] |
+| Same-authority publication recovery | [`orbit-store` restore workflow](../../../crates/orbit-store/src/migrate/task/restore.rs) | [ORB-11076] |
 | Operator CLI and network-free end-to-end contract | [`orbit-cli` publication commands](../../../crates/orbit-cli/src/command/task/publication.rs) | [ORB-11077] |
-| Portable migration archive primitives | [`orbit-store` task workflow](../../../crates/orbit-store/src/workflow/task/mod.rs) | — |
+| Portable migration archive primitives | [`orbit-store` task workflow](../../../crates/orbit-store/src/migrate/task/mod.rs) | — |
 
 The binding, snapshot, publication and inspection slices landed in [ORB-11072], [ORB-11073], [ORB-11074] and [ORB-11075], respectively. [ORB-18375] added shared repositories with separate branch-scoped lineages.
 

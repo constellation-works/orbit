@@ -37,7 +37,7 @@ mod store;
 mod util;
 mod workspaces;
 
-pub use crate::contracts::{
+pub use crate::contract::{
     AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, IndexedTaskRow,
     RegisterWorkspaceParams, TaskBundleBinding, TaskIndexFilter, TaskIndexSelection,
     WorkspaceBinding, WorkspaceCheckoutBinding,

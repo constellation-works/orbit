@@ -9,7 +9,7 @@ impl OrbitRuntime {
     pub fn worker_resource_limit_evidence(
         &self,
         run_id: &str,
-    ) -> Result<Option<orbit_store::contracts::WorkerResourceLimitEvidence>, OrbitError> {
+    ) -> Result<Option<orbit_store::contract::WorkerResourceLimitEvidence>, OrbitError> {
         self.sqlite_store()?
             .read()?
             .worker_resource_limit()

@@ -11,7 +11,7 @@ use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimSteeringRecord, ClaimWorkerUpdate,
 };
 use orbit_tools::OrbitBuiltinAction;
@@ -634,7 +634,7 @@ fn apply(
     let result = runtime.mutate_execution_claim(Some(&auth), &mutation_id, &mutation)?;
     if let Some(record) = result.friction {
         return super::friction_tools::record_to_json_with_tag_normalizations(
-            orbit_store::contracts::StoredFrictionRecord { record, path: None },
+            orbit_store::contract::StoredFrictionRecord { record, path: None },
             friction_tag_substitutions,
         );
     }

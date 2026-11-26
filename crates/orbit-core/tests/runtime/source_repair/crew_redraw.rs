@@ -2,7 +2,7 @@
 use super::published_owner::{checkpoint, next, publication, requeue, save_run};
 use super::*;
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_store::contracts::{TaskDocumentUpdateParams, TaskHistoryUpdateParams};
+use orbit_store::contract::{TaskDocumentUpdateParams, TaskHistoryUpdateParams};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{
     CrewAssignmentState, RecordedCrewAssignment, TaskComplexity, TaskDecision, TaskEnvelopeV2,

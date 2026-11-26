@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun};
+use orbit_store::contract::{ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun};
 use orbit_types::tool::ToolSessionContext;
 
 use crate::OrbitRuntime;
@@ -24,7 +24,7 @@ impl OrbitRuntime {
         session: &ToolSessionContext,
         claim_id: &str,
         run_id: &str,
-        ship: orbit_store::contracts::AdmissionShipContract,
+        ship: orbit_store::contract::AdmissionShipContract,
     ) -> Result<ClaimMutationResult, OrbitError> {
         ensure_distributed_mutation_available("orbit.drain.claim.bind")?;
         self.ensure_distributed_owner_workspace()?;

@@ -11,7 +11,7 @@
 //! This module owns only the SQL. The protocol, its file-side apply, and the
 //! serialization boundary live in `boundary::coordination`.
 
-use crate::contracts::TaskReservationReserveResult;
+use crate::contract::TaskReservationReserveResult;
 
 pub(crate) use census::upsert_executor_census_in;
 #[cfg(test)]

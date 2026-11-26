@@ -10,7 +10,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::Selector;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::RegisteredTaskResolution;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::{NO_DRAIN_TAG, Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::automation::members::{

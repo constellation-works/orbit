@@ -19,7 +19,7 @@ use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::contracts::{
+use crate::contract::{
     CompatibilityRecord, MigrationCompatibility, StateComponent, evaluate_newer_state,
 };
 
@@ -293,14 +293,14 @@ fn compat_key(feature: &str) -> String {
 fn read_compat_record(
     conn: &Connection,
     feature: &str,
-) -> Result<Option<CompatibilityRecord>, crate::contracts::CompatibilityRefusal> {
+) -> Result<Option<CompatibilityRecord>, crate::contract::CompatibilityRefusal> {
     conn.query_row(
         "SELECT value FROM schema_meta WHERE key = ?1",
         [compat_key(feature)],
         |row| row.get::<_, String>(0),
     )
     .optional()
-    .map_err(|error| crate::contracts::CompatibilityRefusal::CorruptRecord(error.to_string()))?
+    .map_err(|error| crate::contract::CompatibilityRefusal::CorruptRecord(error.to_string()))?
     .map(|raw| CompatibilityRecord::decode(raw.trim()))
     .transpose()
 }

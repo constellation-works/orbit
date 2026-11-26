@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionForecastRecord, AdmissionLoad, NewAdmissionReservation};
+use orbit_store::contract::{AdmissionForecastRecord, AdmissionLoad, NewAdmissionReservation};
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 
 use super::RuntimeKernel;

@@ -1,6 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_engine::BaseSyncMode;
-use orbit_store::contracts::{HandoffObservation, HandoffReviewObservation};
+use orbit_store::contract::{HandoffObservation, HandoffReviewObservation};
 use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, TaskHandoff};
 

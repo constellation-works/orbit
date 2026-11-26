@@ -27,7 +27,7 @@ use super::leases::{LEASE_COLUMNS, lease_row, load_lease};
 use super::notices::{self, LeaseOverlapNotice};
 use super::rows::{LEASE_ROWS, expire_leases, serialize_string_list, visit_reservation_conflicts};
 use super::{reservation_scope_clause, unique_row_id};
-use crate::contracts::{
+use crate::contract::{
     LeaseDeadlock, LeaseExpandParams, LeaseExpandResult, LeaseMode, LeasePriority, LeaseQueueGrant,
     LeaseQueueGrantParams, LeaseQueueGrantResult, LeaseQueueKind, LeaseRecord, TaskLockConflict,
     TaskReservationScope,

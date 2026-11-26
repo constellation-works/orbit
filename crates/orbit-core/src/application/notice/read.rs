@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::governance::notice::NOTICE_LIST_MAX_LIMIT;
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{NoticeRow, NoticeScopeFilter};
+use orbit_store::contract::{NoticeRow, NoticeScopeFilter};
 use orbit_types::record::{EffectiveStatus, Notice, NoticeKind};
 use orbit_types::task::TaskStatus;
 

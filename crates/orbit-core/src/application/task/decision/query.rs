@@ -21,7 +21,7 @@ impl OrbitRuntime {
         let stamps = self.task_bundle_stamps(&[id.to_string()]);
         let (requests, observed_at) = self.get_task_decision_requests_for_scan(id)?;
         if !requests.is_empty() || stamps.contains_key(id) {
-            self.record_decision_snapshots(&[orbit_store::contracts::TaskDecisionSnapshot {
+            self.record_decision_snapshots(&[orbit_store::contract::TaskDecisionSnapshot {
                 task_id: id.to_string(),
                 // An unstampable observation can still index the owner;
                 // an empty stamp never matches a real bundle proof.

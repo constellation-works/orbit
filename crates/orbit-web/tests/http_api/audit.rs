@@ -5,7 +5,7 @@ use orbit_core::{
     AuditEventFilter, AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery,
     JobRunState, OrbitError,
 };
-use orbit_store::contracts::AuditInvocationFields;
+use orbit_store::contract::AuditInvocationFields;
 use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok, walk_audit_pages};

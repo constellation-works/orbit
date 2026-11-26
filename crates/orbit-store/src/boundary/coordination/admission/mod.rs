@@ -12,7 +12,7 @@ use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
-use crate::contracts::*;
+use crate::contract::*;
 
 mod admit;
 mod census;

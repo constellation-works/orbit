@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::FrictionListFilter;
+use orbit_store::contract::FrictionListFilter;
 
 use crate::OrbitRuntime;
 

@@ -6,7 +6,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::AuditEvent;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::contracts::AuditEventFilter;
+use crate::contract::AuditEventFilter;
 
 use super::row::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
 use super::{param_refs, since_tool_filter, where_clause};

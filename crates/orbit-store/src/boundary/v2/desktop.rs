@@ -1,6 +1,6 @@
 //! Desktop mutations share the existing task bundle journal and commit point.
 use super::*;
-use crate::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
+use crate::contract::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{CrewSource, DesktopMutationReceipt, TaskDecision};
 
@@ -21,18 +21,18 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
 /// Why an active claim refuses desktop writes, and the supported way out: a
 /// claim-scoped mutation, never a status change. The task and claiming run are
 /// named so a refusal can be traced without a second lookup.
-pub(crate) fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> String {
+pub(crate) fn active_claim_reason(claim: &crate::contract::ExecutionClaim) -> String {
     let identity = format!(
         " (task {}, run {})",
         claim.task_id, claim.run_context.run_id
     );
     match claim.phase {
-        crate::contracts::ExecutionClaimPhase::HandedOff => format!(
+        crate::contract::ExecutionClaimPhase::HandedOff => format!(
             "active execution claim requires a claim-scoped mutation{identity}: its handoff \
              awaits the owner's completion authority; land it through that authority, or revoke \
              the handoff and recover the claim from the owner's operator console"
         ),
-        crate::contracts::ExecutionClaimPhase::RepairPending => format!(
+        crate::contract::ExecutionClaimPhase::RepairPending => format!(
             "active execution claim requires a claim-scoped mutation{identity}: its landing \
              stopped on its base and an automatic repair is pending; let the repair re-hand it \
              off, or recover the claim from the owner's operator console"
@@ -49,7 +49,7 @@ impl TaskV2Store {
     pub fn read_desktop_task(
         &self,
         id: &str,
-    ) -> Result<crate::contracts::DesktopTaskRead, OrbitError> {
+    ) -> Result<crate::contract::DesktopTaskRead, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
         let bundle = self.read_existing_bundle(id)?;
@@ -84,7 +84,7 @@ impl TaskV2Store {
         } else {
             None
         };
-        Ok(crate::contracts::DesktopTaskRead {
+        Ok(crate::contract::DesktopTaskRead {
             task,
             revision,
             comments,

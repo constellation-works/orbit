@@ -2,7 +2,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ADMISSION_RECEIPT_LOOKUP_SCHEMA, AdmissionLookup, AdmissionShipContract,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
 };
@@ -132,7 +132,7 @@ impl crate::OrbitRuntime {
     /// interrupted task commits. Claim-mutation receipt usage is separate.
     pub fn inspect_admission_receipt_storage(
         &self,
-    ) -> Result<orbit_store::contracts::AdmissionReceiptStorage, OrbitError> {
+    ) -> Result<orbit_store::contract::AdmissionReceiptStorage, OrbitError> {
         self.ensure_distributed_owner_workspace()?;
         self.stores().tasks().inspect_admission_receipt_storage()
     }
@@ -152,7 +152,7 @@ impl crate::OrbitRuntime {
         declared: &DeclaredCallerContract,
     ) -> Result<DrainProbeReport, OrbitError> {
         self.ensure_distributed_owner_workspace()?;
-        let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+        let fingerprint = orbit_store::contract::distributed_drain_protocol_fingerprint();
         if let Some(caller) = declared.caller_fingerprint.as_deref()
             && caller != fingerprint
         {

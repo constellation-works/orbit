@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use orbit_common::fs::path::orbit_scratch_dir;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::JobRunState;
 use serde::Serialize;
 

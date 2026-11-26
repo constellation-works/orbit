@@ -9,7 +9,7 @@
 //! nothing about it.
 use orbit_common::OrbitError;
 use orbit_engine::{PullRequestStatus, RuntimeHost};
-use orbit_store::contracts::{ClaimInspection, ClaimRun, ClaimSettlementKind, ExecutionClaimPhase};
+use orbit_store::contract::{ClaimInspection, ClaimRun, ClaimSettlementKind, ExecutionClaimPhase};
 use orbit_types::{
     task::Task,
     workflow::handoff::{AcceptedHandoff, HandoffDelivery},

@@ -8,7 +8,7 @@ use super::queries::{
 };
 use super::store::TaskRegistryStore;
 use super::util::{now_string, path_to_string};
-use crate::contracts::{
+use crate::contract::{
     BindWorkspaceParams, RegisterWorkspaceParams, WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 use crate::fs::path_safety::normalize_path;

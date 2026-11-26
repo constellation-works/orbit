@@ -11,7 +11,7 @@
 //! them, so the scorecards count them like a reported settlement.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{LateLeafEffortWrite, LateLeafModelWrite};
+use orbit_store::contract::{LateLeafEffortWrite, LateLeafModelWrite};
 use orbit_types::tool::ToolSessionContext;
 use serde::Serialize;
 

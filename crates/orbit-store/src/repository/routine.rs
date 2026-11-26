@@ -10,7 +10,7 @@ mod fingerprint;
 mod fires;
 mod pause;
 
-use crate::contracts::{
+use crate::contract::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineCursor,
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutinePauseRecord,
     RoutineSlotAttempts,

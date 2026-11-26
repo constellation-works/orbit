@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskLockConflict;
+use orbit_store::contract::TaskLockConflict;
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::task::Task;
 use serde_json::Value;

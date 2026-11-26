@@ -21,7 +21,7 @@ use std::ffi::OsStr;
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::AuditEventInsertParams;
+use orbit_store::contract::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase};
 use serde_json::Value;

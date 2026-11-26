@@ -6,7 +6,7 @@ use std::process::Output;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::ReviewableLines;
+use orbit_store::contract::ReviewableLines;
 use orbit_types::workflow::automation::DirectLandingRequest;
 
 fn git(repo: &Path, args: &[&str]) -> Output {

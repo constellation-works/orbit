@@ -143,7 +143,7 @@ fn candidates(
     store: &TaskV2Store,
     filter: &TaskListFilter,
     observed: bool,
-) -> Result<orbit_store::contracts::TaskCandidates, OrbitError> {
+) -> Result<orbit_store::contract::TaskCandidates, OrbitError> {
     if observed {
         store.observe_task_candidates(filter, usize::MAX)
     } else {

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use super::super::Section;
 use super::{RECEIPT_KIND, StoredReceipt, TaskCommitBoundary, decode, digest, row};
-use crate::contracts::{AdmissionReceiptMaintenance, AdmissionReceiptStorage, ExecutionClaimPhase};
+use crate::contract::{AdmissionReceiptMaintenance, AdmissionReceiptStorage, ExecutionClaimPhase};
 use orbit_common::OrbitError;
 
 const CLAIM_MUTATION_RECEIPT_KIND: &str = "distributed-claim-mutation-v1";

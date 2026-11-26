@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::CrewMemoryProposalRow;
+use orbit_store::contract::CrewMemoryProposalRow;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;

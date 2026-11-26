@@ -613,7 +613,7 @@ fn tag_changes_record_previous_and_new_tags_in_history() {
 }
 
 fn claim_refused_start_leaves_document_status_history_and_artifacts_unchanged() {
-    use orbit_store::contracts::{
+    use orbit_store::contract::{
         AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
     };
     use serde_json::json;

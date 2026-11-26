@@ -1,7 +1,7 @@
 use super::super::super::TaskCommitBoundary;
 use super::super::codec::{CLAIM, STATE};
 use super::super::{ClaimAuthority, decode, invalid};
-use crate::contracts::*;
+use crate::contract::*;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
 

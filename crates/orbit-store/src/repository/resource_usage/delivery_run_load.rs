@@ -22,7 +22,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, Rows, params};
 
-use crate::contracts::{
+use crate::contract::{
     DeliveryRunResources, DeliveryRunShape, DeliveryRunsLoad, ResourceMinuteLoad,
 };
 

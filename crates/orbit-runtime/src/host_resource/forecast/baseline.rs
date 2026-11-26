@@ -38,7 +38,7 @@
 //! value: it is capped at what the host grew by since.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use orbit_store::contracts::{AdmissionLoad, AdmissionRunMinute, HostResourceMinute};
+use orbit_store::contract::{AdmissionLoad, AdmissionRunMinute, HostResourceMinute};
 
 use super::HostLoad;
 use crate::host_resource::RESOURCE_SAMPLE_INTERVAL;

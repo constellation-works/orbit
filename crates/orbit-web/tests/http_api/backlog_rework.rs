@@ -5,7 +5,7 @@ use super::backlog_forecast::{
 };
 use super::support::{Fixture, isolated, json_ok};
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::TaskHistoryUpdateParams;
+use orbit_store::contract::TaskHistoryUpdateParams;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task, TaskDecision,
     TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus,
@@ -595,7 +595,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             let fixture = Fixture::new();
             measured_history(&fixture, Duration::hours(1), false);
             backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
-            let older = orbit_core::StoredBacklogForecast {
+            let older = orbit_store::contract::StoredBacklogForecast {
                 workspace_id: String::new(),
                 forecast_at: Utc::now() - Duration::minutes(100),
                 model_version: 13,
@@ -726,7 +726,7 @@ fn rework_calibration_waits_for_the_horizon_and_keeps_mature_snapshots() {
             let stored_tasks =
                 serde_json::json!([{"id": origin, "complexity": "medium", "forecast": {}}]);
             let predicted = serde_json::json!({"time_to_drain_hours": {"p50": 120, "p90": 120}, "usd": {"p50": 2, "p90": 2}, "regression_rework": {"followups": {"p50": 1, "p90": 1}, "work_hours": {"p50": 1, "p90": 1}, "usd": {"p50": 1, "p90": 1}}});
-            let row = |at, version| orbit_core::StoredBacklogForecast {
+            let row = |at, version| orbit_store::contract::StoredBacklogForecast {
                 workspace_id: String::new(),
                 forecast_at: at,
                 model_version: version,

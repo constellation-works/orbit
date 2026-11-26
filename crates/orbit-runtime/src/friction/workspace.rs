@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_types::identity::validate_friction_id;
 
 use orbit_store::Store;
-use orbit_store::contracts::{FrictionListFilter, StoredFrictionRecord};
+use orbit_store::contract::{FrictionListFilter, StoredFrictionRecord};
 use orbit_store::friction_taxonomy::{load_tag_taxonomy, load_tag_taxonomy_with_descriptions};
 
 /// Application operations scoped to the workspace that owns the records.

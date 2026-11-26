@@ -50,7 +50,7 @@ pub fn isolated(test: &str) -> bool {
 }
 
 use chrono::{TimeZone, Utc};
-use orbit_store::contracts::TaskCreateParams;
+use orbit_store::contract::TaskCreateParams;
 use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, TaskType};
 // Shared by task and publication fixtures; file-store cases only use isolation.
 #[allow(dead_code)]

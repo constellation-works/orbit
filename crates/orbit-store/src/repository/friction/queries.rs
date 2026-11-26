@@ -16,7 +16,7 @@ use orbit_types::record::{FrictionRecord, FrictionStatus};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Row};
 
-use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
+use crate::contract::{FrictionListFilter, StoredFrictionRecord};
 use crate::driver::sqlite::host::connection::{UNICODE_LOWER_SQL, unicode_lower};
 
 /// Columns every record read selects, in decode order.

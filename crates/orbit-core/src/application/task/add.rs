@@ -1,6 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
+use orbit_store::contract::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::{Crew, all_agent_families};
 use orbit_types::task::{
     GRANTED_TOOLS_FIELD, OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin,

@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority.
 tags: [task-migration, multi-host, task-prefix]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/application/task_bundle/migration.rs", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
+paths: ["crates/orbit-store/src/migrate/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/application/task_bundle/migration.rs", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [task-migration, task-artifacts, host-registry]
 related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 ---
@@ -77,8 +77,8 @@ machine a disjoint id range).
 
 | Concern | File | Task |
 |---------|------|------|
-| Archive pack/unpack (tar.zst) | [crates/orbit-store/src/workflow/task/archive.rs](../../../crates/orbit-store/src/workflow/task/archive.rs) | [ORB-00034] |
-| Export / validated import + renumber | [crates/orbit-store/src/workflow/task/export.rs](../../../crates/orbit-store/src/workflow/task/export.rs), [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-00034], [ORB-20828] |
+| Archive pack/unpack (tar.zst) | [crates/orbit-store/src/migrate/task/archive.rs](../../../crates/orbit-store/src/migrate/task/archive.rs) | [ORB-00034] |
+| Export / validated import + renumber | [crates/orbit-store/src/migrate/task/export.rs](../../../crates/orbit-store/src/migrate/task/export.rs), [crates/orbit-store/src/migrate/task/import.rs](../../../crates/orbit-store/src/migrate/task/import.rs) | [ORB-00034], [ORB-20828] |
 | Reindex from disk | [crates/orbit-store/src/boundary/reindex.rs](../../../crates/orbit-store/src/boundary/reindex.rs) | [ORB-00034] |
 | Allocator seed/bump + prefix primitives | [crates/orbit-store/src/repository/task_index/allocator.rs](../../../crates/orbit-store/src/repository/task_index/allocator.rs) | [ORB-00034], [ORB-10721] |
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
@@ -86,7 +86,7 @@ machine a disjoint id range).
 | Open-time allocator seeding | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] introduced seeding; [ORB-24534] kept only open-time code here |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/registry/settings/table/key_head.rs](../../../crates/orbit-config/src/registry/settings/table/key_head.rs) | [ORB-00034] |
-| Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-12126] |
+| Owner-wins mirror sync | [crates/orbit-store/src/migrate/task/import.rs](../../../crates/orbit-store/src/migrate/task/import.rs) | [ORB-12126] |
 
 The export/import/reindex surfaces and owner-wins policy are shipped. Later
 repairs also landed: [ORB-10042] preserved artifact blobs through import,

@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{DrainIntentRecord, DrainIntentState};
+use orbit_store::contract::{DrainIntentRecord, DrainIntentState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -51,7 +51,7 @@ impl OrbitRuntime {
         let runs =
             self.stores()
                 .jobs()
-                .list_job_runs_filtered(&orbit_store::contracts::JobRunQuery {
+                .list_job_runs_filtered(&orbit_store::contract::JobRunQuery {
                     job_id: Some(orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB.to_string()),
                     recency_since: Some(since),
                     include_steps: false,

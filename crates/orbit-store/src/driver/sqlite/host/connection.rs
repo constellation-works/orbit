@@ -12,7 +12,7 @@ use rusqlite::{Connection, MAIN_DB, OpenFlags, Transaction, TransactionBehavior}
 
 use super::read_pool::{ReadGuard, ReadPool};
 use super::schema;
-use crate::contracts::ForwardCompatibleOpen;
+use crate::contract::ForwardCompatibleOpen;
 use orbit_types::telemetry::incident::classify_failure;
 
 /// SQL name of [`unicode_lower`]. The bundled SQLite `lower()` folds ASCII
@@ -96,8 +96,9 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
 pub struct Store {
     /// The single writer connection. Every mutating statement and every
     /// transaction serializes here; lock scope is one method call, never
-    /// held across unrelated I/O.
-    pub(crate) conn: Arc<Mutex<Connection>>,
+    /// held across unrelated I/O. Private to this driver so every production
+    /// write passes through `Store::write`.
+    conn: Arc<Mutex<Connection>>,
     /// Read pool for file-backed stores. `None` for in-memory stores, whose
     /// reads fall back to the writer connection (a second connection would
     /// see a different empty database).
@@ -121,14 +122,15 @@ pub struct StoreTx<'a> {
 }
 
 impl StoreTx<'_> {
-    /// Borrow the transaction as a raw SQLite connection.
-    ///
-    /// Feature crates use this narrow escape hatch to keep their SQL and row
-    /// codecs inside the owning crate while reusing Store's serialized writer
-    /// and transaction boundary. The returned connection remains inside this
-    /// transaction; callers must not issue transaction-control statements or
-    /// re-enter the parent [`Store`] from the callback.
+    /// Borrow the transaction as a raw SQLite connection for crate-internal
+    /// persistence and test fixtures.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn connection(&self) -> &Connection {
+        &self.tx
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    pub(crate) fn connection(&self) -> &Connection {
         &self.tx
     }
 }
@@ -284,6 +286,7 @@ impl Store {
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_transaction<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce(&mut StoreTx<'_>) -> Result<T, OrbitError>,
@@ -291,7 +294,7 @@ impl Store {
         self.with_transaction_behavior(TransactionBehavior::Deferred, op)
     }
 
-    pub fn with_transaction_behavior<T, F>(
+    pub(crate) fn with_transaction_behavior<T, F>(
         &self,
         behavior: TransactionBehavior,
         op: F,
@@ -325,8 +328,8 @@ impl Store {
     /// (`query_only=ON`), so reads proceed concurrently with the writer.
     /// In-memory stores fall back to locking the writer connection. Never
     /// call this while already holding the writer connection (e.g. inside a
-    /// [`Store::with_transaction`] or [`Store::write`] closure): the in-memory
-    /// fallback would deadlock, exactly as the old direct `conn.lock()` did.
+    /// [`Store::write`] closure): the in-memory fallback would deadlock,
+    /// exactly as the old direct `conn.lock()` did.
     pub(crate) fn read_connection(&self) -> Result<ReadGuard<'_>, OrbitError> {
         match &self.readers {
             Some(pool) => {
@@ -348,6 +351,7 @@ impl Store {
     /// connections do not share state. Callers must therefore treat the
     /// connection as read-only on every backend and must not re-enter this
     /// Store from the callback.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_read_connection<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce(&Connection) -> Result<T, OrbitError>,
@@ -356,6 +360,17 @@ impl Store {
         op(&conn)
     }
 
+    #[cfg(not(any(test, feature = "test-support")))]
+    pub(crate) fn with_read_connection<T, F>(&self, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce(&Connection) -> Result<T, OrbitError>,
+    {
+        let conn = self.read_connection()?;
+        op(&conn)
+    }
+
+    /// Raw writer connection handle for SQLite test fixtures only.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn connection(&self) -> Arc<Mutex<Connection>> {
         self.conn.clone()
     }

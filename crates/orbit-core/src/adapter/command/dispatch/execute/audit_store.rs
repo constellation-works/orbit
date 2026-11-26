@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use orbit_common::security::redaction::redact_all_json_with_keys;
 use orbit_common::{Env, NotFoundKind, OrbitError};
-use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_store::contract::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolExecutionKind;
 use orbit_tools::plugin::{take_delivered_plugin_secret_names, take_plugin_secret_updates};
 use orbit_types::plugin::PluginProvenance;

@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::log_rollback_failure;
-use crate::workflow::task::{
+use crate::migrate::task::{
     ImportAction, ImportConflictPolicy, ImportOutcome, ImportedTask, TaskMigrationManifest,
 };
 

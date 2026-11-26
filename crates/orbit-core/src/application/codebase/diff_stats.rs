@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::path_filter::PathFilter;
-use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats, ReviewableLines};
+use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats, ReviewableLines};
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::DirectLandingRequest;
 use serde::Serialize;

@@ -6,7 +6,7 @@ use orbit_engine::{
     RuntimeHost, WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcResult,
     WorktreeGcTaskLookup, collect_worktrees, run_worktree_has_reclaim_output,
 };
-use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
+use orbit_store::contract::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};

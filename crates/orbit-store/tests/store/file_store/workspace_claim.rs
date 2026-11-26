@@ -3,9 +3,9 @@
 
 use super::*;
 use orbit_store::Store;
-use orbit_store::contracts::WorkspaceClaimAcquireParams;
-use orbit_store::contracts::WorkspaceClaimCheckParams;
-use orbit_store::contracts::WorkspaceClaimReleaseParams;
+use orbit_store::contract::WorkspaceClaimAcquireParams;
+use orbit_store::contract::WorkspaceClaimCheckParams;
+use orbit_store::contract::WorkspaceClaimReleaseParams;
 
 fn acquire_params(actor: &str) -> WorkspaceClaimAcquireParams {
     WorkspaceClaimAcquireParams {

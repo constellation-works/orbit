@@ -2336,6 +2336,7 @@ dependencies = [
  "jsonschema",
  "libc",
  "orbit-common",
+ "orbit-store",
  "orbit-types",
  "rusqlite",
  "schemars",

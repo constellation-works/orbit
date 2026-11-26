@@ -9,7 +9,7 @@ fn seed_cycle_change(fx: &Fixture, mandate: &str, at: DateTime<Utc>, note: &str)
         .task_history()
         .update_task_history(
             mandate,
-            orbit_store::contracts::TaskHistoryUpdateParams {
+            orbit_store::contract::TaskHistoryUpdateParams {
                 actor: "fixture".into(),
                 append_history: vec![TaskHistoryEntry {
                     at,
@@ -214,7 +214,7 @@ fn checkpoint_notes_refuse_non_delta_length_without_losing_legacy_history() {
             .task_history()
             .update_task_history(
                 &mandate,
-                orbit_store::contracts::TaskHistoryUpdateParams {
+                orbit_store::contract::TaskHistoryUpdateParams {
                     actor: "fixture".into(),
                     append_comments: vec![orbit_types::task::TaskComment {
                         at: now,
@@ -693,7 +693,7 @@ fn rejected_checkpoint_surfaces_cause_and_field_on_exited_and_unknown_cycles() {
     let audit_dead_brief = fx.begin_cycle(&audit_dead_run, now + Duration::minutes(65));
     let audit_dead_cycle = audit_dead_brief["cycle"].as_str().unwrap().to_owned();
     fx.runtime
-        .record_audit_event(&orbit_store::contracts::AuditEventInsertParams {
+        .record_audit_event(&orbit_store::contract::AuditEventInsertParams {
             execution_id: format!("exec-{audit_dead_run}"),
             command: "tool".into(),
             subcommand: Some("run".into()),

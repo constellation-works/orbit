@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use orbit_store::workflow::task::{
+use orbit_store::migrate::task::{
     PublicationInspectRequest, PublicationRestoreMode, PublicationRestoreRequest,
     inspect_publication, restore_publication,
 };

@@ -6,7 +6,7 @@
 
 use orbit_engine::DispatchError;
 use orbit_store::compose::workspace_session_log_store;
-use orbit_store::contracts::{JobRunQuery, SessionLogFilter, SessionLogKind};
+use orbit_store::contract::{JobRunQuery, SessionLogFilter, SessionLogKind};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};

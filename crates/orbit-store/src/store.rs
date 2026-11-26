@@ -8,7 +8,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
-use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use crate::contract::{AuditEventInsertParams, AuditInvocationFields};
 use crate::driver::sqlite::host::read_pool::ReadGuard;
 use crate::repository::admission_load::AdmissionLoadRepository;
 use crate::repository::application_consent::ApplicationConsentRepository;
@@ -398,8 +398,7 @@ impl Store {
     ///
     /// File-backed stores use the read-only connection pool (`query_only=ON`);
     /// in-memory stores borrow the writer connection, so callers must not open
-    /// a [`Snapshot`] while already inside [`Store::write`] or
-    /// [`Store::with_transaction`].
+    /// a [`Snapshot`] while already inside [`Store::write`].
     pub fn read(&self) -> Result<Snapshot<'_>, OrbitError> {
         let conn = self.read_connection()?;
         conn.execute_batch("BEGIN DEFERRED")

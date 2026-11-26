@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use orbit_store::contracts::InvocationAccountingFact;
+use orbit_store::contract::InvocationAccountingFact;
 
 /// Keep scan order for aggregate readers and narrow unit attribution to
 /// its own run without repeatedly walking every workspace invocation.

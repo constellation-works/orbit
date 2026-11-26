@@ -24,7 +24,7 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
         return;
     }
     use orbit_core::OrbitRuntime;
-    use orbit_store::contracts::RunResourceMinute;
+    use orbit_store::contract::RunResourceMinute;
     use rusqlite::functions::FunctionFlags;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -78,7 +78,7 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
                 resumed: false,
                 delivery_admitted_at: Some(at),
                 cpu_cores: 1.0,
-                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                cpu_accounting: Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.into()),
                 memory_bytes: 1024,
                 samples: 1,
                 crew_model: Some("fixture-model".into()),

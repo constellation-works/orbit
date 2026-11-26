@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use orbit_common::OrbitError;
 use orbit_core::application::automation::pin_attempt_source;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_store::contracts::KeyedJobRunAdmission;
+use orbit_store::contract::KeyedJobRunAdmission;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{ChildDispatch, ExecutorDef, ExecutorSandboxKind, JobRunState};

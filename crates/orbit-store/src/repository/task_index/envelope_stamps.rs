@@ -18,7 +18,7 @@ use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
-use crate::contracts::EnvelopeStampRecord;
+use crate::contract::EnvelopeStampRecord;
 
 const ENVELOPE_STAMPS_TABLE: &str = "task_envelope_stamps";
 

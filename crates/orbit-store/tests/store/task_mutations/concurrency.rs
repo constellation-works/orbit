@@ -81,7 +81,7 @@ fn desktop_concurrent_status_receipts_are_atomic_and_durable() {
     {
         return;
     }
-    use orbit_store::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
+    use orbit_store::contract::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
     let temp = TempDir::new().unwrap();
     let store = store(&temp);
     let id = store

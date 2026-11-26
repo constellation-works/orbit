@@ -9,7 +9,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::Store;
-use orbit_store::contracts::{DeliveryRunResources, DeliveryRunsFreshness, DeliveryRunsLoad};
+use orbit_store::contract::{DeliveryRunResources, DeliveryRunsFreshness, DeliveryRunsLoad};
 
 use super::{ProfileBounds, ProfileSet, build_profiles, template_task_ids};
 

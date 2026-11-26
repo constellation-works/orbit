@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExperimentRecord;
+use orbit_store::contract::ExperimentRecord;
 
 use super::definition::ExperimentOverlay;
 use crate::OrbitRuntime;

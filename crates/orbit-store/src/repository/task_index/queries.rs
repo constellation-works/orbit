@@ -8,7 +8,7 @@ use orbit_types::task::{TaskComplexity, TaskEnvelopeV2, normalize_task_tags};
 use rusqlite::{Connection, OptionalExtension, Statement, Transaction, params};
 
 use super::util::{path_to_string, relation_type_name, terminal_month};
-use crate::contracts::{TaskBundleBinding, WorkspaceBinding, WorkspaceCheckoutBinding};
+use crate::contract::{TaskBundleBinding, WorkspaceBinding, WorkspaceCheckoutBinding};
 
 pub(super) fn workspace_by_orbit_dir(
     conn: &Connection,

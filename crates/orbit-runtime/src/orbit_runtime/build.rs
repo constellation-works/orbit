@@ -69,7 +69,7 @@ impl RuntimeKernel {
         roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
-        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
         read_only: bool,
         config_loader: RuntimeConfigLoader,
@@ -105,7 +105,7 @@ impl RuntimeKernel {
         roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
-        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
@@ -144,7 +144,7 @@ impl RuntimeKernel {
         context: crate::context::OrbitContext,
         binding: Option<WorkspaceRuntimeBinding>,
         global_root: &Path,
-        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
     ) -> Result<Self, OrbitError> {
@@ -182,7 +182,7 @@ impl RuntimeKernel {
         config_loader: RuntimeConfigLoader,
         binding: Option<Arc<WorkspaceRuntimeBinding>>,
         temp_dir: Option<Arc<builder::TempDir>>,
-        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
         host_resources: Arc<HostResourceMonitor>,
         host_signals: Arc<dyn HostSignalProbe>,
         task_pr_forge: Arc<dyn TaskPrForge>,
@@ -266,7 +266,7 @@ impl RuntimeKernel {
             config_loader,
             Some(Arc::new(binding)),
             Some(Arc::new(temp_dir)),
-            orbit_store::workflow::layout::LayoutUpgradeReport::default(),
+            orbit_store::migrate::layout::LayoutUpgradeReport::default(),
             host_resources,
             // An in-memory runtime is not bound to a host lifecycle.
             Arc::new(FixedHostSignals::none()),
@@ -311,7 +311,7 @@ impl RuntimeKernel {
 
     /// Outcome of the workspace-layout pre-flight that ran when this runtime
     /// opened: which layout migrations (if any) were auto-applied.
-    pub fn layout_upgrade_report(&self) -> &orbit_store::workflow::layout::LayoutUpgradeReport {
+    pub fn layout_upgrade_report(&self) -> &orbit_store::migrate::layout::LayoutUpgradeReport {
         &self.stored().layout_report
     }
 

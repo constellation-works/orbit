@@ -17,7 +17,7 @@ use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::contracts::{AuditEventInsertParams, JobRunStepParams};
+use orbit_store::contract::{AuditEventInsertParams, JobRunStepParams};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState};
 use serde_json::Value;

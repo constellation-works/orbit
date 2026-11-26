@@ -10,7 +10,7 @@ use crate::{
 };
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{OrbitError, governance::attention::cursor};
-use orbit_store::contracts::{ClaimInspection, JobRunQuery, LocalPullPhase};
+use orbit_store::contract::{ClaimInspection, JobRunQuery, LocalPullPhase};
 use orbit_types::{
     task::Task,
     tool::{

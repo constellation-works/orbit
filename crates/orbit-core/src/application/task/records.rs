@@ -2,7 +2,7 @@
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_search::{LexicalIndex, TaskSidecarSearchText};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
     TaskRow,
 };
@@ -382,10 +382,10 @@ impl crate::OrbitRuntime {
     /// never construct it from tool arguments or advisory environment labels.
     pub fn mutate_execution_claim(
         &self,
-        context: Option<&orbit_store::contracts::ClaimInvocation>,
+        context: Option<&orbit_store::contract::ClaimInvocation>,
         mutation_id: &str,
-        mutation: &orbit_store::contracts::ClaimMutation,
-    ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
+        mutation: &orbit_store::contract::ClaimMutation,
+    ) -> Result<orbit_store::contract::ClaimMutationResult, OrbitError> {
         Ok(self
             .mutate_execution_claim_outcome(context, mutation_id, mutation)?
             .result)
@@ -396,10 +396,10 @@ impl crate::OrbitRuntime {
     /// authority for a side effect that must follow the commit exactly once.
     pub(crate) fn mutate_execution_claim_outcome(
         &self,
-        context: Option<&orbit_store::contracts::ClaimInvocation>,
+        context: Option<&orbit_store::contract::ClaimInvocation>,
         mutation_id: &str,
-        mutation: &orbit_store::contracts::ClaimMutation,
-    ) -> Result<orbit_store::contracts::ClaimMutationOutcome, OrbitError> {
+        mutation: &orbit_store::contract::ClaimMutation,
+    ) -> Result<orbit_store::contract::ClaimMutationOutcome, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let outcome =
             self.stores()
@@ -429,7 +429,7 @@ impl crate::OrbitRuntime {
     /// read-side fence that matches [`Self::mutate_execution_claim`]'s.
     pub(crate) fn verify_worker_claim(
         &self,
-        context: &orbit_store::contracts::ClaimInvocation,
+        context: &orbit_store::contract::ClaimInvocation,
     ) -> Result<(), OrbitError> {
         self.stores()
             .task_coordination()
@@ -440,27 +440,27 @@ impl crate::OrbitRuntime {
     /// as [`Self::verify_worker_claim`].
     pub(crate) fn worker_claim_steering(
         &self,
-        context: &orbit_store::contracts::ClaimInvocation,
-    ) -> Result<orbit_store::contracts::ClaimSteeringReading, OrbitError> {
+        context: &orbit_store::contract::ClaimInvocation,
+    ) -> Result<orbit_store::contract::ClaimSteeringReading, OrbitError> {
         self.stores().tasks().worker_claim_steering(context)
     }
 
     pub fn inspect_execution_claims(
         &self,
-    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::ClaimInspection>, OrbitError> {
         self.stores().tasks().inspect_execution_claims()
     }
 
     pub fn inspect_live_execution_claims(
         &self,
-    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::ClaimInspection>, OrbitError> {
         self.stores().tasks().inspect_live_execution_claims()
     }
 
     pub fn inspect_task_execution_claims(
         &self,
         task_id: &str,
-    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::ClaimInspection>, OrbitError> {
         self.stores().tasks().inspect_task_execution_claims(task_id)
     }
 
@@ -468,7 +468,7 @@ impl crate::OrbitRuntime {
     /// commands: an interrupted coordination commit is recovered first.
     pub fn resolve_execution_claims(
         &self,
-    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::ClaimInspection>, OrbitError> {
         self.stores().task_coordination().resolve_execution_claims()
     }
 
@@ -476,7 +476,7 @@ impl crate::OrbitRuntime {
     /// live commands: an interrupted coordination commit is recovered first.
     pub fn resolve_live_execution_claims(
         &self,
-    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::ClaimInspection>, OrbitError> {
         self.stores().tasks().resolve_live_execution_claims()
     }
 
@@ -485,7 +485,7 @@ impl crate::OrbitRuntime {
     pub fn resolve_task_execution_claims(
         &self,
         task_id: &str,
-    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::ClaimInspection>, OrbitError> {
         self.stores().tasks().resolve_task_execution_claims(task_id)
     }
 
@@ -495,8 +495,8 @@ impl crate::OrbitRuntime {
     /// or retains the receipt. Settlement writes receipts still deferred.
     pub(crate) fn record_deferred_branch_observation(
         &self,
-        observation: &orbit_store::contracts::DeferredBranchObservation,
-    ) -> Result<orbit_store::contracts::BranchObservationOutcome, OrbitError> {
+        observation: &orbit_store::contract::DeferredBranchObservation,
+    ) -> Result<orbit_store::contract::BranchObservationOutcome, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let outcome = self
             .stores()
@@ -512,7 +512,7 @@ impl crate::OrbitRuntime {
         // it returns, so no later ordinary write is needed.
         if matches!(
             outcome,
-            orbit_store::contracts::BranchObservationOutcome::Retained
+            orbit_store::contract::BranchObservationOutcome::Retained
         ) && let Ok(Some(task)) = self.stores().tasks().get_task(&observation.task_id)
         {
             self.stores().task_records().index_task(&task);

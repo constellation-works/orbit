@@ -4,7 +4,7 @@ use orbit_types::workflow::{ReviewCertificate, handoff::*};
 
 use super::super::lifecycle::{decode, invalid};
 use super::{HANDOFF, START, TaskCommitBoundary};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     pub fn landing_start_requests(&self) -> Result<Vec<LandingStartRequest>, OrbitError> {

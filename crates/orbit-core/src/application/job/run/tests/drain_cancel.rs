@@ -8,12 +8,12 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionReceipt, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
     AdmissionTaskSummary, ClaimMutation, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
     LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
-use orbit_store::contracts::{TaskCreateParams, TaskReservationReleaseReason};
+use orbit_store::contract::{TaskCreateParams, TaskReservationReleaseReason};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
 use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::tool::ToolSessionContext;

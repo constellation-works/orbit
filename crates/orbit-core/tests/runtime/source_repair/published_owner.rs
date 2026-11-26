@@ -25,7 +25,7 @@ pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: V
     f.runtime
         .complete_job_run_step(
             run,
-            &orbit_store::contracts::JobRunStepParams {
+            &orbit_store::contract::JobRunStepParams {
                 step_index: index as usize,
                 target_type: orbit_types::workflow::JobTargetType::Activity,
                 target_id: id.into(),
@@ -1756,7 +1756,7 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
     f.runtime
         .complete_job_run_step(
             &held.run_id,
-            &orbit_store::contracts::JobRunStepParams {
+            &orbit_store::contract::JobRunStepParams {
                 step_index: 7,
                 target_type: orbit_types::workflow::JobTargetType::Activity,
                 target_id: "complete_pr".into(),

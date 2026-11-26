@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_common::{OrbitError, RemoteToolCode};
-use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
+use orbit_store::contract::{ClaimMutation, LocalPullPhase};
 use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
@@ -40,7 +40,7 @@ impl crate::OrbitRuntime {
     pub(crate) fn pull_drain_admissions(
         &self,
         drain_run_id: &str,
-    ) -> Result<Vec<orbit_store::contracts::LocalPullAdmission>, OrbitError> {
+    ) -> Result<Vec<orbit_store::contract::LocalPullAdmission>, OrbitError> {
         let jobs = self.stores().jobs();
         let Some(run) = jobs.get_job_run(drain_run_id)? else {
             return Ok(Vec::new());
@@ -55,8 +55,7 @@ impl crate::OrbitRuntime {
                     .and_then(|input| input.get("destination"))
                     .cloned()
                     .and_then(|value| {
-                        serde_json::from_value::<orbit_store::contracts::PullDestination>(value)
-                            .ok()
+                        serde_json::from_value::<orbit_store::contract::PullDestination>(value).ok()
                     })
             })
             .flatten();
@@ -83,7 +82,7 @@ impl crate::OrbitRuntime {
     pub fn pull_drain_occupancy(
         &self,
         drain_run_id: &str,
-    ) -> Result<Option<orbit_store::contracts::DrainLeafOccupancy>, OrbitError> {
+    ) -> Result<Option<orbit_store::contract::DrainLeafOccupancy>, OrbitError> {
         let jobs = self.stores().jobs();
         match jobs.get_job_run(drain_run_id)? {
             Some(run) if run.job_id == crate::application::contracts::PULL_DRAIN_JOB => {
@@ -353,7 +352,7 @@ impl crate::OrbitRuntime {
                 // host's, so its release excludes nothing.
                 // [ORB-15573] Nor is a provider's content refusal.
                 (None, Some(failure))
-                    if failure.excludes_crew()
+                    if claim_failure_excludes_crew(failure)
                         && evidence.forge_hold.is_none()
                         && !is_stale_branch_release(evidence) =>
                 {
@@ -508,7 +507,7 @@ impl crate::OrbitRuntime {
             crews.sort_by(|left, right| left.name.cmp(&right.name));
             crews
                 .into_iter()
-                .map(|crew| orbit_store::contracts::AdmissionCrewPressure {
+                .map(|crew| orbit_store::contract::AdmissionCrewPressure {
                     crew: crew.name.clone(),
                     pressure_milli: pressure_milli(read.crew(crew).pressure),
                 })
@@ -649,7 +648,7 @@ impl crate::OrbitRuntime {
 
 /// A stale-branch setup refusal protects one task's retained branch rather than
 /// indicting the host environment or the crew, so it suppresses neither.
-fn is_stale_branch_release(evidence: &orbit_store::contracts::ClaimEvidence) -> bool {
+fn is_stale_branch_release(evidence: &orbit_store::contract::ClaimEvidence) -> bool {
     evidence
         .leaf_run
         .as_ref()
@@ -733,4 +732,15 @@ pub(crate) fn is_owner_transport_failure(error: &OrbitError) -> bool {
         | OrbitError::UnhealthyCheckout(_) => true,
         _ => false,
     }
+}
+
+/// Whether the executing drain stops running the leaf's crew for the rest of
+/// its window: its class [says so](orbit_types::workflow::ClaimFailureClass::excludes_crew)
+/// and it is neither a provider's content refusal, a busy owner, nor a
+/// task-scoped delivery hold.
+pub(crate) fn claim_failure_excludes_crew(failure: &orbit_store::contract::ClaimFailure) -> bool {
+    failure.class.excludes_crew()
+        && !failure.provider_refusal
+        && !failure.owner_busy
+        && !failure.delivery_hold
 }

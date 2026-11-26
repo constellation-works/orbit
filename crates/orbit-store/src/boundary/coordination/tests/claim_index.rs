@@ -10,7 +10,7 @@ use super::super::admission::{claim_decodes, reset_claim_decodes};
 use super::super::lifecycle::CLAIM;
 use super::claim_section::Owner;
 use crate::boundary::journal::CLAIM_ROWS_FOR_TASK_SQL;
-use crate::contracts::*;
+use crate::contract::*;
 
 const SETTLED_CLAIMS: usize = 1_000;
 const CLAIM_BY_TASK_INDEX: &str = "idx_task_coordination_claims_by_task";

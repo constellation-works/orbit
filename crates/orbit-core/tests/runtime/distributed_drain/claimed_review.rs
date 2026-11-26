@@ -10,7 +10,7 @@
 
 use super::*;
 
-use orbit_store::contracts::{HandoffReviewObservation, ReviewInvocationRecord};
+use orbit_store::contract::{HandoffReviewObservation, ReviewInvocationRecord};
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;

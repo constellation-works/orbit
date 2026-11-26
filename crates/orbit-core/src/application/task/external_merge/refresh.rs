@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::AuditEventFilter;
+use orbit_store::contract::AuditEventFilter;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
 use serde::Serialize;

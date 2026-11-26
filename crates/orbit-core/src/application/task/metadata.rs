@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::TaskV2Store;
-use orbit_store::contracts::TaskListFilter;
+use orbit_store::contract::TaskListFilter;
 use orbit_types::task::{Task, TaskEnvelopeV2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

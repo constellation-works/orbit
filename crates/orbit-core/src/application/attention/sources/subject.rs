@@ -307,7 +307,7 @@ pub(super) fn derive_subject_kind(
             next.also.push(subject.show_next());
             // Put the leaf error before run metadata so the bounded reason
             // shows what the operator needs to resolve.
-            let prerequisite = orbit_store::contracts::ClaimFailedNote::parse(&episode.block_note)
+            let prerequisite = orbit_store::contract::ClaimFailedNote::parse(&episode.block_note)
                 .filter(|note| {
                     note.failure_class.is_some_and(
                         orbit_types::workflow::ClaimFailureClass::requires_operator_decision,

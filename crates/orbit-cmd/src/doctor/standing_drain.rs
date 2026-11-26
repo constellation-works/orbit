@@ -30,13 +30,13 @@ pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
                 .updated_at
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             match record.intent {
-                orbit_store::contracts::DrainIntentState::On => {
+                orbit_store::contract::DrainIntentState::On => {
                     format!(
                         "on (started by {} from {} at {at})",
                         record.actor, record.source
                     )
                 }
-                orbit_store::contracts::DrainIntentState::Paused => {
+                orbit_store::contract::DrainIntentState::Paused => {
                     format!("paused by {} from {} at {at}", record.actor, record.source)
                 }
             }

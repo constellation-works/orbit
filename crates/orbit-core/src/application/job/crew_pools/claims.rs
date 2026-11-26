@@ -13,7 +13,7 @@ impl OrbitRuntime {
     pub(crate) fn fresh_claim_crew_task(
         &self,
         task: &Task,
-        request: &orbit_store::contracts::AdmissionRequest,
+        request: &orbit_store::contract::AdmissionRequest,
     ) -> Result<Task, OrbitError> {
         // Preserve unrelated routing, including human work and standing
         // purpose/type assignments. Only historical crew enrollment needs

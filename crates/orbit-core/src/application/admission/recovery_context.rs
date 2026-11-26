@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::git::{GIT_REMOTE_TIMEOUT, run_git_within};
 use orbit_common::fs::selector::overlaps;
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening,

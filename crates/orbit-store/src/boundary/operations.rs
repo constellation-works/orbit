@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, Task, TaskHistoryEntry, TaskPriority, TaskStatus};
 
 use super::TaskV2Store;
-use crate::contracts::{RegisteredTaskResolution, TaskCreateParams};
+use crate::contract::{RegisteredTaskResolution, TaskCreateParams};
 
 /// The task operations callers reach on the concrete store: each enters the
 /// commit boundary or the claim section it needs, then delegates.
@@ -74,7 +74,7 @@ impl TaskV2Store {
         &self,
         task_id: &str,
         machine_id: &str,
-    ) -> Result<Option<crate::contracts::KeptClaimCandidate>, OrbitError> {
+    ) -> Result<Option<crate::contract::KeptClaimCandidate>, OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.kept_claim_candidate(task_id, machine_id),
             None => Ok(None),
@@ -84,10 +84,10 @@ impl TaskV2Store {
     /// Apply a claim mutation and report whether it committed or replayed.
     pub fn mutate_execution_claim_outcome(
         &self,
-        context: Option<&crate::contracts::ClaimInvocation>,
+        context: Option<&crate::contract::ClaimInvocation>,
         mutation_id: &str,
-        mutation: &crate::contracts::ClaimMutation,
-    ) -> Result<crate::contracts::ClaimMutationOutcome, OrbitError> {
+        mutation: &crate::contract::ClaimMutation,
+    ) -> Result<crate::contract::ClaimMutationOutcome, OrbitError> {
         self.claim_boundary()?
             .mutate_execution_claim_outcome(context, mutation_id, mutation)
     }
@@ -95,8 +95,8 @@ impl TaskV2Store {
     /// Mid-run steering records for a claimed leaf.
     pub fn worker_claim_steering(
         &self,
-        context: &crate::contracts::ClaimInvocation,
-    ) -> Result<crate::contracts::ClaimSteeringReading, OrbitError> {
+        context: &crate::contract::ClaimInvocation,
+    ) -> Result<crate::contract::ClaimSteeringReading, OrbitError> {
         self.claim_boundary()?.worker_claim_steering(context)
     }
 
@@ -114,7 +114,7 @@ impl TaskV2Store {
     /// Upsert one executor's census row.
     pub fn record_executor_census(
         &self,
-        entry: &crate::contracts::ExecutorCensusEntry,
+        entry: &crate::contract::ExecutorCensusEntry,
     ) -> Result<(), OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.record_executor_census(entry),
@@ -126,7 +126,7 @@ impl TaskV2Store {
     pub fn live_executor_census(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ExecutorCensusEntry>, OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.live_executor_census(now),
             None => Ok(Vec::new()),
@@ -136,7 +136,7 @@ impl TaskV2Store {
     /// Every recorded census row, live or not.
     pub fn recorded_executor_census(
         &self,
-    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ExecutorCensusEntry>, OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.recorded_executor_census(),
             None => Ok(Vec::new()),
@@ -146,14 +146,14 @@ impl TaskV2Store {
     /// Inspect execution claims.
     pub fn inspect_execution_claims(
         &self,
-    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_execution_claims()
     }
 
     /// Inspect claims whose phase protects a footprint.
     pub fn inspect_live_execution_claims(
         &self,
-    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_live_execution_claims()
     }
 
@@ -161,7 +161,7 @@ impl TaskV2Store {
     pub fn inspect_task_execution_claims(
         &self,
         task_id: &str,
-    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
         self.claim_boundary()?
             .inspect_task_execution_claims(task_id)
     }
@@ -169,14 +169,14 @@ impl TaskV2Store {
     /// Logical storage diagnostic for admission and mutation receipts.
     pub fn inspect_admission_receipt_storage(
         &self,
-    ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
+    ) -> Result<crate::contract::AdmissionReceiptStorage, OrbitError> {
         self.claim_boundary()?.inspect_admission_receipt_storage()
     }
 
     /// Settle an interrupted commit, then read footprint-protecting claims.
     pub fn resolve_live_execution_claims(
         &self,
-    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.resolve_live_execution_claims()
     }
 
@@ -184,7 +184,7 @@ impl TaskV2Store {
     pub fn resolve_task_execution_claims(
         &self,
         task_id: &str,
-    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
         self.claim_boundary()?
             .resolve_task_execution_claims(task_id)
     }
@@ -193,7 +193,7 @@ impl TaskV2Store {
     pub fn execution_claim_state(
         &self,
         claim_id: &str,
-    ) -> Result<Option<crate::contracts::ClaimInspection>, OrbitError> {
+    ) -> Result<Option<crate::contract::ClaimInspection>, OrbitError> {
         self.coordination_boundary().map_or(Ok(None), |boundary| {
             boundary.execution_claim_state(claim_id)
         })
@@ -203,8 +203,8 @@ impl TaskV2Store {
     pub fn record_hydrated_leaf_evidence(
         &self,
         claim_id: &str,
-        report: crate::contracts::LeafRunReport,
-    ) -> Result<crate::contracts::LeafEvidenceWrite, OrbitError> {
+        report: crate::contract::LeafRunReport,
+    ) -> Result<crate::contract::LeafEvidenceWrite, OrbitError> {
         self.claim_boundary()?
             .record_hydrated_leaf_evidence(claim_id, report)
     }
@@ -218,7 +218,7 @@ impl TaskV2Store {
         effort: Option<String>,
         crew: Option<String>,
         model: Option<String>,
-    ) -> Result<crate::contracts::LateLeafReportWrite, OrbitError> {
+    ) -> Result<crate::contract::LateLeafReportWrite, OrbitError> {
         self.claim_boundary()?
             .record_late_leaf_report(claim_id, machine_id, run_id, effort, crew, model)
     }
@@ -226,8 +226,8 @@ impl TaskV2Store {
     /// Retain one task-branch CI receipt, or queue it for a protecting claim.
     pub fn record_deferred_branch_observation(
         &self,
-        observation: &crate::contracts::DeferredBranchObservation,
-    ) -> Result<crate::contracts::BranchObservationOutcome, OrbitError> {
+        observation: &crate::contract::DeferredBranchObservation,
+    ) -> Result<crate::contract::BranchObservationOutcome, OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.record_deferred_branch_observation(observation),
             None => Err(OrbitError::Store(
@@ -239,8 +239,8 @@ impl TaskV2Store {
     /// Repairs still waiting for a repair leaf, with take eligibility.
     pub fn pending_repairs(
         &self,
-        owner: &crate::contracts::AdmissionIdentity,
-    ) -> Result<Vec<crate::contracts::PendingRepair>, OrbitError> {
+        owner: &crate::contract::AdmissionIdentity,
+    ) -> Result<Vec<crate::contract::PendingRepair>, OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.pending_repairs(owner),
             None => Ok(Vec::new()),
@@ -250,9 +250,9 @@ impl TaskV2Store {
     /// Reconcile one admission receipt without creating or binding anything.
     pub fn lookup_admission(
         &self,
-        identity: &crate::contracts::AdmissionIdentity,
+        identity: &crate::contract::AdmissionIdentity,
         request_id: &str,
-    ) -> Result<crate::contracts::AdmissionLookup, OrbitError> {
+    ) -> Result<crate::contract::AdmissionLookup, OrbitError> {
         self.claim_boundary()?
             .lookup_admission(identity, request_id)
     }
@@ -284,9 +284,9 @@ impl TaskV2Store {
     /// Select metadata before hydration, retaining all-envelope index validation.
     pub fn task_candidates(
         &self,
-        filter: &crate::contracts::TaskListFilter,
+        filter: &crate::contract::TaskListFilter,
         limit: usize,
-    ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
+    ) -> Result<crate::contract::TaskCandidates, OrbitError> {
         self.in_boundary(|| self.task_candidates_bare(filter, limit))
     }
 
@@ -294,9 +294,9 @@ impl TaskV2Store {
     /// envelope; `None` when the filter or the index cannot answer that way.
     pub fn task_candidate_keys(
         &self,
-        filter: &crate::contracts::TaskListFilter,
+        filter: &crate::contract::TaskListFilter,
         limit: usize,
-    ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
+    ) -> Result<Option<crate::contract::TaskCandidateKeys>, OrbitError> {
         self.in_boundary(|| self.task_candidate_keys_bare(filter, limit))
     }
 
@@ -307,11 +307,11 @@ impl TaskV2Store {
 
     pub fn query_task_rows(
         &self,
-        filter: &crate::contracts::TaskListFilter,
+        filter: &crate::contract::TaskListFilter,
         limit: usize,
-        residual: crate::contracts::TaskResidualFilter<'_>,
-        hydration: crate::contracts::TaskListHydration,
-    ) -> Result<crate::contracts::TaskPage, OrbitError> {
+        residual: crate::contract::TaskResidualFilter<'_>,
+        hydration: crate::contract::TaskListHydration,
+    ) -> Result<crate::contract::TaskPage, OrbitError> {
         self.in_boundary(|| self.query_task_rows_bare(filter, limit, residual, hydration))
     }
 
@@ -321,10 +321,10 @@ impl TaskV2Store {
     /// the index cannot serve, every page takes the unbatched route.
     pub fn query_task_row_pages(
         &self,
-        pages: &[(crate::contracts::TaskListFilter, usize)],
-        residual: crate::contracts::TaskResidualFilter<'_>,
-        hydration: crate::contracts::TaskListHydration,
-    ) -> Result<Vec<crate::contracts::TaskPage>, OrbitError> {
+        pages: &[(crate::contract::TaskListFilter, usize)],
+        residual: crate::contract::TaskResidualFilter<'_>,
+        hydration: crate::contract::TaskListHydration,
+    ) -> Result<Vec<crate::contract::TaskPage>, OrbitError> {
         self.in_boundary(|| self.query_task_row_pages_bare(pages, residual, hydration))
     }
 
@@ -333,7 +333,7 @@ impl TaskV2Store {
         &self,
         id: &str,
         list_read: bool,
-    ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
+    ) -> Result<Option<crate::contract::TaskRow>, OrbitError> {
         self.in_boundary(|| self.get_task_row_bare(id, list_read))
     }
 
@@ -341,7 +341,7 @@ impl TaskV2Store {
     pub fn get_task_row_uncached(
         &self,
         id: &str,
-    ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
+    ) -> Result<Option<crate::contract::TaskRow>, OrbitError> {
         self.in_boundary(|| TaskV2Store::get_task_row_uncached_bare(self, id))
     }
 
@@ -375,7 +375,7 @@ impl TaskV2Store {
     /// Bodyless scan identity inputs for every task.
     pub fn task_metadata_scan_stamps(
         &self,
-    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskChangeStamp>, OrbitError> {
         Ok(TaskV2Store::task_change_stamps(self)?.as_ref().clone())
     }
 
@@ -386,7 +386,7 @@ impl TaskV2Store {
         &self,
         statuses: &[TaskStatus],
         updated_since: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<crate::contracts::TaskLifecycleStamp>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskLifecycleStamp>, OrbitError> {
         self.in_boundary(|| self.task_lifecycle_stamps_matching_bare(statuses, updated_since))
     }
 
@@ -493,7 +493,7 @@ impl TaskV2Store {
     /// Status counts per complexity bucket from the task index.
     pub fn task_completion_by_complexity(
         &self,
-    ) -> Result<Vec<crate::contracts::TaskCompletionByComplexity>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskCompletionByComplexity>, OrbitError> {
         self.in_boundary(|| self.task_completion_by_complexity_bare())
     }
 
@@ -506,7 +506,7 @@ impl TaskV2Store {
     pub fn task_terminal_transitions(
         &self,
         since: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<Vec<crate::contracts::TaskTerminalTransition>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskTerminalTransition>, OrbitError> {
         self.in_boundary(|| self.task_terminal_transitions_bare(since))
     }
 
@@ -514,17 +514,17 @@ impl TaskV2Store {
     pub fn task_defect_filings(
         &self,
         since: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<Vec<crate::contracts::TaskDefectFiling>, OrbitError> {
+    ) -> Result<Vec<crate::contract::TaskDefectFiling>, OrbitError> {
         self.in_boundary(|| self.task_defect_filings_bare(since))
     }
 
     /// Internal lifecycle seam; unavailable backends fail closed.
     pub fn mutate_execution_claim(
         &self,
-        context: Option<&crate::contracts::ClaimInvocation>,
+        context: Option<&crate::contract::ClaimInvocation>,
         mutation_id: &str,
-        mutation: &crate::contracts::ClaimMutation,
-    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+        mutation: &crate::contract::ClaimMutation,
+    ) -> Result<crate::contract::ClaimMutationResult, OrbitError> {
         self.mutate_execution_claim_outcome(context, mutation_id, mutation)
             .map(|outcome| outcome.result)
     }

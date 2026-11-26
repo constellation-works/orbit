@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_engine::{RuntimeHost, V2AuditWriter};
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, DurationRound, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionForecastPoint, AdmissionForecastRecord, ForecastDelivery, HostResourceMinute,
     RunResourceMinute,
 };

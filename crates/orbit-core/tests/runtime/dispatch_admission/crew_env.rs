@@ -109,13 +109,13 @@ env = ["OPENAI_API_KEY={SOURCE}"]
     )
     .unwrap();
     let filed = frictions
-        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .list(&orbit_store::contract::FrictionListFilter::default())
         .unwrap();
     assert_eq!(filed.len(), 1, "one sustained incident");
     classify(&runtime, &drain);
     assert_eq!(
         frictions
-            .list(&orbit_store::contracts::FrictionListFilter::default())
+            .list(&orbit_store::contract::FrictionListFilter::default())
             .unwrap()
             .len(),
         1,
@@ -653,7 +653,7 @@ model = "fixture-beta"
     )
     .unwrap();
     let filed: Vec<String> = frictions
-        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .list(&orbit_store::contract::FrictionListFilter::default())
         .unwrap()
         .into_iter()
         .map(|row| row.record.body)
@@ -749,7 +749,7 @@ model = "fixture-beta"
     )
     .unwrap();
     let filed: Vec<String> = frictions
-        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .list(&orbit_store::contract::FrictionListFilter::default())
         .unwrap()
         .into_iter()
         .map(|row| row.record.body)
@@ -831,7 +831,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
     )
     .unwrap();
     let filed: Vec<String> = frictions
-        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .list(&orbit_store::contract::FrictionListFilter::default())
         .unwrap()
         .into_iter()
         .map(|row| row.record.body)

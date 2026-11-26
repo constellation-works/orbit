@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState};
+use orbit_store::contract::{RoutineFireIntentParams, RoutineFireState};
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::OverlapPolicy;
 use std::collections::BTreeMap;

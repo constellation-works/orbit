@@ -213,7 +213,7 @@ fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
 
     let (_root, runtime) = test_runtime();
     let jobs = runtime.stores().jobs();
-    let orbit_store::contracts::KeyedJobRunAdmission::Admitted(run) = jobs
+    let orbit_store::contract::KeyedJobRunAdmission::Admitted(run) = jobs
         .insert_automation_job_run("trigger_fixture", json!({}), "action")
         .unwrap()
     else {
@@ -335,7 +335,7 @@ fn repeated_automation_admission_preserves_pending_running_and_terminal_state() 
         Some(JobRunTrigger::cli())
     );
     let jobs = runtime.stores().jobs();
-    let orbit_store::contracts::KeyedJobRunAdmission::Admitted(run) = jobs
+    let orbit_store::contract::KeyedJobRunAdmission::Admitted(run) = jobs
         .insert_automation_job_run("snapshot_fixture", json!({"guard": true}), "repeat-action")
         .unwrap()
     else {

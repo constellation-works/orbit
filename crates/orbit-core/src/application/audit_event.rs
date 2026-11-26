@@ -4,7 +4,7 @@ mod incidents;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
     AuditInvocationFields, AuditToolAggregate, AuditToolModelAggregate, FailureIncidentQuery,
     FailureIncidentReport,
@@ -619,7 +619,7 @@ impl OrbitRuntime {
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<AuditPolicyDenialStats, OrbitError> {
-        use orbit_store::contracts::V2AuditEventFilter;
+        use orbit_store::contract::V2AuditEventFilter;
         use orbit_types::workflow::activity_job::{
             V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
         };

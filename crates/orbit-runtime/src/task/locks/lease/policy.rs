@@ -7,7 +7,7 @@
 //! reach it through `install_test_lease_policy` under `test-support`.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{LeaseMode, LeasePrincipalClass, LeasePriority};
+use orbit_store::contract::{LeaseMode, LeasePrincipalClass, LeasePriority};
 use serde_json::json;
 
 /// The former `lease.enabled` default, fixed when the key was removed [ORB-22808].

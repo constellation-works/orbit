@@ -156,7 +156,7 @@ fn apply_findings_change(
             let status = runtime.get_task(task_id)?.status;
             runtime.stores().task_history().update_task_history(
                 task_id,
-                orbit_store::contracts::TaskHistoryUpdateParams {
+                orbit_store::contract::TaskHistoryUpdateParams {
                     actor: "system".into(),
                     append_history: vec![TaskHistoryEntry {
                         at: Utc::now(),

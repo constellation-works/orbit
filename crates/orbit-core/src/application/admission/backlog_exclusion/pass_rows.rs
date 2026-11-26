@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use orbit_store::contracts::TaskRow;
+use orbit_store::contract::TaskRow;
 use orbit_types::task::{Task, TaskStatus};
 
 use super::super::pass_error::PassError;

@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, params};
 
-use crate::contracts::InvocationInsertParams;
+use crate::contract::InvocationInsertParams;
 use crate::now_string;
 
 /// Every column the invocation-trace insert binds, in bind order.

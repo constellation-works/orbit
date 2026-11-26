@@ -6,7 +6,7 @@ use orbit_core::application::task::{
 };
 use orbit_core::{Task, TaskComplexity, TaskPriority, TaskStatus};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::TaskHistoryUpdateParams;
+use orbit_store::contract::TaskHistoryUpdateParams;
 use orbit_types::task::{
     DecisionGate, DecisionRequest, DecisionRequestState, PilotAdmissionVerdict, TaskArtifact,
     TaskComment, TaskDecision, TaskHistoryEntry,

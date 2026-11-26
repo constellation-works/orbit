@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::candidate_identity;
-use orbit_store::contracts::ReviewReserveRequest;
+use orbit_store::contract::ReviewReserveRequest;
 use orbit_types::workflow::{
     DeliveryRefusal, REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
     ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision,

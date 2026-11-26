@@ -241,7 +241,7 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
             };
             use orbit_core::application::task::TaskAddParams;
             use orbit_core::{TaskComplexity, TaskStatus, TaskType};
-            use orbit_store::contracts::{
+            use orbit_store::contract::{
                 DiffClassCounts, ExperimentAssignment, LandedDiffSource, LandedDiffStats,
                 ReviewableLines,
             };
@@ -334,7 +334,7 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                     .unwrap();
                 runtime
                     .insert_invocation_trace_record(
-                        &orbit_store::contracts::InvocationInsertParams {
+                        &orbit_store::contract::InvocationInsertParams {
                             agent_execution_id: None,
                             job_run_id: format!("fixture-{}", task.id),
                             account: None,

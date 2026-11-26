@@ -1,7 +1,7 @@
 //! Accepting, approving and revoking a follower's task handoff.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimInvocation, ClaimMutation, ClaimMutationOutcome, ClaimMutationResult, HandoffObservation,
 };
 use orbit_types::workflow::handoff::{HandoffCandidate, LandingStartRequest, TaskHandoff};

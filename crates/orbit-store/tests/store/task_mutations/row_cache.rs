@@ -7,7 +7,7 @@
 //! `task_bundle_lightweight_read` tracing span, not a private counter.
 
 use super::*;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     TaskDocumentUpdateParams, TaskListFilter, TaskListHydration, TaskPage, TaskRow,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};

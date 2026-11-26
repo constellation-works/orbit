@@ -18,7 +18,7 @@ use orbit_core::runtime::task_pr_forge::{
     inspect_base_merge,
 };
 use orbit_core::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
-use orbit_store::contracts::TaskArtifactUpdateParams;
+use orbit_store::contract::TaskArtifactUpdateParams;
 use orbit_types::task::{ArtifactWriter, ExternalRef, TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{

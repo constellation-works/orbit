@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::V2AuditEventFilter;
-use orbit_store::contracts::{ExperimentAssignment, InvocationQuery, JobRunQuery};
+use orbit_store::contract::{ExperimentAssignment, InvocationQuery, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus, complexity_bucket};
 use orbit_types::workflow::{
     CapturedExperiments, ReviewVerdict, TagInstructionRole, V2AuditEvent, V2AuditEventKind,

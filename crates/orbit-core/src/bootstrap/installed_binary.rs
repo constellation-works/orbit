@@ -18,7 +18,7 @@ use orbit_common::fs::generation::{
     installed_executable_other_than_this_process, reported_compatibility,
 };
 use orbit_store::compose::compiled_compatibility;
-use orbit_store::workflow::layout::current_layout_version;
+use orbit_store::migrate::layout::current_layout_version;
 
 /// One state ledger this process would migrate past the installed binary.
 struct Advance {

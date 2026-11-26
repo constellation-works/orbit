@@ -9,7 +9,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::AgentExecutionIdentity;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::contracts::{AgentExecutionBackfill, AgentExecutionQuery, AgentExecutionRecord};
+use crate::contract::{AgentExecutionBackfill, AgentExecutionQuery, AgentExecutionRecord};
 use crate::now_string;
 
 /// One completed invocation without an `agent_execution_id`, for the backfill workflow.

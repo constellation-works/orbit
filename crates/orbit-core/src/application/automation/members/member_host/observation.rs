@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::members::{MemberHost, MemberPage};
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskListFilter;
+use orbit_store::contract::TaskListFilter;
 use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
 use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind, bundle_crew};
 use serde_json::json;

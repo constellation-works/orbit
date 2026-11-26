@@ -1,5 +1,5 @@
 use super::*;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::{DeliveryRefusal, JobRun, JobTargetType};
 
 fn held_completion_fixture() -> Fixture {

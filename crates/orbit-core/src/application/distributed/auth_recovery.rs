@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::{auth_credential_source, run_auth_probe};
-use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullAdmission};
+use orbit_store::contract::{ClaimMutation, JobRunQuery, LocalPullAdmission};
 use orbit_types::workflow::{Provider, PullAuthExclusion, PullAuthRecovery};
 
 use crate::OrbitRuntime;

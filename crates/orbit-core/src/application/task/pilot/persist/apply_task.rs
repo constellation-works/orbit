@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
+use orbit_store::contract::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus,
     normalize_task_tags,

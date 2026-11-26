@@ -46,7 +46,7 @@ fn deferred_run_ids(output: &Value, owner: &str) -> Vec<Value> {
 fn claimed_compiler_owner(
     runtime: &OrbitRuntime,
     commit: &str,
-) -> (String, orbit_store::contracts::ExecutionClaim) {
+) -> (String, orbit_store::contract::ExecutionClaim) {
     let log = compiler_log("E0433", LOG_MESSAGE, LOG_PATH, 277, 25);
     let first = file(runtime, vec![failure(&log, 0, commit)]);
     let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();

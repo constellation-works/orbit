@@ -3,7 +3,7 @@
 use chrono::{Duration, Utc};
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_engine::DispatchError;
-use orbit_store::contracts::ReviewReserveRequest;
+use orbit_store::contract::ReviewReserveRequest;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{ReviewBudget, ReviewReservation, ReviewVerdict};
 

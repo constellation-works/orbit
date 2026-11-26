@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::V2ActivityCatalog;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::{
     ActivityV2Spec, CommitObservation, DeliveryEvidenceGap, JobRun, JobV2, JobV2Step,
     JobV2StepBody, PipelineState, RUN_DELIVERY_SCHEMA_VERSION, RunDeliveryObservation, TargetStep,

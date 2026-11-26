@@ -7,7 +7,7 @@ use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
-use orbit_store::contracts::RoutineBreakerState;
+use orbit_store::contract::RoutineBreakerState;
 use orbit_types::tool::{
     AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity,
     AttentionWorkspace,

@@ -153,7 +153,7 @@ pub(crate) fn reset_review(
     input: &serde_json::Value,
 ) -> Result<serde_json::Value, OrbitError> {
     use orbit_common::protocol::tool_input::required_string;
-    use orbit_store::contracts::ReviewResetRequest;
+    use orbit_store::contract::ReviewResetRequest;
     if orbit_common::governance::authorization::agent_context_declared(
         runtime.execution_env_policy().process_env(),
     ) {

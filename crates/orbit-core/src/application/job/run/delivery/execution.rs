@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use orbit_store::contracts::V2AuditEventFilter;
+use orbit_store::contract::V2AuditEventFilter;
 use orbit_types::workflow::activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEvent, V2AuditEventKind,
 };

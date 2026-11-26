@@ -10,7 +10,7 @@ fn child_stop_refusal_preserves_owner_candidate_reservation_and_lineage() {
     ) {
         return;
     }
-    use orbit_store::contracts::TaskReservationReserveParams;
+    use orbit_store::contract::TaskReservationReserveParams;
     use orbit_types::workflow::JobRunState;
 
     for (cascade, identity) in [

@@ -41,5 +41,6 @@ tracing.workspace = true
 [dev-dependencies]
 # The crate's own tests build their host doubles on `test_support::NullRuntimeHost`.
 orbit-engine = { path = ".", features = ["test-support"] }
+orbit-store = { path = "../orbit-store", features = ["test-support"] }
 jsonschema.workspace = true
 tracing-subscriber.workspace = true

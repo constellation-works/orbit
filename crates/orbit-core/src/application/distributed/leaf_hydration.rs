@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
 use orbit_common::{NotFoundKind, RemoteToolCode};
-use orbit_store::contracts::{LeafEvidenceWrite, LeafRootCause, LeafRunReport};
+use orbit_store::contract::{LeafEvidenceWrite, LeafRootCause, LeafRunReport};
 use orbit_types::workflow::{JobRunState, OrbitBuild};
 use serde::Serialize;
 use serde_json::Value;

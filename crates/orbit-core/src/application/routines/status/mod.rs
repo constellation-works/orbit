@@ -16,7 +16,7 @@ use chrono::{DateTime, Local, Utc};
 use orbit_automation::routines::sweep::duplicate_ownership_skipped;
 use orbit_common::OrbitError;
 use orbit_store::Store;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     JobRunQuery, RoutineBreakerRecord, RoutineBreakerState, RoutineFireRecord, RoutineFireState,
 };
 use orbit_types::workflow::{JobRun, JobRunState};

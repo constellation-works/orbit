@@ -3,7 +3,7 @@ use orbit_core::runtime::JobRuns;
 use orbit_store::Store;
 use orbit_types::workflow::JobRunState;
 
-use orbit_store::contracts::{
+use orbit_store::contract::{
     CPU_ACCOUNTING_LINUX, ResourceHistoryKeep, ResourceMinutesTable, RunResourceMinute,
 };
 

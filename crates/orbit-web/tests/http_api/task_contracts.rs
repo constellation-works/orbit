@@ -1247,7 +1247,7 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                         .sqlite_store()
                         .unwrap()
                         .reserve_task_reservation(
-                            &orbit_store::contracts::TaskReservationReserveParams {
+                            &orbit_store::contract::TaskReservationReserveParams {
                                 workspace_orbit_dir: runtime
                                     .paths()
                                     .orbit_dir
@@ -1807,7 +1807,7 @@ fn task_locks_paced_history_probe() {
         let reserved = runtime
             .sqlite_store()
             .unwrap()
-            .reserve_task_reservation(&orbit_store::contracts::TaskReservationReserveParams {
+            .reserve_task_reservation(&orbit_store::contract::TaskReservationReserveParams {
                 workspace_orbit_dir: fixture.work.display().to_string(),
                 workspace_id: Some("ws_http_fixture".into()),
                 task_ids: vec![holder.id],

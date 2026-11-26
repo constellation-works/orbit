@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     /// Upsert `entry` as its machine's census row [ORB-17304].

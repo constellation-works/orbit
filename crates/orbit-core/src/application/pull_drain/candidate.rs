@@ -15,7 +15,7 @@
 //! completes with the attempt's findings.
 
 use orbit_engine::review_gate::{INTERRUPTED_REVIEW_KEY, interrupted_review_ref, review_in_flight};
-use orbit_store::contracts::{ClaimCandidateRef, ClaimFailure, InterruptedReview};
+use orbit_store::contract::{ClaimCandidateRef, ClaimFailure, InterruptedReview};
 use orbit_types::workflow::{self, CandidateCarry, CandidateCarryOutput, JobRun, PipelineState};
 
 /// The claimed PR leaf's base synchronization step.

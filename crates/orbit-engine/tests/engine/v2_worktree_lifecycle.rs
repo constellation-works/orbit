@@ -36,7 +36,7 @@ use orbit_engine::{
     StepRecoveryAdmission, TaskAutomationUpdate, V2AuditWriter, V2DispatchInput,
     WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
 };
-use orbit_store::contracts::{ClaimCandidateRef, KeptClaimCandidate};
+use orbit_store::contract::{ClaimCandidateRef, KeptClaimCandidate};
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,

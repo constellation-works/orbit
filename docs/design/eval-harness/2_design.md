@@ -117,7 +117,7 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 ### 3.2 Base commit
 
-The base is the first parent of the commit the task landed as. Orbit already records both: `landed_diff_stats` holds `landed_commit` and `base_commit` per task (`LandedDiffStats`, `crates/orbit-store/src/contracts/landed_diff_stats.rs:62-85`), and the writer defines `base_commit` as the landed commit's first parent, because pull requests land by squash or merge commit (`crates/orbit-core/src/application/codebase/diff_stats.rs:7-18`). Tasks without a row fall back to the landing receipt in task history, read by `crates/orbit-core/src/application/codebase/landed.rs`.
+The base is the first parent of the commit the task landed as. Orbit already records both: `landed_diff_stats` holds `landed_commit` and `base_commit` per task (`LandedDiffStats`, `crates/orbit-store/src/contract/landed_diff_stats.rs:62-85`), and the writer defines `base_commit` as the landed commit's first parent, because pull requests land by squash or merge commit (`crates/orbit-core/src/application/codebase/diff_stats.rs:7-18`). Tasks without a row fall back to the landing receipt in task history, read by `crates/orbit-core/src/application/codebase/landed.rs`.
 
 This agrees with the starting view. It is deliberately not the base the original run started from, which is older whenever the branch was rebased before landing: the reference diff and the held-out tests are only known to work on the merge parent.
 
@@ -164,7 +164,7 @@ What reaches an implementer besides the task, and what replay does about each:
 2. **The network.** The repository is on GitHub; a candidate with network access can read the merged pull request.
 3. **Training data.** A model trained after the merge may have seen the fix. Recent tasks are the least exposed, and the audit-blob limit already forces recent tasks.
 
-For the first two, the first version detects and does not prevent. Each invocation records its tool calls (`InvocationRecord`, `crates/orbit-store/src/contracts/invocation.rs`); the scorer scans them for history reads beyond the base and for forge or web access to the repository, and marks the run `contaminated`. Contaminated runs are listed in the readout and left out of every rate. Prevention (a per-run clone containing only ancestors of the base, and a network-denied sandbox profile) is task 10 of §13, to be built if the contamination rate shows it is needed.
+For the first two, the first version detects and does not prevent. Each invocation records its tool calls (`InvocationRecord`, `crates/orbit-store/src/contract/invocation.rs`); the scorer scans them for history reads beyond the base and for forge or web access to the repository, and marks the run `contaminated`. Contaminated runs are listed in the readout and left out of every rate. Prevention (a per-run clone containing only ancestors of the base, and a network-denied sandbox profile) is task 10 of §13, to be built if the contamination rate shows it is needed.
 
 ---
 

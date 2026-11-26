@@ -487,7 +487,7 @@ fn diagnostics_errors_join_steps_deduplicate_and_keep_windows_separate() {
         || {
             use chrono::{DateTime, Duration, Utc};
             use orbit_common::storage::blob_store::BlobStore;
-            use orbit_core::V2AuditEventInsertParams;
+            use orbit_core::test_support::V2AuditEventInsertParams;
             let fixture = Fixture::new();
             let now = Utc::now();
             let recent = now - Duration::minutes(2);
@@ -637,7 +637,8 @@ fn diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs() {
         "log::diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs",
         || {
             use chrono::{Duration, Utc};
-            use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
+            use orbit_core::OrbitRuntime;
+            use orbit_core::test_support::V2AuditEventInsertParams;
             use orbit_types::workspace::WorkspaceCheckout;
             const OTHER: &str = "ws_http_other";
 
@@ -871,7 +872,7 @@ fn diagnostics_errors_report_the_stderr_blob_cap_as_the_coverage_start() {
         || {
             use chrono::{DateTime, Duration, Utc};
             use orbit_common::storage::blob_store::BlobStore;
-            use orbit_core::V2AuditEventInsertParams;
+            use orbit_core::test_support::V2AuditEventInsertParams;
             // One past the per-request stderr blob cap in the web crate.
             const INVOCATIONS: i64 = 257;
             let fixture = Fixture::new();

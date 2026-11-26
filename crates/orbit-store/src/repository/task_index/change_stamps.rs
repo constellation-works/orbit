@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
-use crate::contracts::TaskChangeStamp;
+use crate::contract::TaskChangeStamp;
 use crate::driver::sqlite::task_index::TaskIndexDb;
 
 /// The index read a change watcher compares between scans.

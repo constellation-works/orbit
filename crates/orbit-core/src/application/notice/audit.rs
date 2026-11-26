@@ -1,7 +1,7 @@
 //! Notice write auditing and persisted row conversions.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::NoticeRow;
+use orbit_store::contract::NoticeRow;
 use orbit_types::record::{AuthorClass, Notice};
 use orbit_types::telemetry::AuditEventStatus;
 

@@ -13,7 +13,7 @@ use orbit_common::OrbitError;
 use super::super::TaskCommitBoundary;
 use super::codec::{CLAIM, FRICTION, RECEIPT, STATE};
 use super::{decode, decode_state};
-use crate::contracts::ExecutionClaim;
+use crate::contract::ExecutionClaim;
 
 /// Days a settled claim's mutation receipts outlive its last mutation.
 const SETTLED_RECEIPT_RETENTION_DAYS: i64 = 7;

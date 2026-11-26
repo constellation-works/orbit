@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use crate::contracts::MigrationCompatibility;
+use crate::contract::MigrationCompatibility;
 
 use super::current_layout_version;
 use super::registry::LayoutMigration;

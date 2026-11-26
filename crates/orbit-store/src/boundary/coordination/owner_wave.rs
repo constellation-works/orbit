@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use super::TaskCommitBoundary;
 use super::selection::DependencyReach;
 use crate::boundary::v2_bundle::TaskBundleStoreV2;
-use crate::contracts::*;
+use crate::contract::*;
 
 const OWNER_WAVE_KIND: &str = "owner-wave-admission-v1";
 

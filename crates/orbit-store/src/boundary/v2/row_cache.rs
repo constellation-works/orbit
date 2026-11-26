@@ -23,7 +23,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use orbit_types::task::TaskEnvelopeV2;
 
-use crate::contracts::TaskRow;
+use crate::contract::TaskRow;
 
 /// Fixed cap on hydrated rows held at once. A default page is 50 rows, so
 /// this holds several pages of distinct filters without growing with the

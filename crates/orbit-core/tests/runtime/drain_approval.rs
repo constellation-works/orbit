@@ -9,7 +9,7 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteSc
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_tools::ToolContext;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::{
@@ -1727,7 +1727,7 @@ fn append_history(
         surface: None,
         caller: None,
     };
-    let params = orbit_store::contracts::TaskHistoryUpdateParams {
+    let params = orbit_store::contract::TaskHistoryUpdateParams {
         actor: actor.into(),
         append_history: vec![entry],
         ..Default::default()
@@ -1821,15 +1821,15 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
 }
 
 fn record_execution_claim(ws: &Workspace, task: &Task) {
-    let claim = orbit_store::contracts::ExecutionClaim {
+    let claim = orbit_store::contract::ExecutionClaim {
         claim_id: "stale-repilot-claim".into(),
         task_id: task.id.clone(),
         request_id: "stale-repilot-request".into(),
-        executed_on: orbit_store::contracts::ExecutionLocation {
+        executed_on: orbit_store::contract::ExecutionLocation {
             machine_id: "fixture-machine".into(),
             machine_name: None,
         },
-        run_context: orbit_store::contracts::AdmissionRunContext {
+        run_context: orbit_store::contract::AdmissionRunContext {
             run_id: "fixture-claim-run".into(),
             job_name: "task_pr_pipeline".into(),
             machine_name: None,
@@ -1837,7 +1837,7 @@ fn record_execution_claim(ws: &Workspace, task: &Task) {
         footprint: Vec::new(),
         reservation_id: "stale-repilot-reservation".into(),
         reservation_expires_at: (Utc::now() + chrono::Duration::minutes(30)).to_rfc3339(),
-        phase: orbit_store::contracts::ExecutionClaimPhase::Running,
+        phase: orbit_store::contract::ExecutionClaimPhase::Running,
         repair: None,
     };
     let connection = rusqlite::Connection::open(ws.runtime.global_root().join("orbit.db")).unwrap();

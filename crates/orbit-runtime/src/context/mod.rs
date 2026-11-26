@@ -9,4 +9,4 @@ pub use actor::{ActorIdentity, ActorKind, resolve_write_actor_label, trusted_wri
 pub use settings::OrbitRuntimeSettings;
 pub(crate) use state::OrbitContext;
 pub use stores::OrbitStores;
-pub(crate) use stores::{OrbitExecutionAssets, OrbitHostStore, OrbitPolicyContext};
+pub(crate) use stores::{OrbitExecutionAssets, OrbitPolicyContext};

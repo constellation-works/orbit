@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionRequest, JobRunQuery, PendingRepair, PullDestination,
 };
 use orbit_types::workflow::{DrainWaitingTask, JobRun};

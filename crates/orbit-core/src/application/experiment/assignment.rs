@@ -5,7 +5,7 @@ use super::records::assign_experiments;
 use crate::OrbitRuntime;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExperimentAssignment, ExperimentRecord};
+use orbit_store::contract::{ExperimentAssignment, ExperimentRecord};
 use orbit_types::task::{CrewSource, Task};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;

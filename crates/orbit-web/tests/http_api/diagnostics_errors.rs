@@ -1,8 +1,9 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_core::JobRunState;
 use orbit_core::runtime::audit::run::AuditStepOutcome;
-use orbit_core::{JobRunState, V2AuditEventInsertParams};
+use orbit_core::test_support::V2AuditEventInsertParams;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};

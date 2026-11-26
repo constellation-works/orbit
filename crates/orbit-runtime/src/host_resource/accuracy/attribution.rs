@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
-use orbit_store::contracts::{AdmissionForecastRecord, DeliveryRunResources};
+use orbit_store::contract::{AdmissionForecastRecord, DeliveryRunResources};
 
 use crate::host_resource::RESOURCE_SAMPLE_INTERVAL;
 

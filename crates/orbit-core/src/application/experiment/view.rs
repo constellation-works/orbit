@@ -1,7 +1,7 @@
 //! The JSON shape an experiment is shown in.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExperimentArmRow, ExperimentEventRow, ExperimentRecord};
+use orbit_store::contract::{ExperimentArmRow, ExperimentEventRow, ExperimentRecord};
 use serde::Serialize;
 use serde_json::Value;
 

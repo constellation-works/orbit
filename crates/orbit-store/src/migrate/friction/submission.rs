@@ -7,7 +7,7 @@ use orbit_common::governance::friction::{derive_title, normalize_friction_tags};
 use orbit_common::observability::logging;
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 
-use crate::contracts::{FrictionAddParams, StoredFrictionRecord};
+use crate::contract::{FrictionAddParams, StoredFrictionRecord};
 use crate::repository::friction::taxonomy::load_tag_taxonomy;
 use crate::{Store, Tx};
 

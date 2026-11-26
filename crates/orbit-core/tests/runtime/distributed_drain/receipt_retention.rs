@@ -1,7 +1,7 @@
 //! Admission receipt maintenance through the owner's public runtime API.
 
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
-use orbit_store::contracts::{ClaimEvidence, ClaimInvocation, ClaimMutation};
+use orbit_store::contract::{ClaimEvidence, ClaimInvocation, ClaimMutation};
 
 use super::*;
 
@@ -47,8 +47,8 @@ fn failed_claims_kept_unaccepted_pr_settles_after_receipt_compaction() {
             "orbit.task.pull",
             json!({
                 "request_id": "kept-pr-retention", "caller_version": probe["binary_version"],
-                "caller_schema": orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                "caller_fingerprint": orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+                "caller_schema": orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                "caller_fingerprint": orbit_store::contract::distributed_drain_protocol_fingerprint(),
                 "review_gate": true, "ship": probe["ship"],
                 "run_context": {"run_id": "retention-drain", "job_name": "workspace_pull_pipeline"}
             }),
@@ -131,8 +131,8 @@ fn operational_receipt_compaction_preserves_request_identity_and_live_claims() {
     let request = |id: &str| {
         json!({
             "request_id": id, "caller_version": probe["binary_version"],
-            "caller_schema": orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            "caller_fingerprint": orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+            "caller_schema": orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            "caller_fingerprint": orbit_store::contract::distributed_drain_protocol_fingerprint(),
             "review_gate": true, "ship": probe["ship"],
             "run_context": {"run_id": "retention-drain", "job_name": "workspace_pull_pipeline"}
         })
@@ -206,7 +206,7 @@ fn operational_receipt_compaction_preserves_request_identity_and_live_claims() {
                 "orbit.drain.receipt.lookup",
                 json!({
                     "request_id": original["request_id"],
-                    "lookup_schema": orbit_store::contracts::ADMISSION_RECEIPT_LOOKUP_SCHEMA,
+                    "lookup_schema": orbit_store::contract::ADMISSION_RECEIPT_LOOKUP_SCHEMA,
                 }),
             )
             .unwrap();

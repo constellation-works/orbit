@@ -67,7 +67,7 @@ fn export_all(
     registry: &TaskRegistryStore,
     workspace: &str,
     dest: &Path,
-) -> Result<orbit_store::workflow::task::ExportOutcome, OrbitError> {
+) -> Result<orbit_store::migrate::task::ExportOutcome, OrbitError> {
     export_tasks(
         registry,
         workspace,
@@ -375,7 +375,7 @@ fn admission_request(
         labels: Vec::new(),
         request_id: request_id.into(),
         caller_version: caller_version.into(),
-        caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_schema: orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
@@ -1182,7 +1182,7 @@ allocation_test!(
                         .backends
                         .reservation
                         .reserve_task_reservation(
-                            orbit_store::contracts::TaskReservationReserveParams {
+                            orbit_store::contract::TaskReservationReserveParams {
                                 workspace_orbit_dir: owner.orbit_dir.to_string_lossy().into_owned(),
                                 workspace_id: Some(PARTITION_ID.into()),
                                 task_ids: vec![competitor.id.clone()],
@@ -1202,7 +1202,7 @@ allocation_test!(
                         .backends
                         .commit_boundary
                         .commit_task_transition(
-                            &orbit_store::contracts::TaskCoordinationCommitParams {
+                            &orbit_store::contract::TaskCoordinationCommitParams {
                                 task_id: competitor.id.clone(),
                                 actor: "owner".into(),
                                 expected_status: vec![TaskStatus::Backlog],

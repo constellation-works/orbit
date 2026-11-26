@@ -45,7 +45,7 @@ its serde shapes are persisted contracts.
 | [`orbit-exec`](docs/architecture/orbit-exec.md) | internal | Sandboxed and supervised subprocess execution, capture, timeouts, and build/browser-kit environments. | common, types |
 | [`orbit-auth`](docs/architecture/orbit-auth.md) | internal | Lease-listener credentials (`orbl_` tokens, scopes, token store, environment/client-address checks, and request rate limiting). | common, types |
 | [`orbit-search`](docs/architecture/orbit-search.md) | internal | SQLite FTS5 lexical indexing and BM25 retrieval over synchronously maintained task chunks. | common, types |
-| [`orbit-store`](docs/architecture/orbit-store.md) | stable | Persistence contracts, private file and SQLite drivers, cross-driver repositories, maintenance workflows, and store composition. | common, types |
+| [`orbit-store`](docs/architecture/orbit-store.md) | stable | Record contracts, private file and SQLite drivers, concrete repositories, one-shot migrations, and store composition. | common, types (dev: store) |
 | [`orbit-registry`](docs/architecture/orbit-registry.md) | internal | Machine identity, logical workspace catalog, local checkout/publication bindings, and registered remote hosts. | common, config, types |
 | [`orbit-tools`](docs/architecture/orbit-tools.md) | internal | Built-in and external tool registry, plugin tool loading/execution, MCP tool rules, and the `gh` CLI contract. | common, exec, policy, types (dev: tools) |
 | [`orbit-agent`](docs/architecture/orbit-agent.md) | internal | Provider CLI runtimes, request/response projections, and redacted audit blob sinks. | common, types |
@@ -78,9 +78,9 @@ Edge rules the guard enforces beyond the table:
   `workspace = true`.
 
 Inside `orbit-store`, `crates/orbit-store/src/driver/file` and `crates/orbit-store/src/driver/sqlite` are private, implement one technology
-each and never import each other. Concrete records live in `repository`. Only `boundary`
+each and never import each other; SQLite writer connections stay private to their driver. Record shapes live in `contract` and concrete records live in `repository`. Only `boundary`
 sequences writes across the canonical task files, the registry index and host reservations.
-The `workflow` layer runs import, export and repair, and `compose` builds the stores. The same
+The `migrate` layer runs import, export, repair and layout upgrades, and `compose` builds the stores. The same
 guard enforces these arrows; see [orbit-store](docs/architecture/orbit-store.md).
 
 ## Stability tiers

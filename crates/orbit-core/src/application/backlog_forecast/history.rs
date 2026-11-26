@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::StoredBacklogForecast;
+use orbit_store::contract::StoredBacklogForecast;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
 use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 use serde_json::Value;
@@ -25,7 +25,7 @@ pub(super) struct LoadedForecastHistory {
     /// recorded it, for a fix whose current selectors no longer give one.
     pub(super) recorded_footprints: HashMap<String, Vec<String>>,
     pub(super) task_episodes: HashMap<String, TaskEpisodes>,
-    pub(super) history_rows: Vec<orbit_store::contracts::TaskTerminalTransition>,
+    pub(super) history_rows: Vec<orbit_store::contract::TaskTerminalTransition>,
     pub(super) lookback_start: DateTime<Utc>,
     pub(super) lookback_days: i64,
     pub(super) min_history: usize,

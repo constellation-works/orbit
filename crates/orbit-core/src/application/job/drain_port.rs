@@ -17,7 +17,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{AdmissionReceipt, DrainLeafOccupancy, LocalPullAdmission};
+use orbit_store::contract::{AdmissionReceipt, DrainLeafOccupancy, LocalPullAdmission};
 use orbit_types::workflow::{JobRun, ResourceThrottle};
 
 use crate::application::contracts::{

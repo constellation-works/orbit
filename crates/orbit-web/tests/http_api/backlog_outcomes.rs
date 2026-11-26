@@ -2,9 +2,9 @@
 //! [ORB-18688], from dated status histories at the HTTP boundary.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::StoredBacklogForecast;
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contracts::{InvocationInsertParams, TaskHistoryUpdateParams};
+use orbit_store::contract::StoredBacklogForecast;
+use orbit_store::contract::{InvocationInsertParams, TaskHistoryUpdateParams};
 use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};

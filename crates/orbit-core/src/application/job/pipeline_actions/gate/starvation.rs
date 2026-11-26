@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use orbit_engine::DispatchError;
-use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
+use orbit_store::contract::{TaskLockConflict, TaskLockHolder};
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::AuditEventStatus;
 use serde::{Deserialize, Deserializer, Serialize};

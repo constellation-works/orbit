@@ -2,7 +2,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::contracts::{ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams};
+use orbit_store::contract::{ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::json;
 
@@ -90,7 +90,7 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         .expect("list runs");
     assert_eq!(listed.len(), 2);
     let projected = jobs
-        .job_run_task_ids(&orbit_store::contracts::JobRunQuery {
+        .job_run_task_ids(&orbit_store::contract::JobRunQuery {
             job_id: Some("task_pr_pipeline".into()),
             states: vec![JobRunState::Cancelled],
             ..Default::default()
@@ -110,7 +110,7 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         ("T-3", false),
     ] {
         let runs = jobs
-            .list_job_runs_filtered(&orbit_store::contracts::JobRunQuery {
+            .list_job_runs_filtered(&orbit_store::contract::JobRunQuery {
                 task_id: Some(task.into()),
                 ..Default::default()
             })
@@ -124,15 +124,15 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         assert_eq!(ids, expected, "runs owned by {task:?}");
     }
     for query in [
-        orbit_store::contracts::JobRunQuery {
+        orbit_store::contract::JobRunQuery {
             job_id: Some("task_auto_pipeline".into()),
             ..Default::default()
         },
-        orbit_store::contracts::JobRunQuery {
+        orbit_store::contract::JobRunQuery {
             states: vec![JobRunState::Failed],
             ..Default::default()
         },
-        orbit_store::contracts::JobRunQuery {
+        orbit_store::contract::JobRunQuery {
             limit: Some(0),
             ..Default::default()
         },
@@ -306,7 +306,7 @@ fn stored_step_wait_is_updated_and_hydrated_by_single_and_batched_reads() {
 // transaction: whichever commits first wins, and the loser writes nothing.
 #[test]
 fn pending_only_cancel_and_start_never_both_win() {
-    use orbit_store::contracts::PendingJobRunCancellation;
+    use orbit_store::contract::PendingJobRunCancellation;
     use orbit_types::workflow::JobRunStartOutcome;
 
     let store = Store::open_in_memory().expect("memory store");

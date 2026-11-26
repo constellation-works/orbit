@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
+use orbit_store::contract::{FrictionAddParams, FrictionListFilter};
 use orbit_types::identity::{resolve_crew, same_crew_family};
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, CrewPoolExclusion};

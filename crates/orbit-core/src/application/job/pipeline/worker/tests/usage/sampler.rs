@@ -7,7 +7,7 @@ use std::sync::{Arc, Barrier};
 
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use orbit_store::Store;
-use orbit_store::contracts::HostResourceMinute;
+use orbit_store::contract::HostResourceMinute;
 use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;

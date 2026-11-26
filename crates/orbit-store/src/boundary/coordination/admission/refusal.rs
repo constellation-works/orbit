@@ -1,6 +1,6 @@
 //! Pre-admission refusal verdict, shared by admission and the read-only preflight probe.
 
-use crate::contracts::*;
+use crate::contract::*;
 
 /// The ordered pre-admission ladder, shared by admission and the read-only
 /// preflight probe.
@@ -19,7 +19,7 @@ pub fn admission_refusal(
     if request
         .caller_fingerprint
         .as_deref()
-        .is_some_and(|caller| caller != crate::contracts::distributed_drain_protocol_fingerprint())
+        .is_some_and(|caller| caller != crate::contract::distributed_drain_protocol_fingerprint())
     {
         return Some(AdmissionRefusal::ProtocolSkew);
     }
@@ -32,7 +32,7 @@ pub fn admission_refusal(
     ]
     .iter()
     .any(|v| v.trim().is_empty())
-        || request.crews_malformed()
+        || crews_malformed(request)
     {
         return Some(AdmissionRefusal::InvalidInput);
     }
@@ -72,4 +72,20 @@ pub fn admission_refusal(
         return Some(AdmissionRefusal::BeforePrUnsupported);
     }
     None
+}
+
+/// Whether the declared crew capability carries any blank crew name.
+fn crews_malformed(request: &AdmissionRequest) -> bool {
+    request.crews.as_ref().is_some_and(malformed)
+}
+
+fn malformed(crews: &AdmissionCrewCapability) -> bool {
+    let blank = |name: &str| name.trim().is_empty();
+    crews.runnable.iter().flatten().any(|name| blank(name))
+        || crews.default_crew.as_deref().is_some_and(blank)
+        || crews
+            .excluded
+            .iter()
+            .any(|exclusion| blank(&exclusion.crew))
+        || crews.usage_pressure.iter().any(|entry| blank(&entry.crew))
 }

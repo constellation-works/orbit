@@ -177,7 +177,7 @@ pub(super) fn effort_split(
         .map(
             |fact| match (&fact.execution, labelled.get(&fact.job_run_id)) {
                 (None, Some(identity)) => {
-                    std::borrow::Cow::Owned(orbit_store::contracts::InvocationAccountingFact {
+                    std::borrow::Cow::Owned(orbit_store::contract::InvocationAccountingFact {
                         execution: Some(identity.clone()),
                         ..fact.clone()
                     })

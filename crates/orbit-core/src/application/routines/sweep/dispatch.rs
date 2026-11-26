@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use orbit_automation::routines::breaker::{ObservedFire, ObservedOutcome};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::json;
 

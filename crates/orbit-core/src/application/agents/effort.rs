@@ -51,7 +51,7 @@
 //! run's crew-label effort when this key resolved that run's attempt from the
 //! label, so the split and the scorecard rows agree.
 
-use orbit_store::contracts::InvocationAccountingFact;
+use orbit_store::contract::InvocationAccountingFact;
 use orbit_types::identity::{CREW_EFFORT_SEPARATOR, ReasoningEffort};
 
 use super::facts::{AgentInvocationFacts, AgentLaunchFacts};
@@ -384,7 +384,7 @@ impl crate::OrbitRuntime {
         let snapshot = store.read().ok()?;
         let invocation_repo = snapshot.invocation();
         let invocations = invocation_repo
-            .list_accounting_facts(&orbit_store::contracts::InvocationAccountingQuery {
+            .list_accounting_facts(&orbit_store::contract::InvocationAccountingQuery {
                 workspace_id: Some(workspace_id.clone()),
                 since,
                 until,
@@ -394,7 +394,7 @@ impl crate::OrbitRuntime {
                 Vec::new()
             });
         let launches = invocation_repo
-            .list_agent_executions(&orbit_store::contracts::AgentExecutionQuery {
+            .list_agent_executions(&orbit_store::contract::AgentExecutionQuery {
                 workspace_id: Some(workspace_id),
                 since,
                 until,

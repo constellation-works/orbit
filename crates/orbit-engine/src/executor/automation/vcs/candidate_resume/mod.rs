@@ -115,7 +115,7 @@ mod lookup;
 
 pub(in crate::executor::automation) use lookup::candidate_resume;
 
-use orbit_store::contracts::InterruptedReview;
+use orbit_store::contract::InterruptedReview;
 use serde_json::Value;
 
 /// The settlement step whose failure is the review's verdict on the

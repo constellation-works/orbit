@@ -22,7 +22,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::OrbitId;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};

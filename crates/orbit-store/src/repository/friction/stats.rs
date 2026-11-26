@@ -13,7 +13,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::queries::encode_timestamp;
-use crate::contracts::FrictionReportedCount;
+use crate::contract::FrictionReportedCount;
 
 pub(super) fn status_counts(
     conn: &Connection,

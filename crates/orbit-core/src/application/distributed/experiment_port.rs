@@ -8,7 +8,7 @@
 //! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::AdmissionShipContract;
+use orbit_store::contract::AdmissionShipContract;
 use orbit_types::task::Task;
 use orbit_types::workflow::CapturedExperiments;
 

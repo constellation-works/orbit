@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate};
-use orbit_store::contracts::{ClaimMutation, HandoffObservation};
+use orbit_store::contract::{ClaimMutation, HandoffObservation};
 use orbit_types::workflow::handoff::AcceptedHandoff;
 use orbit_types::workflow::handoff::HandoffDelivery;
 use serde_json::{Value, json};

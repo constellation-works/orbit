@@ -19,7 +19,7 @@ use orbit_types::workflow::handoff::*;
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, invalid, row};
-use crate::contracts::*;
+use crate::contract::*;
 
 const ATTEMPT: &str = "distributed-landing-attempt-v1";
 const HISTORY: &str = "distributed-landing-attempt-history-v1";

@@ -8,7 +8,7 @@ use orbit_common::fs::selector::{Selector, canonical_selector_in_workspace};
 use orbit_common::protocol::tool_input::{
     optional_string_list_alias, optional_u32_alias, required_string,
 };
-use orbit_store::contracts::{
+use orbit_store::contract::{
     TaskLockConflict, TaskReservationCheckParams, TaskReservationReleaseParams,
     TaskReservationReleaseReason, TaskReservationReserveParams,
 };
@@ -127,7 +127,7 @@ pub fn list(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
     let holding = leases
         .leases
         .iter()
-        .filter(|lease| lease.queue_kind != Some(orbit_store::contracts::LeaseQueueKind::Request))
+        .filter(|lease| lease.queue_kind != Some(orbit_store::contract::LeaseQueueKind::Request))
         .collect::<Vec<_>>();
     listing["by_lease"] = json!(holding);
     listing["total_leases"] = json!(holding.len());
@@ -385,7 +385,7 @@ pub fn reserve_with_index(
             })?;
         conflicts = merge_task_lock_conflicts(conflicts, check.conflicts);
         emit_expired_reservation_events(runtime, &check.expired_reservations)?;
-        orbit_store::contracts::TaskReservationReserveResult {
+        orbit_store::contract::TaskReservationReserveResult {
             reserved: false,
             reservation_id: None,
             expires_at: None,

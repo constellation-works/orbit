@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 
-use crate::contracts::V2AuditEventRow;
+use crate::contract::V2AuditEventRow;
 use crate::parse_timestamp;
 
 pub(super) fn row_to_v2_audit_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<V2AuditEventRow> {

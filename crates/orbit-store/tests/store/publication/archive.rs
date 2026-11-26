@@ -5,11 +5,11 @@ use tempfile::TempDir;
 
 use super::support;
 use orbit_store::compose::workspace_task_backends;
-use orbit_store::contracts::TaskArtifactUpdateParams;
+use orbit_store::contract::TaskArtifactUpdateParams;
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
-use orbit_store::workflow::task::{
+use orbit_store::migrate::task::{
     ExportSelection, ImportConflictPolicy, export_tasks, import_tasks,
 };
 use orbit_types::task::{TaskArtifact, TaskStatus};

@@ -97,7 +97,7 @@ fn run_phase(root: &Path, phase: &str) {
 }
 
 fn seed_pilot_receipt(fx: &Fixture, task: &str) {
-    use orbit_store::contracts::{TaskArtifactUpdateParams, TaskHistoryUpdateParams};
+    use orbit_store::contract::{TaskArtifactUpdateParams, TaskHistoryUpdateParams};
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     use orbit_types::task::{TaskArtifact, TaskComment};
     let registry = TaskRegistryStore::open(&task_registry_path(&fx.global)).unwrap();

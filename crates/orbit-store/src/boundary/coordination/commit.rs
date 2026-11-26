@@ -9,7 +9,7 @@ use super::{
 use crate::boundary::journal::JournalCommitOutcome;
 use crate::boundary::v2::sequencing::next_sequence;
 use crate::boundary::v2_bundle::TaskBundleV2;
-use crate::contracts::{
+use crate::contract::{
     TaskCommitJournalState, TaskCoordinationCommit, TaskCoordinationCommitOutcome,
     TaskCoordinationCommitParams,
 };
@@ -202,9 +202,9 @@ impl TaskCommitBoundary {
         &self,
         params: &TaskCoordinationCommitParams,
         make_rows: &mut impl FnMut(
-            Option<&crate::contracts::TaskReservationReserveResult>,
+            Option<&crate::contract::TaskReservationReserveResult>,
         )
-            -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError>,
+            -> Result<Vec<crate::contract::TaskCoordinationRow>, OrbitError>,
     ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
         self.commit_locked_effects(
             params,
@@ -219,12 +219,12 @@ impl TaskCommitBoundary {
         &self,
         params: &TaskCoordinationCommitParams,
         make_rows: &mut impl FnMut(
-            Option<&crate::contracts::TaskReservationReserveResult>,
+            Option<&crate::contract::TaskReservationReserveResult>,
         )
-            -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError>,
-        effects: &crate::contracts::ClaimCommitEffects,
-        evidence: &crate::contracts::ClaimEvidence,
-        binding: Option<&crate::contracts::ClaimRun>,
+            -> Result<Vec<crate::contract::TaskCoordinationRow>, OrbitError>,
+        effects: &crate::contract::ClaimCommitEffects,
+        evidence: &crate::contract::ClaimEvidence,
+        binding: Option<&crate::contract::ClaimRun>,
     ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
         orbit_types::task::validate_orb_task_id(&params.task_id)?;
         if params.actor.trim().is_empty() {

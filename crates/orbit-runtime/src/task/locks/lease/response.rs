@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     LeaseQueueKind, LeaseRecord, TaskLockConflict, TaskLockHolder, TaskReservationReleaseReason,
 };
 use serde::Serialize;

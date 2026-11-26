@@ -1,7 +1,7 @@
 //! Adoption, refusal and frozen-v1 compatibility through Store::open.
 use super::*;
 
-use orbit_store::contracts::{BreakingMigration, COMPATIBILITY_RECORD_FORMAT, CompatibilityRecord};
+use orbit_store::contract::{BreakingMigration, COMPATIBILITY_RECORD_FORMAT, CompatibilityRecord};
 use orbit_store::maintenance::migration::{
     AppliedMigration, SUPPORTED_SCHEMA_VERSION, current_schema_version,
 };

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use orbit_config::AutoConcurrencySettings;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS, CPU_ACCOUNTING_MACOS_OWN_ONLY,
     CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunResources,
 };

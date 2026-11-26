@@ -9,15 +9,13 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_registry::{load_machine_identity, workspace_registry};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
-use orbit_store::workflow::task::{
-    inspect_publication, publish_task_snapshot, restore_publication,
-};
+use orbit_store::migrate::task::{inspect_publication, publish_task_snapshot, restore_publication};
 use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspacePublicationBinding};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
-pub use orbit_store::workflow::task::{
+pub use orbit_store::migrate::task::{
     AttachmentPolicy, AttachmentPolicyKind, InspectedPublicationTask, OmittedAttachment,
     PublicationCallerRole, PublicationFreshness, PublicationInspectLabel,
     PublicationInspectRequest, PublicationInspection, PublicationLastSuccess,

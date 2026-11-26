@@ -314,7 +314,7 @@ fn manual_backlog_starts_after_edits_without_a_routine_pilot() {
 }
 
 fn hold_execution_claim(workspace: &Workspace, task: &Task) -> rusqlite::Connection {
-    use orbit_store::contracts::{
+    use orbit_store::contract::{
         AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
     };
     let claim = ExecutionClaim {

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState};
+use orbit_store::contract::{RoutineFireIntentParams, RoutineFireState};
 
 use super::super::due::{MISSED_SLOT_SKIP_DETAIL, MissedSlotWalk, missed_slots_through};
 use super::super::loader::LoadedRoutine;

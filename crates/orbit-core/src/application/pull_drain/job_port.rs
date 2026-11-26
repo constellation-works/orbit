@@ -1,7 +1,7 @@
 //! Pull settlement's side of the job-owned port [ORB-17937].
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::LocalPullAdmission;
+use orbit_store::contract::LocalPullAdmission;
 use orbit_types::workflow::JobRun;
 
 use crate::OrbitRuntime;

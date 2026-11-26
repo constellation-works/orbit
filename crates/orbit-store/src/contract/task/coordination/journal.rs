@@ -3,7 +3,7 @@
 use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::{
+use crate::contract::{
     ExpiredTaskReservation, TaskLockConflict, TaskReservationReserveParams,
     TaskReservationReserveResult,
 };

@@ -37,7 +37,7 @@ use orbit_engine::{
     V2AuditWriter, execute_job_with_resume,
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_tools::ToolContext;
 #[cfg(unix)]
 use orbit_types::telemetry::ProviderLimitObservation;

@@ -4,7 +4,7 @@
 //! the executor has no profile of is judged by its base class.
 
 use super::*;
-use orbit_store::contracts::{AdmissionWorkFit, AdmissionWorkKey, TaskDocumentUpdateParams};
+use orbit_store::contract::{AdmissionWorkFit, AdmissionWorkKey, TaskDocumentUpdateParams};
 
 /// A backlog task with `tags` and `complexity`, on its own file so no
 /// footprint holds it back.

@@ -5,7 +5,7 @@
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::ci_run_event::is_branch_event;
-use orbit_store::contracts::BranchObservationOutcome;
+use orbit_store::contract::BranchObservationOutcome;
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
 use serde::{Deserialize, Serialize};

@@ -62,11 +62,11 @@ pub struct DrainLeafOccupancy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalPullAdmission {
     pub destination: PullDestination,
-    pub request: crate::contracts::AdmissionRequest,
-    pub receipt: Option<crate::contracts::AdmissionReceipt>,
+    pub request: crate::contract::AdmissionRequest,
+    pub receipt: Option<crate::contract::AdmissionReceipt>,
     pub leaf_run_id: Option<String>,
     pub phase: LocalPullPhase,
-    pub settlement: Option<crate::contracts::ClaimMutation>,
+    pub settlement: Option<crate::contract::ClaimMutation>,
     /// The owner's refusal: with [`LocalPullPhase::Refused`], of the request;
     /// with [`LocalPullPhase::Settled`], of a settlement the owner could no
     /// longer accept because it had already ended the claim.
@@ -146,12 +146,12 @@ impl LocalPullAdmission {
 /// Each transition commits before the next network or process side effect.
 #[derive(Debug, Clone)]
 pub enum LocalPullMutation {
-    Receive(Box<crate::contracts::AdmissionReceipt>),
+    Receive(Box<crate::contract::AdmissionReceipt>),
     CreateLeaf,
     Bound,
     LaunchIntent,
     Launched,
-    Settle(Box<crate::contracts::ClaimMutation>),
+    Settle(Box<crate::contract::ClaimMutation>),
     Settled,
     /// Close a still-`Requested` admission the owner refused, after the owner
     /// confirmed it holds no live receipt for this request ID.

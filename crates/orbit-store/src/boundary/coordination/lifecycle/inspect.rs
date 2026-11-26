@@ -9,7 +9,7 @@ use super::codec::{
 };
 use super::late_effort::{attach_late_leaf_crew, attach_late_leaf_effort, attach_late_leaf_model};
 use super::{decode, decode_state, invalid};
-use crate::contracts::*;
+use crate::contract::*;
 
 impl TaskCommitBoundary {
     /// Strictly read-only: an interrupted commit requires explicit journal recovery

@@ -17,7 +17,7 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::AgentExecutionIdentity;
 use rusqlite::Connection;
 
-use crate::contracts::{
+use crate::contract::{
     AgentExecutionBackfill, AgentExecutionQuery, AgentExecutionRecord, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
     InvocationSample, ProviderLedgerEntry, TaskInvocationMetrics, ToolInvocationMetrics,

@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::desktop::{DesktopTaskOperation, DesktopTaskRequest};
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};

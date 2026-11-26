@@ -5,7 +5,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::Store;
-use orbit_store::contracts::AuditEventFilter;
+use orbit_store::contract::AuditEventFilter;
 use orbit_types::workflow::{JobRun, JobRunState, WORKER_PROVENANCE_SEPARATOR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

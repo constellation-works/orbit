@@ -108,7 +108,7 @@ fn minted_grant_waits_for_a_delta_and_stays_inside_its_scope() {
     let cursor = response["cursor"]["next"].as_str().unwrap().to_owned();
 
     // A new open friction record is a delta.
-    use orbit_store::contracts::FrictionAddParams;
+    use orbit_store::contract::FrictionAddParams;
     orbit_core::runtime::friction::store_for(&runtime)
         .unwrap()
         .add(FrictionAddParams {

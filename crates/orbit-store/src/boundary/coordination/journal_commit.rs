@@ -5,12 +5,12 @@ use orbit_common::{ClaimRefusalKind, OrbitError};
 use rusqlite::{OptionalExtension, params};
 
 use crate::boundary::journal::{JournalCommitOutcome, upsert_executor_census_in};
-use crate::contracts::{
+use crate::contract::{
     TaskCoordinationRow, TaskReservationReserveParams, TaskReservationReserveResult,
 };
+use crate::migrate::friction::{allocate, project_committed_friction};
 use crate::repository::task_reservation::notices::{self, LeaseOverlapNotice};
 use crate::repository::task_reservation::reserve_files_in_tx;
-use crate::workflow::friction::{allocate, project_committed_friction};
 use crate::{Store, StoreTx};
 
 impl Store {
@@ -28,7 +28,7 @@ impl Store {
         make_rows: &mut impl FnMut(
             Option<&TaskReservationReserveResult>,
         ) -> Result<Vec<TaskCoordinationRow>, OrbitError>,
-        effects: &crate::contracts::ClaimCommitEffects,
+        effects: &crate::contract::ClaimCommitEffects,
         lease_notice: Option<&LeaseOverlapNotice<'_>>,
     ) -> Result<JournalCommitOutcome, OrbitError> {
         let mut reported_friction = None;

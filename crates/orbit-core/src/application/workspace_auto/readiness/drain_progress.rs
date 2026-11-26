@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 
 use crate::OrbitRuntime;

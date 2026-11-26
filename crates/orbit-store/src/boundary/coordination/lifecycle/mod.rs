@@ -4,7 +4,7 @@ use orbit_types::task::{ArtifactManifestV2, TaskCommentRowV2, TaskStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::boundary::v2_bundle::TaskBundleV2;
-use crate::contracts::{ClaimInspection, ClaimMutationResult, ExecutionClaim, TaskCoordinationRow};
+use crate::contract::{ClaimInspection, ClaimMutationResult, ExecutionClaim, TaskCoordinationRow};
 
 mod codec;
 mod evidence;

@@ -9,12 +9,12 @@ use orbit_types::record::{FrictionRecord, FrictionStatus};
 
 use super::{WorkspaceFrictions, validate_workspace_id};
 use orbit_common::governance::friction::normalize_friction_tags as normalize_and_validate_tags;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     FrictionAddParams, FrictionLandingOutcome, FrictionListFilter, FrictionRehomeOutcome,
     FrictionRehomeParams, FrictionUpdateParams, StoredFrictionRecord,
 };
 use orbit_store::friction_taxonomy::load_tag_taxonomy;
-use orbit_store::workflow::friction as submission;
+use orbit_store::migrate::friction as submission;
 
 impl WorkspaceFrictions {
     /// Submit a new report and announce it after commit.

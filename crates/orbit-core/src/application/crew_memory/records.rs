@@ -4,7 +4,7 @@
 
 use orbit_common::OrbitError;
 use orbit_store::Tx;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     CrewMemoryEventRow, CrewMemoryProposalDecision, CrewMemoryProposalOutcome,
     CrewMemoryProposalRow, CrewMemoryRevisionRow,
 };

@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
-use crate::contracts::V2AuditEventInsertParams;
+use crate::contract::V2AuditEventInsertParams;
 
 pub(super) fn insert(
     conn: &Connection,

@@ -21,7 +21,7 @@ use orbit_common::governance::friction::{
 };
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionUpdateParams,
     StoredFrictionRecord,
 };

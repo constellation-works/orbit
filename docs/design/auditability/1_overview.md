@@ -95,12 +95,12 @@ The default tracing subscriber appends redacted operational events to `~/.orbit/
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-runtime/src/audit/run/trail.rs` | Landed: [T20260426-0705], [T20260426-0709] |
 | Audit blob sinks and storage | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/storage/blob_store.rs` | Landed: [T20260426-0605] |
 | Redaction utilities | [crates/orbit-common/src/security/redaction/](../../../crates/orbit-common/src/security/redaction/) | Landed: [T20260426-0605], [T20260426-2349] |
-| Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers, `crates/orbit-store/src/workflow/friction/submission.rs` | Landed: [T20260426-2343], [T20260427-0023] |
+| Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers, `crates/orbit-store/src/migrate/friction/submission.rs` | Landed: [T20260426-2343], [T20260427-0023] |
 | Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | Landed: [T20260510-13], [ORB-00062] |
 | V2 invocation metrics persistence | `crates/orbit-store/src/repository/invocation/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | Landed: [T20260426-0526] |
 | Task attribution fields | `crates/orbit-types/src/task/model/task.rs`, task update/runtime host paths | Landed: [T20260426-0605], [T20260427-47] |
 | Workflow git commit identity attribution | `crates/orbit-engine/src/executor/automation/vcs/commit/` | Landed: [T20260508-22], [T20260509-12] |
-| Friction live-tracing projection | `crates/orbit-store/src/workflow/friction/submission.rs`, `crates/orbit-store/src/boundary/coordination/journal_commit.rs` | Landed: [ORB-21797] |
+| Friction live-tracing projection | `crates/orbit-store/src/migrate/friction/submission.rs`, `crates/orbit-store/src/boundary/coordination/journal_commit.rs` | Landed: [ORB-21797] |
 
 ---
 

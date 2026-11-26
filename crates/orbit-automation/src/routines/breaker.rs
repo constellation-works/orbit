@@ -19,7 +19,7 @@ use super::sweep::RoutineDispatch;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireRecord,
     RoutineFireState,
 };

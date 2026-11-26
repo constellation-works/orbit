@@ -1,7 +1,7 @@
 use super::super::super::TaskCommitBoundary;
 use super::super::codec::{CLAIM, RECEIPT};
 use super::super::{MutationReceipt, decode, invalid};
-use crate::contracts::*;
+use crate::contract::*;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 
 impl TaskCommitBoundary {

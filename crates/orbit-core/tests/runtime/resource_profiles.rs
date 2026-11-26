@@ -13,7 +13,7 @@ use orbit_core::runtime::host_resource::profile::{
 use orbit_core::{JobRunState, OrbitRuntime};
 use orbit_engine::RuntimeHost;
 use orbit_store::Store;
-use orbit_store::contracts::RunResourceMinute;
+use orbit_store::contract::RunResourceMinute;
 use orbit_types::task::TaskStatus;
 use serde_json::json;
 use tempfile::TempDir;
@@ -153,7 +153,7 @@ impl Fixture {
                         resumed: seed.resumed,
                         delivery_admitted_at: Some(admitted),
                         cpu_cores: *cpu,
-                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        cpu_accounting: Some(orbit_store::contract::CPU_ACCOUNTING_LINUX.into()),
                         memory_bytes: *memory,
                         samples: 12,
                         crew_model: self.sampled_under.borrow().0.clone(),
@@ -916,7 +916,7 @@ fn no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_de
 /// changing raw evidence. Linux legacy rows remain usable on Linux, and Mac
 /// rows from before orphans were adopted remain usable everywhere.
 fn profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes() {
-    use orbit_store::contracts::{
+    use orbit_store::contract::{
         CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS, CPU_ACCOUNTING_MACOS_TREE_ONLY,
     };
 

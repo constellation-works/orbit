@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::ExperimentRecord;
+use orbit_store::contract::ExperimentRecord;
 
 use crate::application::experiment::definition::{Kind, MetricSpec, metric_spec};
 

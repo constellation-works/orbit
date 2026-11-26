@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::InterruptedReview;
+use orbit_store::contract::InterruptedReview;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, Task};
 use serde_json::{Value, json};
 

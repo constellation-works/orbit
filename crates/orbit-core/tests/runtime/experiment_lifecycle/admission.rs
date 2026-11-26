@@ -259,7 +259,7 @@ fn explicit_same_crew_does_not_count_as_experiment_treatment() {
                         .iter()
                         .find(|arm| arm.name == "treatment")
                         .unwrap();
-                    Ok(vec![orbit_store::contracts::ExperimentAssignment {
+                    Ok(vec![orbit_store::contract::ExperimentAssignment {
                         experiment: f.experiment.clone(),
                         task_id: f.task.clone(),
                         arm: Some(arm.name.clone()),

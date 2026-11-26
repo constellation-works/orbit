@@ -5,7 +5,7 @@ use orbit_common::security::{
     release::sha256_hex,
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::TaskArtifactUpdateParams;
+use orbit_store::contract::TaskArtifactUpdateParams;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactWriter, CommentReceipt, TaskArtifact, TaskComment,
 };

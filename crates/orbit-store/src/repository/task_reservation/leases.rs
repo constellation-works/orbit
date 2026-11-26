@@ -23,7 +23,7 @@ use super::rows::{
 };
 use super::{reservation_scope_clause, unique_row_id};
 use crate::Store;
-use crate::contracts::{
+use crate::contract::{
     LeaseInsertParams, LeaseInsertResult, LeaseListResult, LeaseMode, LeasePrincipalClass,
     LeasePriority, LeaseQueueKind, LeaseRecord, LeaseReleaseParams, LeaseReleaseResult,
     LeaseRenewParams, LeaseRenewResult, TaskReservationReleaseReason, TaskReservationScope,

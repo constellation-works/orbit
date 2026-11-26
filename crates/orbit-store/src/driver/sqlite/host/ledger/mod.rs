@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::ledger::{LedgeredDatabase, Migration, run_database_migrations};
 use rusqlite::Connection;
 
-use crate::contracts::{ForwardCompatibleOpen, StateComponent};
+use crate::contract::{ForwardCompatibleOpen, StateComponent};
 
 pub(super) const STORE_DATABASE: LedgeredDatabase = LedgeredDatabase {
     component: StateComponent::StoreSchema,

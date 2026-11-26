@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+use orbit_store::contract::{JobRunOrder, JobRunQuery};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{

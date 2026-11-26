@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 use super::super::TaskCommitBoundary;
 use super::codec::{CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_CREW, LATE_LEAF_EFFORT, LATE_LEAF_MODEL};
 use super::{decode, invalid, row};
-use crate::contracts::*;
+use crate::contract::*;
 
 /// The task history event a claim's pull writes; its note names the claim.
 const PULLED_BY_EVENT: &str = "pulled_by";

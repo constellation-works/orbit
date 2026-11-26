@@ -2,7 +2,7 @@
 type: runbook
 summary: Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository.
 tags: [operations, backup, recovery, git, task-publication]
-paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/workflow/task/**"]
+paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/migrate/task/**"]
 related_features: [task-publication, task-artifacts, host-registry]
 related_artifacts: [ORB-11077, ORB-11142, ORB-11145, ORB-11426]
 last_validated: 2026-10-25

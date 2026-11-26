@@ -3,7 +3,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::optional_string_alias;
-use orbit_store::contracts::{LeaseReleaseParams, LeaseRenewParams, TaskReservationReleaseReason};
+use orbit_store::contract::{LeaseReleaseParams, LeaseRenewParams, TaskReservationReleaseReason};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 

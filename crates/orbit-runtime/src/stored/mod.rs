@@ -25,7 +25,7 @@ pub struct Stored {
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
     /// this runtime opened (empty `applied` when the layout was already
     /// current). Surfaced by `orbit migrate`.
-    pub(crate) layout_report: Arc<orbit_store::workflow::layout::LayoutUpgradeReport>,
+    pub(crate) layout_report: Arc<orbit_store::migrate::layout::LayoutUpgradeReport>,
     // Declared last so the stores close before the base's roots are dropped.
     base: Base,
 }
@@ -36,7 +36,7 @@ impl Stored {
     pub(crate) fn new(
         base: Base,
         stores: OrbitStores,
-        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
     ) -> Self {
         Self {
             stores,

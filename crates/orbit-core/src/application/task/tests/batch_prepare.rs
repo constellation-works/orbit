@@ -9,7 +9,7 @@ use serde_json::json;
 use super::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::batch_prepare::{BatchSpec, Qualification, prepare_batch};
-use orbit_store::contracts::TaskListFilter;
+use orbit_store::contract::TaskListFilter;
 
 #[test]
 fn automatic_batch_stops_hydrating_once_max_tasks_are_selected() {

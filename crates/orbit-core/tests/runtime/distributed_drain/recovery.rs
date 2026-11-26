@@ -1166,7 +1166,7 @@ fn a_later_candidateless_claim_requeues_onto_the_kept_candidate() {
 #[test]
 fn interrupted_claim_recovery_is_fenced_to_the_winning_failure_revision() {
     use orbit_core::application::task::TaskUpdateParams;
-    use orbit_store::contracts::ClaimFinalRecovery;
+    use orbit_store::contract::ClaimFinalRecovery;
     use orbit_types::task::TaskStatus;
 
     if !isolated(

@@ -4,7 +4,7 @@ use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::engine::OrchestratorMetricsBucketKind;
-use orbit_store::contracts::{InvocationInsertParams, InvocationQuery};
+use orbit_store::contract::{InvocationInsertParams, InvocationQuery};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use tempfile::TempDir;
 

@@ -4,7 +4,7 @@ use rusqlite::types::{ToSql, Value};
 
 use super::super::query::build_invocation_list_query;
 use crate::Store;
-use crate::contracts::InvocationQuery;
+use crate::contract::InvocationQuery;
 
 /// Succeeded-candidate selection behind the implement_one durations trend.
 /// Without planner statistics, which the store never collects, SQLite probed

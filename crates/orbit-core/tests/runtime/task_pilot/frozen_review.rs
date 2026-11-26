@@ -58,7 +58,7 @@ fn put_coverage(
     run_id: &str,
     evidence: &orbit_types::workflow::automation::CoverageEvidence,
 ) {
-    use orbit_store::contracts::TaskArtifactUpdateParams;
+    use orbit_store::contract::TaskArtifactUpdateParams;
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     use orbit_types::task::TaskArtifact;
 

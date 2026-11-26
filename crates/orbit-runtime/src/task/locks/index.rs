@@ -6,7 +6,7 @@ use std::path::Path;
 use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
+use orbit_store::contract::{TaskLockConflict, TaskLockHolder};
 use orbit_types::task::{
     EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskEnvelopeV2, TaskRelationType, TaskStatus,
     inherited_only_epic_roots,

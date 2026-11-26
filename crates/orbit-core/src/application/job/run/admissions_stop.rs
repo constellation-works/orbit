@@ -272,7 +272,7 @@ impl OrbitRuntime {
     /// the same word a start records.
     fn record_stop_drain_intent(&self, request: DrainAdmissionsStopRequest<'_>) {
         self.record_hand_drain_intent(
-            orbit_store::contracts::DrainIntentState::Paused,
+            orbit_store::contract::DrainIntentState::Paused,
             request.actor,
             request.reason,
         );

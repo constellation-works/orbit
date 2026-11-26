@@ -4,7 +4,7 @@ use orbit_agent::loop_engine::audit::{AuditSink, BlobStore};
 use orbit_common::OrbitError;
 use orbit_common::storage::blob_sweep;
 use orbit_store::Store;
-use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams};
+use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_types::workflow::activity_job::V2AuditEvent;
 
 pub struct V2SqliteSink {

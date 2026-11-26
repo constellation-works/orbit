@@ -28,7 +28,7 @@ use orbit_core::application::routines::{
 use orbit_core::metrics::reliability::ReliabilityWindow;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AuditEventFilter,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, JobRunStepParams, LocalPullAdmission, LocalPullPhase,
     PullDestination,

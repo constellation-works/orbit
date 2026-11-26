@@ -10,7 +10,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::process::build::current_orbit_build;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, KeyedJobRunAdmission,
     KeyedJobRunParams,
 };

@@ -19,7 +19,7 @@ use super::super::{TaskCommitBoundary, TaskCommitIntent};
 use super::invalid;
 use crate::boundary::v2::{normalize_v2_artifact_path, review_report_history, task_from_bundle};
 use crate::boundary::v2_bundle::{TaskBundleV2, TaskDocumentV2};
-use crate::contracts::{ClaimCommitEffects, ClaimEvidence, ClaimRun};
+use crate::contract::{ClaimCommitEffects, ClaimEvidence, ClaimRun};
 use crate::driver::file::task_bundle::truncate_jsonl_file;
 
 impl TaskCommitBoundary {
@@ -27,7 +27,7 @@ impl TaskCommitBoundary {
     /// and stamp the receipt rows written by that same journal transaction.
     pub(in super::super) fn stamp_failure_revision(
         &self,
-        rows: &mut [crate::contracts::TaskCoordinationRow],
+        rows: &mut [crate::contract::TaskCoordinationRow],
         bundle: &TaskBundleV2,
         intent: &TaskCommitIntent,
     ) -> Result<(), OrbitError> {
@@ -48,7 +48,7 @@ impl TaskCommitBoundary {
             .collect::<Vec<_>>();
         let history = crate::boundary::v2::task_history_from_events(failed.events.clone());
         let task = task_from_bundle(failed);
-        let revision = crate::contracts::FinalRecoveryTaskRevision::of(&task, &comments, &history);
+        let revision = crate::contract::FinalRecoveryTaskRevision::of(&task, &comments, &history);
         for row in rows
             .iter_mut()
             .filter(|row| row.kind == super::codec::RECEIPT)

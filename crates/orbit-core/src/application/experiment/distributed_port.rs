@@ -1,7 +1,7 @@
 //! Experiment's side of the distributed-owned capture port [ORB-22416].
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::AdmissionShipContract;
+use orbit_store::contract::AdmissionShipContract;
 use orbit_types::task::Task;
 use orbit_types::workflow::CapturedExperiments;
 

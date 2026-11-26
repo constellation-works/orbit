@@ -686,7 +686,7 @@ fn a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch() {
     let (_treated, control) = enroll_both_arms(&fx, &job);
     // Simulate a pre-capture delivery: remove every job run for the task.
     {
-        use orbit_store::contracts::JobRunQuery;
+        use orbit_store::contract::JobRunQuery;
         let jobs = orbit_core::runtime::JobRuns::shared(
             fx.runtime.sqlite_store().unwrap(),
             fx.runtime.workspace_id().unwrap(),
@@ -873,7 +873,7 @@ fn a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch() {
     // Drop the enrolling delivery so the history below holds exactly the
     // older explicit luna delivery and the newer normal sol delivery.
     {
-        use orbit_store::contracts::JobRunQuery;
+        use orbit_store::contract::JobRunQuery;
         let jobs = orbit_core::runtime::JobRuns::shared(
             fx.runtime.sqlite_store().unwrap(),
             fx.runtime.workspace_id().unwrap(),
@@ -956,7 +956,7 @@ fn seed_historical_scope_redraw(fx: &Fixture, task: &str) {
         .document
         .update_task_document(
             task,
-            orbit_store::contracts::TaskDocumentUpdateParams {
+            orbit_store::contract::TaskDocumentUpdateParams {
                 actor: "historical-scope-redraw-fixture".into(),
                 crew: Some(Some("luna".into())),
                 crew_source: Some(Some("pool:hard".into())),

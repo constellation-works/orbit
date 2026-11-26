@@ -10,7 +10,7 @@
 //! Task keeps owning its readout and provider-limit decisions.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExperimentAssignment;
+use orbit_store::contract::ExperimentAssignment;
 
 /// The experiment reads task code calls, implemented by `experiment`.
 pub(in crate::application) trait TaskExperimentPort {

@@ -133,17 +133,17 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
 
     let deferred = fx
         .runtime
-        .audit_failure_incidents(&orbit_store::contracts::FailureIncidentQuery::default())
+        .audit_failure_incidents(&orbit_store::contract::FailureIncidentQuery::default())
         .unwrap()
         .incidents
         .into_iter()
         .filter(|incident| {
-            incident.surface == orbit_store::contracts::RUN_DEFERRED_SURFACE
+            incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
                 && incident.run_ids.contains(&run.run_id)
         })
         .map(|incident| incident.class)
         .collect::<Vec<_>>();
-    assert_eq!(deferred, [orbit_store::contracts::FailureClass::Deferred]);
+    assert_eq!(deferred, [orbit_store::contract::FailureClass::Deferred]);
 
     let replay_count = fx.runtime.get_task_history(&task).unwrap().len();
     fx.runtime

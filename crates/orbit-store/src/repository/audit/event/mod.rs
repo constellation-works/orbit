@@ -27,7 +27,7 @@ use orbit_types::telemetry::AuditEvent;
 use rusqlite::Connection;
 use rusqlite::types::ToSql;
 
-use crate::contracts::{
+use crate::contract::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
     AuditInvocationFields, AuditRoleAggregate, AuditToolAggregate, AuditToolModelAggregate,
 };

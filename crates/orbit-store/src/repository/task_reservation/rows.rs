@@ -2,7 +2,7 @@
 //! transaction and row mapping.
 
 use super::notices::{self, LeaseOverlapNotice};
-use crate::contracts::TaskReservationKind;
+use crate::contract::TaskReservationKind;
 use crate::{
     ActiveTaskReservation, ExpiredTaskReservation, ReleasedTaskReservation, TaskLockConflict,
     TaskLockHolder, TaskReservationReleaseReason, TaskReservationReserveParams,

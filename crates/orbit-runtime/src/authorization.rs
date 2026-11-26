@@ -26,7 +26,7 @@ use orbit_common::governance::authorization::{
     governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_store::contract::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::RESIDENT_CYCLE_JOB;

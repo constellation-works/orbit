@@ -6,7 +6,7 @@ use std::ffi::OsStr;
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::AuditEventInsertParams;
-use orbit_store::contracts::AuditInvocationFields;
+use orbit_store::contract::AuditInvocationFields;
 use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;

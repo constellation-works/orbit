@@ -9,7 +9,7 @@
 //! handoffs from it, for the crew and model each pulled attempt ran as.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ClaimInspection, ClaimSettlementKind, ExecutionClaimPhase, LeafRootCause, LeafRunEvidence,
 };
 use orbit_types::workflow::{

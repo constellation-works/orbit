@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 
-use crate::contracts::{DEFAULT_SCAN_LIMIT, FailureIncidentQuery};
+use crate::contract::{DEFAULT_SCAN_LIMIT, FailureIncidentQuery};
 use crate::store::Snapshot;
 use rusqlite::Connection;
 

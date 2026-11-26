@@ -3,7 +3,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string_alias, optional_string_list_alias};
-use orbit_store::contracts::{
+use orbit_store::contract::{
     LeaseInsertParams, LeaseMode, LeasePrincipalClass, LeasePriority, LeaseQueueKind, LeaseRecord,
     TaskLockConflict,
 };

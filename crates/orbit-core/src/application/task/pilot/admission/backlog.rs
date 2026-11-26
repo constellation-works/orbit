@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::{TaskListFilter, TaskRow};
+use orbit_store::contract::{TaskListFilter, TaskRow};
 use orbit_types::task::{
     ArtifactManifestFileV2, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
     PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionOperatorRecord, PilotAdmissionVerdict, Task,

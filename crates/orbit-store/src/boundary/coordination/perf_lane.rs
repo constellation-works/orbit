@@ -14,7 +14,7 @@ use orbit_types::task::{
 
 use super::TaskCommitBoundary;
 use crate::boundary::v2_bundle::TaskBundleStoreV2;
-use crate::contracts::{ExecutionClaim, TaskIndexFilter};
+use crate::contract::{ExecutionClaim, TaskIndexFilter};
 
 impl TaskCommitBoundary {
     /// Read `task_id`'s settled envelope from whichever workspace partition on

@@ -12,7 +12,7 @@ use crate::admission_test_support::{
 
 use orbit_automation::review::REBASED_CLEAN_ASSURANCE;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
     AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ExecutionLocation,
 };
@@ -280,7 +280,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
         accepted.handoff.task_id.clone(),
         accepted.handoff.claim_id.clone(),
         accepted.handoff.machine_id.clone(),
-        Some(orbit_store::contracts::ClaimRun {
+        Some(orbit_store::contract::ClaimRun {
             machine_id: accepted.handoff.machine_id.clone(),
             run_id: "different-run".into(),
         }),

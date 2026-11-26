@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ArtifactManifestFileV2, TaskArtifact};
 
 use crate::boundary::TaskV2Store;
-use crate::contracts::TaskArtifactUpdateParams;
+use crate::contract::TaskArtifactUpdateParams;
 
 /// Artifact records of a workspace's task store.
 #[derive(Clone)]

@@ -1,7 +1,7 @@
 //! Resolve an accepted handoff to its owning execution claim.
 
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use orbit_store::contracts::ClaimInspection;
+use orbit_store::contract::ClaimInspection;
 use orbit_types::workflow::handoff::AcceptedHandoff;
 
 use crate::OrbitRuntime;

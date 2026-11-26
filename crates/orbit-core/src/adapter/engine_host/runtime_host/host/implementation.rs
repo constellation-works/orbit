@@ -26,7 +26,7 @@ use orbit_engine::{
     StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
     TaskActivityUpdate, TaskAutomationUpdate,
 };
-use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunStepParams};
+use orbit_store::contract::{InvocationQuery, InvocationRecord, JobRunStepParams};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::record::OrbitEvent;
@@ -389,7 +389,7 @@ impl RuntimeHost for OrbitRuntime {
     fn kept_claim_candidate(
         &self,
         task_id: &str,
-    ) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
+    ) -> Result<Option<orbit_store::contract::KeptClaimCandidate>, OrbitError> {
         claims::kept_claim_candidate(self, task_id)
     }
 

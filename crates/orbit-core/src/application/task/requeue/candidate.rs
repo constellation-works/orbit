@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{CandidateFreshReason, JobRunQuery, KeptClaimCandidate};
+use orbit_store::contract::{CandidateFreshReason, JobRunQuery, KeptClaimCandidate};
 use orbit_types::task::Task;
 use orbit_types::workflow::HeldCandidate;
 use serde_json::Value;

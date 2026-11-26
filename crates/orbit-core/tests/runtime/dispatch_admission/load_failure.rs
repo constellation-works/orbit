@@ -4,7 +4,7 @@ use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::JobRuns;
 use orbit_store::V2AuditEventInsertParams;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::{ChildDispatch, JobRunState, JobTargetType, PipelineState};
 use serde_json::json;
 

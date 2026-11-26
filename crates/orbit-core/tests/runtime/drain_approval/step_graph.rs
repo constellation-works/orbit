@@ -301,7 +301,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
 
     // Pin actual graph execution, including the short active-pilot branch
     // and the final authority join; checking the job text would prove neither.
-    let filter = orbit_store::contracts::V2AuditEventFilter {
+    let filter = orbit_store::contract::V2AuditEventFilter {
         workspace_id: workspace.runtime.workspace_id().unwrap(),
         run_id: Some(drain.clone()),
         limit: Some(100_000),

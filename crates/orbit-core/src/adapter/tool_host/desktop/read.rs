@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, required_string,
 };
-use orbit_store::contracts::{JobRunQuery, TaskListFilter};
+use orbit_store::contract::{JobRunQuery, TaskListFilter};
 use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{JobRun, JobRunState};

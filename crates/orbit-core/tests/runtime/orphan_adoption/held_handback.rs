@@ -498,7 +498,7 @@ fn a_stale_check_answer_hold_is_repaired_once_the_published_head_is_red() {
     // eligible: the same identity guard passes when the audit links the head.
     let audited_head = "audited-head";
     fx.runtime
-        .record_audit_event(&orbit_store::contracts::AuditEventInsertParams {
+        .record_audit_event(&orbit_store::contract::AuditEventInsertParams {
             execution_id: format!("audit-pr-refresh-{}", red.number),
             command: "pr_refresh".to_string(),
             subcommand: Some("updated".to_string()),

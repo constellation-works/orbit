@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskListFilter;
+use orbit_store::contract::TaskListFilter;
 
 use crate::OrbitRuntime;
 

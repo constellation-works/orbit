@@ -6,7 +6,7 @@ use orbit_engine::review_gate::{
     ReplayBudget, candidate_identity_at, committed_paths, uncommitted_paths,
 };
 use orbit_engine::{DispatchError, ReviewReleaseRequest};
-use orbit_store::contracts::ReviewSettlement;
+use orbit_store::contract::ReviewSettlement;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{

@@ -394,7 +394,7 @@ pub enum ClaimMutation {
     Evidence(ClaimEvidence),
     Update(ClaimWorkerUpdate),
     /// Friction allocation and publication share the claim's commit transaction.
-    Friction(crate::contracts::FrictionAddParams),
+    Friction(crate::contract::FrictionAddParams),
     /// Legacy serialized shape retained for reading only; new writes are refused.
     Handoff(ClaimEvidence),
     AcceptHandoff(orbit_types::workflow::handoff::TaskHandoff),
@@ -614,7 +614,7 @@ pub struct ClaimMutationResult {
     /// Owner-measured revision of the winning failure commit. Older receipts
     /// lack this fence and must not initiate automatic final recovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_revision: Option<crate::contracts::FinalRecoveryTaskRevision>,
+    pub failure_revision: Option<crate::contract::FinalRecoveryTaskRevision>,
     pub claim_id: String,
     pub phase: ExecutionClaimPhase,
     pub status: TaskStatus,
@@ -637,7 +637,7 @@ pub struct ClaimMutationOutcome {
 pub(crate) struct ClaimCommitEffects {
     pub replacements: Vec<(TaskCoordinationRow, TaskCoordinationRow)>,
     pub release_reservation: Option<String>,
-    pub friction: Option<(crate::contracts::FrictionAddParams, String)>,
+    pub friction: Option<(crate::contract::FrictionAddParams, String)>,
     pub execution_origin: Option<ExecutionLocation>,
     pub worker_update: Option<ClaimWorkerUpdate>,
     /// Culprit tasks an accepted handoff attributes the task's regression

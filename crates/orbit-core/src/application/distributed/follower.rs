@@ -45,7 +45,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::PullDestination;
+use orbit_store::contract::PullDestination;
 use orbit_types::workflow::{
     DrainAdmissionPass, DrainPassObservation, JobRunTrigger, PullSinglePass, ResourceThrottle,
     ValidationGates,

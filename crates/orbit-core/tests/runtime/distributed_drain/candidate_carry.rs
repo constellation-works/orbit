@@ -199,7 +199,7 @@ pub(super) fn settled_candidate(pair: &Pair, leaf: &str, kind: &str) -> Value {
 pub(super) fn claim_candidate(
     pair: &Pair,
     leaf: &str,
-) -> Option<orbit_store::contracts::ClaimCandidateRef> {
+) -> Option<orbit_store::contract::ClaimCandidateRef> {
     pair.admission(leaf)
         .receipt
         .and_then(|receipt| receipt.task)

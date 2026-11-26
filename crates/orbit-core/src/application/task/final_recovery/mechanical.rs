@@ -19,7 +19,7 @@
 
 use chrono::Utc;
 use orbit_common::governance::friction::normalize_title;
-use orbit_store::contracts::FrictionAddParams;
+use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{

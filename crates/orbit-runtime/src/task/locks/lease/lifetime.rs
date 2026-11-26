@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{GitAncestry, git_ancestry};
-use orbit_store::contracts::{LeaseRecord, LeaseReleaseParams, TaskReservationReleaseReason};
+use orbit_store::contract::{LeaseRecord, LeaseReleaseParams, TaskReservationReleaseReason};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::json;
 

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionTaskGuidance,
     ExecutorCapability, JobRunQuery,
 };
@@ -76,7 +76,7 @@ impl OrbitRuntime {
     /// compacted requests; claim-mutation pruning remains independent.
     pub fn compact_admission_receipts(
         &self,
-    ) -> Result<orbit_store::contracts::AdmissionReceiptMaintenance, OrbitError> {
+    ) -> Result<orbit_store::contract::AdmissionReceiptMaintenance, OrbitError> {
         self.ensure_distributed_owner_workspace()?;
         self.admission_boundary()?.compact_admission_receipts()
     }

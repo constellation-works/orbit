@@ -25,7 +25,7 @@ use super::super::boundary::section_probe::{SECTIONS, SectionCost};
 use crate::Store;
 use crate::boundary::v2::TaskV2Store;
 use crate::compose::workspace_coordinated_backends;
-use crate::contracts::*;
+use crate::contract::*;
 use crate::repository::task_index::{BindWorkspaceParams, TaskRegistryStore, task_registry_path};
 
 const PARTITION: &str = "orbit-test-123456";

@@ -32,7 +32,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionForecastRecord, AdmissionReceipt, AdmissionRequest, AdmissionWorkFit,
     AdmissionWorkKey, LocalPullAdmission, LocalPullPhase, PullForecastDecision,
 };

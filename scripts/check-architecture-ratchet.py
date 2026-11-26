@@ -3,7 +3,7 @@
 
 The restructure (docs/design/architecture-restructure/2_design.md §10) moves
 about a thousand operations over many weeks while unrelated work lands daily,
-so the old shape can regrow. This check holds fourteen counts of that shape at
+so the old shape can regrow. This check holds twelve counts of that shape at
 or below scripts/architecture-ratchet-baseline.json, the pattern of
 scripts/check-dashboard-css-literals.py:
 
@@ -37,11 +37,6 @@ DEFAULT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE = "scripts/architecture-ratchet-baseline.json"
 CRATES = "crates"
 SURFACE_CRATES = ("orbit-cli", "orbit-web", "orbit-cmd")
-STORE_CRATE = "orbit-store"
-# The one file that takes the writer connection by definition: the
-# transaction protocol itself. Every other driver file is counted.
-WRITER_DEFINITION = "crates/orbit-store/src/driver/sqlite/host/connection.rs"
-STORE_DRIVER = "crates/orbit-store/src/driver/"
 RUNTIME_SRC = "crates/orbit-runtime/src"
 RUNTIME_LAYERS = ("base", "stored", "host", "run")
 APPLICATION_PORT = "crates/orbit-runtime/src/application_port.rs"
@@ -64,10 +59,6 @@ DEFINITIONS = {
         "methods of the `ApplicationPort` trait",
     "from_kernel_ref_uses":
         "calls of `from_kernel_ref` (its definition is not counted)",
-    "store_backend_traits":
-        "`*Backend` traits in orbit-store",
-    "driver_writer_outside_transaction_files":
-        "driver files that lock the writer connection outside `with_transaction`",
     "env_global_accessor_calls":
         "calls of `composition_env()`, `captured_env()` and the free `process_env()` "
         "that return the captured `Env` from the static `CAPTURED_ENV` "
@@ -101,19 +92,6 @@ IMPL_ORBIT_RUNTIME = re.compile(r"\bimpl\s*(?:<[^{;]*?>\s*)?(?:\w+\s*::\s*)*Orbi
 ORBIT_RUNTIME_NAME = re.compile(r"\bOrbitRuntime\b")
 RUNTIME_PARAM = re.compile(r"&\s*(?:'\w+\s+)?(?:mut\s+)?(?:\w+\s*::\s*)*OrbitRuntime\b")
 FROM_KERNEL_REF = re.compile(r"\bfrom_kernel_ref\s*\(")
-BACKEND_TRAIT = re.compile(r"\btrait\s+(\w*Backend)\b")
-# The writer is `Store.conn: Arc<Mutex<Connection>>` (connection.rs). A driver
-# file takes it by `lock_wait::mutex(&…conn)`, by `….conn.lock()`, or through a
-# clone from `Store::connection()`. Only `with_transaction` and
-# `with_transaction_behavior` take it for a whole write, so a lock outside
-# their argument list is counted once per file.
-WRITER_LOCK = re.compile(
-    r"lock_wait::mutex\(\s*&\s*(?:\w+\s*\.\s*)*conn\b"
-    r"|\bconn\s*\.\s*lock\s*\("
-    r"|\bconnection\s*\.\s*lock\s*\("
-    r"|\.connection\(\)\s*\.\s*lock\s*\("
-)
-TRANSACTION_CALL = re.compile(r"\bwith_transaction(?:_behavior)?\s*\(")
 OWNER_READ = re.compile(
     r"\b(worker_invocation|coordination_write_owner|coordination_task_reads_visible"
     r"|coordination_task_write_refusal)\s*\(")
@@ -354,20 +332,6 @@ def application_port_methods(by_path):
     return [port.location(decl.offset, decl.name) for decl in fn_decls(port.masked, start, end)]
 
 
-def writer_files(sources):
-    entries = []
-    for source in sources:
-        if not source.path.startswith(STORE_DRIVER) or source.path == WRITER_DEFINITION:
-            continue
-        transactions = [(call.end() - 1, _closing(source.masked, call.end() - 1))
-                        for call in TRANSACTION_CALL.finditer(source.masked)]
-        for lock in WRITER_LOCK.finditer(source.masked):
-            if not any(open_index < lock.start() < close for open_index, close in transactions):
-                entries.append(source.location(lock.start()))
-                break
-    return entries
-
-
 def runtime_top_level_modules(root):
     entries = []
     for path in sorted((root / RUNTIME_SRC).iterdir()):
@@ -396,11 +360,6 @@ def measure(root):
         source.location(match.start())
         for source in sources for match in FROM_KERNEL_REF.finditer(source.masked)
         if not preceded_by_fn(source.masked, match.start())]
-    counts["store_backend_traits"] = [
-        source.location(match.start(), match.group(1))
-        for source in sources if source.crate == STORE_CRATE
-        for match in BACKEND_TRAIT.finditer(source.masked)]
-    counts["driver_writer_outside_transaction_files"] = writer_files(sources)
     counts["env_global_accessor_calls"] = [
         source.location(match.start(), match.group(1))
         for source in sources for match in ENV_GLOBAL_ACCESSOR.finditer(source.masked)

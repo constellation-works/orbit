@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use orbit_store::contracts::OwnerWaveCandidate;
+use orbit_store::contract::OwnerWaveCandidate;
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 use orbit_types::workflow::DrainWaitingTask;
 

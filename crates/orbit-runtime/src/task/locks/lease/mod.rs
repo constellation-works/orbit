@@ -27,7 +27,7 @@ mod response;
 pub use admission::{LeaseTokenGrant, record_lease_intake_audit};
 pub use lifetime::sweep_lease_lifetimes;
 pub use operation::{check, list, notices, release, renew, renew_with_token, show};
-pub use orbit_store::contracts::{LeasePrincipalClass, LeasePriority};
+pub use orbit_store::contract::{LeasePrincipalClass, LeasePriority};
 #[cfg(feature = "test-support")]
 pub use policy::install_test_lease_policy;
 pub use policy::{

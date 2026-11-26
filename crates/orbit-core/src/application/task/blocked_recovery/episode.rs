@@ -96,7 +96,7 @@ impl BlockEpisode {
                     None,
                     Some(&task.execution_summary),
                 ));
-        let operator_prerequisite = orbit_store::contracts::ClaimFailedNote::parse(&note)
+        let operator_prerequisite = orbit_store::contract::ClaimFailedNote::parse(&note)
             .and_then(|note| note.failure_class)
             .is_some_and(orbit_types::workflow::ClaimFailureClass::requires_operator_decision);
         // [ORB-23967] A run held on owner sign-off blocks under its

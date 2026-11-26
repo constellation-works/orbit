@@ -18,7 +18,7 @@
 use std::fmt;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contract::JobRunQuery;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};

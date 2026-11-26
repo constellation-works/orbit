@@ -7,7 +7,7 @@
 //! close a cycle. This port is the way in: `distributed` implements it on
 //! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
 
-use orbit_store::contracts::ExecutionClaimPhase;
+use orbit_store::contract::ExecutionClaimPhase;
 use orbit_types::workflow::PipelineState;
 
 /// The persisted label accepted by operator claim-recovery commands.

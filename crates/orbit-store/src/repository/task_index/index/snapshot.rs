@@ -13,7 +13,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::super::store::TaskRegistryStore;
-use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskBundleBinding};
+use crate::contract::{EnvelopeStampRecord, IndexedTaskRow, TaskBundleBinding};
 
 pub(crate) struct TaskIndexSnapshot {
     pub(crate) registered: Vec<TaskBundleBinding>,

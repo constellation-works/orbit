@@ -7,7 +7,7 @@
 use std::fs;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::TaskHistoryUpdateParams;
+use orbit_store::contract::TaskHistoryUpdateParams;
 use orbit_types::task::TaskComment;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};

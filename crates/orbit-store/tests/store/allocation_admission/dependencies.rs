@@ -1,7 +1,7 @@
 //! Dependency satisfaction through the serialized owner admission boundary.
 
 use super::*;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     TaskDocumentUpdateParams, TaskHistoryUpdateParams, TaskListFilter, TaskListHydration,
 };
 

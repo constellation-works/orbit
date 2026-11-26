@@ -9,7 +9,7 @@ use orbit_common::OrbitError;
 
 use crate::fs::path_safety::validate_path_stem;
 
-pub use crate::contracts::{
+pub use crate::contract::{
     LoadedSkill, SkillCatalogDoctorRow, SkillCatalogDoctorStatus, SkillMeta, SkillSections,
 };
 

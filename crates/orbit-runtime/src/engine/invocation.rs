@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::model::pricing::normalize_token_usage;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     ActivityInvocationMetrics, InvocationAccountingFact, InvocationAccountingQuery,
     InvocationInsertParams, InvocationQuery, InvocationRecord, InvocationSample,
     ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
@@ -390,7 +390,6 @@ impl RuntimeKernel {
             .stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list_model_attributed_samples(self.stores().jobs().workspace_id())?;
@@ -446,7 +445,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .task_metrics(task_id)
@@ -459,7 +457,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .tool_metrics(self.stores().jobs().workspace_id())
@@ -478,7 +475,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list(&filter)
@@ -495,7 +491,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list(&filter)
@@ -511,7 +506,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .write(|tx| tx.invocation().insert(workspace_id, params))
     }
 
@@ -525,7 +519,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .write(|tx| tx.provider_limit().put(observation))
     }
 
@@ -542,20 +535,13 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .write(|tx| tx.provider_limit().put_reading(observations))
     }
 
     /// [ORB-14695] The latest provider usage limit per provider account,
     /// scope and window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
-        self.stored()
-            .stores()
-            .host
-            .sqlite
-            .read()?
-            .provider_limit()
-            .list()
+        self.stored().stores().host.read()?.provider_limit().list()
     }
 
     /// [ORB-16379] Records a crew this host's provider was unavailable for,
@@ -568,7 +554,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .write(|tx| tx.provider_limit().put_outage(outage))
     }
 
@@ -580,7 +565,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .provider_limit()
             .list_outages(now)
@@ -599,7 +583,6 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list_provider_ledger_entries(provider_names, account, since)
@@ -616,7 +599,6 @@ impl RuntimeKernel {
             .stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list_accounting_facts(&InvocationAccountingQuery {
@@ -655,7 +637,6 @@ impl RuntimeKernel {
             .stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list_accounting_facts(&InvocationAccountingQuery {
@@ -708,7 +689,6 @@ impl RuntimeKernel {
             .stored()
             .stores()
             .host
-            .sqlite
             .read()?
             .invocation()
             .list_accounting_facts(&InvocationAccountingQuery {

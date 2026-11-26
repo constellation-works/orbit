@@ -2,7 +2,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::token;
-use orbit_store::contracts::{AdmissionReceipt, AdmissionRequest, PullDestination};
+use orbit_store::contract::{AdmissionReceipt, AdmissionRequest, PullDestination};
 
 use super::{PullDrain, Reconciled, RefillPass};
 

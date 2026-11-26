@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
+use orbit_store::contract::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimMutation, ExecutionClaim,
     LocalPullAdmission, PullDestination,
 };
@@ -186,7 +186,7 @@ impl PullPeer for RoutedPullPeer<'_> {
                 object.insert(
                     "reasoning_effort".into(),
                     Value::String(effort.unwrap_or_else(|| {
-                        orbit_store::contracts::PROVIDER_DEFAULT_REPORTED_EFFORT.to_string()
+                        orbit_store::contract::PROVIDER_DEFAULT_REPORTED_EFFORT.to_string()
                     })),
                 );
             }

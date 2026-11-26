@@ -11,7 +11,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, params};
 use serde_json::json;
 
-use crate::contracts::{LeaseLandedNoticeParams, LeaseNotice};
+use crate::contract::{LeaseLandedNoticeParams, LeaseNotice};
 use crate::repository::task_reservation::notices::{LeaseOverlapNotice, append_lease_overlaps};
 use crate::store::{Snapshot, Tx};
 
