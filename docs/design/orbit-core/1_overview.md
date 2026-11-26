@@ -154,7 +154,7 @@ source scan, enforces the runtime direction.
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
 | Config loading and runtime assembly | `crates/orbit-core/src/composition/runtime.rs` | [ORB-10886] |
-| Context assembly | `crates/orbit-runtime/src/context/state.rs` | — |
+| Context assembly | `crates/orbit-runtime/src/host/context.rs` | — |
 | Resolved-config consumption | `crates/orbit-runtime/src/builder.rs` | [ORB-10885], [ORB-10886] |
 | Config layering and admission (owning crate); pure TOML path access and the typed dotted-path read are in its private `document::paths` leaf below aliases, seeding, operation policy and the key registry; the key registry sits above the domain admission modules (`aliases`, `attention`, `crew`, `operation`, `provider_limit`, `seeding`), which may not name it, and its snapshot projections live beside `ConfigSnapshot`; no-follow file reads and path admission are in its private `document::io` leaf below loading, diagnostics and the mutable `ConfigStore`, and that leaf stays free of TOML; the shared parse of an admitted file into one document is in its private `document::parse` leaf, which calls `document::io` and admits no policy; the built-in crew registry is in its private `crew_defaults` leaf below snapshot admission, resolved config and seeding, and the registry may not name resolved config (guarded by `scripts/check-dependency-direction.sh`) | `crates/orbit-config/src/` | [ORB-10885] |
 | Registered runtime + routine composition | `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-cmd/src/registry/routines.rs` | — |

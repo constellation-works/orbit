@@ -1,17 +1,12 @@
-use crate::plugin::host::PluginHostLoad;
-use crate::stored::job_runs::JobRuns;
-use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
-use orbit_policy::PolicyEngine;
+use super::job_runs::JobRuns;
 use orbit_search::LexicalIndex;
 use orbit_store::compose::WorkspaceTaskBackends;
-use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
 use orbit_store::{
     TaskArtifactRepository, TaskDocumentRepository, TaskHistoryRepository,
     TaskReservationRepository,
 };
 use orbit_store::{TaskCoordination, TaskV2Store};
-use orbit_tools::ToolRegistry;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -106,50 +101,5 @@ impl OrbitStores {
     /// The workspace policy definitions layered over the global ones.
     pub(crate) fn policies(&self) -> &FileStore<PolicyDefDirs> {
         &self.policy_def
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct OrbitExecutionAssets {
-    pub(crate) registry: Arc<ToolRegistry>,
-    pub(crate) skill_catalog: FileStore<SkillDirs>,
-    /// What the host plugin load pass registered and refused, kept so
-    /// `orbit plugin list`/`show`/`doctor` report the same facts the tool
-    /// surface was built from rather than re-deriving them.
-    pub(crate) plugins: Arc<PluginHostLoad>,
-}
-
-impl OrbitExecutionAssets {
-    pub(crate) fn new(
-        registry: Arc<ToolRegistry>,
-        skill_catalog: FileStore<SkillDirs>,
-        plugins: PluginHostLoad,
-    ) -> Self {
-        Self {
-            registry,
-            skill_catalog,
-            plugins: Arc::new(plugins),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct OrbitPolicyContext {
-    pub(crate) policy: PolicyEngine,
-    pub(crate) execution_env_policy: ExecutionEnvPolicy,
-    pub(crate) codex_execution_policy: CodexExecutionPolicy,
-}
-
-impl OrbitPolicyContext {
-    pub(crate) fn new(
-        policy: PolicyEngine,
-        execution_env_policy: ExecutionEnvPolicy,
-        codex_execution_policy: CodexExecutionPolicy,
-    ) -> Self {
-        Self {
-            policy,
-            execution_env_policy,
-            codex_execution_policy,
-        }
     }
 }

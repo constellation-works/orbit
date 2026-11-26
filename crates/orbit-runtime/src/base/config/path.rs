@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
-use super::RuntimeKernel;
+use crate::RuntimeKernel;
 
 /// Select the fixed config leaf from roots owned by an initialized runtime.
 ///
 /// Keeping this as a free-function boundary gives static analysis a precise
 /// callable whose return is authoritative. It does not authorize an arbitrary
 /// caller-supplied root: both roots come from the runtime's resolved context.
-pub(super) fn validated_runtime_config_path(
+pub(crate) fn validated_runtime_config_path(
     runtime: &RuntimeKernel,
 ) -> Result<PathBuf, OrbitError> {
     let shared_root = runtime.shared_root();
@@ -35,7 +35,7 @@ pub const CONFIG_TOML_FILE: &str = "config.toml";
 /// boundary ahead of the child metadata probe. Final-component safety belongs
 /// to the descriptor-based reader; this boundary does not claim protection
 /// against privileged replacement of mutable ancestors.
-pub(super) fn validated_existing_config_root(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+pub(crate) fn validated_existing_config_root(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_root = match root.canonicalize() {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

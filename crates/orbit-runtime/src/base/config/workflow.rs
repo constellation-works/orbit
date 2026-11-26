@@ -1,6 +1,6 @@
 //! Workflow, validation, and operation configuration.
 
-use super::RuntimeKernel;
+use crate::RuntimeKernel;
 
 impl RuntimeKernel {
     /// Effective host resource throttle policy for this runtime.
@@ -179,12 +179,6 @@ impl RuntimeKernel {
         self.workspace_runtime_binding()
             .and_then(|binding| binding.base_branch.as_deref())
             .unwrap_or_else(|| self.workflow_base_branch())
-    }
-
-    /// The current last-known-good `[workflow.mid_run_steering]` settings,
-    /// refreshed at prompt and gate checkpoints. Steering defaults off.
-    pub fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
-        self.current_mid_run_steering()
     }
 
     /// `workflow.unlocked_context_paths` as admitted: the declared context

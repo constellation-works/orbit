@@ -9,13 +9,14 @@ use orbit_types::workflow::ShipMode;
 use super::{HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel};
 use crate::application_port::ApplicationPort;
 use crate::base::Base;
+use crate::base::binding::WorkspaceRuntimeBinding;
 use crate::host::Host;
+use crate::host::context::OrbitContext;
 use crate::host_resource::{HostResourceMonitor, default_host_resource_probe};
 use crate::host_signal::{FixedHostSignals, HostSignalProbe, default_host_signal_probe};
 use crate::run::Run;
 use crate::stored::Stored;
 use crate::task_pr_forge::{NoTaskPrForge, TaskPrForge, default_task_pr_forge};
-use crate::workspace::binding::WorkspaceRuntimeBinding;
 use crate::{builder, worker_coordination};
 
 impl RuntimeKernel {
@@ -141,7 +142,7 @@ impl RuntimeKernel {
     }
 
     fn finish_from_context(
-        context: crate::context::OrbitContext,
+        context: OrbitContext,
         binding: Option<WorkspaceRuntimeBinding>,
         global_root: &Path,
         layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
@@ -178,7 +179,7 @@ impl RuntimeKernel {
     #[allow(clippy::too_many_arguments)]
     fn from_layers(
         application: &'static dyn ApplicationPort,
-        context: crate::context::OrbitContext,
+        context: OrbitContext,
         config_loader: RuntimeConfigLoader,
         binding: Option<Arc<WorkspaceRuntimeBinding>>,
         temp_dir: Option<Arc<builder::TempDir>>,

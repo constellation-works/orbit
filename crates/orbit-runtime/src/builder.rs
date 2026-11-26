@@ -24,10 +24,12 @@ use orbit_tools::external::ExternalTool;
 use orbit_types::policy::DEFAULT_POLICY_NAME;
 use orbit_types::workspace::WorkspacePaths;
 
-use crate::context::OrbitContext;
-use crate::context::{
-    ActorIdentity, OrbitExecutionAssets, OrbitPolicyContext, OrbitRuntimeSettings, OrbitStores,
-};
+use crate::base::actor::ActorIdentity;
+use crate::base::config::OrbitRuntimeSettings;
+use crate::base::policy::OrbitPolicyContext;
+use crate::host::OrbitExecutionAssets;
+use crate::host::context::OrbitContext;
+use crate::stored::stores::OrbitStores;
 use crate::{HostLifetime, OrbitRuntimeRoots, WorkspaceRuntimeBinding};
 use orbit_store::FileStore;
 use orbit_store::skill_store::SkillDirs;

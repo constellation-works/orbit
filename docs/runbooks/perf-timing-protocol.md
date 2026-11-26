@@ -526,7 +526,7 @@ python3 -I scripts/perf/fixture.py prepare --into <dir> --binary <orbit>
 Unset every inherited `ORBIT_*` and `GIT_*` variable first, as `paired.py` does. The
 restored env deliberately sets no `ORBIT_ROOT`: an explicit `ORBIT_ROOT` (or `--root`)
 pins one directory as both the workspace and the global root (`resolve_orbit_roots` in
-`crates/orbit-runtime/src/resolve.rs`), so the fixture's global store and task bundles
+`crates/orbit-runtime/src/base/path/resolve.rs`), so the fixture's global store and task bundles
 would not be found. The workspace resolves instead from the initialized `.orbit/` in the
 working directory (resolution step 3, ahead of linked-worktree discovery), and the global
 root from `HOME`; `restore` refuses a root whose `.orbit/config.yaml` does not name the

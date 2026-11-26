@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use orbit_common::OrbitError;
 use orbit_common::fs::cwd::confine_workspace_cwd;
 
-use super::UNBOUND_DATA_DIR_PARTITION_ID;
 use crate::RuntimeKernel;
+use crate::UNBOUND_DATA_DIR_PARTITION_ID;
 
 impl RuntimeKernel {
     /// Canonicalize an explicit working directory and require it to stay

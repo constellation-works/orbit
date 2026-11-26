@@ -1,4 +1,4 @@
-use super::actor::ActorIdentity;
+use super::super::actor::ActorIdentity;
 use orbit_config::PersistenceConfig;
 use orbit_engine::PrConfig;
 use orbit_types::identity::Crew;

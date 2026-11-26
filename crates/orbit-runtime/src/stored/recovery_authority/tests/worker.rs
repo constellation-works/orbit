@@ -7,7 +7,7 @@ use tempfile::TempDir;
 fn worker_process_binding_survives_descendants_and_forged_environment() {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
-    const CHILD_TEST: &str = "recovery_authority::tests::worker::worker_process_binding_survives_descendants_and_forged_environment";
+    const CHILD_TEST: &str = "stored::recovery_authority::tests::worker::worker_process_binding_survives_descendants_and_forged_environment";
     if let Some(root) = std::env::var_os("ORBIT_BINDING_FIXTURE_ROOT") {
         if std::env::var_os("ORBIT_BINDING_GRANDCHILD").is_none() {
             std::io::stdin()

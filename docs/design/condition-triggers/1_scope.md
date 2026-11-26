@@ -470,7 +470,7 @@ is the shipped exception:
   consumed at `crates/orbit-core/src/application/routines/sweep/tick.rs::run_sweep_at_with_providers_at`).
   Delivery and state triggers stay owner-only even for those jobs.
 - Every coordination-state action write passes `ensure_coordination_task_write_permitted`
-  (`crates/orbit-runtime/src/orbit_runtime/identity.rs`), so a replica checkout
+  (`crates/orbit-runtime/src/run/identity.rs`), so a replica checkout
   refuses to fire one even if it loads the file.
 - A pull follower evaluates only its replica-local cron worktree GC and store GC.
   Its drain otherwise inherits whatever the owner minted.

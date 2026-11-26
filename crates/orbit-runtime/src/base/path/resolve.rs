@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::Deserialize;
 
-use crate::paths;
+use super::paths;
 use crate::run_input::managed_dispatch_context_from_env;
 
 /// Registry locator emitted to children of an Orbit-managed run.
