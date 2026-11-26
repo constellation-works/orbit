@@ -90,6 +90,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `seeding_policy.rs` | `unit::seeding_policy` | above task |
 | `skill` | `app::skill` | above task |
 | `statistics.rs` | `unit::statistics` | leaf |
+| `store_opener.rs` | `unit::store_opener` | leaf |
 | `sweep_filing` | `unit::sweep_filing` | 10 |
 | `tag_instructions.rs` | `unit::tag_instructions` | above task |
 | `task` | `app::task` | 1 |
@@ -118,6 +119,7 @@ Callers were checked at base `2f18287`, by module path and by inherent-method na
   - `operator_input.rs` → `app::review`: its only app user is `review`; the dashboard and the `landing` unit also use it.
   - `seeding_policy.rs` → `unit::seeding_policy`: used by `health`, `auto_tasks`, `workspace` and `routines`.
   - `statistics.rs` → `unit::statistics`: used by `agents`, `experiment`, `resident` and `backlog_forecast`.
+  - `store_opener.rs` → `unit::store_opener`: composition supplies the opener used by both `routines` and `workspace`.
   - `tag_instructions.rs` → `unit::tag_instructions`: used by `experiment`, `agent_corpus` and `distributed`.
   - `vision_probe.rs` → `app::agent`: backs `orbit agents vision-probe`.
   - `workflow.rs` → `app::run`: the ship and auto workflow and drain-window rules; `job` is the only app user, and `distributed` and `workspace_auto` are units above `run` that reach it downward.

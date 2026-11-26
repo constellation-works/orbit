@@ -60,7 +60,7 @@ fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>
         return Ok(None);
     }
     let report = crate::registry_routines::routine_statuses(global_root)?;
-    let store = orbit_store::Store::open_read_only(&database)?;
+    let store = orbit_core::composition::store_opener().open_read_only(&database)?;
     let now = chrono::Utc::now();
     let mut stale = Vec::new();
     for status in &report.statuses {

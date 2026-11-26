@@ -79,8 +79,10 @@ impl RoutineShowArgs {
                 self.name
             )));
         };
-        let fires = recent_fires(global_root, &self.name, RECENT_FIRE_LIMIT)?;
-        let breaker_events = routine_breaker_events(global_root, &self.name, BREAKER_EVENT_LIMIT)?;
+        let opener = orbit_core::composition::store_opener();
+        let fires = recent_fires(opener, global_root, &self.name, RECENT_FIRE_LIMIT)?;
+        let breaker_events =
+            routine_breaker_events(opener, global_root, &self.name, BREAKER_EVENT_LIMIT)?;
         let definition = &status.routine.definition;
 
         let mut doc = Map::new();

@@ -141,10 +141,11 @@ pub(super) fn newest_fire(
 /// Recent fire attempts for one routine, newest first (for `routine show`).
 /// Read-only: a missing scheduler store is a setup error, never created here.
 pub fn recent_fires(
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
     limit: usize,
 ) -> Result<Vec<RoutineFireRecord>, OrbitError> {
-    let store = super::super::open_existing_routine_store(global_root)?;
+    let store = super::super::open_existing_routine_store(opener, global_root)?;
     store.read()?.routine().recent_fires(name, limit)
 }

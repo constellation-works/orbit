@@ -12,6 +12,7 @@ use orbit_tools::plugin::manifest_digest;
 use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME, PluginStatus};
 use orbit_types::tool::{McpToolDefinition, McpToolScope};
 
+use crate::application::store_opener::StoreOpener;
 use crate::runtime::plugin::{build_witness, cache, discovery, grants};
 
 /// One coherent plugin surface, including workspace visibility ownership.
@@ -26,8 +27,10 @@ pub struct HostPluginMcpSurface {
 /// Plugin rows are read at each boundary; unrelated audit writes do not
 /// invalidate the surface. File stamps cover config and admission files, and
 /// definition paths and content digests cover contribution admission.
-#[derive(Default)]
-pub struct HostPluginMcpCache(Mutex<Option<CachedHost>>);
+pub struct HostPluginMcpCache {
+    opener: StoreOpener,
+    cached: Mutex<Option<CachedHost>>,
+}
 
 struct CachedHost {
     global_root: PathBuf,
@@ -147,6 +150,14 @@ impl FileIdentity {
 }
 
 impl HostPluginMcpCache {
+    /// An empty cache that opens the host store through `opener`.
+    pub fn new(opener: StoreOpener) -> Self {
+        Self {
+            opener,
+            cached: Mutex::new(None),
+        }
+    }
+
     /// Read the host's installed plugin rows through the cached read-only store.
     /// The rows are read on each call so a plugin lifecycle change is visible,
     /// while a warm cache avoids resolving config or opening another store.
@@ -155,8 +166,8 @@ impl HostPluginMcpCache {
         &self,
         global_root: &Path,
     ) -> Result<Vec<InstalledPlugin>, OrbitError> {
-        let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let host = ensure_cached_host(&mut cached, global_root)?;
+        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+        let host = ensure_cached_host(self.opener, &mut cached, global_root)?;
         host.store
             .read()
             .and_then(|snapshot| snapshot.plugin().list())
@@ -166,8 +177,8 @@ impl HostPluginMcpCache {
     /// Failed host config or store reads never publish an empty plugin surface.
     /// Refused contributions are rechecked at each boundary to observe repairs.
     pub fn resolve(&self, global_root: &Path) -> Result<Arc<HostPluginMcpSurface>, OrbitError> {
-        let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let host = ensure_cached_host(&mut cached, global_root)?;
+        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+        let host = ensure_cached_host(self.opener, &mut cached, global_root)?;
         let stamp = PluginStamp::read(&host.store, global_root)?;
         if let Some((previous, surface)) = &host.surface
             && *previous == stamp
@@ -175,11 +186,12 @@ impl HostPluginMcpCache {
             return Ok(Arc::clone(surface));
         }
         tracing::debug!(target: "orbit.mcp.plugin", "rebuilding plugin MCP surface");
-        let (registry, load) = discovery::host_plugin_registry(
-            global_root,
-            &host.config.persistence.audit_db,
-            &host.config.plugins,
-        )?;
+        let discovery_store = self
+            .opener
+            .open_read_only(&host.config.persistence.audit_db)?;
+        let (registry, load) =
+            discovery::host_plugin_registry(global_root, &discovery_store, &host.config.plugins)?;
+        drop(discovery_store);
         let definitions = registry
             .mcp_tool_definitions()
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
@@ -217,6 +229,7 @@ impl HostPluginMcpCache {
 }
 
 fn ensure_cached_host<'a>(
+    opener: StoreOpener,
     cached: &'a mut Option<CachedHost>,
     global_root: &Path,
 ) -> Result<&'a mut CachedHost, OrbitError> {
@@ -229,7 +242,7 @@ fn ensure_cached_host<'a>(
         *cached = None;
         let config = super::global_only_config(global_root)?;
         let database_identity = FileIdentity::read(&config.persistence.audit_db)?;
-        let store = Store::open_read_only(&config.persistence.audit_db)?;
+        let store = opener.open_read_only(&config.persistence.audit_db)?;
         *cached = Some(CachedHost {
             global_root: global_root.to_path_buf(),
             config_stamp,
@@ -247,7 +260,7 @@ fn ensure_cached_host<'a>(
     let database_identity = FileIdentity::read(&host.config.persistence.audit_db)?;
     if host.database_identity != database_identity {
         host.surface = None;
-        host.store = Store::open_read_only(&host.config.persistence.audit_db)?;
+        host.store = opener.open_read_only(&host.config.persistence.audit_db)?;
         host.database_identity = database_identity;
     }
     Ok(host)

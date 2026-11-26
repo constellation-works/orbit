@@ -7,7 +7,6 @@ use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, workspace_live_run_ids};
 use orbit_registry::workspace_registry;
-use orbit_store::Store;
 use orbit_store::compose::workspace_observational_backends;
 use orbit_store::contracts::{AuditEventInsertParams, BindWorkspaceParams};
 use orbit_store::maintenance::task_registry::{
@@ -391,9 +390,10 @@ fn reject_checkout_activity(
     decision: &RebindDecision,
     registry: TaskRegistryStore,
 ) -> Result<(), OrbitError> {
-    let store = Store::open_read_only(&global_root.join("orbit.db"))?;
+    let opener = orbit_core::composition::store_opener();
+    let store = opener.open_read_only(&global_root.join("orbit.db"))?;
     let jobs = JobRuns::shared(store.clone(), &decision.partition_id);
-    if !workspace_live_run_ids(global_root, &decision.new.orbit_dir)?.is_empty() {
+    if !workspace_live_run_ids(opener, global_root, &decision.new.orbit_dir)?.is_empty() {
         return Err(refused(
             "workspace has a live run; stop or reconcile its runs before rebinding",
         ));
@@ -464,7 +464,8 @@ fn record_checkout_rebind_audit(
     global_root: &Path,
     decision: &RebindDecision,
 ) -> Result<(), OrbitError> {
-    if Store::open_read_only(&global_root.join("orbit.db"))?
+    if orbit_core::composition::store_opener()
+        .open_read_only(&global_root.join("orbit.db"))?
         .read()?
         .audit_event()
         .execution_exists(&decision.execution_id)?
@@ -508,7 +509,11 @@ fn record_checkout_rebind_audit(
         activity_id: None,
         step_index: None,
     };
-    Store::append_audit_event_at_path(&global_root.join("orbit.db"), &params, Default::default())
+    orbit_store::Store::append_audit_event_at_path(
+        &global_root.join("orbit.db"),
+        &params,
+        Default::default(),
+    )
 }
 
 /// Binding identity of a checkout, ignoring fields registry validation

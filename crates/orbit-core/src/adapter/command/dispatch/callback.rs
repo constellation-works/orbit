@@ -14,6 +14,7 @@ use orbit_tools::plugin::{
 use orbit_types::plugin::{InstalledPlugin, PluginGrant, PluginProvenance};
 use orbit_types::workflow::{ActivityToolDenyPolicy, ActivityToolPolicyMode};
 
+use crate::application::store_opener::StoreOpener;
 use crate::runtime::plugin::cache::load_installed_plugin;
 use crate::runtime::plugin::grants::verify_install_path;
 
@@ -60,6 +61,7 @@ pub(super) fn enforce_plugin_callback_allowlist(
 
 pub(super) fn enforce_plugin_callback_allowlist_from_root(
     process_env: &orbit_common::Env,
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
 ) -> Result<(), OrbitError> {
@@ -71,7 +73,7 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
         process_env,
         &orbit_config::ConfigRoots::global_only(global_root),
     )?;
-    let store = Store::open(&db)?;
+    let store = opener.open(&db)?;
     apply_callback_resolution(
         resolution,
         global_root,

@@ -286,10 +286,11 @@ pub fn control_listed_routine_breaker(
 /// Newest circuit-breaker events of one routine on this host, newest first
 /// (for `routine show`). Read-only, like [`super::recent_fires`].
 pub fn routine_breaker_events(
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
     limit: usize,
 ) -> Result<Vec<orbit_store::contracts::RoutineBreakerEvent>, OrbitError> {
-    let store = super::super::open_existing_routine_store(global_root)?;
+    let store = super::super::open_existing_routine_store(opener, global_root)?;
     store.read()?.routine().breaker_events(name, limit)
 }
