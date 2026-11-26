@@ -89,23 +89,6 @@ impl ScriptBranchHost {
     }
 }
 
-fn kept_set(run_id: &str, step_id: &str) -> ScriptOutputSet {
-    let files = vec![ScriptOutputFile {
-        name: "shot.png".to_string(),
-        bytes: 70,
-        media_type: "image/png".to_string(),
-        sha256: "a".repeat(64),
-        path: format!("/store/{run_id}/{step_id}/files/shot.png"),
-    }];
-    ScriptOutputSet {
-        workspace_id: "ws_scripts".to_string(),
-        run_id: run_id.to_string(),
-        step_id: step_id.to_string(),
-        set_id: script_output_set_id("ws_scripts", run_id, step_id, &files),
-        files,
-    }
-}
-
 impl orbit_engine::test_support::NullRuntimeHost for ScriptBranchHost {
     fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
         self.scripts.lock().expect("scripts").push(request.clone());
@@ -245,6 +228,23 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptBranchHost {
         _park: &orbit_types::workflow::ParkedWait,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+}
+
+fn kept_set(run_id: &str, step_id: &str) -> ScriptOutputSet {
+    let files = vec![ScriptOutputFile {
+        name: "shot.png".to_string(),
+        bytes: 70,
+        media_type: "image/png".to_string(),
+        sha256: "a".repeat(64),
+        path: format!("/store/{run_id}/{step_id}/files/shot.png"),
+    }];
+    ScriptOutputSet {
+        workspace_id: "ws_scripts".to_string(),
+        run_id: run_id.to_string(),
+        step_id: step_id.to_string(),
+        set_id: script_output_set_id("ws_scripts", run_id, step_id, &files),
+        files,
     }
 }
 

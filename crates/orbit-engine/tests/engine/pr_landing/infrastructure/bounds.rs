@@ -1,6 +1,8 @@
 //! Public completion regressions for rerun scope, DAG work and absolute budgets.
 use super::*;
 
+const PR_READ: &str = "workflow prerequisite read repos/{owner}/{repo}/pulls/42";
+
 fn complete_infrastructure(
     host: &DeliveryHost,
     fx: &Fixture,
@@ -559,8 +561,6 @@ fn deadline_arriving_during_job_log_read_holds_instead_of_failing_the_read() {
         },
     );
 }
-
-const PR_READ: &str = "workflow prerequisite read repos/{owner}/{repo}/pulls/42";
 
 #[test]
 fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {

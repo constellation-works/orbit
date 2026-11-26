@@ -7,7 +7,58 @@ use orbit_types::workflow::{
 };
 use std::io::Write as _;
 
+const REPAIR_ACTS: &[(&str, &str)] = &[
+    ("checkpoint", "test_checkpoint"),
+    ("pr_complete", "pr_complete"),
+    ("step_failure_recovery", "test_ci_repair"),
+    ("pr_conflict_recovery", "unexpected_conflict"),
+];
+
+/// Required-checks reads `pr_complete` makes on a failed head up to and
+/// including the base-tip comparison.
+const REQUIRED_READS_BEFORE_REPAIR_ADMISSION: usize = 4;
+
+/// The provider's authenticated primary rate-limit answer to a failed-job log
+/// read, as `gh run view --log-failed` renders it [ORB-20178].
+const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit exceeded for \
+    user ID 270255973. (https://api.github.com/repos/orbit/test/actions/jobs/12/logs)";
+
 type JobResult = Result<orbit_engine::JobOutcome, DispatchError>;
+
+/// Row timer reporting its case identity and elapsed time; dropping the timer
+/// (including on early return) always closes the row.
+struct RowTimer {
+    case: String,
+    started: std::time::Instant,
+}
+
+#[allow(
+    clippy::print_stderr,
+    reason = "isolated regression rows report their identity and elapsed time"
+)]
+impl RowTimer {
+    fn start(case: &str) -> Self {
+        eprintln!("scenario: {case}");
+        Self {
+            case: case.to_string(),
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+#[allow(
+    clippy::print_stderr,
+    reason = "isolated regression rows report their identity and elapsed time"
+)]
+impl Drop for RowTimer {
+    fn drop(&mut self) {
+        eprintln!(
+            "scenario: {} row elapsed {:.3} s",
+            self.case,
+            self.started.elapsed().as_secs_f64()
+        );
+    }
+}
 
 fn cases(names: &str) -> std::str::SplitWhitespace<'_> {
     names.split_whitespace()
@@ -139,13 +190,6 @@ fn run_job(
 ) -> JobResult {
     run_job_with_audit(host, job, activities, run_id, input, resume).0
 }
-
-const REPAIR_ACTS: &[(&str, &str)] = &[
-    ("checkpoint", "test_checkpoint"),
-    ("pr_complete", "pr_complete"),
-    ("step_failure_recovery", "test_ci_repair"),
-    ("pr_conflict_recovery", "unexpected_conflict"),
-];
 
 fn repair_job(input: Value) -> orbit_types::workflow::JobV2 {
     job_asset(json!([
@@ -630,41 +674,6 @@ fn assert_green_repair_published_for_run(
     assert_eq!(merge["head_sha"], head, "{case}");
     assert_eq!(merge["reason"], "auto_fix_mergeable", "{case}");
     assert_validated_head_for_run(host, run_id, head, case);
-}
-
-/// Row timer reporting its case identity and elapsed time; dropping the timer
-/// (including on early return) always closes the row.
-struct RowTimer {
-    case: String,
-    started: std::time::Instant,
-}
-
-#[allow(
-    clippy::print_stderr,
-    reason = "isolated regression rows report their identity and elapsed time"
-)]
-impl RowTimer {
-    fn start(case: &str) -> Self {
-        eprintln!("scenario: {case}");
-        Self {
-            case: case.to_string(),
-            started: std::time::Instant::now(),
-        }
-    }
-}
-
-#[allow(
-    clippy::print_stderr,
-    reason = "isolated regression rows report their identity and elapsed time"
-)]
-impl Drop for RowTimer {
-    fn drop(&mut self) {
-        eprintln!(
-            "scenario: {} row elapsed {:.3} s",
-            self.case,
-            self.started.elapsed().as_secs_f64()
-        );
-    }
 }
 
 /// Script every unexpected recovery or failure action so the row can prove
@@ -5553,10 +5562,6 @@ fn auto_fix_holds_required_checks_that_change_between_base_tip_and_repair() {
     );
 }
 
-/// Required-checks reads `pr_complete` makes on a failed head up to and
-/// including the base-tip comparison.
-const REQUIRED_READS_BEFORE_REPAIR_ADMISSION: usize = 4;
-
 /// [ORB-21412] An empty or truncated required-checks answer, or a failed
 /// read reporting `unexpected end of JSON input`, is retried a bounded
 /// number of times: a transient bad answer recovers without stopping
@@ -5732,11 +5737,6 @@ fn required_check_evidence_case(case: &str, row: &std::path::Path) {
         _ => unreachable!(),
     }
 }
-
-/// The provider's authenticated primary rate-limit answer to a failed-job log
-/// read, as `gh run view --log-failed` renders it [ORB-20178].
-const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit exceeded for \
-    user ID 270255973. (https://api.github.com/repos/orbit/test/actions/jobs/12/logs)";
 
 /// A throttled failed-log read waits for the provider's not-before inside the
 /// original completion deadline, then reads the same pinned job again and

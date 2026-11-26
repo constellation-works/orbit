@@ -76,6 +76,42 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tempfile::TempDir;
+
+/// One table row per line: expands to an array of `(name, fields...)` tuples.
+macro_rules! rows_by_name {
+    ($($name:expr => ($($field:expr),+));+ $(;)?) => {
+        [$(($name, $($field),+)),+]
+    };
+}
+
+// Wrapper tables: each `#[test]` runs its scenarios in one isolated child (see `isolated`); scenario names double as their row names.
+macro_rules! container_groups {
+    ($($name:ident => [$($s:ident),+]),+ $(,)?) => { $(
+        fn $name(sandbox: &Path) {
+            run_rows(sandbox, &[$((stringify!($s), $s as fn(&Path))),+]);
+        }
+    )+ };
+}
+macro_rules! test_groups {
+    ($($name:ident => [$($s:ident),+]),+ $(,)?) => { $(
+        #[test]
+        fn $name() {
+            isolated(stringify!($name), |sandbox| {
+                run_rows(sandbox, &[$((stringify!($s), $s as fn(&Path))),+]);
+            });
+        }
+    )+ };
+}
+macro_rules! row_groups {
+    ($runner:ident; $($name:ident => [$($row:literal),+]),+ $(,)?) => { $(
+        fn $name(_sandbox: &Path) { $runner(stringify!($name), &[$($row),+]); }
+    )+ };
+    (test $runner:ident; $($name:ident => [$($row:literal),+]),+ $(,)?) => { $(
+        #[test]
+        fn $name() { $runner(stringify!($name), &[$($row),+]); }
+    )+ };
+}
+
 const CHILD_ENV: &str = "ORBIT_PR_LANDING_CHILD";
 /// The parent-owned directory holding the substitute `gh` and its pointer to the forge state of the case being run.
 const SANDBOX_ENV: &str = "ORBIT_PR_LANDING_SANDBOX";
@@ -83,9 +119,2099 @@ const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const BASE: &str = "agent-main";
 const BRANCH: &str = "orbit/landing-candidate";
 const RUN_ID: &str = "jrun-landing";
-type Res<T> = Result<T, OrbitError>;
+
 const TASK_ID: &str = "T-LANDING";
 const PR_NUMBER: &str = "42";
+
+// Synchronous merge refused by a concurrent base landing [ORB-14205]
+const MERGE_CALL: &str = "api repos/{owner}/{repo}/pulls/42/merge";
+const BASE_MODIFIED: &str =
+    "gh: Base branch was modified. Review and try the merge again. (HTTP 405)";
+
+const MINIMAL_PATH: &str = "/usr/bin:/bin";
+const PROFILE_TOOL: &str = "orbit-profile-lint-13987";
+
+const GATE_SUMMARY: &str = ".orbit/tmp/gate-summary.json";
+
+// A red base and network flakes [ORB-14258]
+const RED_LINT: &str = "make ci-lint";
+
+const RED_TESTS: &str = "make ci-test";
+
+// Reuse the existing runner and suite identities for the observed six-vs-one shape and mixed failures. Both delivery routes must make the same decision.
+const BOTH_RED: &[&str] = &["suite::broken", "suite::flaky"];
+const SIX_RED: &[&str] = &[
+    "orbit-core suite::broken",
+    "orbit-core suite::flaky",
+    "orbit-core suite::added",
+    "orbit-engine suite::broken",
+    "orbit-engine suite::flaky",
+    "orbit-engine suite::added",
+];
+const KNOWN_RED_CASES: &[KnownRedCase<'_>] = &rows_by_name! {
+    "equal" => (BOTH_RED, None, Some(BOTH_RED));
+    "subset" => (BOTH_RED, Some(&["suite::flaky"]), Some(&["suite::flaky"]));
+    "shared-plus-new" => (BOTH_RED, Some(&["suite::broken", "suite::flaky", "suite::added"]), None);
+    "disjoint-six-vs-one" => (&["suite::broken"], Some(SIX_RED), None);
+    "candidate-unknown" => (&["suite::broken"], Some(&[]), None);
+    "base-unknown" => (&[], Some(&["suite::added"]), None);
+    "both-unknown" => (&[], None, None)
+};
+
+// A base that advances after completion's conflict recovery [ORB-14393]
+const COMPLETE_STEP: &str = "complete_pr";
+const FEATURE: &str = "src/feature.txt";
+
+const WORKTREE_FAILURE: &str = "could not resolve host: github.com while fetching the base";
+
+// Substitute forge
+/// The `gh` surface the engine's provider adapter calls, over one pull request (#42).
+const FAKE_GH: &str = r#"#!/bin/sh
+set -eu
+forge=$(cat '__SANDBOX__/active-forge')
+remote="$forge/remote.git"
+url="https://github.com/orbit/test/pull/42"
+number_json=42
+if [ -f "$forge/pr-number-json" ]; then number_json=$(cat "$forge/pr-number-json"); fi
+export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
+export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
+printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
+if [ -f "$forge/retry-config.json" ]; then
+    if python3 "$forge/retry-gh.py" "$forge" "$@"; then exit 0; else
+        code=$?
+        if [ "$code" != 77 ]; then exit "$code"; fi
+    fi
+fi
+head_sha() {
+    # A deleted branch reads as empty so a test can model its absence.
+    git --git-dir="$remote" rev-parse --verify --quiet "refs/heads/$(cat "$forge/pr-head")" || true
+}
+check() {
+    case "$1" in
+        mixed_pending|mixed_success|mixed_failure)
+            test_state=IN_PROGRESS; conclusion=''
+            if [ "$1" = mixed_success ]; then test_state=COMPLETED; conclusion=SUCCESS; fi
+            if [ "$1" = mixed_failure ]; then test_state=COMPLETED; conclusion=FAILURE; fi
+            printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
+        optional_pending) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"__typename":"CheckRun","name":"optional","status":"IN_PROGRESS","conclusion":"","isRequired":false}' ;;
+        pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
+        success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+        # A completed skip (a docs-only head) or neutral result.
+        skipped|neutral) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"%s"}' "$(printf '%s' "$1" | tr a-z A-Z)" ;;
+        failure|dirty_failure|clean_failure|unstable_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
+        # Two required failures. `test` then `lint`, or the reverse. Both
+        # carry isRequired so the policy read does not tag only the last node.
+        paired_pending|paired_failure|paired_failure_reversed)
+            test_check='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            lint_check='{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            if [ "$1" = paired_pending ]; then
+                lint_check='{"__typename":"CheckRun","name":"lint","status":"IN_PROGRESS","conclusion":"","isRequired":true}'
+            fi
+            if [ "$1" = paired_failure_reversed ]; then
+                printf '%s,%s' "$lint_check" "$test_check"
+            else
+                printf '%s,%s' "$test_check" "$lint_check"
+            fi ;;
+    esac
+}
+status() {
+    # 1 when this `pr view` asked for isDraft. A draft fixture refuses to
+    # answer otherwise, so dropping the field fails the regression.
+    draft_field=${1:-0}
+    pr_head=$(cat "$forge/pr-head")
+    pr_base=$(cat "$forge/pr-base")
+    if [ -f "$forge/merge-requests" ] && [ -f "$forge/reconcile-status" ]; then
+        printf '%s\n' "$(( $(cat "$forge/reads") + 1 ))" > "$forge/reads"
+        if [ -f "$forge/reconcile-error" ]; then cat "$forge/reconcile-error" >&2; exit 1; fi
+        cat "$forge/reconcile-status"
+        return
+    fi
+    if [ -f "$forge/merge-in-progress" ]; then
+        polls=$(( $(cat "$forge/merge-polls" 2>/dev/null || echo 0) + 1 ))
+        printf '%s\n' "$polls" > "$forge/merge-polls"
+        if [ -f "$forge/merge-after-polls" ] && [ "$polls" = "$(cat "$forge/merge-after-polls")" ]; then
+            land "$(cat "$forge/merge-in-progress")"
+        fi
+    fi
+    if [ -f "$forge/merged" ]; then
+        merged_reads=$(( $(cat "$forge/merged-reads" 2>/dev/null || echo 0) + 1 ))
+        printf '%s\n' "$merged_reads" > "$forge/merged-reads"
+        # GitHub keeps headRefOid after the head branch is deleted. `land`
+        # records it; a forge that merged before this substitute did falls
+        # back to the live branch.
+        merged_head=$(head_sha)
+        if [ -f "$forge/merged-head" ]; then
+            merged_head=$(cat "$forge/merged-head")
+        fi
+        printf '{"number":42,"state":"MERGED","isDraft":false,"mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
+            "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
+        return
+    fi
+    # `status-hang` stalls the status read until the caller's deadline kills it.
+    if [ -f "$forge/status-hang" ]; then sleep 30; fi
+    # `status-faults` status reads fail with `status-fault-stderr` before one
+    # is counted or answered.
+    if [ -s "$forge/status-faults" ] && [ "$(cat "$forge/status-faults")" -gt 0 ]; then
+        printf '%s\n' "$(( $(cat "$forge/status-faults") - 1 ))" > "$forge/status-faults"
+        cat "$forge/status-fault-stderr" >&2
+        exit 1
+    fi
+    reads=$(( $(cat "$forge/reads" 2>/dev/null || echo 0) + 1 ))
+    printf '%s\n' "$reads" > "$forge/reads"
+    observed=$(sed -n "${reads}p" "$forge/checks")
+    [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    if [ "$observed" = source_contract ]; then
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        else
+            observed=failure
+        fi
+    fi
+    # [ORB-27076] As `source_contract`, but the forge reports DIRTY while the
+    # base tip no longer merges into the head, so a conflict the base lands
+    # after the rerun was sent shows as the real Git conflict it is.
+    if [ "$observed" = source_contract_dirty ]; then
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        elif git --git-dir="$remote" merge-tree --write-tree "$(head_sha)" "$pr_base" >/dev/null 2>&1; then
+            observed=failure
+        else
+            observed=dirty_failure
+        fi
+    fi
+    # A provider app's required aggregate fails beside its passing analysis
+    # job; the mixed form also fails the workflow check `test`.
+    case "$observed" in source_aggregate|source_aggregate_mixed)
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        else
+            observed="${observed#source_}_failure"
+        fi ;;
+    esac
+    state=OPEN
+    reported_head=$(head_sha)
+    if [ -f "$forge/heads" ]; then
+        head_read=$(( reads - $(cat "$forge/heads-start") ))
+        reported_head=$(sed -n "${head_read}p" "$forge/heads")
+        [ -n "$reported_head" ] || reported_head=$(tail -n 1 "$forge/heads")
+        [ "$reported_head" != current ] || reported_head=$(head_sha)
+        if [ -f "$forge/remote-heads" ]; then
+            remote_head=$(sed -n "${head_read}p" "$forge/remote-heads")
+            [ -n "$remote_head" ] || remote_head=$(tail -n 1 "$forge/remote-heads")
+            [ "$remote_head" != current ] || remote_head=$(head_sha)
+            if [ "$remote_head" = absent ]; then
+                git --git-dir="$remote" update-ref -d refs/pull/42/head
+            else
+                git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
+            fi
+        fi
+    fi
+    merged_at=null
+    review=""
+    case "$observed" in
+        mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
+        mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
+        optional_pending) merge_state=BLOCKED; rollup=$(check optional_pending) ;;
+        merge_pending) merge_state=PENDING; rollup=$(check pending) ;;
+        pending) merge_state=BLOCKED; rollup=$(check pending) ;;
+        success) merge_state=CLEAN; rollup=$(check success) ;;
+        # Branch protection accepts a skipped or neutral required check.
+        skipped|neutral) merge_state=CLEAN; rollup=$(check "$observed") ;;
+        failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        clean_failure) merge_state=CLEAN; rollup=$(check failure) ;;
+        unstable_failure) merge_state=UNSTABLE; rollup=$(check failure) ;;
+        paired_pending|paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
+        aggregate_failure|aggregate_mixed_failure)
+            merge_state=BLOCKED
+            rollup='{"__typename":"CheckRun","name":"CodeQL","workflowName":"","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"Analyze (rust)","workflowName":"CodeQL","status":"COMPLETED","conclusion":"SUCCESS"}'
+            [ "$observed" = aggregate_failure ] || rollup="$rollup,$(check failure)" ;;
+        prerequisite)
+            merge_state=BLOCKED
+            rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
+            if [ -f "$forge/rerun-applied" ]; then
+                case "$(cat "$forge/infrastructure")" in
+                    positive|merge|lost|moved|deleted|legacy_success|rules_unpinned) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+                    clean_missing|legacy_substitute) merge_state=CLEAN; rollup=$(check success) ;;
+                esac
+            fi ;;
+        review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
+        # A freshly pushed head before the provider has queued any check.
+        unreported) merge_state=BLOCKED; rollup='' ;;
+        dirty) merge_state=DIRTY; rollup=$(check success) ;;
+        dirty_failure) merge_state=DIRTY; rollup=$(check failure) ;;
+        closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
+        contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
+        *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
+    esac
+    if [ -f "$forge/review-decision" ]; then review=$(cat "$forge/review-decision"); fi
+    # [ORB-16342] An explicit draft whose merge state is not DRAFT. The file
+    # names that merge state. Ready pull requests omit it and report false.
+    is_draft=false
+    if [ -f "$forge/pr-draft" ]; then is_draft=true; fi
+    if [ -f "$forge/draft-merge-state" ]; then
+        if [ "$draft_field" != 1 ]; then
+            echo "fake gh: isDraft was not requested" >&2
+            exit 2
+        fi
+        is_draft=true
+        merge_state=$(cat "$forge/draft-merge-state")
+        case "$merge_state" in
+            BLOCKED|UNKNOWN) ;;
+            *) echo "fake gh: unknown draft merge state '$merge_state'" >&2; exit 2 ;;
+        esac
+    fi
+    printf '{"number":42,"state":"%s","isDraft":%s,"mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
+        "$state" "$is_draft" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
+}
+create() {
+    attempt=$(awk '$0 == "pr create" { n++ } END { print n }' "$forge/calls")
+    outcome=success
+    if [ -f "$forge/create-outcomes" ]; then
+        outcome=$(sed -n "${attempt}p" "$forge/create-outcomes")
+        [ -n "$outcome" ] || outcome=$(tail -n 1 "$forge/create-outcomes")
+    fi
+    case "$outcome" in
+        gateway) echo 'HTTP 502: 502 Bad Gateway' >&2; exit 1 ;;
+        auth) echo 'Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+        unknown_head) echo "Head sha can't be blank" >&2; exit 1 ;;
+        no_commits) echo 'No commits between agent-main and orbit/landing-candidate' >&2; exit 1 ;;
+        body_too_long) echo 'Body is too long (maximum is 65536 characters)' >&2; exit 1 ;;
+        rate_limit) echo 'API rate limit exceeded (HTTP 403)' >&2; exit 1 ;;
+        success|applied_gateway) ;;
+        *) echo "fake gh: unknown create outcome '$outcome'" >&2; exit 2 ;;
+    esac
+    if [ -f "$forge/pr-head" ]; then
+        echo 'a pull request for this branch already exists' >&2
+        exit 1
+    fi
+    shift 2
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --base) printf '%s\n' "$2" > "$forge/pr-base"; shift 2 ;;
+            --head) printf '%s\n' "$2" > "$forge/pr-head"; shift 2 ;;
+            --title) printf '%s' "$2" > "$forge/pr-title"; shift 2 ;;
+            --body) printf '%s' "$2" > "$forge/pr-body"; shift 2 ;;
+            --draft) touch "$forge/pr-draft"; shift ;;
+            --label) printf '%s\n' "$2" >> "$forge/pr-labels"; shift 2 ;;
+            --reviewer) printf '%s\n' "$2" >> "$forge/pr-reviewers"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    echo created >> "$forge/created-prs"
+    if [ "$outcome" = applied_gateway ]; then
+        echo 'HTTP 502: 502 Bad Gateway' >&2
+        exit 1
+    fi
+    printf '%s\n' "$url"
+}
+# A provider error as `gh api` reports it: the response body on stdout and
+# `gh: <message> (HTTP <status>)` on stderr.
+refuse() {
+    printf '{"message":"%s","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"%s"}\n' "$2" "$1"
+    printf 'gh: %s (HTTP %s)\n' "$2" "$1" >&2
+    exit 1
+}
+# Apply the adapter's actual gh --jq expression before writing captured stdout.
+# Without a projection, emit the raw service response, including large fields.
+commit_ci_response() {
+    answer=$1
+    shift
+    previous=""
+    for arg in "$@"; do
+        if [ "$previous" = --jq ]; then
+            jq -c "$arg" "$answer"
+            return
+        fi
+        previous=$arg
+    done
+    cat "$answer"
+}
+# Jobs and logs planted per commit under `$forge/commit-ci/<sha>/`.
+commit_ci_api() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    path="${4:-}"
+    case "$path" in
+        repos/*/actions/runs)
+            sha=""
+            for arg in "$@"; do
+                case "$arg" in
+                    head_sha=*) sha=${arg#head_sha=} ;;
+                esac
+            done
+            if [ -z "$sha" ] && [ -f "$forge/base-push-runs.json" ]; then
+                commit_ci_response "$forge/base-push-runs.json" "$@"
+            elif [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
+                commit_ci_response "$forge/commit-ci/$sha/runs.json" "$@"
+            else
+                echo '{"workflow_runs":[]}'
+            fi
+            ;;
+        repos/*/actions/runs/*/jobs)
+            run=$(basename "$(dirname "$path")")
+            found=""
+            for dir in "$forge/commit-ci"/*; do
+                [ -f "$dir/run_id" ] || continue
+                if [ "$(cat "$dir/run_id")" = "$run" ]; then
+                    found=$dir
+                    break
+                fi
+            done
+            if [ -z "$found" ]; then
+                echo "fake gh: no jobs for run $run" >&2
+                exit 2
+            fi
+            # `jobs-from-<n>.json` replaces the answer from status read <n>
+            # on; one holding `unreadable` refuses the listing.
+            answer="$found/jobs.json"
+            reads=$(cat "$forge/reads" 2>/dev/null || echo 0)
+            poll=1
+            while [ "$poll" -le "$reads" ]; do
+                [ -f "$found/jobs-from-$poll.json" ] && answer="$found/jobs-from-$poll.json"
+                poll=$((poll + 1))
+            done
+            if [ "$(cat "$answer")" = unreadable ]; then
+                echo "fake gh: jobs for run $run unavailable" >&2
+                exit 2
+            fi
+            commit_ci_response "$answer" "$@"
+            ;;
+        *)
+            echo "fake gh: unsupported call: $*" >&2
+            exit 2
+            ;;
+    esac
+}
+commit_ci_log() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    run="${3:-}"
+    for dir in "$forge/commit-ci"/*; do
+        [ -f "$dir/run_id" ] || continue
+        if [ "$(cat "$dir/run_id")" = "$run" ]; then
+            job=""
+            previous=""
+            for arg in "$@"; do
+                if [ "$previous" = --job ]; then job="$arg"; fi
+                previous="$arg"
+            done
+            # `log-fault` refuses the read with that stderr until the
+            # fixture's logical clock (`$forge/clock`, in ms) reaches
+            # `log-fault-until`; without it the refusal never ends.
+            if [ -f "$dir/log-fault-after-reads" ]; then
+                reads=$(cat "$dir/log-read-count" 2>/dev/null || echo 0)
+                reads=$((reads + 1))
+                echo "$reads" > "$dir/log-read-count"
+            else
+                reads=1
+            fi
+            after=$(cat "$dir/log-fault-after-reads" 2>/dev/null || echo 0)
+            if [ -f "$dir/log-fault" ] && [ "$reads" -gt "$after" ]; then
+                until=$(cat "$dir/log-fault-until" 2>/dev/null || echo never)
+                now=$(cat "$forge/clock" 2>/dev/null || echo 0)
+                if [ "$until" = never ] || [ "$now" -lt "$until" ]; then
+                    cat "$dir/log-fault" >&2
+                    exit 1
+                fi
+            fi
+            if [ -f "$dir/log-$job" ]; then cat "$dir/log-$job"; else cat "$dir/log"; fi
+            return
+        fi
+    done
+    echo "fake gh: no log for run $run" >&2
+    exit 2
+}
+# Advance a remote branch by one commit, as another writer would.
+advance() {
+    ref="refs/heads/$1"
+    parent=$(git --git-dir="$remote" rev-parse "$ref")
+    next=$(git --git-dir="$remote" commit-tree "$parent^{tree}" -p "$parent" -m "$2")
+    git --git-dir="$remote" update-ref "$ref" "$next" "$parent"
+}
+# Squash `$1` onto the PR base and mark the PR merged.
+land() {
+    # Remember the head oid before any later deletion. GitHub still reports
+    # it on a merged pull request after the branch is gone.
+    if [ ! -f "$forge/merged-head" ]; then
+        printf '%s\n' "$(head_sha)" > "$forge/merged-head"
+    fi
+    base_ref="refs/heads/$(cat "$forge/pr-base")"
+    parent=$(git --git-dir="$remote" rev-parse "$base_ref")
+    tree=$(git --git-dir="$remote" rev-parse "$1^{tree}")
+    landed=$(git --git-dir="$remote" commit-tree "$tree" -p "$parent" -m "Squash pull request #42")
+    git --git-dir="$remote" update-ref "$base_ref" "$landed" "$parent"
+    printf '%s\n' "$landed" > "$forge/merged"
+}
+merge() {
+    sha=""
+    method=""
+    title=""
+    message=""
+    for arg in "$@"; do
+        case "$arg" in
+            sha=*) sha=${arg#sha=} ;;
+            merge_method=*) method=${arg#merge_method=} ;;
+            commit_title=*) title=${arg#commit_title=} ;;
+            commit_message=*) message=${arg#commit_message=} ;;
+        esac
+    done
+    printf 'sha=%s merge_method=%s\n' "$sha" "$method" >> "$forge/merge-requests"
+    # The composed squash message Orbit sent with the request [ORB-25009].
+    printf '%s\n' "${title:-}" >> "$forge/merge-titles"
+    printf '%s\n' "${message:-}" > "$forge/merge-message"
+    # `merge-outcomes` scripts the answer to each merge request in turn; an
+    # unscripted request is an ordinary conditional merge.
+    attempt=$(( $(wc -l < "$forge/merge-requests") ))
+    outcome=$(sed -n "${attempt}p" "$forge/merge-outcomes" 2>/dev/null || true)
+    base_modified="Base branch was modified. Review and try the merge again."
+    case "$outcome" in
+        ""|merge) ;;
+        base_modified_422) refuse 422 "$base_modified" ;;
+        http_499) refuse 499 "499 (https://api.github.com/graphql)" ;;
+        base_modified*)
+            # Another PR landed on the base between the provider's
+            # mergeability check and this mutation.
+            advance "$(cat "$forge/pr-base")" "Concurrent landing"
+            case "$outcome" in
+                *+head_moved) advance "$(cat "$forge/pr-head")" "Unreviewed push" ;;
+                *+retargeted) printf 'other-base\n' > "$forge/pr-base" ;;
+                *+merged) land "$sha" ;;
+                *+merged_other_head)
+                    advance "$(cat "$forge/pr-head")" "Unreviewed push"
+                    land "$(head_sha)" ;;
+                *+policy_disallowed) touch "$forge/merge-methods-disallowed" ;;
+            esac
+            refuse 405 "$base_modified" ;;
+        in_progress_error)
+            cat "$forge/in-progress-body"
+            cat "$forge/in-progress-stderr" >&2
+            exit 1 ;;
+        in_progress|in_progress_empty|in_progress_numeric)
+            printf '%s\n' "$sha" > "$forge/merge-in-progress"
+            if [ "$outcome" = in_progress_empty ]; then
+                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
+            fi
+            if [ "$outcome" = in_progress_numeric ]; then
+                echo '{"message":"Merge already in progress","status":405}'
+                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
+            fi
+            refuse 405 "Merge already in progress" ;;
+        policy) refuse 405 "Merge commits are not allowed on this repository." ;;
+        # [F2026-11-440] The base advanced into a conflict after the mergeable read.
+        merge_conflict) refuse 405 "Pull Request has merge conflicts" ;;
+        merge_conflict_empty) echo 'gh: Pull Request has merge conflicts (HTTP 405)' >&2; exit 1 ;;
+        merge_conflict_numeric)
+            echo '{"message":"Pull Request has merge conflicts","status":405}'
+            echo 'gh: Pull Request has merge conflicts (HTTP 405)' >&2; exit 1 ;;
+        merge_conflict+head_moved)
+            advance "$(cat "$forge/pr-head")" "Unreviewed push"
+            refuse 405 "Pull Request has merge conflicts" ;;
+        merge_conflict+merged) land "$sha"; refuse 405 "Pull Request has merge conflicts" ;;
+        conflict_error)
+            cat "$forge/conflict-body"
+            cat "$forge/conflict-stderr" >&2
+            exit 1 ;;
+        queue) refuse 405 "Changes must be made through the merge queue" ;;
+        protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
+        auth) refuse 403 "Resource not accessible by integration" ;;
+        head_modified) refuse 409 "Head branch was modified. Review and try the merge again." ;;
+        server_error+merged) land "$sha"; refuse 502 "Server Error" ;;
+        internal_error+merged) land "$sha"; refuse 500 "Internal Server Error" ;;
+        bad_gateway+merged) land "$sha"; refuse 502 "Bad Gateway" ;;
+        unavailable+merged) land "$sha"; refuse 503 "Service Unavailable" ;;
+        gateway_timeout+merged) land "$sha"; refuse 504 "Gateway Timeout" ;;
+        empty_error_body+merged) land "$sha"; printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        # [F2026-11-509] The response ended before it decoded; the status is unknown.
+        decode) echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode+merged) land "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_truncated) printf '{"sha":"%s","merged":' "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_truncated+merged) land "$sha"; printf '{"sha":"%s","merged":' "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_html) printf '<html>upstream error</html>\n'; echo 'unexpected end of JSON input' >&2; exit 1 ;;
+        decode_trailing) echo 'unexpected end of JSON input' >&2; echo 'warning: retried after a proxy reset' >&2; exit 1 ;;
+        server_error) refuse 502 "Server Error" ;;
+        server_error_mixed_auth) refuse 502 "Bad credentials" ;;
+        server_error_malformed)
+            printf '<html>upstream error</html>\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_mismatched)
+            printf '{"message":"Bad credentials","status":"502"}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_contradictory)
+            printf '{"message":"Server Error","status":"502","merged":true,"sha":"%s"}\n' "$sha"
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_wrong_status)
+            printf '{"message":"Server Error","status":"403"}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_auth_detail)
+            printf '{"message":"Server Error","status":"502","errors":["Bad credentials"]}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_trailing)
+            printf 'gh: Server Error (HTTP 502)\ngh: permission denied (HTTP 403)\n' >&2; exit 1 ;;
+        invalid_success) printf 'invalid-json\n'; return ;;
+        unconfirmed_success) printf '{"merged":false}\n'; return ;;
+        mismatched_body)
+            printf '{"message":"Pull Request is not mergeable","status":"405"}\n'
+            printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
+            exit 1 ;;
+        malformed_body)
+            printf '<html>upstream error</html>\n'
+            printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
+            exit 1 ;;
+        trailing_stderr)
+            printf '{"message":"%s","status":"405"}\n' "$base_modified"
+            printf 'gh: %s (HTTP 405)\nwarning: retried after a proxy reset\n' "$base_modified" >&2
+            exit 1 ;;
+        transport_timeout)
+            echo 'Put "https://api.github.com/repos/orbit/test/pulls/42/merge": net/http: request canceled (Client.Timeout exceeded while awaiting headers)' >&2
+            exit 1 ;;
+        *) echo "fake gh: unknown merge outcome '$outcome'" >&2; exit 2 ;;
+    esac
+    if [ "$sha" != "$(head_sha)" ]; then
+        echo "gh: Head branch was modified. Review and try the merge again. (HTTP 409)" >&2
+        exit 1
+    fi
+    land "$sha"
+    printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$(cat "$forge/merged")"
+}
+if [ -f "$forge/failed-command-log" ]; then
+    case "$1 ${2:-}" in
+        "run view") cat "$forge/failed-command-log"; exit ;;
+        "api --method")
+            case "${4:-}" in
+                'repos/{owner}/{repo}/actions/runs')
+                    sha=""
+                    for arg in "$@"; do
+                        case "$arg" in
+                            head_sha=*) sha=${arg#head_sha=} ;;
+                        esac
+                    done
+                    if [ "$sha" = "$(head_sha)" ]; then
+                        echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'
+                    else
+                        echo '{"workflow_runs":[]}'
+                    fi
+                    exit ;;
+                'repos/{owner}/{repo}/actions/runs/10/jobs') cat "$forge/failed-command-jobs"; exit ;;
+            esac ;;
+    esac
+fi
+if [ -f "$forge/infrastructure" ]; then
+    phase=before
+    [ ! -f "$forge/rerun-applied" ] || phase=after
+    if [ -f "$forge/infra-auth403" ] && [ "$1" = api ]; then
+        echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1
+    fi
+    # [ORB-25864] The account's REST quota: the next N repository reads are
+    # rate-limited, and `rate_limit` (which spends no quota) names the reset.
+    if [ "$*" = "api rate_limit" ]; then
+        if [ -f "$forge/infra-rate-limit-hang" ]; then sleep 30; fi
+        cat "$forge/infra-rate-limit"; exit
+    fi
+    if [ "$*" = "api repos/{owner}/{repo}" ] && [ -s "$forge/infra-rate-limited" ]; then
+        left=$(cat "$forge/infra-rate-limited")
+        if [ "$left" -gt 0 ]; then
+            echo $((left - 1)) > "$forge/infra-rate-limited"
+            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+            exit 1
+        fi
+    fi
+    # [ORB-25898] The same quota running out after the snapshot: the next N
+    # workflow-file reads are rate-limited.
+    if [ "$1" = api ] && [ -s "$forge/infra-contents-rate-limited" ]; then
+        case "${2:-}" in
+            */contents/*)
+                left=$(cat "$forge/infra-contents-rate-limited")
+                if [ "$left" -gt 0 ]; then
+                    echo $((left - 1)) > "$forge/infra-contents-rate-limited"
+                    echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+                    exit 1
+                fi ;;
+        esac
+    fi
+    # [ORB-25917] A snapshot read that stays throttled: the next N reads of the
+    # pull request are rate-limited, uncached, in every snapshot.
+    if [ "$*" = "api repos/{owner}/{repo}/pulls/42" ] && [ -s "$forge/infra-pulls-rate-limited" ]; then
+        left=$(cat "$forge/infra-pulls-rate-limited")
+        if [ "$left" -gt 0 ]; then
+            echo $((left - 1)) > "$forge/infra-pulls-rate-limited"
+            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+            exit 1
+        fi
+    fi
+    case "$1 ${2:-}" in
+        "api graphql")
+            case "$*" in
+                *requiredStatusChecks*) cat "$forge/infra-policy"; exit ;;
+                *statusCheckRollup*) cat "$forge/infra-rollup-policy"; exit ;;
+            esac ;;
+        "api repos/{owner}/{repo}") cat "$forge/infra-repo"; exit ;;
+        "api repos/{owner}/{repo}/pulls/42") cat "$forge/infra-pr"; exit ;;
+        "api repos/{owner}/{repo}/rules/branches/agent-main?per_page=100") cat "$forge/infra-rules"; exit ;;
+        "api repos/{owner}/{repo}/actions/runs/700") cat "$forge/infra-run-$phase"; exit ;;
+        "api repos/{owner}/{repo}/actions/runs/700/attempts/1/jobs?per_page=100") cat "$forge/infra-jobs"; exit ;;
+        "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
+        "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
+        "run view")
+            # [ORB-25918] The primary log read may come back empty, and the
+            # fallback's run-metadata read (`--json`) may be throttled. Each
+            # counter names how many of its reads still answer that way.
+            case "$*" in
+                *' --json '*)
+                    if [ -s "$forge/infra-run-rate-limited" ]; then
+                        left=$(cat "$forge/infra-run-rate-limited")
+                        if [ "$left" -gt 0 ]; then
+                            echo $((left - 1)) > "$forge/infra-run-rate-limited"
+                            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+                            exit 1
+                        fi
+                    fi ;;
+                *)
+                    if [ -s "$forge/infra-log-empty" ]; then
+                        left=$(cat "$forge/infra-log-empty")
+                        if [ "$left" -gt 0 ]; then
+                            echo $((left - 1)) > "$forge/infra-log-empty"
+                            exit 0
+                        fi
+                    fi ;;
+            esac
+            # A planted marker hangs the job-log read until the supervisor kills it.
+            if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
+            # A planted marker makes the diagnosis vanish once the reservation
+            # is durable, as an empty or throttled view would.
+            if [ -f "$forge/infra-log-vanishes" ] && [ -f "$forge/infra-reserved" ]; then exit; fi
+            cat "$forge/infra-log"; exit ;;
+        "run rerun")
+            [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
+            mode=$(cat "$forge/infrastructure")
+            if [ "$mode" = auth ]; then echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
+            if [ "$mode" != no_apply ]; then touch "$forge/rerun-applied"; fi
+            # [ORB-25917] Throttle the pull-request read from the rerun on, so the
+            # observation of the reserved attempt is the pass that is throttled.
+            if [ -s "$forge/infra-pulls-rate-limited-after-rerun" ]; then cp "$forge/infra-pulls-rate-limited-after-rerun" "$forge/infra-pulls-rate-limited"; fi
+            if [ "$mode" = moved ]; then advance "$(cat "$forge/pr-head")" foreign; fi
+            if [ "$mode" = deleted ]; then git --git-dir="$remote" update-ref -d "refs/heads/$(cat "$forge/pr-head")"; fi
+            if [ "$mode" = lost ] || [ "$mode" = no_apply ]; then echo 'HTTP 503: lost mutation reply' >&2; exit 1; fi
+            exit ;;
+        "api "*)
+            case "$2" in
+                *'/commits/'*'/status?'*) cat "$forge/infra-statuses-$phase"; exit ;;
+                *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
+                *'/actions/runs?head_sha='*)
+                    # A planted marker hangs this read until the supervisor kills it.
+                    if [ -f "$forge/infra-runs-hang" ]; then sleep 30; fi
+                    cat "$forge/infra-runs-$phase"; exit ;;
+                *'/contents/'*) cat "$forge/infra-contents"; exit ;;
+            esac ;;
+    esac
+fi
+# Current branch policy requires `test` [ORB-16339]. The head reports it
+# unless the latest status read scripted `unreported`.
+if [ -f "$forge/gates" ]; then
+    observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
+    [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    head=$(head_sha)
+    pr_base=$(cat "$forge/pr-base")
+    repo='{"id":500,"full_name":"orbit/test","url":"https://api.github.com/repos/orbit/test"}'
+    case "$1 ${2:-}" in
+        "api repos/{owner}/{repo}") printf '%s\n' "$repo"; exit ;;
+        "api repos/{owner}/{repo}/pulls/42")
+            printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' \
+                "$head" "$(cat "$forge/pr-head")" "$repo" "$(git --git-dir="$remote" rev-parse "refs/heads/$pr_base")" "$pr_base" "$repo"
+            exit ;;
+        "api graphql")
+            case "$*" in
+                *requiredStatusChecks*)
+                    printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[{"context":"test","app":null}]}}}}}}\n' "$head" "$pr_base"
+                    exit ;;
+            esac ;;
+        "api "*)
+            case "$2" in
+                *'/rules/branches/'*) echo '[]'; exit ;;
+                *'/check-runs?'*)
+                    if [ "$observed" = unreported ]; then echo '{"total_count":0,"check_runs":[]}'; exit; fi
+                    printf '{"total_count":1,"check_runs":[{"id":1,"name":"test","head_sha":"%s","app":{"id":900},"status":"completed","conclusion":"success"}]}\n' "$head"
+                    exit ;;
+                *'/status?'*) printf '{"sha":"%s","repository":%s,"total_count":0,"statuses":[]}\n' "$head" "$repo"; exit ;;
+                *'/actions/runs?'*) echo '{"total_count":0,"workflow_runs":[]}'; exit ;;
+            esac ;;
+    esac
+fi
+case "$1 ${2:-}" in
+    "pr list")
+        # An unfiltered listing (the one that asks for `body`) can be planted
+        # so a delivery's earlier pull requests are visible. Head lookups stay
+        # on the single pull request this substitute creates.
+        case "$*" in
+            *body*)
+                if [ -f "$forge/open-prs.json" ]; then
+                    cat "$forge/open-prs.json"
+                    exit
+                fi
+                ;;
+        esac
+        if [ -f "$forge/pr-head" ]; then
+            pr_list_base=$(cat "$forge/pr-base" 2>/dev/null || echo agent-main)
+            printf '[{"number":%s,"title":"Landing","headRefName":"%s","baseRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")" "$pr_list_base"
+        else
+            echo '[]'
+        fi ;;
+    "pr create") create "$@" ;;
+    "pr edit")
+        [ "$4" = "--body" ] || exit 2
+        printf '%s' "$5" > "$forge/pr-body"
+        echo Edited ;;
+    "pr ready")
+        if [ -f "$forge/ready-failure" ]; then echo 'HTTP 403: forbidden' >&2; exit 1; fi
+        rm "$forge/pr-draft"
+        echo Ready ;;
+    "pr close")
+        if [ -f "$forge/pr-close-failure" ]; then
+            cat "$forge/pr-close-failure" >&2
+            exit 1
+        fi
+        printf 'Closed\n' ;;
+    "pr view")
+        if [ -f "$forge/pr-view-outcomes" ]; then
+            view_attempt=$(( $(cat "$forge/pr-view-reads") + 1 ))
+            printf '%s\n' "$view_attempt" > "$forge/pr-view-reads"
+            view_outcome=$(sed -n "${view_attempt}p" "$forge/pr-view-outcomes")
+            [ -n "$view_outcome" ] || view_outcome=$(tail -n 1 "$forge/pr-view-outcomes")
+            if [ "$view_outcome" = invalid_json ]; then printf '{'; exit 0; fi
+            if [ "$view_outcome" != success ]; then
+                printf '%s\n' "$view_outcome" >&2
+                exit 1
+            fi
+        fi
+        case "$*" in
+            *mergeStateStatus*)
+                draft_field=0
+                case "$*" in *isDraft*) draft_field=1 ;; esac
+                status "$draft_field" ;;
+            *)
+                python3 - "$forge" "$number_json" "$url" <<'PYVIEW'
+import json, pathlib, sys
+forge = pathlib.Path(sys.argv[1])
+view = {"number": json.loads(sys.argv[2]), "title": "Landing",
+    "body": (forge / "pr-body").read_text() if (forge / "pr-body").exists() else "",
+    "isDraft": (forge / "pr-draft").exists() or (forge / "draft-merge-state").exists(),
+    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}
+if not (forge / "omit-pr-base").exists():
+    view["baseRefName"] = (forge / "pr-base").read_text().strip() if (forge / "pr-base").exists() else "agent-main"
+print(json.dumps(view))
+PYVIEW
+                ;;
+        esac ;;
+    "repo view") echo '{"nameWithOwner":"orbit/test","url":"https://github.com/orbit/test"}' ;;
+    "api graphql")
+        case "$*" in
+            *statusCheckRollup*)
+                observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
+                [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+                if [ -f "$forge/required-checks-outcomes" ]; then
+                    rc_reads=$(( $(cat "$forge/required-checks-reads" 2>/dev/null || echo 0) + 1 ))
+                    printf '%s\n' "$rc_reads" > "$forge/required-checks-reads"
+                    rc_outcome=$(sed -n "${rc_reads}p" "$forge/required-checks-outcomes")
+                    [ -n "$rc_outcome" ] || rc_outcome=$(tail -n 1 "$forge/required-checks-outcomes")
+                    case "$rc_outcome" in
+                        empty) exit 0 ;;
+                        truncated) printf '{"data":{"repository":{"pullRequest":{"headR'; exit 0 ;;
+                        fail) echo 'unexpected end of JSON input' >&2; exit 1 ;;
+                        tls) echo 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' >&2; exit 1 ;;
+                        success) ;;
+                        pending) observed=mixed_pending ;;
+                        foreign_head) rc_head=0000000000000000000000000000000000000000 ;;
+                        stale_rollup) rc_rollup=0000000000000000000000000000000000000000 ;;
+                        *) echo "fake gh: unknown required-checks outcome '$rc_outcome'" >&2; exit 2 ;;
+                    esac
+                fi
+                if [ -f "$forge/required-auth" ]; then echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
+                if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
+                rollup=$(check "$observed")
+                case "$observed" in
+                    mixed_*|paired_failure|paired_failure_reversed|optional_pending) ;;
+                    *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
+                esac
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "${rc_head:-$(head_sha)}" "${rc_rollup:-${rc_head:-$(head_sha)}}" "$rollup"
+                exit ;;
+        esac
+        # An unreviewed push that lands after the freshness check, while the
+        # merge strategy is being resolved and before the merge request.
+        if [ -f "$forge/push-before-merge" ] && [ ! -f "$forge/pushed" ]; then
+            advance "$(cat "$forge/pr-head")" "Unreviewed push"
+            touch "$forge/pushed"
+        fi
+        allowed=true
+        [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
+        printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;
+    "api repos/{owner}/{repo}/pulls/42/merge") merge "$@" ;;
+    "api --method") commit_ci_api "$@" ;;
+    "run view") commit_ci_log "$@" ;;
+    *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
+esac
+"#;
+
+type Res<T> = Result<T, OrbitError>;
+
+/// The handed-off gate, run by path so a test can change what it does between runs while its command, and so the kept record, stays the same.
+struct Gate {
+    script: PathBuf,
+    runs: PathBuf,
+}
+impl Gate {
+    fn new(sandbox: &Path) -> Self {
+        let gate = Self {
+            script: sandbox.join("affected-gate.sh"),
+            runs: sandbox.join("affected-gate.runs"),
+        };
+        gate.executes();
+        gate
+    }
+    /// The gate as the owner's configuration names it.
+    fn command(&self) -> String {
+        format!("sh '{}'", self.script.display())
+    }
+    fn set(&self, body: &str) {
+        fs::write(
+            &self.script,
+            format!("echo ran >> '{}'\n{body}\n", self.runs.display()),
+        )
+        .unwrap();
+    }
+    /// Runs its tests and reports them, as `make ci-test-affected` does.
+    fn executes(&self) {
+        self.set(&reported_tests(3));
+    }
+    fn defers_with(&self, notice: String) {
+        self.set(&format!("echo '{}' >&2\n{}", notice, reported_tests(3)));
+    }
+    fn defers(&self) {
+        self.defers_with(bwrap_notice());
+    }
+    fn skips_seatbelt(&self) {
+        self.defers_with(seatbelt_notice());
+    }
+    fn denies_ps(&self) {
+        self.defers_with(ps_notice());
+    }
+    /// Passes without reporting an executed test, as a lint gate does.
+    fn executes_nothing(&self) {
+        self.set("echo lint-ok");
+    }
+    /// Fails wherever it runs, the base included.
+    fn fails(&self) {
+        self.set(&format!(
+            "{}\necho 'gate is red' >&2\nexit 3",
+            reported_tests(3)
+        ));
+    }
+    fn runs(&self) -> usize {
+        fs::read_to_string(&self.runs).map_or(0, |runs| runs.lines().count())
+    }
+}
+
+/// A known-red case: its name, the base's tests, the candidate's tests (`None` fails exactly as the base), and the tests it proceeds with as known red (`None` requires candidate repair or a base hold).
+type KnownRedCase<'a> = (
+    &'a str,
+    &'a [&'a str],
+    Option<&'a [&'a str]>,
+    Option<&'a [&'a str]>,
+);
+
+/// A checkout on [`BRANCH`] one commit ahead of [`BASE`], both pushed to a bare remote that the substitute forge reads and merges into.
+struct Fixture {
+    _root: TempDir,
+    repo: PathBuf,
+    forge: PathBuf,
+    base_sha: String,
+    candidate: String,
+}
+impl Fixture {
+    /// A fresh repository and forge, made the active forge for `gh`.
+    fn new(sandbox: &Path) -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(|| Self::fresh(sandbox));
+            seed.copy_to(sandbox)
+        })
+    }
+    fn git(&self, args: &[&str]) -> String {
+        git(&self.repo, args)
+    }
+    /// Run git against the forge's bare remote.
+    fn remote_git(&self, args: &[&str]) -> String {
+        let git_dir = path_str(&self.forge.join("remote.git")).to_string();
+        let mut full = vec!["--git-dir", git_dir.as_str()];
+        full.extend_from_slice(args);
+        self.git(&full)
+    }
+    fn remote_parse(&self, rev: &str) -> String {
+        self.remote_git(&["rev-parse", rev])
+    }
+    fn write_forge(&self, name: &str, contents: impl AsRef<[u8]>) {
+        fs::write(self.forge.join(name), contents).unwrap();
+    }
+    fn write_repo(&self, rel: &str, contents: impl AsRef<[u8]>) {
+        fs::write(self.repo.join(rel), contents).unwrap();
+    }
+    fn script_lines(&self, name: &str, lines: &[&str]) {
+        fs::write(self.forge.join(name), format!("{}\n", lines.join("\n"))).unwrap();
+    }
+    /// Copy only pristine preparation, before any action or scripted response mutates it.
+    fn copy_to(&self, sandbox: &Path) -> Self {
+        let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+        git_fixture::copy_template(self._root.path(), root.path());
+        let repo = root.path().join("repo").canonicalize().unwrap();
+        let forge = root.path().join("forge");
+        fs::write(sandbox.join("active-forge"), path_str(&forge)).unwrap();
+        Self {
+            _root: root,
+            repo,
+            forge,
+            base_sha: self.base_sha.clone(),
+            candidate: self.candidate.clone(),
+        }
+    }
+    fn fresh(sandbox: &Path) -> Self {
+        let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+        let forge = root.path().join("forge");
+        let remote = forge.join("remote.git");
+        let repo = root.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        git(root.path(), &["init", "--bare", path_str(&remote)]);
+        git_fixture::init(&repo);
+        let g = |args: &[&str]| git(&repo, args);
+        g(&["remote", "add", "origin", path_str(&remote)]);
+        g(&["checkout", "-b", BASE]);
+        g(&["config", "user.name", "Orbit Test"]);
+        g(&["config", "user.email", "orbit-test@example.invalid"]);
+        fs::write(repo.join("README.md"), "base\n").unwrap();
+        g(&["add", "README.md"]);
+        g(&["commit", "-m", "base"]);
+        g(&["push", "-u", "origin", BASE]);
+        g(&["checkout", "-b", BRANCH]);
+        let repo = repo.canonicalize().unwrap();
+        let base_sha = g(&["rev-parse", BASE]);
+        let fixture = Self {
+            _root: root,
+            repo,
+            forge,
+            base_sha,
+            candidate: String::new(),
+        };
+        let candidate = fixture.commit("src/feature.txt", "reviewed change\n");
+        fs::write(sandbox.join("active-forge"), path_str(&fixture.forge)).unwrap();
+        fixture.script_checks(&["success"]);
+        Self {
+            candidate,
+            ..fixture
+        }
+    }
+    fn rebase_candidate(&mut self) {
+        self.git(&["rebase", BASE]);
+        self.git(&["push", "--force", "origin", BRANCH]);
+        self.base_sha = self.git(&["rev-parse", BASE]);
+        self.candidate = self.head();
+    }
+    /// [`Fixture::new`] whose base carries a `Makefile` with a red `ci-lint` target, and whose candidate is rebased onto it.
+    fn with_red_lint(sandbox: &Path, runs: &Path) -> Self {
+        let mut fixture = Self::new(sandbox);
+        fixture.commit_on_base(
+            "Makefile",
+            &format!(
+                "ci-lint:\n\t@echo ran >> '{}'\n\t@printf 'error: lint is red\\n  --> README.md:1:1\\n' >&2; exit 2\n",
+                runs.display()
+            ),
+        );
+        fixture.rebase_candidate();
+        fixture
+    }
+    /// [`Fixture::new`] whose base fails [`RED_TESTS`] with nextest's `FAIL` line for each of `base_tests` (and libtest's echo of the first), with the candidate rebased onto it.
+    fn with_red_tests(
+        sandbox: &Path,
+        base_tests: &[&str],
+        candidate_tests: Option<&[&str]>,
+    ) -> Self {
+        let mut fixture = Self::new(sandbox);
+        let mut base_output = base_tests
+            .first()
+            .map(|test| format!("test {test} ... FAILED\n"))
+            .unwrap_or_default();
+        base_output.push_str(&nextest_failures(base_tests));
+        fixture.commit_files_on_base(&[
+            ("failing.txt", &base_output),
+            ("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n"),
+        ]);
+        fixture.rebase_candidate();
+        if let Some(tests) = candidate_tests {
+            fixture.candidate = fixture.commit("failing.txt", &nextest_failures(tests));
+        }
+        fixture
+    }
+    /// Commit `file` on the base and push it, leaving the candidate checked out.
+    fn commit_on_base(&self, file: &str, contents: &str) {
+        self.commit_files_on_base(&[(file, contents)]);
+    }
+    /// Seed one final base tree when the fixture observes no intermediate write. Separate base advances still use `commit_on_base` at each observation.
+    fn commit_files_on_base(&self, files: &[(&str, &str)]) {
+        self.git(&["checkout", BASE]);
+        for (file, contents) in files {
+            let path = self.repo.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        let mut add = vec!["add", "--"];
+        add.extend(files.iter().map(|(file, _)| *file));
+        self.git(&add);
+        let names = files
+            .iter()
+            .map(|(file, _)| *file)
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.git(&["commit", "-m", &format!("base writes {names}")]);
+        self.git(&["push", "origin", BASE]);
+        self.git(&["checkout", BRANCH]);
+    }
+    /// Check states the forge reports, one per status read; the last repeats.
+    fn script_checks(&self, states: &[&str]) {
+        self.script_lines("checks", states);
+    }
+    /// Answers to successive merge requests (see `merge-outcomes` in [`FAKE_GH`]); requests past the script merge normally.
+    fn script_merges(&self, outcomes: &[&str]) {
+        self.script_lines("merge-outcomes", outcomes);
+    }
+    /// Answers to successive creates; the final outcome repeats.
+    fn script_creates(&self, outcomes: &[&str]) {
+        self.script_lines("create-outcomes", outcomes);
+    }
+    /// Answers to successive PR views; the final outcome repeats.
+    fn script_pr_views(&self, outcomes: &[&str]) {
+        fs::write(
+            self.forge.join("pr-view-outcomes"),
+            format!("{}\n", outcomes.join("\n")),
+        )
+        .unwrap();
+        fs::write(self.forge.join("pr-view-reads"), "0\n").unwrap();
+    }
+    /// Fail the next `reads` status reads with `stderr`, each before it is counted.
+    fn script_status_failures(&self, reads: u32, stderr: &str) {
+        self.write_forge("status-faults", format!("{reads}\n"));
+        self.write_forge("status-fault-stderr", stderr);
+    }
+    fn script_pr_close_failure(&self, diagnostic: &str) {
+        fs::write(self.forge.join("pr-close-failure"), diagnostic).unwrap();
+    }
+    fn pr_view_reads(&self) -> usize {
+        self.forge_state("pr-view-reads")
+            .map(|value| value.parse().unwrap())
+            .unwrap_or(0)
+    }
+    /// Answers to successive required-checks reads; the last repeats
+    /// (`empty`, `truncated`, `fail`, `tls`, `success`, `pending`, `foreign_head` (a moved PR) or `stale_rollup` (an old rollup commit under the unchanged PR head); see [`FAKE_GH`]).
+    fn script_required_check_outcomes(&self, outcomes: &[&str]) {
+        self.script_lines("required-checks-outcomes", outcomes);
+        fs::write(self.forge.join("required-checks-reads"), "0\n").unwrap();
+    }
+    fn required_check_reads(&self) -> usize {
+        self.forge_state("required-checks-reads")
+            .map(|value| value.parse().unwrap())
+            .unwrap_or(0)
+    }
+    /// Script PR metadata independently of the real remote PR head ref.
+    fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
+        self.script_lines("heads", heads);
+        self.write_forge(
+            "heads-start",
+            self.forge_state("reads").unwrap_or_else(|| "0".into()),
+        );
+        match remote_head {
+            Some(head) => self.remote_git(&["update-ref", "refs/pull/42/head", head]),
+            None => self.remote_git(&["update-ref", "-d", "refs/pull/42/head"]),
+        };
+    }
+    /// Replace the opened head through the production lease-push boundary and hand its checkpoints to completion as the shipped pipeline does.
+    fn republished_completion_input(&self, host: &DeliveryHost) -> Value {
+        self.git(&["commit", "--amend", "-m", "republished candidate"]);
+        let pushed = action_ok(
+            host,
+            "git_push",
+            &json!({ "workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "branch": BRANCH, "rewrite_performed": true, "rewrite_head_before": self.candidate, "expected_remote_sha": self.candidate, }),
+        );
+        assert_eq!(pushed["decision"], "performed_force_with_lease");
+        assert_eq!(pushed["remote_sha_before"], self.candidate);
+        let mut input = self.complete_input();
+        input["published_head_sha"] = pushed["local_sha"].clone();
+        input["reviewed_head_sha"] = pushed["local_sha"].clone();
+        input["previous_published_head_sha"] = pushed["remote_sha_before"].clone();
+        input["max_wait_seconds"] = json!(60);
+        input
+    }
+    /// Commit `file` on the checkout and push it, returning the new head.
+    fn commit(&self, file: &str, contents: &str) -> String {
+        let path = self.repo.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+        self.git(&["add", file]);
+        self.git(&["commit", "-m", &format!("write {file}")]);
+        self.git(&["push", "-u", "origin", BRANCH]);
+        self.head()
+    }
+    /// Land unrelated work on the base, leaving the candidate behind it.
+    fn advance_base(&self) {
+        self.git(&["checkout", BASE]);
+        fs::write(self.repo.join("base.txt"), "advanced\n").unwrap();
+        self.git(&["add", "base.txt"]);
+        self.git(&["commit", "-m", "advance base"]);
+        self.git(&["push", "origin", BASE]);
+        self.git(&["checkout", BRANCH]);
+    }
+    /// Land unrelated work on the base, then rebase and republish the candidate onto it.
+    fn advance_base_and_rebase(&self) {
+        self.advance_base();
+        self.git(&["rebase", BASE]);
+        self.git(&["push", "--force", "origin", BRANCH]);
+    }
+    fn head(&self) -> String {
+        self.git(&["rev-parse", "HEAD"])
+    }
+    fn remote_parent(&self, commit: &str) -> String {
+        self.remote_parse(&format!("{commit}^"))
+    }
+    fn local_tip(&self, branch: &str) -> String {
+        self.git(&["rev-parse", branch])
+    }
+    /// [ORB-14905] The commit a held candidate's durable ref names on the remote, after checking the handoff says it carried it there.
+    fn durable_candidate(&self, handoff: &Value) -> String {
+        assert_eq!(handoff["carry"], "durable", "{handoff}");
+        let reference = handoff["durable_ref"].as_str().unwrap();
+        assert_eq!(
+            reference,
+            format!("refs/orbit/candidates/{TASK_ID}/{RUN_ID}")
+        );
+        self.remote_parse(reference)
+    }
+    fn remote_tip(&self, branch: &str) -> String {
+        self.remote_parse(&format!("refs/heads/{branch}"))
+    }
+    fn push_input(&self) -> Value {
+        json!({"workspace_path": self.repo, "branch": BRANCH})
+    }
+    fn bare_repo_at(&self, bare: &Path) {
+        self.git(&["init", "--bare", path_str(bare)]);
+    }
+    fn bare_repo(&self, name: &str) -> PathBuf {
+        let bare = self.forge.join(name);
+        self.bare_repo_at(&bare);
+        bare
+    }
+    /// The validation step as the owner pipeline hands it the synchronized candidate.
+    fn validate_input(&self) -> Value {
+        json!({"workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "base_sha": self.base_sha})
+    }
+    fn claim_input(&self) -> Value {
+        json!({"workspace_path": self.repo, "base_sync": "local", "base_sha": self.base_sha})
+    }
+    fn open_input(&self, reviewed_head: &str, reviewed_base: &str) -> Value {
+        json!({
+            "workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "head": BRANCH, "base": BASE,
+            "base_ref": BASE, "base_sha": self.base_sha, "base_sync": "local", "reviewed_head_sha": reviewed_head, "reviewed_base_sha": reviewed_base,
+        })
+    }
+    /// The completion step as a `--complete` pipeline hands it the run's published and reviewed candidate.
+    fn complete_input(&self) -> Value {
+        json!({
+            "workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "completion": "done", "pr_number": PR_NUMBER,
+            "head": BRANCH, "base": BASE, "base_sync": "local", "published_head_sha": self.candidate, "reviewed_head_sha": self.candidate,
+            "max_wait_seconds": 30, "poll_interval_seconds": 5,
+        })
+    }
+    /// The same completion for an ungated run: the published head is still pinned, but no before-PR review settled it.
+    fn complete_ungated_input(&self) -> Value {
+        let mut input = self.complete_input();
+        input.as_object_mut().unwrap().remove("reviewed_head_sha");
+        input
+    }
+    fn forge_state(&self, name: &str) -> Option<String> {
+        fs::read_to_string(self.forge.join(name))
+            .ok()
+            .map(|value| value.trim().to_string())
+    }
+    fn forge_lines(&self, name: &str) -> Vec<String> {
+        self.forge_state(name)
+            .map(|value| value.lines().map(ToOwned::to_owned).collect())
+            .unwrap_or_default()
+    }
+    fn forge_calls(&self) -> Vec<String> {
+        self.forge_lines("calls")
+    }
+    fn merge_requests(&self) -> Vec<String> {
+        self.forge_lines("merge-requests")
+    }
+    fn status_reads(&self) -> usize {
+        let count = |name| {
+            self.forge_state(name)
+                .map(|value| value.parse().unwrap())
+                .unwrap_or(0)
+        };
+        // `reads` counts open `pr view`s. `merged-reads` counts each merged
+        // `pr view` on its own, so a second reconciliation read is visible.
+        count("reads") + count("merged-reads")
+    }
+}
+
+/// The task store and review-landing record the delivery actions write through, kept in memory. The provider boundary is left to the engine.
+#[derive(Default)]
+struct DeliveryHost {
+    repo: PathBuf,
+    runs: Mutex<BTreeMap<String, JobRun>>,
+    tasks: Mutex<BTreeMap<String, Task>>,
+    comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
+    completion_notes: Mutex<Vec<String>>,
+    landings: Mutex<Vec<ReviewLandingRequest>>,
+    required_commands: Mutex<Vec<String>>,
+    baseline_commands: Mutex<Vec<String>>,
+    scripted: Mutex<BTreeMap<String, Value>>,
+    failing: Mutex<BTreeMap<String, String>>,
+    failure_checkpoints: Mutex<Vec<(String, String, Value)>>,
+    fail_evidence_writes: Mutex<bool>,
+    /// Task-history events whose automation writes this host refuses.
+    fail_history_events: Mutex<Vec<String>>,
+    artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
+    artifact_creators: Mutex<BTreeMap<(String, String), String>>,
+    releases: Mutex<Vec<ReviewReleaseRequest>>,
+    validation_env: Mutex<Option<ValidationEnvironment>>,
+    widenings: Mutex<Vec<Widening>>,
+    claim_logs: Mutex<Vec<String>>,
+    claim_log_contents: Mutex<BTreeMap<String, Vec<u8>>>,
+    handoffs: Mutex<Vec<TaskHandoff>>,
+    ship_mode: Mutex<String>,
+    status_events: Mutex<Vec<StatusEvent>>,
+    history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
+    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
+    recovery_certificates: Mutex<Vec<(String, String, Value)>>,
+    run_states: Mutex<BTreeMap<String, PipelineState>>,
+    scripted_inputs: Mutex<BTreeMap<String, Value>>,
+    deferral_answers: Mutex<BTreeMap<String, NamespaceProbe>>,
+    probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
+    /// The OS this host runs implementers on [ORB-15587].
+    os: Mutex<Option<EvidenceHostOs>>,
+    /// The workspace's PR settings and delivery conventions.
+    pr_config: Mutex<orbit_engine::PrConfig>,
+    completion_hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
+    step_recovery_decision: Mutex<Option<orbit_engine::StepRecoveryDecisionRead>>,
+}
+type Widening = (String, ContextWideningStep, String, Vec<String>);
+type StatusEvent = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<orbit_types::task::TaskDecision>,
+);
+impl DeliveryHost {
+    fn new(repo: &Path, status: TaskStatus) -> Self {
+        Self {
+            repo: repo.to_path_buf(),
+            tasks: Mutex::new(BTreeMap::from([(TASK_ID.to_string(), task(status))])),
+            ship_mode: Mutex::new("local".to_string()),
+            os: Mutex::new(EvidenceHostOs::current()),
+            ..Self::default()
+        }
+    }
+    fn ship_pr(&self) {
+        *locked(&self.ship_mode) = "pr".to_string();
+    }
+    fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
+        locked(&self.pr_config).conventions = conventions;
+    }
+    /// `pr.delivery_authors` and whether `pr_open` closes earlier delivery PRs.
+    fn set_delivery_identity(&self, authors: &[&str], close_superseded: bool) {
+        let mut config = locked(&self.pr_config);
+        config.delivery_authors = authors.iter().map(|author| (*author).to_string()).collect();
+        config.close_superseded = close_superseded;
+    }
+    fn put_artifact(&self, task_id: &str, path: &str, content: &str) {
+        locked(&self.artifacts).insert((task_id.into(), path.into()), content.into());
+    }
+    fn put_artifact_bytes(&self, task_id: &str, path: &str, content: &[u8]) {
+        locked(&self.artifacts).insert((task_id.into(), path.into()), content.to_vec());
+    }
+    fn set_os(&self, os: EvidenceHostOs) {
+        *locked(&self.os) = Some(os);
+    }
+    fn resolve_validation_env(&self, environment: ValidationEnvironment) {
+        *locked(&self.validation_env) = Some(environment);
+    }
+    fn require_commands(&self, commands: &[&str]) {
+        *locked(&self.required_commands) = commands.iter().map(ToString::to_string).collect();
+    }
+    fn baseline_commands(&self, commands: &[&str]) {
+        *locked(&self.baseline_commands) = commands.iter().map(ToString::to_string).collect();
+    }
+    fn script_step_recovery_decision(&self, decision: orbit_engine::StepRecoveryDecisionRead) {
+        *locked(&self.step_recovery_decision) = Some(decision);
+    }
+    /// Require `true` and name `gate` as the deferred baseline gate.
+    fn gate_commands(&self, gate: &Gate) {
+        self.require_commands(&["true"]);
+        self.baseline_commands(&[&gate.command()]);
+    }
+    fn script(&self, action: &str, output: Value) {
+        locked(&self.scripted).insert(action.to_string(), output);
+    }
+    fn script_all(&self, entries: &[(&str, Value)]) {
+        for (action, output) in entries {
+            self.script(action, output.clone());
+        }
+    }
+    fn fail(&self, action: &str, message: &str) {
+        locked(&self.failing).insert(action.to_string(), message.to_string());
+    }
+    fn failure_checkpoints(&self) -> Vec<(String, String, Value)> {
+        locked(&self.failure_checkpoints).clone()
+    }
+    fn scripted_input(&self, action: &str) -> Value {
+        locked(&self.scripted_inputs)
+            .get(action)
+            .cloned()
+            .unwrap_or_else(|| panic!("`{action}` ran"))
+    }
+    fn has_artifact(&self, task_id: &str, path: &str) -> bool {
+        locked(&self.artifacts).contains_key(&(task_id.to_string(), path.to_string()))
+    }
+    fn validation_log(&self, task_id: &str, path: &str) -> Value {
+        let artifacts = locked(&self.artifacts);
+        let content = artifacts
+            .get(&(task_id.to_string(), path.to_string()))
+            .unwrap_or_else(|| panic!("{task_id} has no artifact {path}"));
+        serde_json::from_slice(content).unwrap()
+    }
+    fn publish_pr(&self, id: &str) {
+        locked(&self.tasks)
+            .get_mut(id)
+            .unwrap()
+            .external_refs
+            .push(ExternalRef {
+                system: GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
+                id: PR_NUMBER.to_string(),
+                url: None,
+            });
+    }
+    fn releases(&self) -> Vec<ReviewReleaseRequest> {
+        locked(&self.releases).clone()
+    }
+    fn set_completion_hold_rules(&self, rules: Vec<orbit_types::workflow::CompletionHoldRule>) {
+        *locked(&self.completion_hold_rules) = rules;
+    }
+    fn set_context_files(&self, id: &str, selectors: &[&str]) {
+        locked(&self.tasks).get_mut(id).unwrap().context_files =
+            selectors.iter().map(ToString::to_string).collect();
+    }
+    fn set_status(&self, id: &str, status: TaskStatus) {
+        locked(&self.tasks).get_mut(id).unwrap().status = status;
+    }
+    fn task(&self, id: &str) -> Task {
+        locked(&self.tasks)[id].clone()
+    }
+    fn status(&self, id: &str) -> TaskStatus {
+        locked(&self.tasks)[id].status
+    }
+    fn comments(&self, id: &str) -> Vec<TaskComment> {
+        locked(&self.comments).get(id).cloned().unwrap_or_default()
+    }
+    fn history(&self, id: &str) -> Vec<TaskHistoryEntry> {
+        locked(&self.history).get(id).cloned().unwrap_or_default()
+    }
+    /// Rewrite every `pr_section_gap` entry as a build before the typed
+    /// decision recorded it: the same note, no decision.
+    fn as_legacy_section_gap_history(&self) {
+        for entries in locked(&self.history).values_mut() {
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
+            {
+                entry.decision = None;
+            }
+        }
+    }
+    /// The typed section-gap decisions recorded for a task, oldest first.
+    fn section_gap_decisions(&self, id: &str) -> Vec<orbit_types::workflow::PrSectionGap> {
+        self.history(id)
+            .into_iter()
+            .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
+            .filter_map(|entry| match entry.decision {
+                Some(orbit_types::task::TaskDecision::PrSectionGap(gap)) => Some(gap),
+                _ => None,
+            })
+            .collect()
+    }
+    fn completion_notes(&self) -> Vec<String> {
+        locked(&self.completion_notes).clone()
+    }
+    fn landings(&self) -> Vec<ReviewLandingRequest> {
+        locked(&self.landings).clone()
+    }
+    fn handoffs(&self) -> Vec<TaskHandoff> {
+        locked(&self.handoffs).clone()
+    }
+    fn probes(&self) -> Vec<(String, Option<String>, PathBuf)> {
+        locked(&self.probes).clone()
+    }
+    fn run_log(&self, name: &str) -> Value {
+        self.validation_log(TASK_ID, &format!("validation/{RUN_ID}/{name}"))
+    }
+    fn claim_log(&self, path: &str) -> Value {
+        serde_json::from_slice(&locked(&self.claim_log_contents)[path]).unwrap()
+    }
+    fn widenings(&self) -> Vec<Widening> {
+        locked(&self.widenings).clone()
+    }
+    fn artifact(&self, task_id: &str, path: &str, content: &[u8]) -> TaskArtifact {
+        TaskArtifact {
+            path: path.into(),
+            content: content.to_vec(),
+            media_type: "application/json".into(),
+            created_by: locked(&self.artifact_creators)
+                .get(&(task_id.into(), path.into()))
+                .cloned(),
+        }
+    }
+    fn record_run_state(&self, run_id: &str, state: orbit_types::workflow::JobRunState) {
+        let run: JobRun = serde_json::from_value(json!({
+            "run_id": run_id,
+            "job_id": "task_pr_pipeline",
+            "attempt": 1,
+            "state": state,
+            "scheduled_at": Utc::now(),
+            "created_at": Utc::now(),
+        }))
+        .unwrap();
+        locked(&self.runs).insert(run_id.to_string(), run);
+    }
+    fn seed_reserved(&self, event: &str, note: &impl serde::Serialize, file: &str) {
+        auto_fix::seed_auto_fix_history(self, event, note);
+        fs::write(self.repo.parent().unwrap().join(file), "reserved").unwrap();
+    }
+    fn recovery_certificates(&self) -> Vec<(String, String, Value)> {
+        locked(&self.recovery_certificates).clone()
+    }
+}
+impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        locked(&self.pr_config).clone()
+    }
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        locked(&self.completion_hold_rules).clone()
+    }
+    fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
+        Ok(locked(&self.runs).get(run_id).cloned())
+    }
+    fn admit_pr_auto_fix(&self, request: &PrAutoFixRequest) -> Res<PrAutoFixAdmission> {
+        let history = self.history(TASK_ID);
+        let attempts = pr_auto_fix_attempts(&history, &request.pr_number);
+        let source_repairs = orbit_types::workflow::source_repair_reservations(&history)
+            .unwrap()
+            .iter()
+            .filter(|record| record.binding.pull_request == request.pr_number)
+            .count() as u32;
+        let ended = |attempt: &PrAutoFixAttempt| {
+            matches!(
+                RuntimeHost::get_job_run(self, &attempt.run_id),
+                Ok(Some(run)) if run.state.is_terminal()
+            )
+        };
+        let decision = decide_pr_auto_fix_settled(
+            &attempts,
+            &PrAutoFixClaim {
+                pr_number: &request.pr_number,
+                head_sha: &request.head_sha,
+                blocker: request.blocker,
+                run_id: &request.run_id,
+            },
+            PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs),
+            "fixture",
+            "fixture",
+            &ended,
+        );
+        if let PrAutoFixDecision::Admit(attempt) = &decision {
+            auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
+        }
+        Ok(PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        })
+    }
+    fn admit_pr_base_update(
+        &self,
+        _tasks: &[String],
+        request: &PrBaseUpdateReservation,
+    ) -> Res<PrBaseUpdateAdmission> {
+        let decision = decide_pr_base_update(&self.history(TASK_ID), request);
+        if matches!(decision, PrBaseUpdateAdmission::Reserved) {
+            self.seed_reserved(
+                PR_BASE_UPDATE_RESERVED_EVENT,
+                request,
+                "forge/base-reserved",
+            );
+        }
+        Ok(decision)
+    }
+    fn refresh_delivery_pull_request(
+        &self,
+        request: &orbit_types::workflow::DeliveryRefreshRequest,
+    ) -> Res<orbit_types::workflow::PullRequestRefreshOutcome> {
+        auto_fix::refresh_pull_request(self, request)
+    }
+    fn admit_ci_rerun(
+        &self,
+        _tasks: &[String],
+        _handoff: Option<&str>,
+        plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
+    ) -> Res<orbit_types::workflow::CiRerunAdmission> {
+        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
+            &self.history(TASK_ID),
+            plan,
+            locked(&self.pr_config).ci_infrastructure_retry,
+            now_ms,
+        );
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
+            self.seed_reserved(
+                orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
+                plan,
+                "forge/retry-reserved",
+            );
+            locked(&self.history)
+                .get_mut(TASK_ID)
+                .unwrap()
+                .last_mut()
+                .unwrap()
+                .at = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
+        }
+        let forge = self.repo.parent().unwrap().join("forge");
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
+            && forge.join("retry-change-policy").exists()
+        {
+            let path = forge.join("retry-config.json");
+            let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            config["wrong_app"] = json!(true);
+            fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+        }
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
+            && forge.join("retry-ambiguous-ledger").exists()
+        {
+            let mut other = plan.clone();
+            if fs::read_to_string(forge.join("retry-ambiguous-ledger")).unwrap() == "unsupported" {
+                other.schema_version = 2;
+            } else {
+                other.run_id += 1;
+            }
+            auto_fix::seed_auto_fix_history(
+                self,
+                orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
+                &other,
+            );
+        }
+        Ok(decision)
+    }
+    fn admit_pr_infrastructure(
+        &self,
+        execution: &str,
+        _task_ids: &[String],
+        evidence: &PrInfrastructureEvidence,
+    ) -> Res<PrInfrastructureAdmission> {
+        let decision = decide_pr_infrastructure(&self.history(TASK_ID), execution, evidence);
+        if let PrInfrastructureAdmission::Reserved(reservation) = &decision {
+            self.seed_reserved(
+                PR_INFRASTRUCTURE_RESERVED_EVENT,
+                reservation,
+                "forge/infra-reserved",
+            );
+        }
+        Ok(decision)
+    }
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        let mut attempts = locked(&self.recovery_attempts);
+        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
+        Ok(attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .count() as u64)
+    }
+    /// Like the runtime's recovery authority, certify only the newest reservation of the step, for exactly the HEAD and base it reserved, then copy the evidence into the run store `git_rebase` reads.
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        let attempts = locked(&self.recovery_attempts);
+        let reserved = attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .collect::<Vec<_>>();
+        let Some((_, _, scope)) = reserved.last() else {
+            return Err(DispatchError::JobExecution("no reserved attempt".into()));
+        };
+        if output["recovery_attempt"] != json!(reserved.len())
+            || output["head_sha_before"] != json!(scope.head_sha_before)
+            || output["target_base_sha"] != json!(scope.target_base_sha)
+        {
+            return Err(DispatchError::JobExecution(
+                "evidence does not describe the newest reserved attempt".into(),
+            ));
+        }
+        locked(&self.recovery_certificates).push((
+            run_id.to_string(),
+            step_id.to_string(),
+            output.clone(),
+        ));
+        locked(&self.run_states)
+            .entry(run_id.to_string())
+            .or_insert_with(|| {
+                PipelineState::new(
+                    run_id.to_string(),
+                    "task_pr_pipeline".to_string(),
+                    json!({}),
+                )
+            })
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
+        Ok(())
+    }
+    fn verify_rebase_recovery(&self, run_id: &str, step_id: &str, checkpoint: &Value) -> Res<bool> {
+        Ok(self
+            .recovery_certificates()
+            .iter()
+            .rev()
+            .find(|(run, step, _)| run == run_id && step == step_id)
+            .is_some_and(|(_, _, certified)| certified == checkpoint))
+    }
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Res<Vec<RebaseRecoveryAttemptScope>> {
+        Ok(locked(&self.recovery_attempts)
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .map(|(_, _, scope)| scope.clone())
+            .collect())
+    }
+    fn read_run_state(&self, run_id: &str) -> Res<Option<PipelineState>> {
+        Ok(locked(&self.run_states).get(run_id).cloned())
+    }
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        _run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Res<Vec<String>> {
+        locked(&self.widenings).push((
+            task_id.to_string(),
+            step,
+            activity.to_string(),
+            paths.to_vec(),
+        ));
+        let selectors = paths
+            .iter()
+            .map(|path| format!("file:{path}"))
+            .collect::<Vec<_>>();
+        if let Some(task) = locked(&self.tasks).get_mut(task_id) {
+            task.context_files.extend(selectors.iter().cloned());
+        }
+        Ok(selectors)
+    }
+    fn get_task_artifact(&self, task_id: &str, path: &str) -> Res<Option<TaskArtifact>> {
+        let artifact = locked(&self.artifacts)
+            .get(&(task_id.into(), path.into()))
+            .map(|c| self.artifact(task_id, path, c));
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(task_id)?;
+        }
+        Ok(artifact)
+    }
+    fn get_task_artifacts(&self, task_id: &str) -> Res<Vec<TaskArtifact>> {
+        Ok(locked(&self.artifacts)
+            .iter()
+            .filter(|((id, _), _)| id == task_id)
+            .map(|((_, path), c)| self.artifact(task_id, path, c))
+            .collect())
+    }
+    fn get_task(&self, task_id: &str) -> Res<Task> {
+        locked(&self.tasks)
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
+    }
+    fn list_tasks_filtered(
+        &self,
+        _status: Option<TaskStatus>,
+        _priority: Option<TaskPriority>,
+        _parent_id: Option<&str>,
+        job_run_id: Option<&str>,
+        _external_ref: Option<&ExternalRef>,
+        _has_external_ref_system: Option<&str>,
+    ) -> Res<Vec<Task>> {
+        Ok(locked(&self.tasks)
+            .values()
+            .filter(|task| job_run_id.is_none_or(|run| task.job_run_id.as_deref() == Some(run)))
+            .cloned()
+            .collect())
+    }
+    fn get_task_comments(&self, task_id: &str) -> Res<Vec<TaskComment>> {
+        Ok(self.comments(task_id))
+    }
+    fn get_task_history(&self, task_id: &str) -> Res<Vec<TaskHistoryEntry>> {
+        Ok(self.history(task_id))
+    }
+    /// The guarded transition: like the task store, refuse a write whose expected status is stale.
+    fn update_task_from_activity(&self, task_id: &str, update: TaskActivityUpdate) -> Res<Task> {
+        let mut tasks = locked(&self.tasks);
+        let task = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        if task.status != update.expected_status {
+            return Err(OrbitError::Execution(format!(
+                "task {task_id} is {} but the write expected {}",
+                task.status, update.expected_status
+            )));
+        }
+        task.status = update.status;
+        if update.status == TaskStatus::Done {
+            locked(&self.completion_notes).push(update.note.unwrap_or_default());
+        }
+        Ok(task.clone())
+    }
+    fn apply_task_automation_update(&self, task_id: &str, update: TaskAutomationUpdate) -> Res<()> {
+        let refused = update
+            .append_history
+            .iter()
+            .any(|entry| locked(&self.fail_history_events).contains(&entry.event));
+        if refused {
+            return Err(OrbitError::Execution(format!(
+                "history write for task {task_id} refused by the test host"
+            )));
+        }
+        let mut tasks = locked(&self.tasks);
+        let task = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        if let Some(status) = update.status {
+            task.status = status;
+        }
+        for external_ref in update.external_refs {
+            push_external_ref_if_missing(&mut task.external_refs, external_ref);
+        }
+        locked(&self.status_events).push((
+            task_id.to_string(),
+            update.status_event,
+            update.status_note,
+            update.status_decision,
+        ));
+        locked(&self.comments)
+            .entry(task_id.to_string())
+            .or_default()
+            .extend(update.append_comments);
+        locked(&self.history)
+            .entry(task_id.to_string())
+            .or_default()
+            .extend(update.append_history);
+        Ok(())
+    }
+    fn record_review_landing(&self, request: &ReviewLandingRequest) -> Res<()> {
+        locked(&self.landings).push(request.clone());
+        Ok(())
+    }
+    fn release_review_attempt(&self, request: &ReviewReleaseRequest) -> Res<()> {
+        locked(&self.releases).push(request.clone());
+        Ok(())
+    }
+    fn admit_final_recovery(
+        &self,
+        _: &str,
+        _: &FinalRecoveryAdmissionRequest,
+    ) -> Res<FinalRecoveryAdmission> {
+        Ok(
+            if locked(&self.scripted).contains_key("test_final_decision") {
+                FinalRecoveryAdmission::Admitted
+            } else {
+                FinalRecoveryAdmission::Skipped {
+                    reason: "fixture has no recovery".into(),
+                }
+            },
+        )
+    }
+    fn apply_final_recovery(
+        &self,
+        _: &str,
+        application: &FinalRecoveryApplication,
+    ) -> Res<FinalRecoveryApplied> {
+        locked(&self.scripted_inputs).insert(
+            "applied_final_recovery".into(),
+            serde_json::to_value(&application.decision).unwrap(),
+        );
+        if matches!(
+            application.decision,
+            orbit_types::workflow::FinalRecoveryDecision::Requeue { .. }
+        ) {
+            self.set_status(&application.task_id, TaskStatus::Backlog);
+            return Ok(FinalRecoveryApplied::Settled {
+                outcome: "requeued".into(),
+            });
+        }
+        Ok(FinalRecoveryApplied::Escalated {
+            outcome: "fixture".into(),
+        })
+    }
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Res<Option<String>> {
+        Ok(None)
+    }
+    fn repo_root(&self) -> Res<String> {
+        Ok(self.repo.to_string_lossy().into_owned())
+    }
+    fn required_validation_commands(&self) -> Vec<String> {
+        locked(&self.required_commands).clone()
+    }
+    fn review_baseline_commands(&self) -> Vec<String> {
+        locked(&self.baseline_commands).clone()
+    }
+    fn host_os(&self) -> Option<EvidenceHostOs> {
+        *locked(&self.os)
+    }
+    /// An implementer lane that refuses the probed sandbox, unless a test scripted another answer [ORB-15516].
+    fn run_deferral_probe(
+        &self,
+        probe: &DeferralProbe,
+        provider: Option<&str>,
+        _fs_profile: Option<&str>,
+        cwd: &Path,
+    ) -> NamespaceProbe {
+        locked(&self.probes).push((
+            probe.command.to_string(),
+            provider.map(str::to_string),
+            cwd.to_path_buf(),
+        ));
+        if let Some(answer) = locked(&self.deferral_answers).get(probe.command) {
+            return answer.clone();
+        }
+        let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
+            (71, "sandbox-exec: sandbox_apply: Operation not permitted")
+        } else if probe.command == PS_EXEC_PROBE {
+            (
+                71,
+                "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
+            )
+        } else {
+            (1, "bwrap: No permissions to create new namespace")
+        };
+        NamespaceProbe {
+            command: probe.command.to_string(),
+            exit_code,
+            output: output.to_string(),
+        }
+    }
+    /// A job graph's scripted steps; every other action is the engine's own.
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        if action == "test_ci_repair" {
+            return auto_fix::perform_ci_repair(self, input);
+        }
+        if let Some(message) = locked(&self.failing).get(action).cloned() {
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message,
+            });
+        }
+        if let Some(output) = locked(&self.scripted).get(action).cloned() {
+            locked(&self.scripted_inputs).insert(action.to_string(), input.clone());
+            return Ok(output);
+        }
+        execute_deterministic_action(self, action, config, input, false, &HashMap::new(), None)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            })
+    }
+    /// The engine records a failure hook's output only when the hook succeeds.
+    fn checkpoint_failure_activity(
+        &self,
+        _run_id: &str,
+        activity_name: &str,
+        failed_step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        locked(&self.failure_checkpoints).push((
+            activity_name.to_string(),
+            failed_step_id.to_string(),
+            output.clone(),
+        ));
+        Ok(())
+    }
+    fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
+        if operation == "ci.commit_jobs"
+            && let Some(answer) = locked(&self.scripted).get(operation).cloned()
+        {
+            let commit = input.get("commit").and_then(Value::as_str).unwrap_or("");
+            // A head-only script does not describe the base tip. An inherited red base is planted through the substitute `gh`.
+            if commit == git(&self.repo, &["rev-parse", BASE]) {
+                return Ok(json!({"commit": commit, "jobs": []}));
+            }
+            return Ok(answer);
+        }
+        if let Some(script) = locked(&self.scripted)
+            .get(&format!("refuse:{operation}"))
+            .cloned()
+        {
+            locked(&self.scripted_inputs).insert("ci-planner-refusal-seen".into(), json!(true));
+            return Err(orbit_common::OrbitError::PrivateVcs(Box::new(
+                orbit_common::PrivateVcsFailure {
+                    operation: operation.into(),
+                    class: if script["transient"] == true {
+                        orbit_common::PrivateVcsFailureClass::TransientObservation
+                    } else {
+                        orbit_common::PrivateVcsFailureClass::Other
+                    },
+                    message: script["reason"].as_str().unwrap().into(),
+                    read_throttle: None,
+                },
+            )));
+        }
+        if matches!(operation, "ci.job_log" | "ci.prerequisite_evidence")
+            && let Some(answer) = locked(&self.scripted).get(operation).cloned()
+        {
+            locked(&self.scripted_inputs).insert("ci-planner-log-seen".into(), json!(true));
+            return Ok(answer);
+        }
+        if locked(&self.scripted).contains_key("test_ci_repair")
+            && let Some(answer) = auto_fix::ci_answer(self, operation, &input)
+        {
+            return Ok(answer);
+        }
+        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
+    }
+    /// One owner-local claim on the fixture's candidate branch, requiring whatever this host requires.
+    fn claim_execution_context(&self) -> Res<ClaimExecutionContext> {
+        Ok(ClaimExecutionContext {
+            footprint: vec!["file:src/feature.txt".to_string()],
+            workspace_id: "ws_owner".to_string(),
+            task_id: TASK_ID.to_string(),
+            claim_id: "claim-landing".to_string(),
+            machine_id: "hm_follower".to_string(),
+            run_id: RUN_ID.to_string(),
+            ship_mode: locked(&self.ship_mode).clone(),
+            base_branch: BASE.to_string(),
+            landing_branch: BASE.to_string(),
+            required_commands: RuntimeHost::required_validation_commands(self),
+        })
+    }
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Res<()> {
+        locked(&self.claim_logs).push(path.to_string());
+        locked(&self.claim_log_contents).insert(path.to_string(), content);
+        if *locked(&self.fail_evidence_writes) && path.contains("/evidence/") {
+            return Err(OrbitError::Execution(
+                "attachment response unknown after write".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn record_flaky_validation(&self, task_id: &str, record: &FlakyValidation) -> Res<()> {
+        RuntimeHost::apply_task_automation_update(
+            self,
+            task_id,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: FLAKY_VALIDATION_EVENT.into(),
+                    note: Some(record.text()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::FlakyValidation(record.clone())),
+                    surface: None,
+                    caller: None,
+                }],
+                ..Default::default()
+            },
+        )
+    }
+    fn record_claim_handoff(&self, handoff: &TaskHandoff) -> Res<()> {
+        locked(&self.handoffs).push(handoff.clone());
+        Ok(())
+    }
+    fn validation_subprocess_environment(&self) -> ValidationEnvironment {
+        locked(&self.validation_env).clone().unwrap_or_else(|| {
+            ValidationEnvironment::launcher(RuntimeHost::agent_subprocess_environment(self, &[]))
+        })
+    }
+    /// Like the task store, accept evidence only from the run owning the task.
+    fn attach_task_validation_log(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Res<()> {
+        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "run {run_id} does not own {task_id}"
+            )));
+        }
+        locked(&self.artifacts).insert((task_id.to_string(), path.to_string()), content);
+        if *locked(&self.fail_evidence_writes) && path.contains("/evidence/") {
+            return Err(OrbitError::Execution(
+                "attachment response unknown after write".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn allocate_step_recovery_decision(
+        &self,
+        request: &orbit_engine::StepRecoveryDecisionRequest,
+    ) -> Res<Option<orbit_engine::StepRecoveryDecisionSlot>> {
+        if locked(&self.step_recovery_decision).is_none() {
+            return Ok(None);
+        }
+        let root = PathBuf::from(&request.workspace_path);
+        Ok(Some(orbit_engine::StepRecoveryDecisionSlot {
+            run_id: request.run_id.clone(),
+            failed_step_id: request.failed_step_id.clone(),
+            attempt: request.attempt,
+            nonce: "fixture-nonce".to_string(),
+            path: root.join(".orbit/tmp/step-recovery-decision.json"),
+            workspace_root: root,
+        }))
+    }
+    fn read_step_recovery_decision(
+        &self,
+        _slot: &orbit_engine::StepRecoveryDecisionSlot,
+    ) -> Res<orbit_engine::StepRecoveryDecisionRead> {
+        Ok(locked(&self.step_recovery_decision)
+            .clone()
+            .unwrap_or(orbit_engine::StepRecoveryDecisionRead::Absent))
+    }
+}
+
+type Scenario = fn(&Path);
+
 // Merge gating
 fn failure_handoff_ok(
     fx: &Fixture,
@@ -219,12 +2345,7 @@ fn assert_landed_exactly(fx: &Fixture, host: &DeliveryHost, head: &str, case: &s
     .unwrap_or_else(|violation| panic!("{case}: squash message {violation}"));
     assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
 }
-/// One table row per line: expands to an array of `(name, fields...)` tuples.
-macro_rules! rows_by_name {
-    ($($name:expr => ($($field:expr),+));+ $(;)?) => {
-        [$(($name, $($field),+)),+]
-    };
-}
+
 /// A `pr_failure_handoff` input for a failure in the candidate's worktree.
 fn failure_input(fx: &Fixture, step: &str, code: &str, message: &str) -> Value {
     json!({
@@ -1368,10 +3489,7 @@ fn a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check(sandbox:
     assert!(fx.forge_state("merged").is_none(), "the PR stays open");
     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
 }
-// Synchronous merge refused by a concurrent base landing [ORB-14205]
-const MERGE_CALL: &str = "api repos/{owner}/{repo}/pulls/42/merge";
-const BASE_MODIFIED: &str =
-    "gh: Base branch was modified. Review and try the merge again. (HTTP 405)";
+
 /// Opens the fixture's candidate and hands it to review, returning how many `gh` calls publication made so completion's own calls can be isolated.
 fn open_for_completion(fx: &Fixture, host: &DeliveryHost) -> usize {
     action_ok(host, "pr_open", &fx.open_input(&fx.candidate, &fx.base_sha));
@@ -2568,8 +4686,7 @@ fn missing_required_validation_tool_reports_its_search_path(sandbox: &Path) {
         assert!(log["output"].as_str().unwrap().contains(&diagnostic));
     }
 }
-const MINIMAL_PATH: &str = "/usr/bin:/bin";
-const PROFILE_TOOL: &str = "orbit-profile-lint-13987";
+
 /// A drain launched from a minimal PATH still validates with the owner's login-shell toolchain, and the log records that the login shell decided PATH [ORB-13987].
 fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
@@ -3005,62 +5122,7 @@ fn a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs(sandbox:
     let held = run_implementation(&fx, &owner, None).unwrap_err();
     assert!(env_failure(&held), "{held}");
 }
-/// The handed-off gate, run by path so a test can change what it does between runs while its command, and so the kept record, stays the same.
-struct Gate {
-    script: PathBuf,
-    runs: PathBuf,
-}
-impl Gate {
-    fn new(sandbox: &Path) -> Self {
-        let gate = Self {
-            script: sandbox.join("affected-gate.sh"),
-            runs: sandbox.join("affected-gate.runs"),
-        };
-        gate.executes();
-        gate
-    }
-    /// The gate as the owner's configuration names it.
-    fn command(&self) -> String {
-        format!("sh '{}'", self.script.display())
-    }
-    fn set(&self, body: &str) {
-        fs::write(
-            &self.script,
-            format!("echo ran >> '{}'\n{body}\n", self.runs.display()),
-        )
-        .unwrap();
-    }
-    /// Runs its tests and reports them, as `make ci-test-affected` does.
-    fn executes(&self) {
-        self.set(&reported_tests(3));
-    }
-    fn defers_with(&self, notice: String) {
-        self.set(&format!("echo '{}' >&2\n{}", notice, reported_tests(3)));
-    }
-    fn defers(&self) {
-        self.defers_with(bwrap_notice());
-    }
-    fn skips_seatbelt(&self) {
-        self.defers_with(seatbelt_notice());
-    }
-    fn denies_ps(&self) {
-        self.defers_with(ps_notice());
-    }
-    /// Passes without reporting an executed test, as a lint gate does.
-    fn executes_nothing(&self) {
-        self.set("echo lint-ok");
-    }
-    /// Fails wherever it runs, the base included.
-    fn fails(&self) {
-        self.set(&format!(
-            "{}\necho 'gate is red' >&2\nexit 3",
-            reported_tests(3)
-        ));
-    }
-    fn runs(&self) -> usize {
-        fs::read_to_string(&self.runs).map_or(0, |runs| runs.lines().count())
-    }
-}
+
 fn reported_tests(tests: u64) -> String {
     format!(
         "printf '{{\"schema_version\":1,\"selection\":{{\"packages\":[\"fixture\"]}},\
@@ -3086,7 +5148,7 @@ fn ps_notice() -> String {
         "the sandbox denied running ps: Operation not permitted (os error 1)",
     )
 }
-const GATE_SUMMARY: &str = ".orbit/tmp/gate-summary.json";
+
 /// Write the summary of the gate run `record` describes, as `make ci-test-affected` writes it, and return the handoff that names it [ORB-15516].
 fn handoff_for(fx: &Fixture, record: &Value) -> Value {
     let mut summary = record.clone();
@@ -3387,8 +5449,7 @@ fn implementation_handoff_contracts(sandbox: &Path) {
         });
     }
 }
-// A red base and network flakes [ORB-14258]
-const RED_LINT: &str = "make ci-lint";
+
 /// Normal child output cannot impersonate a supervisor stop [ORB-15507]. The synchronized base prints the same note but passes the command.
 fn printed_supervisor_notes_remain_candidate_failures_on_both_streams(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
@@ -3593,33 +5654,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr(sandbox: &Path
         "the base moved to a commit where the command passes"
     );
 }
-const RED_TESTS: &str = "make ci-test";
-/// A known-red case: its name, the base's tests, the candidate's tests (`None` fails exactly as the base), and the tests it proceeds with as known red (`None` requires candidate repair or a base hold).
-type KnownRedCase<'a> = (
-    &'a str,
-    &'a [&'a str],
-    Option<&'a [&'a str]>,
-    Option<&'a [&'a str]>,
-);
-// Reuse the existing runner and suite identities for the observed six-vs-one shape and mixed failures. Both delivery routes must make the same decision.
-const BOTH_RED: &[&str] = &["suite::broken", "suite::flaky"];
-const SIX_RED: &[&str] = &[
-    "orbit-core suite::broken",
-    "orbit-core suite::flaky",
-    "orbit-core suite::added",
-    "orbit-engine suite::broken",
-    "orbit-engine suite::flaky",
-    "orbit-engine suite::added",
-];
-const KNOWN_RED_CASES: &[KnownRedCase<'_>] = &rows_by_name! {
-    "equal" => (BOTH_RED, None, Some(BOTH_RED));
-    "subset" => (BOTH_RED, Some(&["suite::flaky"]), Some(&["suite::flaky"]));
-    "shared-plus-new" => (BOTH_RED, Some(&["suite::broken", "suite::flaky", "suite::added"]), None);
-    "disjoint-six-vs-one" => (&["suite::broken"], Some(SIX_RED), None);
-    "candidate-unknown" => (&["suite::broken"], Some(&[]), None);
-    "base-unknown" => (&[], Some(&["suite::added"]), None);
-    "both-unknown" => (&[], None, None)
-};
+
 fn named_tests(tests: &[&str]) -> Vec<String> {
     tests
         .iter()
@@ -4370,9 +6405,7 @@ fn a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes(sandbox: &P
     assert_eq!(host.landings()[0].reviewed_head_sha, rebased_head);
     assert_eq!(host.status(TASK_ID), TaskStatus::Done);
 }
-// A base that advances after completion's conflict recovery [ORB-14393]
-const COMPLETE_STEP: &str = "complete_pr";
-const FEATURE: &str = "src/feature.txt";
+
 /// ORB-14344's shape: completion's rebase conflicts on base B, recovery certifies the candidate on B, and the base advances to B' before the retry, which re-pins to B'.
 fn a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
@@ -4781,7 +6814,7 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle(sandbo
         "the bundle's failed reviewer step still closed its attempt"
     );
 }
-const WORKTREE_FAILURE: &str = "could not resolve host: github.com while fetching the base";
+
 /// The shipped `task_pr_pipeline` failure hook, run after its `worktree` step fails: the engine dispatches the hook with the run's checkpoints so far, which hold no `worktree` entry.
 fn run_shipped_worktree_failure(host: &DeliveryHost) -> Result<(), String> {
     let shipped = shipped_job("task_pr_pipeline.yaml");
@@ -5423,348 +7456,7 @@ fn remote_base_transport_retries_preserve_access_refusals(sandbox: &Path) {
         );
     }
 }
-/// A checkout on [`BRANCH`] one commit ahead of [`BASE`], both pushed to a bare remote that the substitute forge reads and merges into.
-struct Fixture {
-    _root: TempDir,
-    repo: PathBuf,
-    forge: PathBuf,
-    base_sha: String,
-    candidate: String,
-}
-impl Fixture {
-    /// A fresh repository and forge, made the active forge for `gh`.
-    fn new(sandbox: &Path) -> Self {
-        thread_local! {
-            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
-        }
-        TEMPLATE.with(|slot| {
-            let mut template = slot.borrow_mut();
-            let seed = template.get_or_insert_with(|| Self::fresh(sandbox));
-            seed.copy_to(sandbox)
-        })
-    }
-    fn git(&self, args: &[&str]) -> String {
-        git(&self.repo, args)
-    }
-    /// Run git against the forge's bare remote.
-    fn remote_git(&self, args: &[&str]) -> String {
-        let git_dir = path_str(&self.forge.join("remote.git")).to_string();
-        let mut full = vec!["--git-dir", git_dir.as_str()];
-        full.extend_from_slice(args);
-        self.git(&full)
-    }
-    fn remote_parse(&self, rev: &str) -> String {
-        self.remote_git(&["rev-parse", rev])
-    }
-    fn write_forge(&self, name: &str, contents: impl AsRef<[u8]>) {
-        fs::write(self.forge.join(name), contents).unwrap();
-    }
-    fn write_repo(&self, rel: &str, contents: impl AsRef<[u8]>) {
-        fs::write(self.repo.join(rel), contents).unwrap();
-    }
-    fn script_lines(&self, name: &str, lines: &[&str]) {
-        fs::write(self.forge.join(name), format!("{}\n", lines.join("\n"))).unwrap();
-    }
-    /// Copy only pristine preparation, before any action or scripted response mutates it.
-    fn copy_to(&self, sandbox: &Path) -> Self {
-        let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-        git_fixture::copy_template(self._root.path(), root.path());
-        let repo = root.path().join("repo").canonicalize().unwrap();
-        let forge = root.path().join("forge");
-        fs::write(sandbox.join("active-forge"), path_str(&forge)).unwrap();
-        Self {
-            _root: root,
-            repo,
-            forge,
-            base_sha: self.base_sha.clone(),
-            candidate: self.candidate.clone(),
-        }
-    }
-    fn fresh(sandbox: &Path) -> Self {
-        let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-        let forge = root.path().join("forge");
-        let remote = forge.join("remote.git");
-        let repo = root.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        git(root.path(), &["init", "--bare", path_str(&remote)]);
-        git_fixture::init(&repo);
-        let g = |args: &[&str]| git(&repo, args);
-        g(&["remote", "add", "origin", path_str(&remote)]);
-        g(&["checkout", "-b", BASE]);
-        g(&["config", "user.name", "Orbit Test"]);
-        g(&["config", "user.email", "orbit-test@example.invalid"]);
-        fs::write(repo.join("README.md"), "base\n").unwrap();
-        g(&["add", "README.md"]);
-        g(&["commit", "-m", "base"]);
-        g(&["push", "-u", "origin", BASE]);
-        g(&["checkout", "-b", BRANCH]);
-        let repo = repo.canonicalize().unwrap();
-        let fixture = Self {
-            _root: root,
-            base_sha: g(&["rev-parse", BASE]),
-            candidate: String::new(),
-            repo,
-            forge,
-        };
-        let candidate = fixture.commit("src/feature.txt", "reviewed change\n");
-        fs::write(sandbox.join("active-forge"), path_str(&fixture.forge)).unwrap();
-        fixture.script_checks(&["success"]);
-        Self {
-            candidate,
-            ..fixture
-        }
-    }
-    fn rebase_candidate(&mut self) {
-        self.git(&["rebase", BASE]);
-        self.git(&["push", "--force", "origin", BRANCH]);
-        self.base_sha = self.git(&["rev-parse", BASE]);
-        self.candidate = self.head();
-    }
-    /// [`Fixture::new`] whose base carries a `Makefile` with a red `ci-lint` target, and whose candidate is rebased onto it.
-    fn with_red_lint(sandbox: &Path, runs: &Path) -> Self {
-        let mut fixture = Self::new(sandbox);
-        fixture.commit_on_base(
-            "Makefile",
-            &format!(
-                "ci-lint:\n\t@echo ran >> '{}'\n\t@printf 'error: lint is red\\n  --> README.md:1:1\\n' >&2; exit 2\n",
-                runs.display()
-            ),
-        );
-        fixture.rebase_candidate();
-        fixture
-    }
-    /// [`Fixture::new`] whose base fails [`RED_TESTS`] with nextest's `FAIL` line for each of `base_tests` (and libtest's echo of the first), with the candidate rebased onto it.
-    fn with_red_tests(
-        sandbox: &Path,
-        base_tests: &[&str],
-        candidate_tests: Option<&[&str]>,
-    ) -> Self {
-        let mut fixture = Self::new(sandbox);
-        let mut base_output = base_tests
-            .first()
-            .map(|test| format!("test {test} ... FAILED\n"))
-            .unwrap_or_default();
-        base_output.push_str(&nextest_failures(base_tests));
-        fixture.commit_files_on_base(&[
-            ("failing.txt", &base_output),
-            ("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n"),
-        ]);
-        fixture.rebase_candidate();
-        if let Some(tests) = candidate_tests {
-            fixture.candidate = fixture.commit("failing.txt", &nextest_failures(tests));
-        }
-        fixture
-    }
-    /// Commit `file` on the base and push it, leaving the candidate checked out.
-    fn commit_on_base(&self, file: &str, contents: &str) {
-        self.commit_files_on_base(&[(file, contents)]);
-    }
-    /// Seed one final base tree when the fixture observes no intermediate write. Separate base advances still use `commit_on_base` at each observation.
-    fn commit_files_on_base(&self, files: &[(&str, &str)]) {
-        self.git(&["checkout", BASE]);
-        for (file, contents) in files {
-            let path = self.repo.join(file);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, contents).unwrap();
-        }
-        let mut add = vec!["add", "--"];
-        add.extend(files.iter().map(|(file, _)| *file));
-        self.git(&add);
-        let names = files
-            .iter()
-            .map(|(file, _)| *file)
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.git(&["commit", "-m", &format!("base writes {names}")]);
-        self.git(&["push", "origin", BASE]);
-        self.git(&["checkout", BRANCH]);
-    }
-    /// Check states the forge reports, one per status read; the last repeats.
-    fn script_checks(&self, states: &[&str]) {
-        self.script_lines("checks", states);
-    }
-    /// Answers to successive merge requests (see `merge-outcomes` in [`FAKE_GH`]); requests past the script merge normally.
-    fn script_merges(&self, outcomes: &[&str]) {
-        self.script_lines("merge-outcomes", outcomes);
-    }
-    /// Answers to successive creates; the final outcome repeats.
-    fn script_creates(&self, outcomes: &[&str]) {
-        self.script_lines("create-outcomes", outcomes);
-    }
-    /// Answers to successive PR views; the final outcome repeats.
-    fn script_pr_views(&self, outcomes: &[&str]) {
-        fs::write(
-            self.forge.join("pr-view-outcomes"),
-            format!("{}\n", outcomes.join("\n")),
-        )
-        .unwrap();
-        fs::write(self.forge.join("pr-view-reads"), "0\n").unwrap();
-    }
-    /// Fail the next `reads` status reads with `stderr`, each before it is counted.
-    fn script_status_failures(&self, reads: u32, stderr: &str) {
-        self.write_forge("status-faults", format!("{reads}\n"));
-        self.write_forge("status-fault-stderr", stderr);
-    }
-    fn script_pr_close_failure(&self, diagnostic: &str) {
-        fs::write(self.forge.join("pr-close-failure"), diagnostic).unwrap();
-    }
-    fn pr_view_reads(&self) -> usize {
-        self.forge_state("pr-view-reads")
-            .map(|value| value.parse().unwrap())
-            .unwrap_or(0)
-    }
-    /// Answers to successive required-checks reads; the last repeats
-    /// (`empty`, `truncated`, `fail`, `tls`, `success`, `pending`, `foreign_head` (a moved PR) or `stale_rollup` (an old rollup commit under the unchanged PR head); see [`FAKE_GH`]).
-    fn script_required_check_outcomes(&self, outcomes: &[&str]) {
-        self.script_lines("required-checks-outcomes", outcomes);
-        fs::write(self.forge.join("required-checks-reads"), "0\n").unwrap();
-    }
-    fn required_check_reads(&self) -> usize {
-        self.forge_state("required-checks-reads")
-            .map(|value| value.parse().unwrap())
-            .unwrap_or(0)
-    }
-    /// Script PR metadata independently of the real remote PR head ref.
-    fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
-        self.script_lines("heads", heads);
-        self.write_forge(
-            "heads-start",
-            self.forge_state("reads").unwrap_or_else(|| "0".into()),
-        );
-        match remote_head {
-            Some(head) => self.remote_git(&["update-ref", "refs/pull/42/head", head]),
-            None => self.remote_git(&["update-ref", "-d", "refs/pull/42/head"]),
-        };
-    }
-    /// Replace the opened head through the production lease-push boundary and hand its checkpoints to completion as the shipped pipeline does.
-    fn republished_completion_input(&self, host: &DeliveryHost) -> Value {
-        self.git(&["commit", "--amend", "-m", "republished candidate"]);
-        let pushed = action_ok(
-            host,
-            "git_push",
-            &json!({ "workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "branch": BRANCH, "rewrite_performed": true, "rewrite_head_before": self.candidate, "expected_remote_sha": self.candidate, }),
-        );
-        assert_eq!(pushed["decision"], "performed_force_with_lease");
-        assert_eq!(pushed["remote_sha_before"], self.candidate);
-        let mut input = self.complete_input();
-        input["published_head_sha"] = pushed["local_sha"].clone();
-        input["reviewed_head_sha"] = pushed["local_sha"].clone();
-        input["previous_published_head_sha"] = pushed["remote_sha_before"].clone();
-        input["max_wait_seconds"] = json!(60);
-        input
-    }
-    /// Commit `file` on the checkout and push it, returning the new head.
-    fn commit(&self, file: &str, contents: &str) -> String {
-        let path = self.repo.join(file);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-        self.git(&["add", file]);
-        self.git(&["commit", "-m", &format!("write {file}")]);
-        self.git(&["push", "-u", "origin", BRANCH]);
-        self.head()
-    }
-    /// Land unrelated work on the base, leaving the candidate behind it.
-    fn advance_base(&self) {
-        self.git(&["checkout", BASE]);
-        fs::write(self.repo.join("base.txt"), "advanced\n").unwrap();
-        self.git(&["add", "base.txt"]);
-        self.git(&["commit", "-m", "advance base"]);
-        self.git(&["push", "origin", BASE]);
-        self.git(&["checkout", BRANCH]);
-    }
-    /// Land unrelated work on the base, then rebase and republish the candidate onto it.
-    fn advance_base_and_rebase(&self) {
-        self.advance_base();
-        self.git(&["rebase", BASE]);
-        self.git(&["push", "--force", "origin", BRANCH]);
-    }
-    fn head(&self) -> String {
-        self.git(&["rev-parse", "HEAD"])
-    }
-    fn remote_parent(&self, commit: &str) -> String {
-        self.remote_parse(&format!("{commit}^"))
-    }
-    fn local_tip(&self, branch: &str) -> String {
-        self.git(&["rev-parse", branch])
-    }
-    /// [ORB-14905] The commit a held candidate's durable ref names on the remote, after checking the handoff says it carried it there.
-    fn durable_candidate(&self, handoff: &Value) -> String {
-        assert_eq!(handoff["carry"], "durable", "{handoff}");
-        let reference = handoff["durable_ref"].as_str().unwrap();
-        assert_eq!(
-            reference,
-            format!("refs/orbit/candidates/{TASK_ID}/{RUN_ID}")
-        );
-        self.remote_parse(reference)
-    }
-    fn remote_tip(&self, branch: &str) -> String {
-        self.remote_parse(&format!("refs/heads/{branch}"))
-    }
-    fn push_input(&self) -> Value {
-        json!({"workspace_path": self.repo, "branch": BRANCH})
-    }
-    fn bare_repo_at(&self, bare: &Path) {
-        self.git(&["init", "--bare", path_str(bare)]);
-    }
-    fn bare_repo(&self, name: &str) -> PathBuf {
-        let bare = self.forge.join(name);
-        self.bare_repo_at(&bare);
-        bare
-    }
-    /// The validation step as the owner pipeline hands it the synchronized candidate.
-    fn validate_input(&self) -> Value {
-        json!({"workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "base_sha": self.base_sha})
-    }
-    fn claim_input(&self) -> Value {
-        json!({"workspace_path": self.repo, "base_sync": "local", "base_sha": self.base_sha})
-    }
-    fn open_input(&self, reviewed_head: &str, reviewed_base: &str) -> Value {
-        json!({
-            "workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "head": BRANCH, "base": BASE,
-            "base_ref": BASE, "base_sha": self.base_sha, "base_sync": "local", "reviewed_head_sha": reviewed_head, "reviewed_base_sha": reviewed_base,
-        })
-    }
-    /// The completion step as a `--complete` pipeline hands it the run's published and reviewed candidate.
-    fn complete_input(&self) -> Value {
-        json!({
-            "workspace_path": self.repo, "job_run_id": RUN_ID, "completed_task_ids": [TASK_ID], "completion": "done", "pr_number": PR_NUMBER,
-            "head": BRANCH, "base": BASE, "base_sync": "local", "published_head_sha": self.candidate, "reviewed_head_sha": self.candidate,
-            "max_wait_seconds": 30, "poll_interval_seconds": 5,
-        })
-    }
-    /// The same completion for an ungated run: the published head is still pinned, but no before-PR review settled it.
-    fn complete_ungated_input(&self) -> Value {
-        let mut input = self.complete_input();
-        input.as_object_mut().unwrap().remove("reviewed_head_sha");
-        input
-    }
-    fn forge_state(&self, name: &str) -> Option<String> {
-        fs::read_to_string(self.forge.join(name))
-            .ok()
-            .map(|value| value.trim().to_string())
-    }
-    fn forge_lines(&self, name: &str) -> Vec<String> {
-        self.forge_state(name)
-            .map(|value| value.lines().map(ToOwned::to_owned).collect())
-            .unwrap_or_default()
-    }
-    fn forge_calls(&self) -> Vec<String> {
-        self.forge_lines("calls")
-    }
-    fn merge_requests(&self) -> Vec<String> {
-        self.forge_lines("merge-requests")
-    }
-    fn status_reads(&self) -> usize {
-        let count = |name| {
-            self.forge_state(name)
-                .map(|value| value.parse().unwrap())
-                .unwrap_or(0)
-        };
-        // `reads` counts open `pr view`s. `merged-reads` counts each merged
-        // `pr view` on its own, so a second reconciliation read is visible.
-        count("reads") + count("merged-reads")
-    }
-}
+
 fn action(host: &DeliveryHost, name: &str, input: &Value) -> Res<Value> {
     if matches!(name, "git_push" | "pr_complete" | "pr_failure_handoff") {
         git_fixture::assert_local_push_remote(&host.repo);
@@ -5818,1645 +7510,14 @@ fn task(status: TaskStatus) -> Task {
         not_before: None,
     }
 }
-/// The task store and review-landing record the delivery actions write through, kept in memory. The provider boundary is left to the engine.
-#[derive(Default)]
-struct DeliveryHost {
-    repo: PathBuf,
-    runs: Mutex<BTreeMap<String, JobRun>>,
-    tasks: Mutex<BTreeMap<String, Task>>,
-    comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
-    completion_notes: Mutex<Vec<String>>,
-    landings: Mutex<Vec<ReviewLandingRequest>>,
-    required_commands: Mutex<Vec<String>>,
-    baseline_commands: Mutex<Vec<String>>,
-    scripted: Mutex<BTreeMap<String, Value>>,
-    failing: Mutex<BTreeMap<String, String>>,
-    failure_checkpoints: Mutex<Vec<(String, String, Value)>>,
-    fail_evidence_writes: Mutex<bool>,
-    /// Task-history events whose automation writes this host refuses.
-    fail_history_events: Mutex<Vec<String>>,
-    artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
-    artifact_creators: Mutex<BTreeMap<(String, String), String>>,
-    releases: Mutex<Vec<ReviewReleaseRequest>>,
-    validation_env: Mutex<Option<ValidationEnvironment>>,
-    widenings: Mutex<Vec<Widening>>,
-    claim_logs: Mutex<Vec<String>>,
-    claim_log_contents: Mutex<BTreeMap<String, Vec<u8>>>,
-    handoffs: Mutex<Vec<TaskHandoff>>,
-    ship_mode: Mutex<String>,
-    status_events: Mutex<Vec<StatusEvent>>,
-    history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
-    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
-    recovery_certificates: Mutex<Vec<(String, String, Value)>>,
-    run_states: Mutex<BTreeMap<String, PipelineState>>,
-    scripted_inputs: Mutex<BTreeMap<String, Value>>,
-    deferral_answers: Mutex<BTreeMap<String, NamespaceProbe>>,
-    probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
-    /// The OS this host runs implementers on [ORB-15587].
-    os: Mutex<Option<EvidenceHostOs>>,
-    /// The workspace's PR settings and delivery conventions.
-    pr_config: Mutex<orbit_engine::PrConfig>,
-    completion_hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
-    step_recovery_decision: Mutex<Option<orbit_engine::StepRecoveryDecisionRead>>,
-}
-type Widening = (String, ContextWideningStep, String, Vec<String>);
-type StatusEvent = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<orbit_types::task::TaskDecision>,
-);
-impl DeliveryHost {
-    fn new(repo: &Path, status: TaskStatus) -> Self {
-        Self {
-            repo: repo.to_path_buf(),
-            tasks: Mutex::new(BTreeMap::from([(TASK_ID.to_string(), task(status))])),
-            ship_mode: Mutex::new("local".to_string()),
-            os: Mutex::new(EvidenceHostOs::current()),
-            ..Self::default()
-        }
-    }
-    fn ship_pr(&self) {
-        *locked(&self.ship_mode) = "pr".to_string();
-    }
-    fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
-        locked(&self.pr_config).conventions = conventions;
-    }
-    /// `pr.delivery_authors` and whether `pr_open` closes earlier delivery PRs.
-    fn set_delivery_identity(&self, authors: &[&str], close_superseded: bool) {
-        let mut config = locked(&self.pr_config);
-        config.delivery_authors = authors.iter().map(|author| (*author).to_string()).collect();
-        config.close_superseded = close_superseded;
-    }
-    fn put_artifact(&self, task_id: &str, path: &str, content: &str) {
-        locked(&self.artifacts).insert((task_id.into(), path.into()), content.into());
-    }
-    fn put_artifact_bytes(&self, task_id: &str, path: &str, content: &[u8]) {
-        locked(&self.artifacts).insert((task_id.into(), path.into()), content.to_vec());
-    }
-    fn set_os(&self, os: EvidenceHostOs) {
-        *locked(&self.os) = Some(os);
-    }
-    fn resolve_validation_env(&self, environment: ValidationEnvironment) {
-        *locked(&self.validation_env) = Some(environment);
-    }
-    fn require_commands(&self, commands: &[&str]) {
-        *locked(&self.required_commands) = commands.iter().map(ToString::to_string).collect();
-    }
-    fn baseline_commands(&self, commands: &[&str]) {
-        *locked(&self.baseline_commands) = commands.iter().map(ToString::to_string).collect();
-    }
-    fn script_step_recovery_decision(&self, decision: orbit_engine::StepRecoveryDecisionRead) {
-        *locked(&self.step_recovery_decision) = Some(decision);
-    }
-    /// Require `true` and name `gate` as the deferred baseline gate.
-    fn gate_commands(&self, gate: &Gate) {
-        self.require_commands(&["true"]);
-        self.baseline_commands(&[&gate.command()]);
-    }
-    fn script(&self, action: &str, output: Value) {
-        locked(&self.scripted).insert(action.to_string(), output);
-    }
-    fn script_all(&self, entries: &[(&str, Value)]) {
-        for (action, output) in entries {
-            self.script(action, output.clone());
-        }
-    }
-    fn fail(&self, action: &str, message: &str) {
-        locked(&self.failing).insert(action.to_string(), message.to_string());
-    }
-    fn failure_checkpoints(&self) -> Vec<(String, String, Value)> {
-        locked(&self.failure_checkpoints).clone()
-    }
-    fn scripted_input(&self, action: &str) -> Value {
-        locked(&self.scripted_inputs)
-            .get(action)
-            .cloned()
-            .unwrap_or_else(|| panic!("`{action}` ran"))
-    }
-    fn has_artifact(&self, task_id: &str, path: &str) -> bool {
-        locked(&self.artifacts).contains_key(&(task_id.to_string(), path.to_string()))
-    }
-    fn validation_log(&self, task_id: &str, path: &str) -> Value {
-        let artifacts = locked(&self.artifacts);
-        let content = artifacts
-            .get(&(task_id.to_string(), path.to_string()))
-            .unwrap_or_else(|| panic!("{task_id} has no artifact {path}"));
-        serde_json::from_slice(content).unwrap()
-    }
-    fn publish_pr(&self, id: &str) {
-        locked(&self.tasks)
-            .get_mut(id)
-            .unwrap()
-            .external_refs
-            .push(ExternalRef {
-                system: GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
-                id: PR_NUMBER.to_string(),
-                url: None,
-            });
-    }
-    fn releases(&self) -> Vec<ReviewReleaseRequest> {
-        locked(&self.releases).clone()
-    }
-    fn set_completion_hold_rules(&self, rules: Vec<orbit_types::workflow::CompletionHoldRule>) {
-        *locked(&self.completion_hold_rules) = rules;
-    }
-    fn set_context_files(&self, id: &str, selectors: &[&str]) {
-        locked(&self.tasks).get_mut(id).unwrap().context_files =
-            selectors.iter().map(ToString::to_string).collect();
-    }
-    fn set_status(&self, id: &str, status: TaskStatus) {
-        locked(&self.tasks).get_mut(id).unwrap().status = status;
-    }
-    fn task(&self, id: &str) -> Task {
-        locked(&self.tasks)[id].clone()
-    }
-    fn status(&self, id: &str) -> TaskStatus {
-        locked(&self.tasks)[id].status
-    }
-    fn comments(&self, id: &str) -> Vec<TaskComment> {
-        locked(&self.comments).get(id).cloned().unwrap_or_default()
-    }
-    fn history(&self, id: &str) -> Vec<TaskHistoryEntry> {
-        locked(&self.history).get(id).cloned().unwrap_or_default()
-    }
-    /// Rewrite every `pr_section_gap` entry as a build before the typed
-    /// decision recorded it: the same note, no decision.
-    fn as_legacy_section_gap_history(&self) {
-        for entries in locked(&self.history).values_mut() {
-            for entry in entries
-                .iter_mut()
-                .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
-            {
-                entry.decision = None;
-            }
-        }
-    }
-    /// The typed section-gap decisions recorded for a task, oldest first.
-    fn section_gap_decisions(&self, id: &str) -> Vec<orbit_types::workflow::PrSectionGap> {
-        self.history(id)
-            .into_iter()
-            .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
-            .filter_map(|entry| match entry.decision {
-                Some(orbit_types::task::TaskDecision::PrSectionGap(gap)) => Some(gap),
-                _ => None,
-            })
-            .collect()
-    }
-    fn completion_notes(&self) -> Vec<String> {
-        locked(&self.completion_notes).clone()
-    }
-    fn landings(&self) -> Vec<ReviewLandingRequest> {
-        locked(&self.landings).clone()
-    }
-    fn handoffs(&self) -> Vec<TaskHandoff> {
-        locked(&self.handoffs).clone()
-    }
-    fn probes(&self) -> Vec<(String, Option<String>, PathBuf)> {
-        locked(&self.probes).clone()
-    }
-    fn run_log(&self, name: &str) -> Value {
-        self.validation_log(TASK_ID, &format!("validation/{RUN_ID}/{name}"))
-    }
-    fn claim_log(&self, path: &str) -> Value {
-        serde_json::from_slice(&locked(&self.claim_log_contents)[path]).unwrap()
-    }
-    fn widenings(&self) -> Vec<Widening> {
-        locked(&self.widenings).clone()
-    }
-    fn artifact(&self, task_id: &str, path: &str, content: &[u8]) -> TaskArtifact {
-        TaskArtifact {
-            path: path.into(),
-            content: content.to_vec(),
-            media_type: "application/json".into(),
-            created_by: locked(&self.artifact_creators)
-                .get(&(task_id.into(), path.into()))
-                .cloned(),
-        }
-    }
-    fn record_run_state(&self, run_id: &str, state: orbit_types::workflow::JobRunState) {
-        let run: JobRun = serde_json::from_value(json!({
-            "run_id": run_id,
-            "job_id": "task_pr_pipeline",
-            "attempt": 1,
-            "state": state,
-            "scheduled_at": Utc::now(),
-            "created_at": Utc::now(),
-        }))
-        .unwrap();
-        locked(&self.runs).insert(run_id.to_string(), run);
-    }
-    fn seed_reserved(&self, event: &str, note: &impl serde::Serialize, file: &str) {
-        auto_fix::seed_auto_fix_history(self, event, note);
-        fs::write(self.repo.parent().unwrap().join(file), "reserved").unwrap();
-    }
-    fn recovery_certificates(&self) -> Vec<(String, String, Value)> {
-        locked(&self.recovery_certificates).clone()
-    }
-}
-impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        locked(&self.pr_config).clone()
-    }
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        locked(&self.completion_hold_rules).clone()
-    }
-    fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
-        Ok(locked(&self.runs).get(run_id).cloned())
-    }
-    fn admit_pr_auto_fix(&self, request: &PrAutoFixRequest) -> Res<PrAutoFixAdmission> {
-        let history = self.history(TASK_ID);
-        let attempts = pr_auto_fix_attempts(&history, &request.pr_number);
-        let source_repairs = orbit_types::workflow::source_repair_reservations(&history)
-            .unwrap()
-            .iter()
-            .filter(|record| record.binding.pull_request == request.pr_number)
-            .count() as u32;
-        let ended = |attempt: &PrAutoFixAttempt| {
-            matches!(
-                RuntimeHost::get_job_run(self, &attempt.run_id),
-                Ok(Some(run)) if run.state.is_terminal()
-            )
-        };
-        let decision = decide_pr_auto_fix_settled(
-            &attempts,
-            &PrAutoFixClaim {
-                pr_number: &request.pr_number,
-                head_sha: &request.head_sha,
-                blocker: request.blocker,
-                run_id: &request.run_id,
-            },
-            PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs),
-            "fixture",
-            "fixture",
-            &ended,
-        );
-        if let PrAutoFixDecision::Admit(attempt) = &decision {
-            auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
-        }
-        Ok(PrAutoFixAdmission::Decided {
-            decision,
-            source_repairs,
-        })
-    }
-    fn admit_pr_base_update(
-        &self,
-        _tasks: &[String],
-        request: &PrBaseUpdateReservation,
-    ) -> Res<PrBaseUpdateAdmission> {
-        let decision = decide_pr_base_update(&self.history(TASK_ID), request);
-        if matches!(decision, PrBaseUpdateAdmission::Reserved) {
-            self.seed_reserved(
-                PR_BASE_UPDATE_RESERVED_EVENT,
-                request,
-                "forge/base-reserved",
-            );
-        }
-        Ok(decision)
-    }
-    fn refresh_delivery_pull_request(
-        &self,
-        request: &orbit_types::workflow::DeliveryRefreshRequest,
-    ) -> Res<orbit_types::workflow::PullRequestRefreshOutcome> {
-        auto_fix::refresh_pull_request(self, request)
-    }
-    fn admit_ci_rerun(
-        &self,
-        _tasks: &[String],
-        _handoff: Option<&str>,
-        plan: &orbit_types::workflow::CiRerunPlan,
-        now_ms: u64,
-    ) -> Res<orbit_types::workflow::CiRerunAdmission> {
-        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
-            &self.history(TASK_ID),
-            plan,
-            locked(&self.pr_config).ci_infrastructure_retry,
-            now_ms,
-        );
-        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
-            self.seed_reserved(
-                orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
-                plan,
-                "forge/retry-reserved",
-            );
-            locked(&self.history)
-                .get_mut(TASK_ID)
-                .unwrap()
-                .last_mut()
-                .unwrap()
-                .at = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
-        }
-        let forge = self.repo.parent().unwrap().join("forge");
-        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
-            && forge.join("retry-change-policy").exists()
-        {
-            let path = forge.join("retry-config.json");
-            let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-            config["wrong_app"] = json!(true);
-            fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
-        }
-        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
-            && forge.join("retry-ambiguous-ledger").exists()
-        {
-            let mut other = plan.clone();
-            if fs::read_to_string(forge.join("retry-ambiguous-ledger")).unwrap() == "unsupported" {
-                other.schema_version = 2;
-            } else {
-                other.run_id += 1;
-            }
-            auto_fix::seed_auto_fix_history(
-                self,
-                orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
-                &other,
-            );
-        }
-        Ok(decision)
-    }
-    fn admit_pr_infrastructure(
-        &self,
-        execution: &str,
-        _task_ids: &[String],
-        evidence: &PrInfrastructureEvidence,
-    ) -> Res<PrInfrastructureAdmission> {
-        let decision = decide_pr_infrastructure(&self.history(TASK_ID), execution, evidence);
-        if let PrInfrastructureAdmission::Reserved(reservation) = &decision {
-            self.seed_reserved(
-                PR_INFRASTRUCTURE_RESERVED_EVENT,
-                reservation,
-                "forge/infra-reserved",
-            );
-        }
-        Ok(decision)
-    }
-    fn begin_rebase_recovery_attempt(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        scope: &RebaseRecoveryAttemptScope,
-    ) -> Result<u64, DispatchError> {
-        let mut attempts = locked(&self.recovery_attempts);
-        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
-        Ok(attempts
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .count() as u64)
-    }
-    /// Like the runtime's recovery authority, certify only the newest reservation of the step, for exactly the HEAD and base it reserved, then copy the evidence into the run store `git_rebase` reads.
-    fn checkpoint_rebase_recovery(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        let attempts = locked(&self.recovery_attempts);
-        let reserved = attempts
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .collect::<Vec<_>>();
-        let Some((_, _, scope)) = reserved.last() else {
-            return Err(DispatchError::JobExecution("no reserved attempt".into()));
-        };
-        if output["recovery_attempt"] != json!(reserved.len())
-            || output["head_sha_before"] != json!(scope.head_sha_before)
-            || output["target_base_sha"] != json!(scope.target_base_sha)
-        {
-            return Err(DispatchError::JobExecution(
-                "evidence does not describe the newest reserved attempt".into(),
-            ));
-        }
-        locked(&self.recovery_certificates).push((
-            run_id.to_string(),
-            step_id.to_string(),
-            output.clone(),
-        ));
-        locked(&self.run_states)
-            .entry(run_id.to_string())
-            .or_insert_with(|| {
-                PipelineState::new(
-                    run_id.to_string(),
-                    "task_pr_pipeline".to_string(),
-                    json!({}),
-                )
-            })
-            .rebase_recovery_checkpoints
-            .insert(step_id.to_string(), output.clone());
-        Ok(())
-    }
-    fn verify_rebase_recovery(&self, run_id: &str, step_id: &str, checkpoint: &Value) -> Res<bool> {
-        Ok(self
-            .recovery_certificates()
-            .iter()
-            .rev()
-            .find(|(run, step, _)| run == run_id && step == step_id)
-            .is_some_and(|(_, _, certified)| certified == checkpoint))
-    }
-    fn rebase_recovery_attempts(
-        &self,
-        run_id: &str,
-        step_id: &str,
-    ) -> Res<Vec<RebaseRecoveryAttemptScope>> {
-        Ok(locked(&self.recovery_attempts)
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .map(|(_, _, scope)| scope.clone())
-            .collect())
-    }
-    fn read_run_state(&self, run_id: &str) -> Res<Option<PipelineState>> {
-        Ok(locked(&self.run_states).get(run_id).cloned())
-    }
-    fn widen_task_context_files(
-        &self,
-        task_id: &str,
-        _run_id: &str,
-        step: ContextWideningStep,
-        activity: &str,
-        paths: &[String],
-    ) -> Res<Vec<String>> {
-        locked(&self.widenings).push((
-            task_id.to_string(),
-            step,
-            activity.to_string(),
-            paths.to_vec(),
-        ));
-        let selectors = paths
-            .iter()
-            .map(|path| format!("file:{path}"))
-            .collect::<Vec<_>>();
-        if let Some(task) = locked(&self.tasks).get_mut(task_id) {
-            task.context_files.extend(selectors.iter().cloned());
-        }
-        Ok(selectors)
-    }
-    fn get_task_artifact(&self, task_id: &str, path: &str) -> Res<Option<TaskArtifact>> {
-        let artifact = locked(&self.artifacts)
-            .get(&(task_id.into(), path.into()))
-            .map(|c| self.artifact(task_id, path, c));
-        if let Some(artifact) = &artifact {
-            artifact.validate_inline_size(task_id)?;
-        }
-        Ok(artifact)
-    }
-    fn get_task_artifacts(&self, task_id: &str) -> Res<Vec<TaskArtifact>> {
-        Ok(locked(&self.artifacts)
-            .iter()
-            .filter(|((id, _), _)| id == task_id)
-            .map(|((_, path), c)| self.artifact(task_id, path, c))
-            .collect())
-    }
-    fn get_task(&self, task_id: &str) -> Res<Task> {
-        locked(&self.tasks)
-            .get(task_id)
-            .cloned()
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
-    }
-    fn list_tasks_filtered(
-        &self,
-        _status: Option<TaskStatus>,
-        _priority: Option<TaskPriority>,
-        _parent_id: Option<&str>,
-        job_run_id: Option<&str>,
-        _external_ref: Option<&ExternalRef>,
-        _has_external_ref_system: Option<&str>,
-    ) -> Res<Vec<Task>> {
-        Ok(locked(&self.tasks)
-            .values()
-            .filter(|task| job_run_id.is_none_or(|run| task.job_run_id.as_deref() == Some(run)))
-            .cloned()
-            .collect())
-    }
-    fn get_task_comments(&self, task_id: &str) -> Res<Vec<TaskComment>> {
-        Ok(self.comments(task_id))
-    }
-    fn get_task_history(&self, task_id: &str) -> Res<Vec<TaskHistoryEntry>> {
-        Ok(self.history(task_id))
-    }
-    /// The guarded transition: like the task store, refuse a write whose expected status is stale.
-    fn update_task_from_activity(&self, task_id: &str, update: TaskActivityUpdate) -> Res<Task> {
-        let mut tasks = locked(&self.tasks);
-        let task = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-        if task.status != update.expected_status {
-            return Err(OrbitError::Execution(format!(
-                "task {task_id} is {} but the write expected {}",
-                task.status, update.expected_status
-            )));
-        }
-        task.status = update.status;
-        if update.status == TaskStatus::Done {
-            locked(&self.completion_notes).push(update.note.unwrap_or_default());
-        }
-        Ok(task.clone())
-    }
-    fn apply_task_automation_update(&self, task_id: &str, update: TaskAutomationUpdate) -> Res<()> {
-        let refused = update
-            .append_history
-            .iter()
-            .any(|entry| locked(&self.fail_history_events).contains(&entry.event));
-        if refused {
-            return Err(OrbitError::Execution(format!(
-                "history write for task {task_id} refused by the test host"
-            )));
-        }
-        let mut tasks = locked(&self.tasks);
-        let task = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-        if let Some(status) = update.status {
-            task.status = status;
-        }
-        for external_ref in update.external_refs {
-            push_external_ref_if_missing(&mut task.external_refs, external_ref);
-        }
-        locked(&self.status_events).push((
-            task_id.to_string(),
-            update.status_event,
-            update.status_note,
-            update.status_decision,
-        ));
-        locked(&self.comments)
-            .entry(task_id.to_string())
-            .or_default()
-            .extend(update.append_comments);
-        locked(&self.history)
-            .entry(task_id.to_string())
-            .or_default()
-            .extend(update.append_history);
-        Ok(())
-    }
-    fn record_review_landing(&self, request: &ReviewLandingRequest) -> Res<()> {
-        locked(&self.landings).push(request.clone());
-        Ok(())
-    }
-    fn release_review_attempt(&self, request: &ReviewReleaseRequest) -> Res<()> {
-        locked(&self.releases).push(request.clone());
-        Ok(())
-    }
-    fn admit_final_recovery(
-        &self,
-        _: &str,
-        _: &FinalRecoveryAdmissionRequest,
-    ) -> Res<FinalRecoveryAdmission> {
-        Ok(
-            if locked(&self.scripted).contains_key("test_final_decision") {
-                FinalRecoveryAdmission::Admitted
-            } else {
-                FinalRecoveryAdmission::Skipped {
-                    reason: "fixture has no recovery".into(),
-                }
-            },
-        )
-    }
-    fn apply_final_recovery(
-        &self,
-        _: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Res<FinalRecoveryApplied> {
-        locked(&self.scripted_inputs).insert(
-            "applied_final_recovery".into(),
-            serde_json::to_value(&application.decision).unwrap(),
-        );
-        if matches!(
-            application.decision,
-            orbit_types::workflow::FinalRecoveryDecision::Requeue { .. }
-        ) {
-            self.set_status(&application.task_id, TaskStatus::Backlog);
-            return Ok(FinalRecoveryApplied::Settled {
-                outcome: "requeued".into(),
-            });
-        }
-        Ok(FinalRecoveryApplied::Escalated {
-            outcome: "fixture".into(),
-        })
-    }
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Res<Option<String>> {
-        Ok(None)
-    }
-    fn repo_root(&self) -> Res<String> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-    fn required_validation_commands(&self) -> Vec<String> {
-        locked(&self.required_commands).clone()
-    }
-    fn review_baseline_commands(&self) -> Vec<String> {
-        locked(&self.baseline_commands).clone()
-    }
-    fn host_os(&self) -> Option<EvidenceHostOs> {
-        *locked(&self.os)
-    }
-    /// An implementer lane that refuses the probed sandbox, unless a test scripted another answer [ORB-15516].
-    fn run_deferral_probe(
-        &self,
-        probe: &DeferralProbe,
-        provider: Option<&str>,
-        _fs_profile: Option<&str>,
-        cwd: &Path,
-    ) -> NamespaceProbe {
-        locked(&self.probes).push((
-            probe.command.to_string(),
-            provider.map(str::to_string),
-            cwd.to_path_buf(),
-        ));
-        if let Some(answer) = locked(&self.deferral_answers).get(probe.command) {
-            return answer.clone();
-        }
-        let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
-            (71, "sandbox-exec: sandbox_apply: Operation not permitted")
-        } else if probe.command == PS_EXEC_PROBE {
-            (
-                71,
-                "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
-            )
-        } else {
-            (1, "bwrap: No permissions to create new namespace")
-        };
-        NamespaceProbe {
-            command: probe.command.to_string(),
-            exit_code,
-            output: output.to_string(),
-        }
-    }
-    /// A job graph's scripted steps; every other action is the engine's own.
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        if action == "test_ci_repair" {
-            return auto_fix::perform_ci_repair(self, input);
-        }
-        if let Some(message) = locked(&self.failing).get(action).cloned() {
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message,
-            });
-        }
-        if let Some(output) = locked(&self.scripted).get(action).cloned() {
-            locked(&self.scripted_inputs).insert(action.to_string(), input.clone());
-            return Ok(output);
-        }
-        execute_deterministic_action(self, action, config, input, false, &HashMap::new(), None)
-            .map_err(|error| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: error.to_string(),
-            })
-    }
-    /// The engine records a failure hook's output only when the hook succeeds.
-    fn checkpoint_failure_activity(
-        &self,
-        _run_id: &str,
-        activity_name: &str,
-        failed_step_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        locked(&self.failure_checkpoints).push((
-            activity_name.to_string(),
-            failed_step_id.to_string(),
-            output.clone(),
-        ));
-        Ok(())
-    }
-    fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
-        if operation == "ci.commit_jobs"
-            && let Some(answer) = locked(&self.scripted).get(operation).cloned()
-        {
-            let commit = input.get("commit").and_then(Value::as_str).unwrap_or("");
-            // A head-only script does not describe the base tip. An inherited red base is planted through the substitute `gh`.
-            if commit == git(&self.repo, &["rev-parse", BASE]) {
-                return Ok(json!({"commit": commit, "jobs": []}));
-            }
-            return Ok(answer);
-        }
-        if let Some(script) = locked(&self.scripted)
-            .get(&format!("refuse:{operation}"))
-            .cloned()
-        {
-            locked(&self.scripted_inputs).insert("ci-planner-refusal-seen".into(), json!(true));
-            return Err(orbit_common::OrbitError::PrivateVcs(Box::new(
-                orbit_common::PrivateVcsFailure {
-                    operation: operation.into(),
-                    class: if script["transient"] == true {
-                        orbit_common::PrivateVcsFailureClass::TransientObservation
-                    } else {
-                        orbit_common::PrivateVcsFailureClass::Other
-                    },
-                    message: script["reason"].as_str().unwrap().into(),
-                    read_throttle: None,
-                },
-            )));
-        }
-        if matches!(operation, "ci.job_log" | "ci.prerequisite_evidence")
-            && let Some(answer) = locked(&self.scripted).get(operation).cloned()
-        {
-            locked(&self.scripted_inputs).insert("ci-planner-log-seen".into(), json!(true));
-            return Ok(answer);
-        }
-        if locked(&self.scripted).contains_key("test_ci_repair")
-            && let Some(answer) = auto_fix::ci_answer(self, operation, &input)
-        {
-            return Ok(answer);
-        }
-        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
-    }
-    /// One owner-local claim on the fixture's candidate branch, requiring whatever this host requires.
-    fn claim_execution_context(&self) -> Res<ClaimExecutionContext> {
-        Ok(ClaimExecutionContext {
-            footprint: vec!["file:src/feature.txt".to_string()],
-            workspace_id: "ws_owner".to_string(),
-            task_id: TASK_ID.to_string(),
-            claim_id: "claim-landing".to_string(),
-            machine_id: "hm_follower".to_string(),
-            run_id: RUN_ID.to_string(),
-            ship_mode: locked(&self.ship_mode).clone(),
-            base_branch: BASE.to_string(),
-            landing_branch: BASE.to_string(),
-            required_commands: RuntimeHost::required_validation_commands(self),
-        })
-    }
-    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Res<()> {
-        locked(&self.claim_logs).push(path.to_string());
-        locked(&self.claim_log_contents).insert(path.to_string(), content);
-        if *locked(&self.fail_evidence_writes) && path.contains("/evidence/") {
-            return Err(OrbitError::Execution(
-                "attachment response unknown after write".into(),
-            ));
-        }
-        Ok(())
-    }
-    fn record_flaky_validation(&self, task_id: &str, record: &FlakyValidation) -> Res<()> {
-        RuntimeHost::apply_task_automation_update(
-            self,
-            task_id,
-            TaskAutomationUpdate {
-                append_history: vec![TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: "system".into(),
-                    event: FLAKY_VALIDATION_EVENT.into(),
-                    note: Some(record.text()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(TaskDecision::FlakyValidation(record.clone())),
-                    surface: None,
-                    caller: None,
-                }],
-                ..Default::default()
-            },
-        )
-    }
-    fn record_claim_handoff(&self, handoff: &TaskHandoff) -> Res<()> {
-        locked(&self.handoffs).push(handoff.clone());
-        Ok(())
-    }
-    fn validation_subprocess_environment(&self) -> ValidationEnvironment {
-        locked(&self.validation_env).clone().unwrap_or_else(|| {
-            ValidationEnvironment::launcher(RuntimeHost::agent_subprocess_environment(self, &[]))
-        })
-    }
-    /// Like the task store, accept evidence only from the run owning the task.
-    fn attach_task_validation_log(
-        &self,
-        task_id: &str,
-        run_id: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Res<()> {
-        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "run {run_id} does not own {task_id}"
-            )));
-        }
-        locked(&self.artifacts).insert((task_id.to_string(), path.to_string()), content);
-        if *locked(&self.fail_evidence_writes) && path.contains("/evidence/") {
-            return Err(OrbitError::Execution(
-                "attachment response unknown after write".into(),
-            ));
-        }
-        Ok(())
-    }
-    fn allocate_step_recovery_decision(
-        &self,
-        request: &orbit_engine::StepRecoveryDecisionRequest,
-    ) -> Res<Option<orbit_engine::StepRecoveryDecisionSlot>> {
-        if locked(&self.step_recovery_decision).is_none() {
-            return Ok(None);
-        }
-        let root = PathBuf::from(&request.workspace_path);
-        Ok(Some(orbit_engine::StepRecoveryDecisionSlot {
-            run_id: request.run_id.clone(),
-            failed_step_id: request.failed_step_id.clone(),
-            attempt: request.attempt,
-            nonce: "fixture-nonce".to_string(),
-            path: root.join(".orbit/tmp/step-recovery-decision.json"),
-            workspace_root: root,
-        }))
-    }
-    fn read_step_recovery_decision(
-        &self,
-        _slot: &orbit_engine::StepRecoveryDecisionSlot,
-    ) -> Res<orbit_engine::StepRecoveryDecisionRead> {
-        Ok(locked(&self.step_recovery_decision)
-            .clone()
-            .unwrap_or(orbit_engine::StepRecoveryDecisionRead::Absent))
-    }
-}
+
 fn git(current_dir: &Path, args: &[&str]) -> String {
     git_fixture::run(current_dir, args)
 }
 fn path_str(path: &Path) -> &str {
     path.to_str().unwrap()
 }
-// Substitute forge
-/// The `gh` surface the engine's provider adapter calls, over one pull request (#42).
-const FAKE_GH: &str = r#"#!/bin/sh
-set -eu
-forge=$(cat '__SANDBOX__/active-forge')
-remote="$forge/remote.git"
-url="https://github.com/orbit/test/pull/42"
-number_json=42
-if [ -f "$forge/pr-number-json" ]; then number_json=$(cat "$forge/pr-number-json"); fi
-export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
-export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
-printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
-if [ -f "$forge/retry-config.json" ]; then
-    if python3 "$forge/retry-gh.py" "$forge" "$@"; then exit 0; else
-        code=$?
-        if [ "$code" != 77 ]; then exit "$code"; fi
-    fi
-fi
-head_sha() {
-    # A deleted branch reads as empty so a test can model its absence.
-    git --git-dir="$remote" rev-parse --verify --quiet "refs/heads/$(cat "$forge/pr-head")" || true
-}
-check() {
-    case "$1" in
-        mixed_pending|mixed_success|mixed_failure)
-            test_state=IN_PROGRESS; conclusion=''
-            if [ "$1" = mixed_success ]; then test_state=COMPLETED; conclusion=SUCCESS; fi
-            if [ "$1" = mixed_failure ]; then test_state=COMPLETED; conclusion=FAILURE; fi
-            printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
-        optional_pending) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"__typename":"CheckRun","name":"optional","status":"IN_PROGRESS","conclusion":"","isRequired":false}' ;;
-        pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
-        success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
-        # A completed skip (a docs-only head) or neutral result.
-        skipped|neutral) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"%s"}' "$(printf '%s' "$1" | tr a-z A-Z)" ;;
-        failure|dirty_failure|clean_failure|unstable_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
-        # Two required failures. `test` then `lint`, or the reverse. Both
-        # carry isRequired so the policy read does not tag only the last node.
-        paired_pending|paired_failure|paired_failure_reversed)
-            test_check='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
-            lint_check='{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
-            if [ "$1" = paired_pending ]; then
-                lint_check='{"__typename":"CheckRun","name":"lint","status":"IN_PROGRESS","conclusion":"","isRequired":true}'
-            fi
-            if [ "$1" = paired_failure_reversed ]; then
-                printf '%s,%s' "$lint_check" "$test_check"
-            else
-                printf '%s,%s' "$test_check" "$lint_check"
-            fi ;;
-    esac
-}
-status() {
-    # 1 when this `pr view` asked for isDraft. A draft fixture refuses to
-    # answer otherwise, so dropping the field fails the regression.
-    draft_field=${1:-0}
-    pr_head=$(cat "$forge/pr-head")
-    pr_base=$(cat "$forge/pr-base")
-    if [ -f "$forge/merge-requests" ] && [ -f "$forge/reconcile-status" ]; then
-        printf '%s\n' "$(( $(cat "$forge/reads") + 1 ))" > "$forge/reads"
-        if [ -f "$forge/reconcile-error" ]; then cat "$forge/reconcile-error" >&2; exit 1; fi
-        cat "$forge/reconcile-status"
-        return
-    fi
-    if [ -f "$forge/merge-in-progress" ]; then
-        polls=$(( $(cat "$forge/merge-polls" 2>/dev/null || echo 0) + 1 ))
-        printf '%s\n' "$polls" > "$forge/merge-polls"
-        if [ -f "$forge/merge-after-polls" ] && [ "$polls" = "$(cat "$forge/merge-after-polls")" ]; then
-            land "$(cat "$forge/merge-in-progress")"
-        fi
-    fi
-    if [ -f "$forge/merged" ]; then
-        merged_reads=$(( $(cat "$forge/merged-reads" 2>/dev/null || echo 0) + 1 ))
-        printf '%s\n' "$merged_reads" > "$forge/merged-reads"
-        # GitHub keeps headRefOid after the head branch is deleted. `land`
-        # records it; a forge that merged before this substitute did falls
-        # back to the live branch.
-        merged_head=$(head_sha)
-        if [ -f "$forge/merged-head" ]; then
-            merged_head=$(cat "$forge/merged-head")
-        fi
-        printf '{"number":42,"state":"MERGED","isDraft":false,"mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
-            "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
-        return
-    fi
-    # `status-hang` stalls the status read until the caller's deadline kills it.
-    if [ -f "$forge/status-hang" ]; then sleep 30; fi
-    # `status-faults` status reads fail with `status-fault-stderr` before one
-    # is counted or answered.
-    if [ -s "$forge/status-faults" ] && [ "$(cat "$forge/status-faults")" -gt 0 ]; then
-        printf '%s\n' "$(( $(cat "$forge/status-faults") - 1 ))" > "$forge/status-faults"
-        cat "$forge/status-fault-stderr" >&2
-        exit 1
-    fi
-    reads=$(( $(cat "$forge/reads" 2>/dev/null || echo 0) + 1 ))
-    printf '%s\n' "$reads" > "$forge/reads"
-    observed=$(sed -n "${reads}p" "$forge/checks")
-    [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
-    if [ "$observed" = source_contract ]; then
-        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
-            observed=success
-        else
-            observed=failure
-        fi
-    fi
-    # [ORB-27076] As `source_contract`, but the forge reports DIRTY while the
-    # base tip no longer merges into the head, so a conflict the base lands
-    # after the rerun was sent shows as the real Git conflict it is.
-    if [ "$observed" = source_contract_dirty ]; then
-        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
-            observed=success
-        elif git --git-dir="$remote" merge-tree --write-tree "$(head_sha)" "$pr_base" >/dev/null 2>&1; then
-            observed=failure
-        else
-            observed=dirty_failure
-        fi
-    fi
-    # A provider app's required aggregate fails beside its passing analysis
-    # job; the mixed form also fails the workflow check `test`.
-    case "$observed" in source_aggregate|source_aggregate_mixed)
-        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
-            observed=success
-        else
-            observed="${observed#source_}_failure"
-        fi ;;
-    esac
-    state=OPEN
-    reported_head=$(head_sha)
-    if [ -f "$forge/heads" ]; then
-        head_read=$(( reads - $(cat "$forge/heads-start") ))
-        reported_head=$(sed -n "${head_read}p" "$forge/heads")
-        [ -n "$reported_head" ] || reported_head=$(tail -n 1 "$forge/heads")
-        [ "$reported_head" != current ] || reported_head=$(head_sha)
-        if [ -f "$forge/remote-heads" ]; then
-            remote_head=$(sed -n "${head_read}p" "$forge/remote-heads")
-            [ -n "$remote_head" ] || remote_head=$(tail -n 1 "$forge/remote-heads")
-            [ "$remote_head" != current ] || remote_head=$(head_sha)
-            if [ "$remote_head" = absent ]; then
-                git --git-dir="$remote" update-ref -d refs/pull/42/head
-            else
-                git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
-            fi
-        fi
-    fi
-    merged_at=null
-    review=""
-    case "$observed" in
-        mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
-        mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
-        optional_pending) merge_state=BLOCKED; rollup=$(check optional_pending) ;;
-        merge_pending) merge_state=PENDING; rollup=$(check pending) ;;
-        pending) merge_state=BLOCKED; rollup=$(check pending) ;;
-        success) merge_state=CLEAN; rollup=$(check success) ;;
-        # Branch protection accepts a skipped or neutral required check.
-        skipped|neutral) merge_state=CLEAN; rollup=$(check "$observed") ;;
-        failure) merge_state=BLOCKED; rollup=$(check failure) ;;
-        clean_failure) merge_state=CLEAN; rollup=$(check failure) ;;
-        unstable_failure) merge_state=UNSTABLE; rollup=$(check failure) ;;
-        paired_pending|paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
-        aggregate_failure|aggregate_mixed_failure)
-            merge_state=BLOCKED
-            rollup='{"__typename":"CheckRun","name":"CodeQL","workflowName":"","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"Analyze (rust)","workflowName":"CodeQL","status":"COMPLETED","conclusion":"SUCCESS"}'
-            [ "$observed" = aggregate_failure ] || rollup="$rollup,$(check failure)" ;;
-        prerequisite)
-            merge_state=BLOCKED
-            rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
-            if [ -f "$forge/rerun-applied" ]; then
-                case "$(cat "$forge/infrastructure")" in
-                    positive|merge|lost|moved|deleted|legacy_success|rules_unpinned) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
-                    clean_missing|legacy_substitute) merge_state=CLEAN; rollup=$(check success) ;;
-                esac
-            fi ;;
-        review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
-        # A freshly pushed head before the provider has queued any check.
-        unreported) merge_state=BLOCKED; rollup='' ;;
-        dirty) merge_state=DIRTY; rollup=$(check success) ;;
-        dirty_failure) merge_state=DIRTY; rollup=$(check failure) ;;
-        closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
-        contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
-        *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
-    esac
-    if [ -f "$forge/review-decision" ]; then review=$(cat "$forge/review-decision"); fi
-    # [ORB-16342] An explicit draft whose merge state is not DRAFT. The file
-    # names that merge state. Ready pull requests omit it and report false.
-    is_draft=false
-    if [ -f "$forge/pr-draft" ]; then is_draft=true; fi
-    if [ -f "$forge/draft-merge-state" ]; then
-        if [ "$draft_field" != 1 ]; then
-            echo "fake gh: isDraft was not requested" >&2
-            exit 2
-        fi
-        is_draft=true
-        merge_state=$(cat "$forge/draft-merge-state")
-        case "$merge_state" in
-            BLOCKED|UNKNOWN) ;;
-            *) echo "fake gh: unknown draft merge state '$merge_state'" >&2; exit 2 ;;
-        esac
-    fi
-    printf '{"number":42,"state":"%s","isDraft":%s,"mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
-        "$state" "$is_draft" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
-}
-create() {
-    attempt=$(awk '$0 == "pr create" { n++ } END { print n }' "$forge/calls")
-    outcome=success
-    if [ -f "$forge/create-outcomes" ]; then
-        outcome=$(sed -n "${attempt}p" "$forge/create-outcomes")
-        [ -n "$outcome" ] || outcome=$(tail -n 1 "$forge/create-outcomes")
-    fi
-    case "$outcome" in
-        gateway) echo 'HTTP 502: 502 Bad Gateway' >&2; exit 1 ;;
-        auth) echo 'Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
-        unknown_head) echo "Head sha can't be blank" >&2; exit 1 ;;
-        no_commits) echo 'No commits between agent-main and orbit/landing-candidate' >&2; exit 1 ;;
-        body_too_long) echo 'Body is too long (maximum is 65536 characters)' >&2; exit 1 ;;
-        rate_limit) echo 'API rate limit exceeded (HTTP 403)' >&2; exit 1 ;;
-        success|applied_gateway) ;;
-        *) echo "fake gh: unknown create outcome '$outcome'" >&2; exit 2 ;;
-    esac
-    if [ -f "$forge/pr-head" ]; then
-        echo 'a pull request for this branch already exists' >&2
-        exit 1
-    fi
-    shift 2
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --base) printf '%s\n' "$2" > "$forge/pr-base"; shift 2 ;;
-            --head) printf '%s\n' "$2" > "$forge/pr-head"; shift 2 ;;
-            --title) printf '%s' "$2" > "$forge/pr-title"; shift 2 ;;
-            --body) printf '%s' "$2" > "$forge/pr-body"; shift 2 ;;
-            --draft) touch "$forge/pr-draft"; shift ;;
-            --label) printf '%s\n' "$2" >> "$forge/pr-labels"; shift 2 ;;
-            --reviewer) printf '%s\n' "$2" >> "$forge/pr-reviewers"; shift 2 ;;
-            *) shift ;;
-        esac
-    done
-    echo created >> "$forge/created-prs"
-    if [ "$outcome" = applied_gateway ]; then
-        echo 'HTTP 502: 502 Bad Gateway' >&2
-        exit 1
-    fi
-    printf '%s\n' "$url"
-}
-# A provider error as `gh api` reports it: the response body on stdout and
-# `gh: <message> (HTTP <status>)` on stderr.
-refuse() {
-    printf '{"message":"%s","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"%s"}\n' "$2" "$1"
-    printf 'gh: %s (HTTP %s)\n' "$2" "$1" >&2
-    exit 1
-}
-# Apply the adapter's actual gh --jq expression before writing captured stdout.
-# Without a projection, emit the raw service response, including large fields.
-commit_ci_response() {
-    answer=$1
-    shift
-    previous=""
-    for arg in "$@"; do
-        if [ "$previous" = --jq ]; then
-            jq -c "$arg" "$answer"
-            return
-        fi
-        previous=$arg
-    done
-    cat "$answer"
-}
-# Jobs and logs planted per commit under `$forge/commit-ci/<sha>/`.
-commit_ci_api() {
-    if [ ! -d "$forge/commit-ci" ]; then
-        echo "fake gh: unsupported call: $*" >&2
-        exit 2
-    fi
-    path="${4:-}"
-    case "$path" in
-        repos/*/actions/runs)
-            sha=""
-            for arg in "$@"; do
-                case "$arg" in
-                    head_sha=*) sha=${arg#head_sha=} ;;
-                esac
-            done
-            if [ -z "$sha" ] && [ -f "$forge/base-push-runs.json" ]; then
-                commit_ci_response "$forge/base-push-runs.json" "$@"
-            elif [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
-                commit_ci_response "$forge/commit-ci/$sha/runs.json" "$@"
-            else
-                echo '{"workflow_runs":[]}'
-            fi
-            ;;
-        repos/*/actions/runs/*/jobs)
-            run=$(basename "$(dirname "$path")")
-            found=""
-            for dir in "$forge/commit-ci"/*; do
-                [ -f "$dir/run_id" ] || continue
-                if [ "$(cat "$dir/run_id")" = "$run" ]; then
-                    found=$dir
-                    break
-                fi
-            done
-            if [ -z "$found" ]; then
-                echo "fake gh: no jobs for run $run" >&2
-                exit 2
-            fi
-            # `jobs-from-<n>.json` replaces the answer from status read <n>
-            # on; one holding `unreadable` refuses the listing.
-            answer="$found/jobs.json"
-            reads=$(cat "$forge/reads" 2>/dev/null || echo 0)
-            poll=1
-            while [ "$poll" -le "$reads" ]; do
-                [ -f "$found/jobs-from-$poll.json" ] && answer="$found/jobs-from-$poll.json"
-                poll=$((poll + 1))
-            done
-            if [ "$(cat "$answer")" = unreadable ]; then
-                echo "fake gh: jobs for run $run unavailable" >&2
-                exit 2
-            fi
-            commit_ci_response "$answer" "$@"
-            ;;
-        *)
-            echo "fake gh: unsupported call: $*" >&2
-            exit 2
-            ;;
-    esac
-}
-commit_ci_log() {
-    if [ ! -d "$forge/commit-ci" ]; then
-        echo "fake gh: unsupported call: $*" >&2
-        exit 2
-    fi
-    run="${3:-}"
-    for dir in "$forge/commit-ci"/*; do
-        [ -f "$dir/run_id" ] || continue
-        if [ "$(cat "$dir/run_id")" = "$run" ]; then
-            job=""
-            previous=""
-            for arg in "$@"; do
-                if [ "$previous" = --job ]; then job="$arg"; fi
-                previous="$arg"
-            done
-            # `log-fault` refuses the read with that stderr until the
-            # fixture's logical clock (`$forge/clock`, in ms) reaches
-            # `log-fault-until`; without it the refusal never ends.
-            if [ -f "$dir/log-fault-after-reads" ]; then
-                reads=$(cat "$dir/log-read-count" 2>/dev/null || echo 0)
-                reads=$((reads + 1))
-                echo "$reads" > "$dir/log-read-count"
-            else
-                reads=1
-            fi
-            after=$(cat "$dir/log-fault-after-reads" 2>/dev/null || echo 0)
-            if [ -f "$dir/log-fault" ] && [ "$reads" -gt "$after" ]; then
-                until=$(cat "$dir/log-fault-until" 2>/dev/null || echo never)
-                now=$(cat "$forge/clock" 2>/dev/null || echo 0)
-                if [ "$until" = never ] || [ "$now" -lt "$until" ]; then
-                    cat "$dir/log-fault" >&2
-                    exit 1
-                fi
-            fi
-            if [ -f "$dir/log-$job" ]; then cat "$dir/log-$job"; else cat "$dir/log"; fi
-            return
-        fi
-    done
-    echo "fake gh: no log for run $run" >&2
-    exit 2
-}
-# Advance a remote branch by one commit, as another writer would.
-advance() {
-    ref="refs/heads/$1"
-    parent=$(git --git-dir="$remote" rev-parse "$ref")
-    next=$(git --git-dir="$remote" commit-tree "$parent^{tree}" -p "$parent" -m "$2")
-    git --git-dir="$remote" update-ref "$ref" "$next" "$parent"
-}
-# Squash `$1` onto the PR base and mark the PR merged.
-land() {
-    # Remember the head oid before any later deletion. GitHub still reports
-    # it on a merged pull request after the branch is gone.
-    if [ ! -f "$forge/merged-head" ]; then
-        printf '%s\n' "$(head_sha)" > "$forge/merged-head"
-    fi
-    base_ref="refs/heads/$(cat "$forge/pr-base")"
-    parent=$(git --git-dir="$remote" rev-parse "$base_ref")
-    tree=$(git --git-dir="$remote" rev-parse "$1^{tree}")
-    landed=$(git --git-dir="$remote" commit-tree "$tree" -p "$parent" -m "Squash pull request #42")
-    git --git-dir="$remote" update-ref "$base_ref" "$landed" "$parent"
-    printf '%s\n' "$landed" > "$forge/merged"
-}
-merge() {
-    sha=""
-    method=""
-    title=""
-    message=""
-    for arg in "$@"; do
-        case "$arg" in
-            sha=*) sha=${arg#sha=} ;;
-            merge_method=*) method=${arg#merge_method=} ;;
-            commit_title=*) title=${arg#commit_title=} ;;
-            commit_message=*) message=${arg#commit_message=} ;;
-        esac
-    done
-    printf 'sha=%s merge_method=%s\n' "$sha" "$method" >> "$forge/merge-requests"
-    # The composed squash message Orbit sent with the request [ORB-25009].
-    printf '%s\n' "${title:-}" >> "$forge/merge-titles"
-    printf '%s\n' "${message:-}" > "$forge/merge-message"
-    # `merge-outcomes` scripts the answer to each merge request in turn; an
-    # unscripted request is an ordinary conditional merge.
-    attempt=$(( $(wc -l < "$forge/merge-requests") ))
-    outcome=$(sed -n "${attempt}p" "$forge/merge-outcomes" 2>/dev/null || true)
-    base_modified="Base branch was modified. Review and try the merge again."
-    case "$outcome" in
-        ""|merge) ;;
-        base_modified_422) refuse 422 "$base_modified" ;;
-        http_499) refuse 499 "499 (https://api.github.com/graphql)" ;;
-        base_modified*)
-            # Another PR landed on the base between the provider's
-            # mergeability check and this mutation.
-            advance "$(cat "$forge/pr-base")" "Concurrent landing"
-            case "$outcome" in
-                *+head_moved) advance "$(cat "$forge/pr-head")" "Unreviewed push" ;;
-                *+retargeted) printf 'other-base\n' > "$forge/pr-base" ;;
-                *+merged) land "$sha" ;;
-                *+merged_other_head)
-                    advance "$(cat "$forge/pr-head")" "Unreviewed push"
-                    land "$(head_sha)" ;;
-                *+policy_disallowed) touch "$forge/merge-methods-disallowed" ;;
-            esac
-            refuse 405 "$base_modified" ;;
-        in_progress_error)
-            cat "$forge/in-progress-body"
-            cat "$forge/in-progress-stderr" >&2
-            exit 1 ;;
-        in_progress|in_progress_empty|in_progress_numeric)
-            printf '%s\n' "$sha" > "$forge/merge-in-progress"
-            if [ "$outcome" = in_progress_empty ]; then
-                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
-            fi
-            if [ "$outcome" = in_progress_numeric ]; then
-                echo '{"message":"Merge already in progress","status":405}'
-                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
-            fi
-            refuse 405 "Merge already in progress" ;;
-        policy) refuse 405 "Merge commits are not allowed on this repository." ;;
-        # [F2026-11-440] The base advanced into a conflict after the mergeable read.
-        merge_conflict) refuse 405 "Pull Request has merge conflicts" ;;
-        merge_conflict_empty) echo 'gh: Pull Request has merge conflicts (HTTP 405)' >&2; exit 1 ;;
-        merge_conflict_numeric)
-            echo '{"message":"Pull Request has merge conflicts","status":405}'
-            echo 'gh: Pull Request has merge conflicts (HTTP 405)' >&2; exit 1 ;;
-        merge_conflict+head_moved)
-            advance "$(cat "$forge/pr-head")" "Unreviewed push"
-            refuse 405 "Pull Request has merge conflicts" ;;
-        merge_conflict+merged) land "$sha"; refuse 405 "Pull Request has merge conflicts" ;;
-        conflict_error)
-            cat "$forge/conflict-body"
-            cat "$forge/conflict-stderr" >&2
-            exit 1 ;;
-        queue) refuse 405 "Changes must be made through the merge queue" ;;
-        protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
-        auth) refuse 403 "Resource not accessible by integration" ;;
-        head_modified) refuse 409 "Head branch was modified. Review and try the merge again." ;;
-        server_error+merged) land "$sha"; refuse 502 "Server Error" ;;
-        internal_error+merged) land "$sha"; refuse 500 "Internal Server Error" ;;
-        bad_gateway+merged) land "$sha"; refuse 502 "Bad Gateway" ;;
-        unavailable+merged) land "$sha"; refuse 503 "Service Unavailable" ;;
-        gateway_timeout+merged) land "$sha"; refuse 504 "Gateway Timeout" ;;
-        empty_error_body+merged) land "$sha"; printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
-        # [F2026-11-509] The response ended before it decoded; the status is unknown.
-        decode) echo 'unexpected end of JSON input' >&2; exit 1 ;;
-        decode+merged) land "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
-        decode_truncated) printf '{"sha":"%s","merged":' "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
-        decode_truncated+merged) land "$sha"; printf '{"sha":"%s","merged":' "$sha"; echo 'unexpected end of JSON input' >&2; exit 1 ;;
-        decode_html) printf '<html>upstream error</html>\n'; echo 'unexpected end of JSON input' >&2; exit 1 ;;
-        decode_trailing) echo 'unexpected end of JSON input' >&2; echo 'warning: retried after a proxy reset' >&2; exit 1 ;;
-        server_error) refuse 502 "Server Error" ;;
-        server_error_mixed_auth) refuse 502 "Bad credentials" ;;
-        server_error_malformed)
-            printf '<html>upstream error</html>\n'
-            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
-        server_error_mismatched)
-            printf '{"message":"Bad credentials","status":"502"}\n'
-            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
-        server_error_contradictory)
-            printf '{"message":"Server Error","status":"502","merged":true,"sha":"%s"}\n' "$sha"
-            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
-        server_error_wrong_status)
-            printf '{"message":"Server Error","status":"403"}\n'
-            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
-        server_error_auth_detail)
-            printf '{"message":"Server Error","status":"502","errors":["Bad credentials"]}\n'
-            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
-        server_error_trailing)
-            printf 'gh: Server Error (HTTP 502)\ngh: permission denied (HTTP 403)\n' >&2; exit 1 ;;
-        invalid_success) printf 'invalid-json\n'; return ;;
-        unconfirmed_success) printf '{"merged":false}\n'; return ;;
-        mismatched_body)
-            printf '{"message":"Pull Request is not mergeable","status":"405"}\n'
-            printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
-            exit 1 ;;
-        malformed_body)
-            printf '<html>upstream error</html>\n'
-            printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
-            exit 1 ;;
-        trailing_stderr)
-            printf '{"message":"%s","status":"405"}\n' "$base_modified"
-            printf 'gh: %s (HTTP 405)\nwarning: retried after a proxy reset\n' "$base_modified" >&2
-            exit 1 ;;
-        transport_timeout)
-            echo 'Put "https://api.github.com/repos/orbit/test/pulls/42/merge": net/http: request canceled (Client.Timeout exceeded while awaiting headers)' >&2
-            exit 1 ;;
-        *) echo "fake gh: unknown merge outcome '$outcome'" >&2; exit 2 ;;
-    esac
-    if [ "$sha" != "$(head_sha)" ]; then
-        echo "gh: Head branch was modified. Review and try the merge again. (HTTP 409)" >&2
-        exit 1
-    fi
-    land "$sha"
-    printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$(cat "$forge/merged")"
-}
-if [ -f "$forge/failed-command-log" ]; then
-    case "$1 ${2:-}" in
-        "run view") cat "$forge/failed-command-log"; exit ;;
-        "api --method")
-            case "${4:-}" in
-                'repos/{owner}/{repo}/actions/runs')
-                    sha=""
-                    for arg in "$@"; do
-                        case "$arg" in
-                            head_sha=*) sha=${arg#head_sha=} ;;
-                        esac
-                    done
-                    if [ "$sha" = "$(head_sha)" ]; then
-                        echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'
-                    else
-                        echo '{"workflow_runs":[]}'
-                    fi
-                    exit ;;
-                'repos/{owner}/{repo}/actions/runs/10/jobs') cat "$forge/failed-command-jobs"; exit ;;
-            esac ;;
-    esac
-fi
-if [ -f "$forge/infrastructure" ]; then
-    phase=before
-    [ ! -f "$forge/rerun-applied" ] || phase=after
-    if [ -f "$forge/infra-auth403" ] && [ "$1" = api ]; then
-        echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1
-    fi
-    # [ORB-25864] The account's REST quota: the next N repository reads are
-    # rate-limited, and `rate_limit` (which spends no quota) names the reset.
-    if [ "$*" = "api rate_limit" ]; then
-        if [ -f "$forge/infra-rate-limit-hang" ]; then sleep 30; fi
-        cat "$forge/infra-rate-limit"; exit
-    fi
-    if [ "$*" = "api repos/{owner}/{repo}" ] && [ -s "$forge/infra-rate-limited" ]; then
-        left=$(cat "$forge/infra-rate-limited")
-        if [ "$left" -gt 0 ]; then
-            echo $((left - 1)) > "$forge/infra-rate-limited"
-            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
-            exit 1
-        fi
-    fi
-    # [ORB-25898] The same quota running out after the snapshot: the next N
-    # workflow-file reads are rate-limited.
-    if [ "$1" = api ] && [ -s "$forge/infra-contents-rate-limited" ]; then
-        case "${2:-}" in
-            */contents/*)
-                left=$(cat "$forge/infra-contents-rate-limited")
-                if [ "$left" -gt 0 ]; then
-                    echo $((left - 1)) > "$forge/infra-contents-rate-limited"
-                    echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
-                    exit 1
-                fi ;;
-        esac
-    fi
-    # [ORB-25917] A snapshot read that stays throttled: the next N reads of the
-    # pull request are rate-limited, uncached, in every snapshot.
-    if [ "$*" = "api repos/{owner}/{repo}/pulls/42" ] && [ -s "$forge/infra-pulls-rate-limited" ]; then
-        left=$(cat "$forge/infra-pulls-rate-limited")
-        if [ "$left" -gt 0 ]; then
-            echo $((left - 1)) > "$forge/infra-pulls-rate-limited"
-            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
-            exit 1
-        fi
-    fi
-    case "$1 ${2:-}" in
-        "api graphql")
-            case "$*" in
-                *requiredStatusChecks*) cat "$forge/infra-policy"; exit ;;
-                *statusCheckRollup*) cat "$forge/infra-rollup-policy"; exit ;;
-            esac ;;
-        "api repos/{owner}/{repo}") cat "$forge/infra-repo"; exit ;;
-        "api repos/{owner}/{repo}/pulls/42") cat "$forge/infra-pr"; exit ;;
-        "api repos/{owner}/{repo}/rules/branches/agent-main?per_page=100") cat "$forge/infra-rules"; exit ;;
-        "api repos/{owner}/{repo}/actions/runs/700") cat "$forge/infra-run-$phase"; exit ;;
-        "api repos/{owner}/{repo}/actions/runs/700/attempts/1/jobs?per_page=100") cat "$forge/infra-jobs"; exit ;;
-        "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
-        "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
-        "run view")
-            # [ORB-25918] The primary log read may come back empty, and the
-            # fallback's run-metadata read (`--json`) may be throttled. Each
-            # counter names how many of its reads still answer that way.
-            case "$*" in
-                *' --json '*)
-                    if [ -s "$forge/infra-run-rate-limited" ]; then
-                        left=$(cat "$forge/infra-run-rate-limited")
-                        if [ "$left" -gt 0 ]; then
-                            echo $((left - 1)) > "$forge/infra-run-rate-limited"
-                            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
-                            exit 1
-                        fi
-                    fi ;;
-                *)
-                    if [ -s "$forge/infra-log-empty" ]; then
-                        left=$(cat "$forge/infra-log-empty")
-                        if [ "$left" -gt 0 ]; then
-                            echo $((left - 1)) > "$forge/infra-log-empty"
-                            exit 0
-                        fi
-                    fi ;;
-            esac
-            # A planted marker hangs the job-log read until the supervisor kills it.
-            if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
-            # A planted marker makes the diagnosis vanish once the reservation
-            # is durable, as an empty or throttled view would.
-            if [ -f "$forge/infra-log-vanishes" ] && [ -f "$forge/infra-reserved" ]; then exit; fi
-            cat "$forge/infra-log"; exit ;;
-        "run rerun")
-            [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
-            mode=$(cat "$forge/infrastructure")
-            if [ "$mode" = auth ]; then echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
-            if [ "$mode" != no_apply ]; then touch "$forge/rerun-applied"; fi
-            # [ORB-25917] Throttle the pull-request read from the rerun on, so the
-            # observation of the reserved attempt is the pass that is throttled.
-            if [ -s "$forge/infra-pulls-rate-limited-after-rerun" ]; then cp "$forge/infra-pulls-rate-limited-after-rerun" "$forge/infra-pulls-rate-limited"; fi
-            if [ "$mode" = moved ]; then advance "$(cat "$forge/pr-head")" foreign; fi
-            if [ "$mode" = deleted ]; then git --git-dir="$remote" update-ref -d "refs/heads/$(cat "$forge/pr-head")"; fi
-            if [ "$mode" = lost ] || [ "$mode" = no_apply ]; then echo 'HTTP 503: lost mutation reply' >&2; exit 1; fi
-            exit ;;
-        "api "*)
-            case "$2" in
-                *'/commits/'*'/status?'*) cat "$forge/infra-statuses-$phase"; exit ;;
-                *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
-                *'/actions/runs?head_sha='*)
-                    # A planted marker hangs this read until the supervisor kills it.
-                    if [ -f "$forge/infra-runs-hang" ]; then sleep 30; fi
-                    cat "$forge/infra-runs-$phase"; exit ;;
-                *'/contents/'*) cat "$forge/infra-contents"; exit ;;
-            esac ;;
-    esac
-fi
-# Current branch policy requires `test` [ORB-16339]. The head reports it
-# unless the latest status read scripted `unreported`.
-if [ -f "$forge/gates" ]; then
-    observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
-    [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
-    head=$(head_sha)
-    pr_base=$(cat "$forge/pr-base")
-    repo='{"id":500,"full_name":"orbit/test","url":"https://api.github.com/repos/orbit/test"}'
-    case "$1 ${2:-}" in
-        "api repos/{owner}/{repo}") printf '%s\n' "$repo"; exit ;;
-        "api repos/{owner}/{repo}/pulls/42")
-            printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' \
-                "$head" "$(cat "$forge/pr-head")" "$repo" "$(git --git-dir="$remote" rev-parse "refs/heads/$pr_base")" "$pr_base" "$repo"
-            exit ;;
-        "api graphql")
-            case "$*" in
-                *requiredStatusChecks*)
-                    printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[{"context":"test","app":null}]}}}}}}\n' "$head" "$pr_base"
-                    exit ;;
-            esac ;;
-        "api "*)
-            case "$2" in
-                *'/rules/branches/'*) echo '[]'; exit ;;
-                *'/check-runs?'*)
-                    if [ "$observed" = unreported ]; then echo '{"total_count":0,"check_runs":[]}'; exit; fi
-                    printf '{"total_count":1,"check_runs":[{"id":1,"name":"test","head_sha":"%s","app":{"id":900},"status":"completed","conclusion":"success"}]}\n' "$head"
-                    exit ;;
-                *'/status?'*) printf '{"sha":"%s","repository":%s,"total_count":0,"statuses":[]}\n' "$head" "$repo"; exit ;;
-                *'/actions/runs?'*) echo '{"total_count":0,"workflow_runs":[]}'; exit ;;
-            esac ;;
-    esac
-fi
-case "$1 ${2:-}" in
-    "pr list")
-        # An unfiltered listing (the one that asks for `body`) can be planted
-        # so a delivery's earlier pull requests are visible. Head lookups stay
-        # on the single pull request this substitute creates.
-        case "$*" in
-            *body*)
-                if [ -f "$forge/open-prs.json" ]; then
-                    cat "$forge/open-prs.json"
-                    exit
-                fi
-                ;;
-        esac
-        if [ -f "$forge/pr-head" ]; then
-            pr_list_base=$(cat "$forge/pr-base" 2>/dev/null || echo agent-main)
-            printf '[{"number":%s,"title":"Landing","headRefName":"%s","baseRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")" "$pr_list_base"
-        else
-            echo '[]'
-        fi ;;
-    "pr create") create "$@" ;;
-    "pr edit")
-        [ "$4" = "--body" ] || exit 2
-        printf '%s' "$5" > "$forge/pr-body"
-        echo Edited ;;
-    "pr ready")
-        if [ -f "$forge/ready-failure" ]; then echo 'HTTP 403: forbidden' >&2; exit 1; fi
-        rm "$forge/pr-draft"
-        echo Ready ;;
-    "pr close")
-        if [ -f "$forge/pr-close-failure" ]; then
-            cat "$forge/pr-close-failure" >&2
-            exit 1
-        fi
-        printf 'Closed\n' ;;
-    "pr view")
-        if [ -f "$forge/pr-view-outcomes" ]; then
-            view_attempt=$(( $(cat "$forge/pr-view-reads") + 1 ))
-            printf '%s\n' "$view_attempt" > "$forge/pr-view-reads"
-            view_outcome=$(sed -n "${view_attempt}p" "$forge/pr-view-outcomes")
-            [ -n "$view_outcome" ] || view_outcome=$(tail -n 1 "$forge/pr-view-outcomes")
-            if [ "$view_outcome" = invalid_json ]; then printf '{'; exit 0; fi
-            if [ "$view_outcome" != success ]; then
-                printf '%s\n' "$view_outcome" >&2
-                exit 1
-            fi
-        fi
-        case "$*" in
-            *mergeStateStatus*)
-                draft_field=0
-                case "$*" in *isDraft*) draft_field=1 ;; esac
-                status "$draft_field" ;;
-            *)
-                python3 - "$forge" "$number_json" "$url" <<'PYVIEW'
-import json, pathlib, sys
-forge = pathlib.Path(sys.argv[1])
-view = {"number": json.loads(sys.argv[2]), "title": "Landing",
-    "body": (forge / "pr-body").read_text() if (forge / "pr-body").exists() else "",
-    "isDraft": (forge / "pr-draft").exists() or (forge / "draft-merge-state").exists(),
-    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}
-if not (forge / "omit-pr-base").exists():
-    view["baseRefName"] = (forge / "pr-base").read_text().strip() if (forge / "pr-base").exists() else "agent-main"
-print(json.dumps(view))
-PYVIEW
-                ;;
-        esac ;;
-    "repo view") echo '{"nameWithOwner":"orbit/test","url":"https://github.com/orbit/test"}' ;;
-    "api graphql")
-        case "$*" in
-            *statusCheckRollup*)
-                observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
-                [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
-                if [ -f "$forge/required-checks-outcomes" ]; then
-                    rc_reads=$(( $(cat "$forge/required-checks-reads" 2>/dev/null || echo 0) + 1 ))
-                    printf '%s\n' "$rc_reads" > "$forge/required-checks-reads"
-                    rc_outcome=$(sed -n "${rc_reads}p" "$forge/required-checks-outcomes")
-                    [ -n "$rc_outcome" ] || rc_outcome=$(tail -n 1 "$forge/required-checks-outcomes")
-                    case "$rc_outcome" in
-                        empty) exit 0 ;;
-                        truncated) printf '{"data":{"repository":{"pullRequest":{"headR'; exit 0 ;;
-                        fail) echo 'unexpected end of JSON input' >&2; exit 1 ;;
-                        tls) echo 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' >&2; exit 1 ;;
-                        success) ;;
-                        pending) observed=mixed_pending ;;
-                        foreign_head) rc_head=0000000000000000000000000000000000000000 ;;
-                        stale_rollup) rc_rollup=0000000000000000000000000000000000000000 ;;
-                        *) echo "fake gh: unknown required-checks outcome '$rc_outcome'" >&2; exit 2 ;;
-                    esac
-                fi
-                if [ -f "$forge/required-auth" ]; then echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
-                if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
-                rollup=$(check "$observed")
-                case "$observed" in
-                    mixed_*|paired_failure|paired_failure_reversed|optional_pending) ;;
-                    *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
-                esac
-                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "${rc_head:-$(head_sha)}" "${rc_rollup:-${rc_head:-$(head_sha)}}" "$rollup"
-                exit ;;
-        esac
-        # An unreviewed push that lands after the freshness check, while the
-        # merge strategy is being resolved and before the merge request.
-        if [ -f "$forge/push-before-merge" ] && [ ! -f "$forge/pushed" ]; then
-            advance "$(cat "$forge/pr-head")" "Unreviewed push"
-            touch "$forge/pushed"
-        fi
-        allowed=true
-        [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
-        printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;
-    "api repos/{owner}/{repo}/pulls/42/merge") merge "$@" ;;
-    "api --method") commit_ci_api "$@" ;;
-    "run view") commit_ci_log "$@" ;;
-    *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
-esac
-"#;
+
 // Isolated child process
 /// Run `body` in a copy of this test binary whose `PATH` starts with the substitute `gh`, and fail if it fails or outlives [`CHILD_DEADLINE`].
 fn isolated(test: &str, body: impl FnOnce(&Path)) {
@@ -7553,7 +7614,7 @@ fn in_fresh_row(parent: &Path, body: impl FnOnce(&Path)) {
     // TMPDIR stays at the parent-owned child root: a cached immutable Git seed must outlive the row. Each scenario still owns separate TempDirs.
     orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(row.path()));
 }
-type Scenario = fn(&Path);
+
 /// Run each scenario in its own fresh row under `parent` (the isolated child's sandbox), recording each pass by name as `run_scenarios` does.
 fn run_rows(parent: &Path, rows: &[(&str, Scenario)]) {
     for (name, scenario) in rows {
@@ -7569,33 +7630,7 @@ fn run_named_row(parent: &Path, name: &str, scenario: impl FnOnce(&Path)) {
     in_fresh_row(parent, scenario);
     test_env::record_scenario_pass(name);
 }
-// Wrapper tables: each `#[test]` runs its scenarios in one isolated child (see `isolated`); scenario names double as their row names.
-macro_rules! container_groups {
-    ($($name:ident => [$($s:ident),+]),+ $(,)?) => { $(
-        fn $name(sandbox: &Path) {
-            run_rows(sandbox, &[$((stringify!($s), $s as fn(&Path))),+]);
-        }
-    )+ };
-}
-macro_rules! test_groups {
-    ($($name:ident => [$($s:ident),+]),+ $(,)?) => { $(
-        #[test]
-        fn $name() {
-            isolated(stringify!($name), |sandbox| {
-                run_rows(sandbox, &[$((stringify!($s), $s as fn(&Path))),+]);
-            });
-        }
-    )+ };
-}
-macro_rules! row_groups {
-    ($runner:ident; $($name:ident => [$($row:literal),+]),+ $(,)?) => { $(
-        fn $name(_sandbox: &Path) { $runner(stringify!($name), &[$($row),+]); }
-    )+ };
-    (test $runner:ident; $($name:ident => [$($row:literal),+]),+ $(,)?) => { $(
-        #[test]
-        fn $name() { $runner(stringify!($name), &[$($row),+]); }
-    )+ };
-}
+
 container_groups! {
     validation_environment_contracts => [missing_required_validation_tool_reports_its_search_path, validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain, a_missing_validation_tool_is_an_environment_failure],
     empty_validation_and_handoff_contracts => [required_validation_without_commands_is_a_no_op, claimed_validation_without_commands_is_a_recorded_no_op, claimed_handoff_carries_before_pr_evidence_only_for_its_candidate, claimed_handoff_without_logs_is_refused_when_commands_are_required],

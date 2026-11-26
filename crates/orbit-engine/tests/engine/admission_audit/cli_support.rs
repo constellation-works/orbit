@@ -11,6 +11,15 @@ use orbit_engine::ResolvedActivityTools;
 use orbit_engine::V2AuditWriter;
 use orbit_engine::{DispatchError, ResolvedCliExecutor, ResolvedSandbox};
 
+/// The registry [`TestHost::resolve_activity_tool_denials`] resolves against.
+const TEST_REGISTERED_TOOLS: &[&str] = &[
+    "orbit.task.show",
+    "orbit.search",
+    "orbit.workflow.ship",
+    "proc.spawn",
+    "github.run.list",
+];
+
 /// A host that launches the fixture provider and resolves deny-mode tools.
 /// Its optional primary checkout lets the public runner observe checkout drift.
 pub(super) struct TestHost {
@@ -148,15 +157,6 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         }
     }
 }
-
-/// The registry [`TestHost::resolve_activity_tool_denials`] resolves against.
-const TEST_REGISTERED_TOOLS: &[&str] = &[
-    "orbit.task.show",
-    "orbit.search",
-    "orbit.workflow.ship",
-    "proc.spawn",
-    "github.run.list",
-];
 
 /// An audit writer persisting envelopes and blobs to an in-memory store and
 /// `audit_root/blobs`, so tests read back what a real run would keep.

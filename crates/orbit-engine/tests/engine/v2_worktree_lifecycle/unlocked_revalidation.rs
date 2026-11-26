@@ -38,10 +38,10 @@ impl Candidate {
         commit_file(&checkout.path, "lib.rs", "fn feature() {}\n");
         fs::create_dir_all(checkout.path.join("docs")).unwrap();
         Self {
-            base_sha: setup["base_sha"].as_str().unwrap().to_string(),
             fixture,
             host,
             checkout,
+            base_sha: setup["base_sha"].as_str().unwrap().to_string(),
             trace,
         }
     }

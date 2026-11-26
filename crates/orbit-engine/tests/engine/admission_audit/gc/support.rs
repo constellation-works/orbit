@@ -52,6 +52,18 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeTaskHost {
     }
 }
 
+/// Lets the tempdir delete the fixture if an assertion fails first.
+#[cfg(unix)]
+pub(super) struct Unlock(pub(super) PathBuf);
+
+#[cfg(unix)]
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
 pub(super) fn task_fixture(id: &str, status: TaskStatus) -> Task {
     let now = Utc::now();
     Task {
@@ -104,18 +116,6 @@ pub(super) fn leave_read_only_fixture(repo: &Path, worktree: &Path) -> PathBuf {
     fs::write(locked.join("state.db"), vec![7u8; 4096]).unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
     locked
-}
-
-/// Lets the tempdir delete the fixture if an assertion fails first.
-#[cfg(unix)]
-pub(super) struct Unlock(pub(super) PathBuf);
-
-#[cfg(unix)]
-impl Drop for Unlock {
-    fn drop(&mut self) {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
-    }
 }
 
 pub(super) fn listed_worktrees(repo: &Path) -> String {

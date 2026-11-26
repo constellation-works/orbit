@@ -207,9 +207,10 @@ fn run_implementer_envelopes_with_recovery(
         });
     let delivered = *host.delivered.lock().unwrap();
     let traces = host.traces.lock().unwrap().clone();
+    let events = writer.events_snapshot().unwrap();
     Run {
-        events: writer.events_snapshot().unwrap(),
         outcome,
+        events,
         invocations,
         side_effects,
         correction_envelope,

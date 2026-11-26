@@ -12,11 +12,6 @@ use serde_json::{Value, json};
 
 use orbit_engine::{DispatchError, V2AuditWriter};
 
-pub(super) fn test_writer(run_id: &str) -> V2AuditWriter {
-    let inner: std::sync::Arc<dyn AuditSink> = std::sync::Arc::new(NullSink);
-    V2AuditWriter::new(run_id, "test-agent", inner)
-}
-
 // --------------------------------------------------------------------------
 // Shared scripted host for executor-block tests
 // --------------------------------------------------------------------------
@@ -82,6 +77,11 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             None => Ok(json!({ "action": action })),
         }
     }
+}
+
+pub(super) fn test_writer(run_id: &str) -> V2AuditWriter {
+    let inner: std::sync::Arc<dyn AuditSink> = std::sync::Arc::new(NullSink);
+    V2AuditWriter::new(run_id, "test-agent", inner)
 }
 
 // --------------------------------------------------------------------------

@@ -25,72 +25,6 @@ const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 const START_MS: u64 = 1_000_000;
 const PULL_READ: &str = "repos/{owner}/{repo}/pulls/42";
 
-#[test]
-fn truncated_check_runs_are_returned_at_once_without_waiting() {
-    git_fixture::isolated(
-        module_path!(),
-        "truncated_check_runs_are_returned_at_once_without_waiting",
-        || {
-            let fixture = Fixture::open("truncated");
-            fixture.write_forge(0, true);
-            let (result, waits) = fixture.run(START_MS + 3_600_000, 30);
-            let error = result.expect_err("a truncated list is never readable on a retry");
-            assert_eq!(unreadable_reason(&error), "truncated check_runs");
-            assert!(waits.is_empty(), "a retry waited {waits:?} ms");
-            assert_eq!(fixture.reads(PULL_READ), 1, "the snapshot read again");
-        },
-    );
-}
-
-#[test]
-fn transient_unreadable_evidence_backs_off_to_the_poll_interval() {
-    git_fixture::isolated(
-        module_path!(),
-        "transient_unreadable_evidence_backs_off_to_the_poll_interval",
-        || {
-            let fixture = Fixture::open("backoff");
-            fixture.write_forge(6, false);
-            let (result, waits) = fixture.run(START_MS + 3_600_000, 40);
-            let value = result.expect("the evidence becomes readable on the seventh read");
-            assert_eq!(value["gates_passed"], json!(true), "{value}");
-            assert_eq!(
-                waits,
-                [5_000, 10_000, 20_000, 40_000, 40_000, 40_000],
-                "waits grow from 5 s to the poll interval and stay there"
-            );
-            assert_eq!(fixture.reads(PULL_READ), 7, "no read after it succeeded");
-        },
-    );
-}
-
-#[test]
-fn deadline_ending_a_transient_wait_returns_the_last_unreadable_cause() {
-    git_fixture::isolated(
-        module_path!(),
-        "deadline_ending_a_transient_wait_returns_the_last_unreadable_cause",
-        || {
-            let fixture = Fixture::open("deadline");
-            fixture.write_forge(1_000, false);
-            let (result, waits) = fixture.run(START_MS + 12_000, 30);
-            let error = result.expect_err("the evidence never becomes readable");
-            assert_eq!(unreadable_reason(&error), "foreign or changed head");
-            assert_eq!(
-                waits,
-                [5_000, 7_000],
-                "the last wait is the budget that remains"
-            );
-            assert_eq!(fixture.reads(PULL_READ), 2);
-        },
-    );
-}
-
-fn unreadable_reason(error: &OrbitError) -> &str {
-    match error {
-        OrbitError::WorkflowEvidenceUnavailable(evidence) => &evidence.reason,
-        other => panic!("expected unreadable evidence, got {other}"),
-    }
-}
-
 struct Fixture {
     root: PathBuf,
 }
@@ -224,5 +158,71 @@ esac
         );
         let waits = waits.borrow().clone();
         (result, waits)
+    }
+}
+
+#[test]
+fn truncated_check_runs_are_returned_at_once_without_waiting() {
+    git_fixture::isolated(
+        module_path!(),
+        "truncated_check_runs_are_returned_at_once_without_waiting",
+        || {
+            let fixture = Fixture::open("truncated");
+            fixture.write_forge(0, true);
+            let (result, waits) = fixture.run(START_MS + 3_600_000, 30);
+            let error = result.expect_err("a truncated list is never readable on a retry");
+            assert_eq!(unreadable_reason(&error), "truncated check_runs");
+            assert!(waits.is_empty(), "a retry waited {waits:?} ms");
+            assert_eq!(fixture.reads(PULL_READ), 1, "the snapshot read again");
+        },
+    );
+}
+
+#[test]
+fn transient_unreadable_evidence_backs_off_to_the_poll_interval() {
+    git_fixture::isolated(
+        module_path!(),
+        "transient_unreadable_evidence_backs_off_to_the_poll_interval",
+        || {
+            let fixture = Fixture::open("backoff");
+            fixture.write_forge(6, false);
+            let (result, waits) = fixture.run(START_MS + 3_600_000, 40);
+            let value = result.expect("the evidence becomes readable on the seventh read");
+            assert_eq!(value["gates_passed"], json!(true), "{value}");
+            assert_eq!(
+                waits,
+                [5_000, 10_000, 20_000, 40_000, 40_000, 40_000],
+                "waits grow from 5 s to the poll interval and stay there"
+            );
+            assert_eq!(fixture.reads(PULL_READ), 7, "no read after it succeeded");
+        },
+    );
+}
+
+#[test]
+fn deadline_ending_a_transient_wait_returns_the_last_unreadable_cause() {
+    git_fixture::isolated(
+        module_path!(),
+        "deadline_ending_a_transient_wait_returns_the_last_unreadable_cause",
+        || {
+            let fixture = Fixture::open("deadline");
+            fixture.write_forge(1_000, false);
+            let (result, waits) = fixture.run(START_MS + 12_000, 30);
+            let error = result.expect_err("the evidence never becomes readable");
+            assert_eq!(unreadable_reason(&error), "foreign or changed head");
+            assert_eq!(
+                waits,
+                [5_000, 7_000],
+                "the last wait is the budget that remains"
+            );
+            assert_eq!(fixture.reads(PULL_READ), 2);
+        },
+    );
+}
+
+fn unreadable_reason(error: &OrbitError) -> &str {
+    match error {
+        OrbitError::WorkflowEvidenceUnavailable(evidence) => &evidence.reason,
+        other => panic!("expected unreadable evidence, got {other}"),
     }
 }

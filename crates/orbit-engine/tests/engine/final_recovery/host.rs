@@ -299,6 +299,16 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
     }
 }
 
+pub(super) struct Run {
+    pub(super) result: Result<JobOutcome, DispatchError>,
+    /// `(outcome, decision)` of every `job.final_recovery_attempted` event.
+    pub(super) attempts: Vec<(String, Option<String>)>,
+    /// Detail of each attempt, in the same order as `attempts`.
+    pub(super) details: Vec<Option<String>>,
+    /// `outcome` of every `step.post_recovery_attempt` event.
+    pub(super) post_recovery: Vec<String>,
+}
+
 pub(super) fn evidence_hold() -> orbit_types::workflow::ReviewEvidenceHold {
     orbit_types::workflow::ReviewEvidenceHold {
         schema_version: 1,
@@ -315,16 +325,6 @@ pub(super) fn evidence_hold() -> orbit_types::workflow::ReviewEvidenceHold {
         published_ref: None,
         candidate_carry: None,
     }
-}
-
-pub(super) struct Run {
-    pub(super) result: Result<JobOutcome, DispatchError>,
-    /// `(outcome, decision)` of every `job.final_recovery_attempted` event.
-    pub(super) attempts: Vec<(String, Option<String>)>,
-    /// Detail of each attempt, in the same order as `attempts`.
-    pub(super) details: Vec<Option<String>>,
-    /// `outcome` of every `step.post_recovery_attempt` event.
-    pub(super) post_recovery: Vec<String>,
 }
 
 pub(super) fn run(job: &JobV2, host: &RecoveryHost, resume: Option<&PipelineState>) -> Run {

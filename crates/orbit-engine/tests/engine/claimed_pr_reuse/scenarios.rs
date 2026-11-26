@@ -42,339 +42,98 @@ const EARLIER: &str = "orbit/T-REUSE-aaaaaaaa";
 const OURS: &str = "orbit/T-REUSE-bbbbbbbb";
 const PRIOR_PR: &str = "41";
 
-/// A fresh attempt of a re-admitted task: the earlier attempt's `[BLOCKED]`
-/// failure-handoff pull request #41 is still open, and the new run resumes
-/// no candidate, so nothing names #41 to it. Its `pr_open` opens the new pull
-/// request and closes #41 with a comment naming it, so the task has exactly
-/// one open pull request. A human's pull request on the task's branch prefix,
-/// another task's pull request and a merged one are left alone, and a retried
-/// `pr_open` closes nothing more.
-fn a_fresh_attempt_closes_the_tasks_earlier_open_pull_request() {
-    isolated(
-        "a_fresh_attempt_closes_the_tasks_earlier_open_pull_request",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            fx.describe_pr(PRIOR_PR, None, &format!("Blocked delivery of {TASK_ID}."));
-            fx.add_pr(
-                "50",
-                "orbit/T-REUSE-cccccccc",
-                "OPEN",
-                Some("someone"),
-                TASK_ID,
-            );
-            fx.add_pr("51", "orbit/T-OTHER-dddddddd", "OPEN", None, "T-OTHER");
-            fx.add_pr("52", "orbit/T-REUSE-eeeeeeee", "MERGED", None, TASK_ID);
-            let host = Host::closing_superseded(&fx.repo);
+/// The `gh` surface the provider adapter calls, over any number of pull
+/// requests: `prs/<number>/{head,base,state,comment}` under the forge, with
+/// an optional `author` (else `orbit`) and single-line `body`.
+const FAKE_GH: &str = r#"#!/bin/sh
+set -eu
+forge='__FORGE__'
+remote="$forge/remote.git"
+printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
 
-            fs::write(fx.claim.join("fresh.txt"), "fresh attempt\n").unwrap();
-            git(&fx.claim, &["add", "fresh.txt"]);
-            git(&fx.claim, &["commit", "-q", "-m", "fresh attempt"]);
-            let pushed = action(&host, "git_push", &fx.push_input(OURS, &Value::Null)).unwrap();
-            assert_eq!(pushed["decision"], "performed_create", "{pushed}");
-
-            let opened = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
-            assert_eq!(opened["decision"], "performed", "{opened}");
-            let replacement = opened["pr_number"].as_str().unwrap().to_string();
-            assert!(opened["superseded_pull_request"].is_null(), "{opened}");
-            let closed = opened["closed_stale_pull_requests"].as_array().unwrap();
-            assert_eq!(closed.len(), 1, "{opened}");
-            assert_eq!(closed[0]["number"], PRIOR_PR, "{opened}");
-            assert_eq!(closed[0]["decision"], "closed", "{opened}");
-            assert!(
-                !fx.pr_file(PRIOR_PR, "comment").is_empty(),
-                "the earlier pull request is closed with a comment"
-            );
-            let mut expected = vec!["50".to_string(), "51".to_string(), replacement];
-            expected.sort();
-            assert_eq!(
-                fx.open_prs(),
-                expected,
-                "only the task's earlier Orbit pull request is closed"
-            );
-            assert_eq!(fx.pr_file("52", "state"), "MERGED");
-            assert_eq!(
-                fx.remote_tip(EARLIER),
-                fx.earlier_head,
-                "the closed pull request's branch is kept"
-            );
-
-            let again = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
-            assert_eq!(again["decision"], "reused", "{again}");
-            assert_eq!(again["closed_stale_pull_requests"], json!([]), "{again}");
-            let closes = fx.calls().iter().filter(|call| *call == "pr close").count();
-            assert_eq!(closes, 1, "{:?}", fx.calls());
-        },
-    );
+# The value following flag `$1` among the remaining arguments.
+flag() {
+    name=$1; shift
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "$name" ]; then printf '%s' "$2"; return; fi
+        shift
+    done
 }
 
-/// The earlier claim pushed its candidate and opened #41, then failed in its
-/// before-landing review. The re-claim resumes it on a moved base: its
-/// branch becomes the candidate's, the push replaces the published head
-/// under a lease on it, and `pr_open` reuses #41 rather than opening another.
-/// The earlier claim's retained worktree keeps its checkout and commits on a
-/// branch renamed aside.
-fn a_resumed_published_candidate_republishes_through_its_open_pull_request() {
-    isolated(
-        "a_resumed_published_candidate_republishes_through_its_open_pull_request",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = Host::new(&fx.repo);
+url() { printf 'https://github.com/orbit/test/pull/%s' "$1"; }
 
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
-            assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
-            assert_eq!(resumed["prior_pull_request"], PRIOR_PR, "{resumed}");
-            assert_eq!(resumed["reused_branch"], EARLIER, "{resumed}");
-            assert_eq!(resumed["reused_head_sha"], fx.earlier_head, "{resumed}");
-            assert!(resumed["branch_reuse_refused"].is_null(), "{resumed}");
-            assert_eq!(
-                git(&fx.claim, &["symbolic-ref", "--short", "HEAD"]),
-                EARLIER
-            );
-            let aside = format!("{EARLIER}-superseded-bbbbbbbb");
-            assert_eq!(
-                git(&fx.earlier, &["symbolic-ref", "--short", "HEAD"]),
-                aside,
-                "the retained worktree keeps its checkout on a branch renamed aside"
-            );
-            assert_eq!(git(&fx.earlier, &["rev-parse", "HEAD"]), fx.earlier_head);
+case "$1 ${2:-}" in
+    "pr list")
+        # With `--head`, the open pull requests on that branch; without it,
+        # every open one with its body.
+        head=$(flag --head "$@")
+        printf '['
+        sep=
+        for dir in "$forge"/prs/*; do
+            [ "$(cat "$dir/state")" = OPEN ] || continue
+            [ -z "$head" ] || [ "$(cat "$dir/head")" = "$head" ] || continue
+            author=orbit
+            [ ! -f "$dir/author" ] || author=$(cat "$dir/author")
+            body=
+            [ ! -f "$dir/body" ] || body=$(cat "$dir/body")
+            printf '%s{"number":%s,"title":"Delivery","headRefName":"%s","author":{"login":"%s"},"body":"%s"}' \
+                "$sep" "${dir##*/}" "$(cat "$dir/head")" "$author" "$body"
+            sep=,
+        done
+        printf ']\n' ;;
+    "pr create")
+        last=$(ls "$forge/prs" | sort -n | tail -n 1)
+        number=$(( ${last:-0} + 1 ))
+        mkdir -p "$forge/prs/$number"
+        flag --head "$@" > "$forge/prs/$number/head"
+        flag --base "$@" > "$forge/prs/$number/base"
+        printf 'OPEN' > "$forge/prs/$number/state"
+        url "$number"; echo ;;
+    "pr view")
+        number=${3##*/}
+        dir="$forge/prs/$number"
+        head=$(cat "$dir/head")
+        oid=$(git --git-dir="$remote" rev-parse --verify --quiet "refs/heads/$head" || true)
+        printf '{"number":%s,"title":"Delivery","body":"","state":"%s","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","files":[],"commits":[],"url":"%s"}\n' \
+            "$number" "$(cat "$dir/state")" "$head" "$oid" "$(cat "$dir/base")" "$(url "$number")" ;;
+    "pr close")
+        flag --comment "$@" > "$forge/prs/$3/comment"
+        printf 'CLOSED' > "$forge/prs/$3/state" ;;
+    *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
+esac
+"#;
 
-            let head = fx.continue_and_commit();
-            let pushed = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
-            assert_eq!(pushed["decision"], "performed_force_with_lease", "{pushed}");
-            assert_eq!(
-                fx.remote_tip(EARLIER),
-                head,
-                "the published head is replaced"
-            );
-
-            let opened = action(&host, "pr_open", &fx.open_input(EARLIER, &resumed)).unwrap();
-            assert_eq!(opened["decision"], "reused", "{opened}");
-            assert_eq!(opened["pr_number"], PRIOR_PR, "{opened}");
-            assert!(opened["superseded_pull_request"].is_null(), "{opened}");
-            assert!(
-                !fx.calls().iter().any(|call| call == "pr create"),
-                "no second pull request is created: {:?}",
-                fx.calls()
-            );
-            assert_eq!(fx.open_prs(), vec![PRIOR_PR.to_string()]);
-        },
-    );
-}
-
-/// The re-claim cannot take over the earlier branch: this host's copy of it
-/// holds a commit that was never published, which is never moved. The leaf
-/// publishes on its own branch, and `pr_open` closes #41 with a comment
-/// naming the pull request that replaced it.
-fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
-    isolated(
-        "an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            fs::write(fx.earlier.join("notes.txt"), "never pushed\n").unwrap();
-            git(&fx.earlier, &["add", "notes.txt"]);
-            git(&fx.earlier, &["commit", "-q", "-m", "local only"]);
-            let unpublished = git(&fx.earlier, &["rev-parse", "HEAD"]);
-            let host = Host::new(&fx.repo);
-
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
-            assert!(resumed["reused_branch"].is_null(), "{resumed}");
-            assert!(resumed["reused_head_sha"].is_null(), "{resumed}");
-            let refused = resumed["branch_reuse_refused"].as_str().unwrap_or_default();
-            assert!(refused.contains(&unpublished), "{resumed}");
-            assert_eq!(git(&fx.claim, &["symbolic-ref", "--short", "HEAD"]), OURS);
-            assert_eq!(
-                git(&fx.earlier, &["rev-parse", EARLIER]),
-                unpublished,
-                "a branch holding unpublished work is left where it is"
-            );
-
-            fx.continue_and_commit();
-            let pushed = action(&host, "git_push", &fx.push_input(OURS, &resumed)).unwrap();
-            assert_eq!(pushed["decision"], "performed_create", "{pushed}");
-            assert_eq!(fx.remote_tip(EARLIER), fx.earlier_head, "untouched");
-
-            let opened = action(&host, "pr_open", &fx.open_input(OURS, &resumed)).unwrap();
-            assert_eq!(opened["decision"], "performed", "{opened}");
-            let replacement = opened["pr_number"].as_str().unwrap().to_string();
-            assert_ne!(replacement, PRIOR_PR);
-            let superseded = &opened["superseded_pull_request"];
-            assert_eq!(superseded["number"], PRIOR_PR, "{opened}");
-            assert_eq!(superseded["decision"], "closed", "{opened}");
-            assert_eq!(fx.open_prs(), vec![replacement.clone()]);
-            let comment = fx.pr_file(PRIOR_PR, "comment");
-            assert!(
-                comment.contains(&format!("Superseded by #{replacement}")),
-                "the closing comment names the superseding pull request: {comment}"
-            );
-
-            // A retried `pr_open` reuses its own pull request and leaves the
-            // closed one alone.
-            let again = action(&host, "pr_open", &fx.open_input(OURS, &resumed)).unwrap();
-            assert_eq!(again["decision"], "reused", "{again}");
-            assert_eq!(again["superseded_pull_request"]["decision"], "not_open");
-            let closes = fx.calls().iter().filter(|call| *call == "pr close").count();
-            assert_eq!(closes, 1, "{:?}", fx.calls());
-        },
-    );
-}
-
-/// The earlier branch gained a commit after the published head, and the base
-/// moved again while the re-claim implemented. `pr_prepare` observes the
-/// advanced remote and `git_rebase` reports a fresh rewrite checkpoint that
-/// names it, which the ordinary push would accept. The adopted lease is on
-/// the published head, so the push refuses and the newer commit stays.
-fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
-    isolated(
-        "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = Host::new(&fx.repo);
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            fx.continue_and_commit();
-            let concurrent = fx.push_remote_only_commit();
-            fx.advance_base();
-
-            let synced = fx.sync(&host);
-            assert_eq!(synced["rewritten"], true, "{synced}");
-            assert_eq!(synced["remote_sha_before"], concurrent, "{synced}");
-            let refused = action(&host, "git_push", &fx.synced_push_input(&resumed, &synced))
-                .expect_err("the advanced branch is not replaced")
-                .to_string();
-            assert!(refused.contains("push_lease_lost"), "{refused}");
-            assert!(refused.contains(&concurrent), "{refused}");
-            assert!(refused.contains(&fx.earlier_head), "{refused}");
-            assert_eq!(
-                fx.remote_tip(EARLIER),
-                concurrent,
-                "the newer head survives"
-            );
-        },
-    );
-}
-
-/// A branch deleted on the remote since the published head is not recreated
-/// by the resumed candidate.
-fn a_deleted_adopted_branch_is_not_recreated() {
-    isolated("a_deleted_adopted_branch_is_not_recreated", |sandbox| {
-        let fx = Fixture::new(sandbox);
-        let host = Host::new(&fx.repo);
-        let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-        fx.continue_and_commit();
-        git(&fx.repo, &["push", "-q", "origin", "--delete", EARLIER]);
-        fx.advance_base();
-
-        let synced = fx.sync(&host);
-        let refused = action(&host, "git_push", &fx.synced_push_input(&resumed, &synced))
-            .expect_err("the deleted branch is not recreated")
-            .to_string();
-        assert!(refused.contains("push_lease_lost"), "{refused}");
-        assert!(refused.contains("missing"), "{refused}");
-        assert!(refused.contains(&fx.earlier_head), "{refused}");
-        let refs = git(
-            &fx.forge.join("remote.git"),
-            &["for-each-ref", &format!("refs/heads/{EARLIER}")],
-        );
-        assert!(refs.is_empty(), "the branch stays deleted: {refs}");
-    });
-}
-
-/// A remote still at the published head is replaced under the lease on it
-/// even when the base moved, and a retried push finds its own head published.
-fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
-    isolated(
-        "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = Host::new(&fx.repo);
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            fx.continue_and_commit();
-            fx.advance_base();
-
-            let synced = fx.sync(&host);
-            assert_eq!(synced["rewritten"], true, "{synced}");
-            assert_eq!(synced["remote_sha_before"], fx.earlier_head, "{synced}");
-            let input = fx.synced_push_input(&resumed, &synced);
-            let pushed = action(&host, "git_push", &input).unwrap();
-            assert_eq!(pushed["decision"], "performed_force_with_lease", "{pushed}");
-            let rebased = synced["head_sha"].as_str().unwrap();
-            assert_eq!(fx.remote_tip(EARLIER), rebased);
-
-            let retried = action(&host, "git_push", &input).unwrap();
-            assert_eq!(retried["decision"], "reused_current", "{retried}");
-            assert_eq!(fx.remote_tip(EARLIER), rebased);
-        },
-    );
-}
-
-/// A remote still at the published head fast-forwards under the lease on it,
-/// and a retried push finds the candidate published.
-fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
-    isolated(
-        "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = Host::new(&fx.repo);
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            let head = fx.continue_from_published_head();
-
-            let pushed = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
-            assert_eq!(pushed["decision"], "performed_fast_forward", "{pushed}");
-            assert_eq!(pushed["force_with_lease"], true, "{pushed}");
-            assert_eq!(fx.remote_tip(EARLIER), head);
-
-            let retried = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
-            assert_eq!(retried["decision"], "reused_current", "{retried}");
-            assert_eq!(fx.remote_tip(EARLIER), head);
-        },
-    );
-}
-
-/// The adopted branch is deleted after the engine observed it, before its
-/// fast-forward push starts. The lease refuses the push, and the branch stays
-/// deleted.
-fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation() {
-    isolated(
-        "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = Host::new(&fx.repo);
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            fx.continue_from_published_head();
-            fx.change_before_push(Change::Delete);
-
-            action(&host, "git_push", &fx.push_input(EARLIER, &resumed))
-                .expect_err("the push is refused under the published-head lease");
-            let refs = git(
-                &fx.forge.join("remote.git"),
-                &["for-each-ref", &format!("refs/heads/{EARLIER}")],
-            );
-            assert!(refs.is_empty(), "the branch stays deleted: {refs}");
-        },
-    );
-}
-
-/// The adopted branch is rewound to an ancestor of the local candidate after
-/// the engine observed it, before its fast-forward push starts. The lease
-/// refuses the push, and the rewound head survives.
-fn a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation() {
-    isolated(
-        "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
-        |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = Host::new(&fx.repo);
-            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
-            fx.continue_from_published_head();
-            let rewound = git(&fx.repo, &["rev-parse", &format!("{}^", fx.earlier_head)]);
-            fx.change_before_push(Change::Rewind(rewound.clone()));
-
-            action(&host, "git_push", &fx.push_input(EARLIER, &resumed))
-                .expect_err("the push is refused under the published-head lease");
-            assert_eq!(fx.remote_tip(EARLIER), rewound, "the rewound head survives");
-        },
-    );
-}
+/// A `git` that shadows the real one on `PATH`. When the engine's push is about
+/// to run, a change waiting in `__CHANGE__` lands on the bare remote first, so
+/// the push's lease is checked against a ref already moved, before Git
+/// advertises anything. Other invocations, and a push with nothing waiting,
+/// exec the real Git unchanged.
+const PUSH_BOUNDARY_GIT: &str = r#"#!/bin/sh
+set -eu
+git='__GIT__'
+remote='__REMOTE__'
+change='__CHANGE__'
+ref='__REF__'
+subcommand=
+skip=
+for arg in "$@"; do
+    if [ -n "$skip" ]; then skip=; continue; fi
+    case "$arg" in
+        -c) skip=1 ;;
+        -*) ;;
+        *) subcommand=$arg; break ;;
+    esac
+done
+if [ "$subcommand" = push ] && [ -f "$change" ]; then
+    action=$(cat "$change")
+    mv "$change" "$change.applied"
+    case "$action" in
+        delete) "$git" --git-dir="$remote" update-ref -d "$ref" ;;
+        *) "$git" --git-dir="$remote" update-ref "$ref" "$action" ;;
+    esac
+fi
+exec "$git" "$@"
+"#;
 
 /// A change to the adopted branch on the remote, timed to land after the
 /// engine observed the branch and before its push starts.
@@ -845,6 +604,340 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
     }
 }
 
+/// A fresh attempt of a re-admitted task: the earlier attempt's `[BLOCKED]`
+/// failure-handoff pull request #41 is still open, and the new run resumes
+/// no candidate, so nothing names #41 to it. Its `pr_open` opens the new pull
+/// request and closes #41 with a comment naming it, so the task has exactly
+/// one open pull request. A human's pull request on the task's branch prefix,
+/// another task's pull request and a merged one are left alone, and a retried
+/// `pr_open` closes nothing more.
+fn a_fresh_attempt_closes_the_tasks_earlier_open_pull_request() {
+    isolated(
+        "a_fresh_attempt_closes_the_tasks_earlier_open_pull_request",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.describe_pr(PRIOR_PR, None, &format!("Blocked delivery of {TASK_ID}."));
+            fx.add_pr(
+                "50",
+                "orbit/T-REUSE-cccccccc",
+                "OPEN",
+                Some("someone"),
+                TASK_ID,
+            );
+            fx.add_pr("51", "orbit/T-OTHER-dddddddd", "OPEN", None, "T-OTHER");
+            fx.add_pr("52", "orbit/T-REUSE-eeeeeeee", "MERGED", None, TASK_ID);
+            let host = Host::closing_superseded(&fx.repo);
+
+            fs::write(fx.claim.join("fresh.txt"), "fresh attempt\n").unwrap();
+            git(&fx.claim, &["add", "fresh.txt"]);
+            git(&fx.claim, &["commit", "-q", "-m", "fresh attempt"]);
+            let pushed = action(&host, "git_push", &fx.push_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(pushed["decision"], "performed_create", "{pushed}");
+
+            let opened = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(opened["decision"], "performed", "{opened}");
+            let replacement = opened["pr_number"].as_str().unwrap().to_string();
+            assert!(opened["superseded_pull_request"].is_null(), "{opened}");
+            let closed = opened["closed_stale_pull_requests"].as_array().unwrap();
+            assert_eq!(closed.len(), 1, "{opened}");
+            assert_eq!(closed[0]["number"], PRIOR_PR, "{opened}");
+            assert_eq!(closed[0]["decision"], "closed", "{opened}");
+            assert!(
+                !fx.pr_file(PRIOR_PR, "comment").is_empty(),
+                "the earlier pull request is closed with a comment"
+            );
+            let mut expected = vec!["50".to_string(), "51".to_string(), replacement];
+            expected.sort();
+            assert_eq!(
+                fx.open_prs(),
+                expected,
+                "only the task's earlier Orbit pull request is closed"
+            );
+            assert_eq!(fx.pr_file("52", "state"), "MERGED");
+            assert_eq!(
+                fx.remote_tip(EARLIER),
+                fx.earlier_head,
+                "the closed pull request's branch is kept"
+            );
+
+            let again = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(again["decision"], "reused", "{again}");
+            assert_eq!(again["closed_stale_pull_requests"], json!([]), "{again}");
+            let closes = fx.calls().iter().filter(|call| *call == "pr close").count();
+            assert_eq!(closes, 1, "{:?}", fx.calls());
+        },
+    );
+}
+
+/// The earlier claim pushed its candidate and opened #41, then failed in its
+/// before-landing review. The re-claim resumes it on a moved base: its
+/// branch becomes the candidate's, the push replaces the published head
+/// under a lease on it, and `pr_open` reuses #41 rather than opening another.
+/// The earlier claim's retained worktree keeps its checkout and commits on a
+/// branch renamed aside.
+fn a_resumed_published_candidate_republishes_through_its_open_pull_request() {
+    isolated(
+        "a_resumed_published_candidate_republishes_through_its_open_pull_request",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+            assert_eq!(resumed["prior_pull_request"], PRIOR_PR, "{resumed}");
+            assert_eq!(resumed["reused_branch"], EARLIER, "{resumed}");
+            assert_eq!(resumed["reused_head_sha"], fx.earlier_head, "{resumed}");
+            assert!(resumed["branch_reuse_refused"].is_null(), "{resumed}");
+            assert_eq!(
+                git(&fx.claim, &["symbolic-ref", "--short", "HEAD"]),
+                EARLIER
+            );
+            let aside = format!("{EARLIER}-superseded-bbbbbbbb");
+            assert_eq!(
+                git(&fx.earlier, &["symbolic-ref", "--short", "HEAD"]),
+                aside,
+                "the retained worktree keeps its checkout on a branch renamed aside"
+            );
+            assert_eq!(git(&fx.earlier, &["rev-parse", "HEAD"]), fx.earlier_head);
+
+            let head = fx.continue_and_commit();
+            let pushed = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
+            assert_eq!(pushed["decision"], "performed_force_with_lease", "{pushed}");
+            assert_eq!(
+                fx.remote_tip(EARLIER),
+                head,
+                "the published head is replaced"
+            );
+
+            let opened = action(&host, "pr_open", &fx.open_input(EARLIER, &resumed)).unwrap();
+            assert_eq!(opened["decision"], "reused", "{opened}");
+            assert_eq!(opened["pr_number"], PRIOR_PR, "{opened}");
+            assert!(opened["superseded_pull_request"].is_null(), "{opened}");
+            assert!(
+                !fx.calls().iter().any(|call| call == "pr create"),
+                "no second pull request is created: {:?}",
+                fx.calls()
+            );
+            assert_eq!(fx.open_prs(), vec![PRIOR_PR.to_string()]);
+        },
+    );
+}
+
+/// The re-claim cannot take over the earlier branch: this host's copy of it
+/// holds a commit that was never published, which is never moved. The leaf
+/// publishes on its own branch, and `pr_open` closes #41 with a comment
+/// naming the pull request that replaced it.
+fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
+    isolated(
+        "an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fs::write(fx.earlier.join("notes.txt"), "never pushed\n").unwrap();
+            git(&fx.earlier, &["add", "notes.txt"]);
+            git(&fx.earlier, &["commit", "-q", "-m", "local only"]);
+            let unpublished = git(&fx.earlier, &["rev-parse", "HEAD"]);
+            let host = Host::new(&fx.repo);
+
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert!(resumed["reused_branch"].is_null(), "{resumed}");
+            assert!(resumed["reused_head_sha"].is_null(), "{resumed}");
+            let refused = resumed["branch_reuse_refused"].as_str().unwrap_or_default();
+            assert!(refused.contains(&unpublished), "{resumed}");
+            assert_eq!(git(&fx.claim, &["symbolic-ref", "--short", "HEAD"]), OURS);
+            assert_eq!(
+                git(&fx.earlier, &["rev-parse", EARLIER]),
+                unpublished,
+                "a branch holding unpublished work is left where it is"
+            );
+
+            fx.continue_and_commit();
+            let pushed = action(&host, "git_push", &fx.push_input(OURS, &resumed)).unwrap();
+            assert_eq!(pushed["decision"], "performed_create", "{pushed}");
+            assert_eq!(fx.remote_tip(EARLIER), fx.earlier_head, "untouched");
+
+            let opened = action(&host, "pr_open", &fx.open_input(OURS, &resumed)).unwrap();
+            assert_eq!(opened["decision"], "performed", "{opened}");
+            let replacement = opened["pr_number"].as_str().unwrap().to_string();
+            assert_ne!(replacement, PRIOR_PR);
+            let superseded = &opened["superseded_pull_request"];
+            assert_eq!(superseded["number"], PRIOR_PR, "{opened}");
+            assert_eq!(superseded["decision"], "closed", "{opened}");
+            assert_eq!(fx.open_prs(), vec![replacement.clone()]);
+            let comment = fx.pr_file(PRIOR_PR, "comment");
+            assert!(
+                comment.contains(&format!("Superseded by #{replacement}")),
+                "the closing comment names the superseding pull request: {comment}"
+            );
+
+            // A retried `pr_open` reuses its own pull request and leaves the
+            // closed one alone.
+            let again = action(&host, "pr_open", &fx.open_input(OURS, &resumed)).unwrap();
+            assert_eq!(again["decision"], "reused", "{again}");
+            assert_eq!(again["superseded_pull_request"]["decision"], "not_open");
+            let closes = fx.calls().iter().filter(|call| *call == "pr close").count();
+            assert_eq!(closes, 1, "{:?}", fx.calls());
+        },
+    );
+}
+
+/// The earlier branch gained a commit after the published head, and the base
+/// moved again while the re-claim implemented. `pr_prepare` observes the
+/// advanced remote and `git_rebase` reports a fresh rewrite checkpoint that
+/// names it, which the ordinary push would accept. The adopted lease is on
+/// the published head, so the push refuses and the newer commit stays.
+fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
+    isolated(
+        "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_and_commit();
+            let concurrent = fx.push_remote_only_commit();
+            fx.advance_base();
+
+            let synced = fx.sync(&host);
+            assert_eq!(synced["rewritten"], true, "{synced}");
+            assert_eq!(synced["remote_sha_before"], concurrent, "{synced}");
+            let refused = action(&host, "git_push", &fx.synced_push_input(&resumed, &synced))
+                .expect_err("the advanced branch is not replaced")
+                .to_string();
+            assert!(refused.contains("push_lease_lost"), "{refused}");
+            assert!(refused.contains(&concurrent), "{refused}");
+            assert!(refused.contains(&fx.earlier_head), "{refused}");
+            assert_eq!(
+                fx.remote_tip(EARLIER),
+                concurrent,
+                "the newer head survives"
+            );
+        },
+    );
+}
+
+/// A branch deleted on the remote since the published head is not recreated
+/// by the resumed candidate.
+fn a_deleted_adopted_branch_is_not_recreated() {
+    isolated("a_deleted_adopted_branch_is_not_recreated", |sandbox| {
+        let fx = Fixture::new(sandbox);
+        let host = Host::new(&fx.repo);
+        let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+        fx.continue_and_commit();
+        git(&fx.repo, &["push", "-q", "origin", "--delete", EARLIER]);
+        fx.advance_base();
+
+        let synced = fx.sync(&host);
+        let refused = action(&host, "git_push", &fx.synced_push_input(&resumed, &synced))
+            .expect_err("the deleted branch is not recreated")
+            .to_string();
+        assert!(refused.contains("push_lease_lost"), "{refused}");
+        assert!(refused.contains("missing"), "{refused}");
+        assert!(refused.contains(&fx.earlier_head), "{refused}");
+        let refs = git(
+            &fx.forge.join("remote.git"),
+            &["for-each-ref", &format!("refs/heads/{EARLIER}")],
+        );
+        assert!(refs.is_empty(), "the branch stays deleted: {refs}");
+    });
+}
+
+/// A remote still at the published head is replaced under the lease on it
+/// even when the base moved, and a retried push finds its own head published.
+fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
+    isolated(
+        "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_and_commit();
+            fx.advance_base();
+
+            let synced = fx.sync(&host);
+            assert_eq!(synced["rewritten"], true, "{synced}");
+            assert_eq!(synced["remote_sha_before"], fx.earlier_head, "{synced}");
+            let input = fx.synced_push_input(&resumed, &synced);
+            let pushed = action(&host, "git_push", &input).unwrap();
+            assert_eq!(pushed["decision"], "performed_force_with_lease", "{pushed}");
+            let rebased = synced["head_sha"].as_str().unwrap();
+            assert_eq!(fx.remote_tip(EARLIER), rebased);
+
+            let retried = action(&host, "git_push", &input).unwrap();
+            assert_eq!(retried["decision"], "reused_current", "{retried}");
+            assert_eq!(fx.remote_tip(EARLIER), rebased);
+        },
+    );
+}
+
+/// A remote still at the published head fast-forwards under the lease on it,
+/// and a retried push finds the candidate published.
+fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
+    isolated(
+        "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            let head = fx.continue_from_published_head();
+
+            let pushed = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
+            assert_eq!(pushed["decision"], "performed_fast_forward", "{pushed}");
+            assert_eq!(pushed["force_with_lease"], true, "{pushed}");
+            assert_eq!(fx.remote_tip(EARLIER), head);
+
+            let retried = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
+            assert_eq!(retried["decision"], "reused_current", "{retried}");
+            assert_eq!(fx.remote_tip(EARLIER), head);
+        },
+    );
+}
+
+/// The adopted branch is deleted after the engine observed it, before its
+/// fast-forward push starts. The lease refuses the push, and the branch stays
+/// deleted.
+fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation() {
+    isolated(
+        "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_from_published_head();
+            fx.change_before_push(Change::Delete);
+
+            action(&host, "git_push", &fx.push_input(EARLIER, &resumed))
+                .expect_err("the push is refused under the published-head lease");
+            let refs = git(
+                &fx.forge.join("remote.git"),
+                &["for-each-ref", &format!("refs/heads/{EARLIER}")],
+            );
+            assert!(refs.is_empty(), "the branch stays deleted: {refs}");
+        },
+    );
+}
+
+/// The adopted branch is rewound to an ancestor of the local candidate after
+/// the engine observed it, before its fast-forward push starts. The lease
+/// refuses the push, and the rewound head survives.
+fn a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation() {
+    isolated(
+        "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_from_published_head();
+            let rewound = git(&fx.repo, &["rev-parse", &format!("{}^", fx.earlier_head)]);
+            fx.change_before_push(Change::Rewind(rewound.clone()));
+
+            action(&host, "git_push", &fx.push_input(EARLIER, &resumed))
+                .expect_err("the push is refused under the published-head lease");
+            assert_eq!(fx.remote_tip(EARLIER), rewound, "the rewound head survives");
+        },
+    );
+}
+
 fn action(host: &Host, name: &str, input: &Value) -> Result<Value, OrbitError> {
     if name == "git_push" {
         git_fixture::assert_local_push_remote(&host.repo);
@@ -922,99 +1015,6 @@ fn fixture_relative(path: &Path, old_raw: &Path, old_canonical: &Path) -> PathBu
         old_canonical.display()
     )
 }
-
-/// The `gh` surface the provider adapter calls, over any number of pull
-/// requests: `prs/<number>/{head,base,state,comment}` under the forge, with
-/// an optional `author` (else `orbit`) and single-line `body`.
-const FAKE_GH: &str = r#"#!/bin/sh
-set -eu
-forge='__FORGE__'
-remote="$forge/remote.git"
-printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
-
-# The value following flag `$1` among the remaining arguments.
-flag() {
-    name=$1; shift
-    while [ $# -gt 0 ]; do
-        if [ "$1" = "$name" ]; then printf '%s' "$2"; return; fi
-        shift
-    done
-}
-
-url() { printf 'https://github.com/orbit/test/pull/%s' "$1"; }
-
-case "$1 ${2:-}" in
-    "pr list")
-        # With `--head`, the open pull requests on that branch; without it,
-        # every open one with its body.
-        head=$(flag --head "$@")
-        printf '['
-        sep=
-        for dir in "$forge"/prs/*; do
-            [ "$(cat "$dir/state")" = OPEN ] || continue
-            [ -z "$head" ] || [ "$(cat "$dir/head")" = "$head" ] || continue
-            author=orbit
-            [ ! -f "$dir/author" ] || author=$(cat "$dir/author")
-            body=
-            [ ! -f "$dir/body" ] || body=$(cat "$dir/body")
-            printf '%s{"number":%s,"title":"Delivery","headRefName":"%s","author":{"login":"%s"},"body":"%s"}' \
-                "$sep" "${dir##*/}" "$(cat "$dir/head")" "$author" "$body"
-            sep=,
-        done
-        printf ']\n' ;;
-    "pr create")
-        last=$(ls "$forge/prs" | sort -n | tail -n 1)
-        number=$(( ${last:-0} + 1 ))
-        mkdir -p "$forge/prs/$number"
-        flag --head "$@" > "$forge/prs/$number/head"
-        flag --base "$@" > "$forge/prs/$number/base"
-        printf 'OPEN' > "$forge/prs/$number/state"
-        url "$number"; echo ;;
-    "pr view")
-        number=${3##*/}
-        dir="$forge/prs/$number"
-        head=$(cat "$dir/head")
-        oid=$(git --git-dir="$remote" rev-parse --verify --quiet "refs/heads/$head" || true)
-        printf '{"number":%s,"title":"Delivery","body":"","state":"%s","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","files":[],"commits":[],"url":"%s"}\n' \
-            "$number" "$(cat "$dir/state")" "$head" "$oid" "$(cat "$dir/base")" "$(url "$number")" ;;
-    "pr close")
-        flag --comment "$@" > "$forge/prs/$3/comment"
-        printf 'CLOSED' > "$forge/prs/$3/state" ;;
-    *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
-esac
-"#;
-
-/// A `git` that shadows the real one on `PATH`. When the engine's push is about
-/// to run, a change waiting in `__CHANGE__` lands on the bare remote first, so
-/// the push's lease is checked against a ref already moved, before Git
-/// advertises anything. Other invocations, and a push with nothing waiting,
-/// exec the real Git unchanged.
-const PUSH_BOUNDARY_GIT: &str = r#"#!/bin/sh
-set -eu
-git='__GIT__'
-remote='__REMOTE__'
-change='__CHANGE__'
-ref='__REF__'
-subcommand=
-skip=
-for arg in "$@"; do
-    if [ -n "$skip" ]; then skip=; continue; fi
-    case "$arg" in
-        -c) skip=1 ;;
-        -*) ;;
-        *) subcommand=$arg; break ;;
-    esac
-done
-if [ "$subcommand" = push ] && [ -f "$change" ]; then
-    action=$(cat "$change")
-    mv "$change" "$change.applied"
-    case "$action" in
-        delete) "$git" --git-dir="$remote" update-ref -d "$ref" ;;
-        *) "$git" --git-dir="$remote" update-ref "$ref" "$action" ;;
-    esac
-fi
-exec "$git" "$@"
-"#;
 
 /// Run `body` in a copy of this test binary whose `PATH` starts with the
 /// substitute `gh`, with disposable `$HOME` and no inherited authority.

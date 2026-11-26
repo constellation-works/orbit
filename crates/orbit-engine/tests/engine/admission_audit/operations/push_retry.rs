@@ -30,6 +30,144 @@ To https://github.com/example/orbit.git\n\
  ! [remote rejected] branch -> branch (failure)\n",
 ];
 
+struct PushFixture {
+    root: PathBuf,
+}
+
+impl PushFixture {
+    fn new(root: &Path) -> Self {
+        let bin = root.join("bin");
+        write_executable(
+            &bin.join("git"),
+            &format!(
+                r#"#!/bin/sh
+while [ "$1" = -c ]; do shift 2; done
+command=$1
+shift
+case "$command" in
+  remote)
+    [ "$1" = get-url ] && [ "$2" = --push ] && [ "$3" = --all ] && [ "$4" = origin ] || exit 2
+    printf '%s\n' 'https://github.com/example/orbit.git'
+    ;;
+  rev-parse)
+    [ "$1" = --verify ] && [ "$2" = refs/heads/branch ] || exit 2
+    printf '%s\n' '{PUSH_HEAD}'
+    ;;
+  push)
+    printf '%s\n' push >> calls
+    [ "$1" = --no-verify ] || exit 2
+    shift
+    pack=thin
+    if [ "$1" = --no-thin ]; then
+      pack=no-thin
+      shift
+    fi
+    printf '%s\n' "$pack" >> packs
+    if [ -s lease ]; then
+      [ "$1" = '--force-with-lease=refs/heads/branch:{PUSH_PREVIOUS_HEAD}' ] || exit 2
+      shift
+    fi
+    [ "$1" = -- ] && [ "$2" = origin ] || exit 2
+    case "$3" in
+      branch) target=refs/heads/branch ;;
+      '+{PUSH_HEAD}:refs/orbit/candidates/run') target=refs/orbit/candidates/run ;;
+      *) exit 2 ;;
+    esac
+    count=$(cat count)
+    count=$((count + 1))
+    printf '%s\n' "$count" > count
+    if [ "$(cat landed)" = true ]; then
+      printf '%s\t%s\n' '{PUSH_HEAD}' "$target" > remote
+    fi
+    if [ "$count" -le "$(cat failures)" ]; then cat failure >&2; exit 1; fi
+    printf '%s\n' pushed
+    ;;
+  ls-remote)
+    printf '%s\n' ls-remote >> calls
+    case "$1" in
+      --get-url)
+        case "$2" in
+          https://github.com/example/orbit.git/.orbit-publication-probe)
+            printf '%s\n' 'https://github.com/example/orbit.git'
+            ;;
+          *) exit 2 ;;
+        esac
+        ;;
+      --refs)
+        [ "$2" = -- ] && [ "$3" = 'https://github.com/example/orbit.git/.orbit-publication-probe' ] || exit 2
+        case "$4" in refs/heads/branch|refs/orbit/candidates/run) ;; *) exit 2 ;; esac
+        if [ -s lookup-failure ]; then cat lookup-failure >&2; exit 1; fi
+        cat remote
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+"#
+            ),
+        );
+        Self {
+            root: root.to_path_buf(),
+        }
+    }
+
+    fn write(&self, name: &str, contents: &str) {
+        fs::write(self.root.as_path().join(name), contents).expect("write push fixture state");
+    }
+
+    fn reset(&self, failure: &str, failures: usize, landed: bool) {
+        self.write("count", "0");
+        self.write("calls", "");
+        self.write("failure", failure);
+        self.write("failures", &failures.to_string());
+        self.write("landed", if landed { "true" } else { "false" });
+        self.write("remote", "");
+        self.write("lookup-failure", "");
+        self.write("lease", "");
+        self.write("packs", "");
+    }
+
+    fn input(&self, operation: &str, lease: bool) -> serde_json::Value {
+        if operation == "push.candidate_ref" {
+            json!({
+                "repo_root": self.root.as_path(),
+                "head_sha": PUSH_HEAD,
+                "target_ref": "refs/orbit/candidates/run",
+            })
+        } else {
+            self.write("lease", if lease { "true" } else { "" });
+            json!({
+                "repo_root": self.root.as_path(),
+                "branch": "branch",
+                "force_with_lease": lease,
+                "expected_remote_sha": PUSH_PREVIOUS_HEAD,
+            })
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        fs::read_to_string(self.root.as_path().join("calls"))
+            .expect("read git calls")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn push_count(&self) -> usize {
+        read_count(&self.root.as_path().join("count"))
+    }
+
+    /// `thin` or `no-thin` for each push, in order.
+    fn packs(&self) -> Vec<String> {
+        fs::read_to_string(self.root.as_path().join("packs"))
+            .expect("read pack modes")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
 /// A budget short enough for a test, at the same shape as production.
 fn fast_retry(max_attempts: u64) -> serde_json::Value {
     json!({"max_attempts": max_attempts, "initial_backoff_ms": 4, "backoff_cap_ms": 8})
@@ -394,142 +532,4 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
             }
         },
     );
-}
-
-struct PushFixture {
-    root: PathBuf,
-}
-
-impl PushFixture {
-    fn new(root: &Path) -> Self {
-        let bin = root.join("bin");
-        write_executable(
-            &bin.join("git"),
-            &format!(
-                r#"#!/bin/sh
-while [ "$1" = -c ]; do shift 2; done
-command=$1
-shift
-case "$command" in
-  remote)
-    [ "$1" = get-url ] && [ "$2" = --push ] && [ "$3" = --all ] && [ "$4" = origin ] || exit 2
-    printf '%s\n' 'https://github.com/example/orbit.git'
-    ;;
-  rev-parse)
-    [ "$1" = --verify ] && [ "$2" = refs/heads/branch ] || exit 2
-    printf '%s\n' '{PUSH_HEAD}'
-    ;;
-  push)
-    printf '%s\n' push >> calls
-    [ "$1" = --no-verify ] || exit 2
-    shift
-    pack=thin
-    if [ "$1" = --no-thin ]; then
-      pack=no-thin
-      shift
-    fi
-    printf '%s\n' "$pack" >> packs
-    if [ -s lease ]; then
-      [ "$1" = '--force-with-lease=refs/heads/branch:{PUSH_PREVIOUS_HEAD}' ] || exit 2
-      shift
-    fi
-    [ "$1" = -- ] && [ "$2" = origin ] || exit 2
-    case "$3" in
-      branch) target=refs/heads/branch ;;
-      '+{PUSH_HEAD}:refs/orbit/candidates/run') target=refs/orbit/candidates/run ;;
-      *) exit 2 ;;
-    esac
-    count=$(cat count)
-    count=$((count + 1))
-    printf '%s\n' "$count" > count
-    if [ "$(cat landed)" = true ]; then
-      printf '%s\t%s\n' '{PUSH_HEAD}' "$target" > remote
-    fi
-    if [ "$count" -le "$(cat failures)" ]; then cat failure >&2; exit 1; fi
-    printf '%s\n' pushed
-    ;;
-  ls-remote)
-    printf '%s\n' ls-remote >> calls
-    case "$1" in
-      --get-url)
-        case "$2" in
-          https://github.com/example/orbit.git/.orbit-publication-probe)
-            printf '%s\n' 'https://github.com/example/orbit.git'
-            ;;
-          *) exit 2 ;;
-        esac
-        ;;
-      --refs)
-        [ "$2" = -- ] && [ "$3" = 'https://github.com/example/orbit.git/.orbit-publication-probe' ] || exit 2
-        case "$4" in refs/heads/branch|refs/orbit/candidates/run) ;; *) exit 2 ;; esac
-        if [ -s lookup-failure ]; then cat lookup-failure >&2; exit 1; fi
-        cat remote
-        ;;
-      *) exit 2 ;;
-    esac
-    ;;
-  *) exit 2 ;;
-esac
-"#
-            ),
-        );
-        Self {
-            root: root.to_path_buf(),
-        }
-    }
-
-    fn write(&self, name: &str, contents: &str) {
-        fs::write(self.root.as_path().join(name), contents).expect("write push fixture state");
-    }
-
-    fn reset(&self, failure: &str, failures: usize, landed: bool) {
-        self.write("count", "0");
-        self.write("calls", "");
-        self.write("failure", failure);
-        self.write("failures", &failures.to_string());
-        self.write("landed", if landed { "true" } else { "false" });
-        self.write("remote", "");
-        self.write("lookup-failure", "");
-        self.write("lease", "");
-        self.write("packs", "");
-    }
-
-    fn input(&self, operation: &str, lease: bool) -> serde_json::Value {
-        if operation == "push.candidate_ref" {
-            json!({
-                "repo_root": self.root.as_path(),
-                "head_sha": PUSH_HEAD,
-                "target_ref": "refs/orbit/candidates/run",
-            })
-        } else {
-            self.write("lease", if lease { "true" } else { "" });
-            json!({
-                "repo_root": self.root.as_path(),
-                "branch": "branch",
-                "force_with_lease": lease,
-                "expected_remote_sha": PUSH_PREVIOUS_HEAD,
-            })
-        }
-    }
-
-    fn calls(&self) -> Vec<String> {
-        fs::read_to_string(self.root.as_path().join("calls"))
-            .expect("read git calls")
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn push_count(&self) -> usize {
-        read_count(&self.root.as_path().join("count"))
-    }
-
-    /// `thin` or `no-thin` for each push, in order.
-    fn packs(&self) -> Vec<String> {
-        fs::read_to_string(self.root.as_path().join("packs"))
-            .expect("read pack modes")
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
 }

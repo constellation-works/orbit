@@ -14,6 +14,14 @@ use std::{
     process::Command,
 };
 use tempfile::tempdir;
+
+const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
+const SLOW_COPY_CHILD: &str =
+    "admission_audit::inspection::slow_full_ancestry_copy_outlasts_the_local_deadline";
+const KILLED_LOOKUP_CHILD: &str =
+    "admission_audit::inspection::a_commit_lookup_killed_by_a_signal_stays_retryable";
+const KILL_VERIFY_MARKER: &str = "kill-verify";
+
 /// [ORB-14091] A task-pilot dispatch configured to retry still stops after
 /// the first attempt when `inspection_revision` is a 7-character id. The
 /// provider is not started.
@@ -247,13 +255,6 @@ fn assert_permanent(result: Result<orbit_engine::DispatchOutcome, DispatchError>
     );
     assert!(message.contains(needle), "{message}");
 }
-
-const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
-const SLOW_COPY_CHILD: &str =
-    "admission_audit::inspection::slow_full_ancestry_copy_outlasts_the_local_deadline";
-const KILLED_LOOKUP_CHILD: &str =
-    "admission_audit::inspection::a_commit_lookup_killed_by_a_signal_stays_retryable";
-const KILL_VERIFY_MARKER: &str = "kill-verify";
 
 #[test]
 fn a_commit_lookup_killed_by_a_signal_stays_retryable() {

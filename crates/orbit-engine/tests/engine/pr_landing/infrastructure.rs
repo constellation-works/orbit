@@ -40,9 +40,11 @@ fn prepare_source(row: &Path, source: &str) -> Fixture {
         &initial.repo,
         &["push", "--force-with-lease", "origin", BRANCH],
     );
+    let candidate = initial.head();
+    let base_sha = git(&initial.repo, &["rev-parse", BASE]);
     Fixture {
-        candidate: initial.head(),
-        base_sha: git(&initial.repo, &["rev-parse", BASE]),
+        base_sha,
+        candidate,
         ..initial
     }
 }

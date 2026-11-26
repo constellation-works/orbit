@@ -14,8 +14,144 @@ use super::git_fixture;
 
 const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+const FAKE_GIT: &str = r#"#!/bin/sh
+set -eu
+while [ "$1" = -c ]; do shift 2; done
+case "$1" in
+  remote)
+    [ "$2" = get-url ] && [ "$3" = --push ] && [ "$4" = --all ] && [ "$5" = origin ] || exit 2
+    printf '%s\n' 'https://fixture.invalid/orbit.git' ;;
+  rev-parse) printf '%s\n' '__HEAD__' ;;
+  ls-remote)
+    if [ "$2" = --get-url ]; then
+      [ "$3" = 'https://fixture.invalid/orbit.git/.orbit-publication-probe' ] || exit 2
+      printf '%s\n' 'https://fixture.invalid/orbit.git'
+      exit 0
+    fi
+    [ "$2" = --heads ] && [ "$3" = 'https://fixture.invalid/orbit.git/.orbit-publication-probe' ] && [ "$4" = refs/heads/candidate ] || exit 2
+    printf '%s\n' probe >> calls
+    count=$(($(cat count) + 1))
+    printf '%s\n' "$count" > count
+    if [ "$count" -le "$(cat timeouts)" ]; then
+      cat probe-failure >&2
+      : > probe-ready
+      exec sleep 600
+    fi
+    if [ -s probe-failure ]; then cat probe-failure >&2; exit 1; fi
+    cat remote ;;
+  push)
+    printf '%s\n' push >> calls
+    if [ -s push-failure ]; then cat push-failure >&2; exit 1; fi
+    printf '%s\n' '__HEAD__' > published ;;
+  *) exit 2 ;;
+esac
+"#;
+
 struct Host;
 impl orbit_engine::test_support::NullRuntimeHost for Host {}
+
+struct Fixture {
+    root: tempfile::TempDir,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let git = bin.join("git");
+        fs::write(&git, FAKE_GIT.replace("__HEAD__", HEAD)).unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        // The body owns its isolated child process.
+        unsafe {
+            std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+        }
+        Self { root }
+    }
+
+    fn reset(&self, timeouts: usize, remote: &str, probe_failure: &str, push_failure: &str) {
+        for (name, contents) in [
+            ("calls", "".to_string()),
+            ("count", "0".to_string()),
+            ("timeouts", timeouts.to_string()),
+            ("remote", remote.to_string()),
+            ("probe-failure", probe_failure.to_string()),
+            ("push-failure", push_failure.to_string()),
+        ] {
+            fs::write(self.root.path().join(name), contents).unwrap();
+        }
+    }
+
+    fn push(&self) -> Result<Value, OrbitError> {
+        use orbit_common::test_env::{
+            SupervisorSeam, with_supervision_clock, with_supervisor_seam,
+        };
+        use std::{
+            cell::Cell,
+            rc::Rc,
+            time::{Duration, Instant},
+        };
+        let origin = Instant::now();
+        let now = Rc::new(Cell::new(origin));
+        let observed = Rc::clone(&now);
+        let clock = Rc::clone(&now);
+        let ready = self.root.path().join("probe-ready");
+        let seam = SupervisorSeam {
+            wait: Some(Box::new(move |child| {
+                if ready.exists() {
+                    fs::remove_file(&ready).expect("consume probe readiness");
+                    now.set(now.get() + Duration::from_secs(31));
+                    return Ok(None);
+                }
+                child.try_wait()
+            })),
+            ..SupervisorSeam::default()
+        };
+        let result = with_supervision_clock(
+            move || clock.get(),
+            || {
+                with_supervisor_seam(seam, || {
+                    orbit_engine::test_support::with_remote_probe_backoff(10, || {
+                        execute_deterministic_action(
+                            &Host,
+                            "git_push",
+                            &json!({}),
+                            &json!({
+                                "workspace_path": self.root.path(),
+                                "branch": "candidate",
+                            }),
+                            false,
+                            &HashMap::new(),
+                            None,
+                        )
+                    })
+                })
+            },
+        );
+        let injected_attempts = fs::read_to_string(self.root.path().join("timeouts"))
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            .min(3);
+        assert!(
+            observed.get().duration_since(origin) >= Duration::from_secs(31 * injected_attempts),
+            "each stalled ls-remote must reach its supervised deadline: {result:?}"
+        );
+        result
+    }
+
+    fn calls(&self) -> Vec<String> {
+        fs::read_to_string(self.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
 
 #[test]
 fn a_timed_out_pre_push_probe_recovers_and_allows_publication() {
@@ -167,139 +303,3 @@ fn completed_probe_and_push_refusals_are_not_retried() {
         },
     );
 }
-
-struct Fixture {
-    root: tempfile::TempDir,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        let bin = root.path().join("bin");
-        fs::create_dir(&bin).unwrap();
-        let git = bin.join("git");
-        fs::write(&git, FAKE_GIT.replace("__HEAD__", HEAD)).unwrap();
-        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
-        let mut paths = vec![bin];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        // The body owns its isolated child process.
-        unsafe {
-            std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
-        }
-        Self { root }
-    }
-
-    fn reset(&self, timeouts: usize, remote: &str, probe_failure: &str, push_failure: &str) {
-        for (name, contents) in [
-            ("calls", "".to_string()),
-            ("count", "0".to_string()),
-            ("timeouts", timeouts.to_string()),
-            ("remote", remote.to_string()),
-            ("probe-failure", probe_failure.to_string()),
-            ("push-failure", push_failure.to_string()),
-        ] {
-            fs::write(self.root.path().join(name), contents).unwrap();
-        }
-    }
-
-    fn push(&self) -> Result<Value, OrbitError> {
-        use orbit_common::test_env::{
-            SupervisorSeam, with_supervision_clock, with_supervisor_seam,
-        };
-        use std::{
-            cell::Cell,
-            rc::Rc,
-            time::{Duration, Instant},
-        };
-        let origin = Instant::now();
-        let now = Rc::new(Cell::new(origin));
-        let observed = Rc::clone(&now);
-        let clock = Rc::clone(&now);
-        let ready = self.root.path().join("probe-ready");
-        let seam = SupervisorSeam {
-            wait: Some(Box::new(move |child| {
-                if ready.exists() {
-                    fs::remove_file(&ready).expect("consume probe readiness");
-                    now.set(now.get() + Duration::from_secs(31));
-                    return Ok(None);
-                }
-                child.try_wait()
-            })),
-            ..SupervisorSeam::default()
-        };
-        let result = with_supervision_clock(
-            move || clock.get(),
-            || {
-                with_supervisor_seam(seam, || {
-                    orbit_engine::test_support::with_remote_probe_backoff(10, || {
-                        execute_deterministic_action(
-                            &Host,
-                            "git_push",
-                            &json!({}),
-                            &json!({
-                                "workspace_path": self.root.path(),
-                                "branch": "candidate",
-                            }),
-                            false,
-                            &HashMap::new(),
-                            None,
-                        )
-                    })
-                })
-            },
-        );
-        let injected_attempts = fs::read_to_string(self.root.path().join("timeouts"))
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            .min(3);
-        assert!(
-            observed.get().duration_since(origin) >= Duration::from_secs(31 * injected_attempts),
-            "each stalled ls-remote must reach its supervised deadline: {result:?}"
-        );
-        result
-    }
-
-    fn calls(&self) -> Vec<String> {
-        fs::read_to_string(self.root.path().join("calls"))
-            .unwrap()
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    }
-}
-
-const FAKE_GIT: &str = r#"#!/bin/sh
-set -eu
-while [ "$1" = -c ]; do shift 2; done
-case "$1" in
-  remote)
-    [ "$2" = get-url ] && [ "$3" = --push ] && [ "$4" = --all ] && [ "$5" = origin ] || exit 2
-    printf '%s\n' 'https://fixture.invalid/orbit.git' ;;
-  rev-parse) printf '%s\n' '__HEAD__' ;;
-  ls-remote)
-    if [ "$2" = --get-url ]; then
-      [ "$3" = 'https://fixture.invalid/orbit.git/.orbit-publication-probe' ] || exit 2
-      printf '%s\n' 'https://fixture.invalid/orbit.git'
-      exit 0
-    fi
-    [ "$2" = --heads ] && [ "$3" = 'https://fixture.invalid/orbit.git/.orbit-publication-probe' ] && [ "$4" = refs/heads/candidate ] || exit 2
-    printf '%s\n' probe >> calls
-    count=$(($(cat count) + 1))
-    printf '%s\n' "$count" > count
-    if [ "$count" -le "$(cat timeouts)" ]; then
-      cat probe-failure >&2
-      : > probe-ready
-      exec sleep 600
-    fi
-    if [ -s probe-failure ]; then cat probe-failure >&2; exit 1; fi
-    cat remote ;;
-  push)
-    printf '%s\n' push >> calls
-    if [ -s push-failure ]; then cat push-failure >&2; exit 1; fi
-    printf '%s\n' '__HEAD__' > published ;;
-  *) exit 2 ;;
-esac
-"#;

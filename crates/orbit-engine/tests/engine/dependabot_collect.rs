@@ -22,14 +22,6 @@ const CHILD_ENV: &str = "ORBIT_DEPENDABOT_COLLECT_CHILD";
 const LOG_ENV: &str = "ORBIT_FAKE_GH_LOG";
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
-/// A credential-shaped marker the fake `gh` prints to stderr. Built at
-/// runtime so no secret-shaped literal sits in source; the name is
-/// deliberately free of `SECRET`/`TOKEN`/etc. so env-value scrubbing cannot
-/// hide a pattern-redaction gap.
-fn credential_shaped_marker() -> String {
-    format!("ghp_{}", "E".repeat(36))
-}
-
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
 # gh runs under a cleared environment: only HOME reaches it, so state is files under it.
@@ -91,6 +83,14 @@ impl orbit_engine::test_support::NullRuntimeHost for RootHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.root.clone())
     }
+}
+
+/// A credential-shaped marker the fake `gh` prints to stderr. Built at
+/// runtime so no secret-shaped literal sits in source; the name is
+/// deliberately free of `SECRET`/`TOKEN`/etc. so env-value scrubbing cannot
+/// hide a pattern-redaction gap.
+fn credential_shaped_marker() -> String {
+    format!("ghp_{}", "E".repeat(36))
 }
 
 #[test]

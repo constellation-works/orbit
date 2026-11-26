@@ -3,6 +3,14 @@ use super::*;
 use std::io::BufRead;
 use std::process::{Command, Stdio};
 
+struct Holder(std::process::Child);
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_BUILD_WAIT_FIXTURE";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -28,14 +36,6 @@ fn isolated(test: &str) -> bool {
         output.stderr,
     );
     false
-}
-
-struct Holder(std::process::Child);
-impl Drop for Holder {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 fn held_slot(directory: &Path) -> Holder {

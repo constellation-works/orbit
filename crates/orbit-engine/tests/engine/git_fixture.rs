@@ -4,6 +4,15 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+// Seed preparation must wait for automatic maintenance, including receive-pack
+// in the bare remote. Git 2.55 transfers temporary locks to detached children;
+// waiting only for the original Git command does not make its files immutable.
+// Keep maintenance, locking and durability enabled, but finish them foreground.
+pub(super) const ISOLATED_GIT_CONFIG: &str = concat!(
+    "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n",
+    "[maintenance]\n\tautoDetach = false\n[gc]\n\tautoDetach = false\n",
+);
+
 /// Copy a pristine family fixture, keeping independent files and Git objects.
 /// Only repository configuration embeds the template's disposable root.
 pub(super) fn copy_template(source: &Path, destination: &Path) {
@@ -44,15 +53,6 @@ pub(super) fn copy_template(source: &Path, destination: &Path) {
         destination.to_str().unwrap(),
     );
 }
-
-// Seed preparation must wait for automatic maintenance, including receive-pack
-// in the bare remote. Git 2.55 transfers temporary locks to detached children;
-// waiting only for the original Git command does not make its files immutable.
-// Keep maintenance, locking and durability enabled, but finish them foreground.
-pub(super) const ISOLATED_GIT_CONFIG: &str = concat!(
-    "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n",
-    "[maintenance]\n\tautoDetach = false\n[gc]\n\tautoDetach = false\n",
-);
 
 pub(super) fn configure_child(command: &mut Command, home: &Path, sandbox: &Path) {
     // Engine VCS children clear GIT_* variables but retain HOME. Both layers
