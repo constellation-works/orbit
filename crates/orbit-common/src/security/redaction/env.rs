@@ -317,8 +317,8 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
 ///
 /// A bare substring test also matches `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`
 /// (ordinary git identity vars Orbit itself sets for child processes), which
-/// are not credentials. Requiring an exact `AUTH` segment overshoots that
-/// carve-out and misses `AUTH*` / `*AUTH` words other than `AUTHOR*`.
+/// are not credentials. An exact `AUTH` segment would be too narrow and would miss
+/// `AUTH*` / `*AUTH` words other than `AUTHOR*`.
 fn contains_auth_word(upper: &str) -> bool {
     upper
         .split(|c: char| !c.is_ascii_alphanumeric())
